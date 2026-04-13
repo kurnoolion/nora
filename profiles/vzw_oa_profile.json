@@ -1,0 +1,175 @@
+{
+  "profile_name": "VZW_OA",
+  "profile_version": 1,
+  "created_from": [
+    "LTEDATARETRY.pdf",
+    "LTEB13NAC.pdf"
+  ],
+  "last_updated": "2026-04-13",
+  "heading_detection": {
+    "method": "font_size_clustering",
+    "levels": [
+      {
+        "level": 1,
+        "font_size_min": 13.5,
+        "font_size_max": 14.5,
+        "bold": true,
+        "all_caps": true,
+        "sample_texts": [
+          "Requirement Plan Plan Name: LTE_Data_Retry Plan Id: LTEDATARETRY Version Number:",
+          "1 LTE Data Retry",
+          "1.1.1 APPLICABILITY",
+          "1.1.2 3GPP RELEASE 9 SPECIFICATIONS",
+          "1.1.3 ACRONYMS/GLOSSARY/DEFINITIONS"
+        ],
+        "count": 901
+      },
+      {
+        "level": 2,
+        "font_size_min": 13.5,
+        "font_size_max": 14.5,
+        "bold": null,
+        "all_caps": true,
+        "sample_texts": [
+          "1.1 INTRODUCTION",
+          "1.2 HARDWARE SPECIFICATIONS",
+          "1.3 SOFTWARE SPECIFICATIONS",
+          "1.4 SCENARIOS",
+          "1.5 PROVISIONING"
+        ],
+        "count": 17
+      },
+      {
+        "level": 3,
+        "font_size_min": 13.5,
+        "font_size_max": 14.5,
+        "bold": true,
+        "all_caps": null,
+        "sample_texts": [
+          "connecti",
+          "1.3.1.3.16 eUICC",
+          "1.3.1.3.16.5 Testability",
+          "1.3.2.23 ePDCCH",
+          "1.4.1.12.2.2 NAS MESSAGING FOR NETWORK INITIATED BEARER  MODIFICATION - MODIFY E"
+        ],
+        "count": 5
+      }
+    ],
+    "numbering_pattern": "^(\\d+\\.)+\\d*\\s",
+    "max_observed_depth": 6
+  },
+  "requirement_id": {
+    "pattern": "VZ_REQ_[A-Z0-9_]+_\\d+",
+    "components": {
+      "prefix": "VZ_REQ",
+      "separator": "_",
+      "plan_id_position": 2,
+      "number_position": 3
+    },
+    "sample_ids": [
+      "VZ_REQ_LTEB13NAC_11581500",
+      "VZ_REQ_LTEDATARETRY_2365",
+      "VZ_REQ_LTESMS_30278"
+    ],
+    "total_found": 1978
+  },
+  "plan_metadata": {
+    "plan_name": {
+      "location": "first_page",
+      "pattern": "Plan\\s+Name:\\s*(.+?)(?:\\n|Plan\\s+Id|$)",
+      "sample_value": "LTE_Data_Retry"
+    },
+    "plan_id": {
+      "location": "first_page",
+      "pattern": "Plan\\s+Id:\\s*(\\w+)",
+      "sample_value": "LTEDATARETRY"
+    },
+    "version": {
+      "location": "first_page",
+      "pattern": "Version\\s+Number:\\s*([\\d.]+)",
+      "sample_value": "39"
+    },
+    "release_date": {
+      "location": "first_page",
+      "pattern": "Release\\s+Date:\\s*(.+?)(?:\\n|Latest|$)",
+      "sample_value": "February 2026"
+    }
+  },
+  "document_zones": [
+    {
+      "section_pattern": "^1\\.1\\b",
+      "zone_type": "introduction",
+      "description": "INTRODUCTION",
+      "heading_text": "INTRODUCTION"
+    },
+    {
+      "section_pattern": "^1\\.2\\b",
+      "zone_type": "hardware_specs",
+      "description": "HARDWARE SPECIFICATIONS",
+      "heading_text": "HARDWARE SPECIFICATIONS"
+    },
+    {
+      "section_pattern": "^1\\.3\\b",
+      "zone_type": "software_specs",
+      "description": "SOFTWARE SPECIFICATIONS",
+      "heading_text": "SOFTWARE SPECIFICATIONS"
+    },
+    {
+      "section_pattern": "^1\\.4\\b",
+      "zone_type": "scenarios",
+      "description": "SCENARIOS",
+      "heading_text": "SCENARIOS"
+    },
+    {
+      "section_pattern": "^1\\.5\\b",
+      "zone_type": "content",
+      "description": "PROVISIONING",
+      "heading_text": "PROVISIONING"
+    },
+    {
+      "section_pattern": "^1\\.6\\b",
+      "zone_type": "content",
+      "description": "PERFORMANCE",
+      "heading_text": "PERFORMANCE"
+    },
+    {
+      "section_pattern": "^1\\.7\\b",
+      "zone_type": "test_coverage",
+      "description": "REQUIRED VERIZON WIRELESS DEVICE COMPLIANCE TEST  PLANS",
+      "heading_text": "REQUIRED VERIZON WIRELESS DEVICE COMPLIANCE TEST  PLANS"
+    },
+    {
+      "section_pattern": "^1\\.8\\b",
+      "zone_type": "references",
+      "description": "REFERENCES",
+      "heading_text": "REFERENCES"
+    },
+    {
+      "section_pattern": "^1\\.9\\b",
+      "zone_type": "references",
+      "description": "REFERENCES",
+      "heading_text": "REFERENCES"
+    }
+  ],
+  "header_footer": {
+    "header_patterns": [],
+    "footer_patterns": [],
+    "page_number_pattern": "^\\s*Page\\s+\\d+\\s+of\\s+\\d+\\s*$"
+  },
+  "cross_reference_patterns": {
+    "standards_citations": [
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Ss]ection\\s+[\\d.]+)?",
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Rr]elease\\s+\\d+)?",
+      "GSMA\\s+\\w+[\\d.]*"
+    ],
+    "internal_section_refs": "[Ss]ee\\s+[Ss]ection\\s+[\\d.]+",
+    "requirement_id_refs": "VZ_REQ_[A-Z0-9_]+_\\d+"
+  },
+  "body_text": {
+    "font_size_min": 11.5,
+    "font_size_max": 12.5,
+    "font_families": [
+      "Fanwood"
+    ]
+  }
+}
