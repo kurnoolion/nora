@@ -1,5 +1,6 @@
 # Environments
 .env
+.venv/
 venv/
 env/
 
@@ -20,6 +21,9 @@ gexvex.log
 .DS_Store
 Thumbs.db
 
-# Input and generated pdf files
+# PDF files (source docs — large binaries, not tracked)
 *.pdf
+
+# Data directory (raw docs and extracted output)
+data/
 
