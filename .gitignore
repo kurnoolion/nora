@@ -1,0 +1,25 @@
+# Environments
+.env
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Local Databases (SQLite WAL mode)
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+gexvex.log
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Input and generated pdf files
+*.pdf
+
