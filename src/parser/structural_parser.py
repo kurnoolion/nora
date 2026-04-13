@@ -84,6 +84,43 @@ class RequirementTree:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
 
+    @classmethod
+    def load_json(cls, path: Path) -> RequirementTree:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        reqs = []
+        for r in data.get("requirements", []):
+            xr = r.get("cross_references", {})
+            standards = [StandardsRef(**s) for s in xr.get("standards", [])]
+            reqs.append(Requirement(
+                req_id=r.get("req_id", ""),
+                section_number=r.get("section_number", ""),
+                title=r.get("title", ""),
+                parent_req_id=r.get("parent_req_id", ""),
+                parent_section=r.get("parent_section", ""),
+                hierarchy_path=r.get("hierarchy_path", []),
+                zone_type=r.get("zone_type", ""),
+                text=r.get("text", ""),
+                tables=[TableData(**t) for t in r.get("tables", [])],
+                images=[ImageRef(**i) for i in r.get("images", [])],
+                children=r.get("children", []),
+                cross_references=CrossReferences(
+                    internal=xr.get("internal", []),
+                    external_plans=xr.get("external_plans", []),
+                    standards=standards,
+                ),
+            ))
+        return cls(
+            mno=data.get("mno", ""),
+            release=data.get("release", ""),
+            plan_id=data.get("plan_id", ""),
+            plan_name=data.get("plan_name", ""),
+            version=data.get("version", ""),
+            release_date=data.get("release_date", ""),
+            referenced_standards_releases=data.get("referenced_standards_releases", {}),
+            requirements=reqs,
+        )
+
 
 # ── Parser ──────────────────────────────────────────────────────────
 
