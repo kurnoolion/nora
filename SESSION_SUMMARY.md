@@ -42,6 +42,7 @@ An AI system for intelligent querying, cross-referencing, and compliance analysi
 12. **Release-specific standards versioning** — different MNOs may reference different 3GPP releases; separate Standard_Section nodes per release
 13. **Multi-format support (PDF, DOC, DOCX, XLS, XLSX)** — format-aware extraction layer produces normalized intermediate representation; DOC converted to DOCX via LibreOffice headless; supports embedded OLE objects and images/diagrams
 14. **Folder-structure-driven metadata** — `/<MNO>/<Release>/Requirements/`, `/<MNO>/<Release>/TestCases/`, `/Standards/<Spec>/<Release>/`
+15. **LLM abstraction via Protocol** — `LLMProvider` Protocol in `src/llm/base.py` is the only LLM interface; any class with matching `complete()` method works (structural typing, no inheritance); swap providers by passing a different instance
 
 ---
 
@@ -111,6 +112,7 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **Data model:** `src/models/document.py` — Normalized IR (DocumentIR, ContentBlock, FontInfo, Position, BlockType)
 - **Output:** `data/extracted/*_ir.json` — 5 VZW docs extracted
 - **Key design:** pymupdf for text+font metadata, pdfplumber for tables, table-region deduplication, font-group splitting for mixed-font blocks, header/footer filtering
+- **CLI:** `python -m src.extraction.extract <path-or-dir>`
 
 #### PoC Step 2 — DocumentProfiler (DONE, committed)
 - **Code:** `src/profiler/` (profiler.py, profile_schema.py, profile_cli.py)
@@ -125,6 +127,22 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **Key classes:** GenericStructuralParser, RequirementTree, Requirement, CrossReferences, StandardsRef, TableData, ImageRef
 - **CLI:** `python -m src.parser.parse_cli --profile <profile> --doc <ir.json> --output <tree.json>`
 
+#### PoC Step 5 — Cross-Reference Resolver (DONE, committed)
+- **Code:** `src/resolver/` (resolver.py, resolve_cli.py)
+- **Output:** `data/resolved/*_xrefs.json` — per-document cross-reference manifests
+- **Three resolution types:** internal (same tree), cross-plan (other trees in corpus), standards (3GPP TS citations)
+- **Key classes:** CrossReferenceResolver, CrossReferenceManifest, ResolvedInternalRef, ResolvedCrossPlanRef, ResolvedStandardsRef
+- **CLI:** `python -m src.resolver.resolve_cli --trees-dir data/parsed --output-dir data/resolved`
+
+#### PoC Step 6 — Feature Taxonomy (DONE, committed)
+- **LLM abstraction:** `src/llm/` (base.py — LLMProvider Protocol, mock_provider.py — MockLLMProvider with keyword catalog)
+- **Feature extraction:** `src/taxonomy/extractor.py` — per-document LLM-driven feature extraction
+- **Consolidation:** `src/taxonomy/consolidator.py` — cross-document feature merge and deduplication
+- **Data model:** `src/taxonomy/schema.py` — Feature, DocumentFeatures, TaxonomyFeature, FeatureTaxonomy
+- **Output:** `data/taxonomy/*_features.json` (per-doc) + `data/taxonomy/taxonomy.json` (unified)
+- **CLI:** `python -m src.taxonomy.taxonomy_cli --trees-dir data/parsed --output-dir data/taxonomy`
+- **LLM swap:** Any class with `complete(prompt, system, temperature, max_tokens) -> str` satisfies the Protocol. See `src/llm/base.py` for documentation.
+
 ### Code Review & Bug Fixes (completed after Step 3)
 
 Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
@@ -138,7 +156,7 @@ Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
 
 Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
 
-### Test Suite (88 tests, all passing)
+### Test Suite (128 tests, all passing)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -146,18 +164,21 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 | `test_profile_schema.py` | 9 | DocumentProfile round-trip for every nested structure, loads real VZW profile |
 | `test_patterns.py` | 39 | Section numbering, req IDs, plan ID extraction, 3GPP spec numbers (trailing dot regression), h/f patterns |
 | `test_pipeline.py` | 30 | End-to-end extract→profile→parse on real PDFs, cross-ref consistency, parent-child link integrity |
+| `test_resolver.py` | 19 | Internal/cross-plan/standards resolution, summary counts, manifest round-trip, pipeline integration |
+| `test_taxonomy.py` | 40 | MockLLMProvider protocol/keyword matching, FeatureExtractor prompt/parse, TaxonomyConsolidator merge/dedup, schema round-trips, full pipeline integration |
+
+Note: `test_pipeline.py` (30 tests) requires `pymupdf` which may not be installed in all environments. The remaining 98 tests run without it.
 
 ### Known Design Concerns (deferred)
 
 - **Heading levels are misleading** — Profile shows 3 levels all at 13.5-14.5pt differentiated by bold/caps, but these don't map to section depth. Parser correctly uses section numbering for hierarchy, so not a functional bug, but the profile data is confusing.
 - **`update_profile` is incomplete** — Only updates req IDs, cross-refs, and zones. Doesn't re-analyze heading levels, body text, or plan metadata.
 - **Req ID tables captured as data tables** — Some sections have small tables that are just formatting artifacts around requirement IDs, not actual data tables.
+- **Mock provider feature accuracy** — MockLLMProvider uses keyword matching which is approximate. Real LLM will produce more domain-accurate feature extractions. IMS_REGISTRATION appearing in all 5 docs is a mock artifact (many docs contain "registration" in headings).
 
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
-5. Cross-reference extraction (resolve references between parsed requirement trees)
-6. Feature taxonomy (LLM-driven concept extraction from parsed requirements)
 7. Standards ingestion (3GPP spec parsing, selective section extraction)
 8. Knowledge Graph construction (Neo4j or similar)
 9. Vector store (embeddings for parsed requirement text)
@@ -168,17 +189,18 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1-3 complete with bug fixes and test suite. Ready for Step 4 or output regeneration.
+**Status:** PoC Steps 1, 2, 3, 5, and 6 complete. Step 4 skipped for now. Ready for Step 7 or other remaining steps.
 
-**What just happened:**
-- Code review of all 3 PoC steps identified 5 bugs + 1 found by tests (6 total)
-- All bugs fixed and verified with smoke tests
-- Test suite built: 88 tests covering data model round-trips, regex patterns, and full pipeline
-- Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code
+**What just happened (this session):**
+- Completed Step 5 (cross-reference resolver) — resolves internal, cross-plan, and standards references across all parsed trees
+- Completed Step 6 (feature taxonomy) — LLM abstraction layer with Protocol-based provider interface, mock provider for testing, per-document feature extraction, cross-document consolidation into unified taxonomy
+- Added 59 new tests (19 resolver + 40 taxonomy) bringing total to 128
+- Taxonomy output verified: 16 features extracted across 5 VZW docs, each with primary/referenced tracking and MNO coverage
 
 **Immediate next actions:**
-1. Re-generate output files with fixed code (extraction, profiling, parsing)
-2. Move to PoC Step 4 (test case parsing) or another remaining step
+1. Move to PoC Step 7 (standards ingestion) or another remaining step
+2. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
+3. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
 
 ---
 
@@ -186,36 +208,52 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 
 ```
 req-agent/
-├── CLAUDE.md                          # Claude Code instructions
-├── SESSION_SUMMARY.md                 # This file
+├── CLAUDE.md                              # Claude Code instructions
+├── SESSION_SUMMARY.md                     # This file
+├── README.md                              # How to run and test all PoC steps
 ├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.4)
-├── requirements.txt                   # Python dependencies
+├── requirements.txt                       # Python dependencies
 ├── profiles/
-│   └── vzw_oa_profile.json           # VZW OA document profile
+│   └── vzw_oa_profile.json               # VZW OA document profile
 ├── src/
 │   ├── models/
-│   │   └── document.py               # Normalized IR data model
+│   │   └── document.py                   # Normalized IR data model
 │   ├── extraction/
-│   │   ├── base.py                   # Abstract extractor
-│   │   ├── pdf_extractor.py          # PDF extraction (pymupdf + pdfplumber)
-│   │   ├── registry.py               # Extractor registry + path metadata
-│   │   └── extract.py                # Extraction CLI
+│   │   ├── base.py                       # Abstract extractor
+│   │   ├── pdf_extractor.py              # PDF extraction (pymupdf + pdfplumber)
+│   │   ├── registry.py                   # Extractor registry + path metadata
+│   │   └── extract.py                    # Extraction CLI
 │   ├── profiler/
-│   │   ├── profile_schema.py         # Profile data model
-│   │   ├── profiler.py               # DocumentProfiler (heuristic analysis)
-│   │   └── profile_cli.py            # Profiler CLI
-│   └── parser/
-│       ├── structural_parser.py      # GenericStructuralParser (profile-driven)
-│       └── parse_cli.py              # Parser CLI
+│   │   ├── profile_schema.py             # Profile data model
+│   │   ├── profiler.py                   # DocumentProfiler (heuristic analysis)
+│   │   └── profile_cli.py               # Profiler CLI
+│   ├── parser/
+│   │   ├── structural_parser.py          # GenericStructuralParser (profile-driven)
+│   │   └── parse_cli.py                  # Parser CLI
+│   ├── resolver/
+│   │   ├── resolver.py                   # CrossReferenceResolver
+│   │   └── resolve_cli.py               # Resolver CLI
+│   ├── llm/
+│   │   ├── base.py                       # LLMProvider Protocol
+│   │   └── mock_provider.py              # MockLLMProvider (keyword-based)
+│   └── taxonomy/
+│       ├── schema.py                     # Feature taxonomy data model
+│       ├── extractor.py                  # Per-document feature extraction
+│       ├── consolidator.py               # Cross-document feature consolidation
+│       └── taxonomy_cli.py               # Taxonomy CLI
 ├── tests/
-│   ├── test_document_ir.py           # IR round-trip tests (10)
-│   ├── test_profile_schema.py        # Profile round-trip tests (9)
-│   ├── test_patterns.py              # Regex pattern tests (39)
-│   └── test_pipeline.py             # End-to-end pipeline tests (30)
+│   ├── test_document_ir.py               # IR round-trip tests (10)
+│   ├── test_profile_schema.py            # Profile round-trip tests (9)
+│   ├── test_patterns.py                  # Regex pattern tests (39)
+│   ├── test_pipeline.py                  # End-to-end pipeline tests (30, needs pymupdf)
+│   ├── test_resolver.py                  # Cross-reference resolver tests (19)
+│   └── test_taxonomy.py                  # Feature taxonomy tests (40)
 ├── data/
-│   ├── extracted/                    # IR JSON files (5 docs)
-│   └── parsed/                       # RequirementTree JSON files (5 docs)
-└── *.pdf                             # Source PDFs (5 VZW OA docs)
+│   ├── extracted/                        # IR JSON files (5 docs)
+│   ├── parsed/                           # RequirementTree JSON files (5 docs)
+│   ├── resolved/                         # Cross-reference manifest JSON files (5 docs)
+│   └── taxonomy/                         # Feature taxonomy JSON files (5 per-doc + 1 unified)
+└── *.pdf                                 # Source PDFs (5 VZW OA docs)
 ```
 
 ---
