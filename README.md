@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9 implemented. Steps 4, 10-11 pending.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10 implemented. Steps 4, 11 pending.
 
 ## Prerequisites
 
@@ -73,6 +73,9 @@ python -m src.graph.graph_cli --verify
 
 # Step 9: Build vector store → data/vectorstore/
 python -m src.vectorstore.vectorstore_cli
+
+# Step 10: Query the system
+python -m src.query.query_cli --query "What is the T3402 timer behavior?"
 ```
 
 ## Running Tests
@@ -94,6 +97,7 @@ python -m pytest tests/test_taxonomy.py -v          # Step 6: Feature taxonomy
 python -m pytest tests/test_standards.py -v          # Step 7: Standards ingestion
 python -m pytest tests/test_graph.py -v              # Step 8: Knowledge graph
 python -m pytest tests/test_vectorstore.py -v        # Step 9: Vector store
+python -m pytest tests/test_query.py -v              # Step 10: Query pipeline
 ```
 
 ### Test Summary
@@ -109,7 +113,8 @@ python -m pytest tests/test_vectorstore.py -v        # Step 9: Vector store
 | `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector, spec parser, section extractor, schemas | `data/resolved/`, `data/parsed/`, downloaded spec DOCX |
 | `test_graph.py` | 48 | Schema IDs, graph builders, serialization, full build, integration diagnostics | `networkx`, parsed/resolved/taxonomy/standards data |
 | `test_vectorstore.py` | 57 | Config, protocols, chunk builder, deduplication, builder, integration with real data | `data/parsed/`, `data/taxonomy/` |
-| **Total** | **287** | | |
+| `test_query.py` | 55 | Schema models, analyzer, resolver, graph scoper, RAG retriever, context builder, synthesizer, pipeline orchestration, integration | `networkx` |
+| **Total** | **342** | | |
 
 ## Step-by-Step Details
 
@@ -466,6 +471,46 @@ python -m src.vectorstore.vectorstore_cli --save-config configs/baseline.json
 | `include_hierarchy_path` | `true` | Prepend section hierarchy path |
 | `include_tables` | `true` | Include tables as Markdown |
 
+### Step 10 — Query Pipeline
+
+6-stage pipeline: Query Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis. Each stage has a mock implementation, so the full pipeline works without API keys.
+
+```bash
+# Single query
+python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+
+# Verbose mode (shows all pipeline stages)
+python -m src.query.query_cli --query "T3402 timer" --verbose
+
+# Interactive mode
+python -m src.query.query_cli --interactive
+
+# Custom settings
+python -m src.query.query_cli --query "..." --top-k 15 --max-depth 3
+
+# Save response to JSON
+python -m src.query.query_cli --query "..." --output response.json
+```
+
+**Output:** Query response with answer, citations, and pipeline statistics.
+
+**Pipeline stages:**
+
+| Stage | Module | Description |
+|-------|--------|-------------|
+| 1. Query Analysis | `analyzer.py` | Extracts entities, concepts, MNOs, features, plan IDs from natural language |
+| 2. MNO/Release Resolution | `resolver.py` | Maps MNO names to available graph scopes (explicit, latest, or all) |
+| 3. Graph Scoping | `graph_scope.py` | Traverses knowledge graph to find candidate requirement nodes |
+| 4. Targeted RAG | `rag_retriever.py` | Retrieves relevant chunks from vector store, scoped by graph candidates |
+| 5. Context Assembly | `context_builder.py` | Enriches chunks with graph context (hierarchy, standards, cross-refs) |
+| 6. LLM Synthesis | `synthesizer.py` | Generates answer with citations from assembled context |
+
+**Graph scoping strategies:** Entity lookup (req IDs, timers), feature lookup (maps_to edges), plan lookup (all reqs in plan), title search (text matching). BFS edge traversal with configurable depth and score decay (0.7^depth).
+
+**RAG retrieval:** Two strategies — scoped retrieval (filter vector store by graph candidate req_ids) and metadata retrieval (filter by MNO/release when no graph candidates). Diversity enforcement ensures minimum chunks per plan.
+
+**Mock implementations:** `MockQueryAnalyzer` uses keyword matching and regex patterns. `MockSynthesizer` returns structured summaries grouping results by plan with req IDs and standards references. Both exercise the full pipeline without requiring LLM API keys.
+
 ## Swapping the LLM Provider
 
 The LLM abstraction uses Python's Protocol (structural typing). To use a real LLM:
@@ -517,8 +562,9 @@ req-agent/
 │   ├── taxonomy/                          # Step 6: Feature taxonomy
 │   ├── standards/                         # Step 7: 3GPP standards ingestion
 │   ├── graph/                             # Step 8: Knowledge graph construction
-│   └── vectorstore/                       # Step 9: Vector store construction
-├── tests/                                 # 287 tests across 9 test files
+│   ├── vectorstore/                       # Step 9: Vector store construction
+│   └── query/                             # Step 10: Query pipeline (6-stage)
+├── tests/                                 # 342 tests across 10 test files
 ├── data/
 │   ├── extracted/                        # Step 1 output: IR JSON files
 │   ├── parsed/                           # Step 3 output: RequirementTree JSON files

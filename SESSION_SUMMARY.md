@@ -168,7 +168,7 @@ Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
 
 Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
 
-### Test Suite (287 tests, all passing)
+### Test Suite (342 tests, all passing)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -181,8 +181,9 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 | `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector helpers + integration, spec parser metadata/sections/ancestry, section extractor selection, schema round-trips |
 | `test_graph.py` | 48 | Schema ID generation, requirement/xref/standards/feature graph builders with synthetic data, serialization round-trips, full build with synthetic data, integration tests on real data (connectivity, traversals) |
 | `test_vectorstore.py` | 57 | Config round-trip, protocol conformance (EmbeddingProvider, VectorStoreProvider), ChunkBuilder contextualization/metadata/tables/images/toggles, deduplication, Builder orchestration with mock providers, integration tests on real parsed data |
+| `test_query.py` | 55 | Schema models, MockQueryAnalyzer (entities/concepts/MNOs/features/plans/query types), MNOReleaseResolver, GraphScoper (entity/feature/plan/title lookup + edge traversal), RAGRetriever (scoped + metadata retrieval + diversity), ContextBuilder (enrichment + formatting), synthesizer citations, pipeline orchestration, integration with synthetic graph |
 
-Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` (48) requires `networkx`; `test_vectorstore.py` integration tests (7) require parsed/taxonomy data. The remaining tests run without external dependencies.
+Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` (48) requires `networkx`; `test_query.py` (55) requires `networkx`; `test_vectorstore.py` integration tests (7) require parsed/taxonomy data. The remaining tests run without external dependencies.
 
 ### Known Design Concerns (deferred)
 
@@ -212,36 +213,49 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Deduplication:** Builder deduplicates chunks with same ID (parser artifact: VZ_REQ_LTEAT_33081 appears in two sections), keeping the chunk with more text content. 706 raw chunks → 705 after dedup.
 - **Design:** All components are configurable and swappable via Protocols — adding a new embedding model or vector store backend requires no changes to existing code, just a new class matching the Protocol.
 
+#### PoC Step 10 — Query Pipeline (DONE, committed)
+- **Schema:** `src/query/schema.py` — Query pipeline data models: `QueryType` (8 types: SINGLE_DOC, CROSS_DOC, CROSS_MNO_COMPARISON, RELEASE_DIFF, STANDARDS_COMPARISON, TRACEABILITY, FEATURE_LEVEL, GENERAL), `DocTypeScope` (3 scopes), `QueryIntent`, `MNOScope`, `ScopedQuery`, `CandidateNode`/`CandidateSet`, `RetrievedChunk`, `StandardsContext`/`ChunkContext`/`AssembledContext`, `Citation`, `QueryResponse` (with `save_json()`)
+- **Stage 1 — Query Analysis:** `src/query/analyzer.py` — `MockQueryAnalyzer` uses keyword matching (MNO aliases, plan aliases, feature keywords, 3GPP spec patterns, req ID patterns, timer/cause code entity extraction, telecom concept patterns); `LLMQueryAnalyzer` uses structured JSON prompt with fallback to mock on parse failure
+- **Stage 2 — MNO/Release Resolution:** `src/query/resolver.py` — `MNOReleaseResolver` discovers available MNOs/releases from graph nodes; resolution rules: explicit MNO+release → use as-is; MNO only → latest release; no MNO → all available; "latest" → first in sorted list; fuzzy release matching (exact, substring, year+month)
+- **Stage 3 — Graph Scoping:** `src/query/graph_scope.py` — `GraphScoper` with configurable max_depth; default depth per query type (1 for single_doc, 2 for cross_doc/feature/general); 4 lookup strategies (entity, feature, plan, title search); BFS edge traversal with allowed edge types per query type, bidirectional, score decay (0.7^depth), scope filtering by MNO/release
+- **Stage 4 — Targeted RAG:** `src/query/rag_retriever.py` — `RAGRetriever` with configurable top_k and diversity_min_per_plan; scoped retrieval (filter by graph candidate req_ids using `$in`) vs metadata retrieval (filter by MNO/release); diversity enforcement ensures minimum chunks per plan; handles large candidate sets (>500) by retrieving 3x and filtering client-side
+- **Stage 5 — Context Assembly:** `src/query/context_builder.py` — `ContextBuilder` enriches chunks with graph context (hierarchy path, parent text, standards references, related req IDs); query-type-specific system prompts; formatted context with provenance headers, hierarchy, standards, cross-refs; strips chunk headers to avoid duplication
+- **Stage 6 — LLM Synthesis:** `src/query/synthesizer.py` — `LLMSynthesizer` sends assembled context to LLM, extracts citations via regex (`VZ_REQ_*` IDs and `3GPP TS X.Y, Section Z` patterns using `\d[\d.]*\d` to avoid trailing-dot capture); `MockSynthesizer` returns structured summary grouping by plan with req IDs and standards references
+- **Pipeline:** `src/query/pipeline.py` — `QueryPipeline` wires all 6 stages; `query(text, verbose)` runs full pipeline with optional verbose logging of intermediate results; `load_graph(path)` helper
+- **CLI:** `src/query/query_cli.py` — `--query`/`-q` single query, `--interactive`/`-i` interactive mode, `--top-k`, `--max-depth`, `--max-context`, `--verbose`/`-v`, `--output`/`-o` JSON export
+- **Tests:** 55 tests across 9 test classes (schema, analyzer, resolver, graph scoper, RAG retriever, context builder, synthesizer, pipeline, integration) using synthetic graph and mock vector store
+
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
-10. Query pipeline (graph scoping + RAG ranking + LLM synthesis)
 11. Evaluation (accuracy, coverage, latency benchmarks)
 
 ---
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, and 9 complete. Step 4 (test case parsing) skipped for now. Ready for Step 10 (Query Pipeline).
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, and 10 complete. Step 4 (test case parsing) skipped for now. Ready for Step 11 (Evaluation).
 
 **What just happened (this session):**
-- Completed Step 9 (Vector Store construction) — configurable embedding + vector store with Protocol-based abstraction. 705 requirement chunks (after dedup) with contextualized text and rich metadata. CLI supports config files, CLI overrides, test queries, and store inspection.
-- Added 57 new tests (5 config + 12 protocol + 22 chunk builder + 4 deduplication + 7 builder + 7 integration) bringing total to 287
-- Found and handled duplicate req_id (VZ_REQ_LTEAT_33081) with deduplication logic
+- Completed Step 10 (Query Pipeline) — full 6-stage pipeline: Query Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis
+- Mock implementations for every stage (no API keys needed for full pipeline testing)
+- Added 55 new tests (schema, analyzer, resolver, graph scoper, RAG retriever, context builder, synthesizer, pipeline, integration) bringing total to 342
+- Fixed two bugs: standards comparison vs release_diff classification ordering; trailing-dot in citation section regex
 
 **Previous sessions completed:**
 - Step 1 (extraction), Step 2 (profiler), Step 3 (parser), code review + 6 bug fixes
 - Step 5 (cross-reference resolver), Step 6 (feature taxonomy), Step 7 (standards ingestion)
-- Step 8 (knowledge graph construction)
+- Step 8 (knowledge graph construction), Step 9 (vector store construction)
 
 **Immediate next actions:**
-1. Move to PoC Step 10 (Query Pipeline) — graph scoping + targeted RAG + LLM synthesis
+1. Move to PoC Step 11 (Evaluation) — test questions across categories, measure completeness/accuracy/citation quality per TDD section 9.4
 2. Install sentence-transformers and chromadb to run the actual vector store build: `pip install sentence-transformers chromadb`
 3. Build the vector store: `python -m src.vectorstore.vectorstore_cli`
-4. Experiment with different configs: `--model all-mpnet-base-v2`, `--metric l2`, etc.
-5. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
-6. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
-7. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
+4. Run end-to-end queries: `python -m src.query.query_cli --query "..." --verbose`
+5. Experiment with different configs: `--model all-mpnet-base-v2`, `--metric l2`, etc.
+6. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
+7. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
+8. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
 
 ---
 
@@ -294,15 +308,25 @@ req-agent/
 │   │   ├── schema.py                     # Node/edge types, ID generation functions
 │   │   ├── builder.py                    # KnowledgeGraphBuilder (7-step construction)
 │   │   └── graph_cli.py                  # Graph CLI with --verify diagnostics
-│   └── vectorstore/
-│       ├── embedding_base.py             # EmbeddingProvider Protocol
-│       ├── embedding_st.py               # SentenceTransformerEmbedder
-│       ├── store_base.py                 # VectorStoreProvider Protocol + QueryResult
-│       ├── store_chroma.py               # ChromaDBStore (persistent ChromaDB)
-│       ├── config.py                     # VectorStoreConfig (all tuneable params)
-│       ├── chunk_builder.py              # ChunkBuilder (requirement → contextualized chunk)
-│       ├── builder.py                    # VectorStoreBuilder (orchestration)
-│       └── vectorstore_cli.py            # CLI with config support + test queries
+│   ├── vectorstore/
+│   │   ├── embedding_base.py             # EmbeddingProvider Protocol
+│   │   ├── embedding_st.py               # SentenceTransformerEmbedder
+│   │   ├── store_base.py                 # VectorStoreProvider Protocol + QueryResult
+│   │   ├── store_chroma.py               # ChromaDBStore (persistent ChromaDB)
+│   │   ├── config.py                     # VectorStoreConfig (all tuneable params)
+│   │   ├── chunk_builder.py              # ChunkBuilder (requirement → contextualized chunk)
+│   │   ├── builder.py                    # VectorStoreBuilder (orchestration)
+│   │   └── vectorstore_cli.py            # CLI with config support + test queries
+│   └── query/
+│       ├── schema.py                     # Query pipeline data models (intents, candidates, responses)
+│       ├── analyzer.py                   # Stage 1: Query analysis (Mock + LLM)
+│       ├── resolver.py                   # Stage 2: MNO/Release resolution
+│       ├── graph_scope.py                # Stage 3: Graph scoping (entity/feature/plan/title + BFS)
+│       ├── rag_retriever.py              # Stage 4: Targeted RAG retrieval with diversity
+│       ├── context_builder.py            # Stage 5: Context assembly with graph enrichment
+│       ├── synthesizer.py                # Stage 6: LLM synthesis with citation extraction
+│       ├── pipeline.py                   # Pipeline orchestrator (6-stage)
+│       └── query_cli.py                  # CLI (single query, interactive, verbose)
 ├── tests/
 │   ├── test_document_ir.py               # IR round-trip tests (10)
 │   ├── test_profile_schema.py            # Profile round-trip tests (9)
@@ -312,7 +336,8 @@ req-agent/
 │   ├── test_taxonomy.py                  # Feature taxonomy tests (40)
 │   ├── test_standards.py                 # Standards ingestion tests (35)
 │   ├── test_graph.py                     # Knowledge graph tests (48)
-│   └── test_vectorstore.py              # Vector store tests (57)
+│   ├── test_vectorstore.py              # Vector store tests (57)
+│   └── test_query.py                    # Query pipeline tests (55)
 ├── data/
 │   ├── extracted/                        # IR JSON files (5 docs)
 │   ├── parsed/                           # RequirementTree JSON files (5 docs)
