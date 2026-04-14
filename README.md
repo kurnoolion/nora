@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10 implemented. Steps 4, 11 pending.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending.
 
 ## Prerequisites
 
@@ -76,6 +76,11 @@ python -m src.vectorstore.vectorstore_cli
 
 # Step 10: Query the system
 python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+
+# Step 11: Evaluate the pipeline
+python -m src.eval.eval_cli                       # Run all 18 test questions
+python -m src.eval.eval_cli --ab                  # A/B: graph-scoped vs pure RAG
+python -m src.eval.eval_cli --output data/eval/report.json  # Save report
 ```
 
 ## Running Tests
@@ -98,6 +103,7 @@ python -m pytest tests/test_standards.py -v          # Step 7: Standards ingesti
 python -m pytest tests/test_graph.py -v              # Step 8: Knowledge graph
 python -m pytest tests/test_vectorstore.py -v        # Step 9: Vector store
 python -m pytest tests/test_query.py -v              # Step 10: Query pipeline
+python -m pytest tests/test_eval.py -v               # Step 11: Evaluation framework
 ```
 
 ### Test Summary
@@ -114,7 +120,8 @@ python -m pytest tests/test_query.py -v              # Step 10: Query pipeline
 | `test_graph.py` | 48 | Schema IDs, graph builders, serialization, full build, integration diagnostics | `networkx`, parsed/resolved/taxonomy/standards data |
 | `test_vectorstore.py` | 57 | Config, protocols, chunk builder, deduplication, builder, integration with real data | `data/parsed/`, `data/taxonomy/` |
 | `test_query.py` | 55 | Schema models, analyzer, resolver, graph scoper, RAG retriever, context builder, synthesizer, pipeline orchestration, integration | `networkx` |
-| **Total** | **342** | | |
+| `test_eval.py` | 36 | Question set structure, metric scoring, report serialization, A/B comparison, runner integration with synthetic graph | `networkx` |
+| **Total** | **378** | | |
 
 ## Step-by-Step Details
 
@@ -511,6 +518,49 @@ python -m src.query.query_cli --query "..." --output response.json
 
 **Mock implementations:** `MockQueryAnalyzer` uses keyword matching and regex patterns. `MockSynthesizer` returns structured summaries grouping results by plan with req IDs and standards references. Both exercise the full pipeline without requiring LLM API keys.
 
+### Step 11 — Evaluation
+
+Evaluates the query pipeline on 18 test questions across 5 categories, measuring completeness, accuracy, citation quality, standards integration, and hallucination avoidance. Supports A/B comparison between graph-scoped and pure RAG retrieval.
+
+```bash
+# Run all 18 evaluation questions (graph-scoped mode)
+python -m src.eval.eval_cli
+
+# Run A/B comparison (graph-scoped vs pure RAG)
+python -m src.eval.eval_cli --ab
+
+# Run a specific category only
+python -m src.eval.eval_cli --category cross_doc
+
+# Save report to JSON
+python -m src.eval.eval_cli --output data/eval/report.json
+
+# Verbose mode (shows pipeline stage details)
+python -m src.eval.eval_cli --verbose
+```
+
+**Test question categories (18 questions):**
+
+| Category | Count | What It Tests |
+|----------|-------|---------------|
+| Single-doc factual | 4 | Baseline single-document retrieval (T3402 timer, throttling, AT commands, FOTA) |
+| Cross-doc dependency | 4 | Graph traversal across documents (SMS over IMS, PDN connectivity, IMS registration, detach) |
+| Feature-level | 4 | Feature taxonomy retrieval (data retry, error handling, bearer management, PLMN selection) |
+| Standards comparison | 3 | Standards edges and references (T3402 vs 3GPP, attach reject sections, TS 36.331) |
+| Traceability | 3 | Entity lookup (req ID, IMS throttling, cause code 22) |
+
+**Evaluation metrics (per TDD 9.4):**
+
+| Metric | Definition | TDD Target |
+|--------|-----------|------------|
+| Completeness | Did the answer include information from ALL expected plans? | > 80% (cross-doc) |
+| Accuracy | Are expected requirement IDs found in the results? | > 90% |
+| Citation quality | Do answers include requirement and standards citations? | 100% |
+| Standards integration | Are referenced 3GPP specs correctly incorporated? | > 80% |
+| No hallucination | No fabricated requirement IDs from unknown plans | 100% |
+
+**A/B comparison:** Runs all questions twice — once with graph scoping (normal pipeline) and once bypassing graph scoping (pure vector RAG with metadata filters only). Reports per-question and per-category deltas to demonstrate graph value.
+
 ## Swapping the LLM Provider
 
 The LLM abstraction uses Python's Protocol (structural typing). To use a real LLM:
@@ -563,8 +613,9 @@ req-agent/
 │   ├── standards/                         # Step 7: 3GPP standards ingestion
 │   ├── graph/                             # Step 8: Knowledge graph construction
 │   ├── vectorstore/                       # Step 9: Vector store construction
-│   └── query/                             # Step 10: Query pipeline (6-stage)
-├── tests/                                 # 342 tests across 10 test files
+│   ├── query/                             # Step 10: Query pipeline (6-stage)
+│   └── eval/                              # Step 11: Evaluation framework
+├── tests/                                 # 378 tests across 11 test files
 ├── data/
 │   ├── extracted/                        # Step 1 output: IR JSON files
 │   ├── parsed/                           # Step 3 output: RequirementTree JSON files

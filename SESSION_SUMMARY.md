@@ -168,7 +168,7 @@ Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
 
 Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
 
-### Test Suite (342 tests, all passing)
+### Test Suite (378 tests, all passing)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -182,8 +182,9 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 | `test_graph.py` | 48 | Schema ID generation, requirement/xref/standards/feature graph builders with synthetic data, serialization round-trips, full build with synthetic data, integration tests on real data (connectivity, traversals) |
 | `test_vectorstore.py` | 57 | Config round-trip, protocol conformance (EmbeddingProvider, VectorStoreProvider), ChunkBuilder contextualization/metadata/tables/images/toggles, deduplication, Builder orchestration with mock providers, integration tests on real parsed data |
 | `test_query.py` | 55 | Schema models, MockQueryAnalyzer (entities/concepts/MNOs/features/plans/query types), MNOReleaseResolver, GraphScoper (entity/feature/plan/title lookup + edge traversal), RAGRetriever (scoped + metadata retrieval + diversity), ContextBuilder (enrichment + formatting), synthesizer citations, pipeline orchestration, integration with synthetic graph |
+| `test_eval.py` | 36 | Question set structure (counts, categories, IDs, ground truth), metric scoring (perfect/zero/partial/hallucination), score/report serialization, A/B comparison logic, runner integration with synthetic graph + mock store, overall score weighting |
 
-Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` (48) requires `networkx`; `test_query.py` (55) requires `networkx`; `test_vectorstore.py` integration tests (7) require parsed/taxonomy data. The remaining tests run without external dependencies.
+Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` (48) requires `networkx`; `test_query.py` (55) requires `networkx`; `test_eval.py` (36) requires `networkx`; `test_vectorstore.py` integration tests (7) require parsed/taxonomy data. The remaining tests run without external dependencies.
 
 ### Known Design Concerns (deferred)
 
@@ -225,22 +226,30 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **CLI:** `src/query/query_cli.py` — `--query`/`-q` single query, `--interactive`/`-i` interactive mode, `--top-k`, `--max-depth`, `--max-context`, `--verbose`/`-v`, `--output`/`-o` JSON export
 - **Tests:** 55 tests across 9 test classes (schema, analyzer, resolver, graph scoper, RAG retriever, context builder, synthesizer, pipeline, integration) using synthetic graph and mock vector store
 
+#### PoC Step 11 — Evaluation (DONE, committed)
+- **Test questions:** `src/eval/questions.py` — 18 questions across 5 categories (4 single-doc, 4 cross-doc, 4 feature-level, 3 standards comparison, 3 traceability) with `GroundTruth` per question (expected plans, req IDs, features, standards, concepts, min_plans, min_chunks)
+- **Metrics:** `src/eval/metrics.py` — `score_question()` computes 5 metrics per question: completeness (plan coverage), accuracy (req ID recall), citation quality (req + standards citations), standards integration (spec mentions), hallucination-free (no fabricated req IDs from unknown plans). `QuestionScore` with weighted overall (0.30/0.25/0.20/0.15/0.10). `EvalReport` with per-category and overall averages.
+- **Runner:** `src/eval/runner.py` — `EvalRunner` runs questions through pipeline in two modes: `graph_scoped` (normal) and `pure_rag` (bypass graph scoping, Stage 3 returns empty CandidateSet). `ABComparison` computes wins/losses/ties and per-category deltas.
+- **CLI:** `src/eval/eval_cli.py` — `--ab` for A/B comparison, `--category` to filter, `--output` for JSON report, `--verbose` for pipeline details. Displays TDD 9.4 target checks (PASS/FAIL).
+- **Pipeline change:** `pipeline.py` — added `_bypass_graph` flag + `CandidateSet` import for pure-RAG evaluation mode
+- **Tests:** 36 tests (12 question set structure, 8 metric scoring, 3 serialization, 3 A/B comparison, 7 runner integration, 3 overall score)
+
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
-11. Evaluation (accuracy, coverage, latency benchmarks)
 
 ---
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, and 10 complete. Step 4 (test case parsing) skipped for now. Ready for Step 11 (Evaluation).
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. All PoC steps except Step 4 are done.
 
 **What just happened (this session):**
-- Completed Step 10 (Query Pipeline) — full 6-stage pipeline: Query Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis
-- Mock implementations for every stage (no API keys needed for full pipeline testing)
-- Added 55 new tests (schema, analyzer, resolver, graph scoper, RAG retriever, context builder, synthesizer, pipeline, integration) bringing total to 342
-- Fixed two bugs: standards comparison vs release_diff classification ordering; trailing-dot in citation section regex
+- Completed Step 10 (Query Pipeline) — full 6-stage pipeline with mock implementations for all stages
+- Completed Step 11 (Evaluation) — 18 test questions with ground truth, 5 metrics, A/B comparison framework (graph-scoped vs pure RAG)
+- Added 91 new tests (55 query + 36 eval) bringing total to 378
+- Fixed: standards comparison vs release_diff classification ordering; trailing-dot in citation section regex
+- Added `_bypass_graph` to pipeline for pure-RAG A/B comparison mode
 
 **Previous sessions completed:**
 - Step 1 (extraction), Step 2 (profiler), Step 3 (parser), code review + 6 bug fixes
@@ -248,10 +257,10 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - Step 8 (knowledge graph construction), Step 9 (vector store construction)
 
 **Immediate next actions:**
-1. Move to PoC Step 11 (Evaluation) — test questions across categories, measure completeness/accuracy/citation quality per TDD section 9.4
-2. Install sentence-transformers and chromadb to run the actual vector store build: `pip install sentence-transformers chromadb`
-3. Build the vector store: `python -m src.vectorstore.vectorstore_cli`
-4. Run end-to-end queries: `python -m src.query.query_cli --query "..." --verbose`
+1. Install sentence-transformers and chromadb to run the actual vector store build: `pip install sentence-transformers chromadb`
+2. Build the vector store: `python -m src.vectorstore.vectorstore_cli`
+3. Run end-to-end queries: `python -m src.query.query_cli --query "..." --verbose`
+4. Run evaluation: `python -m src.eval.eval_cli --ab --output data/eval/report.json`
 5. Experiment with different configs: `--model all-mpnet-base-v2`, `--metric l2`, etc.
 6. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
 7. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
@@ -317,16 +326,21 @@ req-agent/
 │   │   ├── chunk_builder.py              # ChunkBuilder (requirement → contextualized chunk)
 │   │   ├── builder.py                    # VectorStoreBuilder (orchestration)
 │   │   └── vectorstore_cli.py            # CLI with config support + test queries
-│   └── query/
-│       ├── schema.py                     # Query pipeline data models (intents, candidates, responses)
-│       ├── analyzer.py                   # Stage 1: Query analysis (Mock + LLM)
-│       ├── resolver.py                   # Stage 2: MNO/Release resolution
-│       ├── graph_scope.py                # Stage 3: Graph scoping (entity/feature/plan/title + BFS)
-│       ├── rag_retriever.py              # Stage 4: Targeted RAG retrieval with diversity
-│       ├── context_builder.py            # Stage 5: Context assembly with graph enrichment
-│       ├── synthesizer.py                # Stage 6: LLM synthesis with citation extraction
-│       ├── pipeline.py                   # Pipeline orchestrator (6-stage)
-│       └── query_cli.py                  # CLI (single query, interactive, verbose)
+│   ├── query/
+│   │   ├── schema.py                     # Query pipeline data models (intents, candidates, responses)
+│   │   ├── analyzer.py                   # Stage 1: Query analysis (Mock + LLM)
+│   │   ├── resolver.py                   # Stage 2: MNO/Release resolution
+│   │   ├── graph_scope.py                # Stage 3: Graph scoping (entity/feature/plan/title + BFS)
+│   │   ├── rag_retriever.py              # Stage 4: Targeted RAG retrieval with diversity
+│   │   ├── context_builder.py            # Stage 5: Context assembly with graph enrichment
+│   │   ├── synthesizer.py                # Stage 6: LLM synthesis with citation extraction
+│   │   ├── pipeline.py                   # Pipeline orchestrator (6-stage)
+│   │   └── query_cli.py                  # CLI (single query, interactive, verbose)
+│   └── eval/
+│       ├── questions.py                  # 18 test questions with ground truth
+│       ├── metrics.py                    # Scoring functions and report aggregation
+│       ├── runner.py                     # EvalRunner with A/B comparison
+│       └── eval_cli.py                   # CLI (run, --ab, --category, --output)
 ├── tests/
 │   ├── test_document_ir.py               # IR round-trip tests (10)
 │   ├── test_profile_schema.py            # Profile round-trip tests (9)
@@ -337,7 +351,8 @@ req-agent/
 │   ├── test_standards.py                 # Standards ingestion tests (35)
 │   ├── test_graph.py                     # Knowledge graph tests (48)
 │   ├── test_vectorstore.py              # Vector store tests (57)
-│   └── test_query.py                    # Query pipeline tests (55)
+│   ├── test_query.py                    # Query pipeline tests (55)
+│   └── test_eval.py                     # Evaluation framework tests (36)
 ├── data/
 │   ├── extracted/                        # IR JSON files (5 docs)
 │   ├── parsed/                           # RequirementTree JSON files (5 docs)

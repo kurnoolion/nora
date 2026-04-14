@@ -25,7 +25,7 @@ from src.query.graph_scope import GraphScoper
 from src.query.rag_retriever import RAGRetriever
 from src.query.context_builder import ContextBuilder
 from src.query.synthesizer import MockSynthesizer
-from src.query.schema import QueryResponse
+from src.query.schema import QueryResponse, CandidateSet
 
 from src.vectorstore.embedding_base import EmbeddingProvider
 from src.vectorstore.store_base import VectorStoreProvider
@@ -72,6 +72,7 @@ class QueryPipeline:
         self._synthesizer = synthesizer or MockSynthesizer()
         self._top_k = top_k
         self._max_context_chars = max_context_chars
+        self._bypass_graph = False
 
     def query(self, query_text: str, verbose: bool = False) -> QueryResponse:
         """Run the full query pipeline.
@@ -94,9 +95,14 @@ class QueryPipeline:
             logger.info(f"[Stage 2] Scope: {scoped.to_dict()}")
 
         # Stage 3: Graph Scoping
-        candidates = self._scoper.scope(scoped)
-        if verbose:
-            logger.info(f"[Stage 3] Candidates: {candidates.to_dict()}")
+        if self._bypass_graph:
+            candidates = CandidateSet()
+            if verbose:
+                logger.info("[Stage 3] BYPASSED (pure RAG mode)")
+        else:
+            candidates = self._scoper.scope(scoped)
+            if verbose:
+                logger.info(f"[Stage 3] Candidates: {candidates.to_dict()}")
 
         # Stage 4: Targeted RAG
         chunks = self._retriever.retrieve(
