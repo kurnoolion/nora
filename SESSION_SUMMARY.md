@@ -77,6 +77,7 @@ Honesty:
 14. **Folder-structure-driven metadata** — `/<MNO>/<Release>/Requirements/`, `/<MNO>/<Release>/TestCases/`, `/Standards/<Spec>/<Release>/`
 15. **LLM abstraction via Protocol** — `LLMProvider` Protocol in `src/llm/base.py` is the only LLM interface; any class with matching `complete()` method works (structural typing, no inheritance); swap providers by passing a different instance
 16. **Configurable vector store** — embedding model, vector DB backend, distance metric, and chunk contextualization are all configurable via `VectorStoreConfig` (JSON-serializable). `EmbeddingProvider` and `VectorStoreProvider` Protocols follow same pattern as `LLMProvider`. Supports experimentation with different models/metrics to find best accuracy/speed tradeoff.
+17. **Local LLM via Ollama (Gemma 4 E4B)** — Evaluated Gemma 3 (1B/4B/12B/27B) and Gemma 4 (E2B/E4B/26B-A4B/31B) against 16GB RAM / CPU-only / Intel Ultra 9 185H constraints. Selected Gemma 4 E4B (8B total params, 4B effective via PLE, Q4_K_M quantization, ~9.6GB, 128K context). 26B-A4B won't fit (18GB Q4); 31B ruled out (20GB Q4). E4B runs at ~2-5 tok/s on CPU — acceptable for PoC structured synthesis on pre-scoped context. OllamaProvider (`src/llm/ollama_provider.py`) connects to local Ollama HTTP API, satisfies LLMProvider Protocol.
 
 ---
 
@@ -275,29 +276,40 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. All PoC steps except Step 4 are done.
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. All PoC steps except Step 4 are done. Vector store built, baseline evaluation run, local LLM (Ollama + Gemma 4 E4B) integration implemented and wired in.
 
 **What just happened (this session):**
-- Completed Step 10 (Query Pipeline) — full 6-stage pipeline with mock implementations for all stages
-- Completed Step 11 (Evaluation) — 18 test questions with ground truth, 5 metrics, A/B comparison framework (graph-scoped vs pure RAG)
-- Added 91 new tests (55 query + 36 eval) bringing total to 378
-- Fixed: standards comparison vs release_diff classification ordering; trailing-dot in citation section regex
-- Added `_bypass_graph` to pipeline for pure-RAG A/B comparison mode
+- Installed `sentence-transformers` and `chromadb` dependencies
+- Built the vector store: 705 chunks embedded with `all-MiniLM-L6-v2` (384d), ChromaDB cosine distance
+- Ran end-to-end queries successfully (data retry, SMS/3GPP standards)
+- Ran A/B evaluation baseline (mock synthesizer): 85.3% overall, all ties between graph-scoped and pure RAG (expected — mock synthesizer doesn't differentiate; real LLM will)
+  - Feature-level: 96.3%, Single-doc: 88.5%, Traceability: 83.3%, Cross-doc: 82.7%, Standards comparison: 71.7%
+- Fixed import bug in `eval_cli.py` — `ABComparison` was imported from wrong module
+- Fixed deprecation warning in `embedding_st.py` — `get_sentence_embedding_dimension` → `get_embedding_dimension`
+- Evaluated local LLM options for 16GB RAM / CPU-only / Intel Ultra 9 185H:
+  - Gemma 4 E4B selected (8B total, 4B effective via PLE, Q4_K_M ~9.6GB, 128K context, ~2-5 tok/s CPU)
+  - Gemma 4 26B-A4B ruled out (18GB Q4 — won't fit alongside pipeline)
+  - Gemma 3 4B viable fallback (3GB Q4, proven but older architecture)
+- Installed Ollama (v0.20.7) on WSL2
+- Implemented `OllamaProvider` (`src/llm/ollama_provider.py`) — connects to local Ollama HTTP API, satisfies LLMProvider Protocol, includes performance logging (tok/s), thinking mode support
+- Wired `--llm ollama --llm-model gemma4:e4b` flags into both query CLI and eval CLI with graceful fallback to mock on connection failure
+- Gemma 4 E4B model download in progress via `ollama pull gemma4:e4b`
+- All 378 tests passing
 
 **Previous sessions completed:**
 - Step 1 (extraction), Step 2 (profiler), Step 3 (parser), code review + 6 bug fixes
 - Step 5 (cross-reference resolver), Step 6 (feature taxonomy), Step 7 (standards ingestion)
 - Step 8 (knowledge graph construction), Step 9 (vector store construction)
+- Step 10 (query pipeline), Step 11 (evaluation framework)
 
 **Immediate next actions:**
-1. Install sentence-transformers and chromadb to run the actual vector store build: `pip install sentence-transformers chromadb`
-2. Build the vector store: `python -m src.vectorstore.vectorstore_cli`
-3. Run end-to-end queries: `python -m src.query.query_cli --query "..." --verbose`
-4. Run evaluation: `python -m src.eval.eval_cli --ab --output data/eval/report.json`
-5. Experiment with different configs: `--model all-mpnet-base-v2`, `--metric l2`, etc.
+1. Once `gemma4:e4b` download completes, test end-to-end with real LLM: `python -m src.query.query_cli --llm ollama -q "What are the data retry requirements?" -v`
+2. Run A/B evaluation with real LLM: `python -m src.eval.eval_cli --ab --llm ollama --output data/eval/report_llm.json`
+3. Compare LLM vs mock evaluation results — graph-scoped should now outperform pure RAG
+4. If RAM is too tight with E4B, fall back to `gemma4:e2b` or `gemma3:4b`
+5. Experiment with different embedding models: `--model all-mpnet-base-v2`
 6. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
-7. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
-8. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
+7. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
 
 ---
 
@@ -332,7 +344,8 @@ req-agent/
 │   │   └── resolve_cli.py               # Resolver CLI
 │   ├── llm/
 │   │   ├── base.py                       # LLMProvider Protocol
-│   │   └── mock_provider.py              # MockLLMProvider (keyword-based)
+│   │   ├── mock_provider.py              # MockLLMProvider (keyword-based)
+│   │   └── ollama_provider.py            # OllamaProvider (local Ollama HTTP API)
 │   ├── taxonomy/
 │   │   ├── schema.py                     # Feature taxonomy data model
 │   │   ├── extractor.py                  # Per-document feature extraction

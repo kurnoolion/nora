@@ -73,14 +73,26 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
         print("Run: python -m src.vectorstore.vectorstore_cli")
         sys.exit(1)
 
-    # Create analyzer (mock by default, LLM if provider available)
+    # Create analyzer and synthesizer based on --llm flag
     analyzer = None
     synthesizer = None
 
-    if args.use_llm:
-        # User wants real LLM — they need to provide one
-        print("Note: --use-llm requires a configured LLM provider.")
-        print("Using mock analyzer and synthesizer.")
+    if args.llm == "ollama":
+        from src.llm.ollama_provider import OllamaProvider
+        from src.query.synthesizer import LLMSynthesizer
+
+        try:
+            llm = OllamaProvider(
+                model=args.llm_model,
+                timeout=args.llm_timeout,
+            )
+            synthesizer = LLMSynthesizer(llm, max_tokens=args.max_context // 4)
+            print(f"Using Ollama LLM: {args.llm_model}")
+        except ConnectionError as e:
+            print(f"Warning: {e}")
+            print("Falling back to mock synthesizer.")
+    elif args.llm == "mock":
+        pass  # defaults to MockSynthesizer in pipeline
 
     # Build pipeline
     pipeline = QueryPipeline(
@@ -200,8 +212,16 @@ def main() -> None:
         help="Maximum context chars for LLM (default: 30000)",
     )
     parser.add_argument(
-        "--use-llm", action="store_true",
-        help="Use real LLM for analysis/synthesis (requires provider)",
+        "--llm", choices=["mock", "ollama"], default="mock",
+        help="LLM backend: mock (default) or ollama (local Gemma)",
+    )
+    parser.add_argument(
+        "--llm-model", default="gemma4:e4b",
+        help="Ollama model name (default: gemma4:e4b)",
+    )
+    parser.add_argument(
+        "--llm-timeout", type=int, default=300,
+        help="LLM request timeout in seconds (default: 300)",
     )
 
     # Output

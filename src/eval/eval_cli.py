@@ -26,8 +26,8 @@ import sys
 from pathlib import Path
 
 from src.eval.questions import ALL_QUESTIONS, QUESTIONS_BY_CATEGORY
-from src.eval.runner import EvalRunner
-from src.eval.metrics import EvalReport, ABComparison
+from src.eval.runner import EvalRunner, ABComparison
+from src.eval.metrics import EvalReport
 from src.query.pipeline import load_graph
 
 logger = logging.getLogger(__name__)
@@ -75,10 +75,28 @@ def _create_runner(args: argparse.Namespace) -> EvalRunner:
         print("Run: python -m src.vectorstore.vectorstore_cli")
         sys.exit(1)
 
+    # Create synthesizer based on --llm flag
+    synthesizer = None
+    if args.llm == "ollama":
+        from src.llm.ollama_provider import OllamaProvider
+        from src.query.synthesizer import LLMSynthesizer
+
+        try:
+            llm = OllamaProvider(
+                model=args.llm_model,
+                timeout=args.llm_timeout,
+            )
+            synthesizer = LLMSynthesizer(llm)
+            print(f"Using Ollama LLM: {args.llm_model}")
+        except ConnectionError as e:
+            print(f"Warning: {e}")
+            print("Falling back to mock synthesizer.")
+
     return EvalRunner(
         graph=graph,
         embedder=embedder,
         store=store,
+        synthesizer=synthesizer,
         top_k=args.top_k,
     )
 
@@ -226,6 +244,20 @@ def main() -> None:
     parser.add_argument(
         "--top-k", type=int, default=10,
         help="Number of chunks to retrieve (default: 10)",
+    )
+
+    # LLM settings
+    parser.add_argument(
+        "--llm", choices=["mock", "ollama"], default="mock",
+        help="LLM backend: mock (default) or ollama (local Gemma)",
+    )
+    parser.add_argument(
+        "--llm-model", default="gemma4:e4b",
+        help="Ollama model name (default: gemma4:e4b)",
+    )
+    parser.add_argument(
+        "--llm-timeout", type=int, default=300,
+        help="LLM request timeout in seconds (default: 300)",
     )
 
     # Output

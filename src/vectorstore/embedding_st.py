@@ -44,7 +44,7 @@ class SentenceTransformerEmbedder:
 
         logger.info(f"Loading sentence-transformers model '{model_name}' on {device}")
         self._model = SentenceTransformer(model_name, device=device)
-        self._dimension = self._model.get_sentence_embedding_dimension()
+        self._dimension = self._model.get_embedding_dimension()
         logger.info(
             f"Model loaded: {model_name} ({self._dimension}d, "
             f"device={device}, normalize={normalize})"
