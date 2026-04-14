@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 4 E4B) integrated.
 
 ## Prerequisites
 
@@ -26,6 +26,32 @@ The following VZW Open Alliance PDFs must be present in the repo root:
 - `LTEB13NAC.pdf`
 - `LTEDATARETRY.pdf`
 - `LTEOTADM.pdf`
+
+### Local LLM (optional, recommended)
+
+The system supports local LLM inference via [Ollama](https://ollama.com) for real answer synthesis (as opposed to mock keyword-based responses).
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull the recommended model (Gemma 4 E4B, ~9.6 GB)
+ollama pull gemma4:e4b
+
+# Verify
+ollama list
+```
+
+**Model selection rationale** (for 16GB RAM, CPU-only):
+
+| Model | Size (Q4) | RAM needed | Recommendation |
+|-------|-----------|------------|----------------|
+| `gemma4:e4b` | 9.6 GB | ~11 GB | **Recommended** — 4B effective params via PLE, 128K context, good reasoning |
+| `gemma4:e2b` | 3.3 GB | ~4 GB | Fallback if RAM is tight |
+| `gemma3:4b` | 3 GB | ~4 GB | Alternative fallback, older architecture |
+| `gemma4:26b` | 18 GB | ~20 GB | Won't fit on 16GB alongside pipeline |
+
+CPU inference runs at ~10-13 tok/s on Intel Core Ultra 9 185H, producing answers in ~2-4 minutes per query.
 
 ### System Dependencies (optional)
 
@@ -483,8 +509,17 @@ python -m src.vectorstore.vectorstore_cli --save-config configs/baseline.json
 6-stage pipeline: Query Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis. Each stage has a mock implementation, so the full pipeline works without API keys.
 
 ```bash
-# Single query
+# Single query (mock synthesizer — fast, no LLM needed)
 python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+
+# With real LLM via Ollama (requires ollama running + model pulled)
+python -m src.query.query_cli --llm ollama --query "What is the T3402 timer behavior?"
+
+# Specify a different Ollama model
+python -m src.query.query_cli --llm ollama --llm-model gemma4:e2b --query "..."
+
+# Increase timeout for slow CPU inference (default: 300s)
+python -m src.query.query_cli --llm ollama --llm-timeout 600 --query "..."
 
 # Verbose mode (shows all pipeline stages)
 python -m src.query.query_cli --query "T3402 timer" --verbose
@@ -523,11 +558,15 @@ python -m src.query.query_cli --query "..." --output response.json
 Evaluates the query pipeline on 18 test questions across 5 categories, measuring completeness, accuracy, citation quality, standards integration, and hallucination avoidance. Supports A/B comparison between graph-scoped and pure RAG retrieval.
 
 ```bash
-# Run all 18 evaluation questions (graph-scoped mode)
+# Run all 18 evaluation questions (mock synthesizer — fast)
 python -m src.eval.eval_cli
+
+# Run with real LLM via Ollama
+python -m src.eval.eval_cli --llm ollama
 
 # Run A/B comparison (graph-scoped vs pure RAG)
 python -m src.eval.eval_cli --ab
+python -m src.eval.eval_cli --ab --llm ollama   # with real LLM
 
 # Run a specific category only
 python -m src.eval.eval_cli --category cross_doc
@@ -561,11 +600,34 @@ python -m src.eval.eval_cli --verbose
 
 **A/B comparison:** Runs all questions twice — once with graph scoping (normal pipeline) and once bypassing graph scoping (pure vector RAG with metadata filters only). Reports per-question and per-category deltas to demonstrate graph value.
 
-## Swapping the LLM Provider
+## LLM Providers
 
-The LLM abstraction uses Python's Protocol (structural typing). To use a real LLM:
+The system includes three LLM providers, all satisfying the `LLMProvider` Protocol (structural typing, no inheritance):
 
-1. Create a class with a `complete()` method matching this signature:
+### Built-in: Ollama (local inference)
+
+```bash
+# Use from CLI
+python -m src.query.query_cli --llm ollama --query "..."
+
+# Use programmatically
+from src.llm.ollama_provider import OllamaProvider
+provider = OllamaProvider(model="gemma4:e4b")
+answer = provider.complete("What is T3402?", system="You are a telecom expert.")
+```
+
+### Built-in: Mock (keyword-based, no LLM)
+
+Used by default. Produces deterministic keyword-matched results for testing.
+
+```python
+from src.llm.mock_provider import MockLLMProvider
+provider = MockLLMProvider()
+```
+
+### Custom: Add your own provider
+
+Create a class with a `complete()` method matching this signature:
 
 ```python
 class YourProvider:
@@ -580,13 +642,15 @@ class YourProvider:
         ...
 ```
 
-2. Pass it to the extractor:
+Pass it to any component that takes an `LLMProvider`:
 
 ```python
 from src.taxonomy.extractor import FeatureExtractor
+from src.query.synthesizer import LLMSynthesizer
 
 provider = YourProvider(api_key="...", model="...")
 extractor = FeatureExtractor(provider)
+synthesizer = LLMSynthesizer(provider)
 ```
 
 No base class inheritance required. See `src/llm/base.py` for full documentation.
@@ -608,7 +672,7 @@ req-agent/
 │   ├── profiler/                          # Step 2: Document profiling
 │   ├── parser/                            # Step 3: Structural parsing
 │   ├── resolver/                          # Step 5: Cross-reference resolution
-│   ├── llm/                               # LLM abstraction layer
+│   ├── llm/                               # LLM abstraction layer (mock + Ollama)
 │   ├── taxonomy/                          # Step 6: Feature taxonomy
 │   ├── standards/                         # Step 7: 3GPP standards ingestion
 │   ├── graph/                             # Step 8: Knowledge graph construction

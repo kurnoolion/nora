@@ -1,6 +1,6 @@
 # Session Summary: Telecom Requirements AI System Design
 
-**Date:** April 11-13, 2026
+**Date:** April 11-14, 2026
 **Purpose:** Feed this to Claude Code at the start of a new session to resume where we left off.
 
 ---
@@ -276,25 +276,37 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. All PoC steps except Step 4 are done. Vector store built, baseline evaluation run, local LLM (Ollama + Gemma 4 E4B) integration implemented and wired in.
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. All PoC steps except Step 4 are done. Vector store built, baseline evaluation run, local LLM (Ollama + Gemma 4 E4B) integrated and tested end-to-end. System prompt tuning in progress for citation consistency.
 
 **What just happened (this session):**
 - Installed `sentence-transformers` and `chromadb` dependencies
 - Built the vector store: 705 chunks embedded with `all-MiniLM-L6-v2` (384d), ChromaDB cosine distance
-- Ran end-to-end queries successfully (data retry, SMS/3GPP standards)
 - Ran A/B evaluation baseline (mock synthesizer): 85.3% overall, all ties between graph-scoped and pure RAG (expected — mock synthesizer doesn't differentiate; real LLM will)
   - Feature-level: 96.3%, Single-doc: 88.5%, Traceability: 83.3%, Cross-doc: 82.7%, Standards comparison: 71.7%
 - Fixed import bug in `eval_cli.py` — `ABComparison` was imported from wrong module
 - Fixed deprecation warning in `embedding_st.py` — `get_sentence_embedding_dimension` → `get_embedding_dimension`
 - Evaluated local LLM options for 16GB RAM / CPU-only / Intel Ultra 9 185H:
-  - Gemma 4 E4B selected (8B total, 4B effective via PLE, Q4_K_M ~9.6GB, 128K context, ~2-5 tok/s CPU)
+  - Gemma 4 E4B selected (8B total, 4B effective via PLE, Q4_K_M ~9.6GB, 128K context)
   - Gemma 4 26B-A4B ruled out (18GB Q4 — won't fit alongside pipeline)
   - Gemma 3 4B viable fallback (3GB Q4, proven but older architecture)
-- Installed Ollama (v0.20.7) on WSL2
+- Installed Ollama (v0.20.7) on WSL2, pulled `gemma4:e4b` (9.6 GB)
 - Implemented `OllamaProvider` (`src/llm/ollama_provider.py`) — connects to local Ollama HTTP API, satisfies LLMProvider Protocol, includes performance logging (tok/s), thinking mode support
-- Wired `--llm ollama --llm-model gemma4:e4b` flags into both query CLI and eval CLI with graceful fallback to mock on connection failure
-- Gemma 4 E4B model download in progress via `ollama pull gemma4:e4b`
+- Wired `--llm ollama --llm-model gemma4:e4b --llm-timeout` flags into both query CLI and eval CLI with graceful fallback to mock on connection failure
+- **Tested end-to-end with real Gemma 4 E4B LLM:**
+  - Data retry query: excellent result — 1,578 tokens in 236s (12.6 tok/s), coherent structured answer with 11 citations (8 req IDs + 3 standards refs), correctly described T3402 timer, attach counter, authentication reject scenarios
+  - SMS query: LLM produced good analytical answer but 0 citations — model summarized thematically instead of grounding each claim to specific VZ_REQ IDs despite system prompt instructions
+- **System prompt tuning to improve citation consistency:**
+  - Added `_CITATION_RULES` block to all system prompts in `context_builder.py` with explicit mandatory citation instructions
+  - Added end-of-context citation reminder (placed after all chunks, closest to generation point) — smaller models respond better to instructions near the generation boundary
+  - Re-tested: SMS format query got 1 citation (3GPP TS 23.040) — improved but still not citing VZ_REQ IDs consistently. Prompt tuning is ongoing.
+  - Observed: 300s default timeout can be insufficient when Ollama reloads the model fresh. Need `--llm-timeout 600` for reliability.
 - All 378 tests passing
+
+**Observations on Gemma 4 E4B performance:**
+- Actual CPU inference: **~12-13 tok/s** on Intel Ultra 9 185H — significantly faster than the estimated 2-5 tok/s
+- Total response time: ~2-4 minutes per query (model load + inference)
+- RAM: fits alongside pipeline (embeddings + ChromaDB + graph) on 16GB system
+- Quality: good reasoning and structured analysis, but inconsistent at following citation instructions — smaller models need stronger/repeated prompting for grounded responses
 
 **Previous sessions completed:**
 - Step 1 (extraction), Step 2 (profiler), Step 3 (parser), code review + 6 bug fixes
@@ -303,13 +315,13 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - Step 10 (query pipeline), Step 11 (evaluation framework)
 
 **Immediate next actions:**
-1. Once `gemma4:e4b` download completes, test end-to-end with real LLM: `python -m src.query.query_cli --llm ollama -q "What are the data retry requirements?" -v`
-2. Run A/B evaluation with real LLM: `python -m src.eval.eval_cli --ab --llm ollama --output data/eval/report_llm.json`
-3. Compare LLM vs mock evaluation results — graph-scoped should now outperform pure RAG
-4. If RAM is too tight with E4B, fall back to `gemma4:e2b` or `gemma3:4b`
-5. Experiment with different embedding models: `--model all-mpnet-base-v2`
-6. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
-7. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
+1. Continue system prompt tuning for citation consistency — consider few-shot examples in the prompt, or post-processing to extract IDs from context when LLM doesn't cite them
+2. Run A/B evaluation with real LLM: `python -m src.eval.eval_cli --ab --llm ollama --llm-timeout 600 --output data/eval/report_llm.json` (will take ~1-2 hours with 36 query runs)
+3. Compare LLM vs mock evaluation results — graph-scoped should now outperform pure RAG with real synthesis
+4. Experiment with different embedding models: `--model all-mpnet-base-v2`
+5. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
+6. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
+7. Consider whether Gemma 4 E4B's citation weakness warrants trying a larger model — could test `gemma4:e2b` for comparison (faster, smaller, may follow instructions more consistently at the cost of reasoning depth)
 
 ---
 

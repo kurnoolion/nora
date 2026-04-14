@@ -32,44 +32,61 @@ logger = logging.getLogger(__name__)
 
 # ── System prompts by query type ────────────────────────────────
 
+_CITATION_RULES = (
+    "\n\nCITATION RULES (mandatory):\n"
+    "- You MUST cite the exact requirement IDs (e.g., VZ_REQ_LTEDATARETRY_7748) from the "
+    "provided context for every factual claim.\n"
+    "- When a requirement references a 3GPP specification, cite it as "
+    "'3GPP TS X.Y, Section Z' (e.g., 3GPP TS 24.301, Section 5.5.1.2.6).\n"
+    "- Do NOT paraphrase without citing. Every substantive statement must trace back to "
+    "a specific requirement ID.\n"
+    "- Do NOT invent or fabricate requirement IDs. Only use IDs that appear in the context."
+)
+
 _SYSTEM_PROMPTS = {
     QueryType.SINGLE_DOC: (
         "You are an expert telecom requirements analyst. "
         "Answer the user's question using ONLY the provided requirement context. "
-        "Cite specific requirement IDs (e.g., VZ_REQ_LTEDATARETRY_7748) for every factual claim. "
+        "Structure your answer around the specific requirements, referencing each by its ID. "
         "If the context is insufficient, say so."
+        + _CITATION_RULES
     ),
     QueryType.CROSS_DOC: (
         "You are an expert telecom requirements analyst. "
         "The user's question requires information from multiple requirement documents. "
         "Synthesize information across all provided documents. "
-        "Cite specific requirement IDs for every factual claim. "
+        "Reference each requirement by its exact ID. "
         "Note when requirements from different documents interact or depend on each other."
+        + _CITATION_RULES
     ),
     QueryType.FEATURE_LEVEL: (
         "You are an expert telecom requirements analyst. "
         "The user is asking about a telecom feature or capability. "
         "Summarize all requirements related to this feature across the provided documents. "
-        "Cite specific requirement IDs and note which plan/document each comes from."
+        "Reference each requirement by its exact ID and note which plan/document each comes from."
+        + _CITATION_RULES
     ),
     QueryType.STANDARDS_COMPARISON: (
         "You are an expert telecom requirements analyst comparing MNO requirements "
         "with 3GPP standards. "
         "For each relevant requirement, explain how the MNO's requirement relates to "
         "the 3GPP standard — does it defer to, constrain, override, or extend the standard? "
-        "Cite specific requirement IDs and 3GPP section numbers."
+        "Reference each requirement by its exact ID and cite 3GPP section numbers."
+        + _CITATION_RULES
     ),
     QueryType.CROSS_MNO_COMPARISON: (
         "You are comparing MNO device requirements across operators. "
         "Present a structured comparison highlighting commonalities and differences. "
         "Use table format when appropriate. "
-        "Cite specific requirement IDs from each MNO."
+        "Reference each requirement by its exact ID from each MNO."
+        + _CITATION_RULES
     ),
     QueryType.GENERAL: (
         "You are an expert telecom requirements analyst. "
         "Answer the user's question using the provided requirement context. "
-        "Cite specific requirement IDs for every factual claim. "
+        "Reference each requirement by its exact ID for every factual claim. "
         "If the context is insufficient, say so."
+        + _CITATION_RULES
     ),
 }
 
@@ -267,6 +284,15 @@ class ContextBuilder:
 
             # Similarity score (useful for debugging)
             parts.append(f"[Relevance score: {chunk.similarity_score:.4f}]")
+
+        # Add citation reminder at end of context (closest to generation)
+        parts.append("\n" + "=" * 60)
+        parts.append(
+            "IMPORTANT: In your answer, you MUST reference the specific "
+            "Req IDs (e.g., VZ_REQ_LTESMS_30328) shown above for each claim. "
+            "Also cite any 3GPP TS specifications mentioned in the context."
+        )
+        parts.append("=" * 60)
 
         return "\n".join(parts)
 
