@@ -33,3 +33,6 @@ extracted_images/
 # Pytest
 .pytest_cache/
 
+#git-sync files
+git-sync/
+
