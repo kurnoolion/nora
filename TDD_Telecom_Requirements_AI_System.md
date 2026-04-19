@@ -1,6 +1,6 @@
 # Technical Design Document: NORA — Network Operator Requirements Analyzer
 
-**Version:** 0.5
+**Version:** 0.6
 **Date:** April 2026
 **Status:** PoC Design Phase
 **Change Log:**
@@ -9,6 +9,7 @@
 - v0.3 (2026-04-12): Multi-format document support (PDF, DOCX, XLS), embedded objects, image/diagram handling
 - v0.4 (2026-04-12): DocumentProfiler — standalone, LLM-free module that derives document structure profiles from representative docs, replacing hard-coded per-MNO parsers with a generic profile-driven structural parser; added DOC format support
 - v0.5 (2026-04-18): Web UI for easy non-terminal access (FastAPI + Bootstrap 5 + HTMX), metrics and observability (compact MET report format, SQLite metrics DB, resource sampling), offline Ollama install workflow for proxy-restricted environments
+- v0.6 (2026-04-19): Corrections UI (§10.7) — in-browser profile and taxonomy editing with file-backed storage matching the existing `corrections/` override convention, and a compact FIX report format safe for external-chat paste (no proprietary document content); web UI assets vendored (Bootstrap, Bootstrap Icons, HTMX) for offline/proxy environments
 
 ---
 
@@ -1745,6 +1746,57 @@ NORA is deployed behind a reverse proxy for firewall compliance (avoids whitelis
 - Static file mounts work correctly under prefix
 - `<body data-root-path="{{ root_path }}">` makes prefix available to JavaScript
 - Health check at `/api/health` reports Ollama connectivity and uptime
+
+### 10.7 Corrections UI
+
+Requirement engineers correct generated artifacts (document profile, feature taxonomy) in the browser; the pipeline auto-detects the corrections on the next run.
+
+**Storage layout** (per environment):
+
+```
+<doc_root>/
+├── output/
+│   ├── profile/*.json          # pipeline-generated
+│   └── taxonomy/taxonomy.json  # pipeline-generated
+└── corrections/
+    ├── profile.json            # engineer override (auto-detected)
+    └── taxonomy.json           # engineer override (auto-detected)
+```
+
+`src/pipeline/stages.py` prefers a file in `corrections/` over the corresponding `output/` file, so no pipeline changes are required to adopt a correction.
+
+**Module layout:**
+
+- `src/corrections/schema.py` — `FixReport` dataclass (lines + summary counts, `to_text()` formatter).
+- `src/corrections/store.py` — `CorrectionStore` wraps the file layout: `start_*_correction()` (copy output → correction), `save_*_correction()`, `discard_*_correction()`, `has_*_correction()` status.
+- `src/corrections/compactor.py` — `profile_fix_report()` and `taxonomy_fix_report()` diff output vs correction into a proprietary-content-free pasteable report.
+- `src/web/routes/corrections.py` — 10 endpoints (landing, profile editor + start/save/discard, taxonomy editor + start/save/discard, HTML FIX report page, plain-text `GET /api/corrections/report/<env>`).
+- `src/web/templates/corrections/` — `index.html`, `profile.html`, `taxonomy.html`, `report.html`.
+
+**Compact FIX report — design rules:**
+
+The FIX report is designed to be pasted into a chat with an external assistant without leaking proprietary document content. It contains:
+
+- **Profile:** counts and field names of changes (e.g., `numbering_pattern`, `req_pattern`, zones added/removed by `zone_type`, header/footer pattern deltas, body-text threshold changes). Never the actual body text, heading samples, or zone descriptions.
+- **Taxonomy:** feature IDs, feature names (which are generic technical labels, e.g., `VOLTE_HANDOVER`), and keyword tokens. Never the feature description text or document-derived source_plans content.
+
+Self-diff outputs `(no differences)`. Example:
+
+```
+FIX alice-demo taxonomy
+feat_total=16 added=1 removed=1 renamed=1 kw_edits=1 desc_edits=0
+add: VOLTE_HANDOVER(kws: handover,ho,mobility,srvcc)
+remove: IMS_REGISTRATION
+rename: LTE Data Retry->LTE Data Retry (Renamed) [DATA_RETRY]
+kw: DATA_RETRY +newkw
+```
+
+**Phased delivery:**
+
+- **Phase 1 (current):** profile + taxonomy editors + FIX report.
+- **Phase 2:** evaluation management — xlsx import/export, entry builder, per-question feedback, compact FBK report.
+- **Phase 3:** graph editing — add/remove edges + edge types, node edits, cross-reference + standards-reference corrections as delta files.
+- **Phase 4:** polish — bulk ops, undo/redo, client-side validation of regex patterns.
 
 ---
 

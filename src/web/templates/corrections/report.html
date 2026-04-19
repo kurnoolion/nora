@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - FIX report · {{ env.name }}{% endblock %}
+{% block nav_corrections %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h4 class="mb-1">FIX report</h4>
+        <div class="text-muted small">
+            <a href="{{ root_path }}/corrections">Corrections</a> ·
+            env <strong>{{ env.name }}</strong> ·
+            paste the blocks below into chat
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ root_path }}/corrections/profile/{{ env.name }}" class="btn btn-outline-secondary btn-sm">Profile</a>
+        <a href="{{ root_path }}/corrections/taxonomy/{{ env.name }}" class="btn btn-outline-secondary btn-sm">Taxonomy</a>
+    </div>
+</div>
+
+{% if not profile_report and not taxonomy_report %}
+<div class="alert alert-info">
+    No corrections made yet. Start a profile or taxonomy correction first.
+</div>
+{% endif %}
+
+{% if profile_report %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <strong>Profile</strong>
+        <button class="btn btn-outline-primary btn-sm" onclick="copyText('prof-txt', this)">
+            <i class="bi bi-clipboard"></i> Copy
+        </button>
+    </div>
+    <pre id="prof-txt" class="bg-light p-3 mb-0 small font-monospace" style="white-space: pre-wrap;">{{ profile_report }}</pre>
+</div>
+{% endif %}
+
+{% if taxonomy_report %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <strong>Taxonomy</strong>
+        <button class="btn btn-outline-primary btn-sm" onclick="copyText('tax-txt', this)">
+            <i class="bi bi-clipboard"></i> Copy
+        </button>
+    </div>
+    <pre id="tax-txt" class="bg-light p-3 mb-0 small font-monospace" style="white-space: pre-wrap;">{{ taxonomy_report }}</pre>
+</div>
+{% endif %}
+
+{% if profile_report or taxonomy_report %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <strong>Combined (raw text endpoint)</strong>
+        <a class="btn btn-outline-dark btn-sm"
+           href="{{ root_path }}/api/corrections/report/{{ env.name }}"
+           target="_blank">
+            <i class="bi bi-download"></i> /api/corrections/report/{{ env.name }}
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<script>
+function copyText(id, btn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(() => {
+        const old = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-check2"></i> Copied';
+        btn.classList.add("btn-success");
+        btn.classList.remove("btn-outline-primary");
+        setTimeout(() => {
+            btn.innerHTML = old;
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-outline-primary");
+        }, 1500);
+    });
+}
+</script>
+{% endblock %}

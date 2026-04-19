@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NORA Taxonomy Browser — LTEOTADM focus</title>
+<script src="nora_data.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1724;
+    color: #e8eef8;
+    min-height: 100vh;
+  }
+  header {
+    padding: 20px 32px 12px;
+    border-bottom: 1px solid #1f2d45;
+    background: linear-gradient(180deg, #13203a, #0f1724);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 22px;
+    background: linear-gradient(90deg, #4fc3f7, #66bb6a);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  header .sub { color: #89a0c0; font-size: 12px; margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav { margin-top: 10px; display: flex; gap: 10px; }
+  header .nav a {
+    color: #89a0c0; text-decoration: none; font-size: 12px; padding: 5px 12px;
+    border: 1px solid #2a3d5c; border-radius: 5px;
+  }
+  header .nav a.active { background: #4fc3f7; color: #0f1724; border-color: #4fc3f7; font-weight: 600; }
+  header .nav a:hover:not(.active) { border-color: #4fc3f7; color: #4fc3f7; }
+
+  .container { display: grid; grid-template-columns: 360px 1fr; gap: 0; height: calc(100vh - 80px); }
+  .left {
+    background: #0b1320;
+    border-right: 1px solid #1f2d45;
+    overflow-y: auto;
+    padding: 16px;
+  }
+  .right {
+    overflow-y: auto;
+    padding: 20px 30px;
+  }
+
+  .search {
+    width: 100%; padding: 8px 12px; font-size: 13px;
+    background: #13203a; border: 1px solid #2a3d5c; color: #e8eef8;
+    border-radius: 6px; margin-bottom: 12px;
+  }
+  .search:focus { outline: none; border-color: #4fc3f7; }
+
+  .feature-card {
+    background: #13203a;
+    border: 1px solid #2a3d5c;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .feature-card:hover { border-color: #4fc3f7; background: #17294a; }
+  .feature-card.active { border-color: #66bb6a; background: #17294a; box-shadow: 0 0 0 1px #66bb6a; }
+  .feature-card .fc-name { font-weight: 600; font-size: 13px; color: #e8eef8; }
+  .feature-card .fc-id {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6a7f9c;
+    margin-top: 2px; letter-spacing: 0.5px;
+  }
+  .feature-card .fc-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .feature-card .fc-tag {
+    font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    background: rgba(79,195,247,0.15); color: #4fc3f7; border: 1px solid rgba(79,195,247,0.3);
+  }
+  .feature-card .fc-tag.primary { background: rgba(102,187,106,0.15); color: #66bb6a; border-color: rgba(102,187,106,0.4); }
+
+  .section-head {
+    color: #89a0c0; font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase; margin: 18px 4px 8px;
+    border-bottom: 1px solid #1f2d45; padding-bottom: 4px;
+  }
+  .section-head:first-child { margin-top: 0; }
+
+  .detail-card {
+    background: #13203a;
+    border: 1px solid #2a3d5c;
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin-bottom: 18px;
+  }
+  .detail-card h2 {
+    margin: 0 0 6px; font-size: 22px; color: #4fc3f7;
+  }
+  .detail-card .id-line {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6a7f9c;
+    margin-bottom: 14px;
+  }
+  .detail-card p { line-height: 1.6; color: #cfd8e8; margin: 8px 0; }
+
+  .meta-grid {
+    display: grid; grid-template-columns: 160px 1fr; gap: 10px 14px;
+    margin-top: 14px; font-size: 13px;
+  }
+  .meta-grid dt { color: #89a0c0; font-weight: 500; }
+  .meta-grid dd { margin: 0; color: #e8eef8; }
+
+  .tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tag-list .t {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15);
+    padding: 3px 10px; border-radius: 12px; font-size: 11px;
+  }
+  .tag-list .t.kw { background: rgba(79,195,247,0.1); border-color: rgba(79,195,247,0.35); color: #4fc3f7; }
+
+  .plan-row {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(102,187,106,0.12); color: #66bb6a;
+    padding: 4px 10px; border-radius: 4px; font-size: 11px;
+    border: 1px solid rgba(102,187,106,0.35);
+    font-family: 'JetBrains Mono', monospace;
+    margin-right: 4px; margin-bottom: 4px;
+  }
+  .plan-row.referenced { background: rgba(255,179,64,0.1); color: #ffb74d; border-color: rgba(255,179,64,0.3); }
+
+  .legend {
+    background: #0b1320; border: 1px solid #2a3d5c;
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 18px;
+  }
+  .legend h3 { margin: 0 0 10px; font-size: 13px; color: #89a0c0; letter-spacing: 2px; text-transform: uppercase; }
+  .legend-row { display: flex; gap: 10px; font-size: 12px; margin: 4px 0; color: #cfd8e8; align-items: center; }
+  .legend-row .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  .relation-graph {
+    background: #0b1320; border: 1px solid #2a3d5c;
+    border-radius: 8px; padding: 16px;
+    margin-top: 18px;
+  }
+  .relation-graph h3 { margin: 0 0 10px; font-size: 13px; color: #89a0c0; letter-spacing: 2px; text-transform: uppercase; }
+
+  .relation-list { font-size: 12px; color: #cfd8e8; }
+  .relation-list li { margin: 4px 0; }
+
+  .stats-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+  .stat-chip {
+    background: rgba(79,195,247,0.12); border: 1px solid rgba(79,195,247,0.35);
+    padding: 6px 12px; border-radius: 5px; font-size: 12px;
+  }
+  .stat-chip .num { font-weight: 700; color: #4fc3f7; margin-right: 5px; }
+
+  .sub-h { font-size: 14px; color: #89a0c0; margin: 20px 0 8px; letter-spacing: 1px; text-transform: uppercase; }
+
+  .empty { color: #6a7f9c; font-style: italic; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NORA Taxonomy Browser</h1>
+  <div class="sub">Features · Keywords · Cross-plan coverage · Relationships</div>
+  <div class="nav">
+    <a href="taxonomy.html" class="active">Taxonomy</a>
+    <a href="knowledge_graph.html">Knowledge Graph</a>
+    <a href="query_simulation.html">Query Simulation</a>
+  </div>
+</header>
+
+<div class="container">
+  <div class="left">
+    <input class="search" id="search" placeholder="Search features or keywords…" />
+    <div id="feature-list"></div>
+  </div>
+
+  <div class="right" id="detail">
+    <!-- detail injected here -->
+  </div>
+</div>
+
+<script>
+const D = window.NORA_DATA;
+const taxonomy = D.taxonomy.global;
+const otadmFeatures = D.taxonomy.otadm_features;
+let activeFeatureId = null;
+
+// ------- Left panel: feature list -------
+function renderList(filter='') {
+  const list = document.getElementById('feature-list');
+  list.innerHTML = '';
+  const f = filter.toLowerCase();
+
+  // OTADM primary features first
+  const otadmPrimaryIds = new Set(otadmFeatures.primary_features.map(x => x.feature_id));
+  const otadmRefIds = new Set(otadmFeatures.referenced_features.map(x => x.feature_id));
+
+  const primary = taxonomy.features.filter(ft => otadmPrimaryIds.has(ft.feature_id));
+  const referenced = taxonomy.features.filter(ft => otadmRefIds.has(ft.feature_id) && !otadmPrimaryIds.has(ft.feature_id));
+  const others = taxonomy.features.filter(ft => !otadmPrimaryIds.has(ft.feature_id) && !otadmRefIds.has(ft.feature_id));
+
+  function matches(ft) {
+    if (!f) return true;
+    return ft.name.toLowerCase().includes(f)
+      || ft.feature_id.toLowerCase().includes(f)
+      || (ft.keywords || []).some(k => k.toLowerCase().includes(f))
+      || (ft.description || '').toLowerCase().includes(f);
+  }
+
+  function addSection(label, arr, tagType) {
+    const vis = arr.filter(matches);
+    if (!vis.length) return;
+    const h = document.createElement('div'); h.className='section-head'; h.textContent = label; list.appendChild(h);
+    vis.forEach(ft => {
+      const card = document.createElement('div');
+      card.className = 'feature-card' + (activeFeatureId === ft.feature_id ? ' active' : '');
+      card.innerHTML = `
+        <div class="fc-name">${ft.name}</div>
+        <div class="fc-id">${ft.feature_id}</div>
+        <div class="fc-tags">
+          ${(ft.keywords||[]).slice(0,4).map(k=>`<span class="fc-tag">${k}</span>`).join('')}
+        </div>
+      `;
+      card.onclick = () => { activeFeatureId = ft.feature_id; renderList(filter); renderDetail(ft.feature_id); };
+      list.appendChild(card);
+    });
+  }
+
+  addSection(`LTEOTADM · Primary (${primary.length})`, primary, 'primary');
+  addSection(`LTEOTADM · Referenced (${referenced.length})`, referenced, 'ref');
+  addSection(`Other Features (${others.length})`, others, 'other');
+}
+
+// ------- Right panel: feature detail -------
+function renderDetail(featureId) {
+  const ft = taxonomy.features.find(x => x.feature_id === featureId);
+  if (!ft) return;
+
+  // Find reqs that map to this feature (across all plans)
+  // (We only have full req details for OTADM; for other plans we count.)
+  const otadmReqsPrimary = Object.values(D.requirements).filter(r =>
+    r.mapped_features.some(m => m.feature_id === featureId && m.mapping_type === 'primary')
+  );
+  const otadmReqsSecondary = Object.values(D.requirements).filter(r =>
+    r.mapped_features.some(m => m.feature_id === featureId && m.mapping_type !== 'primary')
+  );
+
+  const el = document.getElementById('detail');
+  el.innerHTML = `
+    <div class="detail-card">
+      <h2>${ft.name}</h2>
+      <div class="id-line">feature_id: <b>${ft.feature_id}</b></div>
+      <p>${ft.description || '<i>No description</i>'}</p>
+
+      <div class="stats-row">
+        <div class="stat-chip"><span class="num">${(ft.keywords||[]).length}</span> keywords</div>
+        <div class="stat-chip"><span class="num">${(ft.source_plans||[]).length}</span> source plans</div>
+        <div class="stat-chip"><span class="num">${otadmReqsPrimary.length}</span> LTEOTADM reqs (primary)</div>
+        <div class="stat-chip"><span class="num">${otadmReqsSecondary.length}</span> LTEOTADM reqs (secondary)</div>
+      </div>
+
+      <dl class="meta-grid">
+        <dt>Keywords</dt>
+        <dd><div class="tag-list">${(ft.keywords||[]).map(k=>`<span class="t kw">${k}</span>`).join('')}</div></dd>
+
+        <dt>Primary in plans</dt>
+        <dd>${(ft.is_primary_in||[]).map(p => `<span class="plan-row">${p}</span>`).join('') || '<span class="empty">none</span>'}</dd>
+
+        <dt>Referenced in plans</dt>
+        <dd>${(ft.is_referenced_in||[]).map(p => `<span class="plan-row referenced">${p}</span>`).join('') || '<span class="empty">none</span>'}</dd>
+
+        <dt>MNO coverage</dt>
+        <dd>${Object.entries(ft.mno_coverage||{}).map(([mno,plans])=>`<b>${mno}:</b> ${plans.join(', ')}`).join('<br>') || '<span class="empty">—</span>'}</dd>
+
+        <dt>Depends on features</dt>
+        <dd>${(ft.depends_on_features||[]).length ? (ft.depends_on_features||[]).map(f=>`<span class="plan-row">${f}</span>`).join('') : '<span class="empty">— (no declared deps)</span>'}</dd>
+      </dl>
+
+      <div class="sub-h">LTEOTADM requirements with PRIMARY mapping to this feature</div>
+      ${otadmReqsPrimary.length ? `
+        <ul class="relation-list">
+          ${otadmReqsPrimary.map(r => `
+            <li><b>§${r.section_number}</b> ${r.title} <span style="color:#6a7f9c; font-family:monospace; font-size:11px;">(${r.req_id})</span></li>
+          `).join('')}
+        </ul>
+      ` : '<div class="empty">No LTEOTADM requirements map to this feature as primary.</div>'}
+    </div>
+
+    <div class="legend">
+      <h3>What is a feature?</h3>
+      <p style="font-size: 13px; color:#cfd8e8; line-height: 1.6;">
+        A <b>feature</b> is a cross-document topic in the NORA taxonomy. Every requirement is tagged with one or more features — one as <b style="color:#66bb6a">primary</b> (what the section is fundamentally about) and optionally several as <b style="color:#4fc3f7">secondary</b> (what it references or depends on). This is what lets NORA answer questions like <i>"Show me every VZW requirement related to APN provisioning"</i> without doing text search — the KG already knows.
+      </p>
+    </div>
+  `;
+}
+
+// ------- Global taxonomy overview (default view) -------
+function renderOverview() {
+  const el = document.getElementById('detail');
+  const stats = D.meta.graph_stats;
+  const vec = D.meta.vector_stats;
+  const key_concepts = otadmFeatures.key_concepts || [];
+
+  el.innerHTML = `
+    <div class="detail-card">
+      <h2>Taxonomy Overview</h2>
+      <div class="id-line">MNO: ${D.meta.mno} · Release: ${D.meta.release} · Focus plan: ${D.meta.focus_plan}</div>
+      <p>
+        The taxonomy is NORA's <b>semantic backbone</b>: it defines a closed set of features that all MNO requirements are classified into. This classification is what makes cross-document reasoning cheap — the KG stores the mapping, so queries can jump from "LTE Data Retry" to every requirement about it across 5 documents without re-running a search.
+      </p>
+
+      <div class="stats-row">
+        <div class="stat-chip"><span class="num">${taxonomy.features.length}</span> features</div>
+        <div class="stat-chip"><span class="num">${stats.nodes_by_type.Requirement}</span> requirements (all plans)</div>
+        <div class="stat-chip"><span class="num">${stats.edges_by_type.maps_to}</span> req→feature mappings</div>
+        <div class="stat-chip"><span class="num">${vec.total_chunks}</span> RAG chunks</div>
+        <div class="stat-chip"><span class="num">${vec.embedding_dimension}</span>-dim embeddings (${vec.embedding_model})</div>
+      </div>
+
+      <div class="sub-h">LTEOTADM · Key concepts (seen in this document)</div>
+      <div class="tag-list">${key_concepts.map(c=>`<span class="t kw">${c}</span>`).join('')}</div>
+
+      <div class="sub-h">Feature layout for LTEOTADM</div>
+      <p style="color:#cfd8e8;">
+        <b style="color:#66bb6a">Primary features</b> — the document is fundamentally about these:
+        <br>
+        ${otadmFeatures.primary_features.map(f => `<span class="plan-row" style="font-family:inherit;">${f.name} <span style="color:#89a0c0; margin-left:6px; font-size:10px;">(conf ${f.confidence})</span></span>`).join(' ')}
+      </p>
+      <p style="color:#cfd8e8;">
+        <b style="color:#ffb74d">Referenced features</b> — mentioned but not the subject:
+        <br>
+        ${otadmFeatures.referenced_features.map(f => `<span class="plan-row referenced" style="font-family:inherit;">${f.name} <span style="color:#89a0c0; margin-left:6px; font-size:10px;">(conf ${f.confidence})</span></span>`).join(' ')}
+      </p>
+
+      <div class="sub-h">How to use this page</div>
+      <ul style="color:#cfd8e8; line-height: 1.8; font-size: 13px;">
+        <li>Click any feature in the left panel to see its keywords, cross-plan coverage, and which LTEOTADM requirements map to it.</li>
+        <li>Features in the <b>green "Primary"</b> group are what LTEOTADM is fundamentally about. <b>Orange "Referenced"</b> features appear but aren't the subject of the document.</li>
+        <li>Search the list to find a feature by name or keyword (e.g., type "timer" to find TIMER_MANAGEMENT).</li>
+      </ul>
+    </div>
+
+    <div class="legend">
+      <h3>Taxonomy ↔ Knowledge Graph ↔ RAG — how they fit together</h3>
+      <p style="color:#cfd8e8; line-height: 1.6; font-size: 13px;">
+        <b>Taxonomy</b> = the vocabulary (16 features). Closed set — every requirement lands in one or more of them.<br>
+        <b>Knowledge Graph</b> = the structure. Requirements, features, standards, plans, and the relationships between them — stored as <i>edges</i>, not text.<br>
+        <b>RAG chunks</b> = the content. The actual requirement text, with context headers (MNO, path, req_id) prepended, embedded into a 384-dim vector space.
+      </p>
+      <p style="color:#cfd8e8; line-height: 1.6; font-size: 13px;">
+        A question like <i>"What OTA DM requirements exist and what standards do they cite?"</i> uses all three:
+        <b>taxonomy</b> resolves "OTA DM" → <code>feature:OTA_DM</code>;
+        <b>KG</b> traverses <code>Feature -&gt; maps_to⁻¹ -&gt; Requirement -&gt; references_standard -&gt; Standard</code>;
+        <b>RAG</b> fetches the chunk text for each hit so the LLM has grounded content to quote.
+      </p>
+    </div>
+  `;
+}
+
+// ------- Init -------
+document.getElementById('search').addEventListener('input', e => renderList(e.target.value));
+renderList('');
+renderOverview();
+</script>
+
+</body>
+</html>

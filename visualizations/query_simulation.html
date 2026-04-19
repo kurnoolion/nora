@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NORA Query Simulation — KG + RAG in action</title>
+<script src="nora_data.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1724; color: #e8eef8; min-height: 100vh;
+  }
+  header {
+    padding: 20px 32px 12px; border-bottom: 1px solid #1f2d45;
+    background: linear-gradient(180deg, #13203a, #0f1724);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 {
+    margin: 0; font-size: 22px;
+    background: linear-gradient(90deg, #4fc3f7, #66bb6a);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  header .sub { color: #89a0c0; font-size: 12px; margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav { margin-top: 10px; display: flex; gap: 10px; }
+  header .nav a {
+    color: #89a0c0; text-decoration: none; font-size: 12px; padding: 5px 12px;
+    border: 1px solid #2a3d5c; border-radius: 5px;
+  }
+  header .nav a.active { background: #4fc3f7; color: #0f1724; border-color: #4fc3f7; font-weight: 600; }
+  header .nav a:hover:not(.active) { border-color: #4fc3f7; color: #4fc3f7; }
+
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px 30px 60px; }
+
+  .query-picker {
+    display: flex; gap: 14px; margin-bottom: 26px;
+  }
+  .q-card {
+    flex: 1;
+    background: #13203a;
+    border: 1px solid #2a3d5c;
+    border-radius: 10px;
+    padding: 16px 20px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .q-card:hover { border-color: #4fc3f7; background: #17294a; }
+  .q-card.active { border-color: #66bb6a; background: #17294a; box-shadow: 0 0 0 1px #66bb6a; }
+  .q-card .q-id {
+    font-family: monospace; font-size: 10px; color: #89a0c0;
+    letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px;
+  }
+  .q-card .q-title { font-size: 14px; font-weight: 600; color: #e8eef8; }
+  .q-card .q-user {
+    font-size: 12px; color: #cfd8e8; margin-top: 8px;
+    font-style: italic; line-height: 1.5;
+  }
+
+  .step {
+    background: #13203a;
+    border: 1px solid #2a3d5c;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.4s, transform 0.4s;
+  }
+  .step.visible { opacity: 1; transform: translateY(0); }
+
+  .step-head {
+    padding: 14px 20px;
+    display: flex; align-items: center; gap: 14px;
+    background: linear-gradient(90deg, #17294a, #13203a);
+    border-bottom: 1px solid #1f2d45;
+  }
+  .step-num {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: #4fc3f7; color: #0f1724;
+    font-weight: 700; font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .step-title { font-size: 16px; font-weight: 600; color: #e8eef8; }
+  .step-subtitle { font-size: 11px; color: #89a0c0; letter-spacing: 1px; text-transform: uppercase; margin-top: 2px; }
+
+  .step-body { padding: 18px 22px; }
+
+  .code-block {
+    background: #050a18; border: 1px solid #1f2d45;
+    border-radius: 6px; padding: 12px 14px;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: #cfd8e8; white-space: pre-wrap; line-height: 1.5;
+    overflow-x: auto;
+  }
+  .code-block .kw { color: #66bb6a; }
+  .code-block .var { color: #4fc3f7; }
+  .code-block .str { color: #ffb74d; }
+
+  .result-row {
+    background: #0b1320; border-left: 3px solid #66bb6a;
+    padding: 10px 14px; margin-top: 10px;
+    font-size: 13px; color: #cfd8e8;
+  }
+
+  .note {
+    background: rgba(79,195,247,0.08);
+    border-left: 3px solid #4fc3f7;
+    padding: 10px 14px; margin-top: 10px;
+    font-size: 12px; color: #cfd8e8; font-style: italic;
+    line-height: 1.6;
+  }
+
+  .chunk-card {
+    background: #050a18; border: 1px solid #1f2d45;
+    border-radius: 6px; padding: 12px 14px; margin-top: 8px;
+    font-size: 11px; line-height: 1.5; color: #cfd8e8;
+  }
+  .chunk-card .chunk-head {
+    font-family: monospace; font-size: 10px; color: #4fc3f7;
+    margin-bottom: 6px; display: flex; justify-content: space-between;
+  }
+  .chunk-card .chunk-head .sim {
+    background: rgba(102,187,106,0.15); color: #66bb6a;
+    padding: 2px 8px; border-radius: 3px;
+  }
+
+  .fusion-row {
+    display: flex; gap: 8px; align-items: center;
+    padding: 6px 10px; background: rgba(102,187,106,0.08);
+    border-radius: 5px; margin: 4px 0; font-size: 12px;
+  }
+  .fusion-row .rank { font-weight: 700; color: #66bb6a; font-family: monospace; width: 24px; }
+
+  .llm-prompt {
+    background: #050a18; border: 1px solid #ffb74d;
+    border-radius: 6px; padding: 14px 16px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: #cfd8e8; white-space: pre-wrap; line-height: 1.5;
+    max-height: 400px; overflow-y: auto;
+  }
+  .llm-response {
+    background: linear-gradient(135deg, rgba(102,187,106,0.1), rgba(79,195,247,0.08));
+    border: 1px solid #66bb6a;
+    border-radius: 6px; padding: 14px 16px;
+    font-size: 13px; color: #e8eef8; line-height: 1.7;
+    white-space: pre-wrap;
+  }
+
+  .node-pill {
+    display: inline-block; padding: 4px 10px; border-radius: 4px;
+    background: rgba(79,195,247,0.15); color: #4fc3f7;
+    font-family: monospace; font-size: 11px; margin: 2px; border: 1px solid rgba(79,195,247,0.35);
+  }
+  .node-pill.feature { background: rgba(102,187,106,0.15); color: #66bb6a; border-color: rgba(102,187,106,0.4); }
+
+  .controls {
+    display: flex; gap: 10px; margin-bottom: 20px; align-items: center;
+  }
+  .controls button {
+    background: #4fc3f7; color: #0f1724; border: none;
+    padding: 8px 16px; border-radius: 5px; font-weight: 600;
+    cursor: pointer; font-size: 13px;
+  }
+  .controls button:hover { background: #29b6f6; }
+  .controls button:disabled { background: #2a3d5c; color: #6a7f9c; cursor: not-allowed; }
+  .controls .speed { color: #89a0c0; font-size: 12px; }
+
+  .ascii-flow {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: #89a0c0; line-height: 1.7; white-space: pre;
+    background: #050a18; padding: 14px; border-radius: 6px;
+    border: 1px solid #1f2d45;
+  }
+  .ascii-flow .hit { color: #66bb6a; }
+  .ascii-flow .feat { color: #ffb74d; }
+  .ascii-flow .req { color: #4fc3f7; }
+
+  .summary {
+    background: linear-gradient(135deg, rgba(102,187,106,0.12), rgba(79,195,247,0.1));
+    border: 1px solid #66bb6a;
+    border-radius: 10px;
+    padding: 18px 22px; margin-top: 24px;
+  }
+  .summary h3 { margin: 0 0 10px; color: #66bb6a; font-size: 15px; }
+  .summary p { color: #cfd8e8; line-height: 1.6; font-size: 13px; margin: 6px 0; }
+  .summary .pillar {
+    display: grid; grid-template-columns: 100px 1fr; gap: 10px 14px;
+    margin-top: 10px; font-size: 12px;
+  }
+  .summary .pillar dt { color: #66bb6a; font-weight: 600; }
+  .summary .pillar dd { margin: 0; color: #cfd8e8; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NORA Query Simulation</h1>
+  <div class="sub">Step-by-step: KG traversal → RAG retrieval → LLM prompt → grounded answer</div>
+  <div class="nav">
+    <a href="taxonomy.html">Taxonomy</a>
+    <a href="knowledge_graph.html">Knowledge Graph</a>
+    <a href="query_simulation.html" class="active">Query Simulation</a>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="query-picker" id="query-picker"></div>
+
+  <div class="controls">
+    <button id="play-btn">▶ Play simulation</button>
+    <button id="reset-btn">↻ Reset</button>
+    <span class="speed">Each step advances with a short delay so you can read it; scroll freely.</span>
+  </div>
+
+  <div id="steps"></div>
+
+  <div class="summary" id="summary" style="display:none;">
+    <h3>What this query taught us about KG + RAG</h3>
+    <p id="summary-body"></p>
+    <dl class="pillar">
+      <dt>KG did</dt>      <dd id="sum-kg"></dd>
+      <dt>RAG did</dt>     <dd id="sum-rag"></dd>
+      <dt>Fusion did</dt>  <dd id="sum-fuse"></dd>
+      <dt>LLM did</dt>     <dd id="sum-llm"></dd>
+    </dl>
+  </div>
+
+</div>
+
+<script>
+const D = window.NORA_DATA;
+const sims = D.query_simulations;
+let activeQId = sims[0].id;
+let playing = false;
+let timers = [];
+
+// ---------- Query picker ----------
+function renderPicker() {
+  const el = document.getElementById('query-picker');
+  el.innerHTML = sims.map(q => `
+    <div class="q-card ${q.id === activeQId ? 'active' : ''}" onclick="selectQuery('${q.id}')">
+      <div class="q-id">${q.id.toUpperCase()} · ${q.intent}</div>
+      <div class="q-title">${q.title}</div>
+      <div class="q-user">"${q.user_query}"</div>
+    </div>
+  `).join('');
+}
+
+function selectQuery(qid) {
+  activeQId = qid;
+  resetAnimation();
+  renderPicker();
+  renderSteps();
+}
+
+// ---------- Steps ----------
+function renderSteps() {
+  const q = sims.find(s => s.id === activeQId);
+  const el = document.getElementById('steps');
+  document.getElementById('summary').style.display = 'none';
+
+  let stepNum = 0;
+  const steps = [];
+
+  // Step 1: User query + intent classification
+  steps.push({
+    num: ++stepNum,
+    title: 'User asks a question',
+    sub: 'Raw input from the Web UI / API',
+    body: `
+      <div class="code-block"><span class="kw">USER:</span> "${q.user_query}"</div>
+      <div class="note"><b>Intent classification:</b> <code>${q.intent}</code></div>
+      <p style="font-size: 13px; color: #cfd8e8; margin-top: 10px;">${q.classification_rationale}</p>
+    `,
+  });
+
+  // Step 2..N: KG traversal steps
+  q.kg_traversal.forEach(t => {
+    steps.push({
+      num: ++stepNum,
+      title: `KG step ${t.step}: ${t.action}`,
+      sub: 'Knowledge Graph traversal',
+      body: `
+        <div class="code-block"><span class="kw">QUERY:</span> ${escapeHtml(t.query)}</div>
+        <div class="result-row"><b>Result:</b> ${escapeHtml(t.result)}</div>
+        ${t.nodes_visited && t.nodes_visited.length ? `
+          <div style="margin-top:10px;">
+            <b style="font-size:12px; color:#89a0c0;">Nodes visited:</b><br>
+            ${t.nodes_visited.slice(0, 10).map(n => {
+              const isFeat = n.startsWith('feature:');
+              return `<span class="node-pill ${isFeat?'feature':''}">${n}</span>`;
+            }).join('')}
+            ${t.nodes_visited.length > 10 ? `<span style="color:#6a7f9c; font-size:11px;">… and ${t.nodes_visited.length - 10} more</span>` : ''}
+          </div>
+        ` : ''}
+      `,
+    });
+  });
+
+  // Step for vector search
+  const vs = q.vector_search;
+  if (vs.top_k > 0) {
+    steps.push({
+      num: ++stepNum,
+      title: 'Vector search (RAG)',
+      sub: 'Semantic chunk retrieval',
+      body: `
+        <div class="code-block">
+<span class="kw">EMBED</span> query=<span class="str">"${escapeHtml(vs.query_text)}"</span>
+      model=<span class="str">all-MiniLM-L6-v2</span>  dim=<span class="var">384</span>
+<span class="kw">SEARCH</span> chroma.query(top_k=<span class="var">${vs.top_k}</span>, filter=<span class="var">${JSON.stringify(vs.filter||{})}</span>)</div>
+        <div class="result-row"><b>Top ${vs.top_results.length} chunks retrieved:</b></div>
+        ${vs.top_results.map((r, i) => `
+          <div class="chunk-card">
+            <div class="chunk-head">
+              <span>#${i+1} · ${r.req_id} · §${r.section} · "${escapeHtml(r.title)}"</span>
+              <span class="sim">sim = ${r.similarity}</span>
+            </div>
+            <div>${escapeHtml((r.chunk_preview||'').replace(/\n/g,' ').slice(0, 260))}${r.chunk_preview && r.chunk_preview.length > 260 ? '…' : ''}</div>
+          </div>
+        `).join('')}
+      `,
+    });
+  } else {
+    steps.push({
+      num: ++stepNum,
+      title: 'Vector search — SKIPPED',
+      sub: 'No RAG needed for this query',
+      body: `
+        <div class="note"><b>Why skipped:</b> ${escapeHtml(vs.note || '—')}</div>
+        <p style="font-size: 13px; color: #cfd8e8; margin-top: 10px;">
+          This is a structural query. The answer lives in graph <i>edges</i>, not in the prose of any requirement.
+          Vector search over text would return plausible-looking but unrelated chunks. The KG alone has the answer.
+        </p>
+      `,
+    });
+  }
+
+  // Step for fusion
+  steps.push({
+    num: ++stepNum,
+    title: 'Fusion: merge KG + vector results',
+    sub: 'Final ranked context assembly',
+    body: `
+      <div class="note"><b>Strategy:</b> ${escapeHtml(q.fusion.strategy)}</div>
+      <p style="font-size: 12px; color: #cfd8e8; margin-top: 8px;">${escapeHtml(q.fusion.note || '')}</p>
+      <div style="margin-top: 10px;">
+        <b style="font-size:12px; color:#89a0c0;">Final context order (sent to LLM):</b><br>
+        ${q.fusion.final_order.slice(0, 6).map((id, i) => {
+          const r = D.requirements[id];
+          return `<div class="fusion-row"><span class="rank">#${i+1}</span>${r ? `§${r.section_number} ${r.title} <span style="color:#6a7f9c; font-family:monospace; font-size:10px; margin-left:6px;">${r.req_id}</span>` : id}</div>`;
+        }).join('')}
+      </div>
+    `,
+  });
+
+  // Step for LLM prompt
+  steps.push({
+    num: ++stepNum,
+    title: 'LLM prompt construction',
+    sub: 'Grounded, cited, bounded',
+    body: `
+      <div class="note">The prompt is deterministic — the same contexts always yield the same prompt string. This is what makes NORA answers auditable.</div>
+      <div class="llm-prompt">${escapeHtml(q.llm_prompt || '')}</div>
+    `,
+  });
+
+  // Step for LLM response
+  steps.push({
+    num: ++stepNum,
+    title: 'LLM synthesizes final answer',
+    sub: 'Gauss LLM (Phase 1) · grounded generation',
+    body: `
+      <div class="note">The LLM cites Req IDs inline. Every claim is traceable back to a specific section — this is the audit trail the Requirements Analysis team (Human Filter) needs.</div>
+      <div class="llm-response">${escapeHtml(q.llm_response || '')}</div>
+    `,
+  });
+
+  // Render
+  el.innerHTML = steps.map(s => `
+    <div class="step" data-num="${s.num}">
+      <div class="step-head">
+        <div class="step-num">${s.num}</div>
+        <div>
+          <div class="step-title">${s.title}</div>
+          <div class="step-subtitle">${s.sub}</div>
+        </div>
+      </div>
+      <div class="step-body">${s.body}</div>
+    </div>
+  `).join('');
+
+  // Populate summary (per-query specific)
+  const summaries = {
+    concept_lookup: {
+      body: "This query showed what happens when the user's term isn't a taxonomy feature. 'ADD' is a domain acronym — the classifier couldn't match it directly, so NORA expanded it ('Automatic Device Detection') and used keyword filtering over KG text, then let vector search confirm and rank. KG provided scope and hierarchy; RAG provided the verbatim text the LLM quotes.",
+      kg:   "Expanded 'ADD' via acronym lookup, filtered LTEOTADM reqs by word-boundary match on 'ADD' and 'Automatic Device Detection', then walked parent_of to surface the containing section §1.5.1.5.1 and its subsections.",
+      rag:  "Vector search on 'ADD Automatic Device Detection …' with plan_id=LTEOTADM filter confirmed the top KG hits (sim 0.87 → 0.61) and pulled verbatim chunks for quoting.",
+      fuse: "RRF merge weighted KG hits higher (they contain the literal ADD definition); vector search reordered by content-richness within the KG-admitted set.",
+      llm:  "Produced a structured explanation citing each source Req ID and section. Every claim is anchored — the Human Filter can spot-check in seconds."
+    },
+    specification_lookup: {
+      body: "This is the textbook KG+RAG sweet spot. A precise technical question ('what IP connectivity?') has a specific answer buried in one section. Vector search finds it (sim 0.91 on §1.5.1.4.3). KG confirms the match is actually client-side (not server-side) by walking parent_of, and attaches the sibling APN-tree and client baseline sections as supporting context.",
+      kg:   "Matched features (OTA_DM, APN_PROVISIONING, BEARER_MANAGEMENT) gave scope. Structural check confirmed §1.5.1.4.3 sits under the CLIENT section. Attached §1.5.1.2 and §1.5.1.5.3 as context.",
+      rag:  "Vector search was the primary retriever here — text is rich in specifics. Top hit at sim=0.91 is the authoritative IPv6/IPv4/PDN section.",
+      fuse: "RRF: vector rank dominated for the top hit; KG rank ensured supporting context (client baseline + APN tree node) came along.",
+      llm:  "Quoted IPv6-preferred-IPv4-fallback rule with correct Class-2 APN qualifier and failure fallback logic. Each bullet cites Req ID + section."
+    }
+  };
+  const s = summaries[q.intent] || summaries.specification_lookup;
+  document.getElementById('summary-body').textContent = s.body;
+  document.getElementById('sum-kg').textContent = s.kg;
+  document.getElementById('sum-rag').textContent = s.rag;
+  document.getElementById('sum-fuse').textContent = s.fuse;
+  document.getElementById('sum-llm').textContent = s.llm;
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;');
+}
+
+// ---------- Animation ----------
+function playAnimation() {
+  if (playing) return;
+  resetAnimation();
+  playing = true;
+  const btn = document.getElementById('play-btn');
+  btn.textContent = '⏵ Playing…';
+  btn.disabled = true;
+
+  const stepEls = document.querySelectorAll('.step');
+  let delay = 0;
+  stepEls.forEach((el, i) => {
+    const t = setTimeout(() => {
+      el.classList.add('visible');
+      el.scrollIntoView({behavior:'smooth', block:'center'});
+      if (i === stepEls.length - 1) {
+        setTimeout(() => {
+          document.getElementById('summary').style.display = 'block';
+          document.getElementById('summary').scrollIntoView({behavior:'smooth', block:'center'});
+          playing = false;
+          btn.textContent = '▶ Play simulation';
+          btn.disabled = false;
+        }, 1000);
+      }
+    }, delay);
+    timers.push(t);
+    delay += 1400;
+  });
+}
+
+function resetAnimation() {
+  timers.forEach(clearTimeout);
+  timers = [];
+  playing = false;
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('visible'));
+  document.getElementById('summary').style.display = 'none';
+  document.getElementById('play-btn').textContent = '▶ Play simulation';
+  document.getElementById('play-btn').disabled = false;
+}
+
+document.getElementById('play-btn').addEventListener('click', playAnimation);
+document.getElementById('reset-btn').addEventListener('click', resetAnimation);
+
+// Init
+renderPicker();
+renderSteps();
+// Auto-show all steps without animation at first (so it's not empty on load)
+setTimeout(() => document.querySelectorAll('.step').forEach(s => s.classList.add('visible')), 100);
+setTimeout(() => { document.getElementById('summary').style.display = 'block'; }, 100);
+</script>
+
+</body>
+</html>

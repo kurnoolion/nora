@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 3 12B / Gemma 4 E4B) integrated. Citation quality improved with few-shot prompting and context-based fallback. Automated pipeline runner, multi-user environment system, and collaboration tooling added for team workflows. **Web UI** (FastAPI + Bootstrap 5 + HTMX) provides browser-based access for team members who primarily work on Windows PCs. Metrics and observability instrumentation with persistent SQLite storage.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 3 12B / Gemma 4 E4B) integrated. Citation quality improved with few-shot prompting and context-based fallback. Automated pipeline runner, multi-user environment system, and collaboration tooling added for team workflows. **Web UI** (FastAPI + Bootstrap 5 + HTMX, vendored assets for offline/proxy environments) provides browser-based access for team members who primarily work on Windows PCs, now including in-browser **Corrections UI** (profile + taxonomy editing with compact FIX reports). Metrics and observability instrumentation with persistent SQLite storage.
 
 ## Prerequisites
 
@@ -129,9 +129,12 @@ python -m src.web.app
 - **Pipeline** — Submit pipeline runs via form (select stages, model, document path)
 - **Jobs** — Monitor running jobs with real-time log streaming (SSE)
 - **Query** — Submit questions against the knowledge graph, view results
+- **Corrections** — In-browser profile and taxonomy editing with compact FIX reports (see below)
 - **Environments** — Create/manage team member environments
 - **Files** — Browse shared network folders (Windows paths auto-mapped to Linux)
 - **Metrics** — Observability dashboard with request timing, LLM stats, resource usage
+
+**Offline-friendly assets:** Bootstrap 5, Bootstrap Icons, and HTMX are vendored under `src/web/static/vendor/`, so the UI renders correctly on proxy-restricted machines with no CDN access.
 
 **Configuration** (`web/config.json`):
 ```json
@@ -154,6 +157,36 @@ python -m src.web.app
 **Path mappings** translate Windows UNC paths (used by team members on Windows PCs) to Linux mount points on the server. Team members can paste Windows paths in forms; the server resolves them automatically.
 
 **Reverse proxy:** Set `root_path` to match your reverse proxy prefix (e.g., `/nora`). All URLs in the UI will be prefixed accordingly.
+
+## Corrections UI
+
+Requirement engineers can correct generated artifacts directly in the browser. Each environment gets its own `corrections/` directory that the pipeline auto-detects as an override on the next run.
+
+**Workflow:**
+
+1. Go to **Corrections** in the sidebar — see per-environment status (no output / output only / corrected).
+2. Click **Edit profile** or **Edit taxonomy** for an environment.
+3. Click **Start correction from output** to seed a copy from the generated artifact.
+4. Edit fields in the form:
+   - **Profile:** heading numbering pattern, requirement ID pattern + components, header/footer patterns, zone definitions (add/remove/edit), cross-reference patterns, body-text thresholds.
+   - **Taxonomy:** searchable feature list — add/remove features, rename, edit keywords and descriptions inline.
+5. Click **Save correction**. The file lands at `<doc_root>/corrections/profile.json` or `<doc_root>/corrections/taxonomy.json`.
+6. Re-run the pipeline — `src/pipeline/stages.py` picks the correction up automatically.
+
+**Compact FIX report:** Click **FIX report** from either editor to get a pasteable summary of what changed, with **no proprietary document content** (no body text, no feature descriptions, no sample req IDs). Only field names, regex patterns, feature IDs, keyword tokens, and counts. Example:
+
+```
+FIX alice-demo taxonomy
+feat_total=16 added=1 removed=1 renamed=1 kw_edits=1 desc_edits=0
+add: VOLTE_HANDOVER(kws: handover,ho,mobility,srvcc)
+remove: IMS_REGISTRATION
+rename: LTE Data Retry->LTE Data Retry (Renamed) [DATA_RETRY]
+kw: DATA_RETRY +newkw
+```
+
+Available also as plain text at `GET /api/corrections/report/<env>` (optional `?artifact=profile|taxonomy|both`).
+
+Files still editable via JSON if preferred — the UI and CLI workflows read/write the same files.
 
 ## Environment Management
 
@@ -842,7 +875,7 @@ req-agent/
 ├── SESSION_SUMMARY.md                     # Session context for continuity
 ├── README.md                              # This file
 ├── CONTRIBUTING.md                        # Team contribution guide (file ownership, QC templates, correction workflow)
-├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.5)
+├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.6)
 ├── requirements.txt                       # Python dependencies
 ├── setup_env.sh                           # One-command setup script (deps, Ollama, model, verification)
 ├── environments/                          # Environment configs (JSON, one per team member workspace)
@@ -863,7 +896,9 @@ req-agent/
 │   ├── eval/                              # Step 11: Evaluation framework
 │   ├── env/                               # Environment config system (multi-user workspaces)
 │   ├── pipeline/                          # Pipeline runner (stage orchestration, reports, error codes)
-│   └── web/                               # Web UI (FastAPI + Bootstrap 5 + HTMX, 7 route modules)
+│   ├── corrections/                       # Corrections module (schema, file-backed store, compact FIX report)
+│   └── web/                               # Web UI (FastAPI + Bootstrap 5 + HTMX, 8 route modules inc. corrections)
+│       └── static/vendor/                 # Vendored Bootstrap + Bootstrap Icons + HTMX (offline/proxy-safe)
 ├── tests/                                 # 426 tests across 13 test files
 ├── data/
 │   ├── extracted/                        # Step 1 output: IR JSON files

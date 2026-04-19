@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Taxonomy correction · {{ env.name }}{% endblock %}
+{% block nav_corrections %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h4 class="mb-1">Taxonomy correction</h4>
+        <div class="text-muted small">
+            <a href="{{ root_path }}/corrections">Corrections</a> ·
+            env <strong>{{ env.name }}</strong>
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ root_path }}/corrections/report/{{ env.name }}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-clipboard-data"></i> FIX report
+        </a>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<div class="card mb-3">
+    <div class="card-body d-flex justify-content-between align-items-center py-2">
+        <div class="small">
+            Output:
+            {% if status.has_output %}<code>{{ status.output_path }}</code>
+            {% else %}<span class="text-muted">no output (run <code>taxonomy</code> stage)</span>
+            {% endif %}
+            &nbsp;·&nbsp;
+            Correction:
+            {% if status.has_correction %}
+                <code>{{ status.correction_path }}</code>
+                <span class="badge bg-success ms-1">present</span>
+            {% else %}
+                <span class="text-muted">not started</span>
+            {% endif %}
+        </div>
+        <div class="d-flex gap-2">
+            {% if status.has_output and not status.has_correction %}
+            <form method="post" action="{{ root_path }}/corrections/taxonomy/{{ env.name }}/start">
+                <button class="btn btn-primary btn-sm">
+                    <i class="bi bi-copy"></i> Start correction from output
+                </button>
+            </form>
+            {% endif %}
+            {% if status.has_correction %}
+            <form method="post" action="{{ root_path }}/corrections/taxonomy/{{ env.name }}/discard"
+                  onsubmit="return confirm('Discard correction? This deletes corrections/taxonomy.json.')">
+                <button class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-trash"></i> Discard correction
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if not has_taxonomy %}
+<div class="alert alert-warning">
+    No taxonomy to edit yet. Run the <code>taxonomy</code> stage, then start a correction.
+</div>
+{% else %}
+<form method="post" action="{{ root_path }}/corrections/taxonomy/{{ env.name }}/save" id="tax-form">
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <div>
+                <strong>Features</strong>
+                <span class="text-muted small ms-2">
+                    (<span id="feat-count">0</span> total)
+                </span>
+            </div>
+            <div class="d-flex gap-2">
+                <input class="form-control form-control-sm" style="width: 220px;"
+                       placeholder="Filter by name or id…" oninput="filterFeats(this.value)">
+                <button type="button" class="btn btn-outline-primary btn-sm" onclick="addFeature()">
+                    <i class="bi bi-plus"></i> Add feature
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="feat-list"></div>
+            <input type="hidden" name="features_json" id="features_json" value="">
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-end gap-2 mb-4">
+        <a href="{{ root_path }}/corrections" class="btn btn-outline-secondary">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save"></i> Save correction
+        </button>
+    </div>
+</form>
+
+<script>
+const initialFeatures = {{ (taxonomy.features or []) | tojson }};
+let features = initialFeatures.map(f => ({
+    feature_id: f.feature_id || "",
+    name: f.name || "",
+    description: f.description || "",
+    keywords: f.keywords || [],
+    mno_coverage: f.mno_coverage || {},
+    source_plans: f.source_plans || [],
+    depends_on_features: f.depends_on_features || [],
+    is_primary_in: f.is_primary_in || [],
+    is_referenced_in: f.is_referenced_in || [],
+}));
+let filterText = "";
+
+function esc(s) {
+    return String(s || "").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderFeats() {
+    const host = document.getElementById("feat-list");
+    const filt = filterText.toLowerCase().trim();
+    const visible = features.map((f, i) => ({f, i})).filter(({f}) => {
+        if (!filt) return true;
+        return (f.feature_id || "").toLowerCase().includes(filt)
+            || (f.name || "").toLowerCase().includes(filt);
+    });
+
+    document.getElementById("feat-count").textContent = features.length;
+
+    if (visible.length === 0) {
+        host.innerHTML = '<div class="text-muted small py-3 text-center">No features match.</div>';
+    } else {
+        host.innerHTML = visible.map(({f, i}) => `
+            <div class="border rounded p-2 mb-2">
+                <div class="row g-2 align-items-center">
+                    <div class="col-md-3">
+                        <label class="form-label small mb-1">Feature ID</label>
+                        <input class="form-control form-control-sm font-monospace" value="${esc(f.feature_id)}"
+                               onchange="updateFeat(${i},'feature_id',this.value)">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small mb-1">Name</label>
+                        <input class="form-control form-control-sm" value="${esc(f.name)}"
+                               onchange="updateFeat(${i},'name',this.value)">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small mb-1">Keywords (comma-separated)</label>
+                        <input class="form-control form-control-sm" value="${esc((f.keywords||[]).join(', '))}"
+                               onchange="updateKeywords(${i},this.value)">
+                    </div>
+                    <div class="col-md-1 text-end pt-3">
+                        <button type="button" class="btn btn-outline-danger btn-sm" onclick="removeFeat(${i})" title="Remove">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                </div>
+                <details class="mt-2">
+                    <summary class="small text-muted">description + coverage</summary>
+                    <div class="mt-2">
+                        <label class="form-label small mb-1">Description</label>
+                        <textarea class="form-control form-control-sm" rows="2"
+                                  onchange="updateFeat(${i},'description',this.value)">${esc(f.description)}</textarea>
+                        <div class="row g-2 mt-1">
+                            <div class="col-md-6">
+                                <label class="form-label small mb-1">Source plans</label>
+                                <div class="small font-monospace text-muted">${esc((f.source_plans||[]).join(', ') || '—')}</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small mb-1">MNO coverage</label>
+                                <div class="small font-monospace text-muted">${esc(Object.keys(f.mno_coverage||{}).join(', ') || '—')}</div>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+        `).join("");
+    }
+    syncHidden();
+}
+
+function syncHidden() { document.getElementById("features_json").value = JSON.stringify(features); }
+function updateFeat(i, key, val) { features[i][key] = val; syncHidden(); }
+function updateKeywords(i, raw) {
+    features[i].keywords = raw.split(",").map(s => s.trim()).filter(Boolean);
+    syncHidden();
+}
+function removeFeat(i) { features.splice(i, 1); renderFeats(); }
+function addFeature() {
+    features.unshift({
+        feature_id: "", name: "", description: "", keywords: [],
+        mno_coverage: {}, source_plans: [], depends_on_features: [],
+        is_primary_in: [], is_referenced_in: [],
+    });
+    renderFeats();
+}
+function filterFeats(v) { filterText = v; renderFeats(); }
+renderFeats();
+
+document.getElementById("tax-form").addEventListener("submit", syncHidden);
+</script>
+{% endif %}
+{% endblock %}

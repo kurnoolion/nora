@@ -1,6 +1,6 @@
 # Session Summary: NORA — Network Operator Requirements Analyzer
 
-**Date:** April 11-18, 2026
+**Date:** April 11-19, 2026
 **Purpose:** Feed this to Claude Code at the start of a new session to resume where we left off.
 
 ---
@@ -130,7 +130,7 @@ Honesty:
 
 ## Design Document
 
-The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System.md` (v0.5). It contains:
+The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System.md` (v0.6). It contains:
 - Full architecture diagrams (ingestion + query pipelines)
 - Detailed ingestion pipeline (7 stages including multi-format extraction)
 - Knowledge graph model (8 node types, 15+ edge types)
@@ -309,6 +309,21 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Tests:** 43 web tests — `tests/test_web_path_mapper.py` (19 tests across 5 classes) + `tests/test_web_jobs.py` (24 async tests covering all JobQueue operations)
 - **Dependencies:** fastapi, uvicorn[standard], jinja2, python-multipart, aiosqlite, httpx
 
+#### Corrections UI — Phase 1 (DONE, this session)
+- **Module:** `src/corrections/` — `schema.py` (`FixReport` dataclass with `to_text()`), `store.py` (`CorrectionStore` wrapping the `<doc_root>/output/{profile,taxonomy}/*.json` + `<doc_root>/corrections/{profile,taxonomy}.json` file layout that `src/pipeline/stages.py` already auto-detects as an override), `compactor.py` (`profile_fix_report` and `taxonomy_fix_report` produce compact pasteable diffs stripped of all proprietary document content — only field names, regex patterns, feature IDs, keyword tokens, and counts).
+- **Route module:** `src/web/routes/corrections.py` — 10 endpoints (landing, profile editor GET/start/save/discard, taxonomy editor GET/start/save/discard, HTML FIX report page, plain-text `GET /api/corrections/report/<env>` with optional `?artifact=` filter).
+- **Templates:** `src/web/templates/corrections/` — `index.html` (per-env status grid with badges), `profile.html` (two-column form with zone add/remove JS synced to hidden JSON), `taxonomy.html` (searchable feature list with inline edits), `report.html` (two `<pre>` blocks with copy-to-clipboard buttons).
+- **Sidebar:** new "Corrections" entry in `base.html` between Query and Settings.
+- **Compact FIX format:** e.g., `FIX alice-demo taxonomy / feat_total=16 added=1 removed=1 renamed=1 kw_edits=1 desc_edits=0 / add: VOLTE_HANDOVER(kws: handover,ho,mobility,srvcc) / remove: IMS_REGISTRATION / rename: LTE Data Retry->LTE Data Retry (Renamed) [DATA_RETRY] / kw: DATA_RETRY +newkw`.
+- **Deferred to later phases:** Phase 2 eval workflow (xlsx import/export, per-question feedback, FBK compact reports), Phase 3 graph/xref/standards deltas, Phase 4 polish (bulk ops, undo/redo, validation).
+
+#### Vendored Web UI Assets (DONE, this session)
+- Root cause of clumsy UI: SRI `integrity` hash on CDN `<link>` was truncated (63 chars instead of 64) so the browser silently rejected Bootstrap CSS, and CDNs are blocked on team laptops behind corporate proxies anyway.
+- Fix: vendored Bootstrap 5.3.3 CSS+JS, Bootstrap Icons 1.11.3 CSS+fonts, HTMX 2.0.4 into `src/web/static/vendor/` (~744K). Removed all `integrity`/`crossorigin` attributes from `base.html`. Matches existing pattern (Cytoscape already vendored for visualizations).
+
+#### Static Visualizations (DONE, this session — earlier work)
+- `visualizations/` — standalone HTML pages (`knowledge_graph.html`, `taxonomy.html`, `query_simulation.html`) backed by `nora_data.js` (~1.1MB generated snapshot) and vendored Cytoscape + cose-bilkent layout. Build script `build_viz_data.py` regenerates `nora_data.js` from current graph + taxonomy + vector store.
+
 #### Offline Ollama Install Workflow (DONE, committed)
 - **`setup_env.sh`** — Added `--download-dir <path>` flag for offline installs. Auto-retries with `OLLAMA_INSECURE=1` when normal `ollama pull` fails. Supports local tarball and install script.
 - **`download_urls.txt`** — URL list for manual browser downloads. Updated to Ollama v0.21.0 (CUDA bundled in `ollama-linux-amd64.tar.zst`, 2GB).
@@ -326,7 +341,17 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 
 **Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. Pipeline runner, environment system, model picker, collaboration tooling, web UI, and metrics/observability all implemented. 426 tests passing. Ready for multi-machine team workflow with browser-based access.
 
-**What just happened (this session — April 18, 2026):**
+**What just happened (this session — April 19, 2026):**
+- **Corrections UI — Phase 1** (new `src/corrections/` module + `src/web/routes/corrections.py` + 4 templates):
+  - File-backed `CorrectionStore` matches the existing pipeline convention (`corrections/profile.json`, `corrections/taxonomy.json` auto-detected as overrides by `src/pipeline/stages.py`).
+  - Profile editor covers heading numbering, req ID pattern + components, header/footer, zones, cross-refs, body-text thresholds.
+  - Taxonomy editor is a searchable feature list with inline add/rename/remove + keyword editing.
+  - Compact FIX report endpoint (HTML view + `GET /api/corrections/report/<env>` plain text) strips all proprietary document content — only field names, regex patterns, feature IDs, keyword tokens, and counts. Safe to paste in chat.
+  - Phase 2 (eval workflow), Phase 3 (graph/xref/standards deltas), Phase 4 (polish) deferred.
+- **Vendored web UI assets** — Bootstrap 5.3.3, Bootstrap Icons 1.11.3, HTMX 2.0.4 copied to `src/web/static/vendor/`. Fixes clumsy unstyled UI (truncated SRI integrity hash) and works on proxy-restricted machines. Removed all CDN URLs from `base.html`.
+- **Static visualizations** already on disk (`visualizations/` — knowledge graph, taxonomy, query simulation HTML backed by vendored Cytoscape + `nora_data.js`).
+
+**Previous session (April 18, 2026):**
 - **Web UI for team access** — full implementation (43 new files, 5129 lines):
   - Designed and agreed on FastAPI + Bootstrap 5 + HTMX stack (rejected Streamlit/Gradio/Airflow)
   - 7 route modules: dashboard, pipeline, jobs, query, environments, files, metrics
@@ -394,7 +419,7 @@ req-agent/
 ├── SESSION_SUMMARY.md                     # This file
 ├── README.md                              # How to run and test all PoC steps
 ├── CONTRIBUTING.md                        # Team contribution guide
-├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.5)
+├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.6)
 ├── requirements.txt                       # Python dependencies
 ├── setup_env.sh                           # One-command setup script (--download-dir for offline)
 ├── download_urls.txt                      # Manual download URLs for proxy-restricted environments
@@ -476,6 +501,10 @@ req-agent/
 │   │   ├── report.py                     # Compact + verbose reports, QC/FIX templates
 │   │   ├── run_cli.py                    # Pipeline CLI (--env, --docs, --start, --end, --detect-hw)
 │   │   └── error_codes.py               # 40 structured error codes
+│   ├── corrections/
+│   │   ├── schema.py                     # FixReport dataclass
+│   │   ├── store.py                      # CorrectionStore (file-backed profile + taxonomy)
+│   │   └── compactor.py                  # Compact FIX report (profile + taxonomy diffs, no proprietary content)
 │   └── web/
 │       ├── __init__.py                   # Package init
 │       ├── app.py                        # FastAPI application entry point
@@ -492,10 +521,13 @@ req-agent/
 │       │   ├── query.py                  # Query form + async execution
 │       │   ├── environments.py           # Environment CRUD
 │       │   ├── files.py                  # Shared folder browser
-│       │   └── metrics_route.py          # Metrics dashboard + compact report
-│       ├── templates/                    # 10 Jinja2 templates (base, dashboard, pipeline, etc.)
-│       ├── templates/partials/           # 6 HTMX partial templates
-│       └── static/                       # CSS + JS (no build toolchain)
+│       │   ├── metrics_route.py          # Metrics dashboard + compact report
+│       │   └── corrections.py            # Profile + taxonomy editor routes + FIX report
+│       ├── templates/                    # Jinja2 templates (base, dashboard, pipeline, corrections/…)
+│       ├── templates/partials/           # HTMX partial templates
+│       └── static/
+│           ├── css/, js/                 # App CSS + JS (no build toolchain)
+│           └── vendor/                   # Vendored Bootstrap 5, Bootstrap Icons, HTMX (offline/proxy-safe)
 ├── web/
 │   └── config.json                       # Web UI configuration (path mappings, Ollama URL, etc.)
 ├── tests/

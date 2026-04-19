@@ -37,11 +37,18 @@ The web UI provides browser-based access to all pipeline features. No terminal e
    - Type your question (e.g., "What is the T3402 timer behavior?")
    - Results include answer, citations, and pipeline stats
 
-6. **Browse shared files:**
+6. **Make corrections:**
+   - Go to **Corrections** in the sidebar — one row per environment, with status badges (no output / output only / corrected).
+   - Click **Edit profile** or **Edit taxonomy**, then **Start correction from output** to seed a copy from the generated artifact.
+   - Edit inline: heading/req-ID patterns, zones, header/footer, body-text thresholds (profile); search and add/rename/remove features, edit keywords (taxonomy).
+   - Click **Save correction** — file lands at `<doc_root>/corrections/profile.json` or `taxonomy.json` and the pipeline picks it up on the next run.
+   - Click **FIX report** to get a compact, proprietary-content-free summary of your changes to paste into chat.
+
+7. **Browse shared files:**
    - Go to **Files** in the sidebar
    - Browse the shared network folders to find documents or pipeline outputs
 
-7. **Check system health:**
+8. **Check system health:**
    - The **Dashboard** shows Ollama status, GPU info, and recent jobs
    - The **Metrics** page shows request timing, LLM stats, and resource usage
 
@@ -108,23 +115,41 @@ These files are produced by the pipeline. Edits will be overwritten on the next 
 
 ## Correction Workflow
 
-### Correcting a Document Profile
+The web UI is the recommended way to make corrections. Both UI and CLI read/write the same files (`<doc_root>/corrections/profile.json` and `<doc_root>/corrections/taxonomy.json`), so you can mix the two.
+
+### Correcting a Document Profile (UI)
 
 1. Run the pipeline through the `profile` stage
-2. Review `output/profile/profile.json`
-3. Copy it to `corrections/profile.json`
-4. Edit the copy — fix heading levels, req ID patterns, zones, etc.
+2. Go to **Corrections → Edit profile** for your environment
+3. Click **Start correction from output** to seed a copy from the generated profile
+4. Edit heading numbering, req ID pattern + components, header/footer patterns, zones, cross-refs, body-text thresholds, and click **Save correction**
 5. Re-run the pipeline — it will use your corrected profile automatically
-6. Report what you changed (see Reporting Format below)
+6. Click **FIX report** and paste the compact block into chat (see Reporting Format below)
 
-### Correcting the Taxonomy
+### Correcting the Taxonomy (UI)
 
 1. Run the pipeline through the `taxonomy` stage
-2. Review `output/taxonomy/taxonomy.json`
-3. Copy it to `corrections/taxonomy.json`
-4. Edit — rename features, remove incorrect ones, add missing ones
-5. Re-run the pipeline from `graph` stage onward
-6. Report what you changed
+2. Go to **Corrections → Edit taxonomy** for your environment
+3. Click **Start correction from output** to seed a copy from the generated taxonomy
+4. Use the search box to filter features, then rename, remove, add, or edit keywords inline
+5. Click **Save correction** — re-run the pipeline from the `graph` stage onward
+6. Click **FIX report** and paste the compact block into chat
+
+### Corrections via CLI (fallback)
+
+If you prefer to edit JSON directly:
+
+1. Copy the generated file:
+   - `cp <doc_root>/output/profile/*.json <doc_root>/corrections/profile.json`
+   - `cp <doc_root>/output/taxonomy/taxonomy.json <doc_root>/corrections/taxonomy.json`
+2. Edit the copy with any text editor
+3. Re-run the pipeline — corrections are auto-detected
+
+To get a compact FIX report without the UI:
+```bash
+curl http://<server>:<port>/api/corrections/report/<env-name>
+# Optional: ?artifact=profile or ?artifact=taxonomy
+```
 
 ## Evaluation Q&A Format (Excel)
 

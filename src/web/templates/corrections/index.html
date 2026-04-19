@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Corrections{% endblock %}
+{% block nav_corrections %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">Corrections</h4>
+    <small class="text-muted">
+        <i class="bi bi-info-circle me-1"></i>
+        Corrections override pipeline output on next run.
+    </small>
+</div>
+
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show">
+    {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if envs|length == 0 %}
+<div class="alert alert-info">
+    No environments yet.
+    <a href="{{ root_path }}/environments/new" class="alert-link">Create one</a> first.
+</div>
+{% else %}
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Environment</th>
+                    <th>Profile</th>
+                    <th>Taxonomy</th>
+                    <th style="width: 140px;">Report</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in envs %}
+                <tr>
+                    <td>
+                        <strong>{{ e.name }}</strong>
+                        <br><small class="text-muted">{{ e.member }} · <code>{{ e.document_root }}</code></small>
+                    </td>
+                    <td>
+                        {% if e.profile.has_correction %}
+                            <span class="badge bg-success">corrected</span>
+                        {% elif e.profile.has_output %}
+                            <span class="badge bg-secondary">output only</span>
+                        {% else %}
+                            <span class="badge bg-light text-muted border">no output</span>
+                        {% endif %}
+                        <a href="{{ root_path }}/corrections/profile/{{ e.name }}" class="btn btn-outline-primary btn-sm ms-2">
+                            <i class="bi bi-pencil-square"></i> Edit
+                        </a>
+                    </td>
+                    <td>
+                        {% if e.taxonomy.has_correction %}
+                            <span class="badge bg-success">corrected</span>
+                        {% elif e.taxonomy.has_output %}
+                            <span class="badge bg-secondary">output only</span>
+                        {% else %}
+                            <span class="badge bg-light text-muted border">no output</span>
+                        {% endif %}
+                        <a href="{{ root_path }}/corrections/taxonomy/{{ e.name }}" class="btn btn-outline-primary btn-sm ms-2">
+                            <i class="bi bi-pencil-square"></i> Edit
+                        </a>
+                    </td>
+                    <td>
+                        <a href="{{ root_path }}/corrections/report/{{ e.name }}" class="btn btn-outline-dark btn-sm">
+                            <i class="bi bi-clipboard-data"></i> FIX report
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

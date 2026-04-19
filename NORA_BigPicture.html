@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NORA — Big Picture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    background: radial-gradient(ellipse at top, #12233f 0%, #050a18 70%);
+    color: #e8eef8;
+    min-height: 100vh;
+    padding: 24px 32px 40px;
+  }
+
+  /* ========== HEADER ========== */
+  .header {
+    text-align: center;
+    margin-bottom: 14px;
+  }
+  .header h1 {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    background: linear-gradient(90deg, #4fc3f7, #26a69a, #66bb6a, #ffb74d);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .header .sub {
+    font-size: 13px;
+    color: #89a0c0;
+    margin-top: 3px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  /* ========== STATS STRIP ========== */
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 28px;
+    margin: 10px auto 22px;
+    max-width: 1620px;
+    flex-wrap: wrap;
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 14px;
+    border-right: 1px solid rgba(100,150,200,0.2);
+  }
+  .stat:last-child { border-right: none; }
+  .stat .num {
+    font-size: 18px;
+    font-weight: 700;
+    color: #4fc3f7;
+  }
+  .stat .lbl {
+    font-size: 10px;
+    color: #89a0c0;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  /* ========== MAIN GRID ========== */
+  .stage {
+    display: grid;
+    grid-template-columns: 220px 1fr 220px;
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      "inputs  ingest     consumers"
+      "inputs  brain      consumers"
+      "inputs  query      consumers";
+    gap: 22px;
+    max-width: 1620px;
+    margin: 0 auto;
+  }
+
+  /* ========== SIDE PANELS ========== */
+  .side-panel {
+    background: linear-gradient(145deg, rgba(30,50,80,0.55), rgba(15,25,45,0.55));
+    border: 1px solid rgba(100,150,200,0.25);
+    border-radius: 14px;
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .side-panel h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #4fc3f7;
+    letter-spacing: 2px;
+    text-align: center;
+    border-bottom: 1px solid rgba(79,195,247,0.3);
+    padding-bottom: 5px;
+    margin-bottom: 4px;
+  }
+  .side-panel.left { grid-area: inputs; }
+  .side-panel.right { grid-area: consumers; }
+  .side-panel.right h3 { color: #66bb6a; border-color: rgba(102,187,106,0.3); }
+
+  .chip {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    padding: 7px 9px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    animation: slideInFade 0.6s ease-out backwards;
+  }
+  .chip .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #4fc3f7;
+    box-shadow: 0 0 8px #4fc3f7;
+    flex-shrink: 0;
+  }
+  .side-panel.right .chip { animation-name: slideInFadeRight; }
+  .side-panel.right .chip .dot { background: #66bb6a; box-shadow: 0 0 8px #66bb6a; }
+  .chip:nth-child(2) { animation-delay: 0.1s; }
+  .chip:nth-child(3) { animation-delay: 0.2s; }
+  .chip:nth-child(4) { animation-delay: 0.3s; }
+  .chip:nth-child(5) { animation-delay: 0.4s; }
+  .chip:nth-child(6) { animation-delay: 0.5s; }
+  .chip:nth-child(7) { animation-delay: 0.6s; }
+  .chip:nth-child(8) { animation-delay: 0.7s; }
+
+  .chip.highlight { background: rgba(79,195,247,0.15); border-color: #4fc3f7; font-weight: 600; }
+  .side-panel.right .chip.highlight { background: rgba(102,187,106,0.15); border-color: #66bb6a; }
+
+  .chip-sub {
+    font-size: 10px;
+    color: #89a0c0;
+    margin-top: 2px;
+    font-style: italic;
+  }
+
+  .divider {
+    height: 1px;
+    background: rgba(255,255,255,0.1);
+    margin: 6px 2px;
+  }
+
+  .divider-label {
+    font-size: 10px;
+    color: #6a7f9c;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    text-align: center;
+    margin: 6px 0 2px;
+  }
+
+  /* ========== PIPELINE BANDS ========== */
+  .pipeline-wrap {
+    position: relative;
+    padding-top: 10px;
+  }
+  .pipeline-wrap.ingest { grid-area: ingest; }
+  .pipeline-wrap.query { grid-area: query; }
+
+  .pipeline-label {
+    position: absolute;
+    top: 0;
+    left: 20px;
+    z-index: 5;
+    background: #0a1426;
+    padding: 3px 12px;
+    font-size: 10px;
+    letter-spacing: 2.5px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    font-weight: 700;
+    border: 1px solid;
+  }
+  .pipeline-wrap.ingest .pipeline-label { color: #4fc3f7; border-color: rgba(79,195,247,0.5); }
+  .pipeline-wrap.query .pipeline-label { color: #66bb6a; border-color: rgba(102,187,106,0.5); }
+
+  .pipeline {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    padding: 18px 14px 12px;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .pipeline.ingest {
+    background: linear-gradient(90deg, rgba(79,195,247,0.12), rgba(79,195,247,0.05));
+    border: 1px solid rgba(79,195,247,0.3);
+  }
+  .pipeline.query {
+    background: linear-gradient(90deg, rgba(102,187,106,0.05), rgba(102,187,106,0.12));
+    border: 1px solid rgba(102,187,106,0.3);
+  }
+
+  .stage-node {
+    flex: 1;
+    text-align: center;
+    padding: 7px 4px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.08);
+    position: relative;
+    animation: glowPulse 3s infinite;
+    min-width: 0;
+  }
+  .stage-node .s-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #e8eef8;
+  }
+  .stage-node .s-desc {
+    font-size: 9px;
+    color: #89a0c0;
+    margin-top: 2px;
+    line-height: 1.3;
+  }
+  .pipeline.ingest .stage-node:nth-child(even) { animation-delay: 0.3s; }
+  .pipeline.ingest .stage-node:nth-child(3n) { animation-delay: 0.6s; }
+  .pipeline.query .stage-node:nth-child(even) { animation-delay: 0.4s; }
+
+  .arrow {
+    color: rgba(255,255,255,0.3);
+    font-size: 14px;
+    flex-shrink: 0;
+    align-self: center;
+  }
+
+  /* Flowing particles */
+  .pipeline::after {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 0;
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, #4fc3f7, transparent);
+    box-shadow: 0 0 12px #4fc3f7;
+    animation: flowLR 3s linear infinite;
+  }
+  .pipeline.query::after {
+    background: linear-gradient(90deg, transparent, #66bb6a, transparent);
+    box-shadow: 0 0 12px #66bb6a;
+  }
+
+  /* ========== BRAIN ========== */
+  .brain-wrap {
+    grid-area: brain;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    padding: 12px 0;
+  }
+  .brain {
+    position: relative;
+    width: 100%;
+    max-width: 720px;
+    min-height: 260px;
+    border-radius: 20px;
+    background: radial-gradient(ellipse at center, rgba(79,195,247,0.13), rgba(102,187,106,0.06));
+    border: 2px solid rgba(79,195,247,0.5);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    padding: 24px 20px 20px;
+    animation: brainPulse 4s ease-in-out infinite;
+    box-shadow: 0 0 40px rgba(79,195,247,0.2), inset 0 0 30px rgba(79,195,247,0.06);
+  }
+  .brain-label {
+    position: absolute;
+    top: -13px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #0a1426;
+    padding: 4px 16px;
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: #4fc3f7;
+    text-transform: uppercase;
+    font-weight: 700;
+    border: 1px solid rgba(79,195,247,0.5);
+    border-radius: 6px;
+  }
+
+  .brain-layer {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(10,20,40,0.7);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .brain-layer.kg { border: 1px solid #4fc3f7; }
+  .brain-layer.vec { border: 1px solid #66bb6a; }
+  .bl-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .bl-head .icon { width: 28px; height: 28px; flex-shrink: 0; }
+  .bl-head .t { font-size: 13px; font-weight: 700; }
+  .bl-head .c { margin-left: auto; font-size: 10px; color: #4fc3f7; letter-spacing: 1px; }
+  .brain-layer.vec .bl-head .c { color: #66bb6a; }
+
+  .bl-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+  }
+  .bl-item {
+    font-size: 10px;
+    padding: 2px 7px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px;
+    color: #cfd8e8;
+  }
+  .brain-layer.kg .bl-item { border-color: rgba(79,195,247,0.4); }
+  .brain-layer.vec .bl-item { border-color: rgba(102,187,106,0.4); }
+
+  .bl-rel {
+    font-size: 10px;
+    color: #89a0c0;
+    font-style: italic;
+    margin-top: 2px;
+  }
+
+  /* Human filter badge on brain */
+  .human-badge {
+    position: absolute;
+    top: -13px;
+    right: 18px;
+    background: linear-gradient(135deg, #ff9800, #f57c00);
+    color: #0a1426;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    box-shadow: 0 0 16px rgba(255,152,0,0.6);
+    animation: glowPulseWarm 2.5s ease-in-out infinite;
+    z-index: 3;
+  }
+
+  /* ========== HUMAN FILTER LOOP ========== */
+  .filter-loop {
+    grid-column: 1 / -1;
+    margin-top: -4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 14px 20px;
+    background: linear-gradient(90deg, rgba(255,152,0,0.08), rgba(255,179,64,0.05), rgba(255,152,0,0.08));
+    border: 1px dashed rgba(255,152,0,0.5);
+    border-radius: 14px;
+    max-width: 1620px;
+    margin: 16px auto 0;
+    flex-wrap: wrap;
+  }
+  .filter-loop .fl-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #ffb74d;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .fl-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    background: rgba(0,0,0,0.2);
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,152,0,0.3);
+  }
+  .fl-step .num {
+    width: 20px; height: 20px;
+    background: #ff9800;
+    color: #0a1426;
+    font-weight: 700;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+  }
+  .fl-arrow { color: #ffb74d; font-size: 18px; }
+
+  /* ========== FOUNDATIONS ========== */
+  .foundations {
+    max-width: 1620px;
+    margin: 16px auto 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+  }
+  .found-card {
+    background: linear-gradient(145deg, rgba(30,40,60,0.55), rgba(15,20,35,0.55));
+    border: 1px solid rgba(100,120,160,0.25);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .found-card h4 {
+    font-size: 11px;
+    color: #89a0c0;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .found-card .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .tech {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 4px 10px;
+    border-radius: 16px;
+    font-size: 11px;
+    color: #cfd8e8;
+    transition: all 0.3s;
+  }
+  .tech:hover {
+    background: rgba(79,195,247,0.15);
+    border-color: #4fc3f7;
+    transform: translateY(-1px);
+  }
+  .tech.accent { background: rgba(79,195,247,0.15); border-color: rgba(79,195,247,0.5); color: #4fc3f7; font-weight: 600; }
+
+  /* ========== FOOTER ========== */
+  .footer {
+    max-width: 1620px;
+    margin: 14px auto 0;
+    text-align: center;
+    color: #5a6a85;
+    font-size: 11px;
+    letter-spacing: 1px;
+  }
+
+  /* ========== ANIMATIONS ========== */
+  @keyframes slideInFade {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes slideInFadeRight {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes glowPulse {
+    0%, 100% { box-shadow: 0 0 0 rgba(79,195,247,0); border-color: rgba(255,255,255,0.08); }
+    50% { box-shadow: 0 0 10px rgba(79,195,247,0.35); border-color: rgba(79,195,247,0.4); }
+  }
+  @keyframes glowPulseWarm {
+    0%, 100% { box-shadow: 0 0 12px rgba(255,152,0,0.4); }
+    50% { box-shadow: 0 0 24px rgba(255,152,0,0.8); }
+  }
+  @keyframes brainPulse {
+    0%, 100% {
+      box-shadow: 0 0 40px rgba(79,195,247,0.2), inset 0 0 30px rgba(79,195,247,0.06);
+      border-color: rgba(79,195,247,0.5);
+    }
+    50% {
+      box-shadow: 0 0 60px rgba(79,195,247,0.4), inset 0 0 40px rgba(102,187,106,0.12);
+      border-color: rgba(102,187,106,0.6);
+    }
+  }
+  @keyframes flowLR {
+    0% { left: 0%; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { left: calc(100% - 14px); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>NORA — Network Operator Requirements Analyzer</h1>
+  <div class="sub">Knowledge Graph + RAG Hybrid for MNO Spec Intelligence</div>
+</div>
+
+<!-- STATS STRIP -->
+<div class="stats">
+  <div class="stat"><div class="num">3+</div><div class="lbl">MNOs Supported</div></div>
+  <div class="stat"><div class="num">5</div><div class="lbl">Doc Formats</div></div>
+  <div class="stat"><div class="num">9+6</div><div class="lbl">Pipeline Stages</div></div>
+  <div class="stat"><div class="num">4</div><div class="lbl">Query Types</div></div>
+  <div class="stat"><div class="num">100%</div><div class="lbl">On-Prem / Offline</div></div>
+  <div class="stat"><div class="num">Gauss</div><div class="lbl">LLM (Phase 1)</div></div>
+</div>
+
+<!-- MAIN GRID -->
+<div class="stage">
+
+  <!-- ========== LEFT: INPUTS ========== -->
+  <div class="side-panel left">
+    <h3>Inputs</h3>
+    <div class="divider-label">MNO Specs</div>
+    <div class="chip"><span class="dot"></span>Verizon (VZW) OA</div>
+    <div class="chip"><span class="dot"></span>AT&amp;T Specs</div>
+    <div class="chip"><span class="dot"></span>T-Mobile Specs</div>
+    <div class="chip"><span class="dot"></span>3GPP / GSMA Refs</div>
+
+    <div class="divider-label">Formats</div>
+    <div class="chip"><span class="dot"></span>PDF · DOC · DOCX</div>
+    <div class="chip"><span class="dot"></span>XLS · XLSX</div>
+
+    <div class="divider-label">Preprocessor</div>
+    <div class="chip highlight">
+      <span class="dot"></span>
+      <div>
+        <div>DocumentProfiler</div>
+        <div class="chip-sub">LLM-free structure learning</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== TOP: INGESTION PIPELINE ========== -->
+  <div class="pipeline-wrap ingest">
+    <span class="pipeline-label">Ingestion Pipeline · runs once per spec release</span>
+    <div class="pipeline ingest">
+      <div class="stage-node"><div class="s-title">Profile</div><div class="s-desc">Derive structure, TOC, headings</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Extract</div><div class="s-desc">Text + tables from any format</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Chunk</div><div class="s-desc">Section-aware segmentation</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Normalize</div><div class="s-desc">Clean text, resolve refs</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Classify</div><div class="s-desc">Requirement vs context vs test</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Taxonomize</div><div class="s-desc">Domain labels (SMS, NAC, OTA)</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Embed</div><div class="s-desc">Vector embeddings per chunk</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Build KG</div><div class="s-desc">Entities + cross-references</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Index</div><div class="s-desc">Persist KG + Vector Store</div></div>
+    </div>
+  </div>
+
+  <!-- ========== CENTER: BRAIN ========== -->
+  <div class="brain-wrap">
+    <div class="brain">
+      <div class="brain-label">Hybrid Memory</div>
+      <div class="human-badge">👁 Human Filter Validated</div>
+
+      <!-- KG side -->
+      <div class="brain-layer kg">
+        <div class="bl-head">
+          <svg class="icon" viewBox="0 0 64 64" fill="none">
+            <circle cx="32" cy="14" r="5" fill="#4fc3f7"/>
+            <circle cx="14" cy="40" r="5" fill="#4fc3f7"/>
+            <circle cx="50" cy="40" r="5" fill="#4fc3f7"/>
+            <circle cx="32" cy="54" r="4" fill="#4fc3f7" opacity="0.7"/>
+            <line x1="32" y1="14" x2="14" y2="40" stroke="#4fc3f7" stroke-width="1.5"/>
+            <line x1="32" y1="14" x2="50" y2="40" stroke="#4fc3f7" stroke-width="1.5"/>
+            <line x1="14" y1="40" x2="50" y2="40" stroke="#4fc3f7" stroke-width="1.2"/>
+            <line x1="32" y1="54" x2="14" y2="40" stroke="#4fc3f7" stroke-width="1.2" opacity="0.6"/>
+            <line x1="32" y1="54" x2="50" y2="40" stroke="#4fc3f7" stroke-width="1.2" opacity="0.6"/>
+          </svg>
+          <div class="t">Knowledge Graph</div>
+          <div class="c">Structured</div>
+        </div>
+        <div class="bl-items">
+          <span class="bl-item">Document</span>
+          <span class="bl-item">Section</span>
+          <span class="bl-item">Requirement</span>
+          <span class="bl-item">Feature</span>
+          <span class="bl-item">Test Case</span>
+          <span class="bl-item">Parameter</span>
+          <span class="bl-item">Timer (e.g. T3402)</span>
+        </div>
+        <div class="bl-rel">Relationships: references · supersedes · tested-by · applies-to · derived-from</div>
+      </div>
+
+      <!-- Vector side -->
+      <div class="brain-layer vec">
+        <div class="bl-head">
+          <svg class="icon" viewBox="0 0 64 64" fill="none">
+            <rect x="8" y="10" width="48" height="5" rx="2" fill="#66bb6a" opacity="0.9"/>
+            <rect x="8" y="19" width="36" height="5" rx="2" fill="#66bb6a" opacity="0.75"/>
+            <rect x="8" y="28" width="44" height="5" rx="2" fill="#66bb6a" opacity="0.85"/>
+            <rect x="8" y="37" width="30" height="5" rx="2" fill="#66bb6a" opacity="0.65"/>
+            <rect x="8" y="46" width="40" height="5" rx="2" fill="#66bb6a" opacity="0.75"/>
+            <circle cx="54" cy="12" r="2" fill="#66bb6a"/>
+            <circle cx="46" cy="21" r="2" fill="#66bb6a"/>
+            <circle cx="52" cy="30" r="2" fill="#66bb6a"/>
+            <circle cx="40" cy="39" r="2" fill="#66bb6a"/>
+            <circle cx="50" cy="48" r="2" fill="#66bb6a"/>
+          </svg>
+          <div class="t">Vector Store</div>
+          <div class="c">Semantic</div>
+        </div>
+        <div class="bl-items">
+          <span class="bl-item">Chunk + Embedding</span>
+          <span class="bl-item">Section context</span>
+          <span class="bl-item">Table rows</span>
+          <span class="bl-item">Cited source span</span>
+        </div>
+        <div class="bl-rel">Indexed by: MNO · domain · section · requirement-id · confidence</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== BOTTOM: QUERY PIPELINE ========== -->
+  <div class="pipeline-wrap query">
+    <span class="pipeline-label">Query Pipeline · real-time</span>
+    <div class="pipeline query">
+      <div class="stage-node"><div class="s-title">Parse Query</div><div class="s-desc">User question + context</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Classify Intent</div><div class="s-desc">Lookup / compare / compliance</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">KG Traverse</div><div class="s-desc">Structured graph walk</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Vector Search</div><div class="s-desc">Semantic top-k retrieval</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Rerank + Fuse</div><div class="s-desc">Merge KG + vector results</div></div>
+      <span class="arrow">▸</span>
+      <div class="stage-node"><div class="s-title">Generate Answer</div><div class="s-desc">Grounded, with citations</div></div>
+    </div>
+  </div>
+
+  <!-- ========== RIGHT: CONSUMERS ========== -->
+  <div class="side-panel right">
+    <h3>Consumers</h3>
+
+    <div class="divider-label">Query Types</div>
+    <div class="chip"><span class="dot"></span>Lookup (What is T3402?)</div>
+    <div class="chip"><span class="dot"></span>Cross-ref (VZW vs AT&amp;T)</div>
+    <div class="chip"><span class="dot"></span>Compliance delta</div>
+    <div class="chip"><span class="dot"></span>Spec Δ (v1 → v2)</div>
+
+    <div class="divider-label">Interfaces</div>
+    <div class="chip"><span class="dot"></span>Web UI · REST API · CLI</div>
+
+    <div class="divider-label">Teams</div>
+    <div class="chip highlight"><span class="dot"></span>R&amp;D Teams</div>
+    <div class="chip highlight"><span class="dot"></span>Test Teams</div>
+    <div class="chip highlight"><span class="dot"></span>Delta Analysis</div>
+
+    <div class="divider-label">Output</div>
+    <div class="chip"><span class="dot"></span>Answer + Citations</div>
+    <div class="chip"><span class="dot"></span>Confidence + Evidence</div>
+  </div>
+
+</div>
+
+<!-- HUMAN FILTER LOOP -->
+<div class="filter-loop">
+  <div class="fl-title">👁 Human Filter · Requirements Analysis Team</div>
+  <div class="fl-step"><span class="num">1</span>AI proposes (ingest + query)</div>
+  <span class="fl-arrow">→</span>
+  <div class="fl-step"><span class="num">2</span>Human reviews flagged low-confidence items</div>
+  <span class="fl-arrow">→</span>
+  <div class="fl-step"><span class="num">3</span>Corrections fed back to KG + taxonomy</div>
+  <span class="fl-arrow">↻</span>
+  <div class="fl-step"><span class="num">4</span>System learns; accuracy compounds over releases</div>
+</div>
+
+<!-- FOUNDATIONS -->
+<div class="foundations">
+  <div class="found-card">
+    <h4>Foundations</h4>
+    <div class="tags">
+      <span class="tech accent">Gauss LLM</span>
+      <span class="tech">Ollama</span>
+      <span class="tech">FastAPI</span>
+      <span class="tech">SQLite + WAL</span>
+      <span class="tech">Python 3.11</span>
+      <span class="tech">Bootstrap + HTMX</span>
+    </div>
+  </div>
+  <div class="found-card">
+    <h4>Deployment</h4>
+    <div class="tags">
+      <span class="tech">On-Prem</span>
+      <span class="tech">Air-Gapped / Offline</span>
+      <span class="tech">Windows + Linux</span>
+      <span class="tech">Reverse Proxy</span>
+      <span class="tech">Zero Cloud Egress</span>
+    </div>
+  </div>
+  <div class="found-card">
+    <h4>Observability</h4>
+    <div class="tags">
+      <span class="tech">Metrics Dashboard</span>
+      <span class="tech">SSE Log Stream</span>
+      <span class="tech">Job Queue</span>
+      <span class="tech">Audit Trail</span>
+      <span class="tech">Confidence Scoring</span>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  Ingestion runs per spec release · Queries are real-time · Human Filter validates both paths · Accuracy compounds release over release
+</div>
+
+</body>
+</html>

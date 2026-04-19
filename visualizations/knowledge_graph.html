@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NORA Knowledge Graph — LTEOTADM</title>
+<script src="cytoscape.min.js"></script>
+<script src="layout-base.js"></script>
+<script src="cose-base.js"></script>
+<script src="cytoscape-cose-bilkent.js"></script>
+<script src="nora_data.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1724; color: #e8eef8;
+  }
+
+  /* --- Top nav --- */
+  header {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+    padding: 10px 20px; height: 54px;
+    border-bottom: 1px solid #1f2d45;
+    background: linear-gradient(180deg, rgba(19,32,58,0.95), rgba(15,23,36,0.85));
+    backdrop-filter: blur(8px);
+    display: flex; align-items: center; gap: 20px;
+  }
+  header h1 {
+    margin: 0; font-size: 18px; letter-spacing: 0.5px;
+    background: linear-gradient(90deg, #4fc3f7, #66bb6a);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  header .sub { color: #89a0c0; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  header .nav { margin-left: auto; display: flex; gap: 8px; }
+  header .nav a {
+    color: #89a0c0; text-decoration: none; font-size: 12px; padding: 5px 12px;
+    border: 1px solid #2a3d5c; border-radius: 5px;
+  }
+  header .nav a.active { background: #4fc3f7; color: #0f1724; border-color: #4fc3f7; font-weight: 600; }
+  header .nav a:hover:not(.active) { border-color: #4fc3f7; color: #4fc3f7; }
+
+  /* --- Cy canvas --- */
+  #cy {
+    position: absolute; inset: 54px 0 0 0;
+    background: radial-gradient(ellipse at center, #0f1f3a 0%, #050a18 100%);
+  }
+
+  /* --- Floating panels --- */
+  .overlay {
+    position: absolute; z-index: 10;
+    background: rgba(11, 19, 32, 0.92);
+    border: 1px solid #1f2d45;
+    border-radius: 10px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .overlay .head {
+    padding: 10px 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #1f2d45;
+    cursor: pointer; user-select: none;
+  }
+  .overlay .head h3 {
+    margin: 0; font-size: 11px; color: #89a0c0;
+    letter-spacing: 2px; text-transform: uppercase;
+  }
+  .overlay .head .tog { color: #4fc3f7; font-size: 12px; transition: transform 0.2s; }
+  .overlay.collapsed .body { display: none; }
+  .overlay.collapsed .tog { transform: rotate(-90deg); }
+  .overlay .body { padding: 12px 14px; }
+
+  /* Controls — top left */
+  .controls-panel {
+    top: 68px; left: 14px; width: 280px;
+  }
+  .controls-panel .group {
+    margin-bottom: 10px;
+  }
+  .controls-panel label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #cfd8e8;
+    padding: 3px 0; cursor: pointer;
+  }
+  .controls-panel label input[type="checkbox"] {
+    accent-color: #4fc3f7;
+  }
+  .controls-panel .line {
+    display: inline-block; width: 18px; height: 2px; vertical-align: middle;
+    margin-right: 4px;
+  }
+  .controls-panel .cnt {
+    margin-left: auto; font-size: 10px; color: #6a7f9c; font-family: monospace;
+  }
+  .controls-panel select, .controls-panel button {
+    width: 100%;
+    background: #1f2d45; border: 1px solid #2a3d5c; color: #cfd8e8;
+    padding: 6px 10px; border-radius: 5px; font-size: 12px;
+    margin-top: 4px;
+  }
+  .controls-panel button { cursor: pointer; }
+  .controls-panel button:hover { border-color: #4fc3f7; color: #4fc3f7; }
+  .controls-panel .label-row {
+    font-size: 10px; color: #89a0c0; letter-spacing: 1.5px;
+    text-transform: uppercase; margin-bottom: 4px;
+  }
+  .controls-panel input[type="range"] {
+    width: 100%; accent-color: #4fc3f7;
+  }
+  .controls-panel .search {
+    width: 100%; padding: 6px 10px; font-size: 12px;
+    background: #13203a; border: 1px solid #2a3d5c; color: #e8eef8;
+    border-radius: 5px;
+  }
+  .controls-panel .search:focus { outline: none; border-color: #4fc3f7; }
+
+  /* Legend — top right */
+  .legend-panel {
+    top: 68px; right: 14px; width: 220px;
+  }
+  .legend-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #cfd8e8;
+    padding: 3px 0;
+  }
+  .legend-row .swatch {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.2); flex-shrink: 0;
+  }
+  .legend-row .cnt {
+    margin-left: auto; font-size: 10px; color: #6a7f9c; font-family: monospace;
+  }
+  .legend-panel .divider {
+    margin: 8px 0 6px; border-top: 1px solid #1f2d45;
+    font-size: 10px; color: #6a7f9c; letter-spacing: 1.5px;
+    text-transform: uppercase; padding-top: 6px;
+  }
+
+  /* Info panel — bottom right */
+  .info-panel {
+    bottom: 14px; right: 14px; width: 420px;
+    max-height: calc(100vh - 300px); overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .info-panel .body { overflow-y: auto; flex: 1; padding: 14px 16px; }
+  .info-panel .empty-hint {
+    color: #89a0c0; font-size: 12px; line-height: 1.6; font-style: italic;
+  }
+  .info-panel h2 { margin: 0; font-size: 15px; color: #4fc3f7; }
+  .info-panel .id-line {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6a7f9c;
+    margin: 5px 0 10px; word-break: break-all;
+  }
+  .info-panel .type-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 3px;
+    font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .info-panel p { line-height: 1.5; font-size: 12px; color: #cfd8e8; margin: 5px 0; }
+  .info-panel .meta-grid { display: grid; grid-template-columns: 100px 1fr; gap: 5px 10px; font-size: 12px; margin-top: 8px; }
+  .info-panel .meta-grid dt { color: #89a0c0; }
+  .info-panel .meta-grid dd { margin: 0; color: #e8eef8; word-break: break-word; }
+  .info-panel .sub-h {
+    font-size: 11px; color: #89a0c0; letter-spacing: 1.5px; text-transform: uppercase;
+    margin: 12px 0 5px; border-bottom: 1px solid #1f2d45; padding-bottom: 3px;
+  }
+  .req-link {
+    display: block;
+    background: rgba(79,195,247,0.08); border: 1px solid rgba(79,195,247,0.25);
+    border-radius: 5px; padding: 6px 9px; margin: 3px 0;
+    font-size: 11px; color: #cfd8e8; cursor: pointer;
+  }
+  .req-link:hover { background: rgba(79,195,247,0.18); border-color: #4fc3f7; }
+  .req-link .sec { font-family: monospace; color: #4fc3f7; font-weight: 600; margin-right: 5px; }
+  .req-link .rid { display: block; font-family: monospace; font-size: 9px; color: #6a7f9c; margin-top: 1px; }
+
+  .feat-chip {
+    display: inline-block; padding: 2px 8px; border-radius: 3px;
+    font-size: 10px; margin: 2px; font-family: monospace;
+  }
+  .feat-chip.primary { background: rgba(102,187,106,0.15); color: #66bb6a; border: 1px solid rgba(102,187,106,0.4); }
+  .feat-chip.secondary { background: rgba(255,179,64,0.1); color: #ffb74d; border: 1px solid rgba(255,179,64,0.3); }
+
+  .edge-flow {
+    display: flex; flex-direction: column; gap: 8px; margin: 10px 0;
+  }
+  .edge-flow .node-pill {
+    background: rgba(79,195,247,0.1); border: 1px solid #4fc3f7;
+    padding: 6px 10px; border-radius: 5px; font-size: 11px;
+  }
+  .edge-flow .node-pill b { color: #4fc3f7; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .edge-flow .edge-type-pill {
+    align-self: center;
+    background: #ff9800; color: #0f1724; padding: 3px 9px; border-radius: 3px;
+    font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  }
+
+  /* Modal (unchanged core but some tighter CSS) */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.82);
+    display: none; align-items: flex-start; justify-content: center;
+    z-index: 100; overflow-y: auto; padding: 40px 20px; backdrop-filter: blur(4px);
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: #13203a; border: 1px solid #2a3d5c; border-radius: 12px;
+    max-width: 1100px; width: 100%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .modal-head {
+    padding: 18px 24px 12px; border-bottom: 1px solid #1f2d45;
+    display: flex; align-items: flex-start; gap: 20px;
+  }
+  .modal-head h2 { margin: 0; font-size: 18px; color: #4fc3f7; flex: 1; }
+  .modal-head .close {
+    background: transparent; border: 1px solid #2a3d5c; color: #89a0c0;
+    padding: 4px 12px; border-radius: 5px; cursor: pointer; font-size: 18px;
+  }
+  .modal-head .close:hover { color: #f48fb1; border-color: #f48fb1; }
+  .modal-body { padding: 16px 24px 24px; }
+  .breadcrumb { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; font-size: 11px; }
+  .breadcrumb .crumb { background: rgba(79,195,247,0.1); padding: 2px 8px; border-radius: 4px; color: #4fc3f7; font-family: monospace; }
+  .breadcrumb .sep { color: #6a7f9c; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+  .subcard { background: #0b1320; border: 1px solid #1f2d45; border-radius: 8px; padding: 12px 14px; }
+  .subcard h4 { margin: 0 0 8px; font-size: 11px; color: #89a0c0; letter-spacing: 1.5px; text-transform: uppercase; }
+  .chunk-text {
+    background: #050a18; border: 1px solid #1f2d45; border-radius: 6px;
+    padding: 12px 14px; font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: #cfd8e8; white-space: pre-wrap;
+    line-height: 1.5; max-height: 300px; overflow-y: auto;
+  }
+  .chunk-header { color: #ffb74d; }
+  .path-item {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(79,195,247,0.1); padding: 3px 8px; border-radius: 4px;
+    margin: 2px; font-size: 11px; color: #4fc3f7; font-family: monospace;
+  }
+  .path-sep { color: #6a7f9c; margin: 0 2px; }
+
+  .spinner {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #4fc3f7; font-size: 13px; letter-spacing: 1px;
+    background: rgba(11,19,32,0.85); padding: 14px 24px; border-radius: 10px;
+    border: 1px solid #2a3d5c; z-index: 5;
+  }
+  .spinner.hidden { display: none; }
+  .spinner::after {
+    content: ''; display: inline-block;
+    width: 10px; height: 10px; margin-left: 10px;
+    border: 2px solid #4fc3f7; border-top-color: transparent;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NORA Knowledge Graph</h1>
+  <div class="sub">LTEOTADM · scope</div>
+  <div class="nav">
+    <a href="taxonomy.html">Taxonomy</a>
+    <a href="knowledge_graph.html" class="active">Knowledge Graph</a>
+    <a href="query_simulation.html">Query Simulation</a>
+  </div>
+</header>
+
+<div id="cy"></div>
+
+<div class="spinner" id="spinner">Laying out graph</div>
+
+<!-- Controls overlay (top left) -->
+<div class="overlay controls-panel" id="ctrl">
+  <div class="head" onclick="togglePanel('ctrl')">
+    <h3>Controls</h3>
+    <span class="tog">▼</span>
+  </div>
+  <div class="body">
+    <div class="group">
+      <div class="label-row">Search nodes</div>
+      <input class="search" id="search" placeholder="section, req_id, feature name…" />
+    </div>
+    <div class="group">
+      <div class="label-row">Layout</div>
+      <select id="layout-select">
+        <option value="cose-bilkent" selected>Force-directed (cose-bilkent, recommended)</option>
+        <option value="cose">Force-directed (basic)</option>
+        <option value="concentric">Concentric (by type)</option>
+        <option value="breadthfirst">Tree (from MNO)</option>
+        <option value="circle">Circle</option>
+        <option value="grid">Grid</option>
+      </select>
+    </div>
+    <div class="group">
+      <div class="label-row">Node spacing</div>
+      <input type="range" id="spacing" min="100" max="500" value="250" step="20">
+    </div>
+    <div class="group">
+      <div class="label-row">Show edge types</div>
+      <label><input type="checkbox" class="edge-tog" data-t="has_release" checked><span class="line" style="background:#f48fb1"></span>has_release <span class="cnt" data-cnt="has_release"></span></label>
+      <label><input type="checkbox" class="edge-tog" data-t="contains_plan" checked><span class="line" style="background:#ce93d8"></span>contains_plan <span class="cnt" data-cnt="contains_plan"></span></label>
+      <label><input type="checkbox" class="edge-tog" data-t="belongs_to" checked><span class="line" style="background:#4fc3f7"></span>belongs_to <span class="cnt" data-cnt="belongs_to"></span></label>
+      <label><input type="checkbox" class="edge-tog" data-t="parent_of" checked><span class="line" style="background:#81d4fa"></span>parent_of <span class="cnt" data-cnt="parent_of"></span></label>
+      <label><input type="checkbox" class="edge-tog" data-t="maps_to" checked><span class="line" style="background:#66bb6a"></span>maps_to <span class="cnt" data-cnt="maps_to"></span></label>
+      <label><input type="checkbox" class="edge-tog" data-t="depends_on" checked><span class="line" style="background:#ff9800"></span>depends_on <span class="cnt" data-cnt="depends_on"></span></label>
+      <label><input type="checkbox" class="edge-tog" data-t="references_standard" checked><span class="line" style="background:#ffb74d"></span>references_standard <span class="cnt" data-cnt="references_standard"></span></label>
+    </div>
+    <div class="group">
+      <button id="fit-btn">Fit to screen</button>
+      <button id="relayout-btn">Re-run layout</button>
+      <button id="reset-btn">Clear selection</button>
+    </div>
+    <div style="font-size: 10px; color: #6a7f9c; line-height: 1.5; margin-top: 10px;">
+      <b>Tip:</b> larger nodes = more connections (degree-scaled). Scroll to zoom; drag to pan.
+    </div>
+  </div>
+</div>
+
+<!-- Legend overlay (top right) -->
+<div class="overlay legend-panel" id="legend">
+  <div class="head" onclick="togglePanel('legend')">
+    <h3>Legend</h3>
+    <span class="tog">▼</span>
+  </div>
+  <div class="body">
+    <div class="legend-row"><span class="swatch" style="background:#f48fb1"></span>MNO<span class="cnt" id="ct-MNO"></span></div>
+    <div class="legend-row"><span class="swatch" style="background:#ce93d8"></span>Release<span class="cnt" id="ct-Release"></span></div>
+    <div class="legend-row"><span class="swatch" style="background:#4fc3f7"></span>Plan<span class="cnt" id="ct-Plan"></span></div>
+    <div class="legend-row"><span class="swatch" style="background:#81d4fa"></span>Requirement<span class="cnt" id="ct-Requirement"></span></div>
+    <div class="legend-row"><span class="swatch" style="background:#66bb6a"></span>Feature<span class="cnt" id="ct-Feature"></span></div>
+    <div class="legend-row"><span class="swatch" style="background:#ffb74d"></span>Standard<span class="cnt" id="ct-Standard_Section"></span></div>
+    <div class="divider">Interaction</div>
+    <div style="font-size: 11px; color: #cfd8e8; line-height: 1.6;">
+      Click node → info panel.<br>
+      Double-click requirement → full modal.<br>
+      Click edge → relationship detail.<br>
+      Click background → clear.
+    </div>
+  </div>
+</div>
+
+<!-- Info panel (bottom right) -->
+<div class="overlay info-panel" id="info">
+  <div class="head" onclick="togglePanel('info')">
+    <h3 id="info-title">Inspector</h3>
+    <span class="tog">▼</span>
+  </div>
+  <div class="body" id="info-body">
+    <div class="empty-hint">
+      Click any node or edge to inspect.
+      <br><br>
+      Tip: use edge-type toggles on the left to declutter. Hiding <code>parent_of</code> and <code>belongs_to</code> reveals the feature / standards structure.
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <div class="modal-head">
+      <div style="flex:1;">
+        <h2 id="modal-title">—</h2>
+        <div class="breadcrumb" id="modal-breadcrumb"></div>
+      </div>
+      <button class="close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+const D = window.NORA_DATA;
+
+// Register the cose-bilkent layout (loaded via script tags above)
+if (typeof cytoscapeCoseBilkent !== 'undefined') {
+  cytoscape.use(cytoscapeCoseBilkent);
+}
+
+// ---------- Styles ----------
+const NODE_COLORS = {
+  MNO: '#f48fb1',
+  Release: '#ce93d8',
+  Plan: '#4fc3f7',
+  Requirement: '#81d4fa',
+  Feature: '#66bb6a',
+  Standard_Section: '#ffb74d',
+};
+const NODE_BASE_SIZE = {
+  MNO: 50,
+  Release: 40,
+  Plan: 42,
+  Requirement: 18,
+  Feature: 38,
+  Standard_Section: 28,
+};
+const NODE_SHAPE = {
+  MNO: 'round-rectangle',
+  Release: 'round-rectangle',
+  Plan: 'round-rectangle',
+  Requirement: 'ellipse',
+  Feature: 'round-diamond',
+  Standard_Section: 'round-hexagon',
+};
+const EDGE_COLORS = {
+  has_release: '#f48fb1',
+  contains_plan: '#ce93d8',
+  belongs_to: '#4fc3f7',
+  parent_of: '#81d4fa',
+  maps_to: '#66bb6a',
+  depends_on: '#ff9800',
+  references_standard: '#ffb74d',
+};
+
+function nodeLabel(n) {
+  const t = n.node_type;
+  if (t === 'Requirement') {
+    const title = (n.title || '').slice(0, 28);
+    return '§' + (n.section_number || '?') + '  ' + title;
+  }
+  if (t === 'Feature') return n.name || n.feature_id;
+  if (t === 'Plan') return n.plan_id || '';
+  if (t === 'MNO') return n.name || n.mno;
+  if (t === 'Release') return n.release || '';
+  if (t === 'Standard_Section') return 'TS ' + (n.spec || '?') + (n.release_num ? ' R' + n.release_num : '');
+  return n.id;
+}
+
+// ---------- Compute degree per node ----------
+const degree = {};
+D.subgraph.edges.forEach(e => {
+  degree[e.source] = (degree[e.source] || 0) + 1;
+  degree[e.target] = (degree[e.target] || 0) + 1;
+});
+
+function nodeSize(n) {
+  const base = NODE_BASE_SIZE[n.node_type] || 20;
+  const d = degree[n.id] || 0;
+  // Scale: base + sqrt(degree) * multiplier
+  const mult = n.node_type === 'Requirement' ? 3.2 :
+               n.node_type === 'Feature'     ? 4.5 :
+               n.node_type === 'Standard_Section' ? 3.5 :
+               2.8;
+  return Math.round(base + Math.sqrt(d) * mult);
+}
+
+// ---------- Type / edge counts ----------
+const nodeCounts = {};
+D.subgraph.nodes.forEach(n => { nodeCounts[n.node_type] = (nodeCounts[n.node_type] || 0) + 1; });
+Object.entries(nodeCounts).forEach(([k,v]) => {
+  const el = document.getElementById('ct-' + k);
+  if (el) el.textContent = v;
+});
+
+const edgeCounts = {};
+D.subgraph.edges.forEach(e => { edgeCounts[e.edge_type] = (edgeCounts[e.edge_type] || 0) + 1; });
+document.querySelectorAll('[data-cnt]').forEach(el => {
+  el.textContent = edgeCounts[el.dataset.cnt] || 0;
+});
+
+// ---------- Build cytoscape elements ----------
+const elements = [
+  ...D.subgraph.nodes.map(n => ({
+    data: {
+      id: n.id,
+      label: nodeLabel(n),
+      node_type: n.node_type,
+      color: NODE_COLORS[n.node_type] || '#999',
+      size: nodeSize(n),
+      shape: NODE_SHAPE[n.node_type] || 'ellipse',
+      degree: degree[n.id] || 0,
+      font_size: Math.max(9, Math.min(14, 8 + Math.log2((degree[n.id] || 1) + 1))),
+      raw: n,
+    },
+  })),
+  ...D.subgraph.edges.map((e, i) => ({
+    data: {
+      id: 'e' + i,
+      source: e.source,
+      target: e.target,
+      edge_type: e.edge_type,
+      color: EDGE_COLORS[e.edge_type] || '#666',
+      details: D.subgraph.edge_details[i],
+      width: (e.edge_type === 'maps_to' || e.edge_type === 'depends_on' || e.edge_type === 'references_standard') ? 1.8 : 1.2,
+    },
+  })),
+];
+
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements,
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'background-color': 'data(color)',
+        'label': 'data(label)',
+        'width': 'data(size)',
+        'height': 'data(size)',
+        'shape': 'data(shape)',
+        'color': '#f0f4fa',
+        'font-size': 'data(font_size)',
+        'font-weight': 500,
+        'text-valign': 'bottom',
+        'text-margin-y': 5,
+        'text-outline-color': '#0f1724',
+        'text-outline-width': 2.5,
+        'text-wrap': 'wrap',
+        'text-max-width': 120,
+        'border-width': 2,
+        'border-color': 'rgba(255,255,255,0.25)',
+      },
+    },
+    { selector: 'node:selected', style: { 'border-width': 5, 'border-color': '#fff' } },
+    { selector: 'node.hover', style: { 'border-color': '#fff', 'border-width': 3 } },
+    {
+      selector: 'edge',
+      style: {
+        'curve-style': 'bezier',
+        'width': 'data(width)',
+        'line-color': 'data(color)',
+        'target-arrow-color': 'data(color)',
+        'target-arrow-shape': 'triangle',
+        'arrow-scale': 0.9,
+        'opacity': 0.55,
+      },
+    },
+    { selector: 'edge:selected', style: { 'width': 4, 'opacity': 1, 'line-color': '#fff', 'target-arrow-color': '#fff' } },
+    { selector: '.highlighted', style: { 'line-color': '#fff', 'target-arrow-color': '#fff', 'opacity': 1, 'width': 3 } },
+    { selector: '.dimmed', style: { 'opacity': 0.08 } },
+    { selector: '.hidden-edge', style: { 'display': 'none' } },
+    { selector: '.search-hit', style: { 'border-color': '#ff9800', 'border-width': 5, 'z-index': 999 } },
+  ],
+  wheelSensitivity: 0.3,
+  minZoom: 0.1,
+  maxZoom: 3,
+});
+
+// ---------- Layout ----------
+const LAYOUT_OPTS = {
+  'cose-bilkent': () => ({
+    name: 'cose-bilkent',
+    animate: 'end',
+    animationDuration: 800,
+    randomize: true,
+    nodeDimensionsIncludeLabels: true,
+    nodeRepulsion: 15000,
+    idealEdgeLength: parseInt(document.getElementById('spacing').value, 10),
+    edgeElasticity: 0.3,
+    gravity: 0.25,
+    gravityRangeCompound: 1.5,
+    numIter: 2500,
+    tile: true,
+    tilingPaddingVertical: 20,
+    tilingPaddingHorizontal: 20,
+  }),
+  'cose': () => ({
+    name: 'cose',
+    animate: false,
+    nodeRepulsion: 30000,
+    idealEdgeLength: parseInt(document.getElementById('spacing').value, 10),
+    gravity: 0.25,
+    numIter: 2000,
+  }),
+  'concentric': () => ({
+    name: 'concentric',
+    animate: true, animationDuration: 600,
+    concentric: n => ({MNO:6,Release:5,Plan:4,Feature:3,Standard_Section:2,Requirement:1})[n.data('node_type')] || 0,
+    levelWidth: () => 1,
+    minNodeSpacing: 40,
+  }),
+  'breadthfirst': () => ({
+    name: 'breadthfirst',
+    animate: true, animationDuration: 600,
+    roots: '[node_type = "MNO"]',
+    directed: true,
+    spacingFactor: 1.3,
+    padding: 30,
+  }),
+  'circle': () => ({ name: 'circle', animate: true, animationDuration: 600, padding: 40 }),
+  'grid':   () => ({ name: 'grid',   animate: true, animationDuration: 600 }),
+};
+
+function runLayout(name) {
+  const spinner = document.getElementById('spinner');
+  spinner.classList.remove('hidden');
+  // Fall back if requested layout not available
+  const resolved = (name === 'cose-bilkent' && typeof cytoscapeCoseBilkent === 'undefined') ? 'cose' : name;
+  const opts = LAYOUT_OPTS[resolved]();
+  const layout = cy.layout(opts);
+  layout.one('layoutstop', () => {
+    spinner.classList.add('hidden');
+    cy.fit(undefined, 50);
+  });
+  layout.run();
+}
+
+// ---------- Interaction ----------
+cy.on('tap', 'node', evt => {
+  const n = evt.target.data('raw');
+  showNodePanel(n);
+  highlightNeighborhood(evt.target);
+});
+cy.on('dbltap', 'node', evt => {
+  const n = evt.target.data('raw');
+  if (n.node_type === 'Requirement') openRequirementModal(n.id);
+});
+cy.on('tap', 'edge', evt => {
+  showEdgePanel(evt.target.data('details'));
+});
+cy.on('tap', evt => {
+  if (evt.target === cy) { clearHighlight(); showEmpty(); }
+});
+cy.on('mouseover', 'node', evt => evt.target.addClass('hover'));
+cy.on('mouseout', 'node', evt => evt.target.removeClass('hover'));
+
+function highlightNeighborhood(node) {
+  cy.elements().removeClass('highlighted').removeClass('dimmed');
+  const neigh = node.neighborhood().add(node);
+  cy.elements().not(neigh).addClass('dimmed');
+  node.connectedEdges().addClass('highlighted');
+}
+function clearHighlight() { cy.elements().removeClass('highlighted').removeClass('dimmed').removeClass('search-hit'); }
+
+// ---------- Info panel ----------
+function showEmpty() {
+  document.getElementById('info-title').textContent = 'Inspector';
+  document.getElementById('info-body').innerHTML = `
+    <div class="empty-hint">
+      Click any node or edge to inspect.<br><br>
+      Tip: use edge-type toggles on the left to declutter. Hiding <code>parent_of</code> and <code>belongs_to</code> reveals the feature / standards structure.
+    </div>
+  `;
+}
+
+function showNodePanel(n) {
+  document.getElementById('info-title').textContent = n.node_type;
+  const typeDesc = D.node_type_descriptions[n.node_type] || '';
+  const deg = degree[n.id] || 0;
+
+  let reqList = [];
+  if (n.node_type === 'Feature') {
+    reqList = Object.values(D.requirements).filter(r => r.mapped_features.some(m => m.feature_id === n.feature_id));
+  } else if (n.node_type === 'Plan' && n.plan_id === D.meta.focus_plan) {
+    reqList = Object.values(D.requirements);
+  } else if (n.node_type === 'Standard_Section') {
+    reqList = Object.values(D.requirements).filter(r => r.standards_references.some(s => s.id === n.id));
+  }
+
+  let metaRows = '';
+  for (const [k, v] of Object.entries(n)) {
+    if (k === 'id' || k === 'text' || typeof v === 'object') continue;
+    metaRows += `<dt>${k}</dt><dd>${v}</dd>`;
+  }
+  metaRows += `<dt>degree</dt><dd>${deg} connected edges</dd>`;
+
+  let extra = '';
+  if (n.node_type === 'Feature') {
+    extra = `
+      <div class="sub-h">Keywords</div>
+      <div>${(n.keywords || []).map(k => `<span class="feat-chip secondary">${k}</span>`).join('')}</div>
+      <div class="sub-h">Source Plans</div>
+      <div>${(n.source_plans || []).map(p => `<span class="feat-chip primary">${p}</span>`).join('')}</div>
+      ${n.description ? `<div class="sub-h">Description</div><p>${n.description}</p>` : ''}
+    `;
+  }
+
+  let reqHtml = '';
+  if (n.node_type === 'Requirement') {
+    // Quick-open modal button since the panel is tight
+    reqHtml = `<div class="sub-h">Full details</div>
+      <button onclick="openRequirementModal('${n.id}')" style="width:100%; background:#4fc3f7; color:#0f1724; border:none; padding:8px; border-radius:5px; font-weight:600; cursor:pointer;">Open requirement modal ↗</button>
+      <p style="margin-top:8px;"><b style="color:#89a0c0">Text:</b><br>${((n.text||'').slice(0, 300))}${(n.text||'').length>300?'…':''}</p>`;
+  } else if (reqList.length) {
+    reqHtml = `
+      <div class="sub-h">Reqs via this node (${reqList.length})</div>
+      ${reqList.slice(0, 20).map(r => `
+        <a class="req-link" onclick="openRequirementModal('${r.id}')">
+          <span class="sec">§${r.section_number}</span>${r.title}
+          <span class="rid">${r.req_id}</span>
+        </a>
+      `).join('')}
+      ${reqList.length > 20 ? `<div style="color:#6a7f9c; font-size:10px; margin-top:5px;">…and ${reqList.length - 20} more</div>` : ''}
+    `;
+  }
+
+  document.getElementById('info-body').innerHTML = `
+    <div class="type-badge" style="background:${NODE_COLORS[n.node_type]}; color:#0f1724;">${n.node_type}</div>
+    <h2>${nodeLabel(n)}</h2>
+    <div class="id-line">${n.id}</div>
+    <p style="color:#89a0c0;">${typeDesc}</p>
+    <dl class="meta-grid">${metaRows}</dl>
+    ${extra}
+    ${reqHtml}
+  `;
+}
+
+function showEdgePanel(d) {
+  document.getElementById('info-title').textContent = 'Edge';
+  document.getElementById('info-body').innerHTML = `
+    <div class="type-badge" style="background:${EDGE_COLORS[d.edge_type]}; color:#0f1724;">EDGE</div>
+    <h2 style="color:${EDGE_COLORS[d.edge_type]};">${d.edge_type}</h2>
+    <p style="font-size:12px;">${d.description || ''}</p>
+
+    <div class="edge-flow">
+      <div class="node-pill"><b>From</b><br>${d.source_label}</div>
+      <div class="edge-type-pill">${d.edge_type}</div>
+      <div class="node-pill"><b>To</b><br>${d.target_label}</div>
+    </div>
+
+    <div class="sub-h">Edge attributes</div>
+    <dl class="meta-grid">
+      ${Object.entries(d.attrs || {}).map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') || '<dd style="color:#6a7f9c;"><i>none</i></dd>'}
+    </dl>
+
+    <div class="sub-h">Provenance</div>
+    <p style="font-size: 11px; color: #cfd8e8; line-height: 1.6;">${edgeProvenance(d.edge_type)}</p>
+  `;
+}
+
+function edgeProvenance(t) {
+  const map = {
+    has_release: "Derived during ingestion when the MNO corpus was declared.",
+    contains_plan: "Every parsed plan is attached to its release.",
+    belongs_to: "Trivially derived — every requirement node has a plan.",
+    parent_of: "Derived from the section numbering in the source document. §1.4.1 is automatically a child of §1.4.",
+    maps_to: "Generated by the taxonomy-classification stage. Each requirement is matched against all features using keyword + semantic similarity. Strongest match = <b>primary</b>, weaker matches = <b>secondary</b>.",
+    depends_on: "Produced by cross-reference resolution. When a requirement text says 'see section 1.2.2', the reference is resolved against the same document (internal) or another plan (cross-plan).",
+    references_standard: "Produced when the text cites a 3GPP/GSMA specification. The citation is parsed and linked to the Standard_Section node.",
+    shared_standard: "Induced edge: two plans both reference the same standard section.",
+    parent_section: "Mirror of parent_of but inside the standards namespace.",
+  };
+  return map[t] || '';
+}
+
+// ---------- Modal (requirement detail) ----------
+function openRequirementModal(nodeId) {
+  const r = D.requirements[nodeId];
+  if (!r) return;
+  document.getElementById('modal-title').textContent = `§${r.section_number} — ${r.title}`;
+
+  const chain = r.hierarchy_chain || [];
+  document.getElementById('modal-breadcrumb').innerHTML = chain.map((c, i) => {
+    let lbl;
+    if (c.node_type === 'MNO' || c.node_type === 'Plan') lbl = c.title;
+    else if (c.node_type === 'Requirement') lbl = `§${c.section_number} ${c.title}`;
+    else lbl = c.title || c.id;
+    return `<span class="crumb">${lbl}</span>` + (i < chain.length - 1 ? '<span class="sep">›</span>' : '');
+  }).join('');
+
+  const hpath = (r.hierarchy_path || []).map(p => `<span class="path-item">${p}</span>`).join('<span class="path-sep">›</span>');
+
+  const chunk = r.rag_chunk;
+  const chunkHtml = chunk ? `
+    <div class="subcard">
+      <h4>RAG Chunk (from vector store)</h4>
+      <div style="font-size: 11px; color: #89a0c0; margin-bottom: 8px;">
+        Embedding id: <code>${chunk.embedding_id}</code> ·
+        ${chunk.chunk_length_chars} chars · zone: <code>${chunk.metadata.zone_type}</code>
+      </div>
+      <div class="chunk-text">${escapeAndColor(chunk.chunk_text || '')}</div>
+      <div style="font-size: 11px; color: #89a0c0; margin-top: 8px;">
+        <b>Feature tags on chunk:</b>
+        ${(chunk.metadata.feature_ids || []).map(f => `<span class="feat-chip secondary">${f}</span>`).join(' ')}
+      </div>
+    </div>
+  ` : '<div class="subcard"><h4>RAG Chunk</h4><i style="color:#6a7f9c">No chunk in vectorstore</i></div>';
+
+  const featsHtml = r.mapped_features.map(m =>
+    `<span class="feat-chip ${m.mapping_type === 'primary' ? 'primary' : 'secondary'}">${m.feature_id} <span style="opacity:0.7">(${m.mapping_type})</span></span>`
+  ).join(' ') || '<i style="color:#6a7f9c">none</i>';
+
+  const stdHtml = r.standards_references.length ? r.standards_references.map(s =>
+    `<li><b>TS ${s.spec}</b> · R${s.release_num}${s.section ? ' §' + s.section : ''}<br><span style="color:#89a0c0; font-size:11px;">${s.title || ''}</span></li>`
+  ).join('') : '<li style="color:#6a7f9c;"><i>no standards citations resolved</i></li>';
+
+  const depHtml = r.internal_dependencies.length ? r.internal_dependencies.map(d => {
+    const target = D.requirements[d.target_id];
+    return `<li>→ ${target ? `§${target.section_number} ${target.title} <span style="font-family:monospace; color:#6a7f9c; font-size:11px;">(${target.req_id})</span>` : d.target_id}</li>`;
+  }).join('') : '<li style="color:#6a7f9c;"><i>none resolved</i></li>';
+
+  const childHtml = (r.children || []).length ? (r.children || []).map(cid => {
+    const child = Object.values(D.requirements).find(x => x.req_id === cid);
+    return child
+      ? `<li><a class="req-link" style="padding:4px 8px;" onclick="openRequirementModal('${child.id}')"><span class="sec">§${child.section_number}</span>${child.title}</a></li>`
+      : `<li>${cid}</li>`;
+  }).join('') : '<li style="color:#6a7f9c;"><i>leaf section</i></li>';
+
+  document.getElementById('modal-body').innerHTML = `
+    <div class="subcard">
+      <h4>Hierarchy path (semantic)</h4>
+      <div>${hpath || '<i style="color:#6a7f9c">—</i>'}</div>
+      <div style="margin-top:10px;">
+        <span style="color:#89a0c0; font-size:11px;">req_id:</span>
+        <code style="color:#4fc3f7;">${r.req_id}</code>
+        <span style="color:#89a0c0; font-size:11px; margin-left:16px;">zone_type:</span>
+        <code style="color:#ffb74d;">${r.zone_type}</code>
+      </div>
+    </div>
+    <div class="grid-2" style="margin-top:14px;">
+      <div class="subcard">
+        <h4>Source text (raw)</h4>
+        <div style="font-size: 12px; color: #cfd8e8; line-height: 1.6; max-height: 220px; overflow-y:auto;">${(r.text || '').replace(/\n/g,'<br>')}</div>
+      </div>
+      <div class="subcard">
+        <h4>Feature mappings</h4>
+        <div>${featsHtml}</div>
+        <h4 style="margin-top:14px;">Mapping provenance</h4>
+        <p style="font-size: 11px; color: #89a0c0; line-height: 1.5;">
+          Produced by the taxonomy classifier during ingestion. <b style="color:#66bb6a">Primary</b> = strongest keyword + semantic match. <b style="color:#ffb74d">Secondary</b> = weaker soft tags.
+        </p>
+      </div>
+    </div>
+    <div style="margin-top:14px;">${chunkHtml}</div>
+    <div class="grid-2" style="margin-top:14px;">
+      <div class="subcard">
+        <h4>Cross-document references (internal deps)</h4>
+        <ul style="font-size: 12px; color: #cfd8e8; line-height: 1.7; padding-left: 16px;">${depHtml}</ul>
+      </div>
+      <div class="subcard">
+        <h4>Standards citations</h4>
+        <ul style="font-size: 12px; color: #cfd8e8; line-height: 1.7; padding-left: 16px;">${stdHtml}</ul>
+      </div>
+    </div>
+    <div class="subcard" style="margin-top:14px;">
+      <h4>Children (sub-sections)</h4>
+      <ul style="padding-left: 0; list-style: none;">${childHtml}</ul>
+    </div>
+  `;
+
+  document.getElementById('modal-bg').classList.add('open');
+}
+function closeModal() { document.getElementById('modal-bg').classList.remove('open'); }
+document.getElementById('modal-bg').addEventListener('click', e => { if (e.target.id === 'modal-bg') closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+function escapeAndColor(text) {
+  const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return esc.replace(/^(\[[^\]]+\]\n?)/gm, m => `<span class="chunk-header">${m}</span>`);
+}
+
+// ---------- Overlay toggle ----------
+function togglePanel(id) {
+  document.getElementById(id).classList.toggle('collapsed');
+}
+
+// ---------- Edge-type toggles ----------
+document.querySelectorAll('.edge-tog').forEach(cb => {
+  cb.addEventListener('change', () => {
+    const t = cb.dataset.t;
+    const show = cb.checked;
+    cy.edges(`[edge_type = "${t}"]`).toggleClass('hidden-edge', !show);
+  });
+});
+
+// ---------- Search ----------
+document.getElementById('search').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase().trim();
+  cy.nodes().removeClass('search-hit');
+  if (!q) return;
+  cy.nodes().filter(n => {
+    const d = n.data('raw');
+    return (d.title || '').toLowerCase().includes(q)
+        || (d.section_number || '').toLowerCase().includes(q)
+        || (d.req_id || '').toLowerCase().includes(q)
+        || (d.name || '').toLowerCase().includes(q)
+        || (d.feature_id || '').toLowerCase().includes(q)
+        || (d.plan_id || '').toLowerCase().includes(q)
+        || (d.id || '').toLowerCase().includes(q);
+  }).addClass('search-hit');
+});
+
+// ---------- Layout / button handlers ----------
+document.getElementById('layout-select').addEventListener('change', e => runLayout(e.target.value));
+document.getElementById('spacing').addEventListener('change', () => runLayout(document.getElementById('layout-select').value));
+document.getElementById('fit-btn').addEventListener('click', () => cy.fit(undefined, 50));
+document.getElementById('relayout-btn').addEventListener('click', () => runLayout(document.getElementById('layout-select').value));
+document.getElementById('reset-btn').addEventListener('click', () => { clearHighlight(); cy.elements().unselect(); showEmpty(); });
+
+// ---------- Initial run ----------
+cy.ready(() => {
+  runLayout('cose-bilkent');
+});
+</script>
+</body>
+</html>

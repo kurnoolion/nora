@@ -24,6 +24,7 @@ from src.web.jobs import JobQueue
 from src.web.metrics import MetricsStore
 from src.web.middleware import MetricsMiddleware
 from src.web.path_mapper import PathMapper
+from src.web.routes.corrections import router as corrections_router
 from src.web.routes.dashboard import router as dashboard_router
 from src.web.routes.environments import router as environments_router
 from src.web.routes.files import router as files_router
@@ -117,6 +118,7 @@ app = FastAPI(
 app.add_middleware(MetricsMiddleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(dashboard_router)
+app.include_router(corrections_router)
 app.include_router(environments_router)
 app.include_router(files_router)
 app.include_router(jobs_router)

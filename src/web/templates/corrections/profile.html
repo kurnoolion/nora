@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Profile correction · {{ env.name }}{% endblock %}
+{% block nav_corrections %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h4 class="mb-1">Profile correction</h4>
+        <div class="text-muted small">
+            <a href="{{ root_path }}/corrections">Corrections</a> ·
+            env <strong>{{ env.name }}</strong> ·
+            <code>{{ env.document_root }}</code>
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ root_path }}/corrections/report/{{ env.name }}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-clipboard-data"></i> FIX report
+        </a>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<div class="card mb-3">
+    <div class="card-body d-flex justify-content-between align-items-center py-2">
+        <div class="small">
+            Output:
+            {% if status.has_output %}
+                <code>{{ status.output_path }}</code>
+            {% else %}
+                <span class="text-muted">no output (run <code>profile</code> stage)</span>
+            {% endif %}
+            &nbsp;·&nbsp;
+            Correction:
+            {% if status.has_correction %}
+                <code>{{ status.correction_path }}</code>
+                <span class="badge bg-success ms-1">present</span>
+            {% else %}
+                <span class="text-muted">not started</span>
+            {% endif %}
+        </div>
+        <div class="d-flex gap-2">
+            {% if status.has_output and not status.has_correction %}
+            <form method="post" action="{{ root_path }}/corrections/profile/{{ env.name }}/start">
+                <button class="btn btn-primary btn-sm">
+                    <i class="bi bi-copy"></i> Start correction from output
+                </button>
+            </form>
+            {% endif %}
+            {% if status.has_correction %}
+            <form method="post" action="{{ root_path }}/corrections/profile/{{ env.name }}/discard"
+                  onsubmit="return confirm('Discard correction? This deletes corrections/profile.json.')">
+                <button class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-trash"></i> Discard correction
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if not has_profile %}
+<div class="alert alert-warning">
+    No profile to edit yet. Run the <code>profile</code> stage, then come back and start a correction.
+</div>
+{% else %}
+<form method="post" action="{{ root_path }}/corrections/profile/{{ env.name }}/save">
+    <div class="row">
+        <div class="col-lg-6">
+            <div class="card mb-3">
+                <div class="card-header">Heading detection</div>
+                <div class="card-body">
+                    <label class="form-label small">Numbering pattern (regex)</label>
+                    <input class="form-control form-control-sm font-monospace" name="numbering_pattern"
+                           value="{{ profile.heading_detection.numbering_pattern|default('', true) }}">
+                    <div class="form-text">Matches section numbers like <code>1.4.3.1</code>.</div>
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-header">Requirement ID</div>
+                <div class="card-body">
+                    <label class="form-label small">Pattern (regex)</label>
+                    <input class="form-control form-control-sm font-monospace" name="req_pattern"
+                           value="{{ profile.requirement_id.pattern|default('', true) }}">
+                    <label class="form-label small mt-2">Components (<code>key=value</code> per line)</label>
+                    <textarea class="form-control form-control-sm font-monospace" name="req_components" rows="4">{% for k, v in (profile.requirement_id.components or {}).items() %}{{ k }}={{ v }}
+{% endfor %}</textarea>
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-header">Header / Footer</div>
+                <div class="card-body">
+                    <label class="form-label small">Header patterns (one per line)</label>
+                    <textarea class="form-control form-control-sm font-monospace" name="header_patterns" rows="3">{{ (profile.header_footer.header_patterns or []) | join("\n") }}</textarea>
+
+                    <label class="form-label small mt-2">Footer patterns (one per line)</label>
+                    <textarea class="form-control form-control-sm font-monospace" name="footer_patterns" rows="3">{{ (profile.header_footer.footer_patterns or []) | join("\n") }}</textarea>
+
+                    <label class="form-label small mt-2">Page-number pattern</label>
+                    <input class="form-control form-control-sm font-monospace" name="page_number_pattern"
+                           value="{{ profile.header_footer.page_number_pattern|default('', true) }}">
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>Document zones</span>
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="addZone()">
+                        <i class="bi bi-plus"></i> Add zone
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="zones-list"></div>
+                    <input type="hidden" id="zones_json" name="zones_json" value="">
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-header">Cross-reference patterns</div>
+                <div class="card-body">
+                    <label class="form-label small">Standards citations (one regex per line)</label>
+                    <textarea class="form-control form-control-sm font-monospace" name="std_citations" rows="3">{{ (profile.cross_reference_patterns.standards_citations or []) | join("\n") }}</textarea>
+
+                    <label class="form-label small mt-2">Internal section refs (regex)</label>
+                    <input class="form-control form-control-sm font-monospace" name="internal_section_refs"
+                           value="{{ profile.cross_reference_patterns.internal_section_refs|default('', true) }}">
+
+                    <label class="form-label small mt-2">Requirement ID refs (regex)</label>
+                    <input class="form-control form-control-sm font-monospace" name="req_id_refs"
+                           value="{{ profile.cross_reference_patterns.requirement_id_refs|default('', true) }}">
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-header">Body text</div>
+                <div class="card-body">
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <label class="form-label small">Font size min</label>
+                            <input class="form-control form-control-sm" type="number" step="0.1"
+                                   name="body_font_min" value="{{ profile.body_text.font_size_min|default(0, true) }}">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small">Font size max</label>
+                            <input class="form-control form-control-sm" type="number" step="0.1"
+                                   name="body_font_max" value="{{ profile.body_text.font_size_max|default(0, true) }}">
+                        </div>
+                    </div>
+                    <label class="form-label small mt-2">Font families (comma-separated)</label>
+                    <input class="form-control form-control-sm" name="body_font_families"
+                           value="{{ (profile.body_text.font_families or []) | join(', ') }}">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-end gap-2 mb-4">
+        <a href="{{ root_path }}/corrections" class="btn btn-outline-secondary">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save"></i> Save correction
+        </button>
+    </div>
+</form>
+
+<script>
+const initialZones = {{ (profile.document_zones or []) | tojson }};
+let zones = (initialZones || []).map(z => ({
+    section_pattern: z.section_pattern || "",
+    zone_type: z.zone_type || "",
+    description: z.description || "",
+    heading_text: z.heading_text || "",
+}));
+
+function renderZones() {
+    const host = document.getElementById("zones-list");
+    if (zones.length === 0) {
+        host.innerHTML = '<div class="text-muted small py-2">No zones defined.</div>';
+    } else {
+        host.innerHTML = zones.map((z, i) => `
+            <div class="border rounded p-2 mb-2">
+                <div class="row g-2">
+                    <div class="col-5">
+                        <label class="form-label small mb-1">Zone type</label>
+                        <input class="form-control form-control-sm" value="${escape(z.zone_type)}"
+                               onchange="updateZone(${i},'zone_type',this.value)">
+                    </div>
+                    <div class="col-7">
+                        <label class="form-label small mb-1">Section pattern (regex)</label>
+                        <div class="input-group input-group-sm">
+                            <input class="form-control font-monospace" value="${escape(z.section_pattern)}"
+                                   onchange="updateZone(${i},'section_pattern',this.value)">
+                            <button class="btn btn-outline-danger" type="button" onclick="removeZone(${i})">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `).join("");
+    }
+    document.getElementById("zones_json").value = JSON.stringify(zones);
+}
+
+function escape(s) { return (s || "").replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+function updateZone(i, key, val) { zones[i][key] = val; document.getElementById("zones_json").value = JSON.stringify(zones); }
+function removeZone(i) { zones.splice(i, 1); renderZones(); }
+function addZone() { zones.push({section_pattern:"", zone_type:"", description:"", heading_text:""}); renderZones(); }
+renderZones();
+</script>
+{% endif %}
+{% endblock %}
