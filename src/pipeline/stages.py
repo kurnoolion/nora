@@ -62,7 +62,7 @@ def run_extract(ctx: PipelineContext) -> StageResult:
 
     exts = supported_extensions()
     files = sorted(
-        f for f in ctx.documents_dir.iterdir()
+        f for f in ctx.documents_dir.rglob("*")
         if f.is_file() and f.suffix.lower() in exts
     )
 
