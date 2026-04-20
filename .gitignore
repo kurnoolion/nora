@@ -36,3 +36,6 @@ extracted_images/
 #git-sync files
 git-sync/
 
+# Local environment definitions (keep .gitkeep only)
+environments/*.json
+
