@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.extraction.base import BaseExtractor
+from src.extraction.docx_extractor import DOCXExtractor
 from src.extraction.pdf_extractor import PDFExtractor
 from src.models.document import DocumentIR
 
@@ -12,6 +13,7 @@ from src.models.document import DocumentIR
 # Extractor instances, keyed by file extension
 _EXTRACTORS: dict[str, BaseExtractor] = {
     ".pdf": PDFExtractor(),
+    ".docx": DOCXExtractor(),
 }
 
 
