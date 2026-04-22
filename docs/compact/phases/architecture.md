@@ -12,6 +12,8 @@
 
 Note: `src/**/MODULE.md` files with `<!-- retrofit: skeleton -->` at the top are unfinished contracts. Load `docs/compact/requirements.md` on demand (to check a design element against its behavioral spec). Load peer `MODULE.md` files only when designing an interface they own.
 
+When invoked as `/switch-phase architecture <m1,m2>`, the named modules' MODULE.md files are pre-loaded along with one hop of their declared `Depends on` edges — that's your working set. If design work requires a module outside that set, ask or re-scope the phase switch rather than silently pulling it in.
+
 **Do**:
 
 - **Curate retrofit skeletons module-by-module.** Each starts with `<!-- retrofit: skeleton -->` and TODO placeholders. Fill Purpose / Public surface / Invariants / Key choices / Non-goals / Depends on / Depended on by. The commented candidate list under Public surface is a scratch pad — choose what belongs in the contract, don't copy verbatim. Remove the sentinel once the MODULE.md is fully curated; normal hard-flag audit applies from that point.

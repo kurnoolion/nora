@@ -8,6 +8,8 @@
 
 Load `docs/compact/requirements.md` **on demand only** — when `/drift-check` runs, or when the session task explicitly concerns a specific FR / NFR. Not by default. Skip `MAP.md`, `DECISIONS.md`, design inputs, and unrelated MODULE.md files.
 
+When invoked as `/switch-phase development <m1,m2>`, the named modules' MODULE.md files are pre-loaded along with one hop of their declared `Depends on` edges — that's your working set. If implementation forces you outside it, stop and ask or re-scope the phase switch rather than silently pulling in peer modules.
+
 **Do**:
 
 - **Honor the contract.** The MODULE.md you loaded is authoritative for Public surface, Invariants, Non-goals, and Depends on. Implement within those. If the contract is wrong, stop and switch phases (see Don't).

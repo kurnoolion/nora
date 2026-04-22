@@ -48,6 +48,17 @@ Each module has `src/<module>/MODULE.md` with the following curated sections (pl
 - **Depends on** / **Depended on by** — links to other MODULE.md.
 - **Deferred** *(optional)* — planned-but-unbuilt behaviors for this module. Read by `drift-check` to classify matching items as `[DEFERRED]` instead of drift.
 
+## Description source
+
+Used by `regen-map` to generate per-file one-liners in the **Project File Structure** section of `MAP.md`.
+
+- Python files (`*.py`): first line of the module docstring. If absent, no description.
+- Shell scripts (`*.sh`): first line of the top comment block after the shebang. If absent, no description.
+- Directories with a `MODULE.md`: first sentence of the **Purpose** section.
+- Other files and directories: no automatic description (path-only row).
+
+Rows are alphabetical within each directory. Files and directories intermix alphabetically.
+
 ## Retrofit skeleton sentinel
 
 MODULE.md files seeded by `project-init --retrofit` begin with the marker `<!-- retrofit: skeleton -->`. While present, `close-session` treats curated-section edits as expected (not hard flags). Remove the sentinel once the MODULE.md is fully curated; from that point, normal audit rules apply.
