@@ -1,27 +1,61 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (and Cline) when working with code in this repository.
 
-## Repository Overview
+## Project
 
-This repository contains Verizon (VZW) Open Alliance (OA) specification documents for February 2026. It is a document-only repository with no source code.
+**NORA** — Network Operator Requirements Analyzer. AI system combining a unified Knowledge Graph with targeted RAG for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications across multiple MNOs (Verizon, AT&T, T-Mobile) and quarterly releases.
 
-## Contents
+See `docs/compact/PROJECT.md` for the 1-page identity and `TDD_Telecom_Requirements_AI_System.md` for the canonical technical design.
 
-The PDFs cover LTE feature specifications:
+## Session-start ritual
 
-- `LTESMS.pdf` — LTE SMS specification
-- `LTEAT.pdf` — LTE AT commands specification
-- `LTEB13NAC.pdf` — LTE Band 13 NAC specification
-- `LTEDATARETRY.pdf` — LTE data retry specification
-- `LTEOTADM.pdf` — LTE Over-The-Air Device Management (OTA DM) specification
+This project uses **COMPACT** — a portable scaffold for team AI-partnered software development. The AI scaffolding lives under `.claude/skills/compact/` and the durable state lives under `docs/compact/`.
 
-## Project Context
+At the start of every session, invoke `run the session-start skill` (or `/session-start`). It loads Tier 1 context (`PROJECT.md` / `STATUS.md` / `MAP.md` / the active phase prompt) and asks what you're working on. Re-invoke mid-session after Claude Code auto-compaction or any time context feels stale.
 
-We are building **NORA** (Network Operator Requirements Analyzer) — an AI system (Knowledge Graph + RAG) for intelligent querying, cross-referencing, and compliance analysis of MNO device requirement specifications. The full technical design is in `TDD_Telecom_Requirements_AI_System.md`.
+## Key skills
 
-Key architectural decisions and rationale are captured in project memory (`design_decisions.md`). The VZW document structure analysis (critical for parser design) is in `vzw_document_structure.md`.
+- `/session-start` — hydrate context at start of every session
+- `/switch-phase <requirements | architecture | development>` — adopt the phase persona
+- `/regen-map` — regenerate `MAP.md` + Structure sections when code structure changes
+- `/drift-check <requirements | design | dev-full | dev-module <name> | all>` — audit for drift between requirements, design, and implementation
+- `/close-session` — end-of-session ritual: triages decisions, updates STATUS, audits MODULE.md edits, proposes commit (this is the **only** place memory is made)
+- `/project-init --re-init` — regenerate phase prompts after project-level changes (state files preserved)
 
-Key architectural component: **DocumentProfiler** — a standalone, LLM-free module that derives document structure profiles from representative docs. The generic structural parser uses these profiles instead of hard-coded per-MNO parsers. Supported formats: PDF, DOC, DOCX, XLS, XLSX.
+## State files
 
-Current phase: PoC development — starting with document content extraction and DocumentProfiler.
+- `docs/compact/PROJECT.md` — identity + Contributors table
+- `docs/compact/STATUS.md` — active phase, done / in progress / next, flags
+- `docs/compact/requirements.md` — FR / NFR / Deferred (authority for what the system must do)
+- `docs/compact/MAP.md` — module table + Mermaid dependency graph (regenerated)
+- `docs/compact/DECISIONS.md` — append-only ADR log
+- `docs/compact/structure-conventions.md` — what's a module, visibility mapping
+- `docs/compact/design-inputs/` — TDD, README, SESSION_SUMMARY, SETUP_OFFLINE (archival design inputs)
+- `docs/compact/retrofit-snapshot.md` — archival scan of existing codebase at retrofit time
+- `docs/compact/phases/{requirements,architecture,development}.md` — phase personas loaded by `/switch-phase`
+- `src/<module>/MODULE.md` — per-module contracts (16 skeletons seeded by retrofit — see STATUS for curation progress)
+
+## Current state
+
+Retrofitted on 2026-04-21 via `/project-init --retrofit`. Active phase: **architecture**. 16 MODULE.md skeletons are seeded with `<!-- retrofit: skeleton -->` sentinels — curation is in progress. See `docs/compact/STATUS.md` for the current work list.
+
+## Repository layout
+
+- `src/` — Python source (16 packages; one MODULE.md per package)
+- `tests/` — pytest suite (one `test_<module>.py` per package)
+- `docs/compact/` — COMPACT state files
+- `.claude/skills/compact/` — COMPACT skills (session-start, switch-phase, regen-map, drift-check, close-session, project-init)
+- `data/` — extracted / parsed artifacts (gitignored)
+- `environments/` — per-environment configs (gitignored except `.gitkeep`)
+- `web/` — Web UI runtime state (config, job queue DB, metrics DB; gitignored)
+- `profiles/` — document profiles (committed, human-editable JSON)
+- Repo-root PDFs (LTE*.pdf, TDD*.pdf) — source docs, gitignored
+
+## Conventions
+
+- Python; no `pyproject.toml` — `requirements.txt` + `src/` layout with `__init__.py` per package
+- Public surface: top-level identifiers without a leading underscore (plus `__init__.py` re-exports when `__all__` is used)
+- CLI per module: `src/<module>/<module>_cli.py` with `main()` entrypoint
+- Protocol-based abstractions: `LLMProvider`, `EmbeddingProvider`, `VectorStoreProvider`
+- No proprietary document content in logs, error messages, compact reports, or test fixtures

@@ -1,0 +1,910 @@
+# NORA — Network Operator Requirements Analyzer (PoC)
+
+AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
+
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 3 12B / Gemma 4 E4B) integrated. Citation quality improved with few-shot prompting and context-based fallback. Automated pipeline runner, multi-user environment system, and collaboration tooling added for team workflows. **Web UI** (FastAPI + Bootstrap 5 + HTMX, vendored assets for offline/proxy environments) provides browser-based access for team members who primarily work on Windows PCs, now including in-browser **Corrections UI** (profile + taxonomy editing with compact FIX reports). Metrics and observability instrumentation with persistent SQLite storage.
+
+## Prerequisites
+
+```bash
+# Python 3.12+
+python --version
+
+# Install dependencies
+pip install -r requirements.txt
+
+# For tests
+pip install pytest
+```
+
+### Source Documents
+
+The following VZW Open Alliance PDFs must be present in the repo root:
+
+- `LTESMS.pdf`
+- `LTEAT.pdf`
+- `LTEB13NAC.pdf`
+- `LTEDATARETRY.pdf`
+- `LTEOTADM.pdf`
+
+### Local LLM (optional, recommended)
+
+The system supports local LLM inference via [Ollama](https://ollama.com) for real answer synthesis (as opposed to mock keyword-based responses).
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull the recommended model (Gemma 4 E4B, ~9.6 GB)
+ollama pull gemma4:e4b
+
+# Verify
+ollama list
+```
+
+**Model selection rationale** (for 16GB RAM, CPU-only):
+
+| Model | Size (Q4) | RAM needed | Recommendation |
+|-------|-----------|------------|----------------|
+| `gemma4:e4b` | 9.6 GB | ~11 GB | **Recommended** — 4B effective params via PLE, 128K context, good reasoning |
+| `gemma4:e2b` | 3.3 GB | ~4 GB | Fallback if RAM is tight |
+| `gemma3:4b` | 3 GB | ~4 GB | Alternative fallback, older architecture |
+| `gemma4:26b` | 18 GB | ~20 GB | Won't fit on 16GB alongside pipeline |
+
+CPU inference runs at ~10-13 tok/s on Intel Core Ultra 9 185H, producing answers in ~2-4 minutes per query.
+
+### Offline Install (proxy-restricted environments)
+
+If `curl` HTTPS downloads fail (e.g., corporate proxy with self-signed certificates):
+
+1. Download files listed in `download_urls.txt` on a machine with browser access
+2. Transfer to the target machine
+3. Run: `./setup_env.sh --download-dir /path/to/downloads`
+
+For full offline setup on a Work PC with no internet — Ollama runtime, Gemma model weights (gemma3:12b / gemma4:e4b), and the HuggingFace sentence-embedding model — see `SETUP_OFFLINE.md`.
+
+### System Dependencies (optional)
+
+- **LibreOffice** — required for automatic DOC→DOCX conversion of 3GPP spec downloads. Install with `apt install libreoffice` or equivalent. If not available, the system will log a warning; you can manually convert DOC files.
+
+## Quick Start — Automated Pipeline Runner
+
+The pipeline runner chains all stages with a single command, generates compact reports, and supports multi-user environment configs.
+
+```bash
+# Run the full pipeline on documents in current directory
+python -m src.pipeline.run_cli --docs . --start extract --end eval
+
+# Run specific stages (by name or number)
+python -m src.pipeline.run_cli --docs . --start profile --end parse
+python -m src.pipeline.run_cli --docs . --start 1 --end 3
+
+# Run using an environment config (see Environment Management below)
+python -m src.pipeline.run_cli --env profiler-review
+
+# Use mock LLM (no Ollama required)
+python -m src.pipeline.run_cli --docs . --model mock --start taxonomy --end graph
+
+# Continue past failed stages
+python -m src.pipeline.run_cli --docs . --continue-on-error
+
+# List available stages
+python -m src.pipeline.run_cli --list-stages
+
+# Detect hardware and get model recommendation
+python -m src.pipeline.run_cli --detect-hw
+
+# Show quality check / correction feedback templates
+python -m src.pipeline.run_cli --qc-template profile
+python -m src.pipeline.run_cli --fix-template taxonomy
+```
+
+**Pipeline output** includes a compact report block (paste in chat for collaborative debugging):
+```
+RPT standalone 2026-04-15T15:53
+HW CPU=Intel Core Ultra 9 185H(22c) RAM=15G GPU=none
+MDL gemma4:e4b
+PRF OK 0s lvl=4 rpat=1 zone=9
+PRS OK 0s req=711 dep=11 docs=5
+RES WARN 0s int=301 xp=1 std=320
+ERR none
+```
+
+## Web UI (Browser-Based Access)
+
+For team members who prefer a browser-based interface over the CLI:
+
+```bash
+# Start the web server
+python -m src.web.app
+
+# Access at http://localhost:8000
+# Or behind a reverse proxy at the configured root_path (e.g., /nora)
+```
+
+**Features:**
+- **Dashboard** — System status, Ollama connectivity, GPU info, recent jobs
+- **Pipeline** — Submit pipeline runs via form (select stages, model, document path)
+- **Jobs** — Monitor running jobs with real-time log streaming (SSE)
+- **Query** — Submit questions against the knowledge graph, view results
+- **Corrections** — In-browser profile and taxonomy editing with compact FIX reports (see below)
+- **Environments** — Create/manage team member environments
+- **Files** — Browse shared network folders (Windows paths auto-mapped to Linux)
+- **Metrics** — Observability dashboard with request timing, LLM stats, resource usage
+
+**Offline-friendly assets:** Bootstrap 5, Bootstrap Icons, and HTMX are vendored under `src/web/static/vendor/`, so the UI renders correctly on proxy-restricted machines with no CDN access.
+
+**Configuration** (`web/config.json`):
+```json
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "root_path": "/nora",
+    "ollama_url": "http://localhost:11434",
+    "default_model": "gemma3:12b",
+    "path_mappings": [
+        {
+            "windows": "\\\\SERVER\\OADocs",
+            "linux": "/mnt/oa_docs",
+            "label": "OA Documents"
+        }
+    ]
+}
+```
+
+**Path mappings** translate Windows UNC paths (used by team members on Windows PCs) to Linux mount points on the server. Team members can paste Windows paths in forms; the server resolves them automatically.
+
+**Reverse proxy:** Set `root_path` to match your reverse proxy prefix (e.g., `/nora`). All URLs in the UI will be prefixed accordingly.
+
+## Corrections UI
+
+Requirement engineers can correct generated artifacts directly in the browser. Each environment gets its own `corrections/` directory that the pipeline auto-detects as an override on the next run.
+
+**Workflow:**
+
+1. Go to **Corrections** in the sidebar — see per-environment status (no output / output only / corrected).
+2. Click **Edit profile** or **Edit taxonomy** for an environment.
+3. Click **Start correction from output** to seed a copy from the generated artifact.
+4. Edit fields in the form:
+   - **Profile:** heading numbering pattern, requirement ID pattern + components, header/footer patterns, zone definitions (add/remove/edit), cross-reference patterns, body-text thresholds.
+   - **Taxonomy:** searchable feature list — add/remove features, rename, edit keywords and descriptions inline.
+5. Click **Save correction**. The file lands at `<doc_root>/corrections/profile.json` or `<doc_root>/corrections/taxonomy.json`.
+6. Re-run the pipeline — `src/pipeline/stages.py` picks the correction up automatically.
+
+**Compact FIX report:** Click **FIX report** from either editor to get a pasteable summary of what changed, with **no proprietary document content** (no body text, no feature descriptions, no sample req IDs). Only field names, regex patterns, feature IDs, keyword tokens, and counts. Example:
+
+```
+FIX alice-demo taxonomy
+feat_total=16 added=1 removed=1 renamed=1 kw_edits=1 desc_edits=0
+add: VOLTE_HANDOVER(kws: handover,ho,mobility,srvcc)
+remove: IMS_REGISTRATION
+rename: LTE Data Retry->LTE Data Retry (Renamed) [DATA_RETRY]
+kw: DATA_RETRY +newkw
+```
+
+Available also as plain text at `GET /api/corrections/report/<env>` (optional `?artifact=profile|taxonomy|both`).
+
+Files still editable via JSON if preferred — the UI and CLI workflows read/write the same files.
+
+## Environment Management
+
+Environments define scoped workspaces for team members to run specific pipeline stages against specific documents.
+
+```bash
+# Create an environment for a team member
+python -m src.env.env_cli create \
+    --name profiler-review \
+    --member alice \
+    --doc-root /data/vzw-new-batch \
+    --stages extract:parse \
+    --scope VZW/Feb2026 \
+    --objectives "Verify heading detection" "Check table extraction" \
+    --created-by mohan
+
+# Create a full-pipeline environment with multiple MNOs
+python -m src.env.env_cli create \
+    --name eval-review \
+    --member bob \
+    --doc-root /data/multi-mno \
+    --stages 1:9 \
+    --scope VZW/Feb2026 ATT/Oct2025
+
+# List all environments
+python -m src.env.env_cli list
+
+# Show environment details and directory status
+python -m src.env.env_cli show profiler-review
+
+# Initialize directory structure at document_root
+python -m src.env.env_cli init profiler-review
+
+# Run the pipeline for an environment
+python -m src.pipeline.run_cli --env profiler-review
+```
+
+**Document root layout** (created by `init`):
+```
+<document_root>/
+├── documents/        # Place source documents here (PDF, DOCX, XLS, XLSX)
+├── corrections/      # Place corrected artifacts here (profile.json, taxonomy.json)
+├── eval/             # Place Q&A eval pairs here (*.xlsx)
+├── output/           # Pipeline outputs (auto-generated per stage)
+└── reports/          # Pipeline reports (auto-generated)
+```
+
+**Correction workflow:** Run pipeline → review artifacts → copy generated file to `corrections/` → edit it → re-run pipeline (corrections auto-detected as overrides).
+
+**User-supplied eval Q&A:** Place an Excel file in `eval/` with columns: `question_id`, `category`, `question`, `expected_plans`, `expected_req_ids`, `expected_features`, `expected_standards`, `expected_concepts`, `min_plans`, `min_chunks`. See `CONTRIBUTING.md` for details.
+
+## Model Selection
+
+The system auto-detects hardware and selects the best Ollama model that fits:
+
+```bash
+python -m src.pipeline.run_cli --detect-hw
+```
+
+| Model | Size (Q4) | RAM/VRAM | GPU-only | Description |
+|-------|-----------|----------|----------|-------------|
+| `gemma4:27b-it-qat` | 18 GB | >=20GB VRAM | Yes | Best quality, needs large GPU |
+| `gemma3:12b` | 8 GB | 12GB+ VRAM or 16GB RAM | No | Strong quality, fits most setups |
+| `gemma4:e4b` | 9.6 GB | 11GB+ | No | Good quality, 128K context, CPU-viable |
+| `gemma3:4b` | 3 GB | 4GB+ | No | Lighter fallback, fast on CPU |
+| `gemma3:1b` | 1.5 GB | 2GB+ | No | Minimal, runs anywhere |
+
+Auto-selection prefers models already pulled on Ollama. Override with `--model gemma4:e4b`.
+
+## Setup (New Machine)
+
+```bash
+# One-command setup: Python deps, Ollama, model, verification
+./setup_env.sh
+
+# Or step by step:
+./setup_env.sh --deps-only    # Python deps only
+./setup_env.sh --check        # Verify without installing
+```
+
+## Quick Start — Run Individual Steps
+
+Run steps individually for more control:
+
+```bash
+# Step 1: Extract document content → data/extracted/
+python -m src.extraction.extract *.pdf --output data/extracted
+
+# Step 2: Create document profile → profiles/vzw_oa_profile.json
+python -m src.profiler.profile_cli create \
+    --name VZW_OA \
+    --docs data/extracted/LTEDATARETRY_ir.json data/extracted/LTEB13NAC_ir.json \
+    --output profiles/vzw_oa_profile.json
+
+# Step 3: Parse all documents → data/parsed/
+python -m src.parser.parse_cli \
+    --profile profiles/vzw_oa_profile.json \
+    --docs-dir data/extracted \
+    --output-dir data/parsed
+
+# Step 5: Resolve cross-references → data/resolved/
+python -m src.resolver.resolve_cli \
+    --trees-dir data/parsed \
+    --output-dir data/resolved
+
+# Step 6: Extract feature taxonomy → data/taxonomy/
+python -m src.taxonomy.taxonomy_cli \
+    --trees-dir data/parsed \
+    --output-dir data/taxonomy
+
+# Step 7: Ingest referenced 3GPP standards → data/standards/
+# (downloads specs from 3GPP FTP — requires internet access)
+python -m src.standards.standards_cli \
+    --manifests-dir data/resolved \
+    --trees-dir data/parsed \
+    --output-dir data/standards
+
+# Step 8: Build knowledge graph → data/graph/
+python -m src.graph.graph_cli --verify
+
+# Step 9: Build vector store → data/vectorstore/
+python -m src.vectorstore.vectorstore_cli
+
+# Step 10: Query the system
+python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+
+# Step 11: Evaluate the pipeline
+python -m src.eval.eval_cli                       # Run all 18 test questions
+python -m src.eval.eval_cli --ab                  # A/B: graph-scoped vs pure RAG
+python -m src.eval.eval_cli --output data/eval/report.json  # Save report
+```
+
+## Running Tests
+
+```bash
+# Run all tests (excluding tests that require pymupdf)
+python -m pytest tests/ --ignore=tests/test_pipeline.py -v
+
+# Run all tests including pipeline integration (requires pymupdf)
+python -m pytest tests/ -v
+
+# Run tests for a specific step
+python -m pytest tests/test_document_ir.py -v     # Step 1: IR data model
+python -m pytest tests/test_profile_schema.py -v   # Step 2: Profile schema
+python -m pytest tests/test_patterns.py -v          # Steps 2-3: Regex patterns
+python -m pytest tests/test_pipeline.py -v          # Steps 1-3: End-to-end pipeline
+python -m pytest tests/test_resolver.py -v          # Step 5: Cross-references
+python -m pytest tests/test_taxonomy.py -v          # Step 6: Feature taxonomy
+python -m pytest tests/test_standards.py -v          # Step 7: Standards ingestion
+python -m pytest tests/test_graph.py -v              # Step 8: Knowledge graph
+python -m pytest tests/test_vectorstore.py -v        # Step 9: Vector store
+python -m pytest tests/test_query.py -v              # Step 10: Query pipeline
+python -m pytest tests/test_eval.py -v               # Step 11: Evaluation framework
+```
+
+### Test Summary
+
+| Test File | Count | Covers | Dependencies |
+|---|---|---|---|
+| `test_document_ir.py` | 10 | IR serialize/deserialize round-trip, block types, positions, metadata | None |
+| `test_profile_schema.py` | 9 | Profile round-trip for all nested structures, loads real VZW profile | `profiles/vzw_oa_profile.json` |
+| `test_patterns.py` | 39 | Section numbering, req IDs, plan ID extraction, 3GPP spec parsing, h/f patterns | None |
+| `test_pipeline.py` | 30 | End-to-end extract, profile, parse on real PDFs, cross-ref consistency | `pymupdf`, source PDFs |
+| `test_resolver.py` | 19 | Internal/cross-plan/standards resolution, manifest round-trip, pipeline integration | `data/parsed/` trees |
+| `test_taxonomy.py` | 40 | LLM protocol, mock provider, extractor, consolidator, schema round-trips, pipeline | `data/parsed/` trees |
+| `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector, spec parser, section extractor, schemas | `data/resolved/`, `data/parsed/`, downloaded spec DOCX |
+| `test_graph.py` | 48 | Schema IDs, graph builders, serialization, full build, integration diagnostics | `networkx`, parsed/resolved/taxonomy/standards data |
+| `test_vectorstore.py` | 57 | Config, protocols, chunk builder, deduplication, builder, integration with real data | `data/parsed/`, `data/taxonomy/` |
+| `test_query.py` | 60 | Schema models, analyzer, resolver, graph scoper, RAG retriever, context builder (few-shot, reminder), synthesizer (citation fallback), pipeline orchestration, integration | `networkx` |
+| `test_eval.py` | 36 | Question set structure, metric scoring, report serialization, A/B comparison, runner integration with synthetic graph | `networkx` |
+| `test_web_path_mapper.py` | 19 | PathMapper Windows↔Linux translation, security checks, resolve, list_roots | None |
+| `test_web_jobs.py` | 24 | JobQueue CRUD, status transitions, log streaming, cancel, cleanup, async | `aiosqlite` |
+| **Total** | **426** | | |
+
+## Step-by-Step Details
+
+### Step 1 — Document Content Extraction
+
+Extracts text, tables, and images from PDFs into a normalized intermediate representation (DocumentIR).
+
+```bash
+# Extract a single document
+python -m src.extraction.extract LTEDATARETRY.pdf --output data/extracted
+
+# Extract all PDFs in a directory
+python -m src.extraction.extract /path/to/pdfs/ --output data/extracted
+```
+
+**Output:** `data/extracted/<name>_ir.json`
+
+**Verify:** Each IR file contains blocks with text content, font metadata, positions, and block types (TEXT, TABLE, IMAGE). Tables include structured cell data.
+
+```bash
+# Check block counts
+python -c "
+from src.models.document import DocumentIR
+ir = DocumentIR.load_json('data/extracted/LTEDATARETRY_ir.json')
+print(f'Pages: {ir.page_count}, Blocks: {len(ir.blocks)}')
+print(f'Text: {sum(1 for b in ir.blocks if b.block_type.value==\"text\")}')
+print(f'Tables: {sum(1 for b in ir.blocks if b.block_type.value==\"table\")}')
+"
+```
+
+### Step 2 — DocumentProfiler
+
+Analyzes representative documents to derive a document structure profile. The profile captures heading styles, requirement ID patterns, section numbering, cross-reference patterns, and document zones — all without using an LLM.
+
+```bash
+# Create profile from representative docs
+python -m src.profiler.profile_cli create \
+    --name VZW_OA \
+    --docs data/extracted/LTEDATARETRY_ir.json data/extracted/LTEB13NAC_ir.json \
+    --output profiles/vzw_oa_profile.json
+
+# Validate profile against a held-out document
+python -m src.profiler.profile_cli validate \
+    --profile profiles/vzw_oa_profile.json \
+    --doc data/extracted/LTESMS_ir.json
+
+# Update profile with additional docs
+python -m src.profiler.profile_cli update \
+    --profile profiles/vzw_oa_profile.json \
+    --docs data/extracted/LTEOTADM_ir.json
+```
+
+**Output:** `profiles/vzw_oa_profile.json`
+
+**Verify:** The profile should contain:
+- `heading_detection` — font sizes and styles for heading levels
+- `requirement_id` — regex pattern matching VZ_REQ IDs with components config
+- `plan_metadata` — title, MNO, release extraction patterns
+- `document_zones` — zone boundaries (meta, software specs, scenarios)
+- `cross_references` — 3GPP citation patterns, req ID reference patterns
+
+```bash
+# Inspect profile
+python -c "
+import json
+with open('profiles/vzw_oa_profile.json') as f:
+    p = json.load(f)
+print(f'Profile: {p[\"profile_name\"]}')
+print(f'Heading levels: {len(p[\"heading_detection\"][\"heading_levels\"])}')
+print(f'Req ID pattern: {p[\"requirement_id\"][\"patterns\"][0]}')
+print(f'Zones: {len(p[\"document_zones\"][\"zones\"])}')
+"
+```
+
+### Step 3 — Generic Structural Parser
+
+Applies a document profile to parse extracted IR into a structured requirement tree. Each section becomes a Requirement node with cross-references, tables, and parent-child relationships.
+
+```bash
+# Parse a single document
+python -m src.parser.parse_cli \
+    --profile profiles/vzw_oa_profile.json \
+    --doc data/extracted/LTEDATARETRY_ir.json \
+    --output data/parsed/LTEDATARETRY_tree.json
+
+# Parse all documents in a directory
+python -m src.parser.parse_cli \
+    --profile profiles/vzw_oa_profile.json \
+    --docs-dir data/extracted \
+    --output-dir data/parsed
+```
+
+**Output:** `data/parsed/<name>_tree.json`
+
+**Verify:** Each tree contains plan metadata and a flat list of requirements with section hierarchy.
+
+```bash
+# Check parsed tree
+python -c "
+from src.parser.structural_parser import RequirementTree
+tree = RequirementTree.load_json('data/parsed/LTEDATARETRY_tree.json')
+print(f'Plan: {tree.plan_id}, MNO: {tree.mno}, Release: {tree.release}')
+print(f'Requirements: {len(tree.requirements)}')
+# Show first 5 requirements
+for r in tree.requirements[:5]:
+    xrefs = r.cross_references
+    print(f'  {r.section_number} {r.title[:50]}')
+    print(f'    Req ID: {r.req_id}, Internal refs: {len(xrefs.internal)}, '
+          f'Standards: {len(xrefs.standards)}, External plans: {len(xrefs.external_plans)}')
+"
+```
+
+**Expected output for LTEDATARETRY:** ~115 requirements, plan_id=LTEDATARETRY, mno=VZW.
+
+### Step 5 — Cross-Reference Resolver
+
+Resolves cross-references from parsed trees: internal refs (same document), cross-plan refs (other documents in corpus), and standards refs (3GPP TS citations with release info).
+
+```bash
+# Resolve all parsed trees
+python -m src.resolver.resolve_cli \
+    --trees-dir data/parsed \
+    --output-dir data/resolved
+
+# Resolve specific trees
+python -m src.resolver.resolve_cli \
+    --trees data/parsed/LTEDATARETRY_tree.json data/parsed/LTESMS_tree.json \
+    --output-dir data/resolved
+```
+
+**Output:** `data/resolved/<name>_xrefs.json`
+
+**Verify:** The CLI prints a summary table. Check that:
+- Internal refs: most resolved, some broken (body-text req IDs that don't have their own section headings — expected)
+- Cross-plan refs: resolved if the referenced plan is in the 5-doc corpus, unresolved otherwise (e.g., LTEOTADM references MMOTADM/ODOTADM which aren't in the corpus)
+- Standards refs: resolved when release info is available (inline or doc-level), unresolved for LTEAT (no release metadata)
+
+```bash
+# Inspect a manifest
+python -c "
+import json
+with open('data/resolved/LTEDATARETRY_xrefs.json') as f:
+    m = json.load(f)
+s = m['summary']
+print(f'Plan: {m[\"plan_id\"]}')
+print(f'Internal: {s[\"resolved_internal\"]}/{s[\"total_internal\"]} '
+      f'(broken: {s[\"broken_internal\"]})')
+print(f'Cross-plan: {s[\"resolved_cross_plan\"]}/{s[\"total_cross_plan\"]}')
+print(f'Standards: {s[\"resolved_standards\"]}/{s[\"total_standards\"]}')
+"
+```
+
+### Step 6 — Feature Taxonomy
+
+Extracts telecom features from each document using an LLM (mock provider for testing), then consolidates into a unified taxonomy. The LLM abstraction layer supports swapping providers.
+
+```bash
+# Build taxonomy from all parsed trees
+python -m src.taxonomy.taxonomy_cli \
+    --trees-dir data/parsed \
+    --output-dir data/taxonomy
+
+# Verbose mode
+python -m src.taxonomy.taxonomy_cli --trees-dir data/parsed -v
+```
+
+**Output:**
+- `data/taxonomy/<plan_id>_features.json` — per-document feature extraction
+- `data/taxonomy/taxonomy.json` — unified taxonomy
+
+**Verify:** The CLI prints a summary table showing all features with primary/referenced counts. Check that:
+- Each feature has a `feature_id`, `name`, `description`, and `keywords`
+- `is_primary_in` lists plans where this feature is a main topic
+- `is_referenced_in` lists plans that mention it without defining it
+- `mno_coverage` maps MNO to plans containing the feature
+- No duplicate `feature_id` values in the unified taxonomy
+
+```bash
+# Inspect unified taxonomy
+python -c "
+import json
+with open('data/taxonomy/taxonomy.json') as f:
+    t = json.load(f)
+print(f'MNO: {t[\"mno\"]}, Release: {t[\"release\"]}')
+print(f'Source docs: {len(t[\"source_documents\"])}')
+print(f'Total features: {len(t[\"features\"])}')
+print()
+for f in t['features']:
+    print(f'{f[\"feature_id\"]:<25s}  primary={len(f[\"is_primary_in\"])}  '
+          f'ref={len(f[\"is_referenced_in\"])}  '
+          f'plans={f[\"source_plans\"]}')
+"
+
+# Inspect per-document features
+python -c "
+import json
+with open('data/taxonomy/LTEDATARETRY_features.json') as f:
+    d = json.load(f)
+print(f'Plan: {d[\"plan_id\"]}, MNO: {d[\"mno\"]}')
+print(f'Primary features: {len(d[\"primary_features\"])}')
+for f in d['primary_features']:
+    print(f'  {f[\"feature_id\"]}: {f[\"name\"]} (confidence={f[\"confidence\"]})')
+print(f'Referenced features: {len(d[\"referenced_features\"])}')
+print(f'Key concepts: {d[\"key_concepts\"]}')
+"
+```
+
+**Note on MockLLMProvider:** The current taxonomy uses a keyword-matching mock provider (no API keys needed). Results are approximate — e.g., IMS_REGISTRATION appears across all docs because many headings contain "registration". When a real LLM provider is configured, feature extractions will be more domain-accurate.
+
+### Step 7 — Standards Ingestion
+
+Collects all 3GPP standards references from MNO requirement documents, downloads the referenced spec versions from the 3GPP FTP archive, parses them into section trees, and extracts referenced sections with surrounding context. Fully generic — no hardcoded spec lists or MNO-specific logic. No LLM required.
+
+```bash
+# Full pipeline: collect refs, download, parse, extract
+python -m src.standards.standards_cli \
+    --manifests-dir data/resolved \
+    --trees-dir data/parsed \
+    --output-dir data/standards
+
+# Collect references only (no download)
+python -m src.standards.standards_cli --collect-only
+
+# Process only specific specs
+python -m src.standards.standards_cli --specs 24.301 36.331
+
+# Skip download (use already-cached specs)
+python -m src.standards.standards_cli --no-download
+
+# Limit specs to process (useful for testing)
+python -m src.standards.standards_cli --max-specs 3
+```
+
+**Output:**
+- `data/standards/reference_index.json` — aggregated reference index
+- `data/standards/TS_{spec}/Rel-{N}/` — per-spec per-release directory containing:
+  - `{compact}-{code}.zip` — original 3GPP archive
+  - `{compact}-{code}.docx` — extracted/converted spec document
+  - `spec_parsed.json` — full section tree
+  - `sections.json` — extracted referenced + context sections
+
+**Verify:**
+
+```bash
+# Check reference index
+python -c "
+import json
+with open('data/standards/reference_index.json') as f:
+    idx = json.load(f)
+print(f'Total refs: {idx[\"total_refs\"]}')
+print(f'Unique specs: {idx[\"total_unique_specs\"]}')
+print(f'Spec-release pairs: {len(idx[\"specs\"])}')
+# Show specs with section-level detail
+with_sec = [s for s in idx['specs'] if s['sections']]
+print(f'Specs with section-level refs: {len(with_sec)}')
+for s in with_sec[:5]:
+    print(f'  TS {s[\"spec\"]} {s[\"release\"]}: sections={s[\"sections\"][:3]}')
+"
+
+# Check parsed spec
+python -c "
+from src.standards.schema import SpecDocument
+doc = SpecDocument.load_json('data/standards/TS_24.301/Rel-11/spec_parsed.json')
+print(f'TS {doc.spec_number} v{doc.version} ({doc.release})')
+print(f'Total sections: {len(doc.sections)}')
+sec = doc.get_section('5.5.1.2.5')
+if sec:
+    print(f'Section 5.5.1.2.5: {sec.title} ({len(sec.text)} chars)')
+"
+
+# Check extracted sections
+python -c "
+import json
+with open('data/standards/TS_24.301/Rel-11/sections.json') as f:
+    data = json.load(f)
+print(f'Referenced: {len(data[\"referenced_sections\"])} sections')
+print(f'Context: {len(data[\"context_sections\"])} sections')
+print(f'Source plans: {data[\"source_plans\"]}')
+"
+```
+
+**How it works:**
+1. **Reference collection** scans cross-ref manifests for spec+release pairs, then scans requirement text for section-level references (e.g., "3GPP TS 24.301, section 5.5.3.2.5")
+2. **Spec resolution** maps each (spec, release) to the 3GPP FTP URL by probing the archive directory listing for the latest version of that release
+3. **Download** fetches the ZIP, extracts DOC/DOCX, auto-converts DOC→DOCX via LibreOffice headless
+4. **Parsing** uses python-docx Heading styles (Heading 1-6) and section numbering to build a section tree
+5. **Extraction** pulls referenced sections + parent/sibling/definitions context (typically 5-15% of the full spec)
+
+### Step 8 — Knowledge Graph Construction
+
+Builds a unified NetworkX DiGraph from all ingestion outputs: parsed trees, cross-reference manifests, feature taxonomy, and standards sections.
+
+```bash
+# Build graph with diagnostic queries
+python -m src.graph.graph_cli --verify
+
+# Build graph without diagnostics
+python -m src.graph.graph_cli
+```
+
+**Output:**
+- `data/graph/knowledge_graph.json` — full graph (node-link JSON)
+- `data/graph/graph_stats.json` — summary statistics
+
+### Step 9 — Vector Store Construction
+
+Creates embeddings for requirement chunks and stores them in a vector store with metadata for filtered retrieval. All settings (embedding model, vector DB backend, distance metric) are configurable.
+
+```bash
+# Build with defaults (all-MiniLM-L6-v2, ChromaDB, cosine)
+python -m src.vectorstore.vectorstore_cli
+
+# Use a different embedding model
+python -m src.vectorstore.vectorstore_cli --model all-mpnet-base-v2
+
+# Use a config file for reproducible experiments
+python -m src.vectorstore.vectorstore_cli --config configs/experiment1.json
+
+# Override distance metric
+python -m src.vectorstore.vectorstore_cli --metric l2
+
+# Force rebuild (clear existing data)
+python -m src.vectorstore.vectorstore_cli --rebuild
+
+# Inspect existing store
+python -m src.vectorstore.vectorstore_cli --info
+
+# Test query against the store
+python -m src.vectorstore.vectorstore_cli --query "T3402 timer behavior"
+python -m src.vectorstore.vectorstore_cli --query "attach reject" --filter-plan LTEDATARETRY --n-results 5
+
+# Save config alongside results for reproducibility
+python -m src.vectorstore.vectorstore_cli --save-config configs/baseline.json
+```
+
+**Output:**
+- `data/vectorstore/` — ChromaDB persistent data
+- `data/vectorstore/build_stats.json` — build statistics
+- `data/vectorstore/config.json` — config used for this build
+
+**Configurable parameters (via JSON config or CLI flags):**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `embedding_model` | `all-MiniLM-L6-v2` | HuggingFace model name |
+| `embedding_provider` | `sentence-transformers` | Embedding backend |
+| `embedding_batch_size` | `64` | Batch size for encoding |
+| `embedding_device` | `cpu` | Device (`cpu`, `cuda`, `mps`) |
+| `normalize_embeddings` | `true` | L2-normalize vectors |
+| `vector_store_backend` | `chromadb` | Vector store backend |
+| `distance_metric` | `cosine` | `cosine`, `l2`, or `ip` |
+| `collection_name` | `requirements` | Collection name |
+| `include_mno_header` | `true` | Prepend MNO/release/plan header |
+| `include_hierarchy_path` | `true` | Prepend section hierarchy path |
+| `include_tables` | `true` | Include tables as Markdown |
+
+### Step 10 — Query Pipeline
+
+6-stage pipeline: Query Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis. Each stage has a mock implementation, so the full pipeline works without API keys.
+
+```bash
+# Single query (mock synthesizer — fast, no LLM needed)
+python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+
+# With real LLM via Ollama (requires ollama running + model pulled)
+python -m src.query.query_cli --llm ollama --query "What is the T3402 timer behavior?"
+
+# Specify a different Ollama model
+python -m src.query.query_cli --llm ollama --llm-model gemma4:e2b --query "..."
+
+# Increase timeout for slow CPU inference (default: 300s)
+python -m src.query.query_cli --llm ollama --llm-timeout 600 --query "..."
+
+# Verbose mode (shows all pipeline stages)
+python -m src.query.query_cli --query "T3402 timer" --verbose
+
+# Interactive mode
+python -m src.query.query_cli --interactive
+
+# Custom settings
+python -m src.query.query_cli --query "..." --top-k 15 --max-depth 3
+
+# Save response to JSON
+python -m src.query.query_cli --query "..." --output response.json
+```
+
+**Output:** Query response with answer, citations, and pipeline statistics.
+
+**Pipeline stages:**
+
+| Stage | Module | Description |
+|-------|--------|-------------|
+| 1. Query Analysis | `analyzer.py` | Extracts entities, concepts, MNOs, features, plan IDs from natural language |
+| 2. MNO/Release Resolution | `resolver.py` | Maps MNO names to available graph scopes (explicit, latest, or all) |
+| 3. Graph Scoping | `graph_scope.py` | Traverses knowledge graph to find candidate requirement nodes |
+| 4. Targeted RAG | `rag_retriever.py` | Retrieves relevant chunks from vector store, scoped by graph candidates |
+| 5. Context Assembly | `context_builder.py` | Enriches chunks with graph context (hierarchy, standards, cross-refs); few-shot citation example in system prompt |
+| 6. LLM Synthesis | `synthesizer.py` | Generates answer with citations from assembled context; context-based citation fallback for small models |
+
+**Graph scoping strategies:** Entity lookup (req IDs, timers), feature lookup (maps_to edges), plan lookup (all reqs in plan), title search (text matching). BFS edge traversal with configurable depth and score decay (0.7^depth).
+
+**RAG retrieval:** Two strategies — scoped retrieval (filter vector store by graph candidate req_ids) and metadata retrieval (filter by MNO/release when no graph candidates). Diversity enforcement ensures minimum chunks per plan.
+
+**Mock implementations:** `MockQueryAnalyzer` uses keyword matching and regex patterns. `MockSynthesizer` returns structured summaries grouping results by plan with req IDs and standards references. Both exercise the full pipeline without requiring LLM API keys.
+
+### Step 11 — Evaluation
+
+Evaluates the query pipeline on 18 test questions across 5 categories, measuring completeness, accuracy, citation quality, standards integration, and hallucination avoidance. Supports A/B comparison between graph-scoped and pure RAG retrieval.
+
+```bash
+# Run all 18 evaluation questions (mock synthesizer — fast)
+python -m src.eval.eval_cli
+
+# Run with real LLM via Ollama
+python -m src.eval.eval_cli --llm ollama
+
+# Run A/B comparison (graph-scoped vs pure RAG)
+python -m src.eval.eval_cli --ab
+python -m src.eval.eval_cli --ab --llm ollama   # with real LLM
+
+# Run a specific category only
+python -m src.eval.eval_cli --category cross_doc
+
+# Save report to JSON
+python -m src.eval.eval_cli --output data/eval/report.json
+
+# Verbose mode (shows pipeline stage details)
+python -m src.eval.eval_cli --verbose
+```
+
+**Test question categories (18 questions):**
+
+| Category | Count | What It Tests |
+|----------|-------|---------------|
+| Single-doc factual | 4 | Baseline single-document retrieval (T3402 timer, throttling, AT commands, FOTA) |
+| Cross-doc dependency | 4 | Graph traversal across documents (SMS over IMS, PDN connectivity, IMS registration, detach) |
+| Feature-level | 4 | Feature taxonomy retrieval (data retry, error handling, bearer management, PLMN selection) |
+| Standards comparison | 3 | Standards edges and references (T3402 vs 3GPP, attach reject sections, TS 36.331) |
+| Traceability | 3 | Entity lookup (req ID, IMS throttling, cause code 22) |
+
+**Evaluation metrics (per TDD 9.4):**
+
+| Metric | Definition | TDD Target |
+|--------|-----------|------------|
+| Completeness | Did the answer include information from ALL expected plans? | > 80% (cross-doc) |
+| Accuracy | Are expected requirement IDs found in the results? | > 90% |
+| Citation quality | Do answers include requirement and standards citations? | 100% |
+| Standards integration | Are referenced 3GPP specs correctly incorporated? | > 80% |
+| No hallucination | No fabricated requirement IDs from unknown plans | 100% |
+
+**A/B comparison:** Runs all questions twice — once with graph scoping (normal pipeline) and once bypassing graph scoping (pure vector RAG with metadata filters only). Reports per-question and per-category deltas to demonstrate graph value.
+
+## LLM Providers
+
+The system includes three LLM providers, all satisfying the `LLMProvider` Protocol (structural typing, no inheritance):
+
+### Built-in: Ollama (local inference)
+
+```bash
+# Use from CLI
+python -m src.query.query_cli --llm ollama --query "..."
+
+# Use programmatically
+from src.llm.ollama_provider import OllamaProvider
+provider = OllamaProvider(model="gemma4:e4b")
+answer = provider.complete("What is T3402?", system="You are a telecom expert.")
+```
+
+### Built-in: Mock (keyword-based, no LLM)
+
+Used by default. Produces deterministic keyword-matched results for testing.
+
+```python
+from src.llm.mock_provider import MockLLMProvider
+provider = MockLLMProvider()
+```
+
+### Custom: Add your own provider
+
+Create a class with a `complete()` method matching this signature:
+
+```python
+class YourProvider:
+    def complete(
+        self,
+        prompt: str,
+        system: str = "",
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+    ) -> str:
+        # Call your LLM API, return the text response
+        ...
+```
+
+Pass it to any component that takes an `LLMProvider`:
+
+```python
+from src.taxonomy.extractor import FeatureExtractor
+from src.query.synthesizer import LLMSynthesizer
+
+provider = YourProvider(api_key="...", model="...")
+extractor = FeatureExtractor(provider)
+synthesizer = LLMSynthesizer(provider)
+```
+
+No base class inheritance required. See `src/llm/base.py` for full documentation.
+
+## Project Structure
+
+```
+nora/
+├── CLAUDE.md                              # Claude Code instructions
+├── SESSION_SUMMARY.md                     # Session context for continuity
+├── README.md                              # This file
+├── CONTRIBUTING.md                        # Team contribution guide (file ownership, QC templates, correction workflow)
+├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.6)
+├── requirements.txt                       # Python dependencies
+├── setup_env.sh                           # One-command setup script (deps, Ollama, model, verification)
+├── environments/                          # Environment configs (JSON, one per team member workspace)
+├── profiles/
+│   └── vzw_oa_profile.json               # VZW OA document profile
+├── src/
+│   ├── models/document.py                # Normalized IR data model
+│   ├── extraction/                       # Step 1: PDF content extraction
+│   ├── profiler/                          # Step 2: Document profiling
+│   ├── parser/                            # Step 3: Structural parsing
+│   ├── resolver/                          # Step 5: Cross-reference resolution
+│   ├── llm/                               # LLM abstraction layer (mock + Ollama + model picker)
+│   ├── taxonomy/                          # Step 6: Feature taxonomy
+│   ├── standards/                         # Step 7: 3GPP standards ingestion
+│   ├── graph/                             # Step 8: Knowledge graph construction
+│   ├── vectorstore/                       # Step 9: Vector store construction
+│   ├── query/                             # Step 10: Query pipeline (6-stage)
+│   ├── eval/                              # Step 11: Evaluation framework
+│   ├── env/                               # Environment config system (multi-user workspaces)
+│   ├── pipeline/                          # Pipeline runner (stage orchestration, reports, error codes)
+│   ├── corrections/                       # Corrections module (schema, file-backed store, compact FIX report)
+│   └── web/                               # Web UI (FastAPI + Bootstrap 5 + HTMX, 8 route modules inc. corrections)
+│       └── static/vendor/                 # Vendored Bootstrap + Bootstrap Icons + HTMX (offline/proxy-safe)
+├── tests/                                 # 426 tests across 13 test files
+├── data/
+│   ├── extracted/                        # Step 1 output: IR JSON files
+│   ├── parsed/                           # Step 3 output: RequirementTree JSON files
+│   ├── resolved/                         # Step 5 output: Cross-reference manifests
+│   ├── taxonomy/                         # Step 6 output: Feature taxonomy JSON files
+│   ├── standards/                        # Step 7 output: Downloaded + parsed 3GPP specs
+│   ├── graph/                            # Step 8 output: Knowledge graph JSON + stats
+│   └── vectorstore/                      # Step 9 output: ChromaDB data + config + stats
+└── *.pdf                                 # Source VZW OA specification PDFs
+```
