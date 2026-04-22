@@ -27,67 +27,67 @@ Generated 2026-04-21 by regen-map. Do not hand-edit.
 
 ```mermaid
 flowchart TD
-    corrections[corrections]
-    env[env]
-    eval[eval]
-    extraction[extraction]
-    graph[graph]
-    llm[llm]
-    models[models]
-    parser[parser]
-    pipeline[pipeline]
-    profiler[profiler]
-    query[query]
-    resolver[resolver]
-    standards[standards]
-    taxonomy[taxonomy]
-    vectorstore[vectorstore]
-    web[web]
-    corrections --> env
-    corrections --> profiler
-    corrections --> taxonomy
-    eval --> graph
-    eval --> llm
-    eval --> query
-    eval --> vectorstore
-    extraction --> models
-    graph --> parser
-    graph --> resolver
-    graph --> standards
-    graph --> taxonomy
-    parser --> extraction
-    parser --> models
-    parser --> profiler
-    pipeline --> corrections
-    pipeline --> env
-    pipeline --> eval
-    pipeline --> extraction
-    pipeline --> graph
-    pipeline --> llm
-    pipeline --> parser
-    pipeline --> profiler
-    pipeline --> resolver
-    pipeline --> standards
-    pipeline --> taxonomy
-    pipeline --> vectorstore
-    profiler --> extraction
-    profiler --> models
-    query --> graph
-    query --> llm
-    query --> resolver
-    query --> standards
-    query --> taxonomy
-    query --> vectorstore
-    resolver --> parser
-    standards --> parser
-    standards --> resolver
-    taxonomy --> corrections
-    taxonomy --> llm
-    taxonomy --> parser
-    vectorstore --> models
-    vectorstore --> parser
-    web --> corrections
-    web --> env
-    web --> pipeline
-    web --> query
+    m_corrections[corrections]
+    m_env[env]
+    m_eval[eval]
+    m_extraction[extraction]
+    m_graph[graph]
+    m_llm[llm]
+    m_models[models]
+    m_parser[parser]
+    m_pipeline[pipeline]
+    m_profiler[profiler]
+    m_query[query]
+    m_resolver[resolver]
+    m_standards[standards]
+    m_taxonomy[taxonomy]
+    m_vectorstore[vectorstore]
+    m_web[web]
+    m_corrections --> m_env
+    m_corrections --> m_profiler
+    m_corrections --> m_taxonomy
+    m_eval --> m_graph
+    m_eval --> m_llm
+    m_eval --> m_query
+    m_eval --> m_vectorstore
+    m_extraction --> m_models
+    m_graph --> m_parser
+    m_graph --> m_resolver
+    m_graph --> m_standards
+    m_graph --> m_taxonomy
+    m_parser --> m_extraction
+    m_parser --> m_models
+    m_parser --> m_profiler
+    m_pipeline --> m_corrections
+    m_pipeline --> m_env
+    m_pipeline --> m_eval
+    m_pipeline --> m_extraction
+    m_pipeline --> m_graph
+    m_pipeline --> m_llm
+    m_pipeline --> m_parser
+    m_pipeline --> m_profiler
+    m_pipeline --> m_resolver
+    m_pipeline --> m_standards
+    m_pipeline --> m_taxonomy
+    m_pipeline --> m_vectorstore
+    m_profiler --> m_extraction
+    m_profiler --> m_models
+    m_query --> m_graph
+    m_query --> m_llm
+    m_query --> m_resolver
+    m_query --> m_standards
+    m_query --> m_taxonomy
+    m_query --> m_vectorstore
+    m_resolver --> m_parser
+    m_standards --> m_parser
+    m_standards --> m_resolver
+    m_taxonomy --> m_corrections
+    m_taxonomy --> m_llm
+    m_taxonomy --> m_parser
+    m_vectorstore --> m_models
+    m_vectorstore --> m_parser
+    m_web --> m_corrections
+    m_web --> m_env
+    m_web --> m_pipeline
+    m_web --> m_query
 ```

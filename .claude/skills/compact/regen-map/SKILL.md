@@ -72,6 +72,7 @@ Each table row:
   - Status marker: `[DRAFT]` / `[NEW]` / `[ORPHANED]` / none
 
 - Mermaid flowchart: nodes alphabetical, edges derived from each module's **Depends on** section. In polyglot mode, annotate nodes with language tags (e.g. `auth[auth · rust]`).
+  - Prefix every node **id** with `m_` (e.g. `m_graph[graph]`) so module names that collide with Mermaid reserved keywords — notably `graph`, `end`, `subgraph`, `class`, `default`, `style` — don't break the chart. The display label stays as the bare module name.
 - If structure-conventions had a `## Cross-language edges` section, copy it verbatim into MAP.md as a `## Cross-language edges` section below the flowchart.
 - Header note: "Generated YYYY-MM-DD by regen-map. Do not hand-edit."
 
