@@ -45,6 +45,8 @@ If you're unfamiliar with a library, framework, or API, say so rather than guess
 
 Development is narrow-context: load the module doc for what you're implementing, plus the module docs of direct dependencies. Don't preload peer modules you're not touching. Reach for the decision log only when you hit a choice that cites a prior decision.
 
+When the user invokes `/switch-phase development <m1,m2>`, the named modules' MODULE.md files are pre-loaded along with one hop of their declared `Depends on` edges — that's your working set. If implementation forces you outside it, stop and ask or re-scope the phase switch rather than silently pulling in peer modules.
+
 **What to produce:**
 
 - **Code** in incremental pieces with reasoning for non-obvious choices

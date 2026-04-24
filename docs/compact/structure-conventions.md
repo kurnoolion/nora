@@ -48,6 +48,10 @@ Each module has `src/<module>/MODULE.md` with the following curated sections (pl
 - **Depends on** / **Depended on by** — links to other MODULE.md.
 - **Deferred** *(optional)* — planned-but-unbuilt behaviors for this module. Read by `drift-check` to classify matching items as `[DEFERRED]` instead of drift.
 
+## Depends on / Depended on by — semantics
+
+These sections capture **either** direct code imports **or** artifact/data consumption (e.g., a module reading JSON produced by another module). A module may legitimately declare a peer as a dependency without importing any of its symbols, when the coupling is through a shared on-disk artifact. `regen-map` and `drift-check` treat both forms as valid — a declared-but-not-imported edge is not flagged as drift on its own.
+
 ## Description source
 
 Used by `regen-map` to generate per-file one-liners in the **Project File Structure** section of `MAP.md`.

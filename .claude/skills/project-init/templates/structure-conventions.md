@@ -53,6 +53,23 @@ Each directory under `packages/<pkg>/src/` is a module. MODULE.md at `packages/<
 User-authored. List edges that cross language boundaries (HTTP / FFI / IPC) that per-language scanners can't infer. `regen-map` reads this section verbatim into MAP.md.
 -->
 
+## Description source
+
+<!--
+Used by `regen-map` to generate per-file one-liners in the **Project File Structure** section of `MAP.md`. Fill in the per-language rule.
+
+Single-language example (Python):
+  - `*.py`: first line of the module docstring. If absent, no description.
+  - `*.sh`: first line of the top comment block after the shebang. If absent, no description.
+  - Directories with `MODULE.md`: first sentence of the Purpose section.
+  - Other files / directories: no automatic description (path-only row).
+
+For polyglot repos, put this subsection under each `## <language>` section with the language-appropriate rule
+(e.g., Rust: `//!` crate-level doc comment; TypeScript: leading JSDoc block).
+
+Rows are alphabetical within each directory; files and directories intermix alphabetically.
+-->
+
 ## Module doc schema
 
 Each module has `src/<module>/MODULE.md` (or per-language canonical path) with the following curated sections (plus a regen-only Structure section):

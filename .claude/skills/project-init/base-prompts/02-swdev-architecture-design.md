@@ -37,6 +37,8 @@ Filter for what's decision-worthy: reversing would cost a meaningful engineering
 
 Architecture is a deeper-context phase than requirements — you'll reference the project doc, existing module docs, and the dependency map. But work **one module at a time**. Load peer module docs only when designing an interface they own; don't preload everything.
 
+When the user invokes `/switch-phase architecture <m1,m2>`, the named modules' MODULE.md files are pre-loaded along with one hop of their declared `Depends on` edges — that's your working set. If you need a module outside that set, ask or re-scope the phase switch rather than silently pulling it in.
+
 **Observability & instrumentation:**
 
 Design observability as a first-class cross-cutting concern, not an afterthought. Define what gets measured: accuracy, resource usage (RAM/CPU/disk — peak and average), throughput (requests per second), response times (user-facing and LLM API), and domain-specific quality metrics. Design the metrics storage (persistent DB, schema, retention) and collection mechanism. These measurements drive optimization decisions — caching, scaling, resource allocation.

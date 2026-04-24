@@ -20,11 +20,13 @@ Designed to work identically across Claude Code (Anthropic) and Cline (any model
 
 ## Installation
 
-Copy this directory's contents to `.claude/skills/` in a project repo (same path for both tools):
+Run the install script to copy the skill bundle into a project's `.claude/skills/` (same path for Claude Code and Cline):
 
 ```bash
-cp -r /home/mohan/work/utils/skills/compact/. /path/to/project/.claude/skills/
+/home/mohan/work/utils/skills/compact/install.sh /path/to/project
 ```
+
+The script uses `rsync` under the hood and deliberately excludes the reference graphics (`COMPACT_Cheatsheet.*`, `COMPACT_Overview.*`) — those stay in this source tree as onboarding material and should not land inside a target project's `.claude/skills/`.
 
 Add the auto-trigger one-liner. Tools read different files, so pick based on which tool(s) the team uses — both can coexist harmlessly in the same repo:
 
