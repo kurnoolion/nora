@@ -57,6 +57,12 @@ How to use this file:
 
 - **FR-21** — The evaluation framework runs a user-supplied Q&A set, scores each question across five metrics (completeness, accuracy, citation quality, standards integration, hallucination-free), and produces A/B comparisons between graph-scoped and pure-RAG retrieval.
 
+### Runtime environment
+
+- **FR-28** — The pipeline accepts a per-environment working directory (`env_dir`) via CLI argument, environment config file, or Web UI input; the system does not assume any hardcoded paths for runtime artifacts.
+- **FR-29** — All runtime artifacts are written under `<env_dir>`, partitioned by purpose: `out/` for pipeline outputs (extracted IR, parsed trees, cross-reference manifests, taxonomies, downloaded standards, knowledge graph snapshots, vector store data); `state/` for runtime SQLite databases (job queue, metrics); `corrections/` for human overrides; `reports/` for compact RPT / MET / FIX / QC outputs; `eval/` for user-supplied Q&A. No artifact is written outside `<env_dir>`.
+- **FR-30** — Source documents are read from `<env_dir>/input/<MNO>/<release>/`; the pipeline does not read source documents from the repository root or from any path outside `<env_dir>`.
+
 ## Non-functional
 
 ### Deployment and install
