@@ -1,16 +1,30 @@
-"""Profile debug — inspect extracted IRs and the emitted profile in compact format.
+"""Profile debug — inspect extracted IRs / emitted profile, or emit an LLM prompt.
 
-Diagnostic tool for the case when `run_profile` produces an empty or low-quality
-profile (zero heading levels, zero zones, etc.) and you need to figure out why
-without pasting proprietary document content into chat. Emits a compact report
-matching NFR-8 / D-012 conventions: only field names, counts, style names,
-font sizes, and method labels — no document text.
+Two modes:
 
-Usage:
-    python -m core.src.profiler.profile_debug --env-dir /path/to/env_dir
+  python -m core.src.profiler.profile_debug --env-dir <ENV_DIR>
+      Analyzes <ENV_DIR>/out/extract/*_ir.json and out/profile/profile.json,
+      prints a compact, no-proprietary-content summary (NFR-8 / D-012) safe
+      to paste in chat for remote diagnosis.
 
-Output is line-oriented and < 30 lines for a typical 5-doc corpus, safe to paste
-in chat-mediated debugging sessions.
+  python -m core.src.profiler.profile_debug --emit-prompt
+      Prints a prompt template the user can paste into their proprietary LLM
+      chat interface, along with 1-2 representative documents, to bootstrap a
+      DocumentProfile JSON. The LLM-emitted JSON goes to
+      <ENV_DIR>/corrections/profile.json, where the pipeline picks it up via
+      the corrections-override workflow (D-011 / FR-15) on the next run.
+
+Use case: when run_profile produces an empty profile (lvl=0 zones=0), the
+analyzer surfaces structural metadata (style names, font sizes, block-type
+counts) to diagnose whether the DOCX uses named Heading styles, whether the
+font sizes cluster cleanly, or whether the corpus needs a hand-curated /
+LLM-bootstrapped profile.
+
+The --emit-prompt flow is the path forward when the heuristic profiler can't
+identify document structure on a new MNO / doc-family that wasn't in the
+profiler's training corpus. It treats LLM-derived profiles as user
+corrections, preserving D-003 (parser stays heuristic, profile is
+deterministic) while letting profile *generation* use an LLM.
 """
 
 from __future__ import annotations
@@ -114,18 +128,96 @@ def _format_profile_lines(profile_path: Path) -> list[str]:
     ]
 
 
+_LLM_PROMPT_TEMPLATE = """\
+You are producing a single JSON "DocumentProfile" that drives a profile-driven, LLM-free structural parser. The parser uses your output to identify headings, requirement IDs, document zones, and cross-references in the documents below.
+
+Do NOT assume conventions from any document family you may know — derive every regex and structural rule strictly from what you observe in the actual documents pasted at the bottom.
+
+Emit ONE JSON object — no prose, no markdown fences, no commentary. The JSON must match the schema exactly.
+
+SCHEMA (placeholder values; replace based on the actual documents):
+
+{
+  "profile_name": "<short-identifier>",
+  "profile_version": 1,
+  "created_from": ["<filename1>.docx", "<filename2>.docx"],
+  "last_updated": "YYYY-MM-DD",
+  "heading_detection": {
+    "method": "docx_styles" | "font_size_clustering",
+    "levels": [
+      {
+        "level": 1,
+        "font_size_min": <float, points>,
+        "font_size_max": <float, points>,
+        "bold": true | false | null,
+        "all_caps": true | false | null,
+        "sample_texts": [],
+        "count": 0
+      }
+    ],
+    "numbering_pattern": "<regex matching the section-number prefix on heading lines, e.g. ^(\\\\d+\\\\.)+\\\\d*\\\\s>",
+    "max_observed_depth": <int>
+  },
+  "requirement_id": {
+    "pattern": "<regex matching individual requirement labels, or empty string if the docs don't use per-requirement IDs>",
+    "components": {"prefix": "<observed>", "separator": "<observed>", "plan_id_position": <int>, "number_position": <int>},
+    "sample_ids": [],
+    "total_found": 0
+  },
+  "plan_metadata": {
+    "plan_name":    {"location": "first_page", "pattern": "<regex with one capture group, or empty>", "sample_value": ""},
+    "plan_id":      {"location": "first_page", "pattern": "<regex>", "sample_value": ""},
+    "version":      {"location": "first_page", "pattern": "<regex>", "sample_value": ""},
+    "release_date": {"location": "first_page", "pattern": "<regex>", "sample_value": ""}
+  },
+  "document_zones": [
+    {"section_pattern": "<regex>", "zone_type": "<one of: introduction | hardware_specs | software_specs | scenarios | provisioning | performance | test_coverage | references | content>", "description": "<heading text>", "heading_text": "<heading text>"}
+  ],
+  "header_footer": {
+    "header_patterns": [],
+    "footer_patterns": [],
+    "page_number_pattern": "<regex matching repeating page-number lines, or empty>"
+  },
+  "cross_reference_patterns": {
+    "standards_citations": [
+      "<one regex per citation flavor observed: 3GPP TS, IETF RFC, GSMA, IEEE, Wi-Fi Alliance, etc.>"
+    ],
+    "internal_section_refs": "<regex for 'see section X.Y' style intra-document refs, or empty>",
+    "requirement_id_refs": "<same regex as requirement_id.pattern, or empty if no requirement IDs>"
+  },
+  "body_text": {
+    "font_size_min": <float>,
+    "font_size_max": <float>,
+    "font_families": []
+  }
+}
+
+GUIDANCE:
+- For DOCX with explicit "Heading 1" / "Heading 2" paragraph styles → method = "docx_styles". For visual-only headings (bold + larger font without semantic styles) → method = "font_size_clustering".
+- Requirement IDs may follow any scheme ("REQ-NNN", "VOWIFI_R042", "[V-001]", or none at all). If the documents enumerate requirements without a stable label format, leave requirement_id.pattern as empty string and the parser will fall back to section-number anchoring.
+- document_zones: only top-level structural sections. Skip nested subsections. zone_type must be one of the listed values; pick "content" if none of the others fits.
+- plan_metadata fields that don't appear in the documents → empty pattern string, empty sample_value.
+- standards_citations: list one regex per citation flavor (3GPP TS XXX.YYY, RFC NNNN, etc.). Don't conflate flavors into one regex.
+- All sample_texts arrays can be empty; they're informational.
+
+Now, here are the representative documents:
+
+[PASTE 1-2 .docx FILES BELOW — text content of the documents]
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Inspect extracted IRs and the emitted profile in compact format. "
-            "No proprietary document content — safe to paste in chat."
+            "Inspect extracted IRs and the emitted profile in compact format, "
+            "or emit an LLM prompt template for bootstrapping a DocumentProfile "
+            "via a proprietary chat interface."
         ),
     )
     parser.add_argument(
         "--env-dir",
-        required=True,
         type=Path,
-        help="Path to env_dir (the same one used for the pipeline run).",
+        help="Path to env_dir (required for analysis mode; not used with --emit-prompt).",
     )
     parser.add_argument(
         "--max-docs",
@@ -133,7 +225,23 @@ def main() -> None:
         default=10,
         help="Maximum number of IR files to summarize (default: 10).",
     )
+    parser.add_argument(
+        "--emit-prompt",
+        action="store_true",
+        help=(
+            "Print the LLM prompt template (no env_dir needed) and exit. "
+            "Paste the output into your proprietary LLM chat with 1-2 representative "
+            "documents; save the LLM's JSON to <env_dir>/corrections/profile.json."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.emit_prompt:
+        sys.stdout.write(_LLM_PROMPT_TEMPLATE)
+        return
+
+    if args.env_dir is None:
+        parser.error("--env-dir is required (or use --emit-prompt to print the LLM prompt template)")
 
     env_dir = Path(args.env_dir).expanduser().resolve()
     extract_dir = env_dir / "out" / "extract"
