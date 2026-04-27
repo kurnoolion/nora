@@ -13,8 +13,8 @@ from typing import Any
 
 import networkx as nx
 
-from src.graph.schema import NodeType
-from src.query.schema import (
+from core.src.graph.schema import NodeType
+from core.src.query.schema import (
     QueryIntent,
     QueryType,
     ScopedQuery,

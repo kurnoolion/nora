@@ -10,14 +10,14 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, PlainTextResponse
 
-from src.corrections import (
+from core.src.corrections import (
     CorrectionStore,
     profile_fix_report,
     taxonomy_fix_report,
 )
-from src.env.config import EnvironmentConfig
-from src.profiler.profile_schema import DocumentProfile
-from src.taxonomy.schema import FeatureTaxonomy, TaxonomyFeature
+from core.src.env.config import EnvironmentConfig
+from core.src.profiler.profile_schema import DocumentProfile
+from core.src.taxonomy.schema import FeatureTaxonomy, TaxonomyFeature
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def _list_envs_with_status() -> list[dict]:
 
 @router.get("/corrections", response_class=HTMLResponse)
 async def corrections_index(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     return _template_response(request, "corrections/index.html", {
         "envs": _list_envs_with_status(),
@@ -85,7 +85,7 @@ async def corrections_index(request: Request):
 
 @router.get("/corrections/profile/{env_name}", response_class=HTMLResponse)
 async def profile_editor(request: Request, env_name: str):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     env = _load_env(env_name)
     if not env:
@@ -108,7 +108,7 @@ async def profile_editor(request: Request, env_name: str):
 
 @router.post("/corrections/profile/{env_name}/start")
 async def profile_start(request: Request, env_name: str):
-    from src.web.app import config
+    from core.src.web.app import config
     env = _load_env(env_name)
     if not env:
         return JSONResponse({"error": "env not found"}, status_code=404)
@@ -125,7 +125,7 @@ async def profile_start(request: Request, env_name: str):
 
 @router.post("/corrections/profile/{env_name}/discard")
 async def profile_discard(request: Request, env_name: str):
-    from src.web.app import config
+    from core.src.web.app import config
     env = _load_env(env_name)
     if not env:
         return JSONResponse({"error": "env not found"}, status_code=404)
@@ -138,7 +138,7 @@ async def profile_discard(request: Request, env_name: str):
 
 @router.post("/corrections/profile/{env_name}/save")
 async def profile_save(request: Request, env_name: str):
-    from src.web.app import config, _template_response
+    from core.src.web.app import config, _template_response
     env = _load_env(env_name)
     if not env:
         return JSONResponse({"error": "env not found"}, status_code=404)
@@ -248,7 +248,7 @@ async def profile_save(request: Request, env_name: str):
 
 @router.get("/corrections/taxonomy/{env_name}", response_class=HTMLResponse)
 async def taxonomy_editor(request: Request, env_name: str):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
     env = _load_env(env_name)
     if not env:
         return _template_response(request, "corrections/index.html", {
@@ -270,7 +270,7 @@ async def taxonomy_editor(request: Request, env_name: str):
 
 @router.post("/corrections/taxonomy/{env_name}/start")
 async def taxonomy_start(request: Request, env_name: str):
-    from src.web.app import config
+    from core.src.web.app import config
     env = _load_env(env_name)
     if not env:
         return JSONResponse({"error": "env not found"}, status_code=404)
@@ -286,7 +286,7 @@ async def taxonomy_start(request: Request, env_name: str):
 
 @router.post("/corrections/taxonomy/{env_name}/discard")
 async def taxonomy_discard(request: Request, env_name: str):
-    from src.web.app import config
+    from core.src.web.app import config
     env = _load_env(env_name)
     if not env:
         return JSONResponse({"error": "env not found"}, status_code=404)
@@ -299,7 +299,7 @@ async def taxonomy_discard(request: Request, env_name: str):
 
 @router.post("/corrections/taxonomy/{env_name}/save")
 async def taxonomy_save(request: Request, env_name: str):
-    from src.web.app import config
+    from core.src.web.app import config
     env = _load_env(env_name)
     if not env:
         return JSONResponse({"error": "env not found"}, status_code=404)
@@ -358,7 +358,7 @@ async def taxonomy_save(request: Request, env_name: str):
 
 @router.get("/corrections/report/{env_name}", response_class=HTMLResponse)
 async def report_page(request: Request, env_name: str):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
     env = _load_env(env_name)
     if not env:
         return _template_response(request, "corrections/index.html", {

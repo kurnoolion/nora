@@ -13,9 +13,9 @@ import json
 import shutil
 from pathlib import Path
 
-from src.env.config import EnvironmentConfig
-from src.profiler.profile_schema import DocumentProfile
-from src.taxonomy.schema import FeatureTaxonomy
+from core.src.env.config import EnvironmentConfig
+from core.src.profiler.profile_schema import DocumentProfile
+from core.src.taxonomy.schema import FeatureTaxonomy
 
 
 class CorrectionStore:

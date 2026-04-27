@@ -26,10 +26,10 @@ import logging
 import time
 from pathlib import Path
 
-from src.llm.mock_provider import MockLLMProvider
-from src.parser.structural_parser import RequirementTree
-from src.taxonomy.consolidator import TaxonomyConsolidator
-from src.taxonomy.extractor import FeatureExtractor
+from core.src.llm.mock_provider import MockLLMProvider
+from core.src.parser.structural_parser import RequirementTree
+from core.src.taxonomy.consolidator import TaxonomyConsolidator
+from core.src.taxonomy.extractor import FeatureExtractor
 
 
 def main():

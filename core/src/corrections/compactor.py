@@ -13,9 +13,9 @@ Never include:
 
 from __future__ import annotations
 
-from src.corrections.schema import FixReport
-from src.profiler.profile_schema import DocumentProfile
-from src.taxonomy.schema import FeatureTaxonomy, TaxonomyFeature
+from core.src.corrections.schema import FixReport
+from core.src.profiler.profile_schema import DocumentProfile
+from core.src.taxonomy.schema import FeatureTaxonomy, TaxonomyFeature
 
 
 # ---------------------------------------------------------------------------

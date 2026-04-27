@@ -29,14 +29,14 @@ import logging
 import sys
 from pathlib import Path
 
-from src.env.config import (
+from core.src.env.config import (
     EnvironmentConfig,
     PIPELINE_STAGES,
     STAGE_NAMES,
     resolve_stage,
 )
-from src.pipeline.runner import PipelineContext, PipelineRunner
-from src.pipeline.report import (
+from core.src.pipeline.runner import PipelineContext, PipelineRunner
+from core.src.pipeline.report import (
     format_compact_report,
     format_verbose_report,
     print_fix_template,
@@ -55,7 +55,7 @@ def _list_stages() -> None:
 
 
 def _detect_hw() -> None:
-    from src.llm.model_picker import detect_hardware, pick_model, MODEL_CATALOG
+    from core.src.llm.model_picker import detect_hardware, pick_model, MODEL_CATALOG
 
     hw = detect_hardware()
     print("Hardware detected:")
@@ -185,7 +185,7 @@ def main() -> None:
         ctx.model_name = args.model
 
     # --- Resolve stage range ---
-    from src.env.config import STAGE_NUM
+    from core.src.env.config import STAGE_NUM
     start_idx = STAGE_NUM[start] - 1
     end_idx = STAGE_NUM[end]
     stages = STAGE_NAMES[start_idx:end_idx]
@@ -202,7 +202,7 @@ def main() -> None:
     hw_summary = ""
     model_display = ctx.model_name
     try:
-        from src.llm.model_picker import detect_hardware
+        from core.src.llm.model_picker import detect_hardware
         hw = detect_hardware()
         hw_summary = hw.compact()
     except Exception:

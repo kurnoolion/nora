@@ -17,7 +17,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from src.standards.schema import AggregatedSpecRef, StandardsReferenceIndex
+from core.src.standards.schema import AggregatedSpecRef, StandardsReferenceIndex
 
 logger = logging.getLogger(__name__)
 

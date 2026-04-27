@@ -25,10 +25,10 @@ import logging
 import sys
 from pathlib import Path
 
-from src.eval.questions import ALL_QUESTIONS, QUESTIONS_BY_CATEGORY
-from src.eval.runner import EvalRunner, ABComparison
-from src.eval.metrics import EvalReport
-from src.query.pipeline import load_graph
+from core.src.eval.questions import ALL_QUESTIONS, QUESTIONS_BY_CATEGORY
+from core.src.eval.runner import EvalRunner, ABComparison
+from core.src.eval.metrics import EvalReport
+from core.src.query.pipeline import load_graph
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +47,14 @@ def _create_runner(args: argparse.Namespace) -> EvalRunner:
     # Load vector store config
     vs_config_path = Path(args.vectorstore_dir) / "config.json"
     if vs_config_path.exists():
-        from src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig.load_json(vs_config_path)
     else:
-        from src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig(persist_directory=args.vectorstore_dir)
 
     # Create embedder
-    from src.vectorstore.embedding_st import SentenceTransformerEmbedder
+    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
     embedder = SentenceTransformerEmbedder(
         model_name=vs_config.embedding_model,
         device=vs_config.embedding_device,
@@ -63,7 +63,7 @@ def _create_runner(args: argparse.Namespace) -> EvalRunner:
     )
 
     # Create store
-    from src.vectorstore.store_chroma import ChromaDBStore
+    from core.src.vectorstore.store_chroma import ChromaDBStore
     store = ChromaDBStore(
         persist_directory=vs_config.persist_directory,
         collection_name=vs_config.collection_name,
@@ -78,8 +78,8 @@ def _create_runner(args: argparse.Namespace) -> EvalRunner:
     # Create synthesizer based on --llm flag
     synthesizer = None
     if args.llm == "ollama":
-        from src.llm.ollama_provider import OllamaProvider
-        from src.query.synthesizer import LLMSynthesizer
+        from core.src.llm.ollama_provider import OllamaProvider
+        from core.src.query.synthesizer import LLMSynthesizer
 
         try:
             llm = OllamaProvider(

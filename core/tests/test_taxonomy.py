@@ -13,16 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from src.llm.base import LLMProvider
-from src.llm.mock_provider import MockLLMProvider
-from src.parser.structural_parser import (
+from core.src.llm.base import LLMProvider
+from core.src.llm.mock_provider import MockLLMProvider
+from core.src.parser.structural_parser import (
     CrossReferences,
     Requirement,
     RequirementTree,
 )
-from src.taxonomy.consolidator import TaxonomyConsolidator
-from src.taxonomy.extractor import FeatureExtractor
-from src.taxonomy.schema import (
+from core.src.taxonomy.consolidator import TaxonomyConsolidator
+from core.src.taxonomy.extractor import FeatureExtractor
+from core.src.taxonomy.schema import (
     DocumentFeatures,
     Feature,
     FeatureTaxonomy,

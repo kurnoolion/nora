@@ -48,7 +48,7 @@ async def _sampler_loop(
 
 
 async def _sample_once(metrics_store, data_dir: str) -> None:
-    from src.web.metrics import MetricRecord
+    from core.src.web.metrics import MetricRecord
 
     records: list[MetricRecord] = []
     ts = ""  # will be set by record_batch from _now_iso
@@ -99,7 +99,7 @@ async def _sample_once(metrics_store, data_dir: str) -> None:
         ))
 
     # Set timestamps
-    from src.web.metrics import _now_iso
+    from core.src.web.metrics import _now_iso
     ts = _now_iso()
     for r in records:
         r.timestamp = ts

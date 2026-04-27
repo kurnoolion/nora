@@ -19,8 +19,8 @@ import logging
 import time
 from pathlib import Path
 
-from src.parser.structural_parser import RequirementTree
-from src.resolver.resolver import CrossReferenceResolver
+from core.src.parser.structural_parser import RequirementTree
+from core.src.resolver.resolver import CrossReferenceResolver
 
 
 def main():

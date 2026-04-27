@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 
-from src.vectorstore.config import VectorStoreConfig
-from src.vectorstore.chunk_builder import ChunkBuilder, Chunk
-from src.vectorstore.embedding_base import EmbeddingProvider
-from src.vectorstore.store_base import VectorStoreProvider, QueryResult
-from src.vectorstore.builder import VectorStoreBuilder, BuildStats
+from core.src.vectorstore.config import VectorStoreConfig
+from core.src.vectorstore.chunk_builder import ChunkBuilder, Chunk
+from core.src.vectorstore.embedding_base import EmbeddingProvider
+from core.src.vectorstore.store_base import VectorStoreProvider, QueryResult
+from core.src.vectorstore.builder import VectorStoreBuilder, BuildStats
 
 
 # ── Mock providers ──────────────────────────────────────────────

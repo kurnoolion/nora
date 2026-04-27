@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
-from src.taxonomy.schema import (
+from core.src.taxonomy.schema import (
     DocumentFeatures,
     Feature,
     FeatureTaxonomy,

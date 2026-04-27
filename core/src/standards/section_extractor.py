@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from src.standards.schema import ExtractedSpecContent, SpecDocument, SpecSection
+from core.src.standards.schema import ExtractedSpecContent, SpecDocument, SpecSection
 
 logger = logging.getLogger(__name__)
 

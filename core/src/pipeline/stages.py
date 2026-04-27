@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.pipeline.runner import PipelineContext
+    from core.src.pipeline.runner import PipelineContext
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        from src.extraction.registry import extract_document, infer_metadata_from_path, supported_extensions
+        from core.src.extraction.registry import extract_document, infer_metadata_from_path, supported_extensions
     except ImportError as e:
         return _fail(stage, "EXT-E001", f"Import error: {e}", time.time() - t0)
 
@@ -124,8 +124,8 @@ def run_profile(ctx: PipelineContext) -> StageResult:
         )
 
     try:
-        from src.models.document import DocumentIR
-        from src.profiler.profiler import DocumentProfiler
+        from core.src.models.document import DocumentIR
+        from core.src.profiler.profiler import DocumentProfiler
     except ImportError as e:
         return _fail(stage, "PRF-E001", f"Import error: {e}", time.time() - t0)
 
@@ -170,9 +170,9 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        from src.models.document import DocumentIR
-        from src.profiler.profile_schema import DocumentProfile
-        from src.parser.structural_parser import GenericStructuralParser
+        from core.src.models.document import DocumentIR
+        from core.src.profiler.profile_schema import DocumentProfile
+        from core.src.parser.structural_parser import GenericStructuralParser
     except ImportError as e:
         return _fail(stage, "PRS-E001", f"Import error: {e}", time.time() - t0)
 
@@ -224,8 +224,8 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        from src.parser.structural_parser import RequirementTree
-        from src.resolver.resolver import CrossReferenceResolver
+        from core.src.parser.structural_parser import RequirementTree
+        from core.src.resolver.resolver import CrossReferenceResolver
     except ImportError as e:
         return _fail(stage, "RES-E001", f"Import error: {e}", time.time() - t0)
 
@@ -279,9 +279,9 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
         )
 
     try:
-        from src.parser.structural_parser import RequirementTree
-        from src.taxonomy.extractor import FeatureExtractor
-        from src.taxonomy.consolidator import TaxonomyConsolidator
+        from core.src.parser.structural_parser import RequirementTree
+        from core.src.taxonomy.extractor import FeatureExtractor
+        from core.src.taxonomy.consolidator import TaxonomyConsolidator
     except ImportError as e:
         return _fail(stage, "TAX-E001", f"Import error: {e}", time.time() - t0)
 
@@ -325,10 +325,10 @@ def run_standards(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        from src.standards.reference_collector import StandardsReferenceCollector
-        from src.standards.spec_downloader import SpecDownloader
-        from src.standards.spec_parser import SpecParser
-        from src.standards.section_extractor import SectionExtractor
+        from core.src.standards.reference_collector import StandardsReferenceCollector
+        from core.src.standards.spec_downloader import SpecDownloader
+        from core.src.standards.spec_parser import SpecParser
+        from core.src.standards.section_extractor import SectionExtractor
     except ImportError as e:
         return _fail(stage, "STD-E001", f"Import error: {e}", time.time() - t0)
 
@@ -392,7 +392,7 @@ def run_graph(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        from src.graph.builder import KnowledgeGraphBuilder
+        from core.src.graph.builder import KnowledgeGraphBuilder
     except ImportError as e:
         return _fail(stage, "GRF-E001", f"Import error: {e}", time.time() - t0)
 
@@ -447,10 +447,10 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        from src.vectorstore.config import VectorStoreConfig
-        from src.vectorstore.builder import VectorStoreBuilder
-        from src.vectorstore.embedding_st import SentenceTransformerEmbedder
-        from src.vectorstore.store_chroma import ChromaDBStore
+        from core.src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.builder import VectorStoreBuilder
+        from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
+        from core.src.vectorstore.store_chroma import ChromaDBStore
     except ImportError as e:
         return _fail(stage, "VEC-E001", f"Import error: {e}", time.time() - t0)
 
@@ -502,12 +502,12 @@ def run_eval(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        from src.eval.questions import ALL_QUESTIONS
-        from src.eval.runner import EvalRunner
-        from src.query.pipeline import load_graph
-        from src.vectorstore.config import VectorStoreConfig
-        from src.vectorstore.embedding_st import SentenceTransformerEmbedder
-        from src.vectorstore.store_chroma import ChromaDBStore
+        from core.src.eval.questions import ALL_QUESTIONS
+        from core.src.eval.runner import EvalRunner
+        from core.src.query.pipeline import load_graph
+        from core.src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
+        from core.src.vectorstore.store_chroma import ChromaDBStore
     except ImportError as e:
         return _fail(stage, "EVL-E001", f"Import error: {e}", time.time() - t0)
 
@@ -541,7 +541,7 @@ def run_eval(ctx: PipelineContext) -> StageResult:
     synthesizer = None
     llm = ctx.create_llm_provider(require_real=False)
     if llm and not hasattr(llm, "_is_mock"):
-        from src.query.synthesizer import LLMSynthesizer
+        from core.src.query.synthesizer import LLMSynthesizer
         synthesizer = LLMSynthesizer(llm)
 
     runner = EvalRunner(graph=graph, embedder=embedder, store=store, synthesizer=synthesizer)
@@ -604,7 +604,7 @@ def _load_user_eval_questions(eval_dir: Path | None) -> list:
                 if not data.get("question"):
                     continue
 
-                from src.eval.questions import EvalQuestion, GroundTruth
+                from core.src.eval.questions import EvalQuestion, GroundTruth
                 q = EvalQuestion(
                     question_id=str(data.get("question_id", f"USER_{len(questions)+1:03d}")),
                     category=str(data.get("category", "general")),

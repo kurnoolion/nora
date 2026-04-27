@@ -15,8 +15,8 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from src.models.document import BlockType, ContentBlock, DocumentIR, FontInfo
-from src.profiler.profile_schema import (
+from core.src.models.document import BlockType, ContentBlock, DocumentIR, FontInfo
+from core.src.profiler.profile_schema import (
     BodyText,
     CrossReferencePatterns,
     DocumentProfile,

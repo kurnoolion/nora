@@ -4,7 +4,7 @@ Detects CPU, GPU, and RAM via Linux commands, then ranks Ollama models
 from best to worst based on what fits in available memory.
 
 Usage:
-    from src.llm.model_picker import detect_hardware, pick_model
+    from core.src.llm.model_picker import detect_hardware, pick_model
 
     hw = detect_hardware()
     choice = pick_model(hw)

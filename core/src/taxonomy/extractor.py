@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import logging
 
-from src.llm.base import LLMProvider
-from src.parser.structural_parser import RequirementTree
-from src.taxonomy.schema import DocumentFeatures, Feature
+from core.src.llm.base import LLMProvider
+from core.src.parser.structural_parser import RequirementTree
+from core.src.taxonomy.schema import DocumentFeatures, Feature
 
 logger = logging.getLogger(__name__)
 

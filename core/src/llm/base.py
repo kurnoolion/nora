@@ -30,7 +30,7 @@ outside src/llm/ should import any LLM SDK directly.
 4. To use it, pass your provider instance to any component that
    takes an LLMProvider parameter:
 
-    from src.llm.internal_provider import InternalLLMProvider
+    from core.src.llm.internal_provider import InternalLLMProvider
     provider = InternalLLMProvider(base_url="...", api_key="...")
     extractor = FeatureExtractor(provider)
 

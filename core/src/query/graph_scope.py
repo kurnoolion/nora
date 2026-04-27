@@ -18,8 +18,8 @@ from typing import Any
 
 import networkx as nx
 
-from src.graph.schema import NodeType, EdgeType
-from src.query.schema import (
+from core.src.graph.schema import NodeType, EdgeType
+from core.src.query.schema import (
     ScopedQuery,
     QueryType,
     CandidateSet,

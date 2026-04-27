@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from src.web.jobs import JobQueue
+from core.src.web.jobs import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ async def dashboard_stats(request: Request):
 
 @router.get("/api/dashboard/status", response_class=HTMLResponse)
 async def dashboard_status_partial(request: Request):
-    from src.web.app import _template_response, config
-    import src.web.app as _app_mod
+    from core.src.web.app import _template_response, config
+    import core.src.web.app as _app_mod
 
     uptime = time.time() - _app_mod._start_time if _app_mod._start_time else 0.0
     ollama_ok = False
@@ -95,7 +95,7 @@ async def dashboard_status_partial(request: Request):
 
 @router.get("/api/dashboard/jobs", response_class=HTMLResponse)
 async def dashboard_jobs_partial(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     job_queue: JobQueue = request.app.state.job_queue
     recent = await job_queue.list_jobs(limit=5)

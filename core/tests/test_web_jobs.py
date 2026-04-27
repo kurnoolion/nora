@@ -8,7 +8,7 @@ import pytest
 
 aiosqlite = pytest.importorskip("aiosqlite")
 
-from src.web.jobs import Job, JobQueue
+from core.src.web.jobs import Job, JobQueue
 
 
 def _run(coro):

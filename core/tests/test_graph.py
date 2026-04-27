@@ -13,7 +13,7 @@ from pathlib import Path
 import networkx as nx
 import pytest
 
-from src.graph.schema import (
+from core.src.graph.schema import (
     NodeType,
     EdgeType,
     mno_id,
@@ -24,7 +24,7 @@ from src.graph.schema import (
     std_spec_id,
     feature_id,
 )
-from src.graph.builder import KnowledgeGraphBuilder, GraphStats
+from core.src.graph.builder import KnowledgeGraphBuilder, GraphStats
 
 
 # ── Schema Tests ─────────────────────────────────────────────────

@@ -18,8 +18,8 @@ from docx.oxml.ns import qn
 from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
 
-from src.extraction.base import BaseExtractor
-from src.models.document import (
+from core.src.extraction.base import BaseExtractor
+from core.src.models.document import (
     BlockType,
     ContentBlock,
     DocumentIR,

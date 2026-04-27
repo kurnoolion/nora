@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from src.extraction.registry import extract_document, supported_extensions
-from src.models.document import BlockType, DocumentIR
-from src.profiler.profiler import DocumentProfiler
-from src.profiler.profile_schema import DocumentProfile
-from src.parser.structural_parser import GenericStructuralParser
+from core.src.extraction.registry import extract_document, supported_extensions
+from core.src.models.document import BlockType, DocumentIR
+from core.src.profiler.profiler import DocumentProfiler
+from core.src.profiler.profile_schema import DocumentProfile
+from core.src.parser.structural_parser import GenericStructuralParser
 
 
 # Skip all tests if PDFs aren't available (e.g., CI without test data)
@@ -193,6 +193,6 @@ class TestRegistry:
         for ext in exts:
             # Each should have a working extractor — this just verifies
             # the registry isn't advertising formats it can't handle
-            from src.extraction.registry import get_extractor
+            from core.src.extraction.registry import get_extractor
             extractor = get_extractor(Path(f"test{ext}"))
             assert extractor is not None

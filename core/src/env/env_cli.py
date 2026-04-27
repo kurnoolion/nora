@@ -32,7 +32,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.env.config import (
+from core.src.env.config import (
     DOC_ROOT_DIRS,
     EnvironmentConfig,
     PIPELINE_STAGES,

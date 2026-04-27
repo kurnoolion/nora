@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.models.document import (
+from core.src.models.document import (
     BlockType,
     ContentBlock,
     DocumentIR,

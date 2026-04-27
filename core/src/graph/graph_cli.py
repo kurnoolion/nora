@@ -34,8 +34,8 @@ from pathlib import Path
 
 import networkx as nx
 
-from src.graph.builder import KnowledgeGraphBuilder
-from src.graph.schema import NodeType, EdgeType
+from core.src.graph.builder import KnowledgeGraphBuilder
+from core.src.graph.schema import NodeType, EdgeType
 
 
 def main():

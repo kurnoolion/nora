@@ -13,8 +13,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
-from src.models.document import BlockType, ContentBlock, DocumentIR
-from src.profiler.profile_schema import DocumentProfile, HeadingLevel
+from core.src.models.document import BlockType, ContentBlock, DocumentIR
+from core.src.profiler.profile_schema import DocumentProfile, HeadingLevel
 
 logger = logging.getLogger(__name__)
 

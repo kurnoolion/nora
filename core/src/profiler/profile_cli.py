@@ -26,9 +26,9 @@ import logging
 import sys
 from pathlib import Path
 
-from src.models.document import DocumentIR
-from src.profiler.profile_schema import DocumentProfile
-from src.profiler.profiler import DocumentProfiler
+from core.src.models.document import DocumentIR
+from core.src.profiler.profile_schema import DocumentProfile
+from core.src.profiler.profiler import DocumentProfiler
 
 
 def cmd_create(args: argparse.Namespace) -> None:

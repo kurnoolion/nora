@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
-from src.web.config import PathMapping
+from core.src.web.config import PathMapping
 
 
 def _normalize_win(path: str) -> str:

@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from src.vectorstore.store_base import QueryResult
+from core.src.vectorstore.store_base import QueryResult
 
 logger = logging.getLogger(__name__)
 

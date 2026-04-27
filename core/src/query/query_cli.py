@@ -25,8 +25,8 @@ import logging
 import sys
 from pathlib import Path
 
-from src.query.pipeline import QueryPipeline, load_graph
-from src.query.schema import QueryResponse
+from core.src.query.pipeline import QueryPipeline, load_graph
+from core.src.query.schema import QueryResponse
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +45,14 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
     # Load vector store config
     vs_config_path = Path(args.vectorstore_dir) / "config.json"
     if vs_config_path.exists():
-        from src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig.load_json(vs_config_path)
     else:
-        from src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig(persist_directory=args.vectorstore_dir)
 
     # Create embedder
-    from src.vectorstore.embedding_st import SentenceTransformerEmbedder
+    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
     embedder = SentenceTransformerEmbedder(
         model_name=vs_config.embedding_model,
         device=vs_config.embedding_device,
@@ -61,7 +61,7 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
     )
 
     # Create store
-    from src.vectorstore.store_chroma import ChromaDBStore
+    from core.src.vectorstore.store_chroma import ChromaDBStore
     store = ChromaDBStore(
         persist_directory=vs_config.persist_directory,
         collection_name=vs_config.collection_name,
@@ -78,8 +78,8 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
     synthesizer = None
 
     if args.llm == "ollama":
-        from src.llm.ollama_provider import OllamaProvider
-        from src.query.synthesizer import LLMSynthesizer
+        from core.src.llm.ollama_provider import OllamaProvider
+        from core.src.query.synthesizer import LLMSynthesizer
 
         try:
             llm = OllamaProvider(

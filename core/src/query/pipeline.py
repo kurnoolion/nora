@@ -19,16 +19,16 @@ from pathlib import Path
 
 import networkx as nx
 
-from src.query.analyzer import MockQueryAnalyzer
-from src.query.resolver import MNOReleaseResolver
-from src.query.graph_scope import GraphScoper
-from src.query.rag_retriever import RAGRetriever
-from src.query.context_builder import ContextBuilder
-from src.query.synthesizer import MockSynthesizer
-from src.query.schema import QueryResponse, CandidateSet
+from core.src.query.analyzer import MockQueryAnalyzer
+from core.src.query.resolver import MNOReleaseResolver
+from core.src.query.graph_scope import GraphScoper
+from core.src.query.rag_retriever import RAGRetriever
+from core.src.query.context_builder import ContextBuilder
+from core.src.query.synthesizer import MockSynthesizer
+from core.src.query.schema import QueryResponse, CandidateSet
 
-from src.vectorstore.embedding_base import EmbeddingProvider
-from src.vectorstore.store_base import VectorStoreProvider
+from core.src.vectorstore.embedding_base import EmbeddingProvider
+from core.src.vectorstore.store_base import VectorStoreProvider
 
 logger = logging.getLogger(__name__)
 

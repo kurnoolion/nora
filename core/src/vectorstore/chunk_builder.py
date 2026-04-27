@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.vectorstore.config import VectorStoreConfig
+from core.src.vectorstore.config import VectorStoreConfig
 
 logger = logging.getLogger(__name__)
 

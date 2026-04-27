@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from src.web.config import PathMapping
-from src.web.path_mapper import PathMapper
+from core.src.web.config import PathMapping
+from core.src.web.path_mapper import PathMapper
 
 MAPPINGS = [
     PathMapping(

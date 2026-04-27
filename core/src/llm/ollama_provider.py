@@ -4,7 +4,7 @@ Connects to a local Ollama server via its HTTP API.
 Satisfies the LLMProvider Protocol — no inheritance needed.
 
 Usage:
-    from src.llm.ollama_provider import OllamaProvider
+    from core.src.llm.ollama_provider import OllamaProvider
 
     provider = OllamaProvider(model="gemma4:e4b")
     answer = provider.complete("What is T3402?", system="You are a telecom expert.")

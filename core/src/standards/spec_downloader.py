@@ -24,7 +24,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 
-from src.standards.spec_resolver import ResolvedSpec, SpecResolver
+from core.src.standards.spec_resolver import ResolvedSpec, SpecResolver
 
 logger = logging.getLogger(__name__)
 

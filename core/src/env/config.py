@@ -4,7 +4,7 @@ An environment defines a workspace for a team member to run specific
 pipeline stages against specific documents, with defined scope and objectives.
 
 Usage:
-    from src.env.config import EnvironmentConfig, PIPELINE_STAGES
+    from core.src.env.config import EnvironmentConfig, PIPELINE_STAGES
 
     env = EnvironmentConfig(
         name="profiler-review",

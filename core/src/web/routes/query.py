@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from src.web.jobs import JobQueue
+from core.src.web.jobs import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ router = APIRouter()
 
 @router.get("/query", response_class=HTMLResponse)
 async def query_page(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     graph_exists = GRAPH_PATH.exists()
     vs_config_path = VECTORSTORE_DIR / "config.json"
@@ -67,7 +67,7 @@ async def submit_query(request: Request):
 
 @router.get("/api/query/{job_id}/result", response_class=HTMLResponse)
 async def query_result(request: Request, job_id: str):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     job_queue: JobQueue = request.app.state.job_queue
     job = await job_queue.get_meta(job_id)
@@ -115,18 +115,18 @@ def _run_query_sync(query_text: str) -> dict:
 
     vs_config_path = VECTORSTORE_DIR / "config.json"
 
-    from src.query.pipeline import QueryPipeline, load_graph
+    from core.src.query.pipeline import QueryPipeline, load_graph
 
     graph = load_graph(GRAPH_PATH)
 
     if vs_config_path.exists():
-        from src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig.load_json(vs_config_path)
     else:
-        from src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig(persist_directory=str(VECTORSTORE_DIR))
 
-    from src.vectorstore.embedding_st import SentenceTransformerEmbedder
+    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
     embedder = SentenceTransformerEmbedder(
         model_name=vs_config.embedding_model,
         device=vs_config.embedding_device,
@@ -134,7 +134,7 @@ def _run_query_sync(query_text: str) -> dict:
         normalize=vs_config.normalize_embeddings,
     )
 
-    from src.vectorstore.store_chroma import ChromaDBStore
+    from core.src.vectorstore.store_chroma import ChromaDBStore
     store = ChromaDBStore(
         persist_directory=vs_config.persist_directory,
         collection_name=vs_config.collection_name,
@@ -152,8 +152,8 @@ def _run_query_sync(query_text: str) -> dict:
     llm = None
     synthesizer = None
     try:
-        from src.llm.ollama_provider import OllamaProvider
-        from src.query.synthesizer import LLMSynthesizer
+        from core.src.llm.ollama_provider import OllamaProvider
+        from core.src.query.synthesizer import LLMSynthesizer
         llm = OllamaProvider(model="gemma4:e4b", timeout=300)
         synthesizer = LLMSynthesizer(llm, max_tokens=30000 // 4)
     except Exception:
@@ -265,7 +265,7 @@ async def _record_llm_metrics(app, llm_data: dict) -> None:
         if metrics_store is None:
             return
 
-        from src.web.metrics import MetricRecord, _now_iso
+        from core.src.web.metrics import MetricRecord, _now_iso
         ts = _now_iso()
         model = llm_data.get("model", "unknown")
         elapsed = llm_data.get("elapsed_s", 0)

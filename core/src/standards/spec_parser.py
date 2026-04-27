@@ -20,7 +20,7 @@ from pathlib import Path
 
 import docx
 
-from src.standards.schema import SpecDocument, SpecSection
+from core.src.standards.schema import SpecDocument, SpecSection
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class SpecParser:
 
         Filename: "24301-be0.docx" → spec=24.301, version=11.14.0
         """
-        from src.standards.spec_resolver import code_to_version
+        from core.src.standards.spec_resolver import code_to_version
 
         name = Path(spec_doc.source_file).stem
         # Match "24301-be0" pattern

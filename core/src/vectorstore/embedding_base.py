@@ -36,7 +36,7 @@ no module outside src/vectorstore/ should import any embedding SDK directly.
 4. To use it, pass your provider instance to any component that
    takes an EmbeddingProvider parameter:
 
-    from src.vectorstore.embedding_openai import OpenAIEmbedder
+    from core.src.vectorstore.embedding_openai import OpenAIEmbedder
     embedder = OpenAIEmbedder(api_key="...")
     builder = VectorStoreBuilder(embedder=embedder, store=store, config=config)
 """

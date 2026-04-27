@@ -6,7 +6,7 @@ Each code has format: {MODULE}-{SEVERITY}{NUMBER}
   NUMBER: 3-digit
 
 Usage:
-    from src.pipeline.error_codes import PipelineError, CODES
+    from core.src.pipeline.error_codes import PipelineError, CODES
 
     raise PipelineError("EXT-E001", context={"file": "foo.pdf"})
     # or just log it:

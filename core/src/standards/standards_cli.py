@@ -42,11 +42,11 @@ import logging
 import time
 from pathlib import Path
 
-from src.standards.reference_collector import StandardsReferenceCollector
-from src.standards.schema import AggregatedSpecRef
-from src.standards.section_extractor import SectionExtractor
-from src.standards.spec_downloader import SpecDownloader
-from src.standards.spec_parser import SpecParser
+from core.src.standards.reference_collector import StandardsReferenceCollector
+from core.src.standards.schema import AggregatedSpecRef
+from core.src.standards.section_extractor import SectionExtractor
+from core.src.standards.spec_downloader import SpecDownloader
+from core.src.standards.spec_parser import SpecParser
 
 
 def main():

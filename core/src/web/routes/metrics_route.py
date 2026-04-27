@@ -16,7 +16,7 @@ router = APIRouter()
 
 @router.get("/metrics", response_class=HTMLResponse)
 async def metrics_page(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
     return _template_response(request, "metrics.html")
 
 
@@ -109,7 +109,7 @@ async def metrics_compact(request: Request):
 @router.get("/api/metrics/resource", response_class=HTMLResponse)
 async def metrics_resource_partial(request: Request):
     """HTMX partial: refreshes the resource gauges."""
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     metrics_store = getattr(request.app.state, "metrics", None)
     data = {}

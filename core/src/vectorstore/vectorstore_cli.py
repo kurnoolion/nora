@@ -32,8 +32,8 @@ import logging
 import sys
 from pathlib import Path
 
-from src.vectorstore.config import VectorStoreConfig
-from src.vectorstore.builder import VectorStoreBuilder
+from core.src.vectorstore.config import VectorStoreConfig
+from core.src.vectorstore.builder import VectorStoreBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 def _create_embedder(config: VectorStoreConfig):
     """Create an embedding provider from config."""
     if config.embedding_provider == "sentence-transformers":
-        from src.vectorstore.embedding_st import SentenceTransformerEmbedder
+        from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
 
         return SentenceTransformerEmbedder(
             model_name=config.embedding_model,
@@ -59,7 +59,7 @@ def _create_embedder(config: VectorStoreConfig):
 def _create_store(config: VectorStoreConfig):
     """Create a vector store backend from config."""
     if config.vector_store_backend == "chromadb":
-        from src.vectorstore.store_chroma import ChromaDBStore
+        from core.src.vectorstore.store_chroma import ChromaDBStore
 
         return ChromaDBStore(
             persist_directory=config.persist_directory,

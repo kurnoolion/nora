@@ -22,8 +22,8 @@ import pytest
 
 import networkx as nx
 
-from src.graph.schema import NodeType, EdgeType
-from src.query.schema import (
+from core.src.graph.schema import NodeType, EdgeType
+from core.src.query.schema import (
     QueryIntent,
     QueryType,
     DocTypeScope,
@@ -38,14 +38,14 @@ from src.query.schema import (
     QueryResponse,
     Citation,
 )
-from src.query.analyzer import MockQueryAnalyzer
-from src.query.resolver import MNOReleaseResolver
-from src.query.graph_scope import GraphScoper
-from src.query.rag_retriever import RAGRetriever
-from src.query.context_builder import ContextBuilder
-from src.query.synthesizer import MockSynthesizer, LLMSynthesizer
-from src.query.pipeline import QueryPipeline
-from src.vectorstore.store_base import QueryResult
+from core.src.query.analyzer import MockQueryAnalyzer
+from core.src.query.resolver import MNOReleaseResolver
+from core.src.query.graph_scope import GraphScoper
+from core.src.query.rag_retriever import RAGRetriever
+from core.src.query.context_builder import ContextBuilder
+from core.src.query.synthesizer import MockSynthesizer, LLMSynthesizer
+from core.src.query.pipeline import QueryPipeline
+from core.src.vectorstore.store_base import QueryResult
 
 
 # ── Mock providers for tests ────────────────────────────────────
@@ -899,15 +899,15 @@ class TestIntegration:
 
     @pytest.fixture(autouse=True)
     def setup(self):
-        from src.query.pipeline import load_graph
+        from core.src.query.pipeline import load_graph
         self.graph = load_graph(_GRAPH_PATH)
 
         self.embedder = MockEmbedder(dim=16)
 
         # Build a store from real parsed data
-        from src.vectorstore.config import VectorStoreConfig
-        from src.vectorstore.chunk_builder import ChunkBuilder
-        from src.vectorstore.builder import VectorStoreBuilder
+        from core.src.vectorstore.config import VectorStoreConfig
+        from core.src.vectorstore.chunk_builder import ChunkBuilder
+        from core.src.vectorstore.builder import VectorStoreBuilder
 
         config = VectorStoreConfig()
         chunk_builder = ChunkBuilder(config)

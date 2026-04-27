@@ -15,8 +15,8 @@ import fitz  # pymupdf
 import pdfplumber
 from PIL import Image
 
-from src.extraction.base import BaseExtractor
-from src.models.document import (
+from core.src.extraction.base import BaseExtractor
+from core.src.models.document import (
     BlockType,
     ContentBlock,
     DocumentIR,

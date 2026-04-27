@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.profiler.profile_schema import (
+from core.src.profiler.profile_schema import (
     BodyText,
     CrossReferencePatterns,
     DocumentProfile,

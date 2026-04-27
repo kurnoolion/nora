@@ -15,7 +15,7 @@ import json
 import logging
 import re
 
-from src.query.schema import (
+from core.src.query.schema import (
     QueryIntent,
     QueryType,
     DocTypeScope,

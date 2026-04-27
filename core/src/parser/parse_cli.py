@@ -21,9 +21,9 @@ import logging
 import time
 from pathlib import Path
 
-from src.models.document import DocumentIR
-from src.profiler.profile_schema import DocumentProfile
-from src.parser.structural_parser import GenericStructuralParser
+from core.src.models.document import DocumentIR
+from core.src.profiler.profile_schema import DocumentProfile
+from core.src.parser.structural_parser import GenericStructuralParser
 
 
 def main():

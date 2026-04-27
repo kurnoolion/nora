@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from src.parser.structural_parser import (
+from core.src.parser.structural_parser import (
     CrossReferences,
     Requirement,
     RequirementTree,
     StandardsRef,
 )
-from src.resolver.resolver import (
+from core.src.resolver.resolver import (
     CrossReferenceManifest,
     CrossReferenceResolver,
     RefStatus,

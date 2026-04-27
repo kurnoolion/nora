@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from src.extraction.registry import extract_document, infer_metadata_from_path, supported_extensions
+from core.src.extraction.registry import extract_document, infer_metadata_from_path, supported_extensions
 
 
 def extract_file(file_path: Path, output_dir: Path) -> Path | None:

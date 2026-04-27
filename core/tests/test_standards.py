@@ -13,20 +13,20 @@ from pathlib import Path
 
 import pytest
 
-from src.standards.reference_collector import (
+from core.src.standards.reference_collector import (
     StandardsReferenceCollector,
     _clean_spec_number,
     _parse_release_num,
 )
-from src.standards.schema import (
+from core.src.standards.schema import (
     AggregatedSpecRef,
     ExtractedSpecContent,
     SpecDocument,
     SpecSection,
     StandardsReferenceIndex,
 )
-from src.standards.section_extractor import SectionExtractor
-from src.standards.spec_resolver import (
+from core.src.standards.section_extractor import SectionExtractor
+from core.src.standards.spec_resolver import (
     SpecResolver,
     build_candidate_urls,
     build_url,
@@ -192,7 +192,7 @@ SPEC_DOCX = Path("data/standards/TS_24.301/Rel-11/24301-be0.docx")
 class TestSpecParser:
     @pytest.fixture(scope="class")
     def spec(self):
-        from src.standards.spec_parser import SpecParser
+        from core.src.standards.spec_parser import SpecParser
         return SpecParser().parse(SPEC_DOCX)
 
     def test_metadata(self, spec):

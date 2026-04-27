@@ -28,7 +28,7 @@ from typing import Any
 
 import networkx as nx
 
-from src.graph.schema import (
+from core.src.graph.schema import (
     NodeType,
     EdgeType,
     mno_id,

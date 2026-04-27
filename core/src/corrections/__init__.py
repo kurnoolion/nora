@@ -10,9 +10,9 @@ The pipeline (src/pipeline/stages.py) already picks up corrections/*.json and
 copies them over the auto-generated output on the next run.
 """
 
-from src.corrections.schema import FixReport
-from src.corrections.store import CorrectionStore
-from src.corrections.compactor import profile_fix_report, taxonomy_fix_report
+from core.src.corrections.schema import FixReport
+from core.src.corrections.store import CorrectionStore
+from core.src.corrections.compactor import profile_fix_report, taxonomy_fix_report
 
 __all__ = [
     "FixReport",

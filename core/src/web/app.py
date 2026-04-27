@@ -19,19 +19,19 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from src.web.config import load_config
-from src.web.jobs import JobQueue
-from src.web.metrics import MetricsStore
-from src.web.middleware import MetricsMiddleware
-from src.web.path_mapper import PathMapper
-from src.web.routes.corrections import router as corrections_router
-from src.web.routes.dashboard import router as dashboard_router
-from src.web.routes.environments import router as environments_router
-from src.web.routes.files import router as files_router
-from src.web.routes.jobs import router as jobs_router
-from src.web.routes.metrics_route import router as metrics_router
-from src.web.routes.pipeline import router as pipeline_router
-from src.web.routes.query import router as query_router
+from core.src.web.config import load_config
+from core.src.web.jobs import JobQueue
+from core.src.web.metrics import MetricsStore
+from core.src.web.middleware import MetricsMiddleware
+from core.src.web.path_mapper import PathMapper
+from core.src.web.routes.corrections import router as corrections_router
+from core.src.web.routes.dashboard import router as dashboard_router
+from core.src.web.routes.environments import router as environments_router
+from core.src.web.routes.files import router as files_router
+from core.src.web.routes.jobs import router as jobs_router
+from core.src.web.routes.metrics_route import router as metrics_router
+from core.src.web.routes.pipeline import router as pipeline_router
+from core.src.web.routes.query import router as query_router
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
     app.state.path_mapper = path_mapper
 
     # Start resource sampler background task
-    from src.web.resource_sampler import start_resource_sampler
+    from core.src.web.resource_sampler import start_resource_sampler
     sampler_task = await start_resource_sampler(metrics_store, interval=30, data_dir="data")
 
     yield

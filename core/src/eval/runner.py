@@ -17,14 +17,14 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from src.eval.questions import EvalQuestion, ALL_QUESTIONS
-from src.eval.metrics import (
+from core.src.eval.questions import EvalQuestion, ALL_QUESTIONS
+from core.src.eval.metrics import (
     QuestionScore,
     EvalReport,
     score_question,
 )
-from src.query.pipeline import QueryPipeline
-from src.query.schema import (
+from core.src.query.pipeline import QueryPipeline
+from core.src.query.schema import (
     QueryResponse,
     CandidateSet,
     ScopedQuery,

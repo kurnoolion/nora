@@ -10,15 +10,15 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from src.env.config import (
+from core.src.env.config import (
     EnvironmentConfig,
     PIPELINE_STAGES,
     STAGE_NAMES,
     STAGE_NUM,
 )
-from src.pipeline.runner import PipelineContext, PipelineRunner
-from src.web.jobs import JobQueue
-from src.web.path_mapper import PathMapper
+from core.src.pipeline.runner import PipelineContext, PipelineRunner
+from core.src.web.jobs import JobQueue
+from core.src.web.path_mapper import PathMapper
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def _stages_for_template() -> list[dict]:
 
 @router.get("/pipeline", response_class=HTMLResponse)
 async def pipeline_page(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
     return _template_response(request, "pipeline.html", {
         "environments": _list_environments(),
         "stages": _stages_for_template(),
@@ -73,7 +73,7 @@ async def pipeline_page(request: Request):
 
 @router.post("/api/pipeline/submit")
 async def submit_pipeline(request: Request):
-    from src.web.app import _template_response, config
+    from core.src.web.app import _template_response, config
 
     job_queue: JobQueue = request.app.state.job_queue
     path_mapper: PathMapper = request.app.state.path_mapper
@@ -268,7 +268,7 @@ async def _record_stage_metrics(app, stage_result) -> None:
         if metrics_store is None:
             return
 
-        from src.web.metrics import MetricRecord, _now_iso
+        from core.src.web.metrics import MetricRecord, _now_iso
         ts = _now_iso()
         records = []
 

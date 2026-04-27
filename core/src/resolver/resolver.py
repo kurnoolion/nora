@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from src.parser.structural_parser import RequirementTree, Requirement, StandardsRef
+from core.src.parser.structural_parser import RequirementTree, Requirement, StandardsRef
 
 logger = logging.getLogger(__name__)
 

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.eval.questions import GroundTruth, EvalQuestion
-from src.query.schema import QueryResponse
+from core.src.eval.questions import GroundTruth, EvalQuestion
+from core.src.query.schema import QueryResponse
 
 
 @dataclass

@@ -9,7 +9,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
-from src.web.jobs import JobQueue
+from core.src.web.jobs import JobQueue
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 @router.get("/jobs", response_class=HTMLResponse)
 async def jobs_list(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     status_filter = request.query_params.get("status")
     if status_filter and status_filter not in (
@@ -37,7 +37,7 @@ async def jobs_list(request: Request):
 
 @router.get("/jobs/table", response_class=HTMLResponse)
 async def jobs_table_partial(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     status_filter = request.query_params.get("status")
     if status_filter and status_filter not in (
@@ -53,7 +53,7 @@ async def jobs_table_partial(request: Request):
 
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 async def job_detail(request: Request, job_id: str):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     job_queue: JobQueue = request.app.state.job_queue
     job = await job_queue.get(job_id)
@@ -114,7 +114,7 @@ async def job_log_stream(request: Request, job_id: str):
 
 @router.post("/api/jobs/{job_id}/cancel")
 async def cancel_job(request: Request, job_id: str):
-    from src.web.app import config
+    from core.src.web.app import config
 
     job_queue: JobQueue = request.app.state.job_queue
     await job_queue.cancel(job_id)

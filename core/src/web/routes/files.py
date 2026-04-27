@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from src.web.path_mapper import PathMapper
+from core.src.web.path_mapper import PathMapper
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def _find_root_label(path_mapper: PathMapper, linux_path: str) -> tuple[str, str
 
 @router.get("/files", response_class=HTMLResponse)
 async def files_page(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     path_mapper: PathMapper = request.app.state.path_mapper
     roots = path_mapper.list_roots()
@@ -69,7 +69,7 @@ async def files_page(request: Request):
 
 @router.get("/files/browse", response_class=HTMLResponse)
 async def browse(request: Request, path: str = ""):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     path_mapper: PathMapper = request.app.state.path_mapper
 
@@ -145,7 +145,7 @@ async def browse(request: Request, path: str = ""):
 
 @router.get("/api/files/listing", response_class=HTMLResponse)
 async def file_listing_partial(request: Request, path: str = ""):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     path_mapper: PathMapper = request.app.state.path_mapper
 

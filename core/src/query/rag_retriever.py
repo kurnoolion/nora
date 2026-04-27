@@ -15,13 +15,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.query.schema import (
+from core.src.query.schema import (
     CandidateSet,
     RetrievedChunk,
     MNOScope,
 )
-from src.vectorstore.embedding_base import EmbeddingProvider
-from src.vectorstore.store_base import VectorStoreProvider, QueryResult
+from core.src.vectorstore.embedding_base import EmbeddingProvider
+from core.src.vectorstore.store_base import VectorStoreProvider, QueryResult
 
 logger = logging.getLogger(__name__)
 

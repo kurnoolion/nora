@@ -15,19 +15,19 @@ from pathlib import Path
 
 import networkx as nx
 
-from src.eval.questions import (
+from core.src.eval.questions import (
     ALL_QUESTIONS,
     QUESTIONS_BY_CATEGORY,
     EvalQuestion,
     GroundTruth,
 )
-from src.eval.metrics import (
+from core.src.eval.metrics import (
     QuestionScore,
     EvalReport,
     score_question,
 )
-from src.eval.runner import EvalRunner, ABComparison
-from src.query.schema import (
+from core.src.eval.runner import EvalRunner, ABComparison
+from core.src.query.schema import (
     QueryResponse,
     QueryIntent,
     QueryType,
@@ -573,7 +573,7 @@ class MockEvalStore:
             metas.append(cdata["metadata"])
             dists.append(0.3)
 
-        from src.vectorstore.store_base import QueryResult
+        from core.src.vectorstore.store_base import QueryResult
         return QueryResult(
             ids=ids,
             documents=docs,
@@ -612,7 +612,7 @@ class TestEvalRunner:
 
     def test_run_single_question(self, runner):
         """Should run a single question and return a score."""
-        from src.query.pipeline import QueryPipeline
+        from core.src.query.pipeline import QueryPipeline
         pipeline = runner._make_pipeline()
         score = runner.run_question(ALL_QUESTIONS[0], pipeline)
         assert isinstance(score, QuestionScore)

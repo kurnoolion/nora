@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from src.env.config import (
+from core.src.env.config import (
     EnvironmentConfig,
     PIPELINE_STAGES,
     STAGE_NAMES,
@@ -56,7 +56,7 @@ def _stages_for_template() -> list[dict]:
 
 @router.get("/environments", response_class=HTMLResponse)
 async def environments_list(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     return _template_response(request, "environments.html", {
         "environments": _list_environments(),
@@ -65,7 +65,7 @@ async def environments_list(request: Request):
 
 @router.get("/environments/new", response_class=HTMLResponse)
 async def environments_new(request: Request):
-    from src.web.app import _template_response
+    from core.src.web.app import _template_response
 
     return _template_response(request, "environment_new.html", {
         "stages": _stages_for_template(),
@@ -74,7 +74,7 @@ async def environments_new(request: Request):
 
 @router.post("/api/environments/create")
 async def create_environment(request: Request):
-    from src.web.app import _template_response, config
+    from core.src.web.app import _template_response, config
 
     form = await request.form()
 

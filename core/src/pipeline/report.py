@@ -5,7 +5,7 @@ Produces two report formats:
   2. Compact report — short enough to paste in chat for collaborative debugging
 
 Usage:
-    from src.pipeline.report import format_compact_report, format_verbose_report
+    from core.src.pipeline.report import format_compact_report, format_verbose_report
 
     text = format_compact_report(results, hw_info, model_choice, env_name)
     print(text)  # ~10 lines, paste-friendly
@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from textwrap import dedent
 
-from src.pipeline.stages import StageResult
+from core.src.pipeline.stages import StageResult
 
 # Short stage name for compact report (max 3 chars)
 _SHORT = {

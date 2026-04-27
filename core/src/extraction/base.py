@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from src.models.document import DocumentIR
+from core.src.models.document import DocumentIR
 
 
 class BaseExtractor(ABC):

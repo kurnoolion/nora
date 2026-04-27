@@ -18,10 +18,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
-from src.vectorstore.chunk_builder import ChunkBuilder, Chunk
-from src.vectorstore.config import VectorStoreConfig
-from src.vectorstore.embedding_base import EmbeddingProvider
-from src.vectorstore.store_base import VectorStoreProvider
+from core.src.vectorstore.chunk_builder import ChunkBuilder, Chunk
+from core.src.vectorstore.config import VectorStoreConfig
+from core.src.vectorstore.embedding_base import EmbeddingProvider
+from core.src.vectorstore.store_base import VectorStoreProvider
 
 logger = logging.getLogger(__name__)
 

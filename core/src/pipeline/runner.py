@@ -4,7 +4,7 @@ Runs pipeline stages in sequence, manages context between stages,
 and collects results for reporting.
 
 Usage:
-    from src.pipeline.runner import PipelineContext, PipelineRunner
+    from core.src.pipeline.runner import PipelineContext, PipelineRunner
 
     ctx = PipelineContext.from_env(env_config)
     runner = PipelineRunner(ctx)
@@ -18,8 +18,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.env.config import STAGE_NAMES
-from src.pipeline.stages import STAGE_FUNCS, StageResult
+from core.src.env.config import STAGE_NAMES
+from core.src.pipeline.stages import STAGE_FUNCS, StageResult
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +69,14 @@ class PipelineContext:
         # Explicit mock request
         if resolved_model == "mock" or self.model_provider == "mock":
             logger.info("Using MockLLMProvider (explicit)")
-            from src.llm.mock_provider import MockLLMProvider
+            from core.src.llm.mock_provider import MockLLMProvider
             mock = MockLLMProvider()
             mock._is_mock = True
             return mock
 
         if self.model_provider == "ollama":
             try:
-                from src.llm.ollama_provider import OllamaProvider
+                from core.src.llm.ollama_provider import OllamaProvider
                 provider = OllamaProvider(
                     model=resolved_model,
                     timeout=self.model_timeout,
@@ -88,7 +88,7 @@ class PipelineContext:
                     raise
                 logger.warning(f"Ollama unavailable ({e}), falling back to mock")
 
-        from src.llm.mock_provider import MockLLMProvider
+        from core.src.llm.mock_provider import MockLLMProvider
         mock = MockLLMProvider()
         mock._is_mock = True
         return mock
@@ -98,7 +98,7 @@ class PipelineContext:
         if self.model_name != "auto":
             return self.model_name
         try:
-            from src.llm.model_picker import detect_hardware, pick_model
+            from core.src.llm.model_picker import detect_hardware, pick_model
             hw = detect_hardware()
             choice = pick_model(hw)
             logger.info(f"Auto-selected model: {choice.model} — {choice.reason}")
