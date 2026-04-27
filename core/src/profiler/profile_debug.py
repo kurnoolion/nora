@@ -1,6 +1,6 @@
-"""Profile debug — inspect extracted IRs / emitted profile, or emit an LLM prompt.
+"""Profile debug — inspect / bootstrap / validate document profiles.
 
-Two modes:
+Three modes:
 
   python -m core.src.profiler.profile_debug --env-dir <ENV_DIR>
       Analyzes <ENV_DIR>/out/extract/*_ir.json and out/profile/profile.json,
@@ -14,29 +14,221 @@ Two modes:
       <ENV_DIR>/corrections/profile.json, where the pipeline picks it up via
       the corrections-override workflow (D-011 / FR-15) on the next run.
 
-Use case: when run_profile produces an empty profile (lvl=0 zones=0), the
-analyzer surfaces structural metadata (style names, font sizes, block-type
-counts) to diagnose whether the DOCX uses named Heading styles, whether the
-font sizes cluster cleanly, or whether the corpus needs a hand-curated /
-LLM-bootstrapped profile.
+  python -m core.src.profiler.profile_debug --validate <profile.json> [--fix] [--out <path>]
+      Validates an LLM-emitted profile.json before the pipeline loads it:
+      - JSON parses cleanly
+      - Every regex string compiles (re.compile)
+      - No regex exceeds a sane length bound (LLM repetition failure mode)
+      - No runaway repetition pattern (e.g. "\\*\\*\\*..." 13kb of escapes)
+      - DocumentProfile.load_json accepts the result
+      With --fix, sanitizes problems in place (oversized / runaway /
+      uncompilable regexes are blanked or dropped from list-valued fields)
+      and writes back. With --out, writes the sanitized JSON elsewhere.
 
-The --emit-prompt flow is the path forward when the heuristic profiler can't
-identify document structure on a new MNO / doc-family that wasn't in the
-profiler's training corpus. It treats LLM-derived profiles as user
-corrections, preserving D-003 (parser stays heuristic, profile is
-deterministic) while letting profile *generation* use an LLM.
+Use case: LLM-bootstrap workflow. The LLM occasionally emits oversized
+or runaway-repetition regex strings (a known repetition failure mode);
+validating before the pipeline loads it surfaces these cleanly without
+exploding at runtime.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 from core.src.models.document import DocumentIR
+
+
+# Validation thresholds — tuned for typical LLM-emitted profiles.
+_MAX_REGEX_LEN = 500           # any regex > this is suspect (LLM repetition)
+_REPETITION_THRESHOLD = 12     # 2-4 char chunk repeated >=N times = runaway
+_RUNAWAY_CHUNK_SIZES = (2, 3, 4)
+
+
+def _is_runaway(s: str, threshold: int = _REPETITION_THRESHOLD) -> bool:
+    """Detect runaway repetition (a small chunk repeating >= threshold times).
+
+    Catches LLM repetition failures like '\\*\\*\\*\\*\\*...' — the model gets
+    stuck in a token loop and emits the same 2-4 character pattern thousands
+    of times consecutively.
+    """
+    if len(s) < _RUNAWAY_CHUNK_SIZES[0] * threshold:
+        return False
+    for chunk_size in _RUNAWAY_CHUNK_SIZES:
+        chunk_total = chunk_size * threshold
+        for i in range(len(s) - chunk_total + 1):
+            chunk = s[i:i + chunk_size]
+            if not chunk:
+                continue
+            if s[i:i + chunk_total] == chunk * threshold:
+                return True
+    return False
+
+
+def _check_regex(pattern: str) -> tuple[str, str]:
+    """Return (status, note) for a regex string.
+
+    status in {'OK', 'BAD'}; 'OK' for empty strings (treated as 'no pattern').
+    """
+    if not pattern:
+        return "OK", "empty"
+    if len(pattern) > _MAX_REGEX_LEN:
+        return "BAD", f"oversized {len(pattern)} chars (max {_MAX_REGEX_LEN})"
+    if _is_runaway(pattern):
+        return "BAD", "runaway repetition"
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        return "BAD", f"compile error: {e}"
+    return "OK", f"{len(pattern)} chars"
+
+
+def _walk_regex_fields(data: dict, fix: bool) -> list[tuple[str, str, str, str]]:
+    """Walk every regex-valued field in the profile. Return issue list.
+
+    Each issue: (label, status, note, action).
+    If fix=True, mutate `data` in place: blank bad scalar fields, drop bad
+    list entries.
+    """
+    issues: list[tuple[str, str, str, str]] = []
+
+    def check_str(parent: dict, key: str, label: str) -> None:
+        val = parent.get(key, "")
+        if not isinstance(val, str):
+            issues.append((label, "BAD", f"not a string ({type(val).__name__})",
+                           "blanked" if fix else "would blank"))
+            if fix:
+                parent[key] = ""
+            return
+        status, note = _check_regex(val)
+        action = ""
+        if status == "BAD":
+            if fix:
+                parent[key] = ""
+                action = "blanked"
+            else:
+                action = "would blank"
+        issues.append((label, status, note, action))
+
+    def check_list(parent: dict, key: str, label: str) -> None:
+        items = parent.get(key, [])
+        if not isinstance(items, list):
+            issues.append((label, "BAD", f"not a list ({type(items).__name__})",
+                           "replaced with []" if fix else "would replace with []"))
+            if fix:
+                parent[key] = []
+            return
+        kept: list[str] = []
+        for i, val in enumerate(items):
+            entry_label = f"{label}[{i}]"
+            if not isinstance(val, str):
+                issues.append((entry_label, "BAD", f"not a string ({type(val).__name__})",
+                               "dropped" if fix else "would drop"))
+                continue
+            status, note = _check_regex(val)
+            action = ""
+            if status == "BAD":
+                action = "dropped" if fix else "would drop"
+            else:
+                kept.append(val)
+            issues.append((entry_label, status, note, action))
+        if fix:
+            parent[key] = kept
+
+    hd = data.get("heading_detection") if isinstance(data.get("heading_detection"), dict) else {}
+    check_str(hd, "numbering_pattern", "heading_detection.numbering_pattern")
+
+    rid = data.get("requirement_id") if isinstance(data.get("requirement_id"), dict) else {}
+    check_str(rid, "pattern", "requirement_id.pattern")
+
+    pm = data.get("plan_metadata") if isinstance(data.get("plan_metadata"), dict) else {}
+    for fname in ("plan_name", "plan_id", "version", "release_date"):
+        sub = pm.get(fname)
+        if isinstance(sub, dict):
+            check_str(sub, "pattern", f"plan_metadata.{fname}.pattern")
+
+    zones = data.get("document_zones")
+    if isinstance(zones, list):
+        for i, z in enumerate(zones):
+            if isinstance(z, dict):
+                check_str(z, "section_pattern", f"document_zones[{i}].section_pattern")
+
+    hf = data.get("header_footer") if isinstance(data.get("header_footer"), dict) else {}
+    check_list(hf, "header_patterns", "header_footer.header_patterns")
+    check_list(hf, "footer_patterns", "header_footer.footer_patterns")
+    check_str(hf, "page_number_pattern", "header_footer.page_number_pattern")
+
+    crp = data.get("cross_reference_patterns") if isinstance(data.get("cross_reference_patterns"), dict) else {}
+    check_list(crp, "standards_citations", "cross_reference_patterns.standards_citations")
+    check_str(crp, "internal_section_refs", "cross_reference_patterns.internal_section_refs")
+    check_str(crp, "requirement_id_refs", "cross_reference_patterns.requirement_id_refs")
+
+    return issues
+
+
+def _validate_profile(path: Path, fix: bool, out_path: Path | None) -> int:
+    """Validate (and optionally sanitize) an LLM-emitted profile.json.
+
+    Returns the process exit code: 0 if all OK after any applied fixes, 1 otherwise.
+    """
+    if not path.exists():
+        print(f"VLD ERR file not found: {path}")
+        return 1
+    try:
+        text = path.read_text()
+    except Exception as e:
+        print(f"VLD ERR read failed: {type(e).__name__}: {e}")
+        return 1
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        print(f"VLD ERR parse error at line {e.lineno} col {e.colno}: {e.msg}")
+        return 1
+    if not isinstance(data, dict):
+        print(f"VLD ERR top-level JSON is not an object (got {type(data).__name__})")
+        return 1
+
+    print(f"VLD {path.name} ({path})")
+    print(f"VLD bytes={len(text)} top_level_keys={len(data)}")
+    print()
+
+    issues = _walk_regex_fields(data, fix)
+    bad_count = sum(1 for _, s, _, _ in issues if s == "BAD")
+    ok_count = sum(1 for _, s, _, _ in issues if s == "OK")
+
+    for label, status, note, action in issues:
+        line = f"{status} {label}: {note}"
+        if action:
+            line += f" -> {action}"
+        print(line)
+
+    print()
+    print(f"summary: {ok_count} OK, {bad_count} BAD")
+
+    if fix and bad_count > 0:
+        target = out_path or path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        print(f"fix: applied; sanitized JSON written to {target}")
+    elif bad_count > 0 and not fix:
+        print("fix: rerun with --fix to apply (blank bad regex fields, drop bad list entries)")
+
+    # Schema-level load check on whichever file is final.
+    final = (out_path if (fix and out_path) else path)
+    try:
+        from core.src.profiler.profile_schema import DocumentProfile
+        DocumentProfile.load_json(final)
+        print("schema: DocumentProfile.load_json OK")
+    except Exception as e:
+        print(f"schema: load FAIL — {type(e).__name__}: {e}")
+        return 1
+
+    return 0 if bad_count == 0 else 1
 
 
 def _format_ir_lines(label: str, ir: DocumentIR) -> list[str]:
@@ -210,14 +402,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Inspect extracted IRs and the emitted profile in compact format, "
-            "or emit an LLM prompt template for bootstrapping a DocumentProfile "
-            "via a proprietary chat interface."
+            "emit an LLM prompt template for bootstrapping a DocumentProfile, "
+            "or validate (and optionally sanitize) an LLM-emitted profile.json."
         ),
     )
     parser.add_argument(
         "--env-dir",
         type=Path,
-        help="Path to env_dir (required for analysis mode; not used with --emit-prompt).",
+        help="Path to env_dir (analysis mode; not used with --emit-prompt or --validate).",
     )
     parser.add_argument(
         "--max-docs",
@@ -230,8 +422,33 @@ def main() -> None:
         action="store_true",
         help=(
             "Print the LLM prompt template (no env_dir needed) and exit. "
-            "Paste the output into your proprietary LLM chat with 1-2 representative "
-            "documents; save the LLM's JSON to <env_dir>/corrections/profile.json."
+            "Paste into your proprietary LLM chat with 1-2 representative documents; "
+            "save the LLM's JSON to <env_dir>/corrections/profile.json."
+        ),
+    )
+    parser.add_argument(
+        "--validate",
+        type=Path,
+        metavar="PROFILE_JSON",
+        help=(
+            "Path to an LLM-emitted profile.json to validate. Checks JSON parse, "
+            "regex compile, length bounds, runaway repetition, and schema load."
+        ),
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help=(
+            "With --validate: sanitize problems in place — blank bad regex "
+            "fields, drop bad list entries — and write back."
+        ),
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help=(
+            "With --validate --fix: write sanitized JSON to this path instead "
+            "of overwriting the input."
         ),
     )
     args = parser.parse_args()
@@ -240,8 +457,18 @@ def main() -> None:
         sys.stdout.write(_LLM_PROMPT_TEMPLATE)
         return
 
+    if args.validate:
+        rc = _validate_profile(
+            Path(args.validate).expanduser().resolve(),
+            fix=args.fix,
+            out_path=Path(args.out).expanduser().resolve() if args.out else None,
+        )
+        sys.exit(rc)
+
     if args.env_dir is None:
-        parser.error("--env-dir is required (or use --emit-prompt to print the LLM prompt template)")
+        parser.error(
+            "specify one of --env-dir, --emit-prompt, or --validate <profile.json>"
+        )
 
     env_dir = Path(args.env_dir).expanduser().resolve()
     extract_dir = env_dir / "out" / "extract"
