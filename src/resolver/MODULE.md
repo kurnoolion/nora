@@ -1,7 +1,7 @@
 # resolver
 
 **Purpose**
-Deterministic cross-reference resolver (TDD §5.5, Methods 1 & 2). Walks every `RequirementTree` in a corpus and turns the parser's raw reference strings into typed, status-tagged manifests covering three flavors: internal (same plan), cross-plan (another plan in the same MNO/release), and standards (3GPP/GSMA citations with release version).
+Deterministic cross-reference resolver (TDD §5.5, Methods 1 & 2). Walks every `RequirementTree` in a corpus and turns the parser's raw reference strings into typed, status-tagged manifests covering three flavors: internal (same plan), cross-plan (another plan in the same MNO/release), and standards (3GPP/GSMA citations with release version). Serves FR-4 (cross-reference extraction with section + release).
 
 **Public surface**
 - `CrossReferenceResolver(trees: list[RequirementTree])` (resolver.py) — constructor indexes by `plan_id` and `req_id`; `resolve_all()` returns manifests for the whole corpus; `resolve_tree(tree)` resolves one

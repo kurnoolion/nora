@@ -1,7 +1,7 @@
 # profiler
 
 **Purpose**
-Standalone, LLM-free document-structure profiler. Analyzes representative `DocumentIR`s from [extraction](../extraction/MODULE.md) and emits a `DocumentProfile` — a JSON artifact of heading rules, requirement-ID patterns, zone classifications, header/footer filters, and cross-reference patterns. The profile drives the generic structural parser, replacing per-MNO parser code with human-editable configuration.
+Standalone, LLM-free document-structure profiler. Analyzes representative `DocumentIR`s from [extraction](../extraction/MODULE.md) and emits a `DocumentProfile` — a JSON artifact of heading rules, requirement-ID patterns, zone classifications, header/footer filters, and cross-reference patterns. The profile drives the generic structural parser, replacing per-MNO parser code with human-editable configuration. Serves FR-2 (LLM-free profiling). Profile JSON files are committed under `customizations/profiles/` per D-024 (human-curated, AI-scaffolded).
 
 **Public surface**
 - `DocumentProfiler` (profiler.py) — `create_profile(docs, profile_name="") -> DocumentProfile`; also `update_profile()`, `validate_profile()` (coverage check against held-out docs)

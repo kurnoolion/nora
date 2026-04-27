@@ -1,7 +1,7 @@
 # taxonomy
 
 **Purpose**
-Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). Per-document extraction surfaces telecom features from section headings and plan metadata; consolidation merges them into a unified taxonomy with MNO coverage, primary/referenced attribution, and dependency hints. Implements D-005: the taxonomy is not pre-defined — it emerges from the documents, and human review is a required curation step, not optional.
+Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). Per-document extraction surfaces telecom features from section headings and plan metadata; consolidation merges them into a unified taxonomy with MNO coverage, primary/referenced attribution, and dependency hints. Serves FR-6 (bottom-up feature taxonomy with required human review). Implements D-005: the taxonomy is not pre-defined — it emerges from the documents, and human review is a required curation step, not optional.
 
 **Public surface**
 - `FeatureExtractor(provider: LLMProvider)` (extractor.py) — per-document extraction: consumes `RequirementTree`, prompts the LLM, returns `DocumentFeatures`

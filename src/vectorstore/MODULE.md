@@ -1,7 +1,7 @@
 # vectorstore
 
 **Purpose**
-Unified vector-store construction and configuration. Defines two structural-typing Protocols (`EmbeddingProvider`, `VectorStoreProvider`), wraps them with a chunk-builder + builder pipeline, and persists a single vector index spanning all MNOs × releases × doc_types. Metadata filters scope retrieval at query time — there is no per-MNO store.
+Unified vector-store construction and configuration. Defines two structural-typing Protocols (`EmbeddingProvider`, `VectorStoreProvider`) per D-007, wraps them with a chunk-builder + builder pipeline, and persists a single vector index spanning all MNOs × releases × doc_types. Metadata filters scope retrieval at query time — there is no per-MNO store. Serves FR-8 (unified vector store with metadata filtering); covers NFR-2 (offline HF install via `hf_offline`), NFR-7 (configurable embedding model / backend / metric / chunk strategy via `VectorStoreConfig`).
 
 **Public surface**
 - Protocols:

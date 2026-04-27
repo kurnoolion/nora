@@ -1,7 +1,7 @@
 # llm
 
 **Purpose**
-LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method structural-typing contract (`complete(prompt, system, temperature, max_tokens) -> str`) that every other module uses to call an LLM. No module outside `src/llm/` imports an LLM SDK directly; new providers are added by implementing `complete()` on a class, with no base-class inheritance.
+LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method structural-typing contract (`complete(prompt, system, temperature, max_tokens) -> str`) that every other module uses to call an LLM. No module outside `src/llm/` imports an LLM SDK directly; new providers are added by implementing `complete()` on a class, with no base-class inheritance. Serves FR-14 (LLM synthesis seam); covers NFR-5 (model picker auto-selects fitting model), NFR-6 (LLMProvider Protocol swap-by-instance per D-006).
 
 **Public surface**
 - `LLMProvider` (base.py) — `@runtime_checkable Protocol`; the only LLM interface the rest of the project sees

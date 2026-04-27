@@ -1,7 +1,7 @@
 # models
 
 **Purpose**
-Shared document intermediate representation. Defines the normalized `DocumentIR` schema produced by every format-specific extractor and consumed uniformly by the profiler, parser, and downstream stages — the seam that makes the rest of the pipeline format-agnostic.
+Shared document intermediate representation. Defines the normalized `DocumentIR` schema produced by every format-specific extractor and consumed uniformly by the profiler, parser, and downstream stages — the seam that makes the rest of the pipeline format-agnostic. Serves FR-1 (DocumentIR shape); implements D-010 (multi-format extraction normalized through DocumentIR).
 
 **Public surface**
 - `BlockType` — `heading | paragraph | table | image | embedded_object`

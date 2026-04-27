@@ -1,7 +1,7 @@
 # query
 
 **Purpose**
-Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language question into a grounded, citation-bearing answer: `Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis`. Implements D-001: the **graph routes, RAG ranks** — retrieval never runs unscoped, and the graph decides which subset of the corpus is even eligible.
+Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language question into a grounded, citation-bearing answer: `Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis`. Serves FR-9, FR-10, FR-11, FR-12, FR-13, FR-14 (one FR per stage). Implements D-001: the **graph routes, RAG ranks** — retrieval never runs unscoped, and the graph decides which subset of the corpus is even eligible.
 
 **Public surface**
 - Entry point: `QueryPipeline(graph, embedder, store, analyzer=None, synthesizer=None, top_k=10, max_depth=None, max_context_chars=30000)` (pipeline.py) — `query(raw_query) -> QueryResponse`

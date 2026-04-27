@@ -1,7 +1,7 @@
 # eval
 
 **Purpose**
-Evaluation framework for the query pipeline. Runs a labeled question set through the full `QueryPipeline`, scores each response against ground truth, and — critically — supports A/B comparison between `graph_scoped` (the D-001 default) and `pure_rag` (graph scoping bypassed, metadata-only RAG) so the KG+RAG hybrid's value can be measured, not assumed.
+Evaluation framework for the query pipeline. Runs a labeled question set through the full `QueryPipeline`, scores each response against ground truth, and — critically — supports A/B comparison between `graph_scoped` (the D-001 default) and `pure_rag` (graph scoping bypassed, metadata-only RAG) so the KG+RAG hybrid's value can be measured, not assumed. Serves FR-21 (eval framework with 5 metrics + A/B); covers NFR-15 (≥ 90% weighted-overall accuracy bar per D-015), NFR-16 (acceptance measured on user-curated Q&A only).
 
 **Public surface**
 - Runner: `EvalRunner(graph, embedder, store, ...)` (runner.py) — `run_all(questions)` returns `EvalReport`; `run_ab_comparison(questions)` returns `ABComparison`
@@ -15,7 +15,7 @@ Evaluation framework for the query pipeline. Runs a labeled question set through
 - `EvalReport.scores` is ordered to match `questions` — position `i` in both lists is the same question. `ABComparison` relies on this zipping.
 - `score_question()` returns a `QuestionScore` with per-dimension sub-scores and an aggregated `overall`. Aggregation is deterministic; regressions trace to a specific sub-score.
 - Eval never mutates the graph, vector store, or corrections. It reads; it reports.
-- User-supplied questions from Excel (`<doc_root>/eval/*.xlsx`) are loaded through the same `EvalQuestion` schema as built-ins — no parallel code path.
+- User-supplied questions from Excel (`<env_dir>/eval/*.xlsx` per D-022) are loaded through the same `EvalQuestion` schema as built-ins — no parallel code path.
 
 **Key choices**
 - Bundled A/B path: the whole point of D-001 was the hybrid hypothesis. Keeping `pure_rag` runnable means we re-measure the hypothesis every time the pipeline changes, not only once.
@@ -25,7 +25,7 @@ Evaluation framework for the query pipeline. Runs a labeled question set through
 
 **Non-goals**
 - Not a benchmark against external models or datasets — scoped to NORA's own questions and corpus.
-- No training data curation tools. If the question set is too small, the fix is to add `.xlsx` pairs to `<doc_root>/eval/`, not to mutate code.
+- No training data curation tools. If the question set is too small, the fix is to add `.xlsx` pairs to `<env_dir>/eval/`, not to mutate code.
 - No synthetic question generation — every question either ships with the repo or comes from a user's eval workbook.
 - No inline regression alerts — CI / reporting is the caller's responsibility; eval just prints and exits.
 

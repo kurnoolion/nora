@@ -1,7 +1,7 @@
 # graph
 
 **Purpose**
-Unified Knowledge Graph construction (TDD §5.8, D-002). Stitches the outputs of parser / resolver / taxonomy / standards into a single `networkx.DiGraph` that spans every MNO × release × doc_type in the corpus. The graph is the **routing layer** for queries — it resolves scope ("VZW Feb2026 data-retry") to a set of requirement IDs; the vector store then ranks those.
+Unified Knowledge Graph construction (TDD §5.8, D-002). Stitches the outputs of parser / resolver / taxonomy / standards into a single `networkx.DiGraph` that spans every MNO × release × doc_type in the corpus. The graph is the **routing layer** for queries — it resolves scope ("VZW Feb2026 data-retry") to a set of requirement IDs; the vector store then ranks those. Serves FR-7 (unified KG with Test_Case schema-only-in-v1 per D-014), FR-11 (graph scoping); covers NFR-14 (release-aware standards: per-release Standard_Section nodes).
 
 **Public surface**
 - Schema (schema.py):

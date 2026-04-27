@@ -1,24 +1,24 @@
 # env
 
 **Purpose**
-Per-environment scoped workspace configuration. An environment names a workspace (one team member × one `document_root` × a stage range × MNO/release scope × objectives) so multiple contributors can run partial pipelines in parallel without stepping on each other's outputs.
+Per-environment scoped workspace configuration. An environment names a workspace (one team member × one `env_dir` × a stage range × MNO/release scope × objectives) so multiple contributors can run partial pipelines in parallel without stepping on each other's outputs. Serves FR-28 (env_dir CLI/config/UI parameterization), FR-29 (single-root partition layout); implements D-022 (per-env directory layout).
 
 **Public surface**
-- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `document_root`, `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `doc_root`, `path()`, `output_path()`, `correction_path()`, `init_directories()`
-- Registry constants: `PIPELINE_STAGES`, `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `DOC_ROOT_DIRS`
+- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path()`, `output_path()`, `correction_path()`, `init_directories()`
+- Registry constants: `PIPELINE_STAGES`, `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`
 - `resolve_stage(value)` — accepts either stage name or 1-based number, returns canonical name
 - `env_cli.main` — CLI: `stages | create | list | show | init | delete`
 
 **Invariants**
 - `PIPELINE_STAGES` is the **single source of truth** for stage names and ordering across the project; any other module listing stages must import from here.
-- `document_root` layout is fixed: `documents/`, `corrections/`, `eval/`, `output/<stage>/`, `reports/` (see `DOC_ROOT_DIRS`). Other modules find artifacts by this convention, not by ad-hoc paths.
+- `env_dir` layout is fixed (D-022): `input/<MNO>/<release>/`, `out/<stage>/`, `state/`, `corrections/`, `reports/`, `eval/` (see `ENV_DIR_DIRS`). Other modules find artifacts by this convention, not by ad-hoc paths.
 - `correction_path(artifact)` returns `None` when missing — callers must handle absence; this is how the "optional override" semantics of corrections is enforced.
 - `validate()` returns errors as a list (never raises) so CLI and Web UI can surface all problems at once.
 - Environment configs live at `environments/<name>.json` (gitignored except `.gitkeep`) — they are per-user, not committed.
 
 **Key choices**
 - Stage registry is a list of tuples (not an enum) so stages can be referenced by name, by 1-based number, or by description without three parallel definitions.
-- `EnvironmentConfig` stores `document_root` as a string (not `Path`) to keep JSON round-tripping trivial; `doc_root` property exposes it as a `Path`.
+- `EnvironmentConfig` stores `env_dir` as a string (not `Path`) to keep JSON round-tripping trivial; `env_dir_path` property exposes it as a `Path` (rename from `document_root` / `doc_root` per D-022).
 - Model provider/name/timeout live on the env config (not a separate model config file) — keeps a run fully reproducible from one JSON artifact.
 
 **Non-goals**

@@ -1,7 +1,7 @@
 # corrections
 
 **Purpose**
-Per-environment profile + taxonomy correction handling: store engineer-edited overrides, diff them against pipeline output, and emit compact FIX reports (no proprietary content) that are pasteable back into chat. Implements the corrections-override pattern (D-011): the pipeline automatically prefers `<doc_root>/corrections/*.json` over its own output on the next run.
+Per-environment profile + taxonomy correction handling: store engineer-edited overrides, diff them against pipeline output, and emit compact FIX reports (no proprietary content) that are pasteable back into chat. Serves FR-15, FR-16, FR-18; covers NFR-8 (no proprietary content). Implements the corrections-override pattern (D-011, D-012, D-022): the pipeline automatically prefers `<env_dir>/corrections/*.json` over its own output on the next run.
 
 **Public surface** (enumerated in `__init__.py` via `__all__`)
 - `FixReport` (schema.py) — compact diff payload: `env`, `artifact`, `lines`, `summary`; `to_text()`, `is_empty`
@@ -14,7 +14,7 @@ Per-environment profile + taxonomy correction handling: store engineer-edited ov
 - `profile_fix_report(output, correction, env_name)`, `taxonomy_fix_report(output, correction, env_name)` (compactor.py) — produce `FixReport`s
 
 **Invariants**
-- Corrections live at `<doc_root>/corrections/profile.json` and `<doc_root>/corrections/taxonomy.json`. Pipeline stages look here *first*; output is the fallback. This module owns those paths — nothing else should hardcode them.
+- Corrections live at `<env_dir>/corrections/profile.json` and `<env_dir>/corrections/taxonomy.json` (D-022). Pipeline stages look here *first*; output is the fallback. This module owns those paths — nothing else should hardcode them.
 - `load_*_effective()` returns correction if present, else output, else `None`. This three-state return is the contract — callers must handle `None` (no artifact at all).
 - `FixReport` never contains proprietary document content — only field names, regex patterns, feature IDs/names, keyword tokens, and counts. Safe for chat paste. (Enforces D-012.)
 - Raw JSON IO (`*_correction_raw`) is only for the Web UI form round-trip; typed IO is preferred everywhere else so schema drift surfaces as a load error, not silent data loss.

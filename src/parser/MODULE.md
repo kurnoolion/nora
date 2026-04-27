@@ -1,7 +1,7 @@
 # parser
 
 **Purpose**
-Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentProfile` and emits a `RequirementTree` — the typed, hierarchical form of the document that every downstream stage (resolver, graph, taxonomy, vectorstore) reads. Implements D-003: all MNO-specific behavior lives in the profile JSON, not in parser code.
+Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentProfile` and emits a `RequirementTree` — the typed, hierarchical form of the document that every downstream stage (resolver, graph, taxonomy, vectorstore) reads. Serves FR-3 (profile-driven generic parser; no per-MNO code paths). Implements D-003: all MNO-specific behavior lives in the profile JSON, not in parser code.
 
 **Public surface**
 - `GenericStructuralParser` (structural_parser.py) — the parser; consumes `DocumentIR` + `DocumentProfile`, returns `RequirementTree`

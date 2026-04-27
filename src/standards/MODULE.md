@@ -1,7 +1,7 @@
 # standards
 
 **Purpose**
-3GPP standards ingestion — generic, release-aware, LLM-free (TDD §5.6, D-004). Collects references from parsed/resolved MNO docs, downloads the matching 3GPP spec archives, parses them into section trees, and extracts **only the referenced sections plus local context** (Option C "Hybrid Selective"). Every spec and version is derived from what the MNO docs actually cite — no hardcoded spec list, no per-MNO branching.
+3GPP standards ingestion — generic, release-aware, LLM-free (TDD §5.6, D-004). Collects references from parsed/resolved MNO docs, downloads the matching 3GPP spec archives, parses them into section trees, and extracts **only the referenced sections plus local context** (Option C "Hybrid Selective"). Every spec and version is derived from what the MNO docs actually cite — no hardcoded spec list, no per-MNO branching. Serves FR-5 (Option C Hybrid standards ingestion); covers NFR-14 (release-aware: per-release Standard_Section nodes).
 
 **Public surface**
 - Reference collection: `StandardsReferenceCollector` (reference_collector.py) — aggregates `SpecReference`s from resolver manifests and tree text into a `StandardsReferenceIndex`

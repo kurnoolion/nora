@@ -1,8 +1,8 @@
 # Status
 
-**Active phase**: architecture
+**Active phase**: development
 **Last updated**: 2026-04-27
-**Last drift-check**: 2026-04-23 — mode: dev-full — 3 drift(s) resolved (all deferred), 0 deferred surfaced
+**Last drift-check**: 2026-04-27 — mode: design — 9 drift(s) resolved (all batch [a]: MODULE.md → match requirements + DECISIONS), 0 deferred surfaced
 
 ## Done
 
