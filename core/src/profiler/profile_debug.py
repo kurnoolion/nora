@@ -188,6 +188,27 @@ def _validate_profile(path: Path, fix: bool, out_path: Path | None) -> int:
         data = json.loads(text)
     except json.JSONDecodeError as e:
         print(f"VLD ERR parse error at line {e.lineno} col {e.colno}: {e.msg}")
+        # Show context around the error so the user can spot the cause
+        # (most often: an unescaped \ inside a regex string — JSON needs \\)
+        lines = text.split("\n")
+        start = max(1, e.lineno - 2)
+        end = min(len(lines), e.lineno + 2)
+        print()
+        print(f"Context (lines {start}-{end}):")
+        for i in range(start - 1, end):
+            marker = ">>>" if (i + 1) == e.lineno else "   "
+            display = lines[i] if len(lines[i]) <= 160 else lines[i][:157] + "..."
+            print(f"  {marker} {i + 1:4d}: {display}")
+            if (i + 1) == e.lineno:
+                # Caret at the offending column (account for "  >>> NNNN: ")
+                pad = 8 + len(f"{i + 1:4d}: ") + e.colno - 1
+                print(f"  {' ' * pad}^")
+        print()
+        print(
+            "Hint: most common cause is an unescaped backslash inside a regex "
+            "pattern string. JSON requires `\\\\` to represent a single literal "
+            "backslash. Edit the file manually to fix, then re-run --validate."
+        )
         return 1
     if not isinstance(data, dict):
         print(f"VLD ERR top-level JSON is not an object (got {type(data).__name__})")
