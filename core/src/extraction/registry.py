@@ -7,6 +7,7 @@ from pathlib import Path
 from core.src.extraction.base import BaseExtractor
 from core.src.extraction.docx_extractor import DOCXExtractor
 from core.src.extraction.pdf_extractor import PDFExtractor
+from core.src.extraction.xlsx_extractor import XLSXExtractor
 from core.src.models.document import DocumentIR
 
 
@@ -14,6 +15,7 @@ from core.src.models.document import DocumentIR
 _EXTRACTORS: dict[str, BaseExtractor] = {
     ".pdf": PDFExtractor(),
     ".docx": DOCXExtractor(),
+    ".xlsx": XLSXExtractor(),
 }
 
 

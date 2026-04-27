@@ -11,9 +11,17 @@ import logging
 import re
 from pathlib import Path
 
-import fitz  # pymupdf
-import pdfplumber
-from PIL import Image
+# fitz (pymupdf) and pdfplumber are optional at import time so registry
+# tests can run without the extraction backends installed. extract() will
+# raise a clear ImportError if either is actually missing at call time.
+try:
+    import fitz  # pymupdf
+except ImportError:  # pragma: no cover - optional dep
+    fitz = None  # type: ignore[assignment]
+try:
+    import pdfplumber
+except ImportError:  # pragma: no cover - optional dep
+    pdfplumber = None  # type: ignore[assignment]
 
 from core.src.extraction.base import BaseExtractor
 from core.src.models.document import (
@@ -50,6 +58,11 @@ class PDFExtractor(BaseExtractor):
         release: str = "",
         doc_type: str = "",
     ) -> DocumentIR:
+        if fitz is None or pdfplumber is None:
+            raise ImportError(
+                "PDFExtractor requires pymupdf and pdfplumber. "
+                "Install with: pip install pymupdf pdfplumber"
+            )
         file_path = Path(file_path)
         logger.info(f"Extracting PDF: {file_path.name}")
 
