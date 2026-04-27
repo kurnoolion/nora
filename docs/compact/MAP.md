@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-04-27 by regen-map. Do not hand-edit.
+Generated 2026-04-27 (regen 2) by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -141,7 +141,8 @@ nora/
 │   │   │   ├── docx_extractor.py                         # DOCX content extractor using python-docx.
 │   │   │   ├── extract.py                                # CLI entry point for document content extraction.
 │   │   │   ├── pdf_extractor.py                          # PDF content extractor using pymupdf (text + images) and pdfplumber (tables).
-│   │   │   └── registry.py                               # Extractor registry — maps file extensions to format-specific extractors.
+│   │   │   ├── registry.py                               # Extractor registry — maps file extensions to format-specific extractors.
+│   │   │   └── xlsx_extractor.py                         # XLSX content extractor using openpyxl.
 │   │   ├── graph/                                        # Unified Knowledge Graph construction (TDD §5.8, D-002).
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -297,7 +298,8 @@ nora/
 │       ├── test_taxonomy.py                              # Tests for the feature taxonomy pipeline (Step 6).
 │       ├── test_vectorstore.py                           # Tests for vector store construction (PoC Step 9).
 │       ├── test_web_jobs.py                              # Tests for the NORA web job queue.
-│       └── test_web_path_mapper.py                       # Tests for the web path mapper module.
+│       ├── test_web_path_mapper.py                       # Tests for the web path mapper module.
+│       └── test_xlsx_extractor.py                        # Tests for XLSXExtractor (FR-1).
 ├── create_presentation.py                                # Generate NORA leadership presentation.
 ├── customizations/
 │   ├── __init__.py
