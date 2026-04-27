@@ -56,10 +56,8 @@ Count directories with a `SKILL.md` under scaffold root. Cross-reference claims 
 
 - `README.md` — "A set of N skills..." statement and Skills table row count.
 - `compact/SKILL.md` — "The N sub-skills" statement and sub-skills table row count. **Sub-skill count excludes the `compact` entry-point itself** (sub-skills = total - 1).
-- `COMPACT_Overview.md` — Skills-at-a-glance table row count.
-- `COMPACT_Overview.md` — directory layout code block (inside the `.claude/skills/` subtree).
 
-- **Pass:** all four sources agree (accounting for the `compact` entry-point exclusion in sub-skill count).
+- **Pass:** all sources agree (accounting for the `compact` entry-point exclusion in sub-skill count).
 - **Fail:** show actual vs claimed per source.
 
 ### 5. Step monotonicity in multi-step skills
@@ -104,14 +102,13 @@ Ignore `/project-init --re-init` flag syntax and Claude Code built-in slash comm
 
 ### 10. Directory-layout parity
 
-Extract the set of skill names from three sources:
+Extract the set of skill names from two sources:
 
 - `README.md` Skills table (column 1).
-- `COMPACT_Overview.md` directory layout code block (entries inside `.claude/skills/`).
-- `COMPACT_Overview.md` Skills-at-a-glance table (column 1).
+- Actual scaffold directory listing — every immediate child directory of scaffold root that contains a `SKILL.md`.
 
-- **Pass:** identical set across all three.
-- **Fail:** show set differences per source.
+- **Pass:** identical set across both.
+- **Fail:** show set difference (skills in README missing from disk; directories on disk missing from README).
 
 ### 11. Step-reference resolution
 
@@ -131,7 +128,7 @@ Ignore matches inside HTML comments and inside fenced example blocks — those a
 
 `docs/compact/retrofit-snapshot.md` is produced once by `project-init --retrofit` and is archival — no scaffold skill should take an ongoing dependency on it at runtime. Grep scaffold root for `retrofit-snapshot.md`.
 
-- **Pass:** all matches live inside one of: `project-init/SKILL.md` (the file it produces), `project-init/base-prompts/00-swdev-project-customizer.md` (wires phase prompts to read it), `README.md` / `COMPACT_Overview.md` (documentation), `doctor/SKILL.md` (this check).
+- **Pass:** all matches live inside one of: `project-init/SKILL.md` (the file it produces), `project-init/base-prompts/00-swdev-project-customizer.md` (wires phase prompts to read it), `README.md` (documentation), `doctor/SKILL.md` (this check).
 - **Fail:** list `(file:line)` for unexpected references — e.g. `session-start`, `close-session`, or `regen-map` naming retrofit-snapshot as a load target. The retrofit path has then bled into steady-state operation.
 
 ## Output format
