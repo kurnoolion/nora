@@ -210,12 +210,19 @@ def _validate_profile(path: Path, fix: bool, out_path: Path | None) -> int:
     print()
     print(f"summary: {ok_count} OK, {bad_count} BAD")
 
-    if fix and bad_count > 0:
+    if fix:
+        # --fix always writes (otherwise an --out target stays at its prior
+        # state — possibly empty — when there's nothing to sanitize, which
+        # surprises callers who expected --fix to emit a guaranteed file).
         target = out_path or path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-        print(f"fix: applied; sanitized JSON written to {target}")
-    elif bad_count > 0 and not fix:
+        payload = json.dumps(data, indent=2, ensure_ascii=False)
+        target.write_text(payload)
+        if bad_count > 0:
+            print(f"fix: sanitized; wrote {len(payload)} bytes to {target}")
+        else:
+            print(f"fix: no issues; wrote {len(payload)} bytes to {target}")
+    elif bad_count > 0:
         print("fix: rerun with --fix to apply (blank bad regex fields, drop bad list entries)")
 
     # Schema-level load check on whichever file is final.
