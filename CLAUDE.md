@@ -42,20 +42,24 @@ Retrofitted on 2026-04-21 via `/project-init --retrofit`. Active phase: **archit
 
 ## Repository layout
 
+> **Reorg in flight (D-019..D-024, 2026-04-27)**: target layout is three-tier — `core/` (AI-generated), `customizations/` (AI-scaffolded, human-completed), `config/` (per-module settings) — plus a per-env runtime directory `<env_dir>` for inputs, outputs, state, corrections, reports, and eval data. See `docs/compact/structure-conventions.md` for the canonical layout. File moves land in the next development-phase session; until then, paths below reflect current on-disk reality.
+
+Current (pre-reorg) paths:
+
 - `src/` — Python source (16 packages; one MODULE.md per package)
 - `tests/` — pytest suite (one `test_<module>.py` per package)
 - `docs/compact/` — COMPACT state files
-- `.claude/skills/compact/` — COMPACT skills (session-start, switch-phase, regen-map, drift-check, close-session, project-init)
-- `data/` — extracted / parsed artifacts (gitignored)
+- `.claude/skills/` — COMPACT skills (flat layout: compact, session-start, switch-phase, regen-map, drift-check, close-session, project-init, doctor)
+- `data/` — extracted / parsed artifacts (gitignored; will be replaced by `<env_dir>/out/`)
 - `environments/` — per-environment configs (gitignored except `.gitkeep`)
-- `web/` — Web UI runtime state (config, job queue DB, metrics DB; gitignored)
-- `profiles/` — document profiles (committed, human-editable JSON)
-- Repo-root PDFs (LTE*.pdf, TDD*.pdf) — source docs, gitignored
+- `web/` — Web UI runtime state (config, job queue DB, metrics DB; gitignored; runtime DBs will move to `<env_dir>/state/`, config to `config/web.json`)
+- `profiles/` — document profiles (committed, human-editable JSON; will move to `customizations/profiles/`)
+- Repo-root PDFs (LTE*.pdf, TDD*.pdf) — source docs, gitignored (will move to `<env_dir>/input/<MNO>/<release>/`)
 
 ## Conventions
 
 - Python; no `pyproject.toml` — `requirements.txt` + `src/` layout with `__init__.py` per package
 - Public surface: top-level identifiers without a leading underscore (plus `__init__.py` re-exports when `__all__` is used)
-- CLI per module: `src/<module>/<module>_cli.py` with `main()` entrypoint
+- CLI per module: `src/<module>/<module>_cli.py` with `main()` entrypoint (post-reorg: `core/src/<module>/<module>_cli.py`)
 - Protocol-based abstractions: `LLMProvider`, `EmbeddingProvider`, `VectorStoreProvider`
 - No proprietary document content in logs, error messages, compact reports, or test fixtures
