@@ -80,21 +80,24 @@ async def lifespan(app: FastAPI):
     _start_time = time.time()
     logger.info("NORA Web UI starting (root_path=%r)", config.root_path)
 
-    job_queue = JobQueue(config.db_path)
+    # Ensure state/ directory exists (D-022: <env_dir>/state/)
+    state_dir = config.state_path()
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    job_queue = JobQueue(str(config.jobs_db_path()))
     await job_queue.init_db()
     app.state.job_queue = job_queue
 
-    metrics_db = config.db_path.replace(".db", "_metrics.db") if config.db_path.endswith(".db") else config.db_path + "_metrics"
-    metrics_store = MetricsStore(metrics_db)
+    metrics_store = MetricsStore(str(config.metrics_db_path()))
     await metrics_store.init_db()
     app.state.metrics = metrics_store
 
     path_mapper = PathMapper(config.path_mappings)
     app.state.path_mapper = path_mapper
 
-    # Start resource sampler background task
+    # Start resource sampler background task — sample disk usage from env_dir
     from core.src.web.resource_sampler import start_resource_sampler
-    sampler_task = await start_resource_sampler(metrics_store, interval=30, data_dir="data")
+    sampler_task = await start_resource_sampler(metrics_store, interval=30, data_dir=str(config.env_dir_path()))
 
     yield
 
@@ -178,7 +181,7 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
     )
     uvicorn.run(
-        "src.web.app:app",
+        "core.src.web.app:app",
         host=config.host,
         port=config.port,
         reload=True,

@@ -47,23 +47,26 @@ def extract_document(
 def infer_metadata_from_path(
     file_path: Path,
 ) -> dict[str, str]:
-    """Infer mno, release, and doc_type from folder structure.
+    """Infer mno and release from folder structure (D-023, FR-30).
 
-    Expected structure: .../<mno>/<release>/<doc_type>/filename.ext
-    e.g., data/raw/vzw/2026_feb/requirements/LTEDATARETRY.pdf
+    Expected layout: <env_dir>/input/<MNO>/<release>/filename.ext
+    e.g., /data/vzw-feb2026/input/VZW/Feb2026/LTEDATARETRY.pdf
+
+    `doc_type` defaults to "requirement" — v1 has only requirements docs;
+    FR-26 (test-case parser) is deferred.
     """
     parts = file_path.resolve().parts
-    metadata = {"mno": "", "release": "", "doc_type": ""}
+    metadata = {"mno": "", "release": "", "doc_type": "requirement"}
 
-    # Walk backwards from the file to find the expected structure
-    # filename -> doc_type_folder -> release_folder -> mno_folder
-    if len(parts) >= 4:
-        doc_type_folder = parts[-2].lower()
-        if doc_type_folder in ("requirements", "testcases"):
-            metadata["doc_type"] = (
-                "requirement" if doc_type_folder == "requirements" else "testcase"
-            )
-            metadata["release"] = parts[-3]
-            metadata["mno"] = parts[-4].upper()
+    # Look for the "input" anchor; the two segments immediately after it are MNO/release.
+    if "input" in parts:
+        idx = parts.index("input")
+        if idx + 2 < len(parts):
+            metadata["mno"] = parts[idx + 1].upper()
+            metadata["release"] = parts[idx + 2]
+    elif len(parts) >= 3:
+        # Fallback when no "input" anchor: assume last two dirs are MNO/release.
+        metadata["release"] = parts[-2]
+        metadata["mno"] = parts[-3].upper()
 
     return metadata

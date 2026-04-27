@@ -3,6 +3,11 @@
 An environment defines a workspace for a team member to run specific
 pipeline stages against specific documents, with defined scope and objectives.
 
+Per D-022, every environment is rooted at a single `env_dir` containing six
+purpose-partitioned subdirectories: `input/`, `out/`, `state/`, `corrections/`,
+`reports/`, `eval/`. The `env_dir` path is supplied per-environment (CLI,
+config file, or Web UI form) — no hardcoded paths.
+
 Usage:
     from core.src.env.config import EnvironmentConfig, PIPELINE_STAGES
 
@@ -11,7 +16,7 @@ Usage:
         description="Verify profiler accuracy on new VZW docs",
         created_by="mohan",
         member="alice",
-        document_root="/data/vzw-new-batch",
+        env_dir="/data/vzw-new-batch",
         stage_start="extract",
         stage_end="parse",
         mnos=["VZW"],
@@ -67,15 +72,16 @@ def resolve_stage(value: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Document root directory layout
+# Per-environment directory layout (D-022)
 # ---------------------------------------------------------------------------
 
-DOC_ROOT_DIRS = {
-    "documents": "Source documents (PDFs, DOCx, XLS, etc.)",
+ENV_DIR_DIRS = {
+    "input": "Source documents organized as <MNO>/<release>/*",
+    "out": "Pipeline outputs (auto-created per stage)",
+    "state": "Runtime SQLite databases (job queue, metrics)",
     "corrections": "User-corrected artifacts (profile.json, taxonomy.json)",
-    "eval": "User-supplied Q&A eval pairs (Excel)",
-    "output": "Pipeline outputs (auto-created per stage)",
     "reports": "Pipeline reports (auto-created)",
+    "eval": "User-supplied Q&A eval pairs (Excel)",
 }
 
 
@@ -91,7 +97,7 @@ class EnvironmentConfig:
     description: str
     created_by: str
     member: str
-    document_root: str
+    env_dir: str
 
     # Stages to run
     stage_start: str = "extract"
@@ -146,8 +152,8 @@ class EnvironmentConfig:
             )
         if not self.name:
             errors.append("Environment name is required")
-        if not self.document_root:
-            errors.append("document_root is required")
+        if not self.env_dir:
+            errors.append("env_dir is required")
         if not self.mnos:
             errors.append("At least one MNO must be specified")
         if not self.releases:
@@ -164,33 +170,53 @@ class EnvironmentConfig:
         return STAGE_NAMES[start:end]
 
     @property
-    def doc_root(self) -> Path:
-        return Path(self.document_root)
+    def env_dir_path(self) -> Path:
+        return Path(self.env_dir)
 
     def path(self, key: str) -> Path:
-        """Get a standard subdirectory under document_root."""
-        return self.doc_root / key
+        """Get a standard subdirectory under env_dir (generic accessor)."""
+        return self.env_dir_path / key
 
-    def output_path(self, stage: str) -> Path:
-        """Get output directory for a specific stage."""
-        return self.doc_root / "output" / stage
+    def input_path(self, mno: str, release: str) -> Path:
+        """Get input directory for a specific MNO and release (D-023)."""
+        return self.env_dir_path / "input" / mno / release
 
-    def correction_path(self, artifact: str) -> Path | None:
-        """Get path to a correction file if it exists."""
-        p = self.doc_root / "corrections" / artifact
+    def out_path(self, stage: str) -> Path:
+        """Get output directory for a specific pipeline stage."""
+        return self.env_dir_path / "out" / stage
+
+    def state_path(self) -> Path:
+        """Get the state directory (runtime SQLite DBs)."""
+        return self.env_dir_path / "state"
+
+    def corrections_path(self) -> Path:
+        """Get the corrections directory."""
+        return self.env_dir_path / "corrections"
+
+    def correction_file(self, artifact: str) -> Path | None:
+        """Get path to a correction file if it exists, else None."""
+        p = self.corrections_path() / artifact
         return p if p.exists() else None
+
+    def reports_path(self) -> Path:
+        """Get the reports directory."""
+        return self.env_dir_path / "reports"
+
+    def eval_path(self) -> Path:
+        """Get the eval directory (user-supplied Q&A pairs)."""
+        return self.env_dir_path / "eval"
 
     def init_directories(self) -> list[str]:
         """Create the standard directory structure. Returns created dirs."""
         created: list[str] = []
-        for dirname in DOC_ROOT_DIRS:
-            p = self.doc_root / dirname
+        for dirname in ENV_DIR_DIRS:
+            p = self.env_dir_path / dirname
             if not p.exists():
                 p.mkdir(parents=True, exist_ok=True)
                 created.append(str(p))
-        # Stage-specific output dirs
+        # Stage-specific output dirs under out/
         for stage in self.active_stages:
-            p = self.output_path(stage)
+            p = self.out_path(stage)
             if not p.exists():
                 p.mkdir(parents=True, exist_ok=True)
                 created.append(str(p))

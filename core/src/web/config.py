@@ -30,7 +30,13 @@ class PathMapping:
 
 @dataclass
 class WebConfig:
-    """Web application configuration."""
+    """Web application configuration.
+
+    `env_dir` (D-022) is the per-Web-UI runtime root: jobs and metrics SQLite
+    databases live under `<env_dir>/state/`. Pipeline jobs may target different
+    env_dirs at submission time, but Web-UI state always tracks under the
+    configured one.
+    """
 
     host: str = "0.0.0.0"
     port: int = 8000
@@ -38,7 +44,7 @@ class WebConfig:
     path_mappings: list[PathMapping] = field(default_factory=list)
     ollama_url: str = "http://localhost:11434"
     default_model: str = "gemma3:12b"
-    db_path: str = "web/nora.db"
+    env_dir: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> WebConfig:
@@ -52,8 +58,22 @@ class WebConfig:
             path_mappings=mappings,
             ollama_url=data.get("ollama_url", cls.ollama_url),
             default_model=data.get("default_model", cls.default_model),
-            db_path=data.get("db_path", cls.db_path),
+            env_dir=data.get("env_dir", cls.env_dir),
         )
+
+    # --- Derived paths (D-022) ---
+
+    def env_dir_path(self) -> Path:
+        return Path(self.env_dir).resolve() if self.env_dir else PROJECT_ROOT
+
+    def state_path(self) -> Path:
+        return self.env_dir_path() / "state"
+
+    def jobs_db_path(self) -> Path:
+        return self.state_path() / "nora.db"
+
+    def metrics_db_path(self) -> Path:
+        return self.state_path() / "nora_metrics.db"
 
 
 def load_config(path: Path | None = None) -> WebConfig:

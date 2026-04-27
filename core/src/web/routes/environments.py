@@ -34,7 +34,7 @@ def _list_environments() -> list[dict]:
                 "name": cfg.name,
                 "description": cfg.description,
                 "member": cfg.member,
-                "document_root": cfg.document_root,
+                "env_dir": cfg.env_dir,
                 "stage_start": cfg.stage_start,
                 "stage_end": cfg.stage_end,
                 "mnos": cfg.mnos,
@@ -81,7 +81,7 @@ async def create_environment(request: Request):
     name = form.get("name", "").strip()
     description = form.get("description", "").strip()
     member = form.get("member", "").strip()
-    document_root = form.get("document_root", "").strip()
+    env_dir = form.get("env_dir", "").strip()
     stage_start = form.get("stage_start", "extract").strip()
     stage_end = form.get("stage_end", "eval").strip()
     releases = form.get("releases", "").strip()
@@ -116,7 +116,7 @@ async def create_environment(request: Request):
         description=description or f"Environment: {name}",
         created_by=member or "anonymous",
         member=member or "anonymous",
-        document_root=document_root,
+        env_dir=env_dir,
         stage_start=stage_start,
         stage_end=stage_end,
         mnos=mnos,

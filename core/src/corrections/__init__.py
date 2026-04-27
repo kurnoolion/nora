@@ -1,13 +1,13 @@
 """Corrections module — profile + taxonomy editing, diff, and compact FIX reports.
 
-Storage convention (per environment):
-    <doc_root>/output/profile/<profile-name>.json   — auto-generated
-    <doc_root>/output/taxonomy/taxonomy.json         — auto-generated
-    <doc_root>/corrections/profile.json              — engineer's edited copy
-    <doc_root>/corrections/taxonomy.json             — engineer's edited copy
+Storage convention (per environment, D-022):
+    <env_dir>/out/profile/<profile-name>.json    — auto-generated
+    <env_dir>/out/taxonomy/taxonomy.json         — auto-generated
+    <env_dir>/corrections/profile.json           — engineer's edited copy
+    <env_dir>/corrections/taxonomy.json          — engineer's edited copy
 
-The pipeline (src/pipeline/stages.py) already picks up corrections/*.json and
-copies them over the auto-generated output on the next run.
+The pipeline (core/src/pipeline/stages.py) already picks up corrections/*.json
+and copies them over the auto-generated output on the next run.
 """
 
 from core.src.corrections.schema import FixReport

@@ -16,5 +16,5 @@
   ],
   "ollama_url": "http://localhost:11434",
   "default_model": "gemma3:12b",
-  "db_path": "web/nora.db"
+  "env_dir": ""
 }

@@ -40,7 +40,7 @@ def _list_environments() -> list[dict]:
                 "name": cfg.name,
                 "description": cfg.description,
                 "member": cfg.member,
-                "document_root": cfg.document_root,
+                "env_dir": cfg.env_dir,
                 "stage_start": cfg.stage_start,
                 "stage_end": cfg.stage_end,
                 "file": p.name,
@@ -113,19 +113,19 @@ async def submit_pipeline(request: Request):
         label = env_name
 
     else:
-        doc_dir_raw = form.get("document_dir", "").strip()
+        env_dir_raw = form.get("env_dir", "").strip()
         stage_start = form.get("stage_start", "extract").strip()
         stage_end = form.get("stage_end", "eval").strip()
 
-        if not doc_dir_raw:
+        if not env_dir_raw:
             return _template_response(request, "pipeline.html", {
                 "environments": _list_environments(),
                 "stages": _stages_for_template(),
-                "error": "Document directory is required.",
+                "error": "env_dir is required.",
             })
 
         try:
-            document_dir = path_mapper.resolve(doc_dir_raw)
+            document_dir = path_mapper.resolve(env_dir_raw)
         except ValueError as exc:
             return _template_response(request, "pipeline.html", {
                 "environments": _list_environments(),
@@ -155,7 +155,7 @@ async def submit_pipeline(request: Request):
         start_idx = STAGE_NUM[stage_start] - 1
         end_idx = STAGE_NUM[stage_end]
         stages = STAGE_NAMES[start_idx:end_idx]
-        label = f"standalone:{doc_dir_raw}"
+        label = f"standalone:{env_dir_raw}"
 
     job = await job_queue.submit(
         job_type="pipeline",
@@ -194,8 +194,8 @@ async def run_pipeline_background(
             ctx = PipelineContext.from_env(env_config)
             await job_queue.append_log(job_id, f"Environment: {env_config.name}")
         else:
-            ctx = PipelineContext.standalone(documents_dir=document_dir)
-            await job_queue.append_log(job_id, f"Standalone: {document_dir}")
+            ctx = PipelineContext.standalone(env_dir=document_dir)
+            await job_queue.append_log(job_id, f"Standalone env_dir: {document_dir}")
 
         runner = PipelineRunner(ctx)
         total = len(stages)

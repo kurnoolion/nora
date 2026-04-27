@@ -8,7 +8,7 @@ Usage:
     python -m core.src.env.env_cli create \
         --name profiler-review \
         --member alice \
-        --doc-root /data/vzw-new-batch \
+        --env-dir /data/vzw-new-batch \
         --stages extract:parse \
         --scope VZW/Feb2026 \
         --objectives "Verify heading detection" "Check table extraction"
@@ -19,7 +19,7 @@ Usage:
     # Show environment details
     python -m core.src.env.env_cli show profiler-review
 
-    # Initialize directory structure at document_root
+    # Initialize directory structure at env_dir
     python -m core.src.env.env_cli init profiler-review
 
     # Delete an environment config
@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 from core.src.env.config import (
-    DOC_ROOT_DIRS,
+    ENV_DIR_DIRS,
     EnvironmentConfig,
     PIPELINE_STAGES,
     STAGE_DESC,
@@ -81,13 +81,6 @@ def cmd_create(args: argparse.Namespace) -> None:
     # Parse scope
     mnos, releases = ["VZW"], ["Feb2026"]
     if args.scope:
-        for scope_item in args.scope:
-            parts = scope_item.split("/")
-            if parts[0] not in mnos:
-                mnos.append(parts[0]) if parts[0] != mnos[0] else None
-            if len(parts) > 1 and parts[1] not in releases:
-                releases.append(parts[1]) if parts[1] != releases[0] else None
-        # Re-derive clean lists from all scope items
         mnos_set: list[str] = []
         releases_set: list[str] = []
         for scope_item in args.scope:
@@ -104,7 +97,7 @@ def cmd_create(args: argparse.Namespace) -> None:
         description=args.description or f"Environment for {args.member}",
         created_by=args.created_by or "admin",
         member=args.member,
-        document_root=str(Path(args.doc_root).resolve()),
+        env_dir=str(Path(args.env_dir).resolve()),
         stage_start=stage_start,
         stage_end=stage_end,
         mnos=mnos,
@@ -131,7 +124,7 @@ def cmd_create(args: argparse.Namespace) -> None:
     print(f"  Member: {env.member}")
     print(f"  Stages: {env.stage_start} -> {env.stage_end} ({', '.join(env.active_stages)})")
     print(f"  Scope:  {', '.join(env.mnos)} / {', '.join(env.releases)}")
-    print(f"  Doc root: {env.document_root}")
+    print(f"  Env dir: {env.env_dir}")
     if env.objectives:
         print(f"  Objectives:")
         for obj in env.objectives:
@@ -170,7 +163,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     print(f"  Description:  {env.description}")
     print(f"  Created by:   {env.created_by} on {env.created_at}")
     print(f"  Member:       {env.member}")
-    print(f"  Doc root:     {env.document_root}")
+    print(f"  Env dir:      {env.env_dir}")
     print(f"  Stages:       {env.stage_start} -> {env.stage_end}")
     print(f"  Active:       {', '.join(env.active_stages)}")
     print(f"  MNOs:         {', '.join(env.mnos)}")
@@ -183,9 +176,9 @@ def cmd_show(args: argparse.Namespace) -> None:
             print(f"    - {obj}")
 
     # Check directory structure
-    root = env.doc_root
+    root = env.env_dir_path
     print(f"\n  Directory status:")
-    for dirname, desc in DOC_ROOT_DIRS.items():
+    for dirname, _desc in ENV_DIR_DIRS.items():
         p = root / dirname
         status = "EXISTS" if p.exists() else "MISSING"
         count = ""
@@ -195,7 +188,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         print(f"    {dirname + '/':<16} {status}{count}")
 
     # Check corrections
-    corrections_dir = root / "corrections"
+    corrections_dir = env.corrections_path()
     if corrections_dir.exists():
         corr_files = list(corrections_dir.iterdir())
         if corr_files:
@@ -215,10 +208,10 @@ def cmd_init(args: argparse.Namespace) -> None:
     else:
         print(f"All directories already exist for '{args.name}'.")
 
-    print(f"\nExpected document root layout:")
-    for dirname, desc in DOC_ROOT_DIRS.items():
+    print(f"\nExpected env_dir layout:")
+    for dirname, desc in ENV_DIR_DIRS.items():
         print(f"  {dirname + '/':<16} {desc}")
-    print(f"\nPlace source documents in: {env.doc_root}/documents/")
+    print(f"\nPlace source documents in: {env.env_dir_path}/input/<MNO>/<release>/")
 
 
 def cmd_delete(args: argparse.Namespace) -> None:
@@ -248,7 +241,7 @@ def main() -> None:
     p_create = sub.add_parser("create", help="Create a new environment")
     p_create.add_argument("--name", required=True, help="Environment name (used as filename)")
     p_create.add_argument("--member", required=True, help="Team member name")
-    p_create.add_argument("--doc-root", required=True, help="Path to document root directory")
+    p_create.add_argument("--env-dir", required=True, help="Path to env_dir (root for input/out/state/corrections/reports/eval)")
     p_create.add_argument(
         "--stages", default=None,
         help="Stage range as start:end (names or numbers, e.g., extract:parse or 1:3)",

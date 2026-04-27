@@ -64,12 +64,12 @@
                     <!-- Standalone mode fields -->
                     <div id="standalone-fields" {% if environments %}style="display:none"{% endif %}>
                         <div class="mb-3">
-                            <label for="document_dir" class="form-label">Document Directory</label>
-                            <input type="text" class="form-control" id="document_dir"
-                                   name="document_dir"
-                                   placeholder="\\SERVER\OADocs\vzw or /data/vzw-docs">
+                            <label for="env_dir" class="form-label">Env Directory</label>
+                            <input type="text" class="form-control" id="env_dir"
+                                   name="env_dir"
+                                   placeholder="\\SERVER\OADocs\vzw or /data/vzw-feb2026">
                             <div class="form-text">
-                                Windows UNC path or Linux path to the document root directory.
+                                Windows UNC path or Linux path to the env_dir (root for input/, out/, state/, corrections/, reports/, eval/).
                             </div>
                         </div>
                         <div class="row mb-3">

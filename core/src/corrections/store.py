@@ -1,10 +1,10 @@
 """CorrectionStore — per-environment correction file management.
 
-Wraps the filesystem conventions:
-    <doc_root>/output/profile/*.json        (pipeline output)
-    <doc_root>/output/taxonomy/taxonomy.json
-    <doc_root>/corrections/profile.json     (engineer-edited override)
-    <doc_root>/corrections/taxonomy.json
+Wraps the filesystem conventions (D-022):
+    <env_dir>/out/profile/*.json            (pipeline output)
+    <env_dir>/out/taxonomy/taxonomy.json
+    <env_dir>/corrections/profile.json      (engineer-edited override)
+    <env_dir>/corrections/taxonomy.json
 """
 
 from __future__ import annotations
@@ -23,13 +23,13 @@ class CorrectionStore:
 
     def __init__(self, env: EnvironmentConfig):
         self.env = env
-        self.root = env.doc_root
-        self.corrections_dir = self.root / "corrections"
+        self.root = env.env_dir_path
+        self.corrections_dir = env.corrections_path()
 
     # -- Paths --------------------------------------------------------------
 
     def profile_output_path(self) -> Path | None:
-        out_dir = self.env.output_path("profile")
+        out_dir = self.env.out_path("profile")
         if not out_dir.exists():
             return None
         candidates = sorted(out_dir.glob("*.json"))
@@ -39,7 +39,7 @@ class CorrectionStore:
         return self.corrections_dir / "profile.json"
 
     def taxonomy_output_path(self) -> Path | None:
-        p = self.env.output_path("taxonomy") / "taxonomy.json"
+        p = self.env.out_path("taxonomy") / "taxonomy.json"
         return p if p.exists() else None
 
     def taxonomy_correction_path(self) -> Path:
@@ -91,7 +91,7 @@ class CorrectionStore:
         src = self.profile_output_path()
         if not src:
             raise FileNotFoundError(
-                f"No profile output at {self.env.output_path('profile')}"
+                f"No profile output at {self.env.out_path('profile')}"
             )
         dst = self.profile_correction_path()
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +127,7 @@ class CorrectionStore:
         src = self.taxonomy_output_path()
         if not src:
             raise FileNotFoundError(
-                f"No taxonomy output at {self.env.output_path('taxonomy')}"
+                f"No taxonomy output at {self.env.out_path('taxonomy')}"
             )
         dst = self.taxonomy_correction_path()
         dst.parent.mkdir(parents=True, exist_ok=True)

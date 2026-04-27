@@ -59,7 +59,7 @@ def _list_envs_with_status() -> list[dict]:
         rows.append({
             "name": env.name,
             "member": env.member,
-            "document_root": env.document_root,
+            "env_dir": env.env_dir,
             "profile": store.profile_status(),
             "taxonomy": store.taxonomy_status(),
         })

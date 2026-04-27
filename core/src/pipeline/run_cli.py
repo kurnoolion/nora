@@ -1,12 +1,12 @@
 """CLI entry point for the pipeline runner.
 
 Usage:
-    # Run full pipeline in standalone mode
-    python -m core.src.pipeline.run_cli --docs /path/to/pdfs
+    # Run full pipeline against an env_dir (no env config required)
+    python -m core.src.pipeline.run_cli --env-dir /data/vzw-feb2026
 
     # Run specific stages
-    python -m core.src.pipeline.run_cli --docs /path/to/pdfs --start extract --end parse
-    python -m core.src.pipeline.run_cli --docs /path/to/pdfs --start 1 --end 3
+    python -m core.src.pipeline.run_cli --env-dir /data/vzw-feb2026 --start extract --end parse
+    python -m core.src.pipeline.run_cli --env-dir /data/vzw-feb2026 --start 1 --end 3
 
     # Run using an environment config
     python -m core.src.pipeline.run_cli --env profiler-review
@@ -86,7 +86,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  %(prog)s --docs ./pdfs --start extract --end parse\n"
+            "  %(prog)s --env-dir /data/vzw-feb2026 --start extract --end parse\n"
             "  %(prog)s --env profiler-review\n"
             "  %(prog)s --list-stages\n"
             "  %(prog)s --detect-hw\n"
@@ -96,7 +96,7 @@ def main() -> None:
     # Mode selection
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--env", "-e", help="Environment name (from environments/ dir)")
-    mode.add_argument("--docs", type=Path, help="Document directory (standalone mode)")
+    mode.add_argument("--env-dir", type=Path, help="Path to env_dir (standalone mode, no env config required)")
     mode.add_argument("--list-stages", action="store_true", help="Show available stages and exit")
     mode.add_argument("--detect-hw", action="store_true", help="Detect hardware and recommend model")
     mode.add_argument("--qc-template", metavar="STAGE", help="Show quality check template for a stage")
@@ -107,7 +107,6 @@ def main() -> None:
     parser.add_argument("--end", default=None, help="End stage (name or number)")
 
     # Pipeline options
-    parser.add_argument("--output", "-o", type=Path, default=None, help="Output base directory")
     parser.add_argument("--profile", type=Path, default=None, help="Explicit profile path (standalone mode)")
     parser.add_argument("--model", default="auto", help="LLM model name (default: auto)")
     parser.add_argument("--model-timeout", type=int, default=600, help="LLM timeout in seconds")
@@ -162,13 +161,9 @@ def main() -> None:
         # Use env's stage range as default, allow CLI override
         start = resolve_stage(args.start) if args.start else env.stage_start
         end = resolve_stage(args.end) if args.end else env.stage_end
-    elif args.docs:
-        if not args.docs.exists():
-            print(f"Error: Document directory not found: {args.docs}")
-            sys.exit(1)
+    elif args.env_dir:
         ctx = PipelineContext.standalone(
-            documents_dir=args.docs,
-            output_base=args.output or Path("data"),
+            env_dir=args.env_dir,
             profile_path=args.profile,
             model_name=args.model,
             model_timeout=args.model_timeout,
@@ -177,7 +172,7 @@ def main() -> None:
         end = resolve_stage(args.end) if args.end else "eval"
     else:
         parser.print_help()
-        print("\nError: specify --env or --docs")
+        print("\nError: specify --env or --env-dir")
         sys.exit(1)
 
     ctx.verbose = args.verbose
@@ -216,10 +211,8 @@ def main() -> None:
     verbose_report = format_verbose_report(results, hw_summary, model_display, env_name)
     print(verbose_report)
 
-    # Save report to file
-    report_dir = ctx.stage_dirs.get("eval", Path("data/eval"))
-    if args.env:
-        report_dir = Path(ctx.documents_dir).parent / "reports"
+    # Save report to <env_dir>/reports/ (documents_dir is <env_dir>/input, so parent = env_dir)
+    report_dir = Path(ctx.documents_dir).parent / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
 
     from datetime import datetime

@@ -112,11 +112,11 @@ class PipelineContext:
     @classmethod
     def from_env(cls, env) -> PipelineContext:
         """Create context from an EnvironmentConfig."""
-        stage_dirs = {stage: env.output_path(stage) for stage in STAGE_NAMES}
+        stage_dirs = {stage: env.out_path(stage) for stage in STAGE_NAMES}
         return cls(
-            documents_dir=env.doc_root / "documents",
-            corrections_dir=env.doc_root / "corrections",
-            eval_dir=env.doc_root / "eval",
+            documents_dir=env.env_dir_path / "input",
+            corrections_dir=env.corrections_path(),
+            eval_dir=env.eval_path(),
             verbose=False,
             stage_dirs=stage_dirs,
             model_provider=env.model_provider,
@@ -129,28 +129,23 @@ class PipelineContext:
     @classmethod
     def standalone(
         cls,
-        documents_dir: Path,
-        output_base: Path = Path("data"),
+        env_dir: Path,
         profile_path: Path | None = None,
         model_name: str = "auto",
         model_timeout: int = 600,
     ) -> PipelineContext:
-        """Create context for standalone (non-environment) mode."""
-        stage_dirs = {
-            "extract": output_base / "extracted",
-            "profile": Path("profiles"),
-            "parse": output_base / "parsed",
-            "resolve": output_base / "resolved",
-            "taxonomy": output_base / "taxonomy",
-            "standards": output_base / "standards",
-            "graph": output_base / "graph",
-            "vectorstore": output_base / "vectorstore",
-            "eval": output_base / "eval",
-        }
+        """Create context for standalone (no EnvironmentConfig) mode.
+
+        Derives the standard env_dir layout (D-022) from the supplied path:
+        documents under <env_dir>/input/, outputs under <env_dir>/out/<stage>/,
+        corrections under <env_dir>/corrections/, eval under <env_dir>/eval/.
+        """
+        env_dir = Path(env_dir).resolve()
+        stage_dirs = {stage: env_dir / "out" / stage for stage in STAGE_NAMES}
         ctx = cls(
-            documents_dir=documents_dir,
-            corrections_dir=None,
-            eval_dir=None,
+            documents_dir=env_dir / "input",
+            corrections_dir=env_dir / "corrections",
+            eval_dir=env_dir / "eval",
             verbose=False,
             stage_dirs=stage_dirs,
             model_name=model_name,
