@@ -8,7 +8,7 @@ Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentPr
 - `RequirementTree` (structural_parser.py) — top-level output: plan-level metadata + flat `requirements` list; `to_dict`, `save_json`, `load_json`
 - `Requirement` — single requirement node: `req_id`, `section_number`, `title`, `parent_req_id`, `parent_section`, `hierarchy_path`, `zone_type`, `text`, `tables`, `images`, `children`, `cross_references`
 - `TableData`, `ImageRef`, `StandardsRef`, `CrossReferences` — nested types
-- `parse_cli.main` — CLI entrypoint (`python -m src.parser.parse_cli`)
+- `parse_cli.main` — CLI entrypoint (`python -m core.src.parser.parse_cli`)
 
 **Invariants**
 - Parser is **LLM-free**. Any downstream LLM enrichment (taxonomy, query synthesis) happens in its own module; the structural layer stays deterministic and cheap to re-run.

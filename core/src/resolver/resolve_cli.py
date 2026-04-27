@@ -2,12 +2,12 @@
 
 Usage:
     # Resolve all parsed trees in a directory
-    python -m src.resolver.resolve_cli \
+    python -m core.src.resolver.resolve_cli \
         --trees-dir data/parsed \
         --output-dir data/resolved
 
     # Resolve specific trees
-    python -m src.resolver.resolve_cli \
+    python -m core.src.resolver.resolve_cli \
         --trees data/parsed/LTEDATARETRY_tree.json data/parsed/LTEB13NAC_tree.json \
         --output-dir data/resolved
 """

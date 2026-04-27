@@ -13,7 +13,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
   - `get_extractor(file_path) -> BaseExtractor` — extension-keyed lookup; raises `ValueError` on unsupported
   - `extract_document(file_path, mno, release, doc_type) -> DocumentIR`
   - `infer_metadata_from_path(file_path) -> {mno, release, doc_type}` — walks `<mno>/<release>/<doc_type>/` convention
-- `extract.main()` — CLI entrypoint (`python -m src.extraction.extract`)
+- `extract.main()` — CLI entrypoint (`python -m core.src.extraction.extract`)
 
 **Invariants**
 - Every extractor returns a valid `DocumentIR`; extractor-specific details never leak into the IR's type surface.

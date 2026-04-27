@@ -2,27 +2,27 @@
 
 Usage:
     # Full pipeline: collect refs, download specs, parse, extract sections
-    python -m src.standards.standards_cli \
+    python -m core.src.standards.standards_cli \
         --manifests-dir data/resolved \
         --trees-dir data/parsed \
         --output-dir data/standards
 
     # Collect references only (no download)
-    python -m src.standards.standards_cli \
+    python -m core.src.standards.standards_cli \
         --manifests-dir data/resolved \
         --trees-dir data/parsed \
         --output-dir data/standards \
         --collect-only
 
     # Limit download to specific specs
-    python -m src.standards.standards_cli \
+    python -m core.src.standards.standards_cli \
         --manifests-dir data/resolved \
         --trees-dir data/parsed \
         --output-dir data/standards \
         --specs 24.301 36.331
 
     # Skip download (use already-cached specs)
-    python -m src.standards.standards_cli \
+    python -m core.src.standards.standards_cli \
         --manifests-dir data/resolved \
         --trees-dir data/parsed \
         --output-dir data/standards \

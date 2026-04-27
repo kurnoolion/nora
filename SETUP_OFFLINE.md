@@ -179,7 +179,7 @@ ollama run gemma4:e4b "2+2="                   # returns quickly
 ls ~/.cache/huggingface/hub/models--sentence-transformers--*/snapshots/*/config.json
 
 # Run a short NORA pipeline stage that touches both
-python -m src.cli.run_pipeline --stage-start vectorstore --stage-end vectorstore \
+python -m core.src.cli.run_pipeline --stage-start vectorstore --stage-end vectorstore \
     --document-dir /path/to/docs
 # Expect: no PIP-E001, "HF model '...' found in cache — HF_HUB_OFFLINE=1 enabled" in logs
 ```

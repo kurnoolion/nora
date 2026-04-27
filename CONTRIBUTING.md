@@ -72,19 +72,19 @@ For advanced users who prefer the terminal:
 
 2. Ask the admin for your environment name, then check it:
    ```bash
-   python -m src.env.env_cli show <your-env-name>
+   python -m core.src.env.env_cli show <your-env-name>
    ```
 
 3. Initialize your workspace:
    ```bash
-   python -m src.env.env_cli init <your-env-name>
+   python -m core.src.env.env_cli init <your-env-name>
    ```
 
 4. Place your documents in `<document_root>/documents/`
 
 5. Run the pipeline:
    ```bash
-   python -m src.pipeline.run_cli --env <your-env-name>
+   python -m core.src.pipeline.run_cli --env <your-env-name>
    ```
 
 ## File Ownership
@@ -237,9 +237,9 @@ notes: removed mock artifacts, added real features
 
 To see the QC or correction template for any stage:
 ```bash
-python -m src.pipeline.run_cli --qc-template profile
-python -m src.pipeline.run_cli --qc-template taxonomy
-python -m src.pipeline.run_cli --fix-template taxonomy
+python -m core.src.pipeline.run_cli --qc-template profile
+python -m core.src.pipeline.run_cli --qc-template taxonomy
+python -m core.src.pipeline.run_cli --fix-template taxonomy
 ```
 
 ## Environment Directory Structure
@@ -269,25 +269,25 @@ python -m src.pipeline.run_cli --fix-template taxonomy
 
 ```bash
 # List available stages
-python -m src.pipeline.run_cli --list-stages
+python -m core.src.pipeline.run_cli --list-stages
 
 # Run specific stages
-python -m src.pipeline.run_cli --env my-env --start extract --end parse
+python -m core.src.pipeline.run_cli --env my-env --start extract --end parse
 
 # Re-run from taxonomy with corrections
-python -m src.pipeline.run_cli --env my-env --start graph --end eval
+python -m core.src.pipeline.run_cli --env my-env --start graph --end eval
 
 # Check hardware and model recommendation
-python -m src.pipeline.run_cli --detect-hw
+python -m core.src.pipeline.run_cli --detect-hw
 
 # Show environment details
-python -m src.env.env_cli show my-env
+python -m core.src.env.env_cli show my-env
 
 # List all environments
-python -m src.env.env_cli list
+python -m core.src.env.env_cli list
 
 # Start the web UI server
-python -m src.web.app
+python -m core.src.web.app
 ```
 
 ## Web UI Admin Tasks

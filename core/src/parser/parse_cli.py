@@ -2,13 +2,13 @@
 
 Usage:
     # Parse a single document
-    python -m src.parser.parse_cli \
+    python -m core.src.parser.parse_cli \
         --profile profiles/vzw_oa_profile.json \
         --doc data/extracted/LTEDATARETRY_ir.json \
         --output data/parsed/LTEDATARETRY_tree.json
 
     # Parse all documents in a directory
-    python -m src.parser.parse_cli \
+    python -m core.src.parser.parse_cli \
         --profile profiles/vzw_oa_profile.json \
         --docs-dir data/extracted \
         --output-dir data/parsed

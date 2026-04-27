@@ -2,19 +2,19 @@
 
 Usage:
     # Run all evaluation questions (graph-scoped mode)
-    python -m src.eval.eval_cli
+    python -m core.src.eval.eval_cli
 
     # Run A/B comparison (graph-scoped vs pure RAG)
-    python -m src.eval.eval_cli --ab
+    python -m core.src.eval.eval_cli --ab
 
     # Run specific category only
-    python -m src.eval.eval_cli --category cross_doc
+    python -m core.src.eval.eval_cli --category cross_doc
 
     # Save report to JSON
-    python -m src.eval.eval_cli --output data/eval/report.json
+    python -m core.src.eval.eval_cli --output data/eval/report.json
 
     # Verbose mode
-    python -m src.eval.eval_cli --verbose
+    python -m core.src.eval.eval_cli --verbose
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _create_runner(args: argparse.Namespace) -> EvalRunner:
     graph_path = Path(args.graph)
     if not graph_path.exists():
         print(f"Error: Graph not found at {graph_path}")
-        print("Run: python -m src.graph.graph_cli")
+        print("Run: python -m core.src.graph.graph_cli")
         sys.exit(1)
 
     graph = load_graph(graph_path)
@@ -72,7 +72,7 @@ def _create_runner(args: argparse.Namespace) -> EvalRunner:
 
     if store.count == 0:
         print("Error: Vector store is empty.")
-        print("Run: python -m src.vectorstore.vectorstore_cli")
+        print("Run: python -m core.src.vectorstore.vectorstore_cli")
         sys.exit(1)
 
     # Create synthesizer based on --llm flag

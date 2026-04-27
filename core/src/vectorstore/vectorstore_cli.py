@@ -2,26 +2,26 @@
 
 Usage:
     # Build with defaults (all-MiniLM-L6-v2, ChromaDB, cosine)
-    python -m src.vectorstore.vectorstore_cli
+    python -m core.src.vectorstore.vectorstore_cli
 
     # Build with a config file
-    python -m src.vectorstore.vectorstore_cli --config configs/vs_experiment1.json
+    python -m core.src.vectorstore.vectorstore_cli --config configs/vs_experiment1.json
 
     # Override specific settings via CLI flags
-    python -m src.vectorstore.vectorstore_cli --model all-mpnet-base-v2 --metric l2
+    python -m core.src.vectorstore.vectorstore_cli --model all-mpnet-base-v2 --metric l2
 
     # Force rebuild (clear existing data)
-    python -m src.vectorstore.vectorstore_cli --rebuild
+    python -m core.src.vectorstore.vectorstore_cli --rebuild
 
     # Inspect existing store
-    python -m src.vectorstore.vectorstore_cli --info
+    python -m core.src.vectorstore.vectorstore_cli --info
 
     # Save current config for reproducibility
-    python -m src.vectorstore.vectorstore_cli --save-config configs/vs_baseline.json
+    python -m core.src.vectorstore.vectorstore_cli --save-config configs/vs_baseline.json
 
     # Test query against the store
-    python -m src.vectorstore.vectorstore_cli --query "T3402 timer behavior"
-    python -m src.vectorstore.vectorstore_cli --query "attach reject cause codes" --n-results 5 --filter-plan LTEDATARETRY
+    python -m core.src.vectorstore.vectorstore_cli --query "T3402 timer behavior"
+    python -m core.src.vectorstore.vectorstore_cli --query "attach reject cause codes" --n-results 5 --filter-plan LTEDATARETRY
 """
 
 from __future__ import annotations

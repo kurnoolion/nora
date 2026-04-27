@@ -2,13 +2,13 @@
 
 Usage:
     # Extract a single document
-    python -m src.extraction.extract data/raw/vzw/2026_feb/requirements/LTEDATARETRY.pdf
+    python -m core.src.extraction.extract data/raw/vzw/2026_feb/requirements/LTEDATARETRY.pdf
 
     # Extract all documents in a directory
-    python -m src.extraction.extract data/raw/vzw/2026_feb/requirements/
+    python -m core.src.extraction.extract data/raw/vzw/2026_feb/requirements/
 
     # Specify output directory
-    python -m src.extraction.extract data/raw/vzw/2026_feb/requirements/ --output data/extracted
+    python -m core.src.extraction.extract data/raw/vzw/2026_feb/requirements/ --output data/extracted
 """
 
 from __future__ import annotations

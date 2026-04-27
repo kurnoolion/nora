@@ -151,27 +151,27 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **Data model:** `src/models/document.py` — Normalized IR (DocumentIR, ContentBlock, FontInfo, Position, BlockType)
 - **Output:** `data/extracted/*_ir.json` — 5 VZW docs extracted
 - **Key design:** pymupdf for text+font metadata, pdfplumber for tables, table-region deduplication, font-group splitting for mixed-font blocks, header/footer filtering
-- **CLI:** `python -m src.extraction.extract <path-or-dir>`
+- **CLI:** `python -m core.src.extraction.extract <path-or-dir>`
 
 #### PoC Step 2 — DocumentProfiler (DONE, committed)
 - **Code:** `src/profiler/` (profiler.py, profile_schema.py, profile_cli.py)
 - **Output:** `profiles/vzw_oa_profile.json` — VZW OA profile derived from LTEDATARETRY + LTEB13NAC
 - **Validated** against 3 held-out docs (LTESMS, LTEAT, LTEOTADM) — all passed with 0 warnings
 - **Key design:** Font size clustering for heading detection, regex mining for req IDs and metadata, frequency analysis for body text, zone classification by keyword matching
-- **CLI:** `python -m src.profiler.profile_cli create|update|validate`
+- **CLI:** `python -m core.src.profiler.profile_cli create|update|validate`
 
 #### PoC Step 3 — Generic Structural Parser (DONE, committed)
 - **Code:** `src/parser/` (structural_parser.py, parse_cli.py)
 - **Output:** `data/parsed/*_tree.json` — 5 VZW docs parsed into RequirementTree structures
 - **Key classes:** GenericStructuralParser, RequirementTree, Requirement, CrossReferences, StandardsRef, TableData, ImageRef
-- **CLI:** `python -m src.parser.parse_cli --profile <profile> --doc <ir.json> --output <tree.json>`
+- **CLI:** `python -m core.src.parser.parse_cli --profile <profile> --doc <ir.json> --output <tree.json>`
 
 #### PoC Step 5 — Cross-Reference Resolver (DONE, committed)
 - **Code:** `src/resolver/` (resolver.py, resolve_cli.py)
 - **Output:** `data/resolved/*_xrefs.json` — per-document cross-reference manifests
 - **Three resolution types:** internal (same tree), cross-plan (other trees in corpus), standards (3GPP TS citations)
 - **Key classes:** CrossReferenceResolver, CrossReferenceManifest, ResolvedInternalRef, ResolvedCrossPlanRef, ResolvedStandardsRef
-- **CLI:** `python -m src.resolver.resolve_cli --trees-dir data/parsed --output-dir data/resolved`
+- **CLI:** `python -m core.src.resolver.resolve_cli --trees-dir data/parsed --output-dir data/resolved`
 
 #### PoC Step 6 — Feature Taxonomy (DONE, committed)
 - **LLM abstraction:** `src/llm/` (base.py — LLMProvider Protocol, mock_provider.py — MockLLMProvider with keyword catalog)
@@ -179,7 +179,7 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **Consolidation:** `src/taxonomy/consolidator.py` — cross-document feature merge and deduplication
 - **Data model:** `src/taxonomy/schema.py` — Feature, DocumentFeatures, TaxonomyFeature, FeatureTaxonomy
 - **Output:** `data/taxonomy/*_features.json` (per-doc) + `data/taxonomy/taxonomy.json` (unified)
-- **CLI:** `python -m src.taxonomy.taxonomy_cli --trees-dir data/parsed --output-dir data/taxonomy`
+- **CLI:** `python -m core.src.taxonomy.taxonomy_cli --trees-dir data/parsed --output-dir data/taxonomy`
 - **LLM swap:** Any class with `complete(prompt, system, temperature, max_tokens) -> str` satisfies the Protocol. See `src/llm/base.py` for documentation.
 
 #### PoC Step 7 — Standards Ingestion (DONE, committed)
@@ -190,7 +190,7 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **Section extractor:** `src/standards/section_extractor.py` — extracts referenced sections + parent + siblings + definitions for contextual completeness
 - **Data model:** `src/standards/schema.py` — SpecReference, AggregatedSpecRef, StandardsReferenceIndex, SpecSection, SpecDocument, ExtractedSpecContent
 - **Output:** `data/standards/reference_index.json` + `data/standards/TS_{spec}/Rel-{N}/{spec_parsed.json, sections.json}`
-- **CLI:** `python -m src.standards.standards_cli --manifests-dir data/resolved --trees-dir data/parsed --output-dir data/standards`
+- **CLI:** `python -m core.src.standards.standards_cli --manifests-dir data/resolved --trees-dir data/parsed --output-dir data/standards`
 - **Generic design:** No hardcoded spec lists — all specs and versions derived from how they're referenced in MNO requirement documents. Works for any MNO. No LLM required.
 
 ### Code Review & Bug Fixes (completed after Step 3)
@@ -238,7 +238,7 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Builder:** `src/graph/builder.py` — 7-step construction: MNO/Release/Plan → Requirement nodes + parent_of hierarchy → depends_on edges from xref manifests → Standard_Section nodes from extracted sections + references_standard edges → Feature nodes + maps_to edges (two-pass: nodes first, then edges) → shared_standard edges (cross-plan only)
 - **Data model:** `GraphStats` dataclass for summary statistics with JSON serialization
 - **Serialization:** JSON (node-link format via `nx.node_link_data`) and GraphML (with list/dict attrs converted to JSON strings)
-- **CLI:** `python -m src.graph.graph_cli --verify` — builds graph + runs 7 diagnostic queries (reqs per plan, feature coverage, most-referenced standards, cross-plan deps, shared standards, connectivity, path examples)
+- **CLI:** `python -m core.src.graph.graph_cli --verify` — builds graph + runs 7 diagnostic queries (reqs per plan, feature coverage, most-referenced standards, cross-plan deps, shared standards, connectivity, path examples)
 - **Graph stats (real data):** 1,078 nodes (1 MNO, 1 Release, 5 Plans, 705 Requirements, 350 Standard_Sections, 16 Features), 11,732 edges (663 parent_of, 705 belongs_to, 300 depends_on, 326 references_standard, 9,260 maps_to, 204 shared_standard, 268 parent_section, 5 contains_plan, 1 has_release), 22 connected components with 98.1% in largest
 - **Output:** `data/graph/knowledge_graph.json` + `data/graph/graph_stats.json`
 - **Note on maps_to granularity:** MockLLMProvider produces coarse feature mappings (all reqs in a plan → plan's features). Real LLM would refine to specific requirement subsets. The 9,260 edges are expected mock behavior.
@@ -250,7 +250,7 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Embedding provider:** `src/vectorstore/embedding_st.py` — `SentenceTransformerEmbedder` using sentence-transformers library. Configurable model name, device, batch size, normalization. No API key needed.
 - **Vector store backend:** `src/vectorstore/store_chroma.py` — `ChromaDBStore` using ChromaDB with persistent storage. Configurable distance metric (cosine/l2/ip), collection name. Metadata sanitization (list/dict → JSON strings for ChromaDB compatibility) with deserialization on query.
 - **Builder:** `src/vectorstore/builder.py` — `VectorStoreBuilder` orchestrates: load trees + taxonomy → build chunks → deduplicate by ID (keeps longer text) → batch embed → store. `BuildStats` dataclass for summary statistics.
-- **CLI:** `python -m src.vectorstore.vectorstore_cli` — supports `--config` JSON file + CLI flag overrides (--model, --metric, --backend, --device, etc.), `--rebuild`, `--info`, `--query` with `--filter-plan`/`--filter-mno`, `--save-config`. Saves config + stats alongside vector store data for reproducibility.
+- **CLI:** `python -m core.src.vectorstore.vectorstore_cli` — supports `--config` JSON file + CLI flag overrides (--model, --metric, --backend, --device, etc.), `--rebuild`, `--info`, `--query` with `--filter-plan`/`--filter-mno`, `--save-config`. Saves config + stats alongside vector store data for reproducibility.
 - **Deduplication:** Builder deduplicates chunks with same ID (parser artifact: VZ_REQ_LTEAT_33081 appears in two sections), keeping the chunk with more text content. 706 raw chunks → 705 after dedup.
 - **Design:** All components are configurable and swappable via Protocols — adding a new embedding model or vector store backend requires no changes to existing code, just a new class matching the Protocol.
 
@@ -288,7 +288,7 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Tested end-to-end:** profile→parse→resolve chain (3/3 OK, 711 reqs), taxonomy with mock LLM (OK, 16 features), error handling (clean failures with error codes), `--continue-on-error` flag, model picker (correctly selects already-pulled models).
 
 #### Web UI for Team Access (DONE, committed)
-- **Application:** `src/web/app.py` — FastAPI entry point with lifespan initializing JobQueue, MetricsStore, PathMapper, ResourceSampler. Mounts static files, includes 7 route modules. MetricsMiddleware for request timing. Entry: `python -m src.web.app`.
+- **Application:** `src/web/app.py` — FastAPI entry point with lifespan initializing JobQueue, MetricsStore, PathMapper, ResourceSampler. Mounts static files, includes 7 route modules. MetricsMiddleware for request timing. Entry: `python -m core.src.web.app`.
 - **Configuration:** `src/web/config.py` — `WebConfig` dataclass (host, port, root_path, path_mappings, ollama_url, default_model, db_path). `PathMapping` dataclass (windows, linux, label). Loads from `web/config.json`.
 - **Path mapping:** `src/web/path_mapper.py` — `PathMapper` with `to_linux()`, `to_windows()`, `resolve()` (auto-detects Windows/Linux), `is_within_roots()` (directory traversal protection). Case-insensitive Windows matching, backslash normalization.
 - **Job queue:** `src/web/jobs.py` — `Job` dataclass + `JobQueue` with SQLite persistence (aiosqlite, WAL mode). Two tables: `jobs` and `job_logs`. Operations: submit, get, list, update_status, append_log, get_logs_with_numbers (for SSE), cancel, cleanup_old.
@@ -399,10 +399,10 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - Quality: good reasoning, inconsistent citation following. Citation fallback mitigates this.
 
 **Immediate next actions:**
-1. Start web UI: `python -m src.web.app` — access at `http://localhost:8000` (or behind reverse proxy at configured root_path)
+1. Start web UI: `python -m core.src.web.app` — access at `http://localhost:8000` (or behind reverse proxy at configured root_path)
 2. Run full pipeline on work laptop via web UI or CLI
 3. Create environments for team members via web UI (`/environments/new`) or CLI
-4. Run A/B evaluation with real LLM: `python -m src.eval.eval_cli --ab --llm ollama --llm-timeout 600`
+4. Run A/B evaluation with real LLM: `python -m core.src.eval.eval_cli --ab --llm ollama --llm-timeout 600`
 5. Team members: access web UI to run pipeline stages, submit queries, review results
 6. Monitor system metrics at `/metrics` dashboard
 7. Experiment with different embedding models and LLM models (gemma3:12b on 15GB GPU)

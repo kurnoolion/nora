@@ -1,7 +1,7 @@
 """NORA Web UI — FastAPI application.
 
 Run with:
-    python -m src.web.app
+    python -m core.src.web.app
 """
 
 from __future__ import annotations

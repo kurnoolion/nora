@@ -17,7 +17,7 @@ from core.src.env.config import (
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 ENVIRONMENTS_DIR = PROJECT_ROOT / "environments"
 
 router = APIRouter()

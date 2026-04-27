@@ -2,18 +2,18 @@
 
 Usage:
     # Create a new profile from representative docs
-    python -m src.profiler.profile_cli create \
+    python -m core.src.profiler.profile_cli create \
         --name VZW_OA \
         --docs data/extracted/LTEDATARETRY_ir.json data/extracted/LTEB13NAC_ir.json \
         --output profiles/vzw_oa_profile.json
 
     # Update profile with additional docs
-    python -m src.profiler.profile_cli update \
+    python -m core.src.profiler.profile_cli update \
         --profile profiles/vzw_oa_profile.json \
         --docs data/extracted/LTESMS_ir.json
 
     # Validate profile against a document
-    python -m src.profiler.profile_cli validate \
+    python -m core.src.profiler.profile_cli validate \
         --profile profiles/vzw_oa_profile.json \
         --doc data/extracted/LTEOTADM_ir.json
 """

@@ -73,30 +73,30 @@ The pipeline runner chains all stages with a single command, generates compact r
 
 ```bash
 # Run the full pipeline on documents in current directory
-python -m src.pipeline.run_cli --docs . --start extract --end eval
+python -m core.src.pipeline.run_cli --docs . --start extract --end eval
 
 # Run specific stages (by name or number)
-python -m src.pipeline.run_cli --docs . --start profile --end parse
-python -m src.pipeline.run_cli --docs . --start 1 --end 3
+python -m core.src.pipeline.run_cli --docs . --start profile --end parse
+python -m core.src.pipeline.run_cli --docs . --start 1 --end 3
 
 # Run using an environment config (see Environment Management below)
-python -m src.pipeline.run_cli --env profiler-review
+python -m core.src.pipeline.run_cli --env profiler-review
 
 # Use mock LLM (no Ollama required)
-python -m src.pipeline.run_cli --docs . --model mock --start taxonomy --end graph
+python -m core.src.pipeline.run_cli --docs . --model mock --start taxonomy --end graph
 
 # Continue past failed stages
-python -m src.pipeline.run_cli --docs . --continue-on-error
+python -m core.src.pipeline.run_cli --docs . --continue-on-error
 
 # List available stages
-python -m src.pipeline.run_cli --list-stages
+python -m core.src.pipeline.run_cli --list-stages
 
 # Detect hardware and get model recommendation
-python -m src.pipeline.run_cli --detect-hw
+python -m core.src.pipeline.run_cli --detect-hw
 
 # Show quality check / correction feedback templates
-python -m src.pipeline.run_cli --qc-template profile
-python -m src.pipeline.run_cli --fix-template taxonomy
+python -m core.src.pipeline.run_cli --qc-template profile
+python -m core.src.pipeline.run_cli --fix-template taxonomy
 ```
 
 **Pipeline output** includes a compact report block (paste in chat for collaborative debugging):
@@ -116,7 +116,7 @@ For team members who prefer a browser-based interface over the CLI:
 
 ```bash
 # Start the web server
-python -m src.web.app
+python -m core.src.web.app
 
 # Access at http://localhost:8000
 # Or behind a reverse proxy at the configured root_path (e.g., /nora)
@@ -192,7 +192,7 @@ Environments define scoped workspaces for team members to run specific pipeline 
 
 ```bash
 # Create an environment for a team member
-python -m src.env.env_cli create \
+python -m core.src.env.env_cli create \
     --name profiler-review \
     --member alice \
     --doc-root /data/vzw-new-batch \
@@ -202,7 +202,7 @@ python -m src.env.env_cli create \
     --created-by mohan
 
 # Create a full-pipeline environment with multiple MNOs
-python -m src.env.env_cli create \
+python -m core.src.env.env_cli create \
     --name eval-review \
     --member bob \
     --doc-root /data/multi-mno \
@@ -210,16 +210,16 @@ python -m src.env.env_cli create \
     --scope VZW/Feb2026 ATT/Oct2025
 
 # List all environments
-python -m src.env.env_cli list
+python -m core.src.env.env_cli list
 
 # Show environment details and directory status
-python -m src.env.env_cli show profiler-review
+python -m core.src.env.env_cli show profiler-review
 
 # Initialize directory structure at document_root
-python -m src.env.env_cli init profiler-review
+python -m core.src.env.env_cli init profiler-review
 
 # Run the pipeline for an environment
-python -m src.pipeline.run_cli --env profiler-review
+python -m core.src.pipeline.run_cli --env profiler-review
 ```
 
 **Document root layout** (created by `init`):
@@ -241,7 +241,7 @@ python -m src.pipeline.run_cli --env profiler-review
 The system auto-detects hardware and selects the best Ollama model that fits:
 
 ```bash
-python -m src.pipeline.run_cli --detect-hw
+python -m core.src.pipeline.run_cli --detect-hw
 ```
 
 | Model | Size (Q4) | RAM/VRAM | GPU-only | Description |
@@ -271,50 +271,50 @@ Run steps individually for more control:
 
 ```bash
 # Step 1: Extract document content → data/extracted/
-python -m src.extraction.extract *.pdf --output data/extracted
+python -m core.src.extraction.extract *.pdf --output data/extracted
 
 # Step 2: Create document profile → profiles/vzw_oa_profile.json
-python -m src.profiler.profile_cli create \
+python -m core.src.profiler.profile_cli create \
     --name VZW_OA \
     --docs data/extracted/LTEDATARETRY_ir.json data/extracted/LTEB13NAC_ir.json \
     --output profiles/vzw_oa_profile.json
 
 # Step 3: Parse all documents → data/parsed/
-python -m src.parser.parse_cli \
+python -m core.src.parser.parse_cli \
     --profile profiles/vzw_oa_profile.json \
     --docs-dir data/extracted \
     --output-dir data/parsed
 
 # Step 5: Resolve cross-references → data/resolved/
-python -m src.resolver.resolve_cli \
+python -m core.src.resolver.resolve_cli \
     --trees-dir data/parsed \
     --output-dir data/resolved
 
 # Step 6: Extract feature taxonomy → data/taxonomy/
-python -m src.taxonomy.taxonomy_cli \
+python -m core.src.taxonomy.taxonomy_cli \
     --trees-dir data/parsed \
     --output-dir data/taxonomy
 
 # Step 7: Ingest referenced 3GPP standards → data/standards/
 # (downloads specs from 3GPP FTP — requires internet access)
-python -m src.standards.standards_cli \
+python -m core.src.standards.standards_cli \
     --manifests-dir data/resolved \
     --trees-dir data/parsed \
     --output-dir data/standards
 
 # Step 8: Build knowledge graph → data/graph/
-python -m src.graph.graph_cli --verify
+python -m core.src.graph.graph_cli --verify
 
 # Step 9: Build vector store → data/vectorstore/
-python -m src.vectorstore.vectorstore_cli
+python -m core.src.vectorstore.vectorstore_cli
 
 # Step 10: Query the system
-python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+python -m core.src.query.query_cli --query "What is the T3402 timer behavior?"
 
 # Step 11: Evaluate the pipeline
-python -m src.eval.eval_cli                       # Run all 18 test questions
-python -m src.eval.eval_cli --ab                  # A/B: graph-scoped vs pure RAG
-python -m src.eval.eval_cli --output data/eval/report.json  # Save report
+python -m core.src.eval.eval_cli                       # Run all 18 test questions
+python -m core.src.eval.eval_cli --ab                  # A/B: graph-scoped vs pure RAG
+python -m core.src.eval.eval_cli --output data/eval/report.json  # Save report
 ```
 
 ## Running Tests
@@ -367,10 +367,10 @@ Extracts text, tables, and images from PDFs into a normalized intermediate repre
 
 ```bash
 # Extract a single document
-python -m src.extraction.extract LTEDATARETRY.pdf --output data/extracted
+python -m core.src.extraction.extract LTEDATARETRY.pdf --output data/extracted
 
 # Extract all PDFs in a directory
-python -m src.extraction.extract /path/to/pdfs/ --output data/extracted
+python -m core.src.extraction.extract /path/to/pdfs/ --output data/extracted
 ```
 
 **Output:** `data/extracted/<name>_ir.json`
@@ -394,18 +394,18 @@ Analyzes representative documents to derive a document structure profile. The pr
 
 ```bash
 # Create profile from representative docs
-python -m src.profiler.profile_cli create \
+python -m core.src.profiler.profile_cli create \
     --name VZW_OA \
     --docs data/extracted/LTEDATARETRY_ir.json data/extracted/LTEB13NAC_ir.json \
     --output profiles/vzw_oa_profile.json
 
 # Validate profile against a held-out document
-python -m src.profiler.profile_cli validate \
+python -m core.src.profiler.profile_cli validate \
     --profile profiles/vzw_oa_profile.json \
     --doc data/extracted/LTESMS_ir.json
 
 # Update profile with additional docs
-python -m src.profiler.profile_cli update \
+python -m core.src.profiler.profile_cli update \
     --profile profiles/vzw_oa_profile.json \
     --docs data/extracted/LTEOTADM_ir.json
 ```
@@ -438,13 +438,13 @@ Applies a document profile to parse extracted IR into a structured requirement t
 
 ```bash
 # Parse a single document
-python -m src.parser.parse_cli \
+python -m core.src.parser.parse_cli \
     --profile profiles/vzw_oa_profile.json \
     --doc data/extracted/LTEDATARETRY_ir.json \
     --output data/parsed/LTEDATARETRY_tree.json
 
 # Parse all documents in a directory
-python -m src.parser.parse_cli \
+python -m core.src.parser.parse_cli \
     --profile profiles/vzw_oa_profile.json \
     --docs-dir data/extracted \
     --output-dir data/parsed
@@ -478,12 +478,12 @@ Resolves cross-references from parsed trees: internal refs (same document), cros
 
 ```bash
 # Resolve all parsed trees
-python -m src.resolver.resolve_cli \
+python -m core.src.resolver.resolve_cli \
     --trees-dir data/parsed \
     --output-dir data/resolved
 
 # Resolve specific trees
-python -m src.resolver.resolve_cli \
+python -m core.src.resolver.resolve_cli \
     --trees data/parsed/LTEDATARETRY_tree.json data/parsed/LTESMS_tree.json \
     --output-dir data/resolved
 ```
@@ -516,12 +516,12 @@ Extracts telecom features from each document using an LLM (mock provider for tes
 
 ```bash
 # Build taxonomy from all parsed trees
-python -m src.taxonomy.taxonomy_cli \
+python -m core.src.taxonomy.taxonomy_cli \
     --trees-dir data/parsed \
     --output-dir data/taxonomy
 
 # Verbose mode
-python -m src.taxonomy.taxonomy_cli --trees-dir data/parsed -v
+python -m core.src.taxonomy.taxonomy_cli --trees-dir data/parsed -v
 ```
 
 **Output:**
@@ -573,22 +573,22 @@ Collects all 3GPP standards references from MNO requirement documents, downloads
 
 ```bash
 # Full pipeline: collect refs, download, parse, extract
-python -m src.standards.standards_cli \
+python -m core.src.standards.standards_cli \
     --manifests-dir data/resolved \
     --trees-dir data/parsed \
     --output-dir data/standards
 
 # Collect references only (no download)
-python -m src.standards.standards_cli --collect-only
+python -m core.src.standards.standards_cli --collect-only
 
 # Process only specific specs
-python -m src.standards.standards_cli --specs 24.301 36.331
+python -m core.src.standards.standards_cli --specs 24.301 36.331
 
 # Skip download (use already-cached specs)
-python -m src.standards.standards_cli --no-download
+python -m core.src.standards.standards_cli --no-download
 
 # Limit specs to process (useful for testing)
-python -m src.standards.standards_cli --max-specs 3
+python -m core.src.standards.standards_cli --max-specs 3
 ```
 
 **Output:**
@@ -652,10 +652,10 @@ Builds a unified NetworkX DiGraph from all ingestion outputs: parsed trees, cros
 
 ```bash
 # Build graph with diagnostic queries
-python -m src.graph.graph_cli --verify
+python -m core.src.graph.graph_cli --verify
 
 # Build graph without diagnostics
-python -m src.graph.graph_cli
+python -m core.src.graph.graph_cli
 ```
 
 **Output:**
@@ -668,29 +668,29 @@ Creates embeddings for requirement chunks and stores them in a vector store with
 
 ```bash
 # Build with defaults (all-MiniLM-L6-v2, ChromaDB, cosine)
-python -m src.vectorstore.vectorstore_cli
+python -m core.src.vectorstore.vectorstore_cli
 
 # Use a different embedding model
-python -m src.vectorstore.vectorstore_cli --model all-mpnet-base-v2
+python -m core.src.vectorstore.vectorstore_cli --model all-mpnet-base-v2
 
 # Use a config file for reproducible experiments
-python -m src.vectorstore.vectorstore_cli --config configs/experiment1.json
+python -m core.src.vectorstore.vectorstore_cli --config configs/experiment1.json
 
 # Override distance metric
-python -m src.vectorstore.vectorstore_cli --metric l2
+python -m core.src.vectorstore.vectorstore_cli --metric l2
 
 # Force rebuild (clear existing data)
-python -m src.vectorstore.vectorstore_cli --rebuild
+python -m core.src.vectorstore.vectorstore_cli --rebuild
 
 # Inspect existing store
-python -m src.vectorstore.vectorstore_cli --info
+python -m core.src.vectorstore.vectorstore_cli --info
 
 # Test query against the store
-python -m src.vectorstore.vectorstore_cli --query "T3402 timer behavior"
-python -m src.vectorstore.vectorstore_cli --query "attach reject" --filter-plan LTEDATARETRY --n-results 5
+python -m core.src.vectorstore.vectorstore_cli --query "T3402 timer behavior"
+python -m core.src.vectorstore.vectorstore_cli --query "attach reject" --filter-plan LTEDATARETRY --n-results 5
 
 # Save config alongside results for reproducibility
-python -m src.vectorstore.vectorstore_cli --save-config configs/baseline.json
+python -m core.src.vectorstore.vectorstore_cli --save-config configs/baseline.json
 ```
 
 **Output:**
@@ -720,28 +720,28 @@ python -m src.vectorstore.vectorstore_cli --save-config configs/baseline.json
 
 ```bash
 # Single query (mock synthesizer — fast, no LLM needed)
-python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+python -m core.src.query.query_cli --query "What is the T3402 timer behavior?"
 
 # With real LLM via Ollama (requires ollama running + model pulled)
-python -m src.query.query_cli --llm ollama --query "What is the T3402 timer behavior?"
+python -m core.src.query.query_cli --llm ollama --query "What is the T3402 timer behavior?"
 
 # Specify a different Ollama model
-python -m src.query.query_cli --llm ollama --llm-model gemma4:e2b --query "..."
+python -m core.src.query.query_cli --llm ollama --llm-model gemma4:e2b --query "..."
 
 # Increase timeout for slow CPU inference (default: 300s)
-python -m src.query.query_cli --llm ollama --llm-timeout 600 --query "..."
+python -m core.src.query.query_cli --llm ollama --llm-timeout 600 --query "..."
 
 # Verbose mode (shows all pipeline stages)
-python -m src.query.query_cli --query "T3402 timer" --verbose
+python -m core.src.query.query_cli --query "T3402 timer" --verbose
 
 # Interactive mode
-python -m src.query.query_cli --interactive
+python -m core.src.query.query_cli --interactive
 
 # Custom settings
-python -m src.query.query_cli --query "..." --top-k 15 --max-depth 3
+python -m core.src.query.query_cli --query "..." --top-k 15 --max-depth 3
 
 # Save response to JSON
-python -m src.query.query_cli --query "..." --output response.json
+python -m core.src.query.query_cli --query "..." --output response.json
 ```
 
 **Output:** Query response with answer, citations, and pipeline statistics.
@@ -769,23 +769,23 @@ Evaluates the query pipeline on 18 test questions across 5 categories, measuring
 
 ```bash
 # Run all 18 evaluation questions (mock synthesizer — fast)
-python -m src.eval.eval_cli
+python -m core.src.eval.eval_cli
 
 # Run with real LLM via Ollama
-python -m src.eval.eval_cli --llm ollama
+python -m core.src.eval.eval_cli --llm ollama
 
 # Run A/B comparison (graph-scoped vs pure RAG)
-python -m src.eval.eval_cli --ab
-python -m src.eval.eval_cli --ab --llm ollama   # with real LLM
+python -m core.src.eval.eval_cli --ab
+python -m core.src.eval.eval_cli --ab --llm ollama   # with real LLM
 
 # Run a specific category only
-python -m src.eval.eval_cli --category cross_doc
+python -m core.src.eval.eval_cli --category cross_doc
 
 # Save report to JSON
-python -m src.eval.eval_cli --output data/eval/report.json
+python -m core.src.eval.eval_cli --output data/eval/report.json
 
 # Verbose mode (shows pipeline stage details)
-python -m src.eval.eval_cli --verbose
+python -m core.src.eval.eval_cli --verbose
 ```
 
 **Test question categories (18 questions):**
@@ -818,7 +818,7 @@ The system includes three LLM providers, all satisfying the `LLMProvider` Protoc
 
 ```bash
 # Use from CLI
-python -m src.query.query_cli --llm ollama --query "..."
+python -m core.src.query.query_cli --llm ollama --query "..."
 
 # Use programmatically
 from src.llm.ollama_provider import OllamaProvider

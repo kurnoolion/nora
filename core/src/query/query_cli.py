@@ -2,19 +2,19 @@
 
 Usage:
     # Single query
-    python -m src.query.query_cli --query "What is the T3402 timer behavior?"
+    python -m core.src.query.query_cli --query "What is the T3402 timer behavior?"
 
     # Verbose mode (shows all pipeline stages)
-    python -m src.query.query_cli --query "T3402 timer" --verbose
+    python -m core.src.query.query_cli --query "T3402 timer" --verbose
 
     # Interactive mode
-    python -m src.query.query_cli --interactive
+    python -m core.src.query.query_cli --interactive
 
     # With custom settings
-    python -m src.query.query_cli --query "..." --top-k 15 --max-depth 3
+    python -m core.src.query.query_cli --query "..." --top-k 15 --max-depth 3
 
     # Save response to file
-    python -m src.query.query_cli --query "..." --output response.json
+    python -m core.src.query.query_cli --query "..." --output response.json
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
     graph_path = Path(args.graph)
     if not graph_path.exists():
         print(f"Error: Graph not found at {graph_path}")
-        print("Run: python -m src.graph.graph_cli")
+        print("Run: python -m core.src.graph.graph_cli")
         sys.exit(1)
 
     graph = load_graph(graph_path)
@@ -70,7 +70,7 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
 
     if store.count == 0:
         print("Error: Vector store is empty.")
-        print("Run: python -m src.vectorstore.vectorstore_cli")
+        print("Run: python -m core.src.vectorstore.vectorstore_cli")
         sys.exit(1)
 
     # Create analyzer and synthesizer based on --llm flag

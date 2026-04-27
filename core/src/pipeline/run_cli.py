@@ -2,24 +2,24 @@
 
 Usage:
     # Run full pipeline in standalone mode
-    python -m src.pipeline.run_cli --docs /path/to/pdfs
+    python -m core.src.pipeline.run_cli --docs /path/to/pdfs
 
     # Run specific stages
-    python -m src.pipeline.run_cli --docs /path/to/pdfs --start extract --end parse
-    python -m src.pipeline.run_cli --docs /path/to/pdfs --start 1 --end 3
+    python -m core.src.pipeline.run_cli --docs /path/to/pdfs --start extract --end parse
+    python -m core.src.pipeline.run_cli --docs /path/to/pdfs --start 1 --end 3
 
     # Run using an environment config
-    python -m src.pipeline.run_cli --env profiler-review
+    python -m core.src.pipeline.run_cli --env profiler-review
 
     # Show available stages
-    python -m src.pipeline.run_cli --list-stages
+    python -m core.src.pipeline.run_cli --list-stages
 
     # Show QC templates
-    python -m src.pipeline.run_cli --qc-template profile
-    python -m src.pipeline.run_cli --fix-template taxonomy
+    python -m core.src.pipeline.run_cli --qc-template profile
+    python -m core.src.pipeline.run_cli --fix-template taxonomy
 
     # Auto-detect hardware and recommend model
-    python -m src.pipeline.run_cli --detect-hw
+    python -m core.src.pipeline.run_cli --detect-hw
 """
 
 from __future__ import annotations

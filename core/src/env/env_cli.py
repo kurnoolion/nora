@@ -2,10 +2,10 @@
 
 Usage:
     # List available stages
-    python -m src.env.env_cli stages
+    python -m core.src.env.env_cli stages
 
     # Create an environment
-    python -m src.env.env_cli create \
+    python -m core.src.env.env_cli create \
         --name profiler-review \
         --member alice \
         --doc-root /data/vzw-new-batch \
@@ -14,16 +14,16 @@ Usage:
         --objectives "Verify heading detection" "Check table extraction"
 
     # List all environments
-    python -m src.env.env_cli list
+    python -m core.src.env.env_cli list
 
     # Show environment details
-    python -m src.env.env_cli show profiler-review
+    python -m core.src.env.env_cli show profiler-review
 
     # Initialize directory structure at document_root
-    python -m src.env.env_cli init profiler-review
+    python -m core.src.env.env_cli init profiler-review
 
     # Delete an environment config
-    python -m src.env.env_cli delete profiler-review
+    python -m core.src.env.env_cli delete profiler-review
 """
 
 from __future__ import annotations
@@ -136,13 +136,13 @@ def cmd_create(args: argparse.Namespace) -> None:
         print(f"  Objectives:")
         for obj in env.objectives:
             print(f"    - {obj}")
-    print(f"\nNext: python -m src.env.env_cli init {args.name}")
+    print(f"\nNext: python -m core.src.env.env_cli init {args.name}")
 
 
 def cmd_list(_args: argparse.Namespace) -> None:
     """List all environments."""
     if not ENVS_DIR.exists():
-        print("No environments directory. Create one with: python -m src.env.env_cli create ...")
+        print("No environments directory. Create one with: python -m core.src.env.env_cli create ...")
         return
 
     files = sorted(ENVS_DIR.glob("*.json"))

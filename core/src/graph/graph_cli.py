@@ -2,7 +2,7 @@
 
 Usage:
     # Build graph from all data directories
-    python -m src.graph.graph_cli \
+    python -m core.src.graph.graph_cli \
         --trees-dir data/parsed \
         --manifests-dir data/resolved \
         --taxonomy data/taxonomy/taxonomy.json \
@@ -10,7 +10,7 @@ Usage:
         --output-dir data/graph
 
     # Run verification queries
-    python -m src.graph.graph_cli \
+    python -m core.src.graph.graph_cli \
         --trees-dir data/parsed \
         --manifests-dir data/resolved \
         --taxonomy data/taxonomy/taxonomy.json \

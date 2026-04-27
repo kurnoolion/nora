@@ -16,7 +16,7 @@ from core.src.web.jobs import JobQueue
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 GRAPH_PATH = PROJECT_ROOT / "data" / "graph" / "knowledge_graph.json"
 VECTORSTORE_DIR = PROJECT_ROOT / "data" / "vectorstore"
 
@@ -109,7 +109,7 @@ def _run_query_sync(query_text: str) -> dict:
             "error": (
                 "Knowledge graph not found at data/graph/knowledge_graph.json. "
                 "Run the graph-building pipeline stage first "
-                "(Pipeline page, or: python -m src.graph.graph_cli)."
+                "(Pipeline page, or: python -m core.src.graph.graph_cli)."
             ),
         }
 
@@ -145,7 +145,7 @@ def _run_query_sync(query_text: str) -> dict:
         return {
             "error": (
                 "Vector store is empty. Run the vectorstore pipeline stage first "
-                "(Pipeline page, or: python -m src.vectorstore.vectorstore_cli)."
+                "(Pipeline page, or: python -m core.src.vectorstore.vectorstore_cli)."
             ),
         }
 

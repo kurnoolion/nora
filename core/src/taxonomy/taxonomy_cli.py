@@ -2,17 +2,17 @@
 
 Usage:
     # Extract features from all parsed trees and build taxonomy
-    python -m src.taxonomy.taxonomy_cli \
+    python -m core.src.taxonomy.taxonomy_cli \
         --trees-dir data/parsed \
         --output-dir data/taxonomy
 
     # Extract from specific trees
-    python -m src.taxonomy.taxonomy_cli \
+    python -m core.src.taxonomy.taxonomy_cli \
         --trees data/parsed/LTEDATARETRY_tree.json data/parsed/LTESMS_tree.json \
         --output-dir data/taxonomy
 
     # Use verbose mode for debug-level logging
-    python -m src.taxonomy.taxonomy_cli --trees-dir data/parsed -v
+    python -m core.src.taxonomy.taxonomy_cli --trees-dir data/parsed -v
 
 Output files:
     data/taxonomy/{plan_id}_features.json  — per-document feature extraction
