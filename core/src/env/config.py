@@ -171,7 +171,10 @@ class EnvironmentConfig:
 
     @property
     def env_dir_path(self) -> Path:
-        return Path(self.env_dir)
+        # expanduser() handles `~` / `~user` from stored configs or quoted CLI;
+        # resolve() then makes it absolute so downstream rglob / mkdir work
+        # regardless of cwd.
+        return Path(self.env_dir).expanduser().resolve()
 
     def path(self, key: str) -> Path:
         """Get a standard subdirectory under env_dir (generic accessor)."""

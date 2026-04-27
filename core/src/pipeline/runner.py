@@ -140,7 +140,8 @@ class PipelineContext:
         documents under <env_dir>/input/, outputs under <env_dir>/out/<stage>/,
         corrections under <env_dir>/corrections/, eval under <env_dir>/eval/.
         """
-        env_dir = Path(env_dir).resolve()
+        # expanduser() handles a quoted `~/...` from CLI; resolve() absolutizes.
+        env_dir = Path(env_dir).expanduser().resolve()
         stage_dirs = {stage: env_dir / "out" / stage for stage in STAGE_NAMES}
         ctx = cls(
             documents_dir=env_dir / "input",

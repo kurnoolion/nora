@@ -97,7 +97,7 @@ def cmd_create(args: argparse.Namespace) -> None:
         description=args.description or f"Environment for {args.member}",
         created_by=args.created_by or "admin",
         member=args.member,
-        env_dir=str(Path(args.env_dir).resolve()),
+        env_dir=str(Path(args.env_dir).expanduser().resolve()),
         stage_start=stage_start,
         stage_end=stage_end,
         mnos=mnos,
