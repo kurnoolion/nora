@@ -39,3 +39,7 @@ git-sync/
 # Local environment definitions (keep .gitkeep only)
 environments/*.json
 
+
+# Vim swap files
+*.swp
+*.swo
