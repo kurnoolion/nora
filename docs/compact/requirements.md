@@ -1,8 +1,6 @@
 # Requirements
 
-Last updated: 2026-04-21. Behavioral specs only — project identity and scope live in `PROJECT.md`.
-
-*Skeleton seeded by `project-init --retrofit` on 2026-04-21. Candidate FR / NFR entries from `docs/compact/design-inputs/` are listed as comments under each section — review and promote (or reject) each during requirements phase. None are authoritative yet.*
+Last updated: 2026-04-27. Behavioral specs only — project identity and scope live in `PROJECT.md`.
 
 <!--
 How to use this file:
@@ -20,93 +18,94 @@ How to use this file:
 
 ## Functional
 
-<!--
-Candidate FR entries extracted from design inputs (TDD §5, §7, §8, §10; SESSION_SUMMARY "Capabilities"). Promote, edit, or reject each during requirements phase.
+### Ingestion
 
-Ingestion:
-- FR candidate — The system extracts normalized document IR from PDF, DOC, DOCX, XLS, and XLSX inputs, preserving font metadata, table structure, images, and embedded OLE objects (TDD §5.1).
-- FR candidate — DocumentProfiler derives a document structure profile (headings, req-ID pattern, zones, cross-ref patterns, body-text signature) from representative documents without LLM involvement (TDD §5.2).
-- FR candidate — The generic structural parser applies a profile to any MNO's documents and emits a RequirementTree without per-MNO code (TDD §5.3).
-- FR candidate — Cross-reference extraction captures internal, cross-plan, and standards (3GPP TS) references with section and release (TDD §5.5).
-- FR candidate — Standards ingestion fetches 3GPP specs by version from the FTP site, extracts referenced sections + parent + adjacent subsections + definitions (Option C Hybrid, TDD §5.6).
-- FR candidate — Feature taxonomy is derived bottom-up from documents via LLM, then consolidated across documents; human review is a required step (TDD §5.7).
-- FR candidate — Unified Knowledge Graph construction produces nodes for Requirements, Test Cases, Features, Standards, Plan/Release, with 15+ typed edges (TDD §5.8, §6).
-- FR candidate — Unified Vector Store construction chunks requirements with metadata filters for mno, release, doc_type (TDD §5.9).
+- **FR-1** — The system extracts a normalized DocumentIR from PDF, DOCX, and XLSX inputs; the IR captures text blocks, tables, images, and font / positional metadata where available.
+- **FR-2** — The DocumentProfiler derives a structure profile (heading detection, requirement-ID pattern, document zones, cross-reference patterns, body-text signature) from representative documents without invoking an LLM.
+- **FR-3** — A profile-driven generic structural parser produces a RequirementTree from any MNO's documents using only the profile and detected patterns; no per-MNO code paths.
+- **FR-4** — Cross-reference extraction captures internal, cross-plan, and 3GPP standards references with section number and release.
+- **FR-5** — Standards ingestion fetches referenced 3GPP specs from the 3GPP archive, parses each spec to a section tree, and extracts the referenced sections plus their parent, definitions, and adjacent siblings (Option C Hybrid).
+- **FR-6** — The feature taxonomy is derived bottom-up by per-document LLM extraction, then consolidated across documents into a unified taxonomy; the workflow includes human review through the Web UI.
+- **FR-7** — The unified knowledge graph aggregates Requirements, Features, Standard_Sections, and Plan / Release / MNO organization with typed edges across organizational, within-doc, cross-doc, standards, and feature categories. The schema also defines Test_Case node and edge types; Test_Case nodes are populated post-v1 (see FR-26).
+- **FR-8** — The unified vector store chunks requirements with metadata filters keyed on `mno`, `release`, `doc_type`, and `plan_id`.
 
-Query:
-- FR candidate — Query analysis classifies query type (single-doc / cross-doc / cross-MNO / cross-release / standards-comparison / traceability) and extracts MNO + release scope (TDD §7.1).
-- FR candidate — MNO and release resolution maps user-supplied names/dates to canonical graph scope (TDD §7.2).
-- FR candidate — Graph scoping identifies candidate requirement nodes via graph traversal before any vector retrieval (TDD §7.3).
-- FR candidate — Targeted vector RAG ranks within the scoped candidate set with metadata filters; never runs unscoped (TDD §7.4).
-- FR candidate — Context assembly produces hierarchical context (parent requirements, referenced standards, cross-doc dependencies) for LLM synthesis (TDD §7.5).
-- FR candidate — LLM synthesis produces an answer with grounded citations back to specific requirement IDs and document sections (TDD §7.6).
+### Query
 
-Corrections and overrides:
-- FR candidate — The pipeline reads human-edited overrides from `<doc_root>/corrections/*.json` on re-run and prefers them over auto-generated output (SESSION_SUMMARY §18, src/corrections).
-- FR candidate — The Web UI allows in-browser editing of document profiles and taxonomies with file-backed storage matching the corrections convention (TDD §10.7).
+- **FR-9** — Query analysis classifies each query into one of 8 types (single-doc / cross-doc / cross-MNO comparison / release diff / standards comparison / traceability / feature-level / general) and extracts MNO + release scope from the natural-language input.
+- **FR-10** — MNO / release resolution maps user-supplied names and dates to canonical graph scope: explicit scope is preserved as-is, "latest" resolves to the newest release in scope, and missing scope expands to all available.
+- **FR-11** — Graph scoping identifies candidate requirement nodes via graph traversal before any vector retrieval is attempted.
+- **FR-12** — Targeted vector RAG ranks only within the graph-scoped candidate set with metadata filters; un-scoped pure-RAG retrieval is reserved for the A/B baseline mode.
+- **FR-13** — Context assembly enriches retrieved chunks with hierarchical context (parent requirements, referenced Standard_Sections, cross-doc dependencies) before LLM synthesis.
+- **FR-14** — LLM synthesis emits an answer with grounded citations to specific requirement IDs and 3GPP spec sections; when the LLM omits citations, a context-based fallback supplies them from the assembled context.
 
-Remote collaboration:
-- FR candidate — Every pipeline-stage failure emits a stable prefixed error code registered in a catalog; verbose logs are persisted to disk for self-service debugging (SESSION_SUMMARY §18, src/pipeline/error_codes.py).
-- FR candidate — Every artifact type that crosses the AI-collaboration boundary has a paired compact report format (RPT, MET, FIX, QC) containing no proprietary document content (interview topic 4a).
-- FR candidate — The system accepts human QC feedback on intermediate artifacts (profile, taxonomy, eval) and human FIX edits in compact text format (interview topic 4a).
+### Corrections and overrides
 
-Web UI:
-- FR candidate — The Web UI allows pipeline job submission, real-time log streaming via SSE, job queue with SQLite persistence, shared folder browsing with Windows↔Linux path mapping, query interface, environment CRUD, and reverse-proxy deployment (TDD §10).
-- FR candidate — The Web UI runs with zero npm/JS build (FastAPI + Bootstrap 5 + HTMX + jinja2) and vendored static assets for offline environments (TDD §10.2, v0.6 change log).
+- **FR-15** — On re-run, the pipeline reads human-edited overrides from `<doc_root>/corrections/*.json` and prefers them over auto-generated outputs.
+- **FR-16** — The Web UI provides in-browser editing of document profiles and feature taxonomies; saved edits land in the same files the pipeline reads as overrides under FR-15.
 
-Evaluation:
-- FR candidate — The evaluation framework runs a user-supplied Q&A set, computes per-question scores, and produces A/B comparisons between LLM providers and pipeline configurations (src/eval/, SESSION_SUMMARY §18).
--->
+### Remote collaboration
 
-- **FR-1** — <behavior>
+- **FR-17** — Every pipeline-stage failure raises a `PipelineError` carrying a stable, registry-defined error code (e.g., `EXT-E001`); verbose logs persist to disk for self-service debugging in environments where the AI partner cannot see runtime artifacts.
+- **FR-18** — The system emits compact reports in four formats — RPT (per-stage pipeline summary), MET (metrics), FIX (corrections diff), QC (quality-check templates) — paste-ready for chat-mediated collaboration.
+
+### Web UI
+
+- **FR-19** — The Web UI exposes pipeline-job submission, real-time SSE log streaming, an SQLite-backed job queue, shared-folder browsing with Windows↔Linux path mapping, the query interface, environment CRUD, the corrections editor, and the metrics dashboard, all under a configurable reverse-proxy `root_path`.
+- **FR-20** — The Web UI runs without an npm or JS build toolchain (FastAPI + Jinja2 + HTMX + vendored Bootstrap 5) and serves all static assets locally.
+
+### Evaluation
+
+- **FR-21** — The evaluation framework runs a user-supplied Q&A set, scores each question across five metrics (completeness, accuracy, citation quality, standards integration, hallucination-free), and produces A/B comparisons between graph-scoped and pure-RAG retrieval.
 
 ## Non-functional
 
-<!--
-Candidate NFR entries extracted from design inputs (TDD §3, §10.5; SESSION_SUMMARY constraints; interview topic 4).
+### Deployment and install
 
-Deployment and install:
-- NFR candidate — The system runs fully on-premise in production; no external cloud AI service is invoked on proprietary data (TDD §3).
-- NFR candidate — Offline / air-gapped install of Ollama models and HuggingFace embeddings works without internet access (SETUP_OFFLINE.md, src/vectorstore/hf_offline.py).
-- NFR candidate — Web UI static assets (Bootstrap, Bootstrap Icons, HTMX) are vendored; no CDN fetch at runtime (TDD §10.6).
+- **NFR-1** — Production runs fully on-premise; no external cloud AI service is invoked on proprietary MNO content.
+- **NFR-2** — Offline / air-gapped install of the Ollama runtime, model weights (gemma3:12b, gemma4:e4b), and the HuggingFace sentence-embedding model works without internet access.
+- **NFR-3** — All Web UI static assets (Bootstrap, Bootstrap Icons, HTMX) are vendored locally; runtime never fetches from a CDN.
 
-Resource constraints:
-- NFR candidate — The PoC pipeline runs on a personal PC with 16 GB RAM and CPU-only inference (interview topic 4; model-picker target).
-- NFR candidate — The model picker auto-selects an Ollama model that fits detected hardware (RAM ceiling, GPU presence); Gemma 4 E4B is the PoC default (SESSION_SUMMARY §17).
+### Resource constraints
 
-LLM abstraction:
-- NFR candidate — All LLM calls go through the `LLMProvider` Protocol; providers are swappable by instance without code changes elsewhere (SESSION_SUMMARY §15, src/llm/base.py).
-- NFR candidate — Embedding model, vector DB backend, distance metric, and chunk contextualization are configurable via `VectorStoreConfig` (SESSION_SUMMARY §16).
+- **NFR-4** — The PoC pipeline runs to completion on a personal PC with 16 GB RAM and CPU-only inference; the work-laptop target additionally supports a 16 GB NVIDIA GPU.
+- **NFR-5** — The model picker auto-selects an Ollama model that fits detected hardware (RAM, GPU presence); Gemma 4 E4B is the PoC default for the 16 GB CPU-only target.
 
-Remote collaboration:
-- NFR candidate — No compact report, error message, log, or test fixture contains proprietary MNO document content (interview topic 4a).
-- NFR candidate — Any new artifact type that crosses the AI-collaboration boundary must include its compact report schema, QC template, and error-code prefix in the same change that introduces it (interview topic 4a).
+### LLM and store abstraction
 
-Observability:
-- NFR candidate — Metrics middleware is fire-and-forget and never blocks HTTP responses (TDD §10.5).
-- NFR candidate — KPIs are captured across five categories (REQ / LLM / PIP / RES / MET) and persisted to SQLite at `web/nora_metrics.db` (TDD §10.5, SESSION_SUMMARY §20).
-- NFR candidate — Resource sampling reads from `/proc` and `nvidia-smi` without requiring `psutil` (TDD §10.5).
+- **NFR-6** — All LLM calls flow through the `LLMProvider` Protocol (structural typing); providers are swappable by passing a different instance with no other code changes.
+- **NFR-7** — Embedding model, vector-DB backend, distance metric, and chunk contextualization toggles are configurable via a JSON-serializable `VectorStoreConfig`; `EmbeddingProvider` and `VectorStoreProvider` follow the same swap-by-instance Protocol pattern.
 
-Data integrity:
-- NFR candidate — The pipeline is re-runnable and idempotent per stage; partial reruns pick up corrections from `<doc_root>/corrections/*.json` (src/pipeline/runner.py).
-- NFR candidate — Standards resolution is version-aware: different MNO releases may reference different 3GPP releases; each referenced section is stored with its release qualifier (TDD §5.6, §6.5).
--->
+### Remote collaboration
 
-- **NFR-1** — <constraint + measurable criterion if applicable>
+- **NFR-8** — No compact report, error message, log, or test fixture contains proprietary MNO document content; only field names, regex patterns, IDs, keyword tokens, and counts may appear.
+- **NFR-9** — Any new artifact type that crosses the AI-collaboration boundary ships with its compact-report schema, QC template, and error-code prefix in the same change that introduces it.
+
+### Observability
+
+- **NFR-10** — The metrics middleware is fire-and-forget and never blocks an HTTP response.
+- **NFR-11** — KPIs are captured across five categories (REQ / LLM / PIP / RES / MET) and persisted to SQLite at `web/nora_metrics.db`.
+- **NFR-12** — Resource sampling reads from `/proc` and `nvidia-smi` directly; `psutil` is not a runtime dependency.
+
+### Data integrity
+
+- **NFR-13** — The pipeline is re-runnable and idempotent per stage; partial re-runs auto-pick-up corrections from `<doc_root>/corrections/*.json`.
+- **NFR-14** — Standards resolution is release-aware: each Standard_Section node carries its 3GPP release, and different MNO releases may reference different 3GPP releases of the same spec.
+
+### Accuracy
+
+- **NFR-15** — The query pipeline achieves at least **90% on the weighted overall score** defined in `src/eval/metrics.py` (completeness 0.30 + accuracy 0.25 + citation quality 0.20 + standards integration 0.15 + hallucination-free 0.10) for the v1 VZW corpus on the user-curated A/B eval Q&A set.
+- **NFR-16** — Acceptance against NFR-15 is measured on the user-curated Q&A set only; synthetic Q&A may augment development iteration but does not count toward NFR-15.
 
 ## Deferred
 
 <!--
 Requirements explicitly postponed. Not drift. Drift-check surfaces these as notes.
-
-Entry format:
-- **FR-N** — <requirement> (deferred: <why> — revisit: <trigger or date>)
-
-Candidate deferred items from design inputs (TDD §8.3 compliance agent — explicitly post-PoC):
-- FR candidate — Single-requirement compliance check against Excel compliance sheets (deferred: post-PoC — revisit: when PoC accuracy passes A/B eval threshold).
-- FR candidate — Cross-document compliance consistency check (deferred: post-PoC — revisit: after compliance agent v1).
-- FR candidate — Auto-fill from module/chipset documentation (deferred: post-PoC — revisit: compliance agent v2).
-- FR candidate — Delta compliance sheet generation between releases (deferred: post-PoC — revisit: compliance agent v2).
+Entry format: **FR-N** — <requirement> (deferred: <why> — revisit: <trigger or date>)
 -->
 
-<!-- (none yet — promote candidates above during requirements phase) -->
+- **FR-22** — Single-requirement compliance check against Excel compliance sheets (deferred: post-PoC compliance agent — revisit: when v1 PoC accuracy passes NFR-15).
+- **FR-23** — Cross-document compliance consistency check (deferred: post-PoC compliance agent v1 — revisit: after FR-22 lands).
+- **FR-24** — Auto-fill from module / chipset documentation (deferred: post-PoC compliance agent v2 — revisit: after FR-22 and FR-23 land).
+- **FR-25** — Delta compliance sheet generation between releases (deferred: post-PoC compliance agent v2 — revisit: when a multi-release corpus exists).
+- **FR-26** — Test-case parsing (separate parser for test case documents) populates Test_Case nodes in the unified knowledge graph and Test_Case-related edges per FR-7's schema (deferred: post-v1 — revisit: when a test-case corpus is identified for ingestion).
+- **FR-27** — Extraction of DOC and XLS legacy formats (DOC converted to DOCX via LibreOffice headless per the format-aware extraction design) (deferred: not required for v1 corpus — revisit: when a corpus containing DOC or XLS files needs ingestion).

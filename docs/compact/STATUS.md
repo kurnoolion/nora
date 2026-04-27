@@ -1,7 +1,7 @@
 # Status
 
-**Active phase**: development
-**Last updated**: 2026-04-23
+**Active phase**: requirements
+**Last updated**: 2026-04-27
 **Last drift-check**: 2026-04-23 — mode: dev-full — 3 drift(s) resolved (all deferred), 0 deferred surfaced
 
 ## Done
@@ -10,6 +10,7 @@
 - 2026-04-21 Curated all 16 MODULE.md skeletons (retrofit sentinels removed; commit 8395628).
 - 2026-04-23 Flattened `.claude/skills/` layout so COMPACT slash commands are discoverable by Claude Code; user-global bundle source preserved at `~/.claude/compact-src/`.
 - 2026-04-23 First `/drift-check dev-full` — 3 drifts deferred (2 in web, 1 in pipeline); Depends-on semantics clarified in `structure-conventions.md` to treat artifact coupling as a valid edge.
+- 2026-04-27 Switched to requirements phase. Curated PROJECT.md (5-column Contributors with Validation channel, success criteria with ≥90% weighted-overall accuracy bar, scope clarified to single-MNO v1 + multi-MNO-ready schema, production reverse-proxy constraint added). Wrote `requirements.md` with 21 active FRs + 16 NFRs + 6 Deferred (compliance ×4 + test-case parser + DOC/XLS legacy extraction). Triaged all 7 Open questions to closure.
 
 ## In progress
 
@@ -17,10 +18,12 @@
 
 ## Next
 
-- Run `/switch-phase requirements` to extract FR / NFR into `docs/compact/requirements.md` from `design-inputs/` (TDD is rich in requirement-shaped content). Unlocks `/drift-check design` for R-vs-D audits.
-- After requirements exist, run `/drift-check design` to surface code capabilities that lack an owning FR / NFR.
+- Run `/drift-check requirements` to audit code capabilities against the v1 FR/NFR set. Expected to surface FR-1 XLSX support as code-side work-to-do (extension committed in this session's triage).
+- Implement FR-1 XLSX extraction extension (current code: PDF + DOCX; target: PDF + DOCX + XLSX).
+- After requirements-layer drift is cleared, run `/drift-check design` to surface code capabilities that lack an owning FR / NFR.
 - Revisit triggers on the three deferred items when they fire (see `src/web/MODULE.md` and `src/pipeline/MODULE.md` Deferred sections).
 
 ## Flags
 
-*(empty — populated by close-session; consumed by session-start)*
+- 2026-04-27 [requirements] Latency / throughput / memory NFRs not yet set; defer until first work-laptop full-pipeline run produces real telemetry, then promote thresholds to NFR entries in `requirements.md`.
+- 2026-04-27 [requirements] KG sharding / persistence: networkx single-process graph fits v1 (~1k nodes, ~12k edges) but needs re-evaluation when 2nd MNO corpus is added. Revisit at start of post-v1 multi-MNO ingestion.

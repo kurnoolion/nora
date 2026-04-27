@@ -161,3 +161,75 @@ Template for new entries:
 **Why**: The AI partner's blind spot is structural — no view of production artifacts. Compact formats + stable codes turn that blind spot into a tractable debugging surface. Pasting fits within chat limits. No-proprietary-content is a hard invariant — compact reports contain no MNO document text.
 **Consequences**: Every new artifact type must ship with: (1) error-code prefix, (2) compact report schema, (3) QC template. `drift-check` and `close-session` hard-flag artifacts that lack these. This decision is the authority behind NFRs related to remote collaboration.
 **Alternatives considered**: ad-hoc text dumps (rejected — proprietary-content leak risk + chat-limit overruns); verbose-log paste (rejected — too large, too sensitive).
+
+---
+
+## D-013: v1 PoC corpus narrowed to single-MNO (Verizon Feb 2026); multi-MNO ingestion is post-v1
+
+**Status**: Active
+**Date**: 2026-04-27
+**Context**: Design intent (TDD §3, SESSION_SUMMARY) named multi-MNO scope (Verizon, AT&T, T-Mobile) "across multiple MNOs and quarterly releases" as the target. The v1 corpus, however, is 5 publicly-available VZW OA documents (Feb 2026 release) — a single MNO at a single release. Design intent and corpus diverged silently, blurring what v1 acceptance covers.
+**Decision**: v1 ships against a single-MNO corpus only (Verizon Feb 2026). Cross-MNO and release-diff success criteria are explicitly post-v1. The graph and vector schemas (D-002) remain multi-MNO-ready: every node and chunk carries `mno` / `release` metadata, and ingesting AT&T / T-Mobile proprietary documents on-prem is the immediate post-v1 work item.
+**Why**: PoC accuracy gate (NFR-15 ≥ 90% weighted overall) must be reachable before adding corpus complexity. Multi-MNO ingestion of proprietary documents requires on-prem proprietary-LLM integration that is itself out of v1 scope. Narrowing to one public MNO lets the team validate the architectural bet (KG + RAG > pure RAG) on a known dataset before adding the proprietary-data dimension.
+**Consequences**: PROJECT.md In/Out scope must explicitly mark multi-MNO as post-v1. NFR-15 acceptance is measured on VZW only. Cross-MNO comparison and release-diff queries (FR-9 query types) are *capabilities the system supports* but not *outcomes verified in v1*. Adding the second MNO triggers re-evaluation of the KG memory ceiling (STATUS Flag).
+**Alternatives considered**: multi-MNO from v1 (rejected — proprietary-doc handling and on-prem LLM not ready); v1 single-MNO multi-release (rejected — adds release-diff complexity without unlocking the architectural validation).
+
+---
+
+## D-014: Test_Case node and edge types kept in graph schema, populated post-v1
+
+**Status**: Active
+**Date**: 2026-04-27
+**Context**: TDD design decision #11 makes Test_Case nodes a first-class graph citizen with their own parser, `tested_by` / `tests` edges, and `doc_type` metadata. Step 4 of the original PoC plan (test-case parsing) was deferred to focus on the requirements-document path. Schema vs. corpus mismatch left a question: strip Test_Case from the schema until the parser lands, or keep as schema-only?
+**Decision**: The unified graph schema retains Test_Case node and edge types. v1 populates zero Test_Case nodes (no parser, no test-case corpus). FR-7 documents this; FR-26 (Deferred) parks the parser work.
+**Why**: Schema stability across v1 and post-v1 avoids a future migration on persisted graph state. Test_Case is a *known* future requirement, not a hypothetical — keeping the schema slot reserved is cheaper than a later schema rev. Graph builder simply emits zero Test_Case nodes today.
+**Consequences**: Graph builder code paths for Test_Case must compile but produce empty output. drift-check should not flag the schema slot as unused. Adding the test-case parser later requires only the parser module, taxonomy of test cases, and edge-emission logic — no graph schema change.
+**Alternatives considered**: strip Test_Case from schema (rejected — future migration cost on persisted graph state); split into per-doc-type subgraphs (rejected — conflicts with D-002 unified-store decision).
+
+---
+
+## D-015: NFR-15 acceptance bar is weighted-overall ≥ 90%, not raw req-ID accuracy
+
+**Status**: Active
+**Date**: 2026-04-27
+**Context**: User stated the v1 success criterion as "answer requirements queries for single MNO with 90%+ accuracy." The eval framework (FR-21, `src/eval/metrics.py`) computes five metrics per question (completeness, accuracy, citation quality, standards integration, hallucination-free) plus a weighted overall (0.30/0.25/0.20/0.15/0.10). "90% accuracy" admits two readings — the weighted overall, or the raw `accuracy` sub-metric (req-ID recall).
+**Decision**: NFR-15 binds acceptance to the weighted-overall score ≥ 90% on the user-curated A/B eval Q&A set. Pure req-ID recall is part of the weighted score (25% weight) but not the standalone bar.
+**Why**: The weighted overall is harder to game — a system can hit ≥ 90% req-ID recall by retrieving every plausible ID and still produce poor answers (low completeness, missing standards integration, no citations). The weighted score reflects the full eval surface and matches the design rationale that all five metrics encode acceptance-relevant dimensions.
+**Consequences**: Eval reports must report both per-metric scores and the weighted overall. Changing any of the five weights is a hard-flag DECISIONS event (a different weighted-overall is a different acceptance bar). NFR-16 binds the dataset to user-curated Q&A only — synthetic Q&A cannot count toward acceptance.
+**Alternatives considered**: raw req-ID accuracy ≥ 90% (rejected — gameable, doesn't reflect citation/standards quality); pass/fail per-metric AND combined (rejected — too many gates, hard to reason about).
+
+---
+
+## D-016: Production deployment runs behind authenticating reverse proxy; no in-app auth
+
+**Status**: Active
+**Date**: 2026-04-27
+**Context**: PROJECT.md Out-of-scope already excluded "Multi-user authentication / RBAC on the Web UI". Production deployment still needs *some* authentication. Two options: reverse-proxy-handled (e.g., nginx + corporate SSO), or in-app auth.
+**Decision**: Production deployment runs behind an authenticating reverse proxy. The system itself does not implement authentication. The Web UI's `root_path` config (D-008) already accommodates reverse-proxy deployment. Auth is a deployment responsibility, not a system feature.
+**Why**: In-app auth would couple the system to a specific identity provider, contradict the on-prem-only constraint (NFR-1) by introducing IdP integration code paths that vary per deployment, and bloat the v1 surface. Corporate environments running this system already have authenticated reverse proxies (intranet SSO is standard). Reverse-proxy auth is the simplest interface — upstream identity is opaque to the system; the system trusts that traffic reaching it is authenticated.
+**Consequences**: System never sees raw login traffic. No password storage, no session management, no IdP integration code. `root_path` config must be honored end-to-end (FR-19 explicit). Direct exposure of the FastAPI server without a reverse proxy is a deployment misconfiguration, not a v1 system bug.
+**Alternatives considered**: in-app auth with FastAPI security primitives (rejected — couples to IdP, contradicts on-prem-simplicity); no auth at all (rejected — production cannot ship without auth).
+
+---
+
+## D-017: Domain-expert correction validation = architect FIX-report review (workflow rule, not code gate)
+
+**Status**: Active
+**Date**: 2026-04-27
+**Context**: Telecom domain experts edit profile.json / taxonomy.json directly through the Web UI (D-011, FR-15, FR-16). Their edits flow into the next pipeline run automatically. Without a validation step, a bad correction silently corrupts downstream artifacts. The Contributors table flagged this as a missing validation channel.
+**Decision**: Architect (or designated reviewer) reviews the compact FIX report for each correction-driven re-run before it executes. This is a workflow rule — not a code-enforced gate. The pipeline does not block on architect approval; FIX reports already exist (D-012) and strip proprietary content, making them paste-ready for chat-mediated review. The architect role in the Contributors table now explicitly owns this validation channel.
+**Why**: Code-gated approval would require a workflow engine, multi-user role assignments, and approval state in SQLite — incompatible with v1's no-RBAC stance (Out of scope). FIX reports already encode exactly the diff a reviewer needs (added/removed features, regex changes, zone deltas) with no proprietary content. The pipeline is idempotent (NFR-13) — a bad correction can be reverted by editing the corrections file and re-running. Workflow rule + idempotent recovery is the lightest sufficient mechanism.
+**Consequences**: Trusted-team assumption is explicit — small team, known reviewers. Architect must actually review FIX reports; sloppy review is the v1 failure mode. Bad-correction recovery path is "edit corrections file, re-run pipeline" — no rollback infrastructure needed. Contributors table shows the validation channel; missing it would be a soft flag at close-session.
+**Alternatives considered**: code-gated approval workflow (rejected — RBAC scope creep, inconsistent with v1); no validation at all (rejected — was the original gap that prompted this decision).
+
+---
+
+## D-018: DOC and XLS legacy formats preserved in TDD design intent, parked as Deferred FR-27
+
+**Status**: Active
+**Date**: 2026-04-27
+**Context**: TDD §5.1 and SESSION_SUMMARY decision #13 named multi-format extraction across PDF / DOC / DOCX / XLS / XLSX as a design pillar. v1 code implements PDF + DOCX. User committed to extending v1 with XLSX (FR-1). DOC and XLS were not explicitly committed for v1, but the design names them. Two paths to reconcile: trim TDD design intent down to PDF/DOCX/XLSX, or keep design intent intact and park DOC/XLS as Deferred FRs.
+**Decision**: TDD §5.1 design intent is preserved as-is. DOC and XLS extraction land in `requirements.md` Deferred (FR-27) with revisit trigger "when a corpus containing DOC or XLS files needs ingestion". The format-aware extraction layer (D-010) is built to accommodate them — adding a new extractor is the single integration path, no downstream changes.
+**Why**: Trimming TDD would erase a known-future capability that downstream modules already accommodate (per D-010, downstream modules consume only `DocumentIR`). Deferred FRs are the COMPACT mechanism for "known future, not v1" — cheap to maintain, drift-check treats them as `[DEFERRED]` not as drift. Preserving design intent also keeps the format-aware layer's purpose visible — without DOC/XLS in view, future readers might question why the abstraction exists at all.
+**Consequences**: drift-check requirements layer will not flag DOC/XLS as missing. New extractors land as new modules; no design rev needed. If a corpus surfaces with DOC or XLS files before the post-v1 work, FR-27 is the parking spot to revive. R-vs-D consistency holds: design names 5 formats; requirements explicitly defers 2.
+**Alternatives considered**: trim TDD §5.1 to PDF/DOCX/XLSX only (rejected — erases known-future capability that the abstraction was built for); silent omission from requirements (rejected — creates unowned drift between TDD and requirements.md).
