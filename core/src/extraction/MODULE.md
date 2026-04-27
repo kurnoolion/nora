@@ -21,7 +21,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - Block `Position.index` is a contiguous sequence starting at 0 across the whole document, reflecting reading order.
 - Tables extracted by pdfplumber are de-duplicated against text blocks they overlap with (PDF text extractors surface table cells as text too) — no block should appear twice in the IR.
 - Header/footer content (matched by margin thresholds + always-header regex patterns) is dropped, not emitted as paragraphs.
-- Format-specific libraries (fitz, pdfplumber, python-docx, openpyxl, PIL) are imported **only** inside this module — no other `core/src/` module pulls them in.
+- Format-specific libraries (fitz, pdfplumber, python-docx, openpyxl) are imported **only** inside this module — no other `core/src/` module pulls them in.
 
 **Key choices**
 - PDF: pymupdf (fitz) for text + font metadata, pdfplumber for tables — neither alone covers both well. Pay the double-parse cost per file; cache is the IR JSON on disk.

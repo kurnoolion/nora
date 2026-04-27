@@ -7,7 +7,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - App (app.py):
   - `app: FastAPI` — the ASGI application; wires middleware, static mounts, routers, templates
 - Config (config.py):
-  - `WebConfig` — host, port, root_path, path_mappings, ollama_url, default_model, db_path; `from_dict()`
+  - `WebConfig` — host, port, root_path, path_mappings, ollama_url, default_model, env_dir; `from_dict()`, `env_dir_path()`, `state_path()`, `jobs_db_path()`, `metrics_db_path()` (per D-022)
   - `PathMapping` — `(windows, linux, label)` entry
   - `load_config(path=None) -> WebConfig`
 - Jobs (jobs.py):
