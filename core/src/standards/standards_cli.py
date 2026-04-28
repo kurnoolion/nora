@@ -81,6 +81,12 @@ def main():
         "--max-specs", type=int, default=0,
         help="Limit number of specs to process (0 = all). Useful for testing.",
     )
+    parser.add_argument(
+        "--standards-source", default=None, choices=["huggingface", "3gpp"],
+        help="Spec source (default: NORA_STANDARDS_SOURCE env var, or 'huggingface'). "
+             "huggingface = GSMA/3GPP HF dataset (DOCX, no auth, no LibreOffice). "
+             "3gpp = 3GPP FTP archive (ZIPs with DOC/DOCX; .doc → .docx via LibreOffice).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
@@ -137,7 +143,10 @@ def main():
     logging.info("Step 2: Download, parse, and extract")
     logging.info("=" * 60)
 
-    downloader = SpecDownloader(cache_dir=output_dir)
+    from core.src.env.config import resolve_standards_source
+    source = resolve_standards_source(args.standards_source)
+    logging.info(f"Standards source: {source}")
+    downloader = SpecDownloader(cache_dir=output_dir, source=source)
     spec_parser = SpecParser()
     extractor = SectionExtractor()
 

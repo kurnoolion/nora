@@ -1,19 +1,21 @@
-"""3GPP spec downloader with local caching.
+"""3GPP spec downloader with local caching and pluggable source.
 
-Downloads spec ZIP files from the 3GPP FTP archive, extracts the
-DOC/DOCX content, and caches locally under a structured directory.
+Sources (selected via `source` parameter):
+  - "huggingface" (default) — DOCX via the public GSMA/3GPP HF dataset.
+    No auth, no LibreOffice needed (DOCX-only). Single domain → easier to
+    whitelist behind a corporate proxy.
+  - "3gpp" — original 3GPP FTP archive (ZIP archives containing DOC/DOCX;
+    DOC files are auto-converted to DOCX via headless LibreOffice).
 
-Cache structure:
+Both sources land artifacts in the same cache layout, so manual placement
+and downstream consumers (parser, extractor) are source-agnostic:
+
     data/standards/TS_{spec}/Rel-{N}/
-        {compact}-{version_code}.zip       — original archive
-        {compact}-{version_code}.doc[x]    — extracted spec document
+        {compact}-{version_code}.docx       — final extracted spec document
+        {compact}-{version_code}.zip        — (3gpp source only) original archive
 
-Also supports manual placement: if a DOC/DOCX file already exists
-in the cache directory, the downloader skips the download.
-
-DOC→DOCX conversion: older 3GPP specs are in .doc format. If
-LibreOffice is available, .doc files are automatically converted
-to .docx for parsing with python-docx.
+If a DOC/DOCX file already exists in the cache directory, the downloader
+skips the network round-trip regardless of source.
 """
 
 from __future__ import annotations
@@ -29,18 +31,38 @@ from core.src.standards.spec_resolver import ResolvedSpec, SpecResolver
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CACHE_DIR = Path("data/standards")
+_VALID_SOURCES = ("huggingface", "3gpp")
+_DEFAULT_SOURCE = "huggingface"
 
 
 class SpecDownloader:
-    """Download and cache 3GPP specification documents."""
+    """Download and cache 3GPP specification documents.
+
+    `source` selects where downloads come from when the cache misses:
+      - "huggingface" (default) — uses `HuggingFaceSource`
+      - "3gpp" — uses the 3GPP FTP archive via `SpecResolver`
+    """
 
     def __init__(
         self,
         cache_dir: Path = _DEFAULT_CACHE_DIR,
+        source: str = _DEFAULT_SOURCE,
         resolver: SpecResolver | None = None,
+        hf_source=None,  # HuggingFaceSource | None — typed as Any to avoid an unconditional import
     ):
+        if source not in _VALID_SOURCES:
+            raise ValueError(
+                f"Unknown standards source: {source!r}. "
+                f"Valid: {', '.join(_VALID_SOURCES)}"
+            )
         self._cache_dir = cache_dir
-        self._resolver = resolver or SpecResolver()
+        self._source = source
+        self._resolver = resolver  # lazy-init only when source == "3gpp"
+        self._hf = hf_source       # lazy-init only when source == "huggingface"
+
+    @property
+    def source(self) -> str:
+        return self._source
 
     def download(
         self, spec_number: str, release_num: int
@@ -48,17 +70,36 @@ class SpecDownloader:
         """Download a spec for the given release.
 
         Returns the path to the extracted DOC/DOCX file, or None on failure.
-        Uses cache if available, downloads from 3GPP FTP otherwise.
+        Uses cache if available; otherwise fetches from the configured source.
         """
-        # Check cache first
+        # Cache check is shared across sources — manual placement and
+        # prior runs win regardless of which source the user picks now.
         cached = self._find_cached(spec_number, release_num)
         if cached:
             logger.info(
-                f"TS {spec_number} Rel-{release_num}: using cached {cached.name}"
+                f"TS {spec_number} Rel-{release_num}: using cached "
+                f"{cached.name} (source={self._source})"
             )
             return cached
 
-        # Resolve the best version
+        spec_dir = self._spec_dir(spec_number, release_num)
+
+        if self._source == "huggingface":
+            if self._hf is None:
+                from core.src.standards.hf_source import HuggingFaceSource
+                self._hf = HuggingFaceSource()
+            return self._hf.download(spec_number, release_num, spec_dir)
+
+        # source == "3gpp"
+        return self._download_from_3gpp(spec_number, release_num, spec_dir)
+
+    def _download_from_3gpp(
+        self, spec_number: str, release_num: int, spec_dir: Path
+    ) -> Path | None:
+        """3GPP FTP archive download path (ZIP → extract → DOC→DOCX)."""
+        if self._resolver is None:
+            self._resolver = SpecResolver()
+
         resolved = self._resolver.resolve(spec_number, release_num)
         if not resolved:
             logger.warning(
@@ -66,10 +107,7 @@ class SpecDownloader:
             )
             return None
 
-        # Download
-        spec_dir = self._spec_dir(spec_number, release_num)
         spec_dir.mkdir(parents=True, exist_ok=True)
-
         zip_path = spec_dir / f"{resolved.compact}-{resolved.version_code}.zip"
         if not self._download_file(resolved.url, zip_path):
             # Try a few more candidates
@@ -89,12 +127,11 @@ class SpecDownloader:
                 )
                 return None
 
-        # Extract DOC/DOCX from ZIP
         doc_path = self._extract_doc(zip_path, spec_dir)
         if doc_path:
             logger.info(
                 f"TS {spec_number} Rel-{release_num}: "
-                f"v{resolved.version} → {doc_path.name}"
+                f"v{resolved.version} → {doc_path.name} (source=3gpp)"
             )
         return doc_path
 

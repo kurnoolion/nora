@@ -345,7 +345,9 @@ def run_standards(ctx: PipelineContext) -> StageResult:
     index.save_json(index_path)
 
     # Download + parse + extract
-    downloader = SpecDownloader(cache_dir=out_dir)
+    downloader = SpecDownloader(
+        cache_dir=out_dir, source=ctx.standards_source
+    )
     spec_parser = SpecParser()
     extractor = SectionExtractor()
 

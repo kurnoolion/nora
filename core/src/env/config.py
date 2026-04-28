@@ -29,9 +29,42 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Standards source selection — see core/src/standards/spec_downloader.py
+# ---------------------------------------------------------------------------
+
+STANDARDS_SOURCES: tuple[str, ...] = ("huggingface", "3gpp")
+DEFAULT_STANDARDS_SOURCE: str = "huggingface"
+STANDARDS_SOURCE_ENV_VAR: str = "NORA_STANDARDS_SOURCE"
+
+
+def resolve_standards_source(
+    cli_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the effective standards source.
+
+    Precedence: CLI flag > NORA_STANDARDS_SOURCE env var > EnvironmentConfig
+    field > default ("huggingface"). Raises ValueError if any provided value
+    is not in STANDARDS_SOURCES.
+    """
+    for label, value in (
+        ("--standards-source", cli_value),
+        (STANDARDS_SOURCE_ENV_VAR, os.environ.get(STANDARDS_SOURCE_ENV_VAR)),
+        ("EnvironmentConfig.standards_source", env_config_value),
+    ):
+        if value:
+            if value not in STANDARDS_SOURCES:
+                raise ValueError(
+                    f"{label}={value!r} not in {STANDARDS_SOURCES}"
+                )
+            return value
+    return DEFAULT_STANDARDS_SOURCE
 
 # ---------------------------------------------------------------------------
 # Pipeline stage registry — single source of truth for names and ordering
@@ -116,6 +149,9 @@ class EnvironmentConfig:
     model_name: str = "auto"
     model_timeout: int = 600
 
+    # Standards source: "huggingface" (default) | "3gpp"
+    standards_source: str = DEFAULT_STANDARDS_SOURCE
+
     # Metadata
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
 
@@ -158,6 +194,11 @@ class EnvironmentConfig:
             errors.append("At least one MNO must be specified")
         if not self.releases:
             errors.append("At least one release must be specified")
+        if self.standards_source not in STANDARDS_SOURCES:
+            errors.append(
+                f"Unknown standards_source: {self.standards_source!r} "
+                f"(valid: {', '.join(STANDARDS_SOURCES)})"
+            )
         return errors
 
     # --- Derived paths ---

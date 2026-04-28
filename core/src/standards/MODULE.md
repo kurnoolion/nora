@@ -5,23 +5,30 @@
 
 **Public surface**
 - Reference collection: `StandardsReferenceCollector` (reference_collector.py) — aggregates `SpecReference`s from resolver manifests and tree text into a `StandardsReferenceIndex`
-- Spec resolution & download: `SpecResolver`, `ResolvedSpec` (spec_resolver.py) — maps `(spec, release)` to a 3GPP FTP URL; `SpecDownloader` (spec_downloader.py) — downloads ZIPs, unpacks DOC/DOCX, runs headless LibreOffice DOC→DOCX conversion when needed
+- Spec resolution & download: `SpecResolver`, `ResolvedSpec` (spec_resolver.py) — maps `(spec, release)` to a 3GPP FTP URL; `SpecDownloader` (spec_downloader.py) — pluggable source (`huggingface` default | `3gpp`); shared cache layout
+- Pluggable sources:
+  - `HuggingFaceSource` (hf_source.py) — DOCX from the public GSMA/3GPP HF dataset; stdlib `urllib` only, no auth, no LibreOffice
+  - 3GPP FTP path (inside `SpecDownloader._download_from_3gpp`) — ZIP archives with DOC/DOCX, with headless LibreOffice DOC→DOCX conversion when required
 - Parsing: `SpecParser` (spec_parser.py) — turns a 3GPP DOCX into a `SpecDocument` with a nested `SpecSection` tree
 - Selective extraction: `SectionExtractor` (section_extractor.py) — given referenced section numbers, returns those sections plus parents and local siblings as `ExtractedSpecContent`
 - Schema (schema.py): `SpecReference`, `AggregatedSpecRef`, `StandardsReferenceIndex`, `SpecSection`, `SpecDocument`, `ExtractedSpecContent` — all dataclasses; top-level ones have `to_dict` / `save_json` / `load_json`
-- CLI: `standards_cli.main` — collect | resolve | download | parse | extract
+- CLI: `standards_cli.main` — collect | resolve | download | parse | extract; accepts `--standards-source {huggingface,3gpp}`
 
 **Invariants**
 - **Generic**: no hardcoded `ALLOWED_SPECS`. Every `AggregatedSpecRef` comes from `SpecReference`s the resolver collected from document text. Adding a new MNO or release requires no code change.
 - **Release-aware**: the index key is `(spec, release)`, not spec alone. Different MNO releases often cite different 3GPP releases of the same spec, and they must produce separate ingested artifacts.
 - **LLM-free**: parsing, section matching, and extraction are deterministic.
 - Cache is path-structured under `data/standards/TS_{spec}/Rel-{N}/`. Manual placement is supported — if a DOC/DOCX is already in the cache dir, the downloader skips the download. This matters on offline work machines.
+- **Sources are interchangeable post-download.** Both sources land DOCX in the same cache layout; `SpecParser` and `SectionExtractor` are source-agnostic. Switching sources between runs (or pointing different specs at different sources) is safe — the cache check arbitrates first.
+- Source precedence (resolved by `core.src.env.config.resolve_standards_source`): CLI `--standards-source` > `NORA_STANDARDS_SOURCE` env var > `EnvironmentConfig.standards_source` > `"huggingface"` default.
 - `ExtractedSpecContent` is the **only** artifact that downstream stages consume directly. The full `SpecDocument` is kept for debugging but is not what the graph/query layer indexes.
 - Option C Hybrid Selective: extract referenced sections + their parent chain + immediate siblings. Not full specs (too large, low signal-to-noise), not just referenced sections (loses definitional context).
 
 **Key choices**
-- 3GPP FTP as the canonical source — public, versioned, stable. `SpecResolver` encodes the FTP naming convention so a new release just needs the resolver to recognize the new format if it changes.
-- DOC→DOCX via headless LibreOffice subprocess (no Python-level `.doc` reader) — older specs ship in .doc; python-docx only handles .docx.
+- Two interchangeable sources, default = HuggingFace. HF (`GSMA/3GPP`) ships DOCX directly — no auth, no LibreOffice DOC→DOCX, single domain (easier proxy whitelisting on locked-down work hosts). The 3GPP FTP source remains for full-coverage / fallback (HF mirrors authoritative content but lags upstream by hours-to-days).
+- DOCX (not MD) from HF: `SpecParser` already targets DOCX, so the HF MD side (only Rel-8..19, structurally derived from the same DOCX) buys nothing for this pipeline. Picking DOCX dodges a parser fork and a release-coverage gap.
+- `SpecResolver` encodes the 3GPP FTP naming convention; the HF source uses the same `release_to_prefix` table to find the right version code in the HF tree listing — one source-of-truth for release encoding.
+- DOC→DOCX via headless LibreOffice subprocess only on the 3GPP FTP path (older specs ship in .doc). HF source emits DOCX so this dependency is optional when source=huggingface.
 - `StandardsReferenceCollector` accepts both structured `ResolvedStandardsRef` from the resolver manifests and raw regex hits from tree text — text hits catch citations the parser missed.
 - Separate `SpecDocument` and `ExtractedSpecContent` schemas so a single spec parse can serve many selective extractions without re-parsing.
 
@@ -30,6 +37,7 @@
 - Not a reference resolver for MNO-to-MNO cross-plan links — that's [resolver](../resolver/MODULE.md).
 - No full-spec storage in the graph or vector store — Hybrid Selective is the contract; changing to full-spec ingestion is a D-004-level decision.
 - No LLM-based section matching or summarization — if heuristics miss, the fix is to improve the regex or extend the collector, not add a language model.
+- Not consuming the HF `marked/` Markdown side — DOCX-only path keeps `SpecParser` as the single parser implementation. (Revisit only if the HF MD coverage extends to all releases AND we have a downstream reason — e.g., human-review-friendly cleaned text — to justify a parallel parser.)
 
 <!-- BEGIN:STRUCTURE -->
 _Alphabetical, regenerated by regen-map._

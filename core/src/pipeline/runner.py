@@ -45,6 +45,9 @@ class PipelineContext:
     mnos: list[str] = field(default_factory=lambda: ["VZW"])
     releases: list[str] = field(default_factory=lambda: ["Feb2026"])
 
+    # Standards ingestion source: "huggingface" | "3gpp"
+    standards_source: str = "huggingface"
+
     # Accumulated state between stages (paths, intermediate data)
     state: dict = field(default_factory=dict)
 
@@ -124,6 +127,7 @@ class PipelineContext:
             model_timeout=env.model_timeout,
             mnos=env.mnos,
             releases=env.releases,
+            standards_source=env.standards_source,
         )
 
     @classmethod
@@ -133,6 +137,7 @@ class PipelineContext:
         profile_path: Path | None = None,
         model_name: str = "auto",
         model_timeout: int = 600,
+        standards_source: str = "huggingface",
     ) -> PipelineContext:
         """Create context for standalone (no EnvironmentConfig) mode.
 
@@ -151,6 +156,7 @@ class PipelineContext:
             stage_dirs=stage_dirs,
             model_name=model_name,
             model_timeout=model_timeout,
+            standards_source=standards_source,
         )
         if profile_path:
             ctx.state["profile_path"] = str(profile_path)
