@@ -1,6 +1,6 @@
 """Profile debug — inspect / bootstrap / validate document profiles.
 
-Three modes:
+Four modes:
 
   python -m core.src.profiler.profile_debug --env-dir <ENV_DIR>
       Analyzes <ENV_DIR>/out/extract/*_ir.json and out/profile/profile.json,
@@ -13,6 +13,15 @@ Three modes:
       DocumentProfile JSON. The LLM-emitted JSON goes to
       <ENV_DIR>/corrections/profile.json, where the pipeline picks it up via
       the corrections-override workflow (D-011 / FR-15) on the next run.
+
+  python -m core.src.profiler.profile_debug --create --model <ollama-model> \
+      --files <doc1> [<doc2> ...] --out <profile.json>
+      Bootstraps a DocumentProfile by extracting the supplied representative
+      documents and asking a local Ollama model to emit profile JSON. The
+      response is auto-recovered (unterminated string at EOF) and sanitized
+      (oversized / runaway / uncompilable regexes blanked or dropped) before
+      being written. Routes through `core.src.llm.ollama_provider.OllamaProvider`
+      to honor the LLMProvider Protocol seam — no direct ollama imports here.
 
   python -m core.src.profiler.profile_debug --validate <profile.json> [--fix] [--out <path>]
       Validates an LLM-emitted profile.json before the pipeline loads it:
@@ -515,6 +524,211 @@ Now, here are the representative documents:
 """
 
 
+# LLM-create mode: cap rendered text per doc so two big telecom requirements
+# files don't blow past Gemma's context window. 30k chars × 2 docs ≈ 8k tokens
+# which leaves plenty of room for the schema template and the model's response.
+_MAX_DOC_CHARS = 30_000
+_LLM_MAX_TOKENS = 8192
+
+
+def _render_block_for_prompt(block) -> str:
+    """One-line, structurally-annotated rendering of a ContentBlock for the LLM."""
+    bt = block.type.value if hasattr(block.type, "value") else str(block.type)
+    fi = block.font_info
+    hint_parts: list[str] = []
+    if fi is not None:
+        hint_parts.append(f"size={round(fi.size, 1)}")
+        if fi.bold:
+            hint_parts.append("bold")
+        if getattr(fi, "all_caps", False):
+            hint_parts.append("caps")
+    if block.style:
+        hint_parts.append(f"style={block.style!r}")
+    hint = (" {" + " ".join(hint_parts) + "}") if hint_parts else ""
+
+    if bt == "heading":
+        lvl = block.level if block.level is not None else "?"
+        return f"[H{lvl}{hint}] {block.text}"
+    if bt == "paragraph":
+        return f"[P{hint}] {block.text}"
+    if bt == "table":
+        first_row = " | ".join(block.headers) if block.headers else ""
+        # Cap first-row preview so wide telecom tables don't dominate the prompt.
+        if len(first_row) > 200:
+            first_row = first_row[:197] + "..."
+        return f"[TABLE rows={len(block.rows)} cols={len(block.headers)}] {first_row}"
+    if bt == "image":
+        return "[IMAGE]"
+    if bt == "embedded_object":
+        return f"[EMBEDDED type={block.object_type}]"
+    return f"[{bt.upper()}{hint}]"
+
+
+def _render_ir_for_prompt(label: str, ir: DocumentIR, max_chars: int) -> str:
+    """Render a DocumentIR as text-with-structural-hints for the LLM, truncated to max_chars."""
+    header = f"=== {label} (file={Path(ir.source_file).name}, format={ir.source_format}, blocks={ir.block_count}) ==="
+    out = [header]
+    total = len(header) + 1
+    truncated_at = -1
+    for i, block in enumerate(ir.content_blocks):
+        line = _render_block_for_prompt(block)
+        if total + len(line) + 1 > max_chars:
+            truncated_at = i
+            break
+        out.append(line)
+        total += len(line) + 1
+    if truncated_at >= 0:
+        out.append(
+            f"[... truncated: rendered {truncated_at} of {ir.block_count} blocks "
+            f"to stay under {max_chars} chars]"
+        )
+    return "\n".join(out)
+
+
+def _strip_markdown_fences(text: str) -> str:
+    """Strip ```json ... ``` or ``` ... ``` fences if the LLM wrapped its response."""
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    # Drop the opening fence (with optional language tag) and the closing fence.
+    first_newline = s.find("\n")
+    if first_newline == -1:
+        return text
+    body = s[first_newline + 1:]
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3].rstrip()
+    return body
+
+
+def _create_profile_via_llm(
+    model: str,
+    files: list[Path],
+    out_path: Path,
+) -> int:
+    """Call a local Ollama model to bootstrap a DocumentProfile from `files`.
+
+    Returns 0 on success (JSON written, schema-loadable), non-zero otherwise.
+    Output is line-prefixed with `CRT` so it's distinguishable in compact reports.
+    """
+    if not files:
+        print("CRT ERR no files supplied")
+        return 1
+
+    # Resolve and validate inputs up front so we fail fast before extraction.
+    resolved: list[Path] = []
+    for f in files:
+        p = Path(f).expanduser().resolve()
+        if not p.exists():
+            print(f"CRT ERR file not found: {p}")
+            return 1
+        resolved.append(p)
+
+    print(f"CRT model={model} files={len(resolved)} out={out_path}")
+
+    # Lazy imports — keep top-of-module clean and avoid forcing extraction
+    # libraries (fitz, python-docx, openpyxl) on callers that only use --validate.
+    from core.src.extraction.registry import extract_document, get_extractor
+
+    rendered_docs: list[str] = []
+    for i, path in enumerate(resolved, start=1):
+        try:
+            get_extractor(path)  # surfaces "no extractor for .ext" cleanly
+        except ValueError as e:
+            print(f"CRT ERR DOC{i} unsupported format: {e}")
+            return 1
+        try:
+            ir = extract_document(path)
+        except Exception as e:
+            print(f"CRT ERR DOC{i} extraction failed: {type(e).__name__}: {e}")
+            return 1
+        rendered = _render_ir_for_prompt(f"DOC{i}", ir, _MAX_DOC_CHARS)
+        rendered_docs.append(rendered)
+        print(f"CRT DOC{i} fmt={ir.source_format} blocks={ir.block_count} rendered={len(rendered)} chars")
+
+    content_blob = "\n\n".join(rendered_docs)
+    prompt = _LLM_PROMPT_TEMPLATE.replace(
+        "[PASTE 1-2 .docx FILES BELOW — text content of the documents]",
+        content_blob,
+    )
+
+    from core.src.llm.ollama_provider import OllamaProvider
+    try:
+        provider = OllamaProvider(model=model)
+    except ConnectionError as e:
+        print(f"CRT ERR ollama unreachable: {e}")
+        return 1
+
+    print(f"CRT calling ollama prompt={len(prompt)} chars max_tokens={_LLM_MAX_TOKENS}")
+    try:
+        raw = provider.complete(prompt, temperature=0.0, max_tokens=_LLM_MAX_TOKENS)
+    except Exception as e:
+        print(f"CRT ERR ollama call failed: {type(e).__name__}: {e}")
+        return 1
+
+    stats = provider.last_call_stats
+    if stats:
+        print(
+            f"CRT ollama tokens={stats.get('eval_count', 0)} "
+            f"tps={stats.get('tokens_per_second', 0)} "
+            f"duration_s={stats.get('total_duration_s', 0):.1f}"
+        )
+
+    body = _strip_markdown_fences(raw)
+    print(f"CRT response={len(raw)} chars body={len(body)} chars")
+
+    # Try parse → recover-on-unterminated → sanitize. Mirrors the --validate
+    # flow but applied automatically since this is the bootstrap path.
+    data: dict | None = None
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as e:
+        if "Unterminated string" in e.msg:
+            recovered = _recover_unterminated(body, e)
+            if recovered is None:
+                print(f"CRT ERR LLM emitted unterminated JSON; recovery failed at line {e.lineno} col {e.colno}")
+                return 1
+            recovered_text, closers = recovered
+            discarded = len(body) - len(recovered_text)
+            print(
+                f"CRT recovered: truncated unterminated string at line {e.lineno} "
+                f"col {e.colno}; closed {closers} structure(s); discarded {discarded} bytes"
+            )
+            try:
+                data = json.loads(recovered_text)
+            except json.JSONDecodeError as e2:
+                print(f"CRT ERR recovered text still failed parse: {e2.msg}")
+                return 1
+        else:
+            print(f"CRT ERR LLM response failed JSON parse at line {e.lineno} col {e.colno}: {e.msg}")
+            preview = body[:200].replace("\n", "\\n")
+            print(f"CRT preview: {preview}")
+            return 1
+
+    if not isinstance(data, dict):
+        print(f"CRT ERR top-level JSON is not an object (got {type(data).__name__})")
+        return 1
+
+    issues = _walk_regex_fields(data, fix=True)
+    bad_count = sum(1 for _, s, _, _ in issues if s == "BAD")
+    ok_count = sum(1 for _, s, _, _ in issues if s == "OK")
+    print(f"CRT sanitize ok={ok_count} bad={bad_count}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, ensure_ascii=False)
+    out_path.write_text(payload)
+    print(f"CRT wrote {len(payload)} bytes to {out_path}")
+
+    try:
+        from core.src.profiler.profile_schema import DocumentProfile
+        DocumentProfile.load_json(out_path)
+        print("CRT schema: DocumentProfile.load_json OK")
+    except Exception as e:
+        print(f"CRT ERR schema load failed — {type(e).__name__}: {e}")
+        return 1
+
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -579,11 +793,45 @@ def main() -> None:
             "Pair with --fix --out to write the recovered JSON to disk."
         ),
     )
+    parser.add_argument(
+        "--create",
+        action="store_true",
+        help=(
+            "Bootstrap a DocumentProfile by extracting --files and asking the "
+            "Ollama --model to emit profile JSON. Requires --model, --files, --out."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        help="With --create: Ollama model name (e.g. gemma4:e4b, gemma3:4b).",
+    )
+    parser.add_argument(
+        "--files",
+        type=Path,
+        nargs="+",
+        metavar="DOC",
+        help="With --create: 1+ representative documents (PDF/DOCX/XLSX) to extract and feed to the LLM.",
+    )
     args = parser.parse_args()
 
     if args.emit_prompt:
         sys.stdout.write(_LLM_PROMPT_TEMPLATE)
         return
+
+    if args.create:
+        if not args.model:
+            parser.error("--create requires --model")
+        if not args.files:
+            parser.error("--create requires --files")
+        if not args.out:
+            parser.error("--create requires --out")
+        rc = _create_profile_via_llm(
+            model=args.model,
+            files=list(args.files),
+            out_path=Path(args.out).expanduser().resolve(),
+        )
+        sys.exit(rc)
 
     if args.validate:
         rc = _validate_profile(
