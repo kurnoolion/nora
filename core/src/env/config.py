@@ -66,6 +66,39 @@ def resolve_standards_source(
             return value
     return DEFAULT_STANDARDS_SOURCE
 
+
+# ---------------------------------------------------------------------------
+# LLM provider selection — see core/src/llm/openai_provider.py
+# ---------------------------------------------------------------------------
+
+LLM_PROVIDERS: tuple[str, ...] = ("ollama", "openai-compatible", "mock")
+DEFAULT_LLM_PROVIDER: str = "ollama"
+LLM_PROVIDER_ENV_VAR: str = "NORA_LLM_PROVIDER"
+
+
+def resolve_llm_provider(
+    cli_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the effective LLM provider.
+
+    Precedence: CLI flag > NORA_LLM_PROVIDER env var > EnvironmentConfig
+    field > default ("ollama"). Raises ValueError if any provided value is
+    not in LLM_PROVIDERS.
+    """
+    for label, value in (
+        ("--llm-provider", cli_value),
+        (LLM_PROVIDER_ENV_VAR, os.environ.get(LLM_PROVIDER_ENV_VAR)),
+        ("EnvironmentConfig.model_provider", env_config_value),
+    ):
+        if value:
+            if value not in LLM_PROVIDERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {LLM_PROVIDERS}"
+                )
+            return value
+    return DEFAULT_LLM_PROVIDER
+
 # ---------------------------------------------------------------------------
 # Pipeline stage registry — single source of truth for names and ordering
 # ---------------------------------------------------------------------------
@@ -198,6 +231,11 @@ class EnvironmentConfig:
             errors.append(
                 f"Unknown standards_source: {self.standards_source!r} "
                 f"(valid: {', '.join(STANDARDS_SOURCES)})"
+            )
+        if self.model_provider not in LLM_PROVIDERS:
+            errors.append(
+                f"Unknown model_provider: {self.model_provider!r} "
+                f"(valid: {', '.join(LLM_PROVIDERS)})"
             )
         return errors
 

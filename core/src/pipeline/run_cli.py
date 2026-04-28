@@ -111,6 +111,11 @@ def main() -> None:
     parser.add_argument("--model", default="auto", help="LLM model name (default: auto)")
     parser.add_argument("--model-timeout", type=int, default=600, help="LLM timeout in seconds")
     parser.add_argument(
+        "--llm-provider", default=None, choices=["ollama", "openai-compatible", "mock"],
+        help="LLM provider (default: env config or 'ollama'; overrides NORA_LLM_PROVIDER env var). "
+             "openai-compatible reads NORA_LLM_BASE_URL / NORA_LLM_API_KEY and requires explicit --model.",
+    )
+    parser.add_argument(
         "--standards-source", default=None, choices=["huggingface", "3gpp"],
         help="3GPP spec source for the standards stage (default: env config or 'huggingface'; "
              "overrides NORA_STANDARDS_SOURCE env var).",
@@ -167,10 +172,11 @@ def main() -> None:
         start = resolve_stage(args.start) if args.start else env.stage_start
         end = resolve_stage(args.end) if args.end else env.stage_end
     elif args.env_dir:
-        from core.src.env.config import resolve_standards_source
+        from core.src.env.config import resolve_llm_provider, resolve_standards_source
         ctx = PipelineContext.standalone(
             env_dir=args.env_dir,
             profile_path=args.profile,
+            model_provider=resolve_llm_provider(args.llm_provider),
             model_name=args.model,
             model_timeout=args.model_timeout,
             standards_source=resolve_standards_source(args.standards_source),
@@ -185,9 +191,12 @@ def main() -> None:
     ctx.verbose = args.verbose
     if args.model != "auto":
         ctx.model_name = args.model
-    # CLI / env-var override of standards_source for env-config mode
+    # CLI / env-var overrides for env-config mode
     if args.env:
-        from core.src.env.config import resolve_standards_source
+        from core.src.env.config import resolve_llm_provider, resolve_standards_source
+        ctx.model_provider = resolve_llm_provider(
+            args.llm_provider, env.model_provider
+        )
         ctx.standards_source = resolve_standards_source(
             args.standards_source, env.standards_source
         )

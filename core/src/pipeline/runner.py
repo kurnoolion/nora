@@ -65,12 +65,11 @@ class PipelineContext:
     def create_llm_provider(self, require_real: bool = False):
         """Create an LLM provider based on config.
 
-        Returns MockLLMProvider if model is "mock" or Ollama is unavailable.
+        Dispatch on `model_provider`. Each branch falls back to MockLLMProvider
+        on failure unless `require_real=True`.
         """
-        resolved_model = self._resolve_model()
-
-        # Explicit mock request
-        if resolved_model == "mock" or self.model_provider == "mock":
+        # Explicit mock request — fast path before any model_name resolution.
+        if self.model_provider == "mock" or self.model_name == "mock":
             logger.info("Using MockLLMProvider (explicit)")
             from core.src.llm.mock_provider import MockLLMProvider
             mock = MockLLMProvider()
@@ -78,6 +77,7 @@ class PipelineContext:
             return mock
 
         if self.model_provider == "ollama":
+            resolved_model = self._resolve_model()
             try:
                 from core.src.llm.ollama_provider import OllamaProvider
                 provider = OllamaProvider(
@@ -90,6 +90,33 @@ class PipelineContext:
                 if require_real:
                     raise
                 logger.warning(f"Ollama unavailable ({e}), falling back to mock")
+
+        elif self.model_provider == "openai-compatible":
+            # Hardware-detection auto-pick is Ollama-only; cloud providers
+            # require an explicit model tag.
+            if self.model_name == "auto":
+                msg = (
+                    "model_provider=openai-compatible requires an explicit "
+                    "model name (set NORA_LLM_MODEL or pass --model)."
+                )
+                if require_real:
+                    raise ValueError(msg)
+                logger.warning(f"{msg} Falling back to mock.")
+            else:
+                try:
+                    from core.src.llm.openai_provider import OpenAICompatibleProvider
+                    provider = OpenAICompatibleProvider(
+                        model=self.model_name,
+                        timeout=self.model_timeout,
+                    )
+                    logger.info(f"Using OpenAI-compatible LLM: {self.model_name}")
+                    return provider
+                except (ValueError, ConnectionError, RuntimeError, Exception) as e:
+                    if require_real:
+                        raise
+                    logger.warning(
+                        f"OpenAI-compatible provider unavailable ({e}), falling back to mock"
+                    )
 
         from core.src.llm.mock_provider import MockLLMProvider
         mock = MockLLMProvider()
@@ -135,6 +162,7 @@ class PipelineContext:
         cls,
         env_dir: Path,
         profile_path: Path | None = None,
+        model_provider: str = "ollama",
         model_name: str = "auto",
         model_timeout: int = 600,
         standards_source: str = "huggingface",
@@ -154,6 +182,7 @@ class PipelineContext:
             eval_dir=env_dir / "eval",
             verbose=False,
             stage_dirs=stage_dirs,
+            model_provider=model_provider,
             model_name=model_name,
             model_timeout=model_timeout,
             standards_source=standards_source,

@@ -6,6 +6,7 @@ LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method st
 **Public surface**
 - `LLMProvider` (base.py) — `@runtime_checkable Protocol`; the only LLM interface the rest of the project sees
 - `OllamaProvider` (ollama_provider.py) — local Ollama HTTP client via stdlib `urllib`; `model`, `call_count`, `last_call_stats` (total_duration_s, eval_count, prompt_eval_count, tokens_per_second, model) for observability
+- `OpenAICompatibleProvider` (openai_provider.py) — Chat-Completions client for any OpenAI-compatible cloud endpoint (OpenRouter, Together AI, DeepInfra, Groq, Fireworks, vLLM, OpenAI). Stdlib `urllib` only. Reads `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY` / `NORA_LLM_MODEL` env vars when constructor args are None. Same `model` / `call_count` / `last_call_stats` surface as `OllamaProvider`.
 - `MockLLMProvider` (mock_provider.py) — deterministic keyword-based stub for tests and offline runs; `call_count`
 - `HardwareInfo`, `ModelSpec`, `ModelChoice` (model_picker.py); `detect_hardware()`, `pick_model(hw, prefer=None)`, `list_available_ollama_models()`, `check_model_available()` — auto-select the best Ollama model that fits detected RAM/VRAM
 
@@ -14,7 +15,8 @@ LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method st
 - `complete()` returns plain text — JSON parsing is the caller's responsibility. Keeps the Protocol minimal and portable to providers without structured-output modes.
 - Default `temperature=0.0` — all offline extraction paths want determinism.
 - `OllamaProvider.__init__` pings `/api/tags` and raises `ConnectionError` on failure, and logs a warning if the requested model isn't pulled — fail fast with a diagnosable message.
-- `last_call_stats` is updated on every `complete()` call; callers snapshot it to record LLM category metrics (`LLM-*` error codes).
+- `OpenAICompatibleProvider.__init__` validates that model + base_url + api_key are all resolvable (constructor arg or env var) and raises `ValueError` with a precise message otherwise — fail before the first request, not on the first 401.
+- `last_call_stats` schema is identical across providers (`total_duration_s`, `eval_count`, `prompt_eval_count`, `tokens_per_second`, `model`). Swapping providers does not change the metrics shape.
 
 **Key choices**
 - `Protocol` + structural typing over an ABC — lets a vendor SDK wrapper satisfy the interface with zero inheritance, which matters when work-laptop constraints force swapping providers.
