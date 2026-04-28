@@ -150,9 +150,14 @@ class TestParsing:
     def test_extracts_version(self, tree):
         assert tree.version != ""
 
-    def test_requirements_have_section_numbers(self, tree):
-        with_numbers = [r for r in tree.requirements if r.section_number]
-        assert len(with_numbers) == len(tree.requirements)
+    def test_every_requirement_is_anchored(self, tree):
+        # Each requirement is either paragraph-anchored (has section_number)
+        # or table-anchored (no section_number, but req_id + parent_section).
+        for r in tree.requirements:
+            assert r.section_number or (r.req_id and r.parent_section), (
+                f"Unanchored requirement: section={r.section_number!r} "
+                f"req_id={r.req_id!r} parent_section={r.parent_section!r}"
+            )
 
     def test_requirements_have_hierarchy_paths(self, tree):
         with_paths = [r for r in tree.requirements if r.hierarchy_path]

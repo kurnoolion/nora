@@ -176,7 +176,11 @@ class GenericStructuralParser:
         # 1. Extract plan metadata
         plan_meta = self._extract_plan_metadata(doc)
 
-        # 2. Classify blocks and build section hierarchy
+        # 2. Classify blocks and build section hierarchy.
+        #    Two anchor sources for Requirements (see Key Choices in MODULE.md):
+        #    paragraph anchors (heading or standalone-ID-in-small-font) and
+        #    table-cell anchors (req-IDs found in column-1 of a row, falling
+        #    back to all cells). Paragraph anchors win on duplicate req_ids.
         sections = self._build_sections(doc)
 
         # 3. Extract referenced standards releases
@@ -189,6 +193,11 @@ class GenericStructuralParser:
 
         # 5. Build parent-child relationships
         self._link_parents(sections)
+
+        # 6. Table-anchored Requirements have no section_number, so
+        #    _link_parents skips them. Inherit hierarchy_path from their
+        #    paragraph-anchored parent now that the parents are linked.
+        self._propagate_hierarchy_to_table_reqs(sections)
 
         tree = RequirementTree(
             mno=doc.mno,
@@ -238,6 +247,15 @@ class GenericStructuralParser:
         # Pending req ID — small font blocks that appear before/after a heading
         pending_req_id: str = ""
 
+        # Track which req_ids were anchored by a paragraph (heading-block
+        # assignment, pending-id resolution, or inline body-text id) so the
+        # table-anchored detection can dedup against them — paragraph wins.
+        paragraph_req_ids: set[str] = set()
+
+        def _record_paragraph_anchor(rid: str) -> None:
+            if rid:
+                paragraph_req_ids.add(rid)
+
         for block in doc.content_blocks:
             if block.type == BlockType.PARAGRAPH:
                 if not block.font_info:
@@ -252,6 +270,7 @@ class GenericStructuralParser:
                         # If we have a current section without a req_id, assign it
                         if current_section and not current_section.req_id:
                             current_section.req_id = req_ids[0]
+                            _record_paragraph_anchor(req_ids[0])
                         else:
                             pending_req_id = req_ids[0]
                     continue
@@ -266,6 +285,8 @@ class GenericStructuralParser:
                         req_id=pending_req_id,
                         zone_type=self._classify_zone(section_num),
                     )
+                    if pending_req_id:
+                        _record_paragraph_anchor(pending_req_id)
                     pending_req_id = ""
                     sections.append(current_section)
                     continue
@@ -278,6 +299,7 @@ class GenericStructuralParser:
                         ids = self._req_id_re.findall(block.text)
                         if ids:
                             current_section.req_id = ids[0]
+                            _record_paragraph_anchor(ids[0])
 
             elif block.type == BlockType.TABLE:
                 if current_section:
@@ -287,6 +309,12 @@ class GenericStructuralParser:
                             rows=block.rows,
                             source="inline",
                         )
+                    )
+                    # Detect req-IDs anchored in table cells and create new
+                    # Requirement nodes for them (children of current_section).
+                    # Skips IDs already paragraph-anchored.
+                    self._extract_table_anchored_reqs(
+                        block, current_section, sections, paragraph_req_ids
                     )
 
             elif block.type == BlockType.IMAGE:
@@ -299,6 +327,134 @@ class GenericStructuralParser:
                     )
 
         return sections
+
+    # ── Table-anchored requirement detection ────────────────────────
+
+    def _extract_table_anchored_reqs(
+        self,
+        block: ContentBlock,
+        parent_section: Requirement,
+        sections: list[Requirement],
+        paragraph_req_ids: set[str],
+    ) -> None:
+        """Detect req-IDs in table cells; append child Requirement nodes to `sections`.
+
+        Heuristic: scan column 1 of each row first; if no IDs there, fall back
+        to scanning all cells of the row. At most one anchor per row.
+        Skips IDs already anchored by a paragraph elsewhere in the document.
+        Within a single table, also dedups so a repeated ID across rows yields
+        only one Requirement.
+        """
+        if not self._req_id_re or not block.rows:
+            return
+
+        seen_in_table: set[str] = set()
+        for row in block.rows:
+            if not row:
+                continue
+
+            anchor_id: str | None = None
+            anchor_cells: list[str] = list(row)
+
+            # Strategy 1: column 1 only.
+            col1_ids = self._req_id_re.findall(row[0]) if row[0] else []
+            for rid in col1_ids:
+                if rid in paragraph_req_ids or rid in seen_in_table:
+                    continue
+                anchor_id = rid
+                break
+
+            # Strategy 2 (fallback): any cell.
+            if anchor_id is None:
+                for cell in row[1:]:
+                    if not cell:
+                        continue
+                    cell_ids = self._req_id_re.findall(cell)
+                    for rid in cell_ids:
+                        if rid in paragraph_req_ids or rid in seen_in_table:
+                            continue
+                        anchor_id = rid
+                        break
+                    if anchor_id is not None:
+                        break
+
+            if anchor_id is None:
+                continue
+
+            seen_in_table.add(anchor_id)
+            self._create_table_anchored_req(
+                anchor_id, anchor_cells, block, parent_section, sections
+            )
+
+    def _create_table_anchored_req(
+        self,
+        req_id: str,
+        row: list[str],
+        block: ContentBlock,
+        parent_section: Requirement,
+        sections: list[Requirement],
+    ) -> None:
+        """Append a Requirement node anchored by a table row.
+
+        Linkage to parent_section is done here (not via _link_parents, which
+        keys on section_number — table-anchored reqs have none). Hierarchy
+        path is filled later by _propagate_hierarchy_to_table_reqs once the
+        paragraph-anchored sections have their paths built.
+        """
+        # Serialize row as text using headers when available — preserves the
+        # column→value mapping that is the actual content of the requirement.
+        headers = block.headers or []
+        parts: list[str] = []
+        for i, cell in enumerate(row):
+            cell_str = (cell or "").strip()
+            if not cell_str:
+                continue
+            if i < len(headers) and headers[i]:
+                parts.append(f"{headers[i].strip()}: {cell_str}")
+            else:
+                parts.append(cell_str)
+        text = "; ".join(parts)
+
+        new_req = Requirement(
+            req_id=req_id,
+            section_number="",   # no own section — anchored by table row
+            title="",
+            parent_req_id=parent_section.req_id,
+            parent_section=parent_section.section_number,
+            hierarchy_path=[],   # filled in _propagate_hierarchy_to_table_reqs
+            zone_type=parent_section.zone_type,
+            text=text,
+            tables=[
+                TableData(
+                    headers=list(block.headers),
+                    rows=[list(row)],
+                    source="inline",
+                )
+            ],
+        )
+        sections.append(new_req)
+        if req_id and req_id not in parent_section.children:
+            parent_section.children.append(req_id)
+
+    def _propagate_hierarchy_to_table_reqs(
+        self, sections: list[Requirement]
+    ) -> None:
+        """Copy parent's hierarchy_path to table-anchored Requirements.
+
+        _link_parents skips nodes without section_number (table-anchored), so
+        their hierarchy_path stays empty after that pass. Fill it now from the
+        paragraph-anchored parent.
+        """
+        # Lookup paragraph-anchored sections by section_number.
+        by_section_num: dict[str, Requirement] = {
+            s.section_number: s for s in sections if s.section_number
+        }
+        for s in sections:
+            if s.section_number or not s.parent_section:
+                continue
+            parent = by_section_num.get(s.parent_section)
+            if parent and parent.hierarchy_path:
+                s.hierarchy_path = list(parent.hierarchy_path)
 
     def _is_req_id_block(self, block: ContentBlock) -> bool:
         """Check if a block is a standalone requirement ID (small font)."""

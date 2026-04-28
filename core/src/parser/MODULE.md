@@ -14,15 +14,18 @@ Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentPr
 - Parser is **LLM-free**. Any downstream LLM enrichment (taxonomy, query synthesis) happens in its own module; the structural layer stays deterministic and cheap to re-run.
 - No per-MNO branches. A new MNO is onboarded by running the profiler on its docs, editing the resulting profile, and re-running the parser — no parser code change.
 - `RequirementTree.requirements` is a flat list in document order. Parent/child relationships are encoded via `parent_req_id` / `children` ID references; consumers reconstruct the tree if they need traversal.
-- `hierarchy_path` mirrors the heading chain from root down to the requirement — used by the graph and vectorstore to preserve structural context when chunking or indexing.
+- **Every Requirement is anchored from exactly one source block** — either a paragraph anchor (heading-style block, or a small-font standalone-ID paragraph), or a table-cell anchor (a row whose cell matches the profile's `requirement_id.pattern`). Paragraph anchors win on duplicate `req_id`s; the table-anchor pass dedups against the paragraph-anchor set.
+- Table-anchored Requirements have `section_number=""` by design — they're addressed by `req_id` and linked to their owning paragraph-anchored section via `parent_section` / `parent_req_id`. Consumers must not assume `section_number` is non-empty.
+- `hierarchy_path` mirrors the heading chain from root down to the requirement — used by the graph and vectorstore to preserve structural context when chunking or indexing. Table-anchored Requirements inherit `hierarchy_path` from their parent paragraph-anchored section.
 - Cross-references are structurally detected (regex from profile) but **not resolved** here. `CrossReferences.internal/external_plans/standards` are raw strings; [resolver](../resolver/MODULE.md) turns them into concrete manifests.
-- `zone_type` is copied from the profile's `DocumentZone` match — used by the graph to route requirements to the right subgraph partition.
+- `zone_type` is copied from the profile's `DocumentZone` match — used by the graph to route requirements to the right subgraph partition. Table-anchored Requirements inherit `zone_type` from their parent.
 
 **Key choices**
 - One `RequirementTree` per source document (not per MNO or release) — the unified graph is assembled later; keeping parse output 1:1 with input keeps re-runs incremental.
 - Flat requirements list with ID refs rather than a nested tree — trivially JSON-serializable and safe to load partially (load header, skip body) for large plans.
 - Parser reads the profile but never writes it — the profile is an input, edited only by the profiler or by a human. This enforces the corrections-override flow.
 - Tables preserved with source tag (`inline` vs `embedded_xlsx`) so the graph and query layer can score table-derived answers differently from prose-derived ones.
+- **Two req-ID anchor sources**: paragraph anchors (heading-block, pending-id resolution, or inline body-text id) and table-cell anchors (column-1-of-row first; all-cells fallback; one anchor per row max). Necessary because telecom requirement docs frequently define requirements through cross-reference tables — IDs that exist in tables but never as paragraph-form anchors. Detected against the same `requirement_id.pattern` regex from the profile, so adding a new MNO still requires no parser code change. Paragraph anchors win on duplicate `req_id`s to keep precedence deterministic.
 
 **Non-goals**
 - No semantic enrichment (feature tagging, standards resolution, embeddings) — done downstream.
