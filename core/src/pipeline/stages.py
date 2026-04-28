@@ -85,7 +85,7 @@ def run_extract(ctx: PipelineContext) -> StageResult:
             ir_paths.append(str(out_path))
             stats["docs"] += 1
             stats["blocks"] += ir.block_count
-            tbl_count = sum(1 for b in ir.blocks if b.block_type.value == "table")
+            tbl_count = sum(1 for b in ir.content_blocks if b.type.value == "table")
             stats["tables"] += tbl_count
             if ir.block_count < 10:
                 warnings.append(f"EXT-W001: Low blocks ({ir.block_count}) in {f.name}")
