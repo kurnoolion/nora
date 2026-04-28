@@ -524,6 +524,26 @@ Now, here are the representative documents:
 """
 
 
+# System prompt and trailing reinforcement for --create. Small instruct-tuned
+# models (Gemma 4B, etc.) tend to summarize the document instead of emitting
+# JSON when the schema instruction sits ~30k chars before generation begins;
+# anchoring the role at the system level and repeating "JSON only, start with
+# {" right before the model speaks fixes this in practice.
+_LLM_CREATE_SYSTEM = (
+    "You are a JSON emitter. You output ONLY one JSON object — no prose, no "
+    "markdown, no commentary, no explanation, no greeting. Your entire response "
+    "must begin with `{` as the very first character and end with `}` as the "
+    "very last character. Anything else breaks the consumer."
+)
+
+_LLM_CREATE_TRAILER = (
+    "\n\nNow emit the DocumentProfile JSON object derived from the documents above. "
+    "Begin with `{` as the very first character of your response. Do not summarize "
+    "the documents. Do not explain what you are about to do. Do not wrap in "
+    "markdown fences. JSON only."
+)
+
+
 # LLM-create mode: cap rendered text per doc so two big telecom requirements
 # files don't blow past Gemma's context window. 30k chars × 2 docs ≈ 8k tokens
 # which leaves plenty of room for the schema template and the model's response.
@@ -600,6 +620,46 @@ def _strip_markdown_fences(text: str) -> str:
     return body
 
 
+def _extract_json_object(text: str) -> str | None:
+    """Find the first balanced top-level JSON object in `text`.
+
+    Walks the string looking for the first `{`, then advances with brace-depth
+    tracking — string-aware (skips `{`/`}` inside `"..."`) and escape-aware.
+    Returns the substring `{...}` (inclusive) or None if no balanced object
+    exists.
+
+    Use case: small instruct-tuned models often emit a prose preamble ("Here
+    is the profile:" or a document summary) before the JSON despite being
+    told not to. Stripping fences alone doesn't catch that; this does.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def _create_profile_via_llm(
     model: str,
     files: list[Path],
@@ -649,7 +709,7 @@ def _create_profile_via_llm(
     prompt = _LLM_PROMPT_TEMPLATE.replace(
         "[PASTE 1-2 .docx FILES BELOW — text content of the documents]",
         content_blob,
-    )
+    ) + _LLM_CREATE_TRAILER
 
     from core.src.llm.ollama_provider import OllamaProvider
     try:
@@ -660,7 +720,12 @@ def _create_profile_via_llm(
 
     print(f"CRT calling ollama prompt={len(prompt)} chars max_tokens={_LLM_MAX_TOKENS}")
     try:
-        raw = provider.complete(prompt, temperature=0.0, max_tokens=_LLM_MAX_TOKENS)
+        raw = provider.complete(
+            prompt,
+            system=_LLM_CREATE_SYSTEM,
+            temperature=0.0,
+            max_tokens=_LLM_MAX_TOKENS,
+        )
     except Exception as e:
         print(f"CRT ERR ollama call failed: {type(e).__name__}: {e}")
         return 1
@@ -676,33 +741,52 @@ def _create_profile_via_llm(
     body = _strip_markdown_fences(raw)
     print(f"CRT response={len(raw)} chars body={len(body)} chars")
 
-    # Try parse → recover-on-unterminated → sanitize. Mirrors the --validate
-    # flow but applied automatically since this is the bootstrap path.
+    # Try parse → tolerant-extract → recover-on-unterminated → sanitize.
+    # Mirrors --validate but applied automatically; the create path tolerates
+    # prose preambles (small models occasionally summarize before the JSON
+    # despite the system prompt) by extracting the first balanced {...}.
     data: dict | None = None
+    parse_target = body
     try:
-        data = json.loads(body)
+        data = json.loads(parse_target)
     except json.JSONDecodeError as e:
-        if "Unterminated string" in e.msg:
-            recovered = _recover_unterminated(body, e)
-            if recovered is None:
-                print(f"CRT ERR LLM emitted unterminated JSON; recovery failed at line {e.lineno} col {e.colno}")
-                return 1
-            recovered_text, closers = recovered
-            discarded = len(body) - len(recovered_text)
+        extracted = _extract_json_object(body)
+        if extracted is not None and extracted != body.strip():
+            preamble_chars = body.find("{")
             print(
-                f"CRT recovered: truncated unterminated string at line {e.lineno} "
-                f"col {e.colno}; closed {closers} structure(s); discarded {discarded} bytes"
+                f"CRT extracted: skipped {preamble_chars} chars of preamble; "
+                f"object body={len(extracted)} chars"
             )
+            parse_target = extracted
             try:
-                data = json.loads(recovered_text)
+                data = json.loads(parse_target)
             except json.JSONDecodeError as e2:
-                print(f"CRT ERR recovered text still failed parse: {e2.msg}")
+                # Fall through to unterminated-string recovery using the
+                # extracted text — the most likely remaining failure mode.
+                e = e2
+
+        if data is None:
+            if "Unterminated string" in e.msg:
+                recovered = _recover_unterminated(parse_target, e)
+                if recovered is None:
+                    print(f"CRT ERR LLM emitted unterminated JSON; recovery failed at line {e.lineno} col {e.colno}")
+                    return 1
+                recovered_text, closers = recovered
+                discarded = len(parse_target) - len(recovered_text)
+                print(
+                    f"CRT recovered: truncated unterminated string at line {e.lineno} "
+                    f"col {e.colno}; closed {closers} structure(s); discarded {discarded} bytes"
+                )
+                try:
+                    data = json.loads(recovered_text)
+                except json.JSONDecodeError as e3:
+                    print(f"CRT ERR recovered text still failed parse: {e3.msg}")
+                    return 1
+            else:
+                print(f"CRT ERR LLM response failed JSON parse at line {e.lineno} col {e.colno}: {e.msg}")
+                preview = body[:200].replace("\n", "\\n")
+                print(f"CRT preview: {preview}")
                 return 1
-        else:
-            print(f"CRT ERR LLM response failed JSON parse at line {e.lineno} col {e.colno}: {e.msg}")
-            preview = body[:200].replace("\n", "\\n")
-            print(f"CRT preview: {preview}")
-            return 1
 
     if not isinstance(data, dict):
         print(f"CRT ERR top-level JSON is not an object (got {type(data).__name__})")
