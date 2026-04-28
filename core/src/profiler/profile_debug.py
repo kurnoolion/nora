@@ -88,6 +88,63 @@ def _check_regex(pattern: str) -> tuple[str, str]:
     return "OK", f"{len(pattern)} chars"
 
 
+def _recover_unterminated(text: str, e: json.JSONDecodeError) -> tuple[str, int] | None:
+    """Best-effort recovery of JSON with an unterminated string at EOF.
+
+    LLM repetition failure mode: file ends mid-string after thousands of
+    repeated escape sequences (e.g., `"...*\\*\\*\\*...` with no closing quote
+    or following `]` / `}`). Recovery: truncate at the offending opening
+    quote, replace the unterminated string with `""`, close any unclosed
+    `{` / `[` structures with a stack walk that skips over balanced strings.
+
+    Returns (recovered_text, closers_added) on success, None if the recovered
+    text still doesn't parse.
+    """
+    if "Unterminated string" not in e.msg:
+        return None
+    if e.pos < 0 or e.pos >= len(text):
+        return None
+
+    head = text[:e.pos]
+
+    # Walk head, tracking unclosed { and [ in a stack. Skip over balanced
+    # strings (with backslash-escape handling) so brackets inside string
+    # values don't contribute to the open-stack.
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for c in head:
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+        elif c in "{[":
+            stack.append(c)
+        elif c == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+        elif c == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+
+    closing_map = {"{": "}", "[": "]"}
+    closers = "".join(closing_map[c] for c in reversed(stack))
+    recovered = head + '""' + closers
+
+    try:
+        json.loads(recovered)
+    except json.JSONDecodeError:
+        return None
+    return recovered, len(closers)
+
+
 def _walk_regex_fields(data: dict, fix: bool) -> list[tuple[str, str, str, str]]:
     """Walk every regex-valued field in the profile. Return issue list.
 
@@ -171,7 +228,12 @@ def _walk_regex_fields(data: dict, fix: bool) -> list[tuple[str, str, str, str]]
     return issues
 
 
-def _validate_profile(path: Path, fix: bool, out_path: Path | None) -> int:
+def _validate_profile(
+    path: Path,
+    fix: bool,
+    out_path: Path | None,
+    recover: bool = False,
+) -> int:
     """Validate (and optionally sanitize) an LLM-emitted profile.json.
 
     Returns the process exit code: 0 if all OK after any applied fixes, 1 otherwise.
@@ -187,29 +249,56 @@ def _validate_profile(path: Path, fix: bool, out_path: Path | None) -> int:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"VLD ERR parse error at line {e.lineno} col {e.colno}: {e.msg}")
-        # Show context around the error so the user can spot the cause
-        # (most often: an unescaped \ inside a regex string — JSON needs \\)
-        lines = text.split("\n")
-        start = max(1, e.lineno - 2)
-        end = min(len(lines), e.lineno + 2)
-        print()
-        print(f"Context (lines {start}-{end}):")
-        for i in range(start - 1, end):
-            marker = ">>>" if (i + 1) == e.lineno else "   "
-            display = lines[i] if len(lines[i]) <= 160 else lines[i][:157] + "..."
-            print(f"  {marker} {i + 1:4d}: {display}")
-            if (i + 1) == e.lineno:
-                # Caret at the offending column (account for "  >>> NNNN: ")
-                pad = 8 + len(f"{i + 1:4d}: ") + e.colno - 1
-                print(f"  {' ' * pad}^")
-        print()
-        print(
-            "Hint: most common cause is an unescaped backslash inside a regex "
-            "pattern string. JSON requires `\\\\` to represent a single literal "
-            "backslash. Edit the file manually to fix, then re-run --validate."
-        )
-        return 1
+        # Try best-effort recovery for the LLM unterminated-string-at-EOF case.
+        if recover and "Unterminated string" in e.msg:
+            result = _recover_unterminated(text, e)
+            if result is not None:
+                recovered_text, closers = result
+                # Diff in size shows how much was discarded.
+                discarded = len(text) - len(recovered_text)
+                print(
+                    f"VLD recovered: truncated unterminated string at line "
+                    f"{e.lineno} col {e.colno}; closed {closers} JSON structure(s); "
+                    f"discarded {discarded} bytes"
+                )
+                text = recovered_text
+                data = json.loads(text)
+                # Continue with regex-level validation on the recovered data.
+            else:
+                print(f"VLD ERR recovery failed for parse error at line {e.lineno} col {e.colno}: {e.msg}")
+                return 1
+        else:
+            print(f"VLD ERR parse error at line {e.lineno} col {e.colno}: {e.msg}")
+            # Show context around the error so the user can spot the cause
+            # (most often: an unescaped \ inside a regex string — JSON needs \\)
+            lines = text.split("\n")
+            start = max(1, e.lineno - 2)
+            end = min(len(lines), e.lineno + 2)
+            print()
+            print(f"Context (lines {start}-{end}):")
+            for i in range(start - 1, end):
+                marker = ">>>" if (i + 1) == e.lineno else "   "
+                display = lines[i] if len(lines[i]) <= 160 else lines[i][:157] + "..."
+                print(f"  {marker} {i + 1:4d}: {display}")
+                if (i + 1) == e.lineno:
+                    # Caret at the offending column (account for "  >>> NNNN: ")
+                    pad = 8 + len(f"{i + 1:4d}: ") + e.colno - 1
+                    print(f"  {' ' * pad}^")
+            print()
+            if "Unterminated string" in e.msg:
+                print(
+                    "Hint: file ends mid-string (LLM runaway-repetition failure). "
+                    "Re-run with --recover to truncate the offending field and "
+                    "close open JSON structures automatically."
+                )
+            else:
+                print(
+                    "Hint: most common cause is an unescaped backslash inside a "
+                    "regex pattern string. JSON requires `\\\\` to represent a "
+                    "single literal backslash. Edit the file manually to fix, "
+                    "then re-run --validate."
+                )
+            return 1
     if not isinstance(data, dict):
         print(f"VLD ERR top-level JSON is not an object (got {type(data).__name__})")
         return 1
@@ -479,6 +568,17 @@ def main() -> None:
             "of overwriting the input."
         ),
     )
+    parser.add_argument(
+        "--recover",
+        action="store_true",
+        help=(
+            "With --validate: when the file ends mid-string (LLM runaway-"
+            "repetition failure where the model never closed a regex value), "
+            "truncate the offending field to empty, close any unclosed JSON "
+            "structures, and continue validation on the recovered data. "
+            "Pair with --fix --out to write the recovered JSON to disk."
+        ),
+    )
     args = parser.parse_args()
 
     if args.emit_prompt:
@@ -490,6 +590,7 @@ def main() -> None:
             Path(args.validate).expanduser().resolve(),
             fix=args.fix,
             out_path=Path(args.out).expanduser().resolve() if args.out else None,
+            recover=args.recover,
         )
         sys.exit(rc)
 
