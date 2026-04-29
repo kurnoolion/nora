@@ -36,21 +36,33 @@ class VectorStoreConfig:
 
     # ── Embedding settings ───────────────────────────────────────
     embedding_provider: str = "sentence-transformers"
-    """Which embedding backend to use. Options: 'sentence-transformers'."""
+    """Which embedding backend to use.
+    Options:
+      - 'sentence-transformers' (default): local HF-cached model
+      - 'ollama': uses the same Ollama runtime as the LLM provider; no
+        separate HuggingFace offline cache needed. Configure ollama_url
+        via `extra["ollama_url"]` (defaults to http://localhost:11434).
+    """
 
     embedding_model: str = "all-MiniLM-L6-v2"
     """Model name passed to the embedding provider.
     sentence-transformers options:
-      - 'all-MiniLM-L6-v2'    (384d, fast, good baseline)
-      - 'all-mpnet-base-v2'   (768d, slower, better quality)
+      - 'all-MiniLM-L6-v2'       (384d, fast, good baseline)
+      - 'all-mpnet-base-v2'      (768d, slower, better quality)
       - 'BAAI/bge-large-en-v1.5' (1024d, strong retrieval model)
+    ollama options (must be pulled first via `ollama pull <name>`):
+      - 'nomic-embed-text'       (768d, ~270MB, balanced)
+      - 'mxbai-embed-large'      (1024d, ~670MB, top quality)
+      - 'all-minilm'             (384d, ~45MB, fastest)
     """
 
     embedding_batch_size: int = 64
-    """Batch size for embedding computation. Larger = faster but more memory."""
+    """Batch size for embedding computation. Larger = faster but more memory.
+    (Used by sentence-transformers; Ollama's /api/embeddings is single-text-per-call.)"""
 
     embedding_device: str = "cpu"
-    """Device for sentence-transformers. Options: 'cpu', 'cuda', 'mps'."""
+    """Device for sentence-transformers. Options: 'cpu', 'cuda', 'mps'.
+    (Ignored by ollama; the Ollama runtime manages device placement itself.)"""
 
     normalize_embeddings: bool = True
     """L2-normalize embeddings before storing. Required for cosine similarity

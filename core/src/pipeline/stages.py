@@ -449,20 +449,15 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        from core.src.vectorstore import make_embedder
         from core.src.vectorstore.config import VectorStoreConfig
         from core.src.vectorstore.builder import VectorStoreBuilder
-        from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
         from core.src.vectorstore.store_chroma import ChromaDBStore
     except ImportError as e:
         return _fail(stage, "VEC-E001", f"Import error: {e}", time.time() - t0)
 
     config = VectorStoreConfig(persist_directory=str(out_dir))
-    embedder = SentenceTransformerEmbedder(
-        model_name=config.embedding_model,
-        device=config.embedding_device,
-        batch_size=config.embedding_batch_size,
-        normalize=config.normalize_embeddings,
-    )
+    embedder = make_embedder(config)
     store = ChromaDBStore(
         persist_directory=config.persist_directory,
         collection_name=config.collection_name,
@@ -507,8 +502,8 @@ def run_eval(ctx: PipelineContext) -> StageResult:
         from core.src.eval.questions import ALL_QUESTIONS
         from core.src.eval.runner import EvalRunner
         from core.src.query.pipeline import load_graph
+        from core.src.vectorstore import make_embedder
         from core.src.vectorstore.config import VectorStoreConfig
-        from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
         from core.src.vectorstore.store_chroma import ChromaDBStore
     except ImportError as e:
         return _fail(stage, "EVL-E001", f"Import error: {e}", time.time() - t0)
@@ -524,10 +519,7 @@ def run_eval(ctx: PipelineContext) -> StageResult:
     vs_config_path = vs_dir / "config.json"
     vs_config = VectorStoreConfig.load_json(vs_config_path) if vs_config_path.exists() else VectorStoreConfig(persist_directory=str(vs_dir))
 
-    embedder = SentenceTransformerEmbedder(
-        model_name=vs_config.embedding_model, device=vs_config.embedding_device,
-        batch_size=vs_config.embedding_batch_size, normalize=vs_config.normalize_embeddings,
-    )
+    embedder = make_embedder(vs_config)
     store = ChromaDBStore(
         persist_directory=vs_config.persist_directory, collection_name=vs_config.collection_name,
         distance_metric=vs_config.distance_metric,

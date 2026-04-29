@@ -10,13 +10,18 @@ Unified vector-store construction and configuration. Defines two structural-typi
   - `QueryResult` (store_base.py) — `ids`, `documents`, `metadatas`, `distances`
 - Implementations:
   - `SentenceTransformerEmbedder` (embedding_st.py) — ST backend; respects offline HF cache
+  - `OllamaEmbedder` (embedding_ollama.py) — Ollama `/api/embeddings` backend; loopback-aware (bypasses HTTP_PROXY for localhost); same offline-distribution path as the LLM provider (`ollama pull <model>`)
   - `ChromaDBStore` (store_chroma.py) — persistent ChromaDB collection
+- Provider factory:
+  - `make_embedder(config)` (`__init__.py`) — dispatches by `config.embedding_provider` to `SentenceTransformerEmbedder` or `OllamaEmbedder`; reads provider-specific settings from `extra` (e.g., `ollama_url`, `ollama_timeout_s`)
 - Builder / chunking:
   - `VectorStoreBuilder` (builder.py) — orchestrates load → chunk → embed → store
   - `BuildStats` — per-build metrics: chunks_by_plan, embedding model/dim, backend, metric, collection
   - `ChunkBuilder`, `Chunk` (chunk_builder.py) — builds contextualized chunks with configurable headers (MNO / Release / Plan / Path / Req ID) and optional inline tables/image context
-- Config: `VectorStoreConfig` (config.py) — every tuneable parameter (embedding provider/model/batch/device, store backend/metric/persist_dir, chunk contextualization toggles, defaults)
-- Offline support: `hf_offline.enable_offline_if_cached(model_name)` — switches HF to offline mode when the cache already has the model
+- Config: `VectorStoreConfig` (config.py) — every tuneable parameter (embedding provider/model/batch/device, store backend/metric/persist_dir, chunk contextualization toggles, defaults). Provider options: `'sentence-transformers'` (default) | `'ollama'`.
+- Offline support:
+  - `hf_offline.enable_offline_if_cached(model_name)` — switches HF to offline mode when the cache already has the model (sentence-transformers path)
+  - Ollama path is offline by construction — once `ollama pull` has run, no further network calls
 - CLI: `vectorstore_cli.main`
 
 **Invariants**
