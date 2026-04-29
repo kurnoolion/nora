@@ -1,7 +1,7 @@
 # Status
 
 **Active phase**: development
-**Last updated**: 2026-04-27
+**Last updated**: 2026-04-28
 **Last drift-check**: 2026-04-27 — mode: dev-full — 4 drift(s) resolved (all batch [a]: MODULE.md → match code post-slice-B/C), 0 deferred surfaced
 
 ## Done
@@ -18,15 +18,24 @@
 - 2026-04-27 Slice B executed (`<env_dir>` parameterization, FR-28..FR-30, D-022, D-023): `EnvironmentConfig` field/property/method renames (`document_root` → `env_dir`, aggressive per-partition methods); `PipelineContext.from_env` / `.standalone` threaded through `<env_dir>` / `out/` / `state/` / `corrections/` / `reports/` / `eval/`; `--env-dir` CLI flag; web runtime DBs under `<env_dir>/state/` (`WebConfig.env_dir` + `state_path()` / `jobs_db_path()` / `metrics_db_path()` helpers); extraction `infer_metadata_from_path` adapted for `<env_dir>/input/<MNO>/<release>/`; doc_type dropped from path inference per Q4 (defaults to "requirement"). 375 tests pass.
 - 2026-04-27 Slice C executed (FR-1 XLSXExtractor): per-sheet heading + table-block extraction via openpyxl; registered as `.xlsx` extractor; 9 new tests with `pytest.importorskip("openpyxl")` gating. PDF extractor lazy-imports `fitz` / `pdfplumber` so the registry module loads on environments without pymupdf (matches stages.py pattern). Full suite at 384 passed, 2 skipped, 0 failed.
 - 2026-04-27 `/drift-check dev-full` — 4 R/D-vs-I drifts resolved (all batch [a]: MODULE.md aligned to slice-B/C method renames). env Public surface + Invariant `correction_path` → `correction_file`; web Public surface `WebConfig.db_path` → `env_dir` + helpers; extraction Invariant drops PIL. Reorg fully landed and verified across all three layers.
+- 2026-04-28 profile_debug `--create` mode for Ollama-driven profile bootstrap from extracted docs (commit 868103c); hardened against small-model prose preambles via system prompt + trailing "JSON only, start with `{`" reinforcement + tolerant `_extract_json_object` first-balanced-{...} extraction (0ea586d).
+- 2026-04-28 Standards: pluggable `SpecDownloader.source` with HuggingFace as default (DOCX-only via stdlib urllib, no auth, no LibreOffice). 3GPP FTP path retained as fallback. New `core/src/standards/hf_source.py`; CLI `--standards-source`, `NORA_STANDARDS_SOURCE` env var, `EnvironmentConfig.standards_source` field; precedence resolver in `env.config.resolve_standards_source`. 13 new tests with mocked urllib. Commit c74e41d.
+- 2026-04-28 LLM: `OpenAICompatibleProvider` for cloud APIs (OpenRouter / Together / DeepInfra / Groq / OpenAI) — stdlib urllib, no SDK dependency. New `core/src/llm/openai_provider.py`; CLI `--llm-provider`, `NORA_LLM_PROVIDER` / `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY` / `NORA_LLM_MODEL` env vars; `EnvironmentConfig.model_provider` validation extended. 16 new tests. Commit 7c90c5a.
+- 2026-04-28 Pipeline extract stats fix: `ir.blocks`/`b.block_type` were wrong attribute names — every doc threw AttributeError that the surrounding except caught and re-emitted as EXT-E001, making it look like all PDFs failed extraction. Real impact: every prior compact report reported `tbl=0` while IRs in fact contained 1272 tables across the 5 OA PDFs. Commit 3c9b881.
+- 2026-04-28 Parser: dual-anchor — Requirements now created from table cells too (column-1 of row first, all-cells fallback; one anchor per row max; paragraph wins on duplicate `req_id`). New `_extract_table_anchored_reqs` + `_create_table_anchored_req` + `_propagate_hierarchy_to_table_reqs`; `_build_sections` tracks `paragraph_req_ids` for dedup. MODULE.md invariants + key choices updated to document the dual-anchor contract and `section_number=""` for table-anchored reqs. 10 new unit tests with hand-crafted in-memory fixtures + 1 existing test updated. **Suite: 426 passed / 52 skipped, 0 failed.** Commit 8fb40ef.
+- 2026-04-28 First end-to-end OA-corpus pipeline runs on dev PC (Core Ultra 9, 15GB RAM, no GPU) via OpenRouter / Qwen3-235B-A22B. Three runs measured: A (pre-parser-fix) → 86.2% overall / 60.2% acc / 100% citation; A2 (post-parser-fix, mock fallback — invalid, env vars missing); A3 (post-parser-fix, real LLM) → 81.7% / 54.6% / 94.4%. Parser fix moved structural numbers up (req 711→985, unresolved internal refs 138→104, graph edges +21%, taxonomy features 28→35) but eval accuracy down 5.6 pts — diagnosed as retrieval pollution: 274 new table-anchored thin chunks distract the 18-Q eval set authored against the old paragraph-only corpus. Resolution pending per-question analysis. (Closes the "first end-to-end pipeline run" Next item from 2026-04-27 — done on dev PC rather than work laptop.)
 
 ## In progress
 
-*(empty — no explicit work in flight)*
+- A3 regression diagnosis: parser dual-anchor change (D-027) caused 5.6-pt accuracy regression on the 18-Q eval set. Per-question results in `~/work/env_vzw/out/eval/report.json` not yet examined. Determines whether to enrich table-anchored chunks with parent context, boost paragraph-anchored chunks in retrieval, broaden the eval set, or roll back D-027.
 
 ## Next
 
-- Push 13 commits ahead of `origin/main` (slices A + B + C + drift-checks + close-sessions). Likely need to rebase or fast-forward once pushed.
-- End-to-end pipeline run against a real `<env_dir>` on the work-laptop or PC (the 5 VZW LTE PDFs at `<env_dir>/input/VZW/Feb2026/`); captures the first concrete telemetry that resolves the "latency / throughput / memory NFRs not yet set" Flag.
+- Resolve the A3 regression (In Progress): pull per-question results from `report.json`, identify which questions flipped wrong post-parser-fix, examine their cited chunks for table-anchored content. Pick a path forward.
+- Replicate baseline on work-laptop (gemma4:e4b on RTX A4600) against the same 5 OA PDFs at `<env_dir>/input/VZW/OA-baseline/` for apples-to-apples model comparison once A3 path is settled. **Note**: requires removing any stray non-OA docs from the work-laptop input dir first (the 2026-04-28 morning run was contaminated with 2 stray VoWiFi/WiFi DOCX files).
+- Investigate `xp=1` cross-plan refs (unchanged across all 3 dev-PC runs). Profile pattern `cross_reference_patterns.requirement_id_refs` likely doesn't match OA's actual cross-plan citation syntax. Sample 5-10 cross-plan citations in source PDFs, classify, propose profile pattern fix.
+- Fix STD-E002 standards parser fragility: TS 22.220 Rel-9 and TS 36.133 Rel-13 consistently fail with `'NoneType' object has no attribute 'name'`. Find call site, null-guard.
+- Harden `--llm-provider` flag so when explicit (not defaulted), `require_real=True` is forced — missing env vars hard-fail with a clear message instead of silently falling back to mock. Cost: wasted A2 run today.
 - Web UI smoke test — start `python -m core.src.web.app`, exercise correction editor / pipeline form / metrics dashboard against the new `<env_dir>` layout (templates were updated but not user-tested).
 - Optional `/drift-check requirements` pass to confirm FR-28..FR-30 are actually exercised by code (dev-full already verified MODULE.md ↔ code alignment).
 - `/drift-check design` (later) to surface any code capabilities still lacking an owning FR / NFR.
@@ -36,3 +45,4 @@
 
 - 2026-04-27 [requirements] Latency / throughput / memory NFRs not yet set; defer until first work-laptop full-pipeline run produces real telemetry, then promote thresholds to NFR entries in `requirements.md`.
 - 2026-04-27 [requirements] KG sharding / persistence: networkx single-process graph fits v1 (~1k nodes, ~12k edges) but needs re-evaluation when 2nd MNO corpus is added. Revisit at start of post-v1 multi-MNO ingestion.
+- 2026-04-28 [development] Parser dual-anchor (D-027) caused 5.6-pt eval accuracy regression (60.2→54.6) on the 18-Q OA eval set despite structural numbers moving in the right direction. Citation drop 100→94.4% is the smoking gun → retrieval is pulling new table-anchored thin chunks as distractors. Eval set was authored against the pre-fix corpus and doesn't ask about any of the 274 new table-anchored req IDs. Mitigation TBD (see In Progress).
