@@ -1,7 +1,7 @@
 # Status
 
 **Active phase**: development
-**Last updated**: 2026-04-28
+**Last updated**: 2026-04-29
 **Last drift-check**: 2026-04-27 — mode: dev-full — 4 drift(s) resolved (all batch [a]: MODULE.md → match code post-slice-B/C), 0 deferred surfaced
 
 ## Done
@@ -24,6 +24,8 @@
 - 2026-04-28 Pipeline extract stats fix: `ir.blocks`/`b.block_type` were wrong attribute names — every doc threw AttributeError that the surrounding except caught and re-emitted as EXT-E001, making it look like all PDFs failed extraction. Real impact: every prior compact report reported `tbl=0` while IRs in fact contained 1272 tables across the 5 OA PDFs. Commit 3c9b881.
 - 2026-04-28 Parser: dual-anchor — Requirements now created from table cells too (column-1 of row first, all-cells fallback; one anchor per row max; paragraph wins on duplicate `req_id`). New `_extract_table_anchored_reqs` + `_create_table_anchored_req` + `_propagate_hierarchy_to_table_reqs`; `_build_sections` tracks `paragraph_req_ids` for dedup. MODULE.md invariants + key choices updated to document the dual-anchor contract and `section_number=""` for table-anchored reqs. 10 new unit tests with hand-crafted in-memory fixtures + 1 existing test updated. **Suite: 426 passed / 52 skipped, 0 failed.** Commit 8fb40ef.
 - 2026-04-28 First end-to-end OA-corpus pipeline runs on dev PC (Core Ultra 9, 15GB RAM, no GPU) via OpenRouter / Qwen3-235B-A22B. Three runs measured: A (pre-parser-fix) → 86.2% overall / 60.2% acc / 100% citation; A2 (post-parser-fix, mock fallback — invalid, env vars missing); A3 (post-parser-fix, real LLM) → 81.7% / 54.6% / 94.4%. Parser fix moved structural numbers up (req 711→985, unresolved internal refs 138→104, graph edges +21%, taxonomy features 28→35) but eval accuracy down 5.6 pts — diagnosed as retrieval pollution: 274 new table-anchored thin chunks distract the 18-Q eval set authored against the old paragraph-only corpus. Resolution pending per-question analysis. (Closes the "first end-to-end pipeline run" Next item from 2026-04-27 — done on dev PC rather than work laptop.)
+- 2026-04-29 Vectorstore Ollama embedding backend (alternative to sentence-transformers / HF cache): new `OllamaEmbedder` (POST `/api/embeddings`, pings `/api/tags` on init, bypasses HTTP_PROXY for loopback hosts, L2-normalizes by default). New `make_embedder(config)` factory in `vectorstore/__init__.py`; `run_vectorstore` / `run_eval` migrated to it. 18 new tests. Commit 247ffb5.
+- 2026-04-29 Pipeline embedding CLI parity with `--llm-provider`: `EnvironmentConfig.embedding_provider` + `embedding_model` fields with `resolve_embedding_provider` / `resolve_embedding_model` precedence (CLI > `NORA_EMBEDDING_{PROVIDER,MODEL}` env var > config > default). `PipelineContext` carries the fields; `run_cli` exposes `--embedding-provider {sentence-transformers,huggingface,ollama}` + `--embedding-model`. `make_embedder` accepts `huggingface`/`hf` aliases. `vectorstore_cli` migrated to the factory + refreshed `--provider` help (was stale). 8 new tests. Suite: 455 passed, 52 skipped. Commit 3eb9d35. Unblocks personal-PC (OpenRouter LLM + local HF embeddings) vs work-PC (local Ollama for both) two-machine workflow.
 
 ## In progress
 

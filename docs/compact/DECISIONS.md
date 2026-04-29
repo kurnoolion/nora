@@ -353,3 +353,51 @@ Template for new entries:
 **Why**: Qwen3-235B-A22B is MoE (~22B active per token) — better quality-per-bandwidth on DGX Spark's memory-rich / bandwidth-modest profile (~273 GB/s LPDDR5X) than a dense 70B; cloud cost lower per query than dense alternatives. Hybrid thinking mode benefits query-synthesis and eval stages. Strong IFEval scores directly target the instruction-following gap that drove `profile_debug --create` failures with `gemma4:e4b` (model summarized instead of emitting JSON). Native 128K context comfortable for telecom-spec retrieval. Same model on cloud and DGX gives operational consistency: switching is a two-env-var change with no model-quality re-baseline needed. OpenRouter as the cloud provider: single API + key for ~100 models including Qwen3, Llama 3.3, DeepSeek-V3 — switch model by changing one env var if availability or quality issues arise; the ~10% markup over native (Together / DeepInfra) costs cents on a sub-$1 baseline run, well worth the optionality.
 **Consequences**: Established baseline numbers: Run A (pre-parser-fix) overall=86.2% / acc=60.2% / citation=100%; Run A3 (post-parser-fix) overall=81.7% / acc=54.6% / citation=94.4%. Both via Qwen3-235B-A22B / OpenRouter on dev PC (Core Ultra 9 185H, 15 GB RAM, no GPU). Cost per full pipeline run measured ~$0.30-1; OpenRouter dashboard tracks live spend. When DGX Spark arrives, baseline replicates with two env-var changes and no model swap — first DGX run becomes a hardware-only re-baseline. Two corpora, two LLM setups codified: OA/dev-PC → OpenRouter cloud; VoWiFi/work-laptop → local Ollama with smaller model. Cloud path is operational only — never carries proprietary content.
 **Alternatives considered**: Llama 3.3 70B Instruct (rejected — dense, no thinking mode, bandwidth-unfriendly on Spark; broadly available and a fine fallback if Qwen3 unavailable); DeepSeek-V3 (671B MoE — rejected, doesn't fit 128GB at any usable quant; cheap on DeepSeek's own API but Chinese hosting jurisdiction matters even for public docs); Qwen2.5-72B-Instruct dense at Q8 (~75GB) (rejected as primary — dense throughput on Spark's bandwidth profile is worse than MoE; kept as backup if 235B-MoE is unstable on Spark at launch); start with native cloud provider (Together/DeepInfra/Groq) for lower cost (rejected — OpenRouter's optionality is worth ~10% markup at this scale; Groq's catalog historically Llama-heavy and Qwen3-235B availability uncertain); cloud Anthropic/OpenAI proprietary models (rejected — explicit user constraint to use open-source models so cloud and DGX setups can match); cheaper open models (Mixtral, smaller Llamas) (rejected — IFEval gap is what hurts NORA; smaller models don't move the bottleneck).
+
+## D-029: LLM and embedding provider/model selectable at runtime; cloud LLM and local embeddings supported in v1
+
+**Date**: 2026-04-29
+**Status**: Accepted
+**Phase**: Architecture / Development
+
+**Context**
+Different deployments have different access patterns: some hosts can reach
+cloud APIs, others run fully air-gapped against local model runtimes.
+Before this decision, the LLM was already swappable (D-026), but embedding
+choice was hard-coded in `VectorStoreConfig()` defaults inside
+`run_vectorstore` — switching the embedder was a code edit.
+
+**Decision**
+Both the LLM and the embedding model are selectable at runtime through a
+single precedence chain: **CLI flag > `NORA_*` env var > `EnvironmentConfig`
+field > built-in default**, applied symmetrically.
+
+- LLM: local (`ollama`) or cloud (`openai-compatible`, used via OpenRouter
+  or any OpenAI-shaped endpoint).
+- Embedding: local only in v1 — `sentence-transformers` (HuggingFace cache)
+  or `ollama` (`/api/embeddings`). New `OllamaEmbedder` ships alongside the
+  existing `SentenceTransformerEmbedder`. Pipeline stages talk only to
+  `make_embedder(config)` in `vectorstore/__init__.py`; adding a new
+  backend is a new file, not a stage-code change.
+- `EnvironmentConfig` carries the canonical per-deployment model choice
+  (`model_provider` / `model_name` / `embedding_provider` / `embedding_model`).
+
+**Why this over alternatives**
+- *Per-deployment code edits*: rejected; couples model choice to source.
+- *Config files only, no CLI flags*: rejected; loses ergonomic overrides
+  for one-off experiments.
+- *Cloud-embedding provider now*: deferred. OpenRouter (the cloud LLM
+  target) does not host embeddings, and adding a separate
+  embedding-API seam adds a credentials/billing surface for marginal
+  v1 benefit. Revisit if a deployment can't run a local embedder.
+
+**Consequences**
+- `environments/<name>.json` is the canonical record of what models a
+  deployment runs.
+- Cloud-embedding remains a deferred surface, not a non-goal.
+- `NORA_EMBEDDING_PROVIDER` / `NORA_EMBEDDING_MODEL` are public env-var
+  contracts.
+- Preserves D-006 / D-007 (Protocol + injection); switching backends
+  is a new file, not a touched call site.
+
+**Related**: D-006, D-007, D-026.

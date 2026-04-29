@@ -664,14 +664,17 @@ python -m core.src.graph.graph_cli
 
 ### Step 9 — Vector Store Construction
 
-Creates embeddings for requirement chunks and stores them in a vector store with metadata for filtered retrieval. All settings (embedding model, vector DB backend, distance metric) are configurable.
+Creates embeddings for requirement chunks and stores them in a vector store with metadata for filtered retrieval. All settings (embedding provider, model, vector DB backend, distance metric) are configurable. Two embedding backends ship: `sentence-transformers` (HuggingFace, default) and `ollama` (via `/api/embeddings`); selection is via `VectorStoreConfig.embedding_provider` and `--embedding-provider` on the pipeline runner.
 
 ```bash
-# Build with defaults (all-MiniLM-L6-v2, ChromaDB, cosine)
+# Build with defaults (sentence-transformers + all-MiniLM-L6-v2, ChromaDB, cosine)
 python -m core.src.vectorstore.vectorstore_cli
 
-# Use a different embedding model
+# Use a different sentence-transformers model
 python -m core.src.vectorstore.vectorstore_cli --model all-mpnet-base-v2
+
+# Use Ollama instead (must `ollama pull <model>` first; offline by construction)
+python -m core.src.vectorstore.vectorstore_cli --provider ollama --model nomic-embed-text
 
 # Use a config file for reproducible experiments
 python -m core.src.vectorstore.vectorstore_cli --config configs/experiment1.json
@@ -703,9 +706,10 @@ python -m core.src.vectorstore.vectorstore_cli --save-config configs/baseline.js
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `embedding_model` | `all-MiniLM-L6-v2` | HuggingFace model name |
-| `embedding_provider` | `sentence-transformers` | Embedding backend |
+| `embedding_provider` | `sentence-transformers` | Embedding backend (`sentence-transformers`, `huggingface` (alias), or `ollama`) |
 | `embedding_batch_size` | `64` | Batch size for encoding |
-| `embedding_device` | `cpu` | Device (`cpu`, `cuda`, `mps`) |
+| `embedding_device` | `cpu` | Device (`cpu`, `cuda`, `mps`) — sentence-transformers only |
+| `extra.ollama_url` | `http://localhost:11434` | Ollama HTTP endpoint (only used when `embedding_provider=ollama`) |
 | `normalize_embeddings` | `true` | L2-normalize vectors |
 | `vector_store_backend` | `chromadb` | Vector store backend |
 | `distance_metric` | `cosine` | `cosine`, `l2`, or `ip` |
@@ -810,60 +814,66 @@ python -m core.src.eval.eval_cli --verbose
 
 **A/B comparison:** Runs all questions twice — once with graph scoping (normal pipeline) and once bypassing graph scoping (pure vector RAG with metadata filters only). Reports per-question and per-category deltas to demonstrate graph value.
 
-## LLM Providers
+## LLM and Embedding Providers
 
-The system includes three LLM providers, all satisfying the `LLMProvider` Protocol (structural typing, no inheritance):
+NORA decouples model selection from code: both the LLM and the embedding model are picked at runtime through the same precedence chain — **CLI flag > env var > environment-config file > built-in default**.
 
-### Built-in: Ollama (local inference)
+### LLM providers
 
+| Provider | Where it runs | When to use |
+|---|---|---|
+| `ollama` (default) | Local Ollama runtime | Work PC; air-gapped or proxy-restricted environments |
+| `openai-compatible` | Cloud (OpenRouter, Together, DeepInfra, Groq, OpenAI) | Personal PC; access to a strong frontier model |
+| `mock` | In-process | Tests; deterministic keyword responses |
+
+CLI:
 ```bash
-# Use from CLI
-python -m core.src.query.query_cli --llm ollama --query "..."
+# Local Ollama (auto-pick a model that fits the hardware)
+python -m core.src.pipeline.run_cli --env-dir ~/env-vzw \
+    --llm-provider ollama --model auto
 
-# Use programmatically
-from src.llm.ollama_provider import OllamaProvider
-provider = OllamaProvider(model="gemma4:e4b")
-answer = provider.complete("What is T3402?", system="You are a telecom expert.")
+# Cloud via OpenRouter
+export NORA_LLM_BASE_URL=https://openrouter.ai/api/v1
+export NORA_LLM_API_KEY=sk-or-...
+python -m core.src.pipeline.run_cli --env-dir ~/env-vzw \
+    --llm-provider openai-compatible --model anthropic/claude-haiku
 ```
 
-### Built-in: Mock (keyword-based, no LLM)
+Env vars: `NORA_LLM_PROVIDER`, `NORA_LLM_MODEL`, `NORA_LLM_BASE_URL`, `NORA_LLM_API_KEY`. All three providers satisfy the `LLMProvider` Protocol — see `core/src/llm/base.py`. Custom providers only need a `complete(prompt, system, temperature, max_tokens) -> str` method.
 
-Used by default. Produces deterministic keyword-matched results for testing.
+### Embedding providers (local-only in v1)
 
-```python
-from src.llm.mock_provider import MockLLMProvider
-provider = MockLLMProvider()
+| Provider | Aliases | Where it runs | When to use |
+|---|---|---|---|
+| `sentence-transformers` (default) | `huggingface`, `hf`, `st` | Local, HuggingFace cache (`~/.cache/huggingface`) | Personal PC where the HF cache is already populated |
+| `ollama` | — | Local Ollama runtime | Work PC where Ollama is already set up — skips the HF cache entirely |
+
+CLI:
+```bash
+# HuggingFace sentence-transformers (default)
+python -m core.src.pipeline.run_cli --env-dir ~/env-vzw \
+    --embedding-provider huggingface --embedding-model all-MiniLM-L6-v2
+
+# Ollama embeddings (must `ollama pull <model>` first)
+python -m core.src.pipeline.run_cli --env-dir ~/env-vzw \
+    --embedding-provider ollama --embedding-model nomic-embed-text
 ```
 
-### Custom: Add your own provider
+Env vars: `NORA_EMBEDDING_PROVIDER`, `NORA_EMBEDDING_MODEL`. Recommended Ollama embedding models: `nomic-embed-text` (768d, ~270 MB), `mxbai-embed-large` (1024d, ~670 MB), `all-minilm` (384d, ~45 MB).
 
-Create a class with a `complete()` method matching this signature:
+### Two-PC workflow
 
-```python
-class YourProvider:
-    def complete(
-        self,
-        prompt: str,
-        system: str = "",
-        temperature: float = 0.0,
-        max_tokens: int = 4096,
-    ) -> str:
-        # Call your LLM API, return the text response
-        ...
+Capture per-machine choices in `environments/<name>.json` and select with `--env`:
+
+```json
+// environments/personal.json — OpenRouter LLM, local HF embeddings
+{ "model_provider": "openai-compatible", "model_name": "anthropic/claude-haiku",
+  "embedding_provider": "huggingface", "embedding_model": "all-MiniLM-L6-v2", ... }
+
+// environments/work.json — local Ollama for both
+{ "model_provider": "ollama", "model_name": "auto",
+  "embedding_provider": "ollama", "embedding_model": "nomic-embed-text", ... }
 ```
-
-Pass it to any component that takes an `LLMProvider`:
-
-```python
-from src.taxonomy.extractor import FeatureExtractor
-from src.query.synthesizer import LLMSynthesizer
-
-provider = YourProvider(api_key="...", model="...")
-extractor = FeatureExtractor(provider)
-synthesizer = LLMSynthesizer(provider)
-```
-
-No base class inheritance required. See `src/llm/base.py` for full documentation.
 
 ## Project Structure
 

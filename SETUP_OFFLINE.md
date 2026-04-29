@@ -2,6 +2,8 @@
 
 Everything NORA needs to run on a host with no internet access: Ollama runtime, Gemma LLM weights, and the HuggingFace sentence-embedding model. Perform the **"on an internet-connected machine"** steps on any PC with open egress (home laptop, dev workstation), then transfer the bundled artifacts to the Work PC.
 
+> **Tip — skip section 3 entirely with Ollama embeddings.** If you already have Ollama set up for the LLM, you can also use it for embeddings (`--embedding-provider ollama --embedding-model nomic-embed-text`). The embedding model ships through `ollama pull`, just like Gemma — no HuggingFace cache, no `HF_HUB_OFFLINE` dance. See section 3, "Option C," below.
+
 ---
 
 ## 1. Ollama runtime (with CUDA)
@@ -157,6 +159,24 @@ tar czf /tmp/hf_cache.tgz hub/models--sentence-transformers--all-mpnet-base-v2
 
 Then transfer `/tmp/hf_cache.tgz` to the Work PC and extract under `~/.cache/huggingface/` as in Option A.
 
+**Option C — use Ollama for embeddings (skip the HF cache).**
+
+Pull an embedding model via the same offline path used for the LLM (section 2 — manual blob download or `ollama pull` on a connected machine, then transfer `~/.ollama/models`):
+
+```bash
+ollama pull nomic-embed-text       # 768d, ~270 MB — balanced
+# Alternatives: mxbai-embed-large (1024d, ~670 MB) or all-minilm (384d, ~45 MB)
+```
+
+Then run the pipeline with the Ollama embedder selected:
+
+```bash
+python -m core.src.pipeline.run_cli --env-dir <env_dir> \
+    --embedding-provider ollama --embedding-model nomic-embed-text
+```
+
+No HuggingFace cache, no `HF_HUB_OFFLINE`, no `hf_offline.py` involvement. The pipeline talks to Ollama via `http://localhost:11434/api/embeddings` (loopback bypasses any HTTP_PROXY automatically).
+
 ### Manual override
 
 If you need to force offline mode before NORA runs (e.g., other tooling on the same host), export:
@@ -179,8 +199,8 @@ ollama run gemma4:e4b "2+2="                   # returns quickly
 ls ~/.cache/huggingface/hub/models--sentence-transformers--*/snapshots/*/config.json
 
 # Run a short NORA pipeline stage that touches both
-python -m core.src.cli.run_pipeline --stage-start vectorstore --stage-end vectorstore \
-    --document-dir /path/to/docs
+python -m core.src.pipeline.run_cli --env-dir /path/to/env_dir \
+    --start vectorstore --end vectorstore
 # Expect: no PIP-E001, "HF model '...' found in cache — HF_HUB_OFFLINE=1 enabled" in logs
 ```
 
