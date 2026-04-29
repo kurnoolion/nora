@@ -32,28 +32,11 @@ import logging
 import sys
 from pathlib import Path
 
+from core.src.vectorstore import make_embedder
 from core.src.vectorstore.config import VectorStoreConfig
 from core.src.vectorstore.builder import VectorStoreBuilder
 
 logger = logging.getLogger(__name__)
-
-
-def _create_embedder(config: VectorStoreConfig):
-    """Create an embedding provider from config."""
-    if config.embedding_provider == "sentence-transformers":
-        from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
-
-        return SentenceTransformerEmbedder(
-            model_name=config.embedding_model,
-            device=config.embedding_device,
-            batch_size=config.embedding_batch_size,
-            normalize=config.normalize_embeddings,
-        )
-    else:
-        raise ValueError(
-            f"Unknown embedding provider '{config.embedding_provider}'. "
-            f"Options: 'sentence-transformers'"
-        )
 
 
 def _create_store(config: VectorStoreConfig):
@@ -122,7 +105,7 @@ def cmd_build(args: argparse.Namespace) -> None:
     trees_dir = Path(args.trees_dir)
     taxonomy_path = Path(args.taxonomy) if args.taxonomy else None
 
-    embedder = _create_embedder(config)
+    embedder = make_embedder(config)
     store = _create_store(config)
     builder = VectorStoreBuilder(embedder, store, config)
 
@@ -196,7 +179,7 @@ def cmd_query(args: argparse.Namespace) -> None:
     if saved_config_path.exists():
         config = VectorStoreConfig.load_json(saved_config_path)
 
-    embedder = _create_embedder(config)
+    embedder = make_embedder(config)
     store = _create_store(config)
 
     if store.count == 0:
@@ -264,8 +247,16 @@ def main() -> None:
     )
 
     # Embedding overrides
-    parser.add_argument("--model", help="Embedding model name")
-    parser.add_argument("--provider", help="Embedding provider (sentence-transformers)")
+    parser.add_argument(
+        "--model",
+        help="Embedding model name (e.g. all-MiniLM-L6-v2 for sentence-transformers, "
+             "nomic-embed-text for ollama)",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["sentence-transformers", "huggingface", "ollama"],
+        help="Embedding provider. 'huggingface' is an alias for 'sentence-transformers'.",
+    )
     parser.add_argument("--device", help="Device for embedding (cpu, cuda, mps)")
     parser.add_argument("--batch-size", type=int, help="Embedding batch size")
     parser.add_argument("--no-normalize", action="store_true", help="Disable L2 normalization")

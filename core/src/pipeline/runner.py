@@ -36,10 +36,14 @@ class PipelineContext:
     # Stage output directories (pre-resolved)
     stage_dirs: dict[str, Path] = field(default_factory=dict)
 
-    # Model config
+    # LLM config
     model_provider: str = "ollama"
     model_name: str = "auto"
     model_timeout: int = 600
+
+    # Embedding config (local providers only)
+    embedding_provider: str = "sentence-transformers"
+    embedding_model: str = "all-MiniLM-L6-v2"
 
     # Scope
     mnos: list[str] = field(default_factory=lambda: ["VZW"])
@@ -152,6 +156,8 @@ class PipelineContext:
             model_provider=env.model_provider,
             model_name=env.model_name,
             model_timeout=env.model_timeout,
+            embedding_provider=env.embedding_provider,
+            embedding_model=env.embedding_model,
             mnos=env.mnos,
             releases=env.releases,
             standards_source=env.standards_source,
@@ -165,6 +171,8 @@ class PipelineContext:
         model_provider: str = "ollama",
         model_name: str = "auto",
         model_timeout: int = 600,
+        embedding_provider: str = "sentence-transformers",
+        embedding_model: str = "all-MiniLM-L6-v2",
         standards_source: str = "huggingface",
     ) -> PipelineContext:
         """Create context for standalone (no EnvironmentConfig) mode.
@@ -185,6 +193,8 @@ class PipelineContext:
             model_provider=model_provider,
             model_name=model_name,
             model_timeout=model_timeout,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
             standards_source=standards_source,
         )
         if profile_path:

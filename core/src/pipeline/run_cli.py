@@ -116,6 +116,19 @@ def main() -> None:
              "openai-compatible reads NORA_LLM_BASE_URL / NORA_LLM_API_KEY and requires explicit --model.",
     )
     parser.add_argument(
+        "--embedding-provider", default=None,
+        choices=["sentence-transformers", "huggingface", "ollama"],
+        help="Embedding provider (default: env config or 'sentence-transformers'; "
+             "overrides NORA_EMBEDDING_PROVIDER env var). "
+             "'huggingface' is an alias for 'sentence-transformers'.",
+    )
+    parser.add_argument(
+        "--embedding-model", default=None,
+        help="Embedding model name (default: env config or 'all-MiniLM-L6-v2'; "
+             "overrides NORA_EMBEDDING_MODEL env var). For ollama, use names like "
+             "'nomic-embed-text' or 'mxbai-embed-large' (must be `ollama pull`-ed first).",
+    )
+    parser.add_argument(
         "--standards-source", default=None, choices=["huggingface", "3gpp"],
         help="3GPP spec source for the standards stage (default: env config or 'huggingface'; "
              "overrides NORA_STANDARDS_SOURCE env var).",
@@ -172,13 +185,20 @@ def main() -> None:
         start = resolve_stage(args.start) if args.start else env.stage_start
         end = resolve_stage(args.end) if args.end else env.stage_end
     elif args.env_dir:
-        from core.src.env.config import resolve_llm_provider, resolve_standards_source
+        from core.src.env.config import (
+            resolve_embedding_model,
+            resolve_embedding_provider,
+            resolve_llm_provider,
+            resolve_standards_source,
+        )
         ctx = PipelineContext.standalone(
             env_dir=args.env_dir,
             profile_path=args.profile,
             model_provider=resolve_llm_provider(args.llm_provider),
             model_name=args.model,
             model_timeout=args.model_timeout,
+            embedding_provider=resolve_embedding_provider(args.embedding_provider),
+            embedding_model=resolve_embedding_model(args.embedding_model),
             standards_source=resolve_standards_source(args.standards_source),
         )
         start = resolve_stage(args.start) if args.start else "extract"
@@ -193,9 +213,20 @@ def main() -> None:
         ctx.model_name = args.model
     # CLI / env-var overrides for env-config mode
     if args.env:
-        from core.src.env.config import resolve_llm_provider, resolve_standards_source
+        from core.src.env.config import (
+            resolve_embedding_model,
+            resolve_embedding_provider,
+            resolve_llm_provider,
+            resolve_standards_source,
+        )
         ctx.model_provider = resolve_llm_provider(
             args.llm_provider, env.model_provider
+        )
+        ctx.embedding_provider = resolve_embedding_provider(
+            args.embedding_provider, env.embedding_provider
+        )
+        ctx.embedding_model = resolve_embedding_model(
+            args.embedding_model, env.embedding_model
         )
         ctx.standards_source = resolve_standards_source(
             args.standards_source, env.standards_source

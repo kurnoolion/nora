@@ -456,7 +456,11 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
     except ImportError as e:
         return _fail(stage, "VEC-E001", f"Import error: {e}", time.time() - t0)
 
-    config = VectorStoreConfig(persist_directory=str(out_dir))
+    config = VectorStoreConfig(
+        persist_directory=str(out_dir),
+        embedding_provider=ctx.embedding_provider,
+        embedding_model=ctx.embedding_model,
+    )
     embedder = make_embedder(config)
     store = ChromaDBStore(
         persist_directory=config.persist_directory,
@@ -517,7 +521,15 @@ def run_eval(ctx: PipelineContext) -> StageResult:
     # Load vector store
     vs_dir = ctx.stage_output("vectorstore")
     vs_config_path = vs_dir / "config.json"
-    vs_config = VectorStoreConfig.load_json(vs_config_path) if vs_config_path.exists() else VectorStoreConfig(persist_directory=str(vs_dir))
+    vs_config = (
+        VectorStoreConfig.load_json(vs_config_path)
+        if vs_config_path.exists()
+        else VectorStoreConfig(
+            persist_directory=str(vs_dir),
+            embedding_provider=ctx.embedding_provider,
+            embedding_model=ctx.embedding_model,
+        )
+    )
 
     embedder = make_embedder(vs_config)
     store = ChromaDBStore(

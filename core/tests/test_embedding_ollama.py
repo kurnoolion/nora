@@ -262,3 +262,15 @@ def test_make_embedder_alias_st_for_sentence_transformers():
     from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
     emb = make_embedder(config)
     assert isinstance(emb, SentenceTransformerEmbedder)
+
+
+def test_make_embedder_alias_huggingface_for_sentence_transformers():
+    """'huggingface' (and 'hf') route to SentenceTransformerEmbedder."""
+    pytest.importorskip("sentence_transformers")
+    from core.src.vectorstore import make_embedder
+    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
+
+    for alias in ("huggingface", "hf"):
+        config = VectorStoreConfig(embedding_provider=alias)
+        emb = make_embedder(config)
+        assert isinstance(emb, SentenceTransformerEmbedder), f"alias {alias!r} did not route"

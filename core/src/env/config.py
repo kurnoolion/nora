@@ -99,6 +99,62 @@ def resolve_llm_provider(
             return value
     return DEFAULT_LLM_PROVIDER
 
+
+# ---------------------------------------------------------------------------
+# Embedding provider / model selection — see core/src/vectorstore
+# ---------------------------------------------------------------------------
+
+EMBEDDING_PROVIDERS: tuple[str, ...] = ("sentence-transformers", "huggingface", "ollama")
+DEFAULT_EMBEDDING_PROVIDER: str = "sentence-transformers"
+DEFAULT_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+EMBEDDING_PROVIDER_ENV_VAR: str = "NORA_EMBEDDING_PROVIDER"
+EMBEDDING_MODEL_ENV_VAR: str = "NORA_EMBEDDING_MODEL"
+
+
+def resolve_embedding_provider(
+    cli_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the effective embedding provider.
+
+    Precedence: CLI flag > NORA_EMBEDDING_PROVIDER env var >
+    EnvironmentConfig field > default ("sentence-transformers"). The
+    "huggingface" alias is accepted but the canonical name is preserved
+    (make_embedder normalizes aliases internally).
+    """
+    for label, value in (
+        ("--embedding-provider", cli_value),
+        (EMBEDDING_PROVIDER_ENV_VAR, os.environ.get(EMBEDDING_PROVIDER_ENV_VAR)),
+        ("EnvironmentConfig.embedding_provider", env_config_value),
+    ):
+        if value:
+            if value not in EMBEDDING_PROVIDERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {EMBEDDING_PROVIDERS}"
+                )
+            return value
+    return DEFAULT_EMBEDDING_PROVIDER
+
+
+def resolve_embedding_model(
+    cli_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the effective embedding model name.
+
+    Precedence: CLI flag > NORA_EMBEDDING_MODEL env var > EnvironmentConfig
+    field > default ("all-MiniLM-L6-v2"). No enum validation — model names
+    are provider-specific.
+    """
+    for value in (
+        cli_value,
+        os.environ.get(EMBEDDING_MODEL_ENV_VAR),
+        env_config_value,
+    ):
+        if value:
+            return value
+    return DEFAULT_EMBEDDING_MODEL
+
 # ---------------------------------------------------------------------------
 # Pipeline stage registry — single source of truth for names and ordering
 # ---------------------------------------------------------------------------
@@ -177,10 +233,14 @@ class EnvironmentConfig:
     # Objectives (human-readable)
     objectives: list[str] = field(default_factory=list)
 
-    # Model config
+    # LLM config
     model_provider: str = "ollama"
     model_name: str = "auto"
     model_timeout: int = 600
+
+    # Embedding config (local providers only)
+    embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
 
     # Standards source: "huggingface" (default) | "3gpp"
     standards_source: str = DEFAULT_STANDARDS_SOURCE
@@ -236,6 +296,11 @@ class EnvironmentConfig:
             errors.append(
                 f"Unknown model_provider: {self.model_provider!r} "
                 f"(valid: {', '.join(LLM_PROVIDERS)})"
+            )
+        if self.embedding_provider not in EMBEDDING_PROVIDERS:
+            errors.append(
+                f"Unknown embedding_provider: {self.embedding_provider!r} "
+                f"(valid: {', '.join(EMBEDDING_PROVIDERS)})"
             )
         return errors
 

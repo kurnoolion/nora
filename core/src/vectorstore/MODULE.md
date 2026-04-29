@@ -13,7 +13,7 @@ Unified vector-store construction and configuration. Defines two structural-typi
   - `OllamaEmbedder` (embedding_ollama.py) — Ollama `/api/embeddings` backend; loopback-aware (bypasses HTTP_PROXY for localhost); same offline-distribution path as the LLM provider (`ollama pull <model>`)
   - `ChromaDBStore` (store_chroma.py) — persistent ChromaDB collection
 - Provider factory:
-  - `make_embedder(config)` (`__init__.py`) — dispatches by `config.embedding_provider` to `SentenceTransformerEmbedder` or `OllamaEmbedder`; reads provider-specific settings from `extra` (e.g., `ollama_url`, `ollama_timeout_s`)
+  - `make_embedder(config)` (`__init__.py`) — dispatches by `config.embedding_provider` to `SentenceTransformerEmbedder` or `OllamaEmbedder`; reads provider-specific settings from `extra` (e.g., `ollama_url`, `ollama_timeout_s`). Accepts the aliases `huggingface`/`hf`/`st`/`sentence_transformers` for `sentence-transformers`.
 - Builder / chunking:
   - `VectorStoreBuilder` (builder.py) — orchestrates load → chunk → embed → store
   - `BuildStats` — per-build metrics: chunks_by_plan, embedding model/dim, backend, metric, collection

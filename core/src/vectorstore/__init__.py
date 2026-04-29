@@ -35,7 +35,7 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
     """
     provider = (config.embedding_provider or "").strip().lower()
 
-    if provider in ("sentence-transformers", "sentence_transformers", "st"):
+    if provider in ("sentence-transformers", "sentence_transformers", "st", "huggingface", "hf"):
         from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
         return SentenceTransformerEmbedder(
             model_name=config.embedding_model,
@@ -57,7 +57,7 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
 
     raise ValueError(
         f"Unknown embedding_provider {config.embedding_provider!r}. "
-        f"Supported: 'sentence-transformers', 'ollama'."
+        f"Supported: 'sentence-transformers' (aliases: 'huggingface', 'hf', 'st'), 'ollama'."
     )
 
 
