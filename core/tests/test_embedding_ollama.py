@@ -212,6 +212,38 @@ def test_dimension_recorded_from_first_call():
     assert emb.dimension == 768
 
 
+def test_oversize_text_truncated_at_max_input_chars(caplog):
+    """Texts longer than max_input_chars are truncated (with a warning) so the
+    embedder doesn't trip a model context-window 500."""
+    with patch("core.src.vectorstore.embedding_ollama._build_opener") as mock_builder:
+        mock_builder.return_value = _make_opener([
+            _tags_payload(["qwen3-embedding-q8-0:4b:latest"]),
+            _emb_payload([1.0, 0.0]),
+        ])
+        emb = OllamaEmbedder(
+            model_name="qwen3-embedding-q8-0:4b",
+            normalize=False,
+            max_input_chars=100,
+        )
+        with caplog.at_level("WARNING", logger="core.src.vectorstore.embedding_ollama"):
+            emb.embed(["x" * 250])
+    assert emb._truncated_count == 1
+    assert any("truncating" in r.message for r in caplog.records)
+
+
+def test_make_embedder_passes_ollama_max_input_chars_from_extra():
+    config = VectorStoreConfig(
+        embedding_provider="ollama",
+        embedding_model="nomic-embed-text",
+        extra={"ollama_max_input_chars": 4096},
+    )
+    with patch("core.src.vectorstore.embedding_ollama._build_opener") as mock_builder:
+        mock_builder.return_value = _make_opener([_tags_payload(["nomic-embed-text:latest"])])
+        from core.src.vectorstore import make_embedder
+        emb = make_embedder(config)
+    assert emb._max_input_chars == 4096
+
+
 # ---------------------------------------------------------------------------
 # Factory dispatch
 # ---------------------------------------------------------------------------

@@ -45,14 +45,21 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
         )
 
     if provider == "ollama":
-        from core.src.vectorstore.embedding_ollama import OllamaEmbedder
+        from core.src.vectorstore.embedding_ollama import (
+            _DEFAULT_MAX_INPUT_CHARS,
+            OllamaEmbedder,
+        )
         ollama_url = config.extra.get("ollama_url", "http://localhost:11434")
         timeout = int(config.extra.get("ollama_timeout_s", 60))
+        max_chars = int(
+            config.extra.get("ollama_max_input_chars", _DEFAULT_MAX_INPUT_CHARS)
+        )
         return OllamaEmbedder(
             model_name=config.embedding_model,
             base_url=ollama_url,
             timeout=timeout,
             normalize=config.normalize_embeddings,
+            max_input_chars=max_chars,
         )
 
     raise ValueError(

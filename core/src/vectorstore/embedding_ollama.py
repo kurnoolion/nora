@@ -49,6 +49,20 @@ def _l2_normalize(vec: list[float]) -> list[float]:
     return [x / norm for x in vec]
 
 
+_DEFAULT_MAX_INPUT_CHARS = 8000
+"""Conservative default cap on per-text input length sent to /api/embeddings.
+
+Different Ollama embedding models have different effective context windows.
+Empirical limits observed:
+  - nomic-embed-text     → ~32K chars before 500
+  - qwen3-embedding-q8-0:4b → 500s above ~16K chars
+At 8K we're comfortably under both. Tunable via `OllamaEmbedder(max_input_chars=...)`
+or `VectorStoreConfig.extra["ollama_max_input_chars"]`. Texts longer than this
+are truncated (with a warning) rather than dropped, since dropping a chunk
+breaks the chunk-id ↔ vector correspondence the store relies on.
+"""
+
+
 class OllamaEmbedder:
     """Embedding provider using Ollama's /api/embeddings endpoint.
 
@@ -59,6 +73,9 @@ class OllamaEmbedder:
         base_url: Ollama server URL.
         timeout: Per-request timeout in seconds.
         normalize: L2-normalize embeddings before returning.
+        max_input_chars: Truncate inputs longer than this before embedding.
+            Defaults to a conservative value that fits any common Ollama
+            embedding model; raise if you know your model handles more.
     """
 
     def __init__(
@@ -67,13 +84,16 @@ class OllamaEmbedder:
         base_url: str = _DEFAULT_BASE_URL,
         timeout: int = 60,
         normalize: bool = True,
+        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
     ) -> None:
         self._model_name = model_name
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._normalize = normalize
+        self._max_input_chars = max_input_chars
         self._opener = _build_opener(self._base_url)
         self._dimension: int | None = None
+        self._truncated_count = 0
 
         # Verify reachability + check that the model is pulled. Match
         # OllamaProvider's __init__ behavior: warn (don't fail) if the model
@@ -118,6 +138,14 @@ class OllamaEmbedder:
             return []
         vectors: list[list[float]] = []
         for i, text in enumerate(texts):
+            if len(text) > self._max_input_chars:
+                logger.warning(
+                    f"Text {i} length {len(text)} > max_input_chars "
+                    f"{self._max_input_chars}; truncating "
+                    f"({len(text) - self._max_input_chars} chars dropped)"
+                )
+                text = text[:self._max_input_chars]
+                self._truncated_count += 1
             payload = json.dumps(
                 {"model": self._model_name, "prompt": text}
             ).encode("utf-8")
