@@ -132,7 +132,9 @@ class OllamaEmbedder:
                     data = json.loads(resp.read())
             except urllib.error.URLError as e:
                 raise RuntimeError(
-                    f"Ollama embedding request failed (text {i}): {e}"
+                    f"Ollama embedding request failed (text {i}, "
+                    f"length={len(text)} chars, "
+                    f"preview={text[:80]!r}{'…' if len(text) > 80 else ''}): {e}"
                 ) from e
             vec = data.get("embedding", [])
             if not vec:
