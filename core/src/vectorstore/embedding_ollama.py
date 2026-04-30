@@ -159,8 +159,10 @@ class OllamaEmbedder:
     @property
     def dimension(self) -> int:
         if self._dimension is None:
-            # Probe with an empty string to discover dimensionality.
-            self.embed([""])
+            # Probe with a short non-empty string to discover dimensionality.
+            # Empty strings are rejected by some embedding models (Qwen3 family
+            # returns {"embedding":[]} for ""); use a single ASCII character.
+            self.embed(["a"])
         return self._dimension or 0
 
     @property
