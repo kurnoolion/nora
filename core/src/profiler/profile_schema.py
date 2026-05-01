@@ -103,6 +103,31 @@ class HeaderFooter:
 
 
 @dataclass
+class ApplicabilityDetection:
+    """Rules for extracting form-factor applicability (FR-32 [D-030]).
+
+    Per D-030, regex-only — no keyword bag-of-words fallback. The corrections
+    workflow extends `requirement_patterns` by JSON edit, not code change.
+    """
+
+    requirement_patterns: list[str] = field(default_factory=list)
+    """Regex patterns matching an applicability statement at requirement /
+    section level. First-match wins; capture group 1 contains the form-factor
+    text (single label or comma/pipe-separated list, parsed by the parser
+    into list[str]). Empty list disables detection."""
+
+    global_section_pattern: str = ""
+    """Optional regex matching the heading text of a document-level
+    applicability section (e.g. `(?i)^applicability$`). When detected, the
+    contents of that section produce the root default by running
+    `requirement_patterns` over its body text."""
+
+    label_split_pattern: str = r"[,;|]|\band\b|\bor\b"
+    """Regex used to split a captured form-factor list into individual
+    labels. Default handles `[, ; |]` plus the words `and`/`or`."""
+
+
+@dataclass
 class CrossReferencePatterns:
     """Regex patterns for detecting cross-references in text."""
     standards_citations: list[str] = field(default_factory=list)
@@ -139,6 +164,9 @@ class DocumentProfile:
         default_factory=CrossReferencePatterns
     )
     body_text: BodyText = field(default_factory=BodyText)
+    applicability_detection: ApplicabilityDetection = field(
+        default_factory=ApplicabilityDetection
+    )
 
     # ── Strikeout omission (FR-33 [D-031]) ────────────────────────
     ignore_strikeout: bool = True
@@ -222,6 +250,9 @@ class DocumentProfile:
                 font_size_min=bt.get("font_size_min", 0),
                 font_size_max=bt.get("font_size_max", 0),
                 font_families=bt.get("font_families", []),
+            ),
+            applicability_detection=ApplicabilityDetection(
+                **data.get("applicability_detection", {})
             ),
             ignore_strikeout=data.get("ignore_strikeout", True),
             toc_detection_pattern=data.get("toc_detection_pattern", r".*\.{3,}\s*\d+\s*$"),

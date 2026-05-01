@@ -74,6 +74,7 @@ class Requirement:
     hierarchy_path: list[str] = field(default_factory=list)
     zone_type: str = ""
     priority: str = ""  # FR-31: extracted via profile.heading_detection.priority_marker_pattern
+    applicability: list[str] = field(default_factory=list)  # FR-32 [D-030]: form-factor labels
     text: str = ""
     tables: list[TableData] = field(default_factory=list)
     images: list[ImageRef] = field(default_factory=list)
@@ -132,6 +133,7 @@ class RequirementTree:
                 hierarchy_path=r.get("hierarchy_path", []),
                 zone_type=r.get("zone_type", ""),
                 priority=r.get("priority", ""),
+                applicability=r.get("applicability", []),
                 text=r.get("text", ""),
                 tables=[TableData(**t) for t in r.get("tables", [])],
                 images=[ImageRef(**i) for i in r.get("images", [])],
@@ -189,6 +191,17 @@ class GenericStructuralParser:
         self._priority_re = (
             re.compile(profile.heading_detection.priority_marker_pattern)
             if profile.heading_detection.priority_marker_pattern
+            else None
+        )
+        # Applicability detection (FR-32 [D-030]) — compiled once
+        ad = profile.applicability_detection
+        self._applicability_res = [re.compile(p) for p in ad.requirement_patterns]
+        self._applicability_global_re = (
+            re.compile(ad.global_section_pattern) if ad.global_section_pattern else None
+        )
+        self._applicability_split_re = (
+            re.compile(ad.label_split_pattern, re.IGNORECASE)
+            if ad.label_split_pattern
             else None
         )
         # Cross-reference regexes
@@ -252,6 +265,11 @@ class GenericStructuralParser:
         #    _link_parents skips them. Inherit hierarchy_path from their
         #    paragraph-anchored parent now that the parents are linked.
         self._propagate_hierarchy_to_table_reqs(sections)
+
+        # 7. Apply form-factor applicability with hierarchical inheritance
+        #    (FR-32 [D-030]). Document-order walk; explicit value wins,
+        #    else inherit from parent_section, else fall back to root default.
+        self._apply_applicability(sections)
 
         tree = RequirementTree(
             mno=doc.mno,
@@ -578,7 +596,9 @@ class GenericStructuralParser:
 
         _link_parents skips nodes without section_number (table-anchored), so
         their hierarchy_path stays empty after that pass. Fill it now from the
-        paragraph-anchored parent.
+        paragraph-anchored parent. `applicability` is propagated by
+        `_apply_applicability` later (it walks document-order so parents
+        resolve before children, including table-anchored ones).
         """
         # Lookup paragraph-anchored sections by section_number.
         by_section_num: dict[str, Requirement] = {
@@ -590,6 +610,89 @@ class GenericStructuralParser:
             parent = by_section_num.get(s.parent_section)
             if parent and parent.hierarchy_path:
                 s.hierarchy_path = list(parent.hierarchy_path)
+
+    def _apply_applicability(self, sections: list[Requirement]) -> None:
+        """FR-32 [D-030]: resolve `Requirement.applicability` for every section.
+
+        Walk in document order. For each section:
+          1. Try `requirement_patterns` against the section's own text.
+             First-match wins; capture group 1 is split into labels.
+          2. Else inherit from `parent_section`'s already-resolved value.
+          3. Else fall back to a root default extracted from the
+             document-level applicability section, if any.
+
+        No-op when the profile has no patterns and no global section regex.
+        Empty list = unknown; downstream stages do not filter on empty.
+        """
+        # Fast path: nothing to do.
+        if not self._applicability_res and self._applicability_global_re is None:
+            return
+
+        # Resolve a root default by scanning for the global applicability
+        # section once. Its body text is run through requirement_patterns.
+        root_default: list[str] = []
+        if self._applicability_global_re is not None:
+            for s in sections:
+                if s.title and self._applicability_global_re.search(s.title):
+                    root_default = self._extract_applicability_labels(s.text)
+                    if root_default:
+                        break
+
+        # Lookup table for parent inheritance — table-anchored reqs key on
+        # parent_section, paragraph-anchored on section_number.
+        by_section_num: dict[str, Requirement] = {
+            s.section_number: s for s in sections if s.section_number
+        }
+
+        for s in sections:
+            # 1. Explicit value from the section's own text.
+            labels = self._extract_applicability_labels(s.text)
+            if labels:
+                s.applicability = labels
+                continue
+            # 2. Inherit from parent_section if already resolved (document
+            #    order guarantees parents come first for paragraph-anchored;
+            #    table-anchored point at parent via parent_section).
+            parent_key = s.parent_section
+            if parent_key and parent_key in by_section_num:
+                parent = by_section_num[parent_key]
+                if parent.applicability:
+                    s.applicability = list(parent.applicability)
+                    continue
+            # 3. Root default.
+            if root_default:
+                s.applicability = list(root_default)
+
+    def _extract_applicability_labels(self, text: str) -> list[str]:
+        """Run requirement_patterns over `text`; first match wins. Capture
+        group 1 is split into individual labels via `label_split_pattern`.
+        Returns [] when no pattern matches or no labels survive trimming.
+        """
+        if not text or not self._applicability_res:
+            return []
+        for rx in self._applicability_res:
+            m = rx.search(text)
+            if not m:
+                continue
+            captured = (m.group(1) if m.groups() else m.group(0)).strip()
+            if not captured:
+                continue
+            if self._applicability_split_re is not None:
+                parts = self._applicability_split_re.split(captured)
+            else:
+                parts = [captured]
+            labels = [p.strip() for p in parts if p and p.strip()]
+            # De-duplicate while preserving order.
+            seen: set[str] = set()
+            unique: list[str] = []
+            for label in labels:
+                key = label.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(label)
+            return unique
+        return []
 
     def _is_req_id_block(self, block: ContentBlock) -> bool:
         """Check if a block is a standalone requirement ID (small font)."""

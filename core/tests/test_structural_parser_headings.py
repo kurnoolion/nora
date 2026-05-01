@@ -408,3 +408,102 @@ def test_struck_block_without_font_info_is_not_dropped():
     # Body content should reach current section (the "1 Real Heading" req).
     sec = next(r for r in tree.requirements if r.section_number == "1")
     assert "body line without font_info" in sec.text
+
+
+# ---------------------------------------------------------------------------
+# FR-32: form-factor applicability with hierarchical inheritance
+# ---------------------------------------------------------------------------
+
+
+def _profile_with_applicability(
+    requirement_patterns: list[str] | None = None,
+    global_section_pattern: str = "",
+) -> DocumentProfile:
+    p = _profile()
+    from core.src.profiler.profile_schema import ApplicabilityDetection
+    p.applicability_detection = ApplicabilityDetection(
+        requirement_patterns=requirement_patterns or [],
+        global_section_pattern=global_section_pattern,
+    )
+    return p
+
+
+def test_applicability_explicit_value_extracted_from_section_text():
+    """A section's own text matches `requirement_patterns` → labels populated."""
+    profile = _profile_with_applicability(
+        requirement_patterns=[r"[Aa]pplies to:?\s*([\w,\s]+?)(?:\.|\n|$)"]
+    )
+    blocks = [
+        _block(0, "1 Hardware Specs"),
+        _block(1, "1.1 Antennas"),
+        _block(2, "Applies to: smartphones, tablets"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(r for r in tree.requirements if r.section_number == "1.1")
+    assert sec.applicability == ["smartphones", "tablets"]
+
+
+def test_applicability_inherited_from_parent_when_section_silent():
+    """Child section without its own applicability text inherits parent's."""
+    profile = _profile_with_applicability(
+        requirement_patterns=[r"[Aa]pplies to:?\s*([\w,\s]+?)(?:\.|\n|$)"]
+    )
+    blocks = [
+        _block(0, "2 Specs"),
+        _block(1, "Applies to: smartphones"),
+        _block(2, "2.1 Sub"),
+        _block(3, "no applicability text here"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    parent = next(r for r in tree.requirements if r.section_number == "2")
+    child = next(r for r in tree.requirements if r.section_number == "2.1")
+    assert parent.applicability == ["smartphones"]
+    assert child.applicability == ["smartphones"], "child must inherit"
+
+
+def test_applicability_root_default_from_global_section():
+    """When the document declares a top-level applicability section, its
+    contents seed the root default for sections that have no own value
+    and no resolvable parent."""
+    profile = _profile_with_applicability(
+        requirement_patterns=[r"[Aa]pplies to:?\s*([\w,\s]+?)(?:\.|\n|$)"],
+        global_section_pattern=r"(?i)^applicability$",
+    )
+    blocks = [
+        _block(0, "1 Applicability"),
+        _block(1, "Applies to: smartphones, data devices"),
+        _block(2, "2 Hardware"),
+        _block(3, "no applicability here"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    section_2 = next(r for r in tree.requirements if r.section_number == "2")
+    # Section 2 has no own applicability, no parent — falls back to root default.
+    assert section_2.applicability == ["smartphones", "data devices"]
+
+
+def test_applicability_empty_when_no_pattern_no_global_no_text():
+    """Profile has no applicability rules → field stays empty everywhere."""
+    profile = _profile()  # no applicability_detection patterns
+    blocks = [
+        _block(0, "1 Top"),
+        _block(1, "no applicability statements anywhere"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    for r in tree.requirements:
+        assert r.applicability == []
+
+
+def test_applicability_dedupes_repeated_labels():
+    """Repeated labels in capture group are deduplicated case-insensitively
+    while preserving order."""
+    profile = _profile_with_applicability(
+        requirement_patterns=[r"[Aa]pplies to:?\s*([\w,\s]+?)(?:\.|\n|$)"]
+    )
+    blocks = [
+        _block(0, "3 Top"),
+        _block(1, "Applies to: smartphones, Smartphones, tablets"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(r for r in tree.requirements if r.section_number == "3")
+    # Case-insensitive dedup; first occurrence preserved.
+    assert sec.applicability == ["smartphones", "tablets"]
