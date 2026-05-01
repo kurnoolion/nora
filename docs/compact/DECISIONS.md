@@ -444,3 +444,79 @@ documents).
   slightly larger chunk text (bounded: one expansion per term per chunk).
 
 **Related**: FR-35, FR-15, NFR-9, D-007, D-002.
+
+## D-033: Heading classification — numbering required, style advisory
+
+**Date**: 2026-05-01
+**Status**: Accepted
+**Phase**: Architecture (captured retroactively from the development-phase
+commit that landed it; commit 3839dcb)
+
+**Context**
+Real-corpus review of profile.json against the VZW OA documents surfaced
+two structural problems in the previous heading classifier:
+- The numbering regex `^((?:\d+\.)+\d*)\s` required at least one dot, so
+  top-level chapters in the form `"1 LTE Data Retry"` (no trailing dot)
+  were silently rejected — entire subtrees missing from the parsed
+  structure.
+- `_classify_heading` required both a font/style match AND a numbering
+  match; real-world specs apply styling inconsistently, so valid
+  headings were dropped when fonts diverged. The profiler responded by
+  emitting one detection rule per (font_size, bold, all_caps) cluster
+  — three rules all at the same 13.5pt size in the OA corpus, none
+  load-bearing.
+
+**Decision**
+Numbering pattern is the **necessary** signal for heading classification;
+style/font in `profile.heading_detection.levels` is consulted as a hint
+only and never gates.
+
+- Relaxed numbering pattern: `^(\d+(?:\.\d+)*)\s+\S` — matches `"2"`,
+  `"2.1"`, `"2.1.1.1"` uniformly. Section depth =
+  `section_number.count(".") + 1`.
+- Section-number extraction in the parser uses an internal canonical
+  regex (`_SECTION_NUM_RE`), not the profile's, so older profiles with
+  different capture-group shapes keep working.
+- False-positive guards in `_classify_heading`: text length capped at 200
+  chars; terminal-punctuation rejection (`. ! ?`) for blocks longer
+  than 80 chars. Rejects numbered list items in body text
+  (`"1. The system shall ..."`).
+- **Section-number deduplication** in `_build_sections`: the first
+  heading with a given section number wins; subsequent matches are
+  demoted to body text appended to the current section.
+- Profiler: when numbering depth >= 2, emit `method="numbering"` and a
+  single advisory level rule capturing the dominant heading style
+  (kept for human curation, ignored by the parser). When numbering is
+  absent or shallow, fall back to legacy `method="font_size_clustering"`.
+- Default `HeadingDetection.method` changed from `"font_size_clustering"`
+  to `"numbering"`.
+
+**Why this over alternatives**
+- *Style-as-gate (previous behavior)*: rejected. Real specs apply
+  styling inconsistently; fonts get lost in extraction; valid headings
+  drop. The bug we fixed.
+- *Hybrid (require style OR numbering)*: rejected. Without firm length /
+  punctuation guards, numbered list items in body flip to headings.
+- *Stricter regex (require trailing dot)*: rejected per OA evidence —
+  top-level chapters use `"N Title"` form without a dot. A stricter
+  regex misses an entire hierarchy level.
+- *Per-line section-number-from-profile capture-group shape*: rejected.
+  Profile patterns vary in capture-group structure (legacy
+  `^((?:\d+\.)+\d*)\s` vs new `^(\d+(?:\.\d+)*)\s+\S`); decoupling the
+  gate from the section-number extractor avoids breaking older profiles.
+
+**Consequences**
+- Public-surface contract shift on parser's `_classify_heading` — gate
+  semantics changed. Soft flag in parser/MODULE.md (additive Invariant
+  noting numbering-as-gate).
+- Section-number uniqueness is now a hard invariant — first heading wins.
+- Profile schema: `HeadingDetection.method` default changed; old JSONs
+  with `"font_size_clustering"` keep loading and working (parser still
+  gates on numbering; the old levels become inert advisory).
+- Surfaced 5 new ingestion FRs (FR-31..FR-35) as a side effect of the
+  corpus review — those are addressed under D-030, D-031, D-032 plus
+  FR-31 / FR-34 batches without their own decisions.
+- 7 new heading-classification tests + 1 profiler integration test pin
+  the new behavior.
+
+**Related**: FR-3, D-003, D-030, D-031, D-032.
