@@ -1,6 +1,6 @@
 # Requirements
 
-Last updated: 2026-04-27. Behavioral specs only — project identity and scope live in `PROJECT.md`.
+Last updated: 2026-05-01. Behavioral specs only — project identity and scope live in `PROJECT.md`.
 
 <!--
 How to use this file:
@@ -28,6 +28,11 @@ How to use this file:
 - **FR-6** — The feature taxonomy is derived bottom-up by per-document LLM extraction, then consolidated across documents into a unified taxonomy; the workflow includes human review through the Web UI.
 - **FR-7** — The unified knowledge graph aggregates Requirements, Features, Standard_Sections, and Plan / Release / MNO organization with typed edges across organizational, within-doc, cross-doc, standards, and feature categories. The schema also defines Test_Case node and edge types; Test_Case nodes are populated post-v1 (see FR-26).
 - **FR-8** — The unified vector store chunks requirements with metadata filters keyed on `mno`, `release`, `doc_type`, and `plan_id`.
+- **FR-31** — Priority-marker extraction in headings. The structural parser detects an optional priority marker embedded in heading text (e.g., `mandatory`, `optional`, `conditional`) via a profile-defined regex; when matched, the marker is stored as a `priority` attribute on the `Requirement` node and stripped from the displayed title. Profile carries `heading_detection.priority_marker_pattern`; corpora without the convention leave it empty. (Verizon OA does not use this convention; some other carriers do.)
+- **FR-32** — Form-factor applicability with hierarchical inheritance. Each `Requirement` carries an `applicability` attribute (free-form `list[str]`, e.g. `["smartphone", "tablet"]`) listing the form factors the requirement applies to. The parser populates this by (a) extracting an explicit value from the requirement's own text or attached table when present, via a profile-defined regex / keyword set, and (b) inheriting from the parent requirement when absent, recursing up the hierarchy until a value is found. When the document declares a top-level applicability section, its value serves as the root default. When no applicability information exists anywhere in the corpus, the attribute is left empty and downstream stages do not filter on it. Controlled-vocabulary form-factor labels are deferred until a second carrier needs the consistency.
+- **FR-33** — Strikeout content omission. The extractors for all supported formats (PDF, DOCX, XLSX) surface strikeout formatting on `FontInfo.strikethrough`; the parser drops content blocks where `font_info.strikethrough` is true, representing requirements / sections deleted in the original document. Profile carries an `ignore_strikeout: bool = True` switch (override available through the corrections workflow per FR-15).
+- **FR-34** — Table of Contents omission. The profiler detects TOC entries by their leader-dot-and-page-number signature (default regex `<title>\.{3,}\s*\d+\s*$`); the parser skips matching blocks. Profile carries `toc_detection_pattern` (regex, default as above) and `toc_page_threshold` (float in `[0, 1]`, default 0.8 — a page is treated as a TOC page when at least this fraction of its blocks match the pattern). Both fields are profile-tuneable.
+- **FR-35** — Definitions / acronyms expansion for retrieval. The profiler detects each document's definitions / acronyms / glossary section by heading-text regex (default `(?i)acronym|definition|glossary`) and extracts entry pairs (`term → expansion`) into a per-document `definitions_map`. The chunk builder expands the first occurrence of each known term inline in every chunk before embedding (e.g., `ETWS` → `ETWS (Earthquake and Tsunami Warning System)`) to improve vector recall on acronym-shaped queries. Expansion is per-document, not corpus-wide, to preserve locality when a term means different things in different MNO documents.
 
 ### Query
 

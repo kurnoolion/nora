@@ -1,7 +1,7 @@
 # vectorstore
 
 **Purpose**
-Unified vector-store construction and configuration. Defines two structural-typing Protocols (`EmbeddingProvider`, `VectorStoreProvider`) per D-007, wraps them with a chunk-builder + builder pipeline, and persists a single vector index spanning all MNOs × releases × doc_types. Metadata filters scope retrieval at query time — there is no per-MNO store. Serves FR-8 (unified vector store with metadata filtering); covers NFR-2 (offline HF install via `hf_offline`), NFR-7 (configurable embedding model / backend / metric / chunk strategy via `VectorStoreConfig`).
+Unified vector-store construction and configuration. Defines two structural-typing Protocols (`EmbeddingProvider`, `VectorStoreProvider`) per D-007, wraps them with a chunk-builder + builder pipeline, and persists a single vector index spanning all MNOs × releases × doc_types. Metadata filters scope retrieval at query time — there is no per-MNO store. Serves FR-8 (unified vector store with metadata filtering), FR-35 (per-document definitions/acronyms expansion in chunk text before embedding [D-032]); covers NFR-2 (offline HF install via `hf_offline`), NFR-7 (configurable embedding model / backend / metric / chunk strategy via `VectorStoreConfig`).
 
 **Public surface**
 - Protocols:
@@ -17,7 +17,7 @@ Unified vector-store construction and configuration. Defines two structural-typi
 - Builder / chunking:
   - `VectorStoreBuilder` (builder.py) — orchestrates load → chunk → embed → store
   - `BuildStats` — per-build metrics: chunks_by_plan, embedding model/dim, backend, metric, collection
-  - `ChunkBuilder`, `Chunk` (chunk_builder.py) — builds contextualized chunks with configurable headers (MNO / Release / Plan / Path / Req ID) and optional inline tables/image context
+  - `ChunkBuilder`, `Chunk` (chunk_builder.py) — builds contextualized chunks with configurable headers (MNO / Release / Plan / Path / Req ID) and optional inline tables/image context. Accepts an optional per-document `definitions_map: dict[str, str]` and expands the first occurrence of each known term inline before chunk text is finalized [D-032].
 - Config: `VectorStoreConfig` (config.py) — every tuneable parameter (embedding provider/model/batch/device, store backend/metric/persist_dir, chunk contextualization toggles, defaults). Provider options: `'sentence-transformers'` (default) | `'ollama'`.
 - Offline support:
   - `hf_offline.enable_offline_if_cached(model_name)` — switches HF to offline mode when the cache already has the model (sentence-transformers path)
@@ -31,6 +31,9 @@ Unified vector-store construction and configuration. Defines two structural-typi
 - Embeddings are L2-normalized by default (`normalize_embeddings=True`) because the default `distance_metric="cosine"` requires it; turning off one without the other is a configuration bug.
 - `embed_query()` is a separate method from `embed()` because some models use asymmetric encoders (different prefixes for docs vs queries). Callers must never bypass it by calling `embed([text])[0]` directly.
 - Chunk context (hierarchy path, req ID, MNO header) is **prepended to the chunk text before embedding**, not just stored as metadata — this is what lets retrieval surface the right chunk when the user asks by path or req ID.
+- Definitions expansion (when `definitions_map` is supplied) is **per-document scoped** — each `RequirementTree`'s map is threaded into the chunker only for that tree's chunks, never aggregated across trees. Preserves locality (`RAT` may mean different things in different MNO docs) [D-032, FR-35].
+- Definitions expansion is **idempotent and first-occurrence-per-chunk only**; re-running on already-expanded text is a no-op (`\bETWS\b` does not match inside a previously-expanded `ETWS (Earthquake...)`).
+- Chunks belonging to the definitions section itself are excluded from expansion to avoid `ETWS (Earthquake...) (Earthquake...)` double-anchoring [D-032].
 
 **Key choices**
 - Protocol + injection: `VectorStoreBuilder(embedder, store, config)` — builder never constructs providers, so tests can use in-memory stubs without monkey-patching.
@@ -38,6 +41,7 @@ Unified vector-store construction and configuration. Defines two structural-typi
 - Offline HF cache loader (`hf_offline`) specifically supports locked-down work machines — `SentenceTransformerEmbedder` calls it on init so models ship via tarball if needed.
 - Config includes chunk-contextualization toggles so A/B tests can isolate retrieval gains from chunk decoration vs. model changes.
 - `BuildStats` saved alongside the store — a build is reproducible from `(VectorStoreConfig, BuildStats)` without re-reading any tree.
+- Definitions expansion happens at **chunk-build time, not query-time** — vectors are computed from expanded text, so retrieval recall on acronym-shaped queries (`"ETWS"`, `"SUPL requirements"`) actually improves. Query-time expansion would leave un-expanded vectors in the store [D-032].
 
 **Non-goals**
 - No retrieval logic beyond `query()` — ranking, reranking, hybrid merging, and MNO/release scoping live in [query](../query/MODULE.md).

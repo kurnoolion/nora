@@ -1,13 +1,13 @@
 # extraction
 
 **Purpose**
-Format-aware content extraction. Each format has its own extractor (PDF via pymupdf + pdfplumber, DOCX via python-docx, XLSX via openpyxl), all producing the normalized `DocumentIR` defined in [models](../models/MODULE.md). Downstream stages (profiler, parser) treat every document uniformly after this boundary. Serves FR-1 (PDF + DOCX + XLSX extraction) and FR-30 (sources read from `<env_dir>/input/<MNO>/<release>/`); implements D-010 (multi-format DocumentIR), D-018 (DOC/XLS deferred per FR-27), D-023 (input path layout).
+Format-aware content extraction. Each format has its own extractor (PDF via pymupdf + pdfplumber, DOCX via python-docx, XLSX via openpyxl), all producing the normalized `DocumentIR` defined in [models](../models/MODULE.md). Downstream stages (profiler, parser) treat every document uniformly after this boundary. Serves FR-1 (PDF + DOCX + XLSX extraction), FR-30 (sources read from `<env_dir>/input/<MNO>/<release>/`), and FR-33 (strikeout detection); implements D-010 (multi-format DocumentIR), D-018 (DOC/XLS deferred per FR-27), D-023 (input path layout), D-031 (strikeout detection per format).
 
 **Public surface**
 - `BaseExtractor` (base.py) — ABC: `extract(file_path, mno="", release="", doc_type="") -> DocumentIR`
-- `PDFExtractor` (pdf_extractor.py) — text blocks with `FontInfo`, tables via pdfplumber, images; header/footer margin filtering
-- `DOCXExtractor` (docx_extractor.py) — paragraphs (with style/level), tables, embedded images
-- `XLSXExtractor` (xlsx_extractor.py) — per-sheet extraction via openpyxl: each non-empty worksheet emits a heading (sheet title) + a table block (first row as headers, remaining rows as body). Page numbers track sheet index (1-based).
+- `PDFExtractor` (pdf_extractor.py) — text blocks with `FontInfo` (incl. strikethrough via PyMuPDF span flags bit 8), tables via pdfplumber, images; header/footer margin filtering
+- `DOCXExtractor` (docx_extractor.py) — paragraphs (with style/level + strikethrough from `Run.font.strike`), tables, embedded images
+- `XLSXExtractor` (xlsx_extractor.py) — per-sheet extraction via openpyxl: each non-empty worksheet emits a heading (sheet title) + a table block; cell strikethrough surfaced via `Cell.font.strike` for row-level drop semantics. Page numbers track sheet index (1-based).
 - Registry (registry.py):
   - `supported_extensions() -> set[str]`
   - `get_extractor(file_path) -> BaseExtractor` — extension-keyed lookup; raises `ValueError` on unsupported
@@ -22,6 +22,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - Tables extracted by pdfplumber are de-duplicated against text blocks they overlap with (PDF text extractors surface table cells as text too) — no block should appear twice in the IR.
 - Header/footer content (matched by margin thresholds + always-header regex patterns) is dropped, not emitted as paragraphs.
 - Format-specific libraries (fitz, pdfplumber, python-docx, openpyxl) are imported **only** inside this module — no other `core/src/` module pulls them in.
+- Strikethrough block-level signal differs per format [D-031]: PDF — majority-of-characters across mixed-strike spans (50% defaults to `False`); DOCX — `any` run struck → whole paragraph struck; XLSX — row carries strikethrough only when **all** non-empty cells are struck.
 
 **Key choices**
 - PDF: pymupdf (fitz) for text + font metadata, pdfplumber for tables — neither alone covers both well. Pay the double-parse cost per file; cache is the IR JSON on disk.
@@ -30,6 +31,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - Registry is an instance dict (`_EXTRACTORS`), not a class hierarchy — extractors are stateless; one instance per format.
 - Path-based metadata inference (`<env_dir>/input/<MNO>/<release>/file.ext` per D-023) avoids hardcoding per-MNO dispatch; a new MNO needs no code change.
 - XLSX strategy is one heading + one table per worksheet — minimal but lets the profiler still cluster headings by font size and the parser still see structured rows.
+- Strikeout detected per format but **not dropped here** — the IR carries `FontInfo.strikethrough` faithfully; drop semantics live in the parser so the corrections workflow can override without re-extracting [D-031].
 
 **Non-goals**
 - No OCR — scanned PDFs without a text layer will yield empty IRs; this is surfaced via block_count=0, not silently filled by an image-to-text model.

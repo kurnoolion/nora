@@ -1,12 +1,14 @@
 # profiler
 
 **Purpose**
-Standalone, LLM-free document-structure profiler. Analyzes representative `DocumentIR`s from [extraction](../extraction/MODULE.md) and emits a `DocumentProfile` — a JSON artifact of heading rules, requirement-ID patterns, zone classifications, header/footer filters, and cross-reference patterns. The profile drives the generic structural parser, replacing per-MNO parser code with human-editable configuration. Serves FR-2 (LLM-free profiling). Profile JSON files are committed under `customizations/profiles/` per D-024 (human-curated, AI-scaffolded).
+Standalone, LLM-free document-structure profiler. Analyzes representative `DocumentIR`s from [extraction](../extraction/MODULE.md) and emits a `DocumentProfile` — a JSON artifact of heading rules, requirement-ID patterns, zone classifications, header/footer filters, cross-reference patterns, applicability detection rules, definitions-section detection rules, TOC detection rules, and priority-marker detection rules. The profile drives the generic structural parser, replacing per-MNO parser code with human-editable configuration. Serves FR-2 (LLM-free profiling), FR-31 (priority markers), FR-32 (applicability detection rules), FR-33 (`ignore_strikeout` toggle), FR-34 (TOC detection), FR-35 (definitions section + entry detection). Profile JSON files are committed under `customizations/profiles/` per D-024 (human-curated, AI-scaffolded).
 
 **Public surface**
 - `DocumentProfiler` (profiler.py) — `create_profile(docs, profile_name="") -> DocumentProfile`; also `update_profile()`, `validate_profile()` (coverage check against held-out docs)
 - `DocumentProfile` (profile_schema.py) — full profile container with `to_dict`, `save_json`, `load_json`
-- Profile subcomponents: `HeadingLevel`, `HeadingDetection`, `RequirementIdPattern`, `MetadataField`, `PlanMetadata`, `DocumentZone`, `HeaderFooter`, `CrossReferencePatterns`, `BodyText`
+- Profile subcomponents: `HeadingLevel`, `HeadingDetection`, `RequirementIdPattern`, `MetadataField`, `PlanMetadata`, `DocumentZone`, `HeaderFooter`, `CrossReferencePatterns`, `BodyText`, `ApplicabilityDetection` (FR-32 [D-030])
+- New `DocumentProfile` fields: `ignore_strikeout: bool = True` (FR-33 [D-031]); `applicability_detection` (FR-32); `toc_detection_pattern: str` + `toc_page_threshold: float` (FR-34); `definitions_entry_pattern: str` (FR-35 [D-032])
+- New `HeadingDetection` fields: `priority_marker_pattern: str` (FR-31); `definitions_section_pattern: str` (FR-35 [D-032])
 - `profile_cli.main` — CLI: `create | update | validate`
 
 **Invariants**
@@ -22,6 +24,8 @@ Standalone, LLM-free document-structure profiler. Analyzes representative `Docum
 - Zone classification uses section-number regex + heading-text keyword match (e.g., "hardware", "scenarios") — simple, auditable, and editable.
 - Profile is a flat JSON file per document family, not one per file — one set of rules covers a whole MNO × release batch.
 - Validation mode reports coverage (headings matched / expected, req IDs found / sample size) rather than pass/fail, so reviewers can judge quality at a glance.
+- Per-document content (extracted definitions term→expansion pairs) is **not** stored in the profile — those land on `RequirementTree.definitions_map`. Profile carries only the *detection rules*; locality is preserved at the parsed-tree level [D-032].
+- Pattern-based detection only (no keyword bag-of-words) for applicability and definitions; corrections workflow extends patterns by JSON edit, not code change [D-030, D-032].
 
 **Non-goals**
 - Not a parser — applying a profile to a document is [parser](../parser/MODULE.md)'s job.

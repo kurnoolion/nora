@@ -244,3 +244,203 @@ Template (keep entries tight — this file is always in context):
 **Why**: Different deployments have different access (cloud vs air-gapped). Embedding was hard-coded in `VectorStoreConfig()`. Vs config-only: loses ergonomic CLI overrides. Cloud embedding deferred — OpenRouter doesn't host embeddings, separate API seam adds creds/billing surface for marginal v1 benefit.
 **Consequences**: `environments/<name>.json` is canonical record of deployed models. `NORA_EMBEDDING_PROVIDER`/`NORA_EMBEDDING_MODEL` are public env contracts. Cloud-embedding remains deferred, not non-goal. Preserves D-006/D-007 (Protocol + injection).
 **Related**: D-006, D-007, D-026.
+
+## D-030: Form-factor applicability — per-Requirement attribute with parser-side hierarchical inheritance
+
+**Date**: 2026-05-01
+**Status**: Accepted
+**Phase**: Architecture
+
+**Context**
+FR-32 introduces form-factor applicability (e.g. `["smartphone", "tablet"]`)
+as a per-`Requirement` attribute with hierarchical inheritance: explicit
+value on the requirement wins; otherwise inherit from parent up the chain;
+otherwise fall back to a document-level applicability section if present.
+
+**Decision**
+
+- **Schema**: `Requirement.applicability: list[str]` (parser/structural_parser.py),
+  free-form labels per FR-32. Empty list = unknown; downstream stages don't
+  filter on empty.
+- **Profile** (profiler/profile_schema.py): new `ApplicabilityDetection`
+  dataclass on `DocumentProfile` with two fields —
+  - `requirement_patterns: list[str]`: regex patterns; first-match wins;
+    group 1 contains the comma/pipe-separated form-factor text.
+  - `global_section_pattern: str`: regex for the heading text of a
+    document-level applicability section; that section's contents seed
+    the root default.
+  Regex-only by direction; no keyword bag-of-words fallback.
+- **Parser pass**: new `_apply_applicability(sections, profile)` post-pass
+  after `_link_parents`. Walk sections in document order; resolve global
+  root default once; per section try patterns against the section's own
+  text, else inherit from parent's already-resolved applicability, else
+  fall back to root default.
+- **Table-anchored Requirements** inherit through the existing
+  `_propagate_hierarchy_to_table_reqs` pass (extended to copy
+  `applicability` alongside `hierarchy_path` / `zone_type`).
+- **Downstream**: graph + chunk_builder gain one-line `r.get("applicability", [])`
+  propagation, mirroring the existing `zone_type` pattern. Metadata-only in v1;
+  no retrieval-time `where` filter.
+
+**Why this over alternatives**
+- *Side-channel manifest*: rejected. Applicability is intrinsic to each
+  requirement; splitting it complicates corrections, graph hydration, audit.
+- *Inline detection in `_build_sections`*: rejected. Parent's applicability
+  isn't resolved at section-creation time. Post-pass mirrors how
+  `zone_type` already flows.
+- *Keyword bag-of-words fallback*: dropped per user direction. Trade-off:
+  varied phrasings need one regex each; corrections workflow makes that a
+  JSON edit, not a code change.
+- *Controlled vocabulary*: deferred per FR-32 (free-form labels in v1;
+  revisit at second carrier).
+
+**Consequences**
+- Additive schema change to `Requirement` and `DocumentProfile` — soft flag
+  in parser/MODULE.md and profiler/MODULE.md.
+- Profiler does **not** auto-derive these patterns in v1. Humans curate
+  `requirement_patterns` per corpus via corrections (D-011, FR-15);
+  auto-detection becomes possible once a second corpus reveals patterns
+  worth generalizing.
+- Future query-side filtering (`where={"applicability": "smartphone"}`)
+  is a one-line addition — left as a Deferred capability.
+
+**Related**: FR-32, FR-15, D-007, D-011, parser MODULE.md `zone_type`
+propagation pattern.
+
+## D-031: Strikeout-content omission — `FontInfo.strikethrough` IR field, format coverage, parser drop semantics
+
+**Date**: 2026-05-01
+**Status**: Accepted
+**Phase**: Architecture
+
+**Context**
+FR-33 requires the system to detect strikethrough formatting and drop the
+affected content (struck-through requirements are document-author deletions
+that must not surface to the user or downstream stages). FR-33 covers all
+three supported formats: PDF, DOCX, XLSX.
+
+**Decision**
+
+- **IR schema** (models/document.py): `FontInfo.strikethrough: bool = False`.
+  Default False keeps existing IR JSONs readable without migration.
+  Extractors that can't determine the signal leave it False (never None;
+  binary signal keeps the consumer contract simple).
+- **Per-format extractor surfacing**:
+  - PDF: PyMuPDF `flags` bit 8 (`TEXT_FONT_STRIKEOUT`). Mixed-strike blocks
+    use majority-of-characters; 50% defaults to False (no drop on ambiguity).
+  - DOCX: `Run.font.strike` / `.dstrike`. Block-level signal is `any` —
+    any run struck → whole paragraph struck.
+  - XLSX: `Cell.font.strike`. Row drop only when **all** non-empty cells
+    in the row are struck; partial strike is treated as in-cell editing.
+    Sheet headings (synthesized from sheet titles) cannot be struck.
+- **Drop point**: the **parser**, not the extractor. The IR is a faithful
+  source representation; interpretation (including the
+  `ignore_strikeout` toggle) lives in the parser. This keeps drops
+  overrideable via corrections without re-extracting PDFs.
+- **Override knob** (profile_schema.py): top-level
+  `DocumentProfile.ignore_strikeout: bool = True`. Default ON makes
+  FR-33 active out of the box; flip to False (via corrections workflow)
+  for corpora that use strikethrough for annotation rather than deletion.
+- **Parser behavior**: in `_build_sections`, when both
+  `profile.ignore_strikeout` and `block.font_info.strikethrough` are
+  True, skip the block (no heading classification, no body append, no
+  table emission), increment a counter, log once per parse.
+- **Compact-report visibility**: `RequirementTree` gains
+  `parse_stats.struck_blocks_dropped: int`; the parse stage's compact
+  RPT line gains a `struck=N` token alongside `req=N dep=N docs=N`.
+  Per NFR-9.
+
+**Why this over alternatives**
+- *Drop at extractor*: rejected. Faithful IR enables corrections-workflow
+  override without re-parsing PDFs and keeps IR auditable.
+- *Per-span strike state in IR*: rejected. IR block granularity is
+  paragraph-shaped; carrying span-level strike would require a much larger
+  schema change than this FR justifies. Block-level majority/any/all
+  per format is sufficient.
+- *Always drop, no toggle*: rejected. Some carriers use strikethrough as
+  emphasis. Default ON keeps FR-33 active; the toggle handles edge corpora.
+- *Auto-detect "is this corpus strikethrough-as-deletion or
+  strikethrough-as-emphasis?"*: deferred. Heuristic isn't reliable
+  without labelled data; explicit toggle is more honest.
+
+**Consequences**
+- Soft-flag schema additions in models/MODULE.md, profiler/MODULE.md,
+  parser/MODULE.md (additive, no breaking change).
+- All three extractors gain strike-detection paths.
+- Compact RPT format gains `struck=N` (NFR-9 honored).
+- Existing IR JSONs and profile JSONs load safely with defaults that
+  preserve correctness.
+
+**Related**: FR-33, FR-15 (override path), NFR-9 (compact-format
+counterpart), D-007 (profile is human-editable input).
+
+## D-032: Definitions/acronyms expansion — per-document map on RequirementTree, chunk-build-time expansion
+
+**Date**: 2026-05-01
+**Status**: Accepted
+**Phase**: Architecture
+
+**Context**
+FR-35 requires the profiler to detect each document's definitions /
+acronyms / glossary section, extract `term → expansion` pairs, and have
+the chunk builder expand the first occurrence of each term inline before
+embedding. Per FR-35, expansion is per-document, not corpus-wide, to
+preserve locality (e.g. `RAT` may mean different things in different MNO
+documents).
+
+**Decision**
+
+- **Map location**: on `RequirementTree` (per-document parse output), not
+  on the profile. New field `RequirementTree.definitions_map: dict[str, str]`,
+  populated by the parser. Profile carries detection rules only; extracted
+  values are corpus-content and belong with the parsed tree.
+- **Expansion timing**: at chunk-build time, not query-time. Expanded text
+  is what gets embedded — vectors carry the signal that retrieval scores
+  against.
+- **Detection** (profiler):
+  - `DocumentProfile.heading_detection.definitions_section_pattern` (regex
+    against heading text; default `(?i)acronym|definition|glossary`).
+  - `DocumentProfile.definitions_entry_pattern` (regex with two capture
+    groups; default supports common dash/colon separators: 16-char term
+    cap to avoid prose-line false positives).
+- **Extraction** (parser): new post-pass `_extract_definitions` after
+  `_link_parents`. The definitions section is kept in the parsed tree.
+- **Chunker behavior** (vectorstore/chunk_builder.py): `ChunkBuilder`
+  accepts an optional `definitions_map`. First-occurrence-per-chunk
+  expansion via `\b<term>\b`. Idempotent. Skips chunks belonging to the
+  definitions section itself (avoid double-expansion).
+- **Per-document scoping**: vectorstore builder threads each tree's
+  `definitions_map` into the chunker per tree; never aggregated across
+  trees. Enforced at chunk-build, not at store level (D-002 unified store
+  preserved).
+- **Corrections workflow**: per-document corrections at
+  `<env_dir>/corrections/definitions/<plan_id>.json`. Pipeline merges
+  correction values over extracted values for the same term.
+- **Compact reports**: parse RPT gains `defs=N`; vectorstore RPT gains
+  `expanded=N`. New error-code prefix `DEF-` (`DEF-E001`: definitions
+  section detected but entry pattern matched zero entries). Honors NFR-9.
+
+**Why this over alternatives**
+- *Map on DocumentProfile*: rejected. Profile is per-corpus rules; map is
+  per-document content. Mixing violates the existing profile↔tree seam.
+- *Side-channel JSON outside the parsed tree*: rejected. New file, new
+  producer, new corrections drop-path — too much surface for one field.
+- *Query-time expansion*: rejected. Vectors computed from un-expanded
+  text don't improve retrieval recall — defeats the purpose.
+- *Corpus-wide map*: rejected per FR-35 (locality is the point).
+- *Expansion every occurrence*: rejected. Over-anchors embeddings on the
+  same expansion. First-per-chunk is enough signal.
+- *Config knob to disable expansion*: rejected. Empty map = no-op; no
+  switch needed. Corrections workflow handles edge cases.
+
+**Consequences**
+- Soft-flag schema additions in parser/MODULE.md
+  (`RequirementTree.definitions_map`), profiler/MODULE.md (two pattern
+  fields), vectorstore/MODULE.md (chunker constructor argument).
+- New corrections drop-path under `<env_dir>/corrections/definitions/`
+  with associated error-code prefix `DEF-` and compact-format counterpart
+  per NFR-9.
+- Embedding quality on acronym-shaped queries improves at the cost of
+  slightly larger chunk text (bounded: one expansion per term per chunk).
+
+**Related**: FR-35, FR-15, NFR-9, D-007, D-002.

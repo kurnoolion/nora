@@ -1,7 +1,7 @@
 # Status
 
-**Active phase**: development
-**Last updated**: 2026-04-29
+**Active phase**: architecture
+**Last updated**: 2026-05-01
 **Last drift-check**: 2026-04-27 — mode: dev-full — 4 drift(s) resolved (all batch [a]: MODULE.md → match code post-slice-B/C), 0 deferred surfaced
 
 ## Done

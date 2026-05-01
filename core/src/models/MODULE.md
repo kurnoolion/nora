@@ -6,7 +6,7 @@ Shared document intermediate representation. Defines the normalized `DocumentIR`
 **Public surface**
 - `BlockType` — `heading | paragraph | table | image | embedded_object`
 - `Position` — `(page, index, bbox?)` for every block
-- `FontInfo` — font attrs (size, bold, italic, name, all_caps, color); feeds profiler heading clustering
+- `FontInfo` — font attrs (size, bold, italic, name, all_caps, color, strikethrough); feeds profiler heading clustering and the parser's strikeout-drop pass [D-031]
 - `ContentBlock` — single block with type-specific fields (text/level, headers+rows, image_path, object_type+extracted_content)
 - `DocumentIR` — document container: source_file, source_format, mno, release, doc_type, content_blocks, extraction_metadata; exposes `page_count`, `block_count`, `blocks_by_type()`, `to_dict()`, `save_json()`, `load_json()`
 
@@ -14,6 +14,7 @@ Shared document intermediate representation. Defines the normalized `DocumentIR`
 - All extractors produce `DocumentIR`; no downstream code branches on source format except via `source_format`.
 - Every `ContentBlock` carries a `Position` with a sequential `index` unique within the document — preserves reading order after round-trip serialization.
 - Schema is JSON-serializable via dataclass `asdict`; `load_json` reconstructs a value-equivalent instance.
+- `FontInfo.strikethrough` defaults to `False`; extractors that cannot determine it leave it `False` (never `None`) — consumers do not handle a tri-state.
 - No LLM, no I/O beyond `save_json` / `load_json`, no dependencies on any other `src/` module.
 
 **Key choices**

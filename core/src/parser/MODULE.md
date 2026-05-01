@@ -1,12 +1,12 @@
 # parser
 
 **Purpose**
-Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentProfile` and emits a `RequirementTree` — the typed, hierarchical form of the document that every downstream stage (resolver, graph, taxonomy, vectorstore) reads. Serves FR-3 (profile-driven generic parser; no per-MNO code paths). Implements D-003: all MNO-specific behavior lives in the profile JSON, not in parser code.
+Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentProfile` and emits a `RequirementTree` — the typed, hierarchical form of the document that every downstream stage (resolver, graph, taxonomy, vectorstore) reads. Serves FR-3 (profile-driven generic parser; no per-MNO code paths), FR-31 (priority extraction), FR-32 (applicability inheritance), FR-33 (struck-block drop), FR-34 (TOC drop), FR-35 (definitions extraction). Implements D-003 (MNO behavior lives in profile, not code), D-030 (applicability inheritance), D-031 (struck-block drop semantics), D-032 (per-document definitions map on `RequirementTree`).
 
 **Public surface**
 - `GenericStructuralParser` (structural_parser.py) — the parser; consumes `DocumentIR` + `DocumentProfile`, returns `RequirementTree`
-- `RequirementTree` (structural_parser.py) — top-level output: plan-level metadata + flat `requirements` list; `to_dict`, `save_json`, `load_json`
-- `Requirement` — single requirement node: `req_id`, `section_number`, `title`, `parent_req_id`, `parent_section`, `hierarchy_path`, `zone_type`, `text`, `tables`, `images`, `children`, `cross_references`
+- `RequirementTree` (structural_parser.py) — top-level output: plan-level metadata + flat `requirements` list + `definitions_map: dict[str, str]` (FR-35 [D-032]) + `parse_stats` (incl. `struck_blocks_dropped: int` per [D-031], `toc_blocks_dropped: int` per FR-34, `defs_extracted: int` per FR-35); `to_dict`, `save_json`, `load_json`
+- `Requirement` — single requirement node: `req_id`, `section_number`, `title`, `parent_req_id`, `parent_section`, `hierarchy_path`, `zone_type`, `priority` (FR-31), `applicability: list[str]` (FR-32 [D-030]), `text`, `tables`, `images`, `children`, `cross_references`
 - `TableData`, `ImageRef`, `StandardsRef`, `CrossReferences` — nested types
 - `parse_cli.main` — CLI entrypoint (`python -m core.src.parser.parse_cli`)
 
@@ -19,6 +19,11 @@ Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentPr
 - `hierarchy_path` mirrors the heading chain from root down to the requirement — used by the graph and vectorstore to preserve structural context when chunking or indexing. Table-anchored Requirements inherit `hierarchy_path` from their parent paragraph-anchored section.
 - Cross-references are structurally detected (regex from profile) but **not resolved** here. `CrossReferences.internal/external_plans/standards` are raw strings; [resolver](../resolver/MODULE.md) turns them into concrete manifests.
 - `zone_type` is copied from the profile's `DocumentZone` match — used by the graph to route requirements to the right subgraph partition. Table-anchored Requirements inherit `zone_type` from their parent.
+- `applicability` resolves in document order via a post-pass after `_link_parents`: explicit value on the requirement wins; else inherit from `parent_section`'s already-resolved value; else fall back to the document-level applicability section's value, if any; else empty list (downstream stages do not filter on empty) [D-030].
+- Struck-through blocks (`block.font_info.strikethrough == True`) are skipped entirely by `_build_sections` when `profile.ignore_strikeout == True` (default). The IR retains them; only the parser-level drop is gated by the profile toggle [D-031].
+- TOC entries (matching `profile.toc_detection_pattern`) are skipped before heading classification. Pages where ≥`toc_page_threshold` of blocks match are treated as TOC pages and dropped wholesale (FR-34).
+- The definitions / acronyms / glossary section is **kept** in the parsed tree; extraction populates `RequirementTree.definitions_map` *in addition to* leaving the section as a queryable Requirement [D-032].
+- Table-anchored Requirements inherit `applicability` (and `zone_type` as before) from their parent paragraph-anchored section via `_propagate_hierarchy_to_table_reqs` [D-030].
 
 **Key choices**
 - One `RequirementTree` per source document (not per MNO or release) — the unified graph is assembled later; keeping parse output 1:1 with input keeps re-runs incremental.
@@ -26,6 +31,7 @@ Generic, profile-driven structural parser. Consumes a `DocumentIR` + `DocumentPr
 - Parser reads the profile but never writes it — the profile is an input, edited only by the profiler or by a human. This enforces the corrections-override flow.
 - Tables preserved with source tag (`inline` vs `embedded_xlsx`) so the graph and query layer can score table-derived answers differently from prose-derived ones.
 - **Two req-ID anchor sources**: paragraph anchors (heading-block, pending-id resolution, or inline body-text id) and table-cell anchors (column-1-of-row first; all-cells fallback; one anchor per row max). Necessary because telecom requirement docs frequently define requirements through cross-reference tables — IDs that exist in tables but never as paragraph-form anchors. Detected against the same `requirement_id.pattern` regex from the profile, so adding a new MNO still requires no parser code change. Paragraph anchors win on duplicate `req_id`s to keep precedence deterministic.
+- New parser passes added in document order (each strictly post-`_link_parents`): `_apply_applicability` [D-030] → `_extract_definitions` [D-032]. Strike-block and TOC drops happen earlier inside `_build_sections` because they affect what reaches the heading classifier.
 
 **Non-goals**
 - No semantic enrichment (feature tagging, standards resolution, embeddings) — done downstream.
