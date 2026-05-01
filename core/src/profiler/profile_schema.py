@@ -140,6 +140,14 @@ class DocumentProfile:
     )
     body_text: BodyText = field(default_factory=BodyText)
 
+    # ── Strikeout omission (FR-33 [D-031]) ────────────────────────
+    ignore_strikeout: bool = True
+    """When True (default), the parser drops content blocks whose
+    `font_info.strikethrough` is True — these represent
+    requirements/sections deleted in the source document. Flip to False
+    via the corrections workflow for corpora that abuse strikethrough
+    as emphasis or annotation rather than deletion."""
+
     # ── TOC omission (FR-34) ──────────────────────────────────────
     toc_detection_pattern: str = r".*\.{3,}\s*\d+\s*$"
     """Regex matching a TOC entry. Default catches the common
@@ -215,6 +223,7 @@ class DocumentProfile:
                 font_size_max=bt.get("font_size_max", 0),
                 font_families=bt.get("font_families", []),
             ),
+            ignore_strikeout=data.get("ignore_strikeout", True),
             toc_detection_pattern=data.get("toc_detection_pattern", r".*\.{3,}\s*\d+\s*$"),
             toc_page_threshold=data.get("toc_page_threshold", 0.8),
         )

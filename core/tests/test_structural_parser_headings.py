@@ -344,3 +344,67 @@ def test_no_priority_when_pattern_set_but_text_doesnt_match():
     sec = next(r for r in tree.requirements if r.section_number == "3.1")
     assert sec.priority == ""
     assert sec.title == "Plain Heading No Marker"
+
+
+# ---------------------------------------------------------------------------
+# FR-33: strikeout content omission
+# ---------------------------------------------------------------------------
+
+
+def _struck_block(idx: int, text: str, *, size: float = 12.0, bold: bool = False) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=idx),
+        text=text,
+        font_info=FontInfo(size=size, bold=bold, strikethrough=True),
+    )
+
+
+def test_struck_block_dropped_by_default():
+    """ignore_strikeout=True (default) → struck blocks are skipped before
+    heading classification, and parse_stats.struck_blocks_dropped is bumped."""
+    blocks = [
+        _block(0, "1 Real Heading"),
+        _struck_block(1, "1.1 Deleted Subsection"),  # struck — should NOT become a heading
+        _block(2, "real body text"),
+    ]
+    tree = _parse(blocks)
+    nums = [r.section_number for r in tree.requirements]
+    assert "1.1" not in nums, "struck block should not become a heading"
+    assert "1" in nums
+    assert tree.parse_stats.struck_blocks_dropped == 1
+
+
+def test_struck_block_kept_when_override_disabled():
+    """When profile.ignore_strikeout=False, struck blocks reach the parser
+    untouched and the counter stays at 0."""
+    profile = _profile()
+    profile.ignore_strikeout = False
+    blocks = [
+        _block(0, "1 Real Heading"),
+        _struck_block(1, "1.1 Kept-Despite-Strike Subsection"),
+        _block(2, "body"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    nums = [r.section_number for r in tree.requirements]
+    assert "1.1" in nums, "struck block should classify as heading when override disabled"
+    assert tree.parse_stats.struck_blocks_dropped == 0
+
+
+def test_struck_block_without_font_info_is_not_dropped():
+    """A block without font_info has no strikethrough signal — must not be
+    spuriously dropped (the `block.font_info is not None` guard matters)."""
+    blocks = [
+        _block(0, "1 Real Heading"),
+        ContentBlock(
+            type=BlockType.PARAGRAPH,
+            position=Position(page=1, index=1),
+            text="body line without font_info",
+            font_info=None,
+        ),
+    ]
+    tree = _parse(blocks)
+    assert tree.parse_stats.struck_blocks_dropped == 0
+    # Body content should reach current section (the "1 Real Heading" req).
+    sec = next(r for r in tree.requirements if r.section_number == "1")
+    assert "body line without font_info" in sec.text

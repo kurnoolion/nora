@@ -196,6 +196,19 @@ class DOCXExtractor(BaseExtractor):
             if size is not None:
                 break
 
+        # FR-33 [D-031]: paragraph-level strikethrough is `any` — if any
+        # textful run is struck, treat the whole paragraph as struck.
+        # Separate pass so we don't disturb the size/bold/italic/font_name
+        # early-exit behavior above.
+        strikethrough = False
+        for run in para.runs:
+            if not run.text or not run.text.strip():
+                continue
+            font = run.font
+            if getattr(font, "strike", None) or getattr(font, "double_strike", None):
+                strikethrough = True
+                break
+
         if size is None:
             style_size = self._style_font_size(para)
             if style_size is not None:
@@ -221,6 +234,7 @@ class DOCXExtractor(BaseExtractor):
             font_name=font_name,
             all_caps=all_caps,
             color=0,
+            strikethrough=strikethrough,
         )
 
     @staticmethod

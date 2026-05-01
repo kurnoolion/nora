@@ -361,6 +361,17 @@ class GenericStructuralParser:
                 paragraph_req_ids.add(rid)
 
         for block in doc.content_blocks:
+            # FR-33 [D-031]: drop struck-through blocks. Checked first so
+            # struck content never feeds heading classification, table
+            # anchoring, or zone matching. Gated by profile.ignore_strikeout.
+            if (
+                self.profile.ignore_strikeout
+                and block.font_info is not None
+                and block.font_info.strikethrough
+            ):
+                self._parse_stats.struck_blocks_dropped += 1
+                continue
+
             # FR-34: drop entire-page TOC content (any block type) and any
             # block that matches the TOC entry pattern.
             if block.position.page in toc_pages:

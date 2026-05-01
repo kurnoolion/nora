@@ -138,6 +138,11 @@ class PDFExtractor(BaseExtractor):
                     )
                 )
 
+            # --- Strike-through line candidates (FR-33 [D-031]) ---
+            # Collected once per page; passed to _extract_text_segments so
+            # each span can be checked against page-level strike marks.
+            strike_lines = self._collect_strike_lines(page)
+
             # --- Text blocks (pymupdf) ---
             fitz_blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)[
                 "blocks"
@@ -163,7 +168,7 @@ class PDFExtractor(BaseExtractor):
                     continue
 
                 # Process spans into content blocks
-                text_segments = self._extract_text_segments(fb)
+                text_segments = self._extract_text_segments(fb, strike_lines)
 
                 # Skip if this matches a header/footer pattern
                 full_text = " ".join(seg["text"] for seg in text_segments)
@@ -363,16 +368,92 @@ class PDFExtractor(BaseExtractor):
 
     # --- Text block processing ---
 
+    @staticmethod
+    def _collect_strike_lines(page) -> list[tuple[float, float, float]]:
+        """Collect candidate strike-through line segments on a page (FR-33 [D-031]).
+
+        PyMuPDF span flags do not include strikethrough; PDF strike marks are
+        graphic operations (a horizontal line drawn over text). We harvest
+        nearly-horizontal short stroke segments from `page.get_drawings()`
+        and use them later as candidates that may cross over text spans.
+
+        Heuristic: a line counts as a strike candidate when its vertical
+        run is ≤ 1.5pt (true horizontals only) and its horizontal run is
+        ≥ 5pt (rules out tiny artifacts). Vertical lines (table borders)
+        and rectangles are filtered. Returns [(y_center, x0, x1), ...].
+        """
+        lines: list[tuple[float, float, float]] = []
+        try:
+            drawings = page.get_drawings()
+        except Exception:
+            return lines
+        for d in drawings:
+            for item in d.get("items", []):
+                if not item or item[0] != "l":  # 'l' = line; rectangles, curves skipped
+                    continue
+                try:
+                    p1, p2 = item[1], item[2]
+                    dy = abs(p1.y - p2.y)
+                    dx = abs(p2.x - p1.x)
+                except (AttributeError, IndexError):
+                    continue
+                if dy <= 1.5 and dx >= 5.0:
+                    y_c = (p1.y + p2.y) / 2
+                    x0, x1 = sorted([p1.x, p2.x])
+                    lines.append((y_c, x0, x1))
+        return lines
+
+    @staticmethod
+    def _span_struck(
+        span_bbox: tuple[float, float, float, float],
+        strike_lines: list[tuple[float, float, float]],
+        min_overlap_frac: float = 0.5,
+    ) -> bool:
+        """Check whether any strike line meaningfully crosses the span.
+
+        A line counts as struck-through when:
+          - it sits within ±40% of the span's height of the span midline
+            (so we accept marks slightly above center, where strike-through
+            usually falls), and
+          - it horizontally covers ≥ `min_overlap_frac` of the span width
+            (rules out tick marks, dividers).
+        """
+        x0, y0, x1, y1 = span_bbox
+        span_w = x1 - x0
+        if span_w <= 0:
+            return False
+        span_mid_y = (y0 + y1) / 2
+        tol = max(2.0, (y1 - y0) * 0.4)
+        for line_y, line_x0, line_x1 in strike_lines:
+            if abs(line_y - span_mid_y) > tol:
+                continue
+            overlap = min(x1, line_x1) - max(x0, line_x0)
+            if overlap >= span_w * min_overlap_frac:
+                return True
+        return False
+
     def _extract_text_segments(
-        self, block: dict
+        self,
+        block: dict,
+        strike_lines: list[tuple[float, float, float]] | None = None,
     ) -> list[dict]:
-        """Extract text segments from a pymupdf text block, preserving font info."""
+        """Extract text segments from a pymupdf text block, preserving font info.
+
+        When `strike_lines` is supplied, each segment is tagged with a
+        per-span strikethrough flag (FR-33 [D-031]); the block-level
+        majority-of-characters aggregation happens in `_make_group`.
+        """
         segments = []
+        strike_lines = strike_lines or []
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 text = span.get("text", "")
                 if not text.strip():
                     continue
+                bbox = span.get("bbox", (0.0, 0.0, 0.0, 0.0))
+                struck = (
+                    self._span_struck(bbox, strike_lines) if strike_lines else False
+                )
                 segments.append(
                     {
                         "text": text,
@@ -381,6 +462,8 @@ class PDFExtractor(BaseExtractor):
                         "italic": bool(span.get("flags", 0) & (1 << 1)),
                         "font": span.get("font", ""),
                         "color": span.get("color", 0),
+                        "strikethrough": struck,
+                        "len": len(text.strip()),
                     }
                 )
         return segments
@@ -397,36 +480,45 @@ class PDFExtractor(BaseExtractor):
             return []
 
         groups = []
-        current_texts = [segments[0]["text"]]
-        current_seg = segments[0]
+        current_segs: list[dict] = [segments[0]]
 
         for seg in segments[1:]:
-            size_diff = abs(seg["size"] - current_seg["size"])
+            size_diff = abs(seg["size"] - current_segs[-1]["size"])
             if size_diff <= 2.0:
-                current_texts.append(seg["text"])
+                current_segs.append(seg)
             else:
-                groups.append(self._make_group(current_texts, current_seg))
-                current_texts = [seg["text"]]
-                current_seg = seg
+                groups.append(self._make_group(current_segs))
+                current_segs = [seg]
 
-        groups.append(self._make_group(current_texts, current_seg))
+        groups.append(self._make_group(current_segs))
         return groups
 
     @staticmethod
-    def _make_group(texts: list[str], representative_seg: dict) -> dict:
-        """Create a font group from collected texts and a representative segment."""
+    def _make_group(segs: list[dict]) -> dict:
+        """Create a font group from collected segments.
+
+        Block-level strikethrough is the majority-of-characters across the
+        constituent spans (FR-33 [D-031]): struck_chars > 50% flips the flag.
+        Exactly 50% defaults to False (no drop on ambiguity).
+        """
+        texts = [s["text"] for s in segs]
         all_caps = all(
             t.strip().isupper() for t in texts if t.strip() and t.strip().isalpha()
         )
+        struck_chars = sum(s.get("len", 0) for s in segs if s.get("strikethrough"))
+        total_chars = sum(s.get("len", 0) for s in segs)
+        strikethrough = struck_chars * 2 > total_chars  # strictly >50%
+        rep = segs[0]
         return {
             "text": " ".join(texts),
             "font_info": FontInfo(
-                size=representative_seg["size"],
-                bold=representative_seg["bold"],
-                italic=representative_seg["italic"],
-                font_name=representative_seg["font"],
+                size=rep["size"],
+                bold=rep["bold"],
+                italic=rep["italic"],
+                font_name=rep["font"],
                 all_caps=all_caps,
-                color=representative_seg["color"],
+                color=rep["color"],
+                strikethrough=strikethrough,
             ),
         }
 

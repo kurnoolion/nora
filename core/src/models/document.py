@@ -43,6 +43,12 @@ class FontInfo:
     font_name: str = ""
     all_caps: bool = False
     color: int = 0  # RGB as integer
+    # FR-33: True if the block's content is struck through in the source
+    # document. Default False; extractors that cannot determine the signal
+    # leave it False (never None — consumers do not handle a tri-state).
+    # The parser drops blocks where strikethrough=True when
+    # `profile.ignore_strikeout` is True (default).
+    strikethrough: bool = False
 
 
 @dataclass
