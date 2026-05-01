@@ -30,6 +30,7 @@
 - 2026-05-01 Parser+profiler: numbering-driven heading classification, style as advisory hint only (commit 3839dcb). `_classify_heading` no longer requires font/style match — numbering pattern is the necessary signal; section_number deduplication added in `_build_sections`. Numbering pattern relaxed to match top-level chapters without trailing dots (`"2 LTE Data Retry"`). Profile method `numbering` emits one advisory level rule instead of the noisy per-cluster set. 7 new heading-classification tests + 1 profiler integration test. Suite: 465 passed, 52 skipped.
 - 2026-05-01 Five new ingestion FRs (FR-31..FR-35) from real-corpus profile review against VZW OA: priority markers, form-factor applicability with hierarchical inheritance, strikeout content omission, TOC omission, definitions/acronyms expansion. Three architecture decisions captured (D-030 applicability, D-031 strikeout, D-032 definitions/acronyms). Five MODULE.md files curated (models, extraction, profiler, parser, vectorstore) with FR/D-XXX citations and additive Invariants / Key choices. Commit 8dd1b30.
 - 2026-05-01 Batch A (FR-34 TOC omission) implemented (commit 4fbdbdc). Profile gains `toc_detection_pattern` (default leader-dot-page-number regex) + `toc_page_threshold` (default 0.8). Parser drops matching blocks before heading classification, plus whole-page drop when threshold met. New `ParseStats` dataclass on `RequirementTree` (also reserves `struck_blocks_dropped` and `defs_extracted` for upcoming batches). Compact RPT parse line gains `toc=N` token. 4 new tests. Suite: 469 passed.
+- 2026-05-01 Batch B (FR-31 priority marker) implemented (commit a3fdbc1). Profile gains optional `HeadingDetection.priority_marker_pattern` (regex; capture group 1 = priority value; empty disables). Parser gains `Requirement.priority` attribute, populated via new `_extract_priority` helper invoked from `_build_sections` after section creation. Priority values uppercased on extraction so `mandatory` / `Mandatory` / `MANDATORY` collapse. 4 new tests. Suite: 473 passed. Verizon OA leaves the field empty (no priority convention in that corpus); other carriers can enable via the corrections workflow without code changes.
 
 ## In progress
 
@@ -37,12 +38,11 @@
 
 ## Next
 
-- Resume implementation of FR-31..FR-35 batches (architecture in 8dd1b30; Batch A in 4fbdbdc; B/C/D/E pending):
-  - **Batch B** (FR-31 priority marker) — small. Profile field `heading_detection.priority_marker_pattern`; parser extracts `Requirement.priority`. ~30–40 min.
+- Resume implementation of FR-31..FR-35 batches (architecture in 8dd1b30; Batches A+B done in 4fbdbdc + a3fdbc1; C/D/E pending):
   - **Batch C** (FR-33 strikeout) — medium-large. Touches `models/document.py:FontInfo`, all three extractors (PDF/DOCX/XLSX), parser, profile, RPT. ~2–3 hours.
   - **Batch D** (FR-32 applicability) — medium. Profile `ApplicabilityDetection`, parser `_apply_applicability` post-pass, new `Requirement.applicability` attribute. ~2 hours.
   - **Batch E** (FR-35 definitions/acronyms) — medium-large. Profile fields, parser `_extract_definitions` post-pass, `RequirementTree.definitions_map`, chunk_builder threading + expansion, new `DEF-` error code, new corrections drop-path. ~2–3 hours.
-  - **Pending sequencing**: user did not pick between (a) as-planned B→C→D→E (smallest first) and (b) group-by-module B→D→E (parser-side) then C (extractor-side). Decide at pickup.
+  - Sequencing chosen: as-planned C→D→E (option (a)).
 - Resolve the A3 regression (In Progress): pull per-question results from `report.json`, identify which questions flipped wrong post-parser-fix, examine their cited chunks for table-anchored content. Pick a path forward.
 - Replicate baseline on work-laptop (gemma4:e4b on RTX A4600) against the same 5 OA PDFs at `<env_dir>/input/VZW/OA-baseline/` for apples-to-apples model comparison once A3 path is settled. **Note**: requires removing any stray non-OA docs from the work-laptop input dir first (the 2026-04-28 morning run was contaminated with 2 stray VoWiFi/WiFi DOCX files).
 - Investigate `xp=1` cross-plan refs (unchanged across all 3 dev-PC runs). Profile pattern `cross_reference_patterns.requirement_id_refs` likely doesn't match OA's actual cross-plan citation syntax. Sample 5-10 cross-plan citations in source PDFs, classify, propose profile pattern fix.
