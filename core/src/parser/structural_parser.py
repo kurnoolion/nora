@@ -19,6 +19,21 @@ from core.src.profiler.profile_schema import DocumentProfile, HeadingLevel
 logger = logging.getLogger(__name__)
 
 
+# Maximum heading text length. Headings in technical specs are usually short;
+# numbered body sentences ("1. The system shall ...") run longer. 200 chars
+# accommodates verbose spec titles like
+# "1.2.3.4 LTE Idle Mode Procedures and Behavior Under Various Conditions"
+# while still rejecting body-paragraph numbered list items.
+_HEADING_MAX_LEN = 200
+
+
+# Section number extractor — independent of whatever capture-group shape the
+# profile's `numbering_pattern` happens to use. We use the profile pattern as
+# a gate ("is this a heading?") and this regex to pull out the canonical
+# `<digits>(\.<digits>)*` portion.
+_SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*")
+
+
 # ── Output data structures ──────────────────────────────────────────
 
 
@@ -252,6 +267,14 @@ class GenericStructuralParser:
         # table-anchored detection can dedup against them — paragraph wins.
         paragraph_req_ids: set[str] = set()
 
+        # Track section_numbers already created. Numbering-driven heading
+        # classification is permissive enough that body paragraphs starting
+        # with a previously-seen section number can occasionally match the
+        # gate. Section numbers are unique per document, so the first
+        # heading wins; later matches with the same number are demoted to
+        # body text appended to the current section.
+        seen_section_numbers: set[str] = set()
+
         def _record_paragraph_anchor(rid: str) -> None:
             if rid:
                 paragraph_req_ids.add(rid)
@@ -277,7 +300,7 @@ class GenericStructuralParser:
 
                 # Check if this is a heading block
                 section_num, heading_text = self._classify_heading(block)
-                if section_num:
+                if section_num and section_num not in seen_section_numbers:
                     # New section
                     current_section = Requirement(
                         section_number=section_num,
@@ -289,7 +312,9 @@ class GenericStructuralParser:
                         _record_paragraph_anchor(pending_req_id)
                     pending_req_id = ""
                     sections.append(current_section)
+                    seen_section_numbers.add(section_num)
                     continue
+                # Section number duplicate or no match → fall through to body text.
 
                 # Body text — append to current section
                 if current_section:
@@ -473,23 +498,20 @@ class GenericStructuralParser:
     def _classify_heading(
         self, block: ContentBlock
     ) -> tuple[str, str]:
-        """Check if a block is a heading. Returns (section_number, title) or ("", "")."""
-        if not block.font_info:
-            return "", ""
+        """Check if a block is a heading. Returns (section_number, title) or ("", "").
 
-        # Check against profile heading levels
-        is_heading_font = False
-        for lv in self.profile.heading_detection.levels:
-            if lv.font_size_min <= block.font_info.size <= lv.font_size_max:
-                if lv.bold is not None and block.font_info.bold != lv.bold:
-                    continue
-                is_heading_font = True
-                break
+        Numbering is the necessary signal: a block matching the profile's
+        numbering_pattern is a heading candidate. Style/font in
+        `profile.heading_detection.levels` is consulted only as a confidence
+        hint — never as a gate — because real-world specs apply styling
+        inconsistently. Hierarchy depth is derived elsewhere from the
+        section_number itself (see _link_parents).
 
-        if not is_heading_font:
-            return "", ""
-
-        # Must have a section number to be treated as a structural heading
+        False-positive guards:
+          - text length capped (numbered list items in body text run long)
+          - text doesn't end with sentence-terminal punctuation
+        """
+        # Must have a numbering pattern to be treated as a structural heading
         if not self._num_re:
             return "", ""
 
@@ -498,10 +520,23 @@ class GenericStructuralParser:
         if not m:
             return "", ""
 
-        section_num = m.group(0).strip().rstrip(".")
-        # Clean: ensure consistent format (remove trailing dots)
-        section_num = re.sub(r"\.$", "", section_num)
-        title = text[m.end():].strip()
+        # Length guard: real headings are short. Numbered list items in body
+        # text typically run >200 chars and end with terminal punctuation —
+        # those are not headings.
+        if len(text) > _HEADING_MAX_LEN:
+            return "", ""
+        if text and text[-1] in ".!?":
+            # Allow trailing period only on very short titles like "1.1.1.".
+            if len(text) > 80:
+                return "", ""
+
+        # Extract the section number with a local, known-good regex —
+        # independent of the profile's gate-pattern capture shape.
+        sec_m = _SECTION_NUM_RE.match(text)
+        if not sec_m:
+            return "", ""
+        section_num = sec_m.group(0).rstrip(".")
+        title = text[sec_m.end():].lstrip()
 
         return section_num, title
 

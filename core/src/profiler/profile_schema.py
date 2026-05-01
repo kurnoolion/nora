@@ -15,7 +15,16 @@ from typing import Any
 
 @dataclass
 class HeadingLevel:
-    """Detection rule for a single heading level."""
+    """Detection rule for a single heading level.
+
+    When `HeadingDetection.method == "numbering"` (the default for spec docs
+    with section numbers), this rule is **advisory** — the parser uses
+    `numbering_pattern` to identify headings and `section_number.count(".")
+    + 1` to assign depth, regardless of font/style. The level rule is kept
+    for human curation and as a hint about typical heading styling. When
+    `method == "font_size_clustering"` or `"docx_styles"`, the rule is
+    consulted for classification (legacy path).
+    """
     level: int
     font_size_min: float
     font_size_max: float
@@ -27,10 +36,19 @@ class HeadingLevel:
 
 @dataclass
 class HeadingDetection:
-    """Rules for detecting headings and their hierarchy."""
-    method: str = "font_size_clustering"  # or "docx_styles"
+    """Rules for detecting headings and their hierarchy.
+
+    `method` selects the classification strategy:
+      - "numbering" (preferred for numbered specs): a block matching
+        `numbering_pattern` is a heading; depth from `section_number`.
+        `levels` is advisory.
+      - "font_size_clustering" (fallback): heading recognized by font/style
+        match in `levels`; numbering still required.
+      - "docx_styles": DOCX style names drive classification.
+    """
+    method: str = "numbering"
     levels: list[HeadingLevel] = field(default_factory=list)
-    numbering_pattern: str = ""  # regex for section numbers (e.g., "^(\\d+\\.)+\\d*\\s")
+    numbering_pattern: str = ""  # regex for section numbers (e.g., "^(\\d+(?:\\.\\d+)*)\\s+\\S")
     max_observed_depth: int = 0
 
 

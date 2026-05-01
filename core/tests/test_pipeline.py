@@ -98,6 +98,15 @@ class TestProfiling:
         assert vzw_profile.heading_detection.numbering_pattern != ""
         assert vzw_profile.heading_detection.max_observed_depth >= 3
 
+    def test_method_is_numbering_when_numbering_detected(self, vzw_profile: DocumentProfile):
+        """When section numbering is found, method should be 'numbering' and
+        levels should be a single advisory rule — not one per font cluster."""
+        assert vzw_profile.heading_detection.method == "numbering"
+        assert len(vzw_profile.heading_detection.levels) <= 1, (
+            "Numbering-method profile should emit at most one advisory level rule; "
+            f"got {len(vzw_profile.heading_detection.levels)}"
+        )
+
     def test_detects_requirement_ids(self, vzw_profile: DocumentProfile):
         rid = vzw_profile.requirement_id
         assert rid.pattern != ""

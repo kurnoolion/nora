@@ -274,48 +274,74 @@ class DocumentProfiler:
                 if len(heading_samples[key]) < 5:
                     heading_samples[key].append(b.text[:80])
 
-        # Sort by font size descending — largest = highest heading level
+        # Detect section numbering pattern from heading text — this is the
+        # primary signal. Style/font is advisory.
+        numbering_pattern, max_depth = self._detect_section_numbering(
+            text_blocks, body_mid
+        )
+
+        # Sort font clusters by size descending. We use them only to emit a
+        # single advisory hint when the numbering method is in effect.
         sorted_candidates = sorted(
             heading_candidates.items(),
             key=lambda x: (-x[0][0], -x[1]),
         )
 
-        levels = []
-        level_num = 1
-        for (size, bold, all_caps), count in sorted_candidates:
-            if count < 3:  # skip very rare font combos
-                continue
-            levels.append(
-                HeadingLevel(
-                    level=level_num,
-                    font_size_min=size - 0.5,
-                    font_size_max=size + 0.5,
-                    bold=bold if bold else None,
-                    all_caps=all_caps if all_caps else None,
-                    sample_texts=heading_samples.get(
-                        (size, bold, all_caps), []
-                    ),
-                    count=count,
-                )
-            )
-            level_num += 1
+        levels: list[HeadingLevel] = []
 
-        # Detect section numbering pattern from heading text
-        numbering_pattern, max_depth = self._detect_section_numbering(
-            text_blocks, body_mid
-        )
+        if max_depth >= 2:
+            # Numbering is the contract; emit one advisory level rule capturing
+            # the dominant heading-text style (helps humans curating the
+            # profile see what styling typically marks a heading). The parser
+            # ignores font fields when method == "numbering".
+            method = "numbering"
+            if sorted_candidates:
+                (size, bold, all_caps), count = sorted_candidates[0]
+                levels.append(
+                    HeadingLevel(
+                        level=1,
+                        font_size_min=size - 0.5,
+                        font_size_max=size + 0.5,
+                        bold=bold if bold else None,
+                        all_caps=all_caps if all_caps else None,
+                        sample_texts=heading_samples.get(
+                            (size, bold, all_caps), []
+                        ),
+                        count=count,
+                    )
+                )
+        else:
+            # No usable numbering — fall back to per-cluster style rules.
+            method = "font_size_clustering"
+            level_num = 1
+            for (size, bold, all_caps), count in sorted_candidates:
+                if count < 3:
+                    continue
+                levels.append(
+                    HeadingLevel(
+                        level=level_num,
+                        font_size_min=size - 0.5,
+                        font_size_max=size + 0.5,
+                        bold=bold if bold else None,
+                        all_caps=all_caps if all_caps else None,
+                        sample_texts=heading_samples.get(
+                            (size, bold, all_caps), []
+                        ),
+                        count=count,
+                    )
+                )
+                level_num += 1
 
         heading = HeadingDetection(
-            method="font_size_clustering",
+            method=method,
             levels=levels,
             numbering_pattern=numbering_pattern,
             max_observed_depth=max_depth,
         )
 
         logger.info(
-            f"Headings: {len(levels)} level(s), "
-            f"numbering depth {max_depth}, "
-            f"pattern: {numbering_pattern}"
+            f"Headings: method={method}, {len(levels)} advisory level rule(s), "
+            f"numbering depth {max_depth}, pattern: {numbering_pattern}"
         )
         return heading
 
@@ -324,9 +350,15 @@ class DocumentProfiler:
         text_blocks: list[ContentBlock],
         body_mid_size: float,
     ) -> tuple[str, int]:
-        """Detect section numbering scheme from heading text."""
-        # Look at text in blocks with font size > body
-        section_number_re = re.compile(r"^((?:\d+\.)+\d*)\s")
+        """Detect section numbering scheme from heading text.
+
+        The relaxed pattern matches both top-level numbers without dots
+        ("2 LTE Data Retry") and nested forms ("2.1", "2.1.1.1") uniformly,
+        so the parser doesn't miss top-level chapter headings just because
+        they lack a trailing dot. Style/font is not part of the contract;
+        any block matching the pattern is a heading candidate.
+        """
+        section_number_re = re.compile(r"^(\d+(?:\.\d+)*)\s+\S")
         depths = []
 
         for b in text_blocks:
@@ -342,8 +374,8 @@ class DocumentProfiler:
             return "", 0
 
         max_depth = max(depths)
-        # Build the numbering regex pattern
-        pattern = r"^(\d+\.)+\d*\s"
+        # Emit the same relaxed pattern so the parser uses it directly.
+        pattern = r"^(\d+(?:\.\d+)*)\s+\S"
         return pattern, max_depth
 
     def _detect_requirement_ids(
@@ -497,19 +529,26 @@ class DocumentProfiler:
         top_level_re = re.compile(r"^(\d+\.\d+)\s+(.+)")
         zones_seen: dict[str, DocumentZone] = {}
 
+        # When method == "numbering" (preferred), classify any block whose
+        # text starts with a section number as a heading — same contract the
+        # parser uses. Font/style is advisory only.
+        numbering_first = heading.method == "numbering"
+
         for doc in docs:
             for b in doc.blocks_by_type(BlockType.PARAGRAPH):
                 if not b.font_info:
                     continue
-                # Check if this is a heading-level block
-                is_heading = False
-                for lv in heading.levels:
-                    if (lv.font_size_min <= b.font_info.size <= lv.font_size_max
-                            and (lv.bold is None or b.font_info.bold == lv.bold)):
-                        is_heading = True
-                        break
-                if not is_heading:
-                    continue
+
+                if not numbering_first:
+                    # Legacy path: gate on font/style match.
+                    is_heading = False
+                    for lv in heading.levels:
+                        if (lv.font_size_min <= b.font_info.size <= lv.font_size_max
+                                and (lv.bold is None or b.font_info.bold == lv.bold)):
+                            is_heading = True
+                            break
+                    if not is_heading:
+                        continue
 
                 m = top_level_re.match(b.text.strip())
                 if not m:
