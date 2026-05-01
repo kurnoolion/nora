@@ -107,6 +107,18 @@ class RequirementTree:
     referenced_standards_releases: dict[str, str] = field(default_factory=dict)
     requirements: list[Requirement] = field(default_factory=list)
     parse_stats: ParseStats = field(default_factory=ParseStats)
+    definitions_map: dict[str, str] = field(default_factory=dict)
+    """FR-35 [D-032]: term → expansion pairs extracted from the document's
+    definitions / acronyms / glossary section. Per-document scope (not
+    aggregated across the corpus) so a term that means different things
+    in different MNO documents doesn't collide. Consumed at chunk-build
+    time by the vectorstore stage."""
+    definitions_section_number: str = ""
+    """Section number of the definitions / acronyms / glossary section
+    when one was identified (else empty). The chunk builder uses it to
+    skip inline expansion within the section's own chunks (and its
+    descendants), avoiding `ETWS (Earthquake...) — Earthquake...`-style
+    double-anchoring."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -159,6 +171,8 @@ class RequirementTree:
                 toc_blocks_dropped=ps.get("toc_blocks_dropped", 0),
                 defs_extracted=ps.get("defs_extracted", 0),
             ),
+            definitions_map=dict(data.get("definitions_map", {})),
+            definitions_section_number=data.get("definitions_section_number", ""),
         )
 
 
@@ -202,6 +216,17 @@ class GenericStructuralParser:
         self._applicability_split_re = (
             re.compile(ad.label_split_pattern, re.IGNORECASE)
             if ad.label_split_pattern
+            else None
+        )
+        # Definitions / acronyms detection (FR-35 [D-032]) — compiled once
+        self._definitions_section_re = (
+            re.compile(profile.heading_detection.definitions_section_pattern)
+            if profile.heading_detection.definitions_section_pattern
+            else None
+        )
+        self._definitions_entry_re = (
+            re.compile(profile.definitions_entry_pattern, re.MULTILINE)
+            if profile.definitions_entry_pattern
             else None
         )
         # Cross-reference regexes
@@ -271,6 +296,12 @@ class GenericStructuralParser:
         #    else inherit from parent_section, else fall back to root default.
         self._apply_applicability(sections)
 
+        # 8. Extract definitions / acronyms map from the glossary section
+        #    (FR-35 [D-032]). The section itself stays in the parsed tree;
+        #    the map is consumed at chunk-build time by the vectorstore.
+        definitions_map, definitions_section_number = self._extract_definitions(sections)
+        self._parse_stats.defs_extracted = len(definitions_map)
+
         tree = RequirementTree(
             mno=doc.mno,
             release=doc.release,
@@ -281,6 +312,8 @@ class GenericStructuralParser:
             referenced_standards_releases=std_releases,
             requirements=sections,
             parse_stats=self._parse_stats,
+            definitions_map=definitions_map,
+            definitions_section_number=definitions_section_number,
         )
 
         logger.info(
@@ -662,6 +695,51 @@ class GenericStructuralParser:
             # 3. Root default.
             if root_default:
                 s.applicability = list(root_default)
+
+    def _extract_definitions(
+        self, sections: list[Requirement]
+    ) -> tuple[dict[str, str], str]:
+        """FR-35 [D-032]: extract `term -> expansion` pairs and the
+        section number of the definitions / acronyms / glossary section.
+
+        Section detection runs `definitions_section_pattern` against each
+        section's title. The first match's body text is scanned line by
+        line via `definitions_entry_pattern`. The section itself stays in
+        the parsed tree (callers may still query it directly); the map
+        and section_number are returned for downstream stages. No-op when
+        either regex is None.
+
+        Per-document scope — the returned map is stored on
+        `RequirementTree.definitions_map` and never aggregated across
+        trees. `RAT` may mean different things in different MNO documents.
+
+        Returns (definitions_map, section_number). When no section
+        matches, returns ({}, "").
+        """
+        if self._definitions_section_re is None or self._definitions_entry_re is None:
+            return {}, ""
+
+        target: Requirement | None = None
+        for s in sections:
+            if s.title and self._definitions_section_re.search(s.title):
+                target = s
+                break
+        if target is None or not target.text:
+            return {}, (target.section_number if target else "")
+
+        defs: dict[str, str] = {}
+        for m in self._definitions_entry_re.finditer(target.text):
+            if not m.groups() or len(m.groups()) < 2:
+                continue
+            term = m.group(1).strip()
+            expansion = m.group(2).strip()
+            if not term or not expansion:
+                continue
+            # First definition wins on duplicate term.
+            if term in defs:
+                continue
+            defs[term] = expansion
+        return defs, target.section_number
 
     def _extract_applicability_labels(self, text: str) -> list[str]:
         """Run requirement_patterns over `text`; first match wins. Capture

@@ -507,3 +507,97 @@ def test_applicability_dedupes_repeated_labels():
     sec = next(r for r in tree.requirements if r.section_number == "3")
     # Case-insensitive dedup; first occurrence preserved.
     assert sec.applicability == ["smartphones", "tablets"]
+
+
+# ---------------------------------------------------------------------------
+# FR-35: definitions / acronyms extraction (parser side; chunk_builder
+# expansion is exercised in tests/test_chunk_builder_definitions.py)
+# ---------------------------------------------------------------------------
+
+
+def test_definitions_extracted_from_glossary_section():
+    """Section title matching the default `(?i)acronym|definition|glossary`
+    pattern → entries parsed from body text."""
+    profile = _profile()  # default definitions_section_pattern + entry_pattern
+    body = (
+        "ETWS - Earthquake and Tsunami Warning System\n"
+        "SUPL - Secure User Plane Location\n"
+        "RAT - Radio Access Technology"
+    )
+    blocks = [
+        _block(0, "1 Top"),
+        _block(1, "1.1 Acronyms"),
+        _block(2, body),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {
+        "ETWS": "Earthquake and Tsunami Warning System",
+        "SUPL": "Secure User Plane Location",
+        "RAT": "Radio Access Technology",
+    }
+    assert tree.definitions_section_number == "1.1"
+    assert tree.parse_stats.defs_extracted == 3
+
+
+def test_definitions_first_occurrence_wins():
+    """Duplicate term: first definition wins; later collisions ignored."""
+    profile = _profile()
+    body = (
+        "ETWS - Earthquake and Tsunami Warning System\n"
+        "ETWS - Some Other Expansion (should be ignored)"
+    )
+    blocks = [
+        _block(0, "1 Glossary"),
+        _block(1, body),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {
+        "ETWS": "Earthquake and Tsunami Warning System",
+    }
+
+
+def test_definitions_empty_when_section_pattern_unset():
+    """Profile.heading_detection.definitions_section_pattern empty → no
+    extraction, definitions_map stays empty, defs_extracted=0."""
+    profile = _profile()
+    profile.heading_detection.definitions_section_pattern = ""
+    body = "ETWS - Earthquake and Tsunami Warning System"
+    blocks = [
+        _block(0, "1 Acronyms"),  # would normally match but pattern disabled
+        _block(1, body),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {}
+    assert tree.parse_stats.defs_extracted == 0
+
+
+def test_definitions_section_kept_in_parsed_tree():
+    """The definitions section itself stays as a Requirement node so users
+    can still query it directly — extraction is additive."""
+    profile = _profile()
+    blocks = [
+        _block(0, "1 Acronyms"),
+        _block(1, "ETWS - Earthquake and Tsunami Warning System"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert any(r.section_number == "1" for r in tree.requirements)
+
+
+def test_definitions_long_prose_lines_not_misread():
+    """Length cap on the term (16 chars) plus uppercase-leading guard
+    prevents normal sentences from being read as entries."""
+    profile = _profile()
+    body = (
+        "ETWS - Earthquake and Tsunami Warning System\n"
+        "This is a long sentence that should not be parsed as an entry\n"
+        "because the term capture only matches a uppercase short token."
+    )
+    blocks = [
+        _block(0, "1 Acronyms"),
+        _block(1, body),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert "ETWS" in tree.definitions_map
+    # No prose-as-entry false positives:
+    assert "This is a long sentence" not in tree.definitions_map
+    assert len(tree.definitions_map) == 1

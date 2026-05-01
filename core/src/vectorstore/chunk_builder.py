@@ -8,11 +8,17 @@ Design decisions:
 - Chunks are contextualized with structural context (MNO, hierarchy path)
 - Tables serialized as Markdown within chunk text
 - Metadata enables filtering by MNO, release, plan, feature
+- FR-35 [D-032]: per-document `definitions_map` is threaded in from the
+  RequirementTree and inline-expanded into chunk text on first occurrence
+  of each known term, before embedding. Chunks belonging to the
+  definitions section itself are excluded from expansion to avoid
+  double-anchoring.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -79,6 +85,13 @@ class ChunkBuilder:
 
         feature_ids = plan_features.get(plan_id, [])
 
+        # FR-35 [D-032]: per-document definitions map and the section
+        # number of the definitions section (used to skip self-expansion
+        # within the section's own chunks and its descendants).
+        definitions_map = tree.get("definitions_map", {}) or {}
+        defs_section_num = tree.get("definitions_section_number", "") or ""
+        defs_pattern = self._compile_definitions_regex(definitions_map)
+
         chunks = []
         for req in tree.get("requirements", []):
             req_id = req.get("req_id", "")
@@ -92,6 +105,14 @@ class ChunkBuilder:
             # Skip chunks with no meaningful content
             if not text.strip():
                 continue
+
+            # FR-35 [D-032]: inline-expand definitions on first occurrence
+            # of each known term, except for chunks within the definitions
+            # section itself (avoid double-anchoring).
+            if defs_pattern is not None and not self._belongs_to_definitions(
+                req, defs_section_num
+            ):
+                text = self._expand_definitions(text, defs_pattern, definitions_map)
 
             metadata = {
                 "mno": mno,
@@ -108,6 +129,69 @@ class ChunkBuilder:
             chunks.append(Chunk(chunk_id=chunk_id, text=text, metadata=metadata))
 
         return chunks
+
+    @staticmethod
+    def _compile_definitions_regex(definitions_map: dict[str, str]):
+        """Compile a single alternation regex matching every term as a
+        whole-word match. Returns None when the map is empty."""
+        if not definitions_map:
+            return None
+        # Sort by length descending so longer terms match first (avoids
+        # `RAT` consuming the start of `RATIO` or similar, and lets
+        # `IMS REGISTRATION` match before bare `IMS` if both are defined).
+        terms_sorted = sorted(definitions_map.keys(), key=len, reverse=True)
+        # Escape each term to be regex-safe; word boundaries on both sides.
+        alternation = "|".join(re.escape(t) for t in terms_sorted)
+        return re.compile(rf"\b({alternation})\b")
+
+    @staticmethod
+    def _belongs_to_definitions(req: dict, defs_section_num: str) -> bool:
+        """True when the requirement is the definitions section or a
+        descendant of it (paragraph- or table-anchored)."""
+        if not defs_section_num:
+            return False
+        sec_num = req.get("section_number", "")
+        parent = req.get("parent_section", "")
+        # Paragraph-anchored: section_number == defs OR descendant by prefix
+        if sec_num:
+            if sec_num == defs_section_num:
+                return True
+            if sec_num.startswith(defs_section_num + "."):
+                return True
+        # Table-anchored: parent_section identifies the owning paragraph
+        if parent:
+            if parent == defs_section_num:
+                return True
+            if parent.startswith(defs_section_num + "."):
+                return True
+        return False
+
+    @staticmethod
+    def _expand_definitions(
+        text: str, pattern: "re.Pattern[str]", definitions_map: dict[str, str]
+    ) -> str:
+        """Inline-expand the first occurrence of each known term in `text`.
+
+        Each term is expanded once per chunk: `ETWS` →
+        `ETWS (Earthquake and Tsunami Warning System)`. Subsequent
+        occurrences within the same chunk are left untouched (avoids
+        bloat). The expansion is idempotent: re-running on already-expanded
+        text is a no-op because the inserted parenthetical breaks the
+        word boundary on the next match.
+        """
+        seen: set[str] = set()
+
+        def repl(m: "re.Match[str]") -> str:
+            term = m.group(1)
+            if term in seen:
+                return term
+            seen.add(term)
+            expansion = definitions_map.get(term, "")
+            if not expansion:
+                return term
+            return f"{term} ({expansion})"
+
+        return pattern.sub(repl, text)
 
     def _build_chunk_text(
         self,

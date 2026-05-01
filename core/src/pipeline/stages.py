@@ -188,7 +188,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     if not ir_files:
         return _fail(stage, "PIP-E002", f"No IR files in {extract_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0}
+    stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "defs": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
 
@@ -206,6 +206,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
             stats["max_depth"] = max(stats["max_depth"], depth)
             stats["toc"] += tree.parse_stats.toc_blocks_dropped
             stats["struck"] += tree.parse_stats.struck_blocks_dropped
+            stats["defs"] += tree.parse_stats.defs_extracted
         except Exception as e:
             warnings.append(f"PRS-E001: {f.name}: {e}")
 

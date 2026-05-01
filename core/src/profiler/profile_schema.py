@@ -58,6 +58,11 @@ class HeadingDetection:
     #   r"\[(MANDATORY|OPTIONAL|CONDITIONAL)\]"
     priority_marker_pattern: str = ""
 
+    # FR-35 [D-032]: regex matching the heading text of a document's
+    # definitions / acronyms / glossary section. Default catches common
+    # variants. Empty string disables definitions extraction.
+    definitions_section_pattern: str = r"(?i)acronym|definition|glossary"
+
 
 @dataclass
 class RequirementIdPattern:
@@ -167,6 +172,10 @@ class DocumentProfile:
     applicability_detection: ApplicabilityDetection = field(
         default_factory=ApplicabilityDetection
     )
+    definitions_entry_pattern: str = r"^([A-Z][A-Z0-9/-]{1,15})\s*[—–:\-]\s*(.+?)$"
+    """Per-line regex extracting `term -> expansion` pairs from the body
+    text of the definitions section identified by
+    `heading_detection.definitions_section_pattern`. See FR-35 [D-032]."""
 
     # ── Strikeout omission (FR-33 [D-031]) ────────────────────────
     ignore_strikeout: bool = True
@@ -175,6 +184,14 @@ class DocumentProfile:
     requirements/sections deleted in the source document. Flip to False
     via the corrections workflow for corpora that abuse strikethrough
     as emphasis or annotation rather than deletion."""
+
+    # ── Definitions extraction (FR-35 [D-032]) ────────────────────
+    definitions_entry_pattern: str = r"^([A-Z][A-Z0-9/-]{1,15})\s*[—–:\-]\s*(.+?)$"
+    """Regex (matched per line of the definitions section's body text)
+    extracting term → expansion pairs. Capture group 1 = term (16-char
+    cap on the term avoids matching prose lines that happen to start
+    uppercase); group 2 = expansion. Empty disables entry extraction
+    even if the section is found."""
 
     # ── TOC omission (FR-34) ──────────────────────────────────────
     toc_detection_pattern: str = r".*\.{3,}\s*\d+\s*$"
@@ -225,6 +242,9 @@ class DocumentProfile:
                 numbering_pattern=hd.get("numbering_pattern", ""),
                 max_observed_depth=hd.get("max_observed_depth", 0),
                 priority_marker_pattern=hd.get("priority_marker_pattern", ""),
+                definitions_section_pattern=hd.get(
+                    "definitions_section_pattern", r"(?i)acronym|definition|glossary"
+                ),
             ),
             requirement_id=RequirementIdPattern(
                 **data.get("requirement_id", {})
@@ -255,6 +275,10 @@ class DocumentProfile:
                 **data.get("applicability_detection", {})
             ),
             ignore_strikeout=data.get("ignore_strikeout", True),
+            definitions_entry_pattern=data.get(
+                "definitions_entry_pattern",
+                r"^([A-Z][A-Z0-9/-]{1,15})\s*[—–:\-]\s*(.+?)$",
+            ),
             toc_detection_pattern=data.get("toc_detection_pattern", r".*\.{3,}\s*\d+\s*$"),
             toc_page_threshold=data.get("toc_page_threshold", 0.8),
         )
