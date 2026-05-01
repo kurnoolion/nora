@@ -73,6 +73,7 @@ class Requirement:
     parent_section: str = ""
     hierarchy_path: list[str] = field(default_factory=list)
     zone_type: str = ""
+    priority: str = ""  # FR-31: extracted via profile.heading_detection.priority_marker_pattern
     text: str = ""
     tables: list[TableData] = field(default_factory=list)
     images: list[ImageRef] = field(default_factory=list)
@@ -130,6 +131,7 @@ class RequirementTree:
                 parent_section=r.get("parent_section", ""),
                 hierarchy_path=r.get("hierarchy_path", []),
                 zone_type=r.get("zone_type", ""),
+                priority=r.get("priority", ""),
                 text=r.get("text", ""),
                 tables=[TableData(**t) for t in r.get("tables", [])],
                 images=[ImageRef(**i) for i in r.get("images", [])],
@@ -181,6 +183,12 @@ class GenericStructuralParser:
         self._toc_re = (
             re.compile(profile.toc_detection_pattern)
             if profile.toc_detection_pattern
+            else None
+        )
+        # Priority marker detection (FR-31) — compiled once; None if disabled
+        self._priority_re = (
+            re.compile(profile.heading_detection.priority_marker_pattern)
+            if profile.heading_detection.priority_marker_pattern
             else None
         )
         # Cross-reference regexes
@@ -388,12 +396,16 @@ class GenericStructuralParser:
                 # Check if this is a heading block
                 section_num, heading_text = self._classify_heading(block)
                 if section_num and section_num not in seen_section_numbers:
+                    # FR-31: extract priority marker (if any) from heading text
+                    # before storing — title carries the cleaned form.
+                    priority, heading_text = self._extract_priority(heading_text)
                     # New section
                     current_section = Requirement(
                         section_number=section_num,
                         title=heading_text,
                         req_id=pending_req_id,
                         zone_type=self._classify_zone(section_num),
+                        priority=priority,
                     )
                     if pending_req_id:
                         _record_paragraph_anchor(pending_req_id)
@@ -626,6 +638,25 @@ class GenericStructuralParser:
         title = text[sec_m.end():].lstrip()
 
         return section_num, title
+
+    def _extract_priority(self, text: str) -> tuple[str, str]:
+        """Extract a priority marker from heading text (FR-31).
+
+        Returns (priority, cleaned_text). The matched substring is stripped
+        from the title and the regex's first capture group becomes the
+        priority value (uppercased so different casings collapse). When the
+        profile pattern is empty or doesn't match, returns ("", text).
+        """
+        if self._priority_re is None or not text:
+            return "", text
+        m = self._priority_re.search(text)
+        if not m:
+            return "", text
+        priority = (m.group(1) if m.groups() else m.group(0)).strip().upper()
+        # Strip the matched span and collapse any double-spaces it leaves.
+        cleaned = (text[:m.start()] + text[m.end():]).strip()
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        return priority, cleaned
 
     def _classify_zone(self, section_number: str) -> str:
         """Classify a section into a document zone using profile rules."""

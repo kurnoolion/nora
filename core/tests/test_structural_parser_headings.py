@@ -289,3 +289,58 @@ def test_toc_detection_disabled_when_pattern_empty():
     # With detection off, the TOC-shaped paragraph reaches the heading
     # classifier — depending on length/punctuation guards it may or may
     # not become a heading; we just assert no drop happened.
+
+
+# ---------------------------------------------------------------------------
+# FR-31: priority-marker extraction
+# ---------------------------------------------------------------------------
+
+
+def _profile_with_priority(pattern: str) -> DocumentProfile:
+    p = _profile()
+    p.heading_detection.priority_marker_pattern = pattern
+    return p
+
+
+def test_priority_marker_extracted_from_bracketed_form():
+    """Heading like '1.2 [MANDATORY] Foo' → priority='MANDATORY', title='Foo'."""
+    profile = _profile_with_priority(r"\[(MANDATORY|OPTIONAL|CONDITIONAL)\]")
+    blocks = [_block(0, "1.2 [MANDATORY] Hardware Specs")]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(r for r in tree.requirements if r.section_number == "1.2")
+    assert sec.priority == "MANDATORY"
+    assert sec.title == "Hardware Specs", f"unexpected title: {sec.title!r}"
+
+
+def test_priority_marker_uppercased_regardless_of_input_case():
+    """Lowercase 'optional' marker → uppercased priority value."""
+    profile = _profile_with_priority(r"\((mandatory|optional|conditional)\)")
+    blocks = [_block(0, "2.3 Foo Bar (optional)")]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(r for r in tree.requirements if r.section_number == "2.3")
+    assert sec.priority == "OPTIONAL"
+    assert sec.title == "Foo Bar"
+
+
+def test_no_priority_when_pattern_unset():
+    """Empty priority_marker_pattern → priority stays empty string for all sections."""
+    profile = _profile()  # default has empty pattern
+    assert profile.heading_detection.priority_marker_pattern == ""
+    blocks = [
+        _block(0, "1.2 [MANDATORY] Foo"),  # marker text present but profile doesn't ask
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(r for r in tree.requirements if r.section_number == "1.2")
+    assert sec.priority == ""
+    # Title preserves the bracketed text since we don't know to strip it.
+    assert "[MANDATORY]" in sec.title
+
+
+def test_no_priority_when_pattern_set_but_text_doesnt_match():
+    """Pattern set, but heading has no marker → priority empty, title untouched."""
+    profile = _profile_with_priority(r"\[(MANDATORY|OPTIONAL)\]")
+    blocks = [_block(0, "3.1 Plain Heading No Marker")]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(r for r in tree.requirements if r.section_number == "3.1")
+    assert sec.priority == ""
+    assert sec.title == "Plain Heading No Marker"

@@ -51,6 +51,13 @@ class HeadingDetection:
     numbering_pattern: str = ""  # regex for section numbers (e.g., "^(\\d+(?:\\.\\d+)*)\\s+\\S")
     max_observed_depth: int = 0
 
+    # FR-31: optional priority-marker regex applied to heading text. When
+    # matched, capture group 1 becomes `Requirement.priority` and the matched
+    # portion is stripped from the displayed title. Empty string disables.
+    # Example for a corpus that uses bracketed markers:
+    #   r"\[(MANDATORY|OPTIONAL|CONDITIONAL)\]"
+    priority_marker_pattern: str = ""
+
 
 @dataclass
 class RequirementIdPattern:
@@ -181,6 +188,7 @@ class DocumentProfile:
                 levels=heading_levels,
                 numbering_pattern=hd.get("numbering_pattern", ""),
                 max_observed_depth=hd.get("max_observed_depth", 0),
+                priority_marker_pattern=hd.get("priority_marker_pattern", ""),
             ),
             requirement_id=RequirementIdPattern(
                 **data.get("requirement_id", {})
