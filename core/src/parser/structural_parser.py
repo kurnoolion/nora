@@ -81,6 +81,20 @@ class Requirement:
 
 
 @dataclass
+class ParseStats:
+    """Per-document parser diagnostics. Surfaced in compact RPT.
+
+    Counters are zero by default; populated by the parser passes that
+    drop or extract content. Consumers should not rely on field presence
+    on serialized older trees — `RequirementTree._from_dict` defaults
+    missing values to zero.
+    """
+    struck_blocks_dropped: int = 0  # FR-33 [D-031]
+    toc_blocks_dropped: int = 0     # FR-34
+    defs_extracted: int = 0         # FR-35 [D-032]
+
+
+@dataclass
 class RequirementTree:
     mno: str = ""
     release: str = ""
@@ -90,6 +104,7 @@ class RequirementTree:
     release_date: str = ""
     referenced_standards_releases: dict[str, str] = field(default_factory=dict)
     requirements: list[Requirement] = field(default_factory=list)
+    parse_stats: ParseStats = field(default_factory=ParseStats)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -125,6 +140,7 @@ class RequirementTree:
                     standards=standards,
                 ),
             ))
+        ps = data.get("parse_stats", {}) or {}
         return cls(
             mno=data.get("mno", ""),
             release=data.get("release", ""),
@@ -134,6 +150,11 @@ class RequirementTree:
             release_date=data.get("release_date", ""),
             referenced_standards_releases=data.get("referenced_standards_releases", {}),
             requirements=reqs,
+            parse_stats=ParseStats(
+                struck_blocks_dropped=ps.get("struck_blocks_dropped", 0),
+                toc_blocks_dropped=ps.get("toc_blocks_dropped", 0),
+                defs_extracted=ps.get("defs_extracted", 0),
+            ),
         )
 
 
@@ -154,6 +175,12 @@ class GenericStructuralParser:
         self._req_id_re = (
             re.compile(profile.requirement_id.pattern)
             if profile.requirement_id.pattern
+            else None
+        )
+        # TOC entry detection (FR-34) — compiled once; None if disabled
+        self._toc_re = (
+            re.compile(profile.toc_detection_pattern)
+            if profile.toc_detection_pattern
             else None
         )
         # Cross-reference regexes
@@ -187,6 +214,10 @@ class GenericStructuralParser:
     def parse(self, doc: DocumentIR) -> RequirementTree:
         """Parse a document IR into a structured requirement tree."""
         logger.info(f"Parsing {doc.source_file} with profile '{self.profile.profile_name}'")
+
+        # Per-document parse diagnostics — populated by passes that drop or
+        # extract content. Surfaced in the compact RPT.
+        self._parse_stats = ParseStats()
 
         # 1. Extract plan metadata
         plan_meta = self._extract_plan_metadata(doc)
@@ -223,6 +254,7 @@ class GenericStructuralParser:
             release_date=plan_meta.get("release_date", ""),
             referenced_standards_releases=std_releases,
             requirements=sections,
+            parse_stats=self._parse_stats,
         )
 
         logger.info(
@@ -254,6 +286,40 @@ class GenericStructuralParser:
 
     # ── Section hierarchy ───────────────────────────────────────────
 
+    def _identify_toc_pages(self, doc: DocumentIR) -> set[int]:
+        """Return the set of page numbers classified as TOC pages (FR-34).
+
+        A page is a TOC page when at least `toc_page_threshold` of its
+        paragraph blocks match `toc_detection_pattern`. Pages with no
+        paragraph blocks are never TOC pages. When `_toc_re` is None
+        (TOC detection disabled), returns an empty set.
+        """
+        if self._toc_re is None:
+            return set()
+        threshold = self.profile.toc_page_threshold
+        if threshold <= 0.0 or threshold > 1.0:
+            return set()  # disabled / invalid
+        # Bucket paragraph blocks by page; count how many match the pattern.
+        per_page_total: dict[int, int] = {}
+        per_page_match: dict[int, int] = {}
+        for b in doc.content_blocks:
+            if b.type != BlockType.PARAGRAPH or not b.text:
+                continue
+            page = b.position.page
+            per_page_total[page] = per_page_total.get(page, 0) + 1
+            if self._toc_re.search(b.text.strip()):
+                per_page_match[page] = per_page_match.get(page, 0) + 1
+        toc_pages: set[int] = set()
+        for page, total in per_page_total.items():
+            if total >= 2 and per_page_match.get(page, 0) / total >= threshold:
+                toc_pages.add(page)
+        if toc_pages:
+            logger.info(
+                f"TOC pages detected: {sorted(toc_pages)} "
+                f"(threshold={threshold:.0%})"
+            )
+        return toc_pages
+
     def _build_sections(self, doc: DocumentIR) -> list[Requirement]:
         """Build the flat list of sections with hierarchy info from content blocks."""
         sections: list[Requirement] = []
@@ -275,11 +341,32 @@ class GenericStructuralParser:
         # body text appended to the current section.
         seen_section_numbers: set[str] = set()
 
+        # FR-34: identify TOC pages — pages where >= toc_page_threshold of
+        # paragraph blocks match the TOC entry pattern. Computed once up
+        # front so the per-block loop below can drop matching blocks AND
+        # all blocks on a TOC page (including non-matching ones, e.g. a
+        # "Table of Contents" header).
+        toc_pages = self._identify_toc_pages(doc)
+
         def _record_paragraph_anchor(rid: str) -> None:
             if rid:
                 paragraph_req_ids.add(rid)
 
         for block in doc.content_blocks:
+            # FR-34: drop entire-page TOC content (any block type) and any
+            # block that matches the TOC entry pattern.
+            if block.position.page in toc_pages:
+                self._parse_stats.toc_blocks_dropped += 1
+                continue
+            if (
+                self._toc_re is not None
+                and block.type == BlockType.PARAGRAPH
+                and block.text
+                and self._toc_re.search(block.text.strip())
+            ):
+                self._parse_stats.toc_blocks_dropped += 1
+                continue
+
             if block.type == BlockType.PARAGRAPH:
                 if not block.font_info:
                     if current_section:

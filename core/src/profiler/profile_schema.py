@@ -133,6 +133,18 @@ class DocumentProfile:
     )
     body_text: BodyText = field(default_factory=BodyText)
 
+    # ── TOC omission (FR-34) ──────────────────────────────────────
+    toc_detection_pattern: str = r".*\.{3,}\s*\d+\s*$"
+    """Regex matching a TOC entry. Default catches the common
+    leader-dot-page-number suffix ('Section Title ........ 47'). Empty
+    string disables TOC detection. Anchored at end-of-line by default."""
+
+    toc_page_threshold: float = 0.8
+    """A page is treated as a TOC page (all blocks dropped wholesale) when
+    this fraction or more of its paragraph blocks match
+    `toc_detection_pattern`. Range [0.0, 1.0]; 1.0 disables page-level
+    drop (only individual matching blocks dropped)."""
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -195,4 +207,6 @@ class DocumentProfile:
                 font_size_max=bt.get("font_size_max", 0),
                 font_families=bt.get("font_families", []),
             ),
+            toc_detection_pattern=data.get("toc_detection_pattern", r".*\.{3,}\s*\d+\s*$"),
+            toc_page_threshold=data.get("toc_page_threshold", 0.8),
         )

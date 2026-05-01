@@ -198,3 +198,94 @@ def test_advisory_style_rule_does_not_gate_classification():
     blocks = [_block(0, "5.2 Style mismatch but numbered", size=12.0, bold=False)]
     tree = GenericStructuralParser(profile).parse(_doc(blocks))
     assert any(r.section_number == "5.2" for r in tree.requirements)
+
+
+# ---------------------------------------------------------------------------
+# FR-34: TOC omission
+# ---------------------------------------------------------------------------
+
+
+def _block_on_page(idx: int, page: int, text: str, *, size: float = 12.0, bold: bool = False) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=page, index=idx),
+        text=text,
+        font_info=FontInfo(size=size, bold=bold),
+    )
+
+
+def test_toc_block_dropped_when_matches_pattern():
+    """A single paragraph that looks like a TOC entry (leader dots + page
+    number) is dropped."""
+    blocks = [
+        _block_on_page(0, 1, "1 Real Heading"),
+        _block_on_page(1, 1, "1.1 Introduction ........... 5"),  # TOC line
+        _block_on_page(2, 1, "real body content"),
+    ]
+    tree = _parse(blocks)
+    nums = [r.section_number for r in tree.requirements]
+    assert "1.1" not in nums, "TOC entry should not become a heading"
+    assert "1" in nums
+    assert tree.parse_stats.toc_blocks_dropped == 1
+
+
+def test_toc_page_dropped_wholesale_when_threshold_met():
+    """When ≥80% of a page's paragraph blocks are TOC entries, the entire
+    page is dropped — including any non-matching blocks (e.g. the page
+    header 'Table of Contents'), since they're part of the TOC zone."""
+    # Page 2 = pure TOC: 1 header + 4 entries (header doesn't match leader
+    # dots so technically 4/5 = 80% match, exactly at threshold).
+    blocks = [
+        _block_on_page(0, 1, "1 Real Top"),
+        _block_on_page(1, 1, "intro body"),
+        # Page 2 — 4 TOC entries + 1 header. 4/5 = 80% matches the default threshold.
+        _block_on_page(2, 2, "Table of Contents"),
+        _block_on_page(3, 2, "1 Real Top ........... 1"),
+        _block_on_page(4, 2, "1.1 Sub ........... 2"),
+        _block_on_page(5, 2, "1.1.1 Subsub ........... 3"),
+        _block_on_page(6, 2, "2 Next ........... 4"),
+        # Real content resumes on page 3.
+        _block_on_page(7, 3, "1.1 Sub heading"),
+        _block_on_page(8, 3, "sub body"),
+    ]
+    tree = _parse(blocks)
+    nums = [r.section_number for r in tree.requirements]
+    assert "1" in nums
+    assert "1.1" in nums
+    # TOC entries' "1.1" / "1.1.1" / "2" did not leak as headings:
+    # 1.1 IS in the tree but came from page 3, not page 2. Confirm by
+    # checking we don't have spurious extras.
+    assert "1.1.1" not in nums
+    assert "2" not in nums
+    # 5 blocks on page 2 dropped wholesale:
+    assert tree.parse_stats.toc_blocks_dropped == 5
+
+
+def test_no_toc_when_pattern_doesnt_match():
+    """A single TOC-like paragraph mixed in with real content shouldn't
+    trigger page-level drop — only the matching block goes."""
+    blocks = [
+        _block_on_page(0, 1, "1 Real Top"),
+        _block_on_page(1, 1, "real body content here"),
+        _block_on_page(2, 1, "more body content"),
+        _block_on_page(3, 1, "Some entry ........... 47"),  # only this drops
+    ]
+    tree = _parse(blocks)
+    assert tree.parse_stats.toc_blocks_dropped == 1
+    assert "1" in [r.section_number for r in tree.requirements]
+
+
+def test_toc_detection_disabled_when_pattern_empty():
+    """If profile.toc_detection_pattern is empty, no blocks are dropped
+    and parse_stats.toc_blocks_dropped stays 0."""
+    profile = _profile()
+    profile.toc_detection_pattern = ""
+    blocks = [
+        _block_on_page(0, 1, "1 Real Top"),
+        _block_on_page(1, 1, "1.1 Introduction ........... 5"),  # would normally match
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.parse_stats.toc_blocks_dropped == 0
+    # With detection off, the TOC-shaped paragraph reaches the heading
+    # classifier — depending on length/punctuation guards it may or may
+    # not become a heading; we just assert no drop happened.
