@@ -392,6 +392,24 @@ class GenericStructuralParser:
         # table-anchored detection can dedup against them — paragraph wins.
         paragraph_req_ids: set[str] = set()
 
+        # Track req_ids that appeared in a struck-through block. Table
+        # cells containing these ids must NOT produce table-anchored reqs
+        # — the strikethrough means the source author marked them deleted.
+        # PDF strike detection is geometric (lines crossing text); table
+        # cells often slip past it because the cell text and the strike
+        # line don't intersect cleanly. Recording the id when we see it
+        # struck in a paragraph block is a reliable secondary signal.
+        struck_req_ids: set[str] = set()
+
+        # Tables are deferred: collected during the main walk, processed
+        # for table-anchored req extraction in a SECOND pass after
+        # paragraph_req_ids and struck_req_ids are fully populated.
+        # Without deferral, a req_id whose paragraph anchor is later in
+        # the document gets duplicated as table-anchored when the table
+        # appears earlier (e.g. in a change-log table on page 3 vs the
+        # real anchor on page 34).
+        deferred_tables: list[tuple[ContentBlock, Requirement]] = []
+
         # Track section_numbers already created. Numbering-driven heading
         # classification is permissive enough that body paragraphs starting
         # with a previously-seen section number can occasionally match the
@@ -420,6 +438,12 @@ class GenericStructuralParser:
                 and block.font_info is not None
                 and block.font_info.strikethrough
             ):
+                # Before dropping, mine any req_id patterns out of the
+                # struck text — those ids are "deleted" and must not
+                # surface via table cross-references either.
+                if self._req_id_re and block.text:
+                    for sid in self._req_id_re.findall(block.text):
+                        struck_req_ids.add(sid)
                 self._parse_stats.struck_blocks_dropped += 1
                 continue
 
@@ -540,12 +564,11 @@ class GenericStructuralParser:
                             source="inline",
                         )
                     )
-                    # Detect req-IDs anchored in table cells and create new
-                    # Requirement nodes for them (children of current_section).
-                    # Skips IDs already paragraph-anchored.
-                    self._extract_table_anchored_reqs(
-                        block, current_section, sections, paragraph_req_ids
-                    )
+                    # Defer table-anchored extraction to a second pass —
+                    # paragraph_req_ids and struck_req_ids must be
+                    # complete before we decide what to anchor (see
+                    # comment at deferred_tables initialization).
+                    deferred_tables.append((block, current_section))
 
             elif block.type == BlockType.IMAGE:
                 if current_section:
@@ -555,6 +578,16 @@ class GenericStructuralParser:
                             surrounding_text=block.surrounding_text,
                         )
                     )
+
+        # Second pass: extract table-anchored reqs now that paragraph_req_ids
+        # and struck_req_ids are fully populated. Any req_id appearing as
+        # paragraph-anchored or as struck takes precedence — table
+        # extraction skips it.
+        skip_set = paragraph_req_ids | struck_req_ids
+        for tbl_block, parent_section in deferred_tables:
+            self._extract_table_anchored_reqs(
+                tbl_block, parent_section, sections, skip_set
+            )
 
         return sections
 

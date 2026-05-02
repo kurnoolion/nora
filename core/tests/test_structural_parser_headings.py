@@ -331,6 +331,49 @@ def test_phantom_section_replaced_by_real_heading():
     assert "real body content" in sec.text
 
 
+def test_struck_req_id_not_anchored_via_table_cell():
+    """A req_id that appeared in a struck-through paragraph block must NOT
+    surface as a table-anchored Requirement when the same id also appears
+    in a table cell. PDF table-cell strikethrough isn't reliably detected
+    geometrically, so the paragraph-block strike is the authoritative
+    deletion signal — the parser tracks struck req_ids and skips them
+    during table-anchored extraction."""
+    profile = _profile_no_space_heading()
+    profile.requirement_id = RequirementIdPattern(pattern=r"VZ_REQ_[A-Z0-9_]+_\d+")
+    profile.body_text = BodyText(font_size_min=11.0, font_size_max=12.0)
+
+    heading = _block(0, "1 Top")
+    # Struck small-font block carrying the req_id — drops, but we
+    # remember the id as struck.
+    struck = ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=1),
+        text="VZ_REQ_TEST_STRUCK_42",
+        font_info=FontInfo(size=7.0, bold=True, strikethrough=True),
+    )
+    # A table on the same/adjacent page contains the same id (cross-ref
+    # or duplicate; in real PDFs the table cell strike is geometric and
+    # often missed). Without struck-id tracking, this would create a
+    # phantom table-anchored Requirement for the deleted id.
+    tbl = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=1, index=2),
+        headers=["Req ID"],
+        rows=[["VZ_REQ_TEST_STRUCK_42"]],
+        font_info=FontInfo(size=11.0, strikethrough=False),
+    )
+    blocks = [heading, struck, tbl]
+
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    # No node with the struck req_id should appear, table-anchored or otherwise.
+    instances = [r for r in tree.requirements if r.req_id == "VZ_REQ_TEST_STRUCK_42"]
+    assert instances == [], (
+        f"struck req_id leaked through table-cell anchoring: {instances!r}"
+    )
+    # parse_stats records the strikeout drop.
+    assert tree.parse_stats.struck_blocks_dropped >= 1
+
+
 def test_extra_req_id_in_section_does_not_lateral_to_next_heading():
     """OA convention: req_ids are TRAILING markers — they belong to the
     section they appear in. If a section already has a req_id and another

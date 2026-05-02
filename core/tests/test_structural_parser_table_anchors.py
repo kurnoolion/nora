@@ -192,14 +192,12 @@ class TestParagraphWinsOnDuplicate:
         assert "actual requirement body text" in instances[0].text
 
     def test_table_anchor_first_then_paragraph_anchor_same_id(self):
-        # Reverse order — paragraph anchor still wins overall by virtue of
-        # being assigned to a real section. Table anchor is created first
-        # (no paragraph-id seen yet), then the paragraph anchors a separate
-        # section later. Both nodes survive but their semantics differ:
-        # table-anchored = no section_number; paragraph-anchored = has one.
-        # Downstream consumers read section_number to disambiguate.
-        # The dedup rule guarantees no two nodes have the SAME provenance —
-        # not that the same req_id can't appear twice when ordering forces it.
+        # Reverse order — table appears FIRST (e.g. cross-reference table on
+        # an early page), then the paragraph anchor for the same req_id
+        # arrives later. Paragraph still wins: the parser defers
+        # table-anchored extraction to a second pass after paragraph_req_ids
+        # is fully populated, so the duplicate table-anchored Requirement
+        # is never created. Only the paragraph-anchored node survives.
         blocks = [
             _para_heading_block(0, 1, "1.6 Listing Section"),
             _table_block(
@@ -212,13 +210,12 @@ class TestParagraphWinsOnDuplicate:
             _body_block(4, 5, "detail body"),
         ]
         tree = _parse(blocks)
-        # Both anchors present — table from listing, paragraph from detail.
-        # This is the documented behavior for forward-only single-pass parsing.
         nodes = [r for r in tree.requirements if r.req_id == "VZ_REQ_LTEB13NAC_36963"]
-        sec_nums = sorted(n.section_number for n in nodes)
-        assert sec_nums == ["", "9.1"], (
-            f"expected one table-anchored ('') and one section ('9.1'); got {sec_nums}"
+        assert len(nodes) == 1, (
+            f"paragraph wins regardless of ordering; got {len(nodes)} nodes"
         )
+        assert nodes[0].section_number == "9.1"
+        assert "detail body" in nodes[0].text
 
 
 class TestEdgeCases:
