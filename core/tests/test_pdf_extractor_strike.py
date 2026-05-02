@@ -101,3 +101,21 @@ def test_span_not_struck_when_horizontal_overlap_low():
     span_bbox = (50.0, 100.0, 200.0, 120.0)
     strike_lines = [(110.0, 50.0, 80.0)]  # only 30/150 = 20% overlap
     assert PDFExtractor._span_struck(span_bbox, strike_lines) is False
+
+
+# ---------------------------------------------------------------------------
+# min_lines parameterization (1-row tables can be struck with a single line)
+# ---------------------------------------------------------------------------
+
+
+def test_table_struck_with_single_line_when_min_lines_is_one():
+    """A 1-row table can be marked struck on a single horizontal strike
+    line — the caller passes `min_lines=1` for 1-row tables. Multi-row
+    tables keep the default `min_lines=2` to avoid false positives
+    from row-divider artifacts."""
+    table_bbox = (50.0, 100.0, 250.0, 120.0)  # 1-row table, height=20
+    strike_lines = [(110.0, 50.0, 250.0)]      # one strike line, full width
+    assert PDFExtractor._table_is_struck(table_bbox, strike_lines, min_lines=1) is True
+    # Default min_lines=2 → not struck (need a second line)
+    assert PDFExtractor._table_is_struck(table_bbox, strike_lines) is False
+

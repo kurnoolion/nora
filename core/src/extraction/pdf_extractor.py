@@ -131,13 +131,31 @@ class PDFExtractor(BaseExtractor):
                 total_cells = sum(1 for row in rows for c in row if c)
                 if len(non_empty_headers) <= 1 and total_cells == 0:
                     continue
+                # Skip 1×1 "tables" — pdfplumber commonly hallucinates a
+                # 1-row × 1-column "table" around small column-aligned
+                # text regions (e.g. the small-font req_id markers in
+                # VZW OA). These are paragraph fragments already
+                # extracted by PyMuPDF, not real tables. Real 1×1 tables
+                # are essentially single cells and almost never occur in
+                # technical specs.
+                if (
+                    len(rows) == 1
+                    and len(rows[0]) == 1
+                    and len(non_empty_headers) <= 1
+                ):
+                    continue
                 # FR-33: detect when the table is struck through. PDF
                 # strikethrough is geometric (horizontal lines drawn over
-                # text); a table is treated as struck when multiple
-                # horizontal strike lines fall within its bbox AND each
-                # crosses a meaningful fraction of its width. The parser
-                # then drops the block via the existing FR-33 path.
-                table_struck = self._table_is_struck(bbox, strike_lines)
+                # text); a table is treated as struck when one or more
+                # horizontal strike lines fall within its bbox (threshold
+                # scales with row count — 1-row tables can be struck with
+                # a single line, multi-row tables require >=2 to avoid
+                # false positives from row dividers). The parser then
+                # drops the block via the existing FR-33 path.
+                strike_min = 1 if len(rows) <= 1 else 2
+                table_struck = self._table_is_struck(
+                    bbox, strike_lines, min_lines=strike_min
+                )
                 all_blocks.append(
                     ContentBlock(
                         type=BlockType.TABLE,
