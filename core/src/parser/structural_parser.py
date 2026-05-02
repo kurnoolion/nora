@@ -107,6 +107,7 @@ class ParseStats:
     missing values to zero.
     """
     struck_blocks_dropped: int = 0  # FR-33 [D-031]
+    cascade_blocks_dropped: int = 0 # FR-33 (struck-heading section cascade)
     toc_blocks_dropped: int = 0     # FR-34
     revhist_blocks_dropped: int = 0 # FR-34 (revision-history table omission)
     defs_extracted: int = 0         # FR-35 [D-032]
@@ -184,6 +185,7 @@ class RequirementTree:
             requirements=reqs,
             parse_stats=ParseStats(
                 struck_blocks_dropped=ps.get("struck_blocks_dropped", 0),
+                cascade_blocks_dropped=ps.get("cascade_blocks_dropped", 0),
                 toc_blocks_dropped=ps.get("toc_blocks_dropped", 0),
                 revhist_blocks_dropped=ps.get("revhist_blocks_dropped", 0),
                 defs_extracted=ps.get("defs_extracted", 0),
@@ -466,17 +468,52 @@ class GenericStructuralParser:
         toc_pages = self._identify_toc_pages(doc)
 
         # FR-34: revision-history table omission. When a paragraph
-        # matches the revision-history heading pattern, set this to
-        # `revhist_window` so the next table block (within the window)
-        # gets dropped. Window tolerates one image between the heading
-        # and the table (some MNOs place a logo there); decremented per
-        # block until it expires or a table is consumed.
-        revhist_window = 0
-        REVHIST_WINDOW = 3
+        # matches the revision-history heading pattern, this flag is
+        # raised and ALL subsequent non-paragraph blocks (tables AND
+        # images) are dropped until the next paragraph block. Multi-
+        # page revhist tables are common — pdfplumber emits each page's
+        # slice as its own table block — so the consumer is intentionally
+        # unbounded by block count. The next paragraph is treated as
+        # the boundary because the next section's heading is always a
+        # paragraph block.
+        revhist_active = False
+
+        # FR-33 cascade state. When a struck-through paragraph is also
+        # a section heading (matches the numbering pattern), the whole
+        # section is treated as deleted: every subsequent block is
+        # dropped until the next heading appears at depth <= the
+        # struck heading's depth (a sibling or shallower section). A
+        # depth=1 struck heading thus drops everything under that
+        # chapter; a depth=4 struck heading drops the rest of that
+        # subsection but leaves siblings untouched.
+        cascade_depth: int | None = None
 
         def _record_paragraph_anchor(rid: str) -> None:
             if rid:
                 paragraph_req_ids.add(rid)
+
+        def _heading_depth(block: ContentBlock) -> int | None:
+            """Return the heading depth (1.2.3 → 3) when `block` is a
+            paragraph that the parser would classify as a section
+            heading; else None.
+
+            Delegates to `_classify_heading` so the cascade boundary
+            test uses EXACTLY the same definition of "heading" as the
+            rest of the parser. Body text starting with a digit
+            ("3GPP TS 24.301"), numbered list items, and prose
+            sentences are all rejected via the same length / punctuation
+            / numbering-pattern guards already in `_classify_heading`.
+            Reusing it prevents premature cascade exit on non-heading
+            number-prefixed text (which would leak phantom content)
+            AND ensures cascade arming on EXACTLY the headings that
+            would otherwise enter the tree.
+            """
+            if block.type != BlockType.PARAGRAPH or not block.text:
+                return None
+            section_num, _ = self._classify_heading(block)
+            if not section_num:
+                return None
+            return section_num.count(".") + 1
 
         for block in doc.content_blocks:
             # FR-33 [D-031]: drop struck-through blocks. Checked first so
@@ -493,8 +530,35 @@ class GenericStructuralParser:
                 if self._req_id_re and block.text:
                     for sid in self._find_req_ids(block.text):
                         struck_req_ids.add(sid)
+                # If this is a struck section heading, arm the cascade
+                # so subsequent siblings/descendants of this section
+                # are also dropped. Refresh cascade_depth to the
+                # SHALLOWEST struck heading we've seen so far — a deeper
+                # struck heading inside an already-cascading section
+                # doesn't tighten the boundary.
+                depth = _heading_depth(block)
+                if depth is not None:
+                    if cascade_depth is None or depth < cascade_depth:
+                        cascade_depth = depth
                 self._parse_stats.struck_blocks_dropped += 1
                 continue
+
+            # FR-33 cascade: a struck section heading deletes the whole
+            # section. Drop every subsequent block until we hit a new
+            # heading at depth <= cascade_depth (a sibling or shallower
+            # section). Tables, images, and body paragraphs all get
+            # dropped through the cascade — strike marks may not have
+            # propagated to every individual block, but the section as
+            # a whole is gone.
+            if cascade_depth is not None:
+                depth = _heading_depth(block)
+                if depth is not None and depth <= cascade_depth:
+                    cascade_depth = None
+                    # Fall through — this block opens a new section
+                    # and must be processed normally.
+                else:
+                    self._parse_stats.cascade_blocks_dropped += 1
+                    continue
 
             # FR-34: drop entire-page TOC content (any block type) and any
             # block that matches the TOC entry pattern.
@@ -510,22 +574,19 @@ class GenericStructuralParser:
                 self._parse_stats.toc_blocks_dropped += 1
                 continue
 
-            # FR-34: drop the revision-history table when its preceding
-            # heading matched. The window persists across iterations
-            # because tables are emitted as their own block, so the
-            # decision is "does the next table belong to a revhist
-            # heading?". A new paragraph closes the window without
-            # consuming anything (the heading was a false positive).
-            if revhist_window > 0:
-                if block.type == BlockType.TABLE:
-                    self._parse_stats.revhist_blocks_dropped += 1
-                    revhist_window = 0
-                    continue
+            # FR-34: revhist consume. After the revhist heading matched,
+            # drop ALL subsequent table/image blocks until the next
+            # paragraph (which is always either the next section heading
+            # or some inter-section text). Multi-page revhist tables —
+            # which pdfplumber slices into one table block per page —
+            # all get consumed as a unit.
+            if revhist_active:
                 if block.type == BlockType.PARAGRAPH:
-                    revhist_window = 0  # window closes on next paragraph
+                    revhist_active = False
+                    # fall through — process this paragraph normally
                 else:
-                    revhist_window -= 1
-                # fall through — the block still gets normal processing
+                    self._parse_stats.revhist_blocks_dropped += 1
+                    continue
 
             if (
                 self._revhist_re is not None
@@ -534,7 +595,7 @@ class GenericStructuralParser:
                 and self._revhist_re.match(block.text.strip())
             ):
                 self._parse_stats.revhist_blocks_dropped += 1
-                revhist_window = REVHIST_WINDOW
+                revhist_active = True
                 continue
 
             if block.type == BlockType.PARAGRAPH:

@@ -144,31 +144,45 @@ class PDFExtractor(BaseExtractor):
                     and len(non_empty_headers) <= 1
                 ):
                     continue
-                # FR-33: detect when the table is struck through. PDF
-                # strikethrough is geometric (horizontal lines drawn over
-                # text); a table is treated as struck when horizontal
-                # strike lines fall within its bbox AND do NOT coincide
-                # with row-grid boundaries. Threshold scales with row
-                # count: 1-row tables on a single line, multi-row tables
-                # require >=2 in-row strike lines.
+                # FR-33: detect strike-through at row AND table level.
+                # Row-level (per-row data-cell strikes) drops just the
+                # struck rows; table-level (whole-table whole-strike)
+                # marks the whole block strikethrough so the parser
+                # drops it. Detected separately:
+                #   - Row-level: strike line in row INTERIOR (mid-row,
+                #     where cell text is drawn) → drop the row
+                #   - Table-level: 2+ full-width strike lines crossing
+                #     the table, NOT aligned with row-grid edges
                 row_edge_ys: list[float] = []
                 for row_obj in table_obj.rows:
                     try:
                         rb = row_obj.bbox
-                        row_edge_ys.append(rb[1])  # top
-                        row_edge_ys.append(rb[3])  # bottom
+                        row_edge_ys.append(rb[1])
+                        row_edge_ys.append(rb[3])
                     except (AttributeError, IndexError, TypeError):
-                        # Some pdfplumber versions / cell shapes lack
-                        # row.bbox — fall back to no filter (degraded
-                        # but not catastrophic).
                         continue
-                strike_min = 1 if len(rows) <= 1 else 2
-                table_struck = self._table_is_struck(
-                    bbox,
-                    strike_lines,
-                    min_lines=strike_min,
-                    row_edge_ys=row_edge_ys,
+                struck_row_indices = self._detect_struck_rows(
+                    table_obj, strike_lines
                 )
+                if struck_row_indices:
+                    rows = [
+                        r for i, r in enumerate(rows)
+                        if i not in struck_row_indices
+                    ]
+                strike_min = 1 if len(rows) <= 1 else 2
+                # If row-level drops emptied the table, mark the whole
+                # block struck so the parser drops the now-headers-only
+                # remnant via the existing FR-33 path. Otherwise apply
+                # the table-level check on what's left.
+                if not rows and struck_row_indices:
+                    table_struck = True
+                else:
+                    table_struck = self._table_is_struck(
+                        bbox,
+                        strike_lines,
+                        min_lines=strike_min,
+                        row_edge_ys=row_edge_ys,
+                    )
                 all_blocks.append(
                     ContentBlock(
                         type=BlockType.TABLE,
@@ -445,6 +459,52 @@ class PDFExtractor(BaseExtractor):
                     x0, x1 = sorted([p1.x, p2.x])
                     lines.append((y_c, x0, x1))
         return lines
+
+    @staticmethod
+    def _detect_struck_rows(
+        table_obj,
+        strike_lines: list[tuple[float, float, float]],
+        edge_tol: float = 1.5,
+    ) -> list[int]:
+        """Return data-row indices (0-based, header excluded) whose
+        interior contains strike-through line segments (FR-33 [D-031]).
+
+        A row is treated as struck when ≥1 candidate strike line falls
+        in its vertical interior — strictly between `row.bbox[1]+tol`
+        and `row.bbox[3]-tol`. The edge-tolerance window keeps row-grid
+        lines (top/bottom of each row) out. Strike-throughs of cell
+        text draw at the middle of a text line, well inside the cell's
+        vertical extent, so they remain even after the edge filter.
+
+        The `strike_lines` from `_collect_strike_lines` are already
+        length-filtered (≥5pt), so a single in-row line is enough
+        signal — real-world strikes typically draw multiple short
+        segments per word, but we don't require that to avoid missing
+        single-word cell strikes.
+
+        First row of `table_obj.rows` is treated as the header (matches
+        the extract-loop convention `headers = table_data[0]`,
+        `rows = table_data[1:]`) and is never marked struck — VZW OA
+        tables retain their header row even when all data rows are
+        deleted.
+        """
+        struck: list[int] = []
+        rows_list = list(table_obj.rows)
+        if len(rows_list) < 2:
+            return struck  # header-only or empty
+        for i, row in enumerate(rows_list[1:]):
+            try:
+                rb = row.bbox
+            except (AttributeError, IndexError, TypeError):
+                continue
+            y_top, y_bot = rb[1] + edge_tol, rb[3] - edge_tol
+            if y_top >= y_bot:
+                continue  # row too thin
+            for line_y, _, _ in strike_lines:
+                if y_top < line_y < y_bot:
+                    struck.append(i)
+                    break
+        return struck
 
     @staticmethod
     def _table_is_struck(

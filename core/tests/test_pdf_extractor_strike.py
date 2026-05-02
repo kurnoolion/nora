@@ -200,3 +200,79 @@ def test_table_edge_filter_with_no_row_edges_supplied():
         table_bbox, grid_lines, row_edge_ys=None
     ) is True
 
+
+# ---------------------------------------------------------------------------
+# _detect_struck_rows — per-row strike detection
+# ---------------------------------------------------------------------------
+
+
+class _FakeRow:
+    """Minimal stand-in for `pdfplumber.table.Row`. The real class
+    exposes a `.bbox` attribute as `(x0, top, x1, bottom)`; that's all
+    `_detect_struck_rows` reads."""
+    def __init__(self, bbox: tuple[float, float, float, float]):
+        self.bbox = bbox
+
+
+class _FakeTable:
+    """Minimal stand-in for `pdfplumber.table.Table` exposing only
+    `.rows` — the interface `_detect_struck_rows` consumes."""
+    def __init__(self, rows: list[_FakeRow]):
+        self.rows = rows
+
+
+def _t(rows_yranges: list[tuple[float, float]]) -> _FakeTable:
+    """Convenience: build a fake table from a list of (y_top, y_bot)
+    row extents. x-range is fixed (irrelevant for row-strike detection)."""
+    return _FakeTable([_FakeRow((50.0, t, 250.0, b)) for t, b in rows_yranges])
+
+
+def test_detect_struck_rows_marks_data_rows_with_interior_strike():
+    """A 4-row table (1 header + 3 data) where rows 1 and 3 (indices
+    1, 3 in pdfplumber) have strike lines mid-row. `_detect_struck_rows`
+    returns DATA-row indices (0-based, header excluded), so it should
+    flag indices [0, 2]."""
+    table = _t([(100.0, 130.0), (130.0, 160.0), (160.0, 190.0), (190.0, 220.0)])
+    strike_lines = [
+        # Row 1 interior (y=130-160, mid-row at ~145)
+        (145.0, 70.0, 200.0),
+        # Row 3 interior (y=190-220, mid-row at ~205)
+        (205.0, 70.0, 200.0),
+    ]
+    result = PDFExtractor._detect_struck_rows(table, strike_lines)
+    # Header is row 0 of pdfplumber → excluded; data row 0 ↔ pdfplumber row 1.
+    assert sorted(result) == [0, 2]
+
+
+def test_detect_struck_rows_excludes_lines_at_row_edges():
+    """Strike candidates aligned with row top/bottom (within edge_tol)
+    are row-grid lines, not strike-throughs. They must be excluded
+    from row-strike detection by the strict-interior `<` checks."""
+    table = _t([(100.0, 130.0), (130.0, 160.0), (160.0, 190.0)])
+    grid_lines = [
+        (130.0, 50.0, 250.0),  # divider between rows 0 and 1
+        (160.0, 50.0, 250.0),  # divider between rows 1 and 2
+    ]
+    result = PDFExtractor._detect_struck_rows(table, grid_lines)
+    assert result == []
+
+
+def test_detect_struck_rows_returns_empty_for_header_only():
+    """A 1-row "table" (just a header) has no data rows; detection is
+    a no-op even with strike lines on the page."""
+    table = _t([(100.0, 130.0)])
+    strike_lines = [(115.0, 50.0, 250.0)]  # mid-row of the header
+    assert PDFExtractor._detect_struck_rows(table, strike_lines) == []
+
+
+def test_detect_struck_rows_counts_one_line_per_row_as_struck():
+    """Even a single short strike line in row interior (length already
+    ≥5pt by the page-level collector) is enough — real strikes draw
+    multiple short segments per word but cell-level detection should
+    not require multi-segment confirmation."""
+    table = _t([(100.0, 130.0), (130.0, 160.0)])
+    strike_lines = [(145.0, 70.0, 95.0)]  # one short line in row 1 interior
+    result = PDFExtractor._detect_struck_rows(table, strike_lines)
+    assert result == [0]  # data row 0 (pdfplumber row 1)
+
+
