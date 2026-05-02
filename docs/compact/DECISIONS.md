@@ -520,3 +520,104 @@ only and never gates.
   the new behavior.
 
 **Related**: FR-3, D-003, D-030, D-031, D-032.
+
+## D-034: Parser hardening — corpus-correctness rules from real-PDF review
+
+**Date**: 2026-05-01
+**Status**: Accepted
+**Phase**: Development (architectural rules captured retroactively from
+the parser-hardening session against the 5 Verizon OA PDFs)
+
+**Context**
+User-driven review of `~/work/env_vzw/out/profile/profile.json` and the
+parsed trees against the source PDFs surfaced multiple corpus-correctness
+bugs in `_build_sections` and adjacent code paths. Each bug had a
+specific root cause and a specific fix; consolidated here because they
+all shape the parser's contract for handling real-world PDF extraction
+artifacts.
+
+**Decision** — five layered rules:
+
+1. **Req-id placement is a corpus property, default `trailing`** (currently
+   hardcoded in parser, TODO to move to profile-stage detection). OA
+   places small-font req_id blocks AFTER the heading they belong to
+   (trailing markers); the parser's pre-fix `pending_req_id` behavior
+   (leading markers, where extras lateral to the next heading) produced
+   a systematic off-by-one cascade. Now: when a req_id block is
+   encountered and `current_section.req_id` is already set, the new id
+   is IGNORED with a debug log (first-id-wins) — never lateralled.
+   `pending_req_id` only fires when no section has been opened yet.
+
+2. **Table-anchored extraction is deferred to a second pass**. Tables
+   are collected during the main walk; table-anchored req extraction
+   runs after `paragraph_req_ids` and `struck_req_ids` are fully
+   populated. Paragraph anchors and struck ids take precedence over
+   table-cell ids regardless of source order. Eliminates the duplicate-
+   when-table-precedes-anchor pattern (a req_id whose paragraph anchor
+   is on page 34 but who appears in a cross-reference table on page 3
+   was getting both nodes).
+
+3. **Heading-continuation defense**. PyMuPDF wraps long headings across
+   multiple text blocks; when the continuation line happens to start
+   with `<digits><space><uppercase>`, the relaxed numbering gate
+   misclassifies it as a phantom depth-1 chapter. Fingerprint (all
+   three required): depth-1 section_number + a deeper section already
+   seen + previous block was heading-shaped (no body text or req_id
+   between). When the fingerprint matches, the new "section" is
+   appended to the current section's title as continuation rather than
+   creating a phantom chapter.
+
+4. **Req-id whitespace canonicalization**. PDF text extraction
+   occasionally fuses bold runs and drops the underscore in
+   `VZ_REQ_PLAN_NUM` → arrives as `VZ_REQ_PLAN NUM`. Profile patterns
+   accept either separator (`[_\s]\d+`); parser canonicalizes every
+   matched id (whitespace → underscore) before storage and comparison
+   so the same requirement is never tracked under two identifiers.
+   `_canonicalize_req_id` helper + `_find_req_ids` wrap site.
+
+5. **`DocumentProfile.enable_table_anchored_extraction: bool = True`**.
+   Default preserves D-027 behavior (back-compat for MNOs that
+   genuinely use table-defined reqs). Set to False via the corrections
+   workflow for paragraph-only-requirement corpora (Verizon OA): table
+   extraction becomes a no-op, eliminating cross-reference / changelog
+   table phantoms in one move.
+
+**Why this over alternatives**
+- *Per-MNO hardcoded behavior in parser* — rejected. Violates D-003;
+  the profile is the single source of corpus-specific rules.
+- *Single-pass table extraction with retroactive dedup* — rejected for
+  rule 2; the deferred two-pass approach is simpler and order-
+  independent. Forward-only single-pass needed an extra reconciliation
+  pass anyway.
+- *Tighter heading-continuation heuristic* (e.g. require the depth-1
+  number to be unrelated to previous) — rejected; the three-part
+  fingerprint is precise enough in practice (4/4 confirmed false
+  positives caught, no real chapter transitions broken in the OA
+  corpus where multi-chapter docs don't exist).
+- *Strict req-id pattern (no whitespace)* — rejected; PDF extraction
+  artifacts are real and silent ID drops are worse than slightly more
+  permissive matching with canonicalization.
+- *`enable_table_anchored_extraction` defaults to False (drop D-027 by
+  default)* — rejected; D-027 is a real architectural decision about
+  multi-MNO support. Defaulting True keeps it on; corpora that don't
+  use table-anchored reqs flip the flag via corrections.
+
+**Consequences**
+- Parser semantics shift: req-id assignment is now first-id-wins and
+  trailing-only (without profile-stage detection of leading-marker
+  corpora, the current implementation may misbehave there — see
+  Flag 2026-05-01).
+- All req_ids stored under canonical underscore form regardless of
+  PDF extraction artifacts; consumers comparing ids never need to
+  whitespace-normalize.
+- Profile schema gains: `requirement_id.placement` (TODO),
+  `enable_table_anchored_extraction`. Old profile JSONs load with
+  default values intact.
+- Empirical corpus result: OA req count 985 (broken A3 baseline) →
+  1015 (with `enable_table_anchored_extraction=False`) or 1048
+  (default). Phantom duplicates eliminated; off-by-one cascade gone;
+  17 ground-truth pairs verified; parse_audit confidence 96%/3%/0.1%.
+
+**Related**: FR-3, D-003 (no per-MNO code), D-027 (table-anchored
+extraction architecture), D-031 (strikeout drop), D-033 (numbering-
+driven heading classification).
