@@ -102,27 +102,37 @@ class GraphScoper:
         # Collect seed requirement nodes
         seed_nodes: dict[str, CandidateNode] = {}
 
-        # 1. Entity lookup
+        # 1. Entity lookup — direct match on req IDs the analyzer
+        # extracted from the query. When the user names specific reqs
+        # ("What is VZ_REQ_LTEDATARETRY_7754?"), those should dominate
+        # the candidate set. Edge traversal (step 5) provides the
+        # immediate neighborhood for context; we deliberately skip
+        # feature- and plan-level expansion in this case to avoid
+        # diluting a 1-req anchor into a 700+-req scope, where vector
+        # similarity ranking can no longer surface the specific chunk.
         entity_nodes = self._entity_lookup(intent, scopes)
         for n in entity_nodes:
             seed_nodes[n.node_id] = n
 
-        # 2. Feature lookup
-        feature_nodes_found = self._feature_lookup(intent, scopes)
-        for n in feature_nodes_found:
-            seed_nodes[n.node_id] = n
-
-        # 3. Plan-level lookup (if plan_ids specified but no specific entities found)
-        if intent.plan_ids and not seed_nodes:
-            plan_nodes = self._plan_lookup(intent.plan_ids, scopes)
-            for n in plan_nodes:
+        if not entity_nodes:
+            # 2. Feature lookup
+            feature_nodes_found = self._feature_lookup(intent, scopes)
+            for n in feature_nodes_found:
                 seed_nodes[n.node_id] = n
 
-        # 4. If still nothing, use concept-based text search on node titles
-        if not seed_nodes and (intent.concepts or intent.entities):
-            title_nodes = self._title_search(intent, scopes)
-            for n in title_nodes:
-                seed_nodes[n.node_id] = n
+            # 3. Plan-level lookup (if plan_ids specified but no
+            # specific entities found)
+            if intent.plan_ids and not seed_nodes:
+                plan_nodes = self._plan_lookup(intent.plan_ids, scopes)
+                for n in plan_nodes:
+                    seed_nodes[n.node_id] = n
+
+            # 4. If still nothing, use concept-based text search on
+            # node titles
+            if not seed_nodes and intent.concepts:
+                title_nodes = self._title_search(intent, scopes)
+                for n in title_nodes:
+                    seed_nodes[n.node_id] = n
 
         # 5. Edge traversal to expand candidates
         traversed = self._traverse(
