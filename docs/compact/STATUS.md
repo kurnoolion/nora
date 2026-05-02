@@ -2,7 +2,7 @@
 
 **Active phase**: development
 **Last updated**: 2026-05-02
-**Last drift-check**: 2026-04-27 — mode: dev-full — 4 drift(s) resolved (all batch [a]: MODULE.md → match code post-slice-B/C), 0 deferred surfaced
+**Last drift-check**: 2026-05-02 — mode: dev-full — 9 drift(s) resolved (all direction [b]: MODULE.md → match code; reflecting D-035..D-040 just landed), 0 deferred surfaced
 
 ## Done
 

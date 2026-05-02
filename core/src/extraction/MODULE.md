@@ -22,7 +22,12 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - Tables extracted by pdfplumber are de-duplicated against text blocks they overlap with (PDF text extractors surface table cells as text too) — no block should appear twice in the IR.
 - Header/footer content (matched by margin thresholds + always-header regex patterns) is dropped, not emitted as paragraphs.
 - Format-specific libraries (fitz, pdfplumber, python-docx, openpyxl) are imported **only** inside this module — no other `core/src/` module pulls them in.
-- Strikethrough block-level signal differs per format [D-031]: PDF — majority-of-characters across mixed-strike spans (50% defaults to `False`); DOCX — `any` run struck → whole paragraph struck; XLSX — row carries strikethrough only when **all** non-empty cells are struck.
+- Strikethrough block-level signal differs per format AND block type [D-031, D-036]:
+  - **PDF paragraph** — majority-of-characters across mixed-strike spans (50% defaults to `False`).
+  - **PDF table (whole-table strike)** — `_table_is_struck` counts horizontal strike lines crossing ≥50% of the table width AND not aligned with a `Table.rows[*].bbox` edge (within `edge_tol=1.5pt`). Row-edge filter is critical: pdfplumber draws each row boundary as a full-width horizontal line which the unfiltered heuristic counted as a strike (D-036, addresses 93% false-positive rate observed pre-filter).
+  - **PDF table (per-row cell strike)** — `_detect_struck_rows` flags rows whose interior (`y_top + 1.5 < y < y_bot - 1.5`) contains ≥1 horizontal strike line. Header row (index 0) is never marked struck — telecom tables retain their header even when all data rows are deleted.
+  - **DOCX** — `any` run struck → whole paragraph struck.
+  - **XLSX** — row carries strikethrough only when **all** non-empty cells are struck.
 
 **Key choices**
 - PDF: pymupdf (fitz) for text + font metadata, pdfplumber for tables — neither alone covers both well. Pay the double-parse cost per file; cache is the IR JSON on disk.
@@ -31,7 +36,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - Registry is an instance dict (`_EXTRACTORS`), not a class hierarchy — extractors are stateless; one instance per format.
 - Path-based metadata inference (`<env_dir>/input/<MNO>/<release>/file.ext` per D-023) avoids hardcoding per-MNO dispatch; a new MNO needs no code change.
 - XLSX strategy is one heading + one table per worksheet — minimal but lets the profiler still cluster headings by font size and the parser still see structured rows.
-- Strikeout detected per format but **not dropped here** — the IR carries `FontInfo.strikethrough` faithfully; drop semantics live in the parser so the corrections workflow can override without re-extracting [D-031].
+- Strikeout detected per format. Whole-table and paragraph strikes are marked via `font_info.strikethrough` and dropped by the parser (the corrections workflow can override `profile.ignore_strikeout` without re-extracting) [D-031]. **Exception**: PDF table rows with cell-level strikes (per-word strike segments inside specific cells, common in OA cross-reference tables) are dropped at extract time from the table's `rows` list — the IR has no per-row strike state to preserve and the alternative (mark + parser-side drop) would require a schema extension. If all data rows drop, the table is marked `strikethrough=True` so the parser drops the now-empty remnant via the existing FR-33 path [D-036]. DOCX/XLSX continue to mark, not drop.
 
 **Non-goals**
 - No OCR — scanned PDFs without a text layer will yield empty IRs; this is surfaced via block_count=0, not silently filled by an image-to-text model.

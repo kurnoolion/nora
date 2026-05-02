@@ -7,7 +7,7 @@ Standalone, LLM-free document-structure profiler. Analyzes representative `Docum
 - `DocumentProfiler` (profiler.py) — `create_profile(docs, profile_name="") -> DocumentProfile`; also `update_profile()`, `validate_profile()` (coverage check against held-out docs)
 - `DocumentProfile` (profile_schema.py) — full profile container with `to_dict`, `save_json`, `load_json`
 - Profile subcomponents: `HeadingLevel`, `HeadingDetection`, `RequirementIdPattern`, `MetadataField`, `PlanMetadata`, `DocumentZone`, `HeaderFooter`, `CrossReferencePatterns`, `BodyText`, `ApplicabilityDetection` (FR-32 [D-030])
-- New `DocumentProfile` fields: `ignore_strikeout: bool = True` (FR-33 [D-031]); `applicability_detection` (FR-32); `toc_detection_pattern: str` + `toc_page_threshold: float` (FR-34); `definitions_entry_pattern: str` (FR-35 [D-032])
+- New `DocumentProfile` fields: `ignore_strikeout: bool = True` (FR-33 [D-031]); `applicability_detection` (FR-32); `toc_detection_pattern: str` + `toc_page_threshold: float` (FR-34); `definitions_entry_pattern: str` (FR-35 [D-032]); `revision_history_heading_pattern: str` (FR-34 [D-035])
 - New `HeadingDetection` fields: `priority_marker_pattern: str` (FR-31); `definitions_section_pattern: str` (FR-35 [D-032])
 - `profile_cli.main` — CLI: `create | update | validate`
 
@@ -26,6 +26,7 @@ Standalone, LLM-free document-structure profiler. Analyzes representative `Docum
 - Validation mode reports coverage (headings matched / expected, req IDs found / sample size) rather than pass/fail, so reviewers can judge quality at a glance.
 - Per-document content (extracted definitions term→expansion pairs) is **not** stored in the profile — those land on `RequirementTree.definitions_map`. Profile carries only the *detection rules*; locality is preserved at the parsed-tree level [D-032].
 - Pattern-based detection only (no keyword bag-of-words) for applicability and definitions; corrections workflow extends patterns by JSON edit, not code change [D-030, D-032].
+- Revision-history heading detection is profile-driven with corpus-narrowing [D-035]: the schema default `(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$` covers common MNO labels; `_detect_revision_history_pattern` walks paragraph-then-table candidates and tightens the regex (whitespace-tolerant) to the most-frequent observed phrasing in the corpus. New corpora work out-of-the-box on the broad default; profiler narrowing makes audits more legible.
 
 **Non-goals**
 - Not a parser — applying a profile to a document is [parser](../parser/MODULE.md)'s job.
