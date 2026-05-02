@@ -621,3 +621,350 @@ artifacts.
 **Related**: FR-3, D-003 (no per-MNO code), D-027 (table-anchored
 extraction architecture), D-031 (strikeout drop), D-033 (numbering-
 driven heading classification).
+
+
+## D-035: Profile-driven revision-history table omission (FR-34)
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+OA documents have a revision/change-history table near the top of section 1.
+Different MNOs use different headings ("Revision History", "Change History",
+"Document Log", etc.) so detection cannot be hardcoded. Tables sometimes
+span multiple pages — pdfplumber emits each page's slice as its own table
+block.
+
+**Decision**
+- New `DocumentProfile.revision_history_heading_pattern: str` field. Default:
+  `(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$` — broad
+  enough to catch common labels without per-MNO config.
+- Profiler narrows the regex during scan to the most-frequent observed
+  phrasing (whitespace-tolerant via `re.escape().replace(r"\ ", r"\s+")`),
+  gated on the next non-image block being a table.
+- Parser drops the matching paragraph, then consumes subsequent table/image
+  blocks until the next paragraph (which is by construction the next
+  section's heading). New `ParseStats.revhist_blocks_dropped` counter.
+
+**Why this over alternatives**
+- *Hardcoded keyword list in parser* — rejected. Violates D-003.
+- *Per-corpus profile override only (no broad default)* — rejected. New corpora
+  would silently retain revhist tables until someone curates an override.
+- *Window-bounded next-block consume (3 blocks)* — initial design; replaced
+  when corpus probe revealed revhist tables span multiple pages. Now
+  consumes until next paragraph, unbounded by block count.
+
+**Consequences**
+- Profile schema gains `revision_history_heading_pattern`. Old profile JSONs
+  load with the default intact.
+- Parser drops any paragraph matching the pattern PLUS all subsequent
+  non-paragraph blocks until the next paragraph.
+- env_vzw empirical: `revhist=73` (5 heading paragraphs + 68 continuation
+  blocks across 5 docs). Previously 10 with single-table window.
+
+**Related**: FR-34, D-003, D-031.
+
+
+## D-036: PDF table strike detection — row-edge filter + per-row cell strike
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+FR-33 [D-031] geometric strike detection produced 93% false positives on
+the OA corpus (709 of 762 tables flagged struck). Probe revealed pdfplumber
+draws each row boundary as a horizontal line of full-cell width —
+geometrically indistinguishable from a strike-through to `_table_is_struck`.
+The `min_lines=2` threshold was protecting nobody: any 3+ row table with
+grid lines trivially crossed it.
+
+User feedback also clarified that real strike-throughs in OA tables are
+*per-row*: short strike segments cover individual word/text spans inside
+specific cells, never spanning the full table width. Whole-table strikes
+exist but are rare.
+
+**Decision** — two complementary filters:
+
+1. **Row-edge filter on `_table_is_struck`**. Strike candidates whose y aligns
+   with any `Table.rows[*].bbox` edge (within `edge_tol=1.5pt`) are excluded
+   from the threshold count. The tolerance handles paired top-of-row-i /
+   bottom-of-row-(i-1) draws that some PDF generators emit at adjacent ys.
+   Real strike-throughs draw at the *middle* of a text row, well away from
+   row boundaries; they survive the filter.
+
+2. **Per-row cell strike via `_detect_struck_rows`**. Walks `table_obj.rows`
+   and flags rows whose interior (`y_top + 1.5 < y < y_bot - 1.5`) contains
+   ≥1 horizontal strike line. Header row (index 0) is never marked struck
+   (OA tables retain their header even when all data rows are deleted).
+   Struck rows are dropped from the IR's `rows` list at extraction time;
+   if all data rows drop, the whole table is marked `strikethrough=True`
+   so the parser drops it via the existing FR-33 path.
+
+**Why this over alternatives**
+- *Raise `min_lines` threshold* — rejected. To rule out 3-row grid lines we'd
+  need ≥4, which would miss small 2-row genuinely struck tables.
+- *Abandon geometric detection on tables* — rejected. Real cell strikes
+  (LTEAT p38 KEYPAD CONTROL row) need to be caught somehow.
+- *Per-row strike with table-bbox-width gate* — rejected. Real cell strikes
+  cover only the cell's text width, not the table's. Counting in row
+  interior without horizontal coverage thresholds matches the actual
+  geometry pattern.
+- *Add per-row strike metadata to IR (preserve rows, mark struck)* — rejected
+  for now. Dropping at extraction simplifies the parser-side contract; if a
+  future workflow needs to override per-row strikes, the corrections file
+  is the seam.
+
+**Consequences**
+- `_table_is_struck` signature gains `row_edge_ys: list[float] | None`,
+  `edge_tol: float = 1.5`. Caller passes edges from pdfplumber `Table.rows`.
+  None/empty preserves legacy behavior (back-compat).
+- New `_detect_struck_rows(table_obj, strike_lines, edge_tol=1.5)` returns
+  data-row indices to drop. Header excluded.
+- Extract-time row drops are silent (no per-row strike marker in IR);
+  callers can't recover them.
+- env_vzw empirical: tables flagged struck 709/762 → 0/762; row-level drops
+  emptied 280 tables (whole-table strikethrough propagated to parser);
+  parse_stats.struck_blocks_dropped 1088 → 659 (paragraphs + emptied
+  tables).
+
+**Related**: FR-33, D-031.
+
+
+## D-037: Section-heading cascade for struck headings
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+User feedback identified two pages where a struck section heading should
+cause its descendants to be dropped even when the descendants themselves
+are not individually marked struck:
+
+- LTEB13NAC p310: parent heading `_6289` "LTE Test Application for Antenna
+  Testing Requirements" is struck; the (non-struck) TIS table directly
+  below it should be dropped as part of the deleted section.
+- LTEB13NAC p68: heading `1.3.1.2.7.15 RSSI ...` is struck; the section
+  body and any sub-sections under it are also gone in source.
+
+The pre-cascade parser dropped the struck heading paragraph but left
+descendant blocks orphaned, attaching them to the previous (live) section
+or producing phantom Requirements.
+
+**Decision**
+Parser maintains a single `cascade_depth: int | None` state across the
+block walk. When a struck paragraph is also a section heading (depth
+detected via `_classify_heading` so the cascade boundary uses EXACTLY the
+same definition of "heading" as the rest of the parser), `cascade_depth`
+is armed to that heading's depth. Subsequent blocks are dropped until a
+new heading appears at depth ≤ `cascade_depth` (a sibling or shallower
+section), at which point cascade ends and that block is processed normally.
+Tables, images, and body paragraphs all get dropped. Deeper-nested struck
+headings inside an already-cascading section don't tighten the boundary
+(only shallower struck headings do — protects against late corrections
+narrowing scope). New `ParseStats.cascade_blocks_dropped` counter.
+
+**Why this over alternatives**
+- *Drop only the heading paragraph* — rejected. Leaves orphan tables/sub-
+  content under the previous live section.
+- *Cascade until next paragraph (no depth check)* — rejected. Would terminate
+  cascade on the first body sentence, missing sub-headings and tables that
+  belong to the deleted section.
+- *Cascade indefinitely (drop everything after a struck heading)* — rejected.
+  A depth-5 struck heading would erase its depth-2 siblings.
+- *Use the profile's `numbering_pattern` directly for boundary detection* —
+  rejected. The pattern's capture-group shape varies per profile;
+  delegating to `_classify_heading` reuses the parser's own length-cap and
+  punctuation guards.
+
+**Consequences**
+- New parser invariant: a struck section heading deletes the entire section
+  subtree (down to depth ≤ cascade_depth boundary).
+- `ParseStats.cascade_blocks_dropped` reports drops; env_vzw empirical: 301
+  blocks dropped across 5 docs.
+- Cascade test depends on `_classify_heading`'s definition of heading,
+  which means if heading classification changes, cascade boundaries shift
+  in lockstep — desirable.
+
+**Related**: FR-33, D-031, D-033.
+
+
+## D-038: Table-anchored definitions extraction (extends D-032)
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+D-032 specified that `_extract_definitions` scans the matched glossary
+section's body text line-by-line via `definitions_entry_pattern`. On the
+OA corpus, this returned `defs=0` despite all 5 docs having a glossary
+section: the section body is a thin intro paragraph ("This section defines
+acronyms used throughout the document.") and the actual term/expansion
+pairs live in 2-column tables (`Acronym/Term | Definition`,
+`Term [Abbreviation] | Definition`, etc.). Body-text scan never sees them.
+
+**Decision**
+`_extract_definitions` scans BOTH layouts — body-text via the existing
+pattern (preserved unchanged), AND tables. For each row of length ≥ 2 in
+the matched section's tables, col[0] is the term and col[1] is the
+expansion; whitespace (including embedded newlines from PDF wrap) is
+collapsed. First-occurrence-wins precedence applies across both layouts:
+body-text scans first, then tables in document order. No profile flag
+gates the table path — any 2+ col table inside a glossary section is
+treated as a glossary table by convention.
+
+**Why this over alternatives**
+- *New profile flag `definitions_layout: str = "body" | "table" | "auto"`*
+  — rejected. The two layouts don't conflict (a doc with both gets both),
+  and "auto" is what humans want by default. Adding a flag for a no-cost
+  combined behavior is over-engineering.
+- *Detect column header ("Acronym/Term", "Term", etc.) before treating
+  rows as defs* — rejected. Different MNOs use different column headers;
+  the structural position (col[0], col[1]) is the reliable signal.
+- *Cap term length to filter prose-shaped first-cells* — rejected for
+  table layout. The structural gate (must be inside a glossary section's
+  table) is strong enough.
+
+**Consequences**
+- `_extract_definitions` yields entries from EITHER body text OR tables OR
+  both — callers don't need to know which.
+- env_vzw empirical: defs=0 → 158. LTEAT 26, LTEB13NAC 63,
+  LTEDATARETRY 36, LTEOTADM 18, LTESMS 15.
+- Minor extraction artifact: PDF wrap can split "3rd" across lines as
+  "rd\n3" → expansion text reads "rd 3 Generation Partnership Project..."
+  Term key (`3GPP`) is correct; expansion remains readable. Acceptable
+  for v1.
+
+**Related**: FR-35, D-032.
+
+
+## D-039: Entity-priority graph scoping
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+A4 evaluation's `traceability` category scored 16.7% accuracy. trace_01
+("What is requirement VZ_REQ_LTEDATARETRY_7754?") returned 10 *other* req
+chunks — not _7754 — despite _7754 existing in the graph and vector store.
+Trace: the analyzer correctly extracted _7754 as an entity; the graph
+scoper's `_entity_lookup` correctly found the node; but `_feature_lookup`
+THEN expanded via the DATA_RETRY feature (~700 mapped reqs) into a
+794-candidate seed. ChromaDB's `where: req_id IN [794 ids]` filter then
+ranks by vector similarity — _7754 didn't make top-10 because the literal
+query text isn't semantically close to its chunk content.
+
+**Decision**
+When `_entity_lookup` yields any matches, treat those as authoritative for
+the scope:
+- Skip `_feature_lookup`, `_plan_lookup`, and `_title_search` expansion.
+- Step-5 edge traversal (depth=2 from entity seeds) still runs, providing
+  the entity's immediate neighborhood — sibling sections, referenced
+  standards, parent containers — without flooding the candidate set with
+  feature-wide reqs.
+
+For queries WITHOUT specific entity matches (the analyzer extracted
+nothing or only false-positive concepts), the existing flow (feature →
+plan → title-search → traversal) is unchanged.
+
+**Why this over alternatives**
+- *Always merge entity + feature seeds (status quo)* — rejected. Diluted
+  the 1-req entity match into a 794-candidate scope where vector ranking
+  couldn't surface the named req.
+- *Boost entity-match chunks at retrieval time (rerank)* — rejected as
+  the primary fix. Reranking is one more knob; the upstream fix (don't
+  add the 793 unrelated reqs to the scope) is cleaner. Reranking can be
+  added later orthogonally.
+- *Bypass vector retrieval entirely when entity matches exist (direct chunk
+  lookup by req_id)* — rejected. Loses the neighborhood-context retrieval
+  that makes "what is X and how does it relate" queries work.
+
+**Consequences**
+- Specific-id queries ("What is VZ_REQ_X?") get tight scope rooted at the
+  named req, with depth-2 neighborhood for context.
+- Concept queries (no entity match) behave as before.
+- env_vzw empirical: trace_01 acc 0% → 100%; traceability 16.7% → 50%
+  (then 66.7% after ground-truth refresh).
+
+**Related**: FR-22 (graph-scoped retrieval), D-002 (unified store with
+metadata filters).
+
+
+## D-040: Type-aware retrieval `top_k` + cross-doc list-style detection
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+A4 evaluation's `cross_doc` category scored 0% accuracy on all 4 questions
+("What are all the SMS over IMS requirements?" / "What are the PDN
+connectivity requirements across all VZW plans?" etc.). Investigation
+revealed two compounding issues:
+
+1. **Misclassification.** `_classify_query_type` only flagged `CROSS_DOC`
+   when ≥2 plan aliases appeared in the query — a high bar that misses
+   concept-shaped breadth questions. cross_01 was classified `SINGLE_DOC`.
+
+2. **Insufficient `top_k`.** List/breadth questions expect parent or
+   overview reqs (e.g., `VZ_REQ_LTESMS_30258` "SMS OVER IMS - OVERVIEW",
+   chunk len ~280 chars: heading + path only) whose chunks are
+   intentionally short. Vector similarity ranks them below richer leaf
+   chunks (663 chars of body). With `top_k=10`, expected reqs land at
+   rank #15+. Probed distances on cross_01:
+   ```
+   top-10 range:    0.314–0.372
+   expected reqs:   0.383, 0.386, 0.577 (just outside)
+   ```
+
+**Decision** — two coupled fixes:
+
+1. **Analyzer adds list/breadth phrase triggers**. `_classify_query_type`
+   gains an explicit pre-multi-plan-alias check on phrases:
+   `across all`, `across the`, `in all`, `across vzw|mnos|plans|specs`,
+   `all the requirements`, `all reqs`, `what are all`, `what requirements`.
+   These map to `CROSS_DOC`. FEATURE_LEVEL still wins on more-specific
+   phrasing ("everything about", "related to") so the existing
+   classification contract holds (FEATURE_LEVEL > CROSS_DOC ordering).
+
+2. **`QueryPipeline` picks `top_k` from `_TYPE_TOP_K`** based on
+   `intent.query_type`:
+   - CROSS_DOC / FEATURE_LEVEL / STANDARDS_COMPARISON /
+     CROSS_MNO_COMPARISON → 25
+   - TRACEABILITY / RELEASE_DIFF → 20
+   - SINGLE_DOC / GENERAL → fall through to constructor `self._top_k`
+     (default 10)
+
+   Pipeline takes `max(self._top_k, type_top_k)` so callers can still
+   raise the floor explicitly.
+
+**Why this over alternatives**
+- *Uniform top_k=20 for all queries* — rejected. Wastes context on lookup-
+  style queries that are already well-served by 10. Per-type tuning costs
+  almost nothing and isolates the regression risk.
+- *Analyzer-driven top_k (set in QueryIntent)* — considered but more
+  surface area than needed. The pipeline knows the intent; encoding
+  top_k in the QueryIntent dataclass would couple the schema to retrieval
+  config. Keeping it in the pipeline keeps the analyzer's job pure.
+- *Boost short/parent chunks at rerank time* — rejected as the primary
+  fix. Same logic as D-039: upstream fix (more headroom) is simpler than
+  reranking. Rerank stays orthogonal.
+- *Raise CROSS_DOC bar to ≥1 plan alias instead of ≥2* — rejected. False
+  positives multiply (any mention of "LTE" or "SMS" would trigger). The
+  list/breadth phrase set is more precise.
+
+**Consequences**
+- New `_TYPE_TOP_K` constant in `query/pipeline.py`. Map values are
+  tuneable knobs, not architectural commitments.
+- Cross-doc queries cost more LLM tokens (more chunks → larger context).
+  Manageable: qwen3-235b-a22b has 128k context; 25 chunks × ~500 chars
+  is well under.
+- env_vzw empirical: cross_doc 0% → 37.5%; overall avg_accuracy
+  56.5% → 64.8%; no regression in single_doc (still 79%).
+
+**Related**: FR-22, D-039 (entity-priority scoping — companion fix for
+the lookup side).
