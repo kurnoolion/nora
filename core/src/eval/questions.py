@@ -176,7 +176,14 @@ Q_CROSS_03 = EvalQuestion(
             # algorithm req that captures concrete IMS-registration
             # requirement content in LTEB13NAC.
             "VZ_REQ_LTEB13NAC_6444",   # IMS Registration/Re-Registration Retry Algorithm
-            "VZ_REQ_LTESMS_30259",     # IMS REGISTRATION (in SMS context)
+            # _LTESMS_30259 was the prior expected LTESMS hit but its
+            # chunk content is just "VOID" (the requirement was
+            # voided in source but kept as a queryable section per
+            # FR-35 [D-032]); retrieval can't surface meaningful
+            # content from it. Replaced with the SMS-over-IMS
+            # overview that directly answers "how does IMS
+            # registration relate to SMS".
+            "VZ_REQ_LTESMS_29575",     # SMS over IMS - overview (LTESMS sec 1.4.2.1.1.1)
         ],
         expected_features=["IMS_REGISTRATION", "SMS"],
         min_plans=2,
@@ -196,8 +203,13 @@ Q_CROSS_04 = EvalQuestion(
         expected_plans=["LTEB13NAC", "LTEDATARETRY"],
         expected_req_ids=[
             "VZ_REQ_LTEB13NAC_6373",       # LTE NETWORK DETACHMENT
-            "VZ_REQ_LTEDATARETRY_23850",    # DETACH REQUEST
-            "VZ_REQ_LTEDATARETRY_7758",     # DETACH REQUEST ON UE POWER DOWN
+            # _23850 was the prior expected hit but its content is
+            # ATTACH retry ("ATTACH ATTEMPT COUNTER REACHES A VALUE
+            # OF 5"), not detach — mis-categorized in the original
+            # ground-truth curation. Replaced with the substantive
+            # detach-content req at sec 1.4.3.3.1.1.
+            "VZ_REQ_LTEDATARETRY_7760",     # RE-ATTACH NOT REQUIRED AND EMM CAUSE CODE
+            "VZ_REQ_LTEDATARETRY_7758",     # DETACH REQUEST handling
         ],
         expected_features=["EPS_MOBILITY"],
         min_plans=2,
@@ -354,7 +366,14 @@ Q_TRACE_03 = EvalQuestion(
     ground_truth=GroundTruth(
         expected_plans=["LTEDATARETRY"],
         expected_req_ids=[
-            "VZ_REQ_LTEDATARETRY_7754",  # Attach reject cause code 22
+            # _7754 was the prior expected hit but its content is
+            # about cause code 42 ("'42: Severe Network Failure'"),
+            # not 22 — mis-curation. The corpus has 5 reqs that
+            # actually mention cause code 22; the canonical pair
+            # below covers the two distinct NAS rejection paths
+            # (ATTACH vs TAU) where cause 22 fires.
+            "VZ_REQ_LTEDATARETRY_7795",   # ATTACH REJECT cause code 22 (sec 1.4.3.1.1.10)
+            "VZ_REQ_LTEDATARETRY_7761",   # TAU REJECT cause code 22 (sec 1.4.3.4.1.1)
         ],
         expected_concepts=["cause code"],
     ),

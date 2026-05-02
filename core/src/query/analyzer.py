@@ -244,8 +244,16 @@ class MockQueryAnalyzer:
         ):
             return QueryType.RELEASE_DIFF
 
-        # Traceability
-        if any(w in q_lower for w in ["test case", "test plan", "coverage", "traceability"]):
+        # Traceability — test-coverage queries OR lookup-by-attribute
+        # ("which requirements mention <term>?" / "where is <term>
+        # mentioned?"). The "mention" / "mentioned" phrasing signals
+        # an entity-search even when the answer spans multiple plans;
+        # routing to TRACEABILITY (with BM25 enabled) gives the
+        # specific-term surfacing that pure-dense CROSS_DOC misses.
+        if any(w in q_lower for w in [
+            "test case", "test plan", "coverage", "traceability",
+            "mention ", "mentions ", "mentioned ",
+        ]):
             return QueryType.TRACEABILITY
 
         # Feature-level — concept-shaped queries about a named topic.
