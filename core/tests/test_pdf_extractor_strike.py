@@ -119,3 +119,84 @@ def test_table_struck_with_single_line_when_min_lines_is_one():
     # Default min_lines=2 → not struck (need a second line)
     assert PDFExtractor._table_is_struck(table_bbox, strike_lines) is False
 
+
+# ---------------------------------------------------------------------------
+# row-edge filter (drops grid lines that look like strike marks)
+# ---------------------------------------------------------------------------
+
+
+def test_table_not_struck_when_lines_align_with_row_edges():
+    """Real-world false positive: a 3-row table whose grid lines look
+    like strike-throughs by geometry alone. Without `row_edge_ys`, the
+    heuristic flags the table struck. With the row-edge filter, the
+    grid lines are correctly excluded and the table is preserved."""
+    # Table from 100 to 200 with rows ending at 130, 160, 200 (3 rows).
+    table_bbox = (50.0, 100.0, 250.0, 200.0)
+    row_edges = [100.0, 130.0, 160.0, 200.0]  # top + 2 dividers + bottom
+    # Grid lines at every row edge — three of them (top, divider, divider) are
+    # within table y-extent and span the full width.
+    grid_lines = [
+        (100.0, 50.0, 250.0),
+        (130.0, 50.0, 250.0),
+        (160.0, 50.0, 250.0),
+        (200.0, 50.0, 250.0),
+    ]
+    # WITHOUT filter — falsely struck (4 lines >> min_lines=2).
+    assert PDFExtractor._table_is_struck(table_bbox, grid_lines) is True
+    # WITH filter — all 4 lines aligned with row edges → not struck.
+    assert PDFExtractor._table_is_struck(
+        table_bbox, grid_lines, row_edge_ys=row_edges
+    ) is False
+
+
+def test_table_struck_when_lines_in_row_middles_not_at_edges():
+    """Mid-row strike lines (genuine strike-throughs of cell text) are
+    NOT filtered — the table is correctly marked struck."""
+    table_bbox = (50.0, 100.0, 250.0, 200.0)
+    row_edges = [100.0, 130.0, 160.0, 200.0]  # 3 rows
+    # Strike lines at the MIDDLE of two rows (y=115, y=145), well away
+    # from row edges.
+    mid_row_lines = [
+        (115.0, 50.0, 250.0),
+        (145.0, 50.0, 250.0),
+    ]
+    assert PDFExtractor._table_is_struck(
+        table_bbox, mid_row_lines, row_edge_ys=row_edges
+    ) is True
+
+
+def test_table_edge_filter_handles_paired_edges_within_tolerance():
+    """PDF generators sometimes emit two horizontal lines at almost-
+    identical y values for the same row boundary (e.g. top-of-row-i
+    and bottom-of-row-(i-1) drawn separately at y=615.73 and y=616.48).
+    Both must be filtered when either matches a known edge within the
+    `edge_tol=1.5` window."""
+    table_bbox = (50.0, 100.0, 250.0, 720.0)
+    row_edges = [616.1]  # nominal edge
+    paired = [
+        (615.73, 50.0, 250.0),  # 0.37pt below
+        (616.48, 50.0, 250.0),  # 0.38pt above
+    ]
+    assert PDFExtractor._table_is_struck(
+        table_bbox, paired, row_edge_ys=row_edges
+    ) is False
+
+
+def test_table_edge_filter_with_no_row_edges_supplied():
+    """Backwards compatibility — when caller passes no row_edge_ys
+    (legacy path / pdfplumber row.bbox unavailable), behavior matches
+    the pre-filter logic."""
+    table_bbox = (50.0, 100.0, 250.0, 200.0)
+    grid_lines = [
+        (130.0, 50.0, 250.0),
+        (160.0, 50.0, 250.0),
+    ]
+    # No filter → 2 lines hit threshold → struck (legacy behavior).
+    assert PDFExtractor._table_is_struck(table_bbox, grid_lines) is True
+    assert PDFExtractor._table_is_struck(
+        table_bbox, grid_lines, row_edge_ys=[]
+    ) is True
+    assert PDFExtractor._table_is_struck(
+        table_bbox, grid_lines, row_edge_ys=None
+    ) is True
+
