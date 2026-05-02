@@ -170,7 +170,12 @@ Q_CROSS_03 = EvalQuestion(
     ground_truth=GroundTruth(
         expected_plans=["LTEB13NAC", "LTESMS"],
         expected_req_ids=[
-            "VZ_REQ_LTEB13NAC_23513",  # IMS REGISTRATION REQUIREMENTS
+            # _23513 (IMS REGISTRATION REQUIREMENTS parent header) was
+            # the prior expected hit but is struck-through in source —
+            # parser correctly drops it. Replaced with the live retry
+            # algorithm req that captures concrete IMS-registration
+            # requirement content in LTEB13NAC.
+            "VZ_REQ_LTEB13NAC_6444",   # IMS Registration/Re-Registration Retry Algorithm
             "VZ_REQ_LTESMS_30259",     # IMS REGISTRATION (in SMS context)
         ],
         expected_features=["IMS_REGISTRATION", "SMS"],
@@ -328,7 +333,11 @@ Q_TRACE_02 = EvalQuestion(
         expected_plans=["LTEB13NAC"],
         expected_req_ids=[
             "VZ_REQ_LTEB13NAC_6454",   # IMS Registration Timer Expires while Throttling
-            "VZ_REQ_LTEB13NAC_23532",  # IMS REGISTRATION THROTTLING
+            # _23532 (sec 1.3.2.10.6.9 throttling-across-system-
+            # transitions parent) was the prior expected hit but is
+            # struck-through in source — parser correctly drops it.
+            # Replaced with the live equivalent at the next subsection.
+            "VZ_REQ_LTEB13NAC_6455",   # IMS Reg/Re-Reg Throttling Across System Transitions
         ],
         expected_features=["IMS_REGISTRATION"],
         expected_concepts=["ims registr", "throttl"],

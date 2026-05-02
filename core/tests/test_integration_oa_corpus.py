@@ -111,6 +111,12 @@ GROUND_TRUTH_PAIRS = [
 STRUCK_REQ_IDS = [
     "VZ_REQ_LTEB13NAC_1871",
     "VZ_REQ_LTEDATARETRY_2366",
+    # Struck section-header req_ids — page 113, page 134 of LTEB13NAC.
+    # Cascade-dropped because their heading is struck in source.
+    # Previously appeared as eval-question expected_req_ids; ground
+    # truth was updated to live siblings (see eval/questions.py).
+    "VZ_REQ_LTEB13NAC_23513",
+    "VZ_REQ_LTEB13NAC_23532",
 ]
 
 
