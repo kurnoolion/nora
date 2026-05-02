@@ -231,6 +231,48 @@ class TestSpecParser:
         assert "Definitions" in defs.title
 
 
+def test_spec_parser_tolerates_paragraphs_with_null_style(tmp_path):
+    """STD-E002 nullguard regression. Some 3GPP specs (observed:
+    TS 22.220 Rel-9, TS 36.133 Rel-13) contain paragraphs whose
+    `style` attribute resolves to None — valid OOXML but rare.
+
+    Mocks `docx.Document` directly (no docx file needed) so this
+    test runs without the gated TS 24.301 fixture. We provide just
+    the surface that `_parse_sections` reads: `paragraphs`, where
+    each paragraph has `text` and `style` (which may be None or
+    have a `name` attribute).
+    """
+    from core.src.standards.spec_parser import SpecParser
+
+    class _MockStyle:
+        def __init__(self, name): self.name = name
+
+    class _MockPara:
+        def __init__(self, style, text):
+            self.style = style
+            self.text = text
+
+    class _MockDoc:
+        def __init__(self, paras): self.paragraphs = paras
+
+    # 3GPP heading convention: section number, TAB, title.
+    mock_doc = _MockDoc([
+        _MockPara(_MockStyle("Heading 1"), "1\tScope"),
+        _MockPara(_MockStyle("Normal"),    "Body under section 1."),
+        # The pathological case: style is None
+        _MockPara(None,                    "Body text with no style ref."),
+        _MockPara(_MockStyle("Heading 1"), "2\tReferences"),
+        _MockPara(_MockStyle("Normal"),    "Body under section 2."),
+    ])
+
+    sections = SpecParser()._parse_sections(mock_doc)
+    nums = [s.number for s in sections]
+    assert "1" in nums and "2" in nums  # real headings still parsed
+    # The null-style paragraph was skipped (not raised) and is not a
+    # heading, so it does not appear as a section.
+    assert all(s.title != "Body text with no style ref." for s in sections)
+
+
 # ── Section Extractor ─────────────────────────────────────────────
 
 

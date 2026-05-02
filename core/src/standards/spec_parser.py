@@ -129,10 +129,15 @@ class SpecParser:
         sections: list[SpecSection] = []
         section_map: dict[str, SpecSection] = {}
 
-        # First pass: collect all headings with their paragraph indices
+        # First pass: collect all headings with their paragraph indices.
+        # `p.style` is occasionally `None` (observed on TS 22.220 Rel-9
+        # and TS 36.133 Rel-13 — paragraphs without a referenced style
+        # element in the docx XML, valid OOXML but rare). Treat those
+        # as non-headings rather than crashing the whole spec parse.
         heading_indices: list[tuple[int, str, str]] = []
         for i, p in enumerate(doc.paragraphs):
-            if not p.style.name.startswith("Heading"):
+            style_name = getattr(p.style, "name", "") or ""
+            if not style_name.startswith("Heading"):
                 continue
             text = p.text.strip()
             if not text:
