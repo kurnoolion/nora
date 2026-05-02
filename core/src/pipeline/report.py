@@ -74,7 +74,7 @@ def _format_stats_compact(stage: str, stats: dict) -> str:
             f"src={s['source']}" if "source" in s
             else f"lvl={s.get('heading_levels',0)} rpat={s.get('req_patterns',0)} zone={s.get('zones',0)}"
         ),
-        "parse": lambda s: f"req={s.get('reqs',0)} dep={s.get('max_depth',0)} docs={s.get('docs',0)} toc={s.get('toc',0)} struck={s.get('struck',0)} defs={s.get('defs',0)}",
+        "parse": lambda s: f"req={s.get('reqs',0)} dep={s.get('max_depth',0)} docs={s.get('docs',0)} toc={s.get('toc',0)} struck={s.get('struck',0)} revhist={s.get('revhist',0)} defs={s.get('defs',0)}",
         "resolve": lambda s: f"int={s.get('internal',0)} xp={s.get('cross_plan',0)} std={s.get('standards',0)}",
         "taxonomy": lambda s: (
             f"src={s['source']}" if "source" in s

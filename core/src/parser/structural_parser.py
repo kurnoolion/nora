@@ -108,6 +108,7 @@ class ParseStats:
     """
     struck_blocks_dropped: int = 0  # FR-33 [D-031]
     toc_blocks_dropped: int = 0     # FR-34
+    revhist_blocks_dropped: int = 0 # FR-34 (revision-history table omission)
     defs_extracted: int = 0         # FR-35 [D-032]
 
 
@@ -184,6 +185,7 @@ class RequirementTree:
             parse_stats=ParseStats(
                 struck_blocks_dropped=ps.get("struck_blocks_dropped", 0),
                 toc_blocks_dropped=ps.get("toc_blocks_dropped", 0),
+                revhist_blocks_dropped=ps.get("revhist_blocks_dropped", 0),
                 defs_extracted=ps.get("defs_extracted", 0),
             ),
             definitions_map=dict(data.get("definitions_map", {})),
@@ -208,6 +210,14 @@ class GenericStructuralParser:
         self._req_id_re = (
             re.compile(profile.requirement_id.pattern)
             if profile.requirement_id.pattern
+            else None
+        )
+        # Revision/version-history heading detection (FR-34) — compiled
+        # once; None if disabled. Drops the matching paragraph and the
+        # immediately-following table block (within a small window).
+        self._revhist_re = (
+            re.compile(profile.revision_history_heading_pattern)
+            if profile.revision_history_heading_pattern
             else None
         )
         # TOC entry detection (FR-34) — compiled once; None if disabled
@@ -455,6 +465,15 @@ class GenericStructuralParser:
         # "Table of Contents" header).
         toc_pages = self._identify_toc_pages(doc)
 
+        # FR-34: revision-history table omission. When a paragraph
+        # matches the revision-history heading pattern, set this to
+        # `revhist_window` so the next table block (within the window)
+        # gets dropped. Window tolerates one image between the heading
+        # and the table (some MNOs place a logo there); decremented per
+        # block until it expires or a table is consumed.
+        revhist_window = 0
+        REVHIST_WINDOW = 3
+
         def _record_paragraph_anchor(rid: str) -> None:
             if rid:
                 paragraph_req_ids.add(rid)
@@ -489,6 +508,33 @@ class GenericStructuralParser:
                 and self._toc_re.search(block.text.strip())
             ):
                 self._parse_stats.toc_blocks_dropped += 1
+                continue
+
+            # FR-34: drop the revision-history table when its preceding
+            # heading matched. The window persists across iterations
+            # because tables are emitted as their own block, so the
+            # decision is "does the next table belong to a revhist
+            # heading?". A new paragraph closes the window without
+            # consuming anything (the heading was a false positive).
+            if revhist_window > 0:
+                if block.type == BlockType.TABLE:
+                    self._parse_stats.revhist_blocks_dropped += 1
+                    revhist_window = 0
+                    continue
+                if block.type == BlockType.PARAGRAPH:
+                    revhist_window = 0  # window closes on next paragraph
+                else:
+                    revhist_window -= 1
+                # fall through — the block still gets normal processing
+
+            if (
+                self._revhist_re is not None
+                and block.type == BlockType.PARAGRAPH
+                and block.text
+                and self._revhist_re.match(block.text.strip())
+            ):
+                self._parse_stats.revhist_blocks_dropped += 1
+                revhist_window = REVHIST_WINDOW
                 continue
 
             if block.type == BlockType.PARAGRAPH:

@@ -220,6 +220,22 @@ class DocumentProfile:
     section title), which lowers the per-page match rate. Real-content
     pages essentially never reach 70% leader-dot patterns."""
 
+    # ── Revision/version history omission (FR-34) ────────────────
+    revision_history_heading_pattern: str = (
+        r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$"
+    )
+    """Regex matched against paragraph-block text. When a paragraph
+    matches AND the immediately-following block is a table, the parser
+    drops both — the heading and the revision/change-log table itself.
+    Empty string disables. The default covers common labels across MNOs
+    ('Revision History', 'Change History', 'Version History', 'Document
+    History', 'Change Log', 'Revision Log'); the profiler narrows it to
+    the specific phrasing observed in a corpus (whitespace-tolerant),
+    and the corrections workflow can override per-MNO. Detection is
+    paragraph + next-block-is-table — the table-following gate prevents
+    spurious matches in body prose that happens to mention 'revision
+    history'."""
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -299,4 +315,8 @@ class DocumentProfile:
             ),
             toc_detection_pattern=data.get("toc_detection_pattern", r".*\.{3,}\s*\d+\s*$"),
             toc_page_threshold=data.get("toc_page_threshold", 0.8),
+            revision_history_heading_pattern=data.get(
+                "revision_history_heading_pattern",
+                r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$",
+            ),
         )

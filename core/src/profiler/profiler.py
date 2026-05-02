@@ -61,6 +61,7 @@ class DocumentProfiler:
         zones = self._detect_document_zones(docs, heading)
         hf = self._collect_header_footer(docs)
         xrefs = self._detect_cross_references(docs, req_id.pattern)
+        revhist_pattern = self._detect_revision_history_pattern(docs)
 
         profile = DocumentProfile(
             profile_name=profile_name or self._derive_profile_name(docs),
@@ -74,6 +75,7 @@ class DocumentProfiler:
             header_footer=hf,
             cross_reference_patterns=xrefs,
             body_text=body,
+            revision_history_heading_pattern=revhist_pattern,
         )
 
         self._log_profile_summary(profile)
@@ -124,6 +126,15 @@ class DocumentProfiler:
         for z in new_zones:
             if z.section_pattern not in existing_zone_patterns:
                 profile.document_zones.append(z)
+
+        # Re-derive revision-history heading pattern from the new docs.
+        # `update_profile` is additive in spirit but a single-variant
+        # field like this can only narrow to one phrasing — the most
+        # recent corpus wins. The default is broad enough that the
+        # previous narrowing isn't a regression even when the new pass
+        # finds nothing.
+        new_revhist = self._detect_revision_history_pattern(docs)
+        profile.revision_history_heading_pattern = new_revhist
 
         self._log_profile_summary(profile)
         return profile
@@ -607,6 +618,72 @@ class DocumentProfiler:
         zones = sorted(zones_seen.values(), key=lambda z: z.section_pattern)
         logger.info(f"Document zones: {len(zones)} top-level sections detected")
         return zones
+
+    def _detect_revision_history_pattern(self, docs: list[DocumentIR]) -> str:
+        """Learn the heading phrase that introduces a revision/change-log
+        table (FR-34).
+
+        Walks paragraph blocks looking for short headings whose text
+        matches a broad family of revision/change/version/document
+        history/log labels AND that are immediately followed by a table
+        block. The "followed-by-table" gate prevents false positives
+        from prose mentions ("see the revision history below").
+
+        When matches are found, returns a tightened regex anchored on
+        the most-frequent phrasing observed (whitespace-tolerant — PDF
+        extractors collapse runs of spaces inconsistently). When no
+        matches are found, returns the broad default so the parser still
+        catches non-Verizon corpora that profile-time analysis missed.
+
+        The pattern is a single string (not a list) because the parser
+        compiles it once. MNO-specific override — say, T-Mobile uses
+        'Revision Log' exclusively — lands via the corrections workflow
+        on top of whatever this returns.
+        """
+        broad = r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$"
+        broad_re = re.compile(broad)
+        matches: Counter[str] = Counter()
+        for doc in docs:
+            blocks = doc.content_blocks
+            for i, b in enumerate(blocks):
+                if b.type != BlockType.PARAGRAPH or not b.text:
+                    continue
+                text = b.text.strip()
+                if not broad_re.match(text):
+                    continue
+                # Confirm the next non-image block is a table.
+                # Tolerate one image (some MNOs put a logo between the
+                # heading and the table) but stop at any other paragraph.
+                followed_by_table = False
+                for j in range(i + 1, min(i + 3, len(blocks))):
+                    nxt = blocks[j]
+                    if nxt.type == BlockType.TABLE:
+                        followed_by_table = True
+                        break
+                    if nxt.type == BlockType.PARAGRAPH:
+                        break
+                if followed_by_table:
+                    matches[re.sub(r"\s+", " ", text)] += 1
+        if not matches:
+            logger.info(
+                "Revision history heading: no corpus evidence; "
+                "using broad default pattern"
+            )
+            return broad
+        best, count = matches.most_common(1)[0]
+        # Tighten: exact phrase, but tolerate any whitespace where
+        # spaces appeared in the source (PDF extractors sometimes emit
+        # 'Revision     History' or split-line variants).
+        tightened = (
+            r"(?i)^\s*"
+            + re.escape(best).replace(r"\ ", r"\s+")
+            + r"\s*$"
+        )
+        logger.info(
+            f"Revision history heading: {best!r} "
+            f"(occurrences={count}, pattern={tightened!r})"
+        )
+        return tightened
 
     def _collect_header_footer(
         self, docs: list[DocumentIR]
