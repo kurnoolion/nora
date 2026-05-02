@@ -248,11 +248,28 @@ class MockQueryAnalyzer:
         if any(w in q_lower for w in ["test case", "test plan", "coverage", "traceability"]):
             return QueryType.TRACEABILITY
 
-        # Feature-level
-        if any(w in q_lower for w in ["all requirements", "all reqs", "everything about", "related to"]):
+        # Feature-level — concept-shaped queries about a named topic.
+        # Most specific so checked first.
+        if any(w in q_lower for w in ["everything about", "related to"]):
             return QueryType.FEATURE_LEVEL
 
-        # Cross-doc (multi-plan keywords)
+        # Cross-doc / list-style: the user is asking for ALL/EVERY items
+        # spanning multiple specs. Catches both:
+        #   "What requirements exist for X across all VZW specs?"
+        #   "What are all the X requirements?" (no plan named — answer
+        #    spans whatever plans contain X)
+        # These need wider retrieval than a within-plan lookup; the
+        # caller (QueryPipeline) uses the query type to pick top_k.
+        cross_doc_phrases = (
+            "across all", "across the", "in all", "across vzw",
+            "across mnos", "across plans", "across specs",
+            "all the requirements", "all reqs",
+            "what are all", "what requirements",
+        )
+        if any(p in q_lower for p in cross_doc_phrases):
+            return QueryType.CROSS_DOC
+
+        # Multi-plan name signal — explicit plan names from aliases
         cross_doc_signals = 0
         for alias in _PLAN_ALIASES:
             if alias in q_lower:

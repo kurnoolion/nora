@@ -25,7 +25,24 @@ from core.src.query.graph_scope import GraphScoper
 from core.src.query.rag_retriever import RAGRetriever
 from core.src.query.context_builder import ContextBuilder
 from core.src.query.synthesizer import MockSynthesizer
-from core.src.query.schema import QueryResponse, CandidateSet
+from core.src.query.schema import QueryResponse, CandidateSet, QueryType
+
+
+# Per-query-type retrieval breadth. Lookup-style queries ("What is
+# VZ_REQ_X?") work best with a tight top_k anchored on the entity
+# match. List/breadth-style queries ("What requirements exist for X
+# across all specs?") need more headroom because the expected hits
+# are often parent/overview reqs whose chunks are short (heading +
+# path only) and rank just below richer leaf chunks; widening top_k
+# lets those surface.
+_TYPE_TOP_K = {
+    QueryType.CROSS_DOC: 25,
+    QueryType.CROSS_MNO_COMPARISON: 25,
+    QueryType.STANDARDS_COMPARISON: 25,
+    QueryType.FEATURE_LEVEL: 25,
+    QueryType.TRACEABILITY: 20,
+    QueryType.RELEASE_DIFF: 20,
+}
 
 from core.src.vectorstore.embedding_base import EmbeddingProvider
 from core.src.vectorstore.store_base import VectorStoreProvider
@@ -104,9 +121,13 @@ class QueryPipeline:
             if verbose:
                 logger.info(f"[Stage 3] Candidates: {candidates.to_dict()}")
 
-        # Stage 4: Targeted RAG
+        # Stage 4: Targeted RAG. top_k widens for cross-doc / list-
+        # style query types — the expected hits in those categories
+        # are often parent/overview chunks that rank below the richer
+        # leaf chunks, so a tight top_k systematically misses them.
+        type_top_k = max(self._top_k, _TYPE_TOP_K.get(intent.query_type, 0))
         chunks = self._retriever.retrieve(
-            query_text, candidates, scoped.scoped_mnos, top_k=self._top_k,
+            query_text, candidates, scoped.scoped_mnos, top_k=type_top_k,
         )
         if verbose:
             logger.info(
