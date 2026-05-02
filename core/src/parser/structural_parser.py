@@ -34,6 +34,21 @@ _HEADING_MAX_LEN = 200
 _SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*")
 
 
+# Req-ID canonicalization. PDF text extraction occasionally drops the
+# underscore between a req_id's plan-prefix and trailing digit (e.g.
+# `"VZ_REQ_LTEOTADM_65"` → extracted as `"VZ_REQ_LTEOTADM 65"` because
+# bold-formatting fused two text runs). Profile patterns now accept
+# either separator; this helper normalizes a matched id to the
+# canonical underscore form for storage and comparison so the same
+# requirement isn't tracked under two different identifiers.
+_REQ_ID_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _canonicalize_req_id(rid: str) -> str:
+    """Normalize whitespace in a matched req_id to underscores."""
+    return _REQ_ID_WHITESPACE_RE.sub("_", rid).strip("_")
+
+
 # ── Output data structures ──────────────────────────────────────────
 
 
@@ -457,7 +472,7 @@ class GenericStructuralParser:
                 # struck text — those ids are "deleted" and must not
                 # surface via table cross-references either.
                 if self._req_id_re and block.text:
-                    for sid in self._req_id_re.findall(block.text):
+                    for sid in self._find_req_ids(block.text):
                         struck_req_ids.add(sid)
                 self._parse_stats.struck_blocks_dropped += 1
                 continue
@@ -484,7 +499,7 @@ class GenericStructuralParser:
 
                 # Check if this is a requirement ID block (small font)
                 if self._is_req_id_block(block):
-                    req_ids = self._req_id_re.findall(block.text) if self._req_id_re else []
+                    req_ids = self._find_req_ids(block.text)
                     if req_ids:
                         if current_section is None:
                             # No section opened yet — hold for the first heading.
@@ -608,7 +623,7 @@ class GenericStructuralParser:
                     self._append_text(current_section, block.text)
                     # Also check for inline req IDs in body text
                     if self._req_id_re and not current_section.req_id:
-                        ids = self._req_id_re.findall(block.text)
+                        ids = self._find_req_ids(block.text)
                         if ids:
                             current_section.req_id = ids[0]
                             _record_paragraph_anchor(ids[0])
@@ -680,7 +695,7 @@ class GenericStructuralParser:
             anchor_cells: list[str] = list(row)
 
             # Strategy 1: column 1 only.
-            col1_ids = self._req_id_re.findall(row[0]) if row[0] else []
+            col1_ids = self._find_req_ids(row[0])
             for rid in col1_ids:
                 if rid in paragraph_req_ids or rid in seen_in_table:
                     continue
@@ -692,7 +707,7 @@ class GenericStructuralParser:
                 for cell in row[1:]:
                     if not cell:
                         continue
-                    cell_ids = self._req_id_re.findall(cell)
+                    cell_ids = self._find_req_ids(cell)
                     for rid in cell_ids:
                         if rid in paragraph_req_ids or rid in seen_in_table:
                             continue
@@ -923,6 +938,18 @@ class GenericStructuralParser:
             return bool(self._req_id_re.search(block.text))
         return False
 
+    def _find_req_ids(self, text: str) -> list[str]:
+        """Find all req_id patterns in `text` and canonicalize each.
+
+        Wraps `_req_id_re.findall(text)` to absorb PDF-extraction
+        artifacts (whitespace where an underscore should be) — every
+        matched id is normalized via `_canonicalize_req_id` so the same
+        requirement is never tracked under two different identifiers.
+        """
+        if not self._req_id_re or not text:
+            return []
+        return [_canonicalize_req_id(rid) for rid in self._req_id_re.findall(text)]
+
     def _classify_heading(
         self, block: ContentBlock
     ) -> tuple[str, str]:
@@ -1062,7 +1089,7 @@ class GenericStructuralParser:
 
         # Internal requirement ID references
         if self._req_id_re:
-            for rid in self._req_id_re.findall(text):
+            for rid in self._find_req_ids(text):
                 ref_plan = self._extract_plan_id_from_req(rid)
                 if ref_plan is not None:
                     if ref_plan != own_plan_id:

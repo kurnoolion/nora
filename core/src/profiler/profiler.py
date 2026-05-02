@@ -396,14 +396,25 @@ class DocumentProfiler:
     def _detect_requirement_ids(
         self, docs: list[DocumentIR]
     ) -> RequirementIdPattern:
-        """Mine requirement ID patterns from document text."""
-        # Try common MNO requirement ID patterns
+        """Mine requirement ID patterns from document text.
+
+        Accepts both `<PLAN>_<NUMBER>` (canonical) and `<PLAN> <NUMBER>`
+        (PDF artifact where the underscore was dropped between two
+        bold-formatted runs). All matched ids are canonicalized to the
+        underscore form before being stored, so downstream consumers
+        see one identifier per requirement regardless of extractor
+        artifacts.
+        """
+        # `[_\s]` accepts either a literal underscore OR a whitespace
+        # character before the trailing digits. The canonicalization
+        # step below normalizes the result so the same id never appears
+        # under two different keys.
         candidate_patterns = [
-            (r"VZ_REQ_[A-Z0-9_]+_\d+", "VZ_REQ"),
-            (r"ATT_REQ_[A-Z0-9_]+_\d+", "ATT_REQ"),
-            (r"TMO_REQ_[A-Z0-9_]+_\d+", "TMO_REQ"),
+            (r"VZ_REQ_[A-Z0-9_]+[_\s]\d+", "VZ_REQ"),
+            (r"ATT_REQ_[A-Z0-9_]+[_\s]\d+", "ATT_REQ"),
+            (r"TMO_REQ_[A-Z0-9_]+[_\s]\d+", "TMO_REQ"),
             # Generic: PREFIX_WORD_NUMBER
-            (r"[A-Z]{2,}_REQ_[A-Z0-9_]+_\d+", "GENERIC_REQ"),
+            (r"[A-Z]{2,}_REQ_[A-Z0-9_]+[_\s]\d+", "GENERIC_REQ"),
         ]
 
         best_pattern = ""
@@ -415,7 +426,10 @@ class DocumentProfiler:
             all_ids: list[str] = []
             for doc in docs:
                 for b in doc.content_blocks:
-                    all_ids.extend(regex.findall(b.text))
+                    raw = regex.findall(b.text)
+                    # Canonicalize every matched id (replace any
+                    # whitespace inside it with underscore).
+                    all_ids.extend(re.sub(r"\s+", "_", r) for r in raw)
 
             if len(all_ids) > best_count:
                 best_count = len(all_ids)

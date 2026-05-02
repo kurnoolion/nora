@@ -420,6 +420,46 @@ def test_multiline_heading_two_consecutive_continuation_blocks():
     assert "14 SUPPORT MATRIX" in sec.title
 
 
+# ---------------------------------------------------------------------------
+# Req-ID canonicalization (PDF-extraction underscore → space artifact)
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalize_req_id_replaces_internal_whitespace():
+    """`_canonicalize_req_id("VZ_REQ_LTEOTADM 65")` → `"VZ_REQ_LTEOTADM_65"`."""
+    from core.src.parser.structural_parser import _canonicalize_req_id
+    assert _canonicalize_req_id("VZ_REQ_LTEOTADM 65") == "VZ_REQ_LTEOTADM_65"
+    assert _canonicalize_req_id("VZ_REQ_LTESMS\t70") == "VZ_REQ_LTESMS_70"
+    # Already canonical → unchanged
+    assert _canonicalize_req_id("VZ_REQ_LTEDATARETRY_2377") == "VZ_REQ_LTEDATARETRY_2377"
+
+
+def test_req_id_with_space_artifact_recovered():
+    """A small-font req_id block whose underscore was lost in PDF
+    extraction (`"VZ_REQ_LTEOTADM 65"`) must still be detected and
+    stored canonically (`"VZ_REQ_LTEOTADM_65"`)."""
+    profile = _profile_no_space_heading()
+    # Profile pattern accepts either underscore or whitespace.
+    profile.requirement_id = RequirementIdPattern(
+        pattern=r"VZ_REQ_[A-Z0-9_]+[_\s]\d+"
+    )
+    profile.body_text = BodyText(font_size_min=11.0, font_size_max=12.0)
+
+    heading = _block(0, "1 Top Chapter")
+    artifact_id = ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=1),
+        text="VZ_REQ_TEST_PLAN 65",  # space, not underscore
+        font_info=FontInfo(size=7.0, bold=True),
+    )
+    blocks = [heading, artifact_id]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(r for r in tree.requirements if r.section_number == "1")
+    assert sec.req_id == "VZ_REQ_TEST_PLAN_65", (
+        f"req_id should be canonicalized to underscore form; got {sec.req_id!r}"
+    )
+
+
 def test_struck_req_id_not_anchored_via_table_cell():
     """A req_id that appeared in a struck-through paragraph block must NOT
     surface as a table-anchored Requirement when the same id also appears
