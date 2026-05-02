@@ -410,6 +410,21 @@ class GenericStructuralParser:
         # real anchor on page 34).
         deferred_tables: list[tuple[ContentBlock, Requirement]] = []
 
+        # Heading-continuation defense state. PyMuPDF text extraction
+        # often splits a long heading across multiple blocks ("1.1.7
+        # DEVICE TESTING ON ... BAND" / "13 NETWORK"). When the
+        # continuation line happens to start with `<digits><space>
+        # <uppercase>`, the relaxed numbering gate misclassifies it as
+        # a phantom depth-1 chapter. The fingerprint of these false
+        # positives is precise: depth-1 section_number AFTER a deeper
+        # section has been classified, with the immediately-preceding
+        # block also heading-shaped (no body text intervening). When
+        # that fingerprint matches, the new "section" is appended to
+        # the current section's title as a continuation rather than
+        # creating a phantom chapter.
+        seen_deep_section = False
+        previous_block_was_heading = False
+
         # Track section_numbers already created. Numbering-driven heading
         # classification is permissive enough that body paragraphs starting
         # with a previously-seen section number can occasionally match the
@@ -492,11 +507,48 @@ class GenericStructuralParser:
                                 current_section.section_number,
                                 current_section.req_id,
                             )
+                    # The req_id "closes" the current heading group: a
+                    # later block, even if heading-shaped, is the start
+                    # of a new heading, not a continuation of the prior
+                    # one.
+                    previous_block_was_heading = False
                     continue
 
                 # Check if this is a heading block
                 section_num, heading_text = self._classify_heading(block)
                 if section_num:
+                    new_depth = section_num.count(".") + 1
+
+                    # Heading-continuation defense. PyMuPDF often splits a
+                    # multi-line heading across blocks; when the second
+                    # line happens to start with `<digits><space><uppercase>`
+                    # (e.g. "13 NETWORK" continuing "1.1.7 ... BAND"),
+                    # the relaxed numbering gate misclassifies it as a
+                    # phantom depth-1 chapter. Fingerprint:
+                    #   - depth-1 section_number
+                    #   - we've already created at least one deep section
+                    #   - the immediately-preceding block was also
+                    #     heading-shaped (no body text intervening — req_id
+                    #     blocks reset the flag).
+                    # When all three hold, the new "section" is appended
+                    # to the current section's title as a continuation.
+                    if (
+                        new_depth == 1
+                        and seen_deep_section
+                        and previous_block_was_heading
+                        and current_section is not None
+                        and current_section.section_number
+                    ):
+                        cont_text = block.text.strip()
+                        if cont_text:
+                            current_section.title = (
+                                (current_section.title + " " + cont_text).strip()
+                                if current_section.title
+                                else cont_text
+                            )
+                        # Stay in heading context — multi-line continuations stack.
+                        continue
+
                     # FR-31: extract priority marker (if any) from heading text
                     # before storing — title carries the cleaned form.
                     priority, heading_text = self._extract_priority(heading_text)
@@ -514,6 +566,9 @@ class GenericStructuralParser:
                         pending_req_id = ""
                         sections.append(current_section)
                         seen_section_numbers.add(section_num)
+                        previous_block_was_heading = True
+                        if new_depth >= 2:
+                            seen_deep_section = True
                         continue
                     # Duplicate section_number. If the prior occurrence is a
                     # "phantom" — empty req_id AND empty body AND no children
@@ -541,6 +596,9 @@ class GenericStructuralParser:
                             _record_paragraph_anchor(pending_req_id)
                         pending_req_id = ""
                         current_section = existing
+                        previous_block_was_heading = True
+                        if new_depth >= 2:
+                            seen_deep_section = True
                         continue
                 # Section number duplicate (real, with content) or no match
                 # → fall through to body text path.
@@ -554,6 +612,8 @@ class GenericStructuralParser:
                         if ids:
                             current_section.req_id = ids[0]
                             _record_paragraph_anchor(ids[0])
+                # Body text breaks the heading-continuation chain.
+                previous_block_was_heading = False
 
             elif block.type == BlockType.TABLE:
                 if current_section:

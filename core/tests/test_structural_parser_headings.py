@@ -331,6 +331,95 @@ def test_phantom_section_replaced_by_real_heading():
     assert "real body content" in sec.text
 
 
+# ---------------------------------------------------------------------------
+# Heading-continuation defense (PyMuPDF wrap-line false positives)
+# ---------------------------------------------------------------------------
+
+
+def test_heading_continuation_appended_not_phantom_chapter():
+    """A depth-1 heading-shaped block appearing IMMEDIATELY AFTER another
+    heading-shaped block, when a deep section has already been seen, is
+    a wrap-line continuation — append to the current section's title
+    rather than create a phantom chapter. This is the `_LTEB13NAC_1876
+    "13 NETWORK"` pattern."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1.1 Introduction"),                       # depth 2 — sets seen_deep
+        _block(1, "real intro body"),                         # body breaks chain
+        _block(2, "1.1.7 DEVICE TESTING ON THE BAND"),       # depth 3 heading
+        _block(3, "13 NETWORK"),                              # continuation — must NOT classify
+    ]
+    tree = _parse(blocks)
+    nums = [r.section_number for r in tree.requirements]
+    assert "13" not in nums, (
+        f"continuation '13 NETWORK' must not become a depth-1 section; got {nums}"
+    )
+    sec_117 = next(r for r in tree.requirements if r.section_number == "1.1.7")
+    assert "13 NETWORK" in sec_117.title, (
+        f"continuation must merge into 1.1.7's title; got {sec_117.title!r}"
+    )
+
+
+def test_heading_continuation_only_when_previous_was_heading():
+    """A depth-1 heading appearing AFTER body text (not after another
+    heading-shaped block) must classify normally — body text breaks the
+    continuation chain."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1.1 Introduction"),
+        _block(1, "real body content under intro"),
+        _block(2, "1.1.7 Some Heading"),
+        _block(3, "real body under 1.1.7"),  # ← body breaks the chain
+        _block(4, "13 NETWORK"),              # ← classifies normally as depth-1 (false positive in real OA, but parser-level we accept here)
+    ]
+    tree = _parse(blocks)
+    nums = [r.section_number for r in tree.requirements]
+    # With body intervening, "13 NETWORK" classifies as a section. Not
+    # ideal in real OA but the body-intervening case is rare and the
+    # tighter heuristic would over-reject real chapter transitions.
+    assert "13" in nums, (
+        "depth-1 heading after body text classifies normally — fingerprint requires "
+        "back-to-back heading blocks"
+    )
+
+
+def test_first_depth1_section_always_classifies():
+    """The very first depth-1 heading in a document must classify as a
+    real chapter — the continuation defense only fires AFTER a deeper
+    section has been seen. This protects against breaking real top-level
+    chapter detection."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1 LTE Data Retry"),  # first depth-1 — must classify
+        _block(1, "1.1 Introduction"),
+    ]
+    tree = _parse(blocks)
+    nums = [r.section_number for r in tree.requirements]
+    assert "1" in nums
+    assert "1.1" in nums
+
+
+def test_multiline_heading_two_consecutive_continuation_blocks():
+    """Two heading-shaped continuation blocks back-to-back BOTH merge.
+    Continuation context persists as long as nothing breaks the chain
+    (body text, req_id assignment, or a deeper section)."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1.1 Introduction"),
+        _block(1, "intro body"),
+        _block(2, "1.1.7 DEVICE TESTING ON"),  # heading line 1
+        _block(3, "13 NETWORK"),                # continuation line 2 — caught
+        _block(4, "14 SUPPORT MATRIX"),         # continuation line 3 — also caught
+    ]
+    tree = _parse(blocks)
+    nums = [r.section_number for r in tree.requirements]
+    assert "13" not in nums, "first continuation must not classify"
+    assert "14" not in nums, "second continuation must also not classify"
+    sec = next(r for r in tree.requirements if r.section_number == "1.1.7")
+    assert "13 NETWORK" in sec.title
+    assert "14 SUPPORT MATRIX" in sec.title
+
+
 def test_struck_req_id_not_anchored_via_table_cell():
     """A req_id that appeared in a struck-through paragraph block must NOT
     surface as a table-anchored Requirement when the same id also appears
