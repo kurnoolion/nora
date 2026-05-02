@@ -201,6 +201,209 @@ def test_advisory_style_rule_does_not_gate_classification():
 
 
 # ---------------------------------------------------------------------------
+# No-whitespace heading variant (PDF-extraction artifact)
+# ---------------------------------------------------------------------------
+
+
+def _profile_no_space_heading() -> DocumentProfile:
+    """Profile with the relaxed numbering pattern that accepts no-space
+    title runs (matches what the profiler emits today). Top-level numbers
+    still require whitespace; only multi-dot section numbers may run
+    directly into an uppercase title (PDF-extraction artifact)."""
+    p = _profile()
+    p.heading_detection.numbering_pattern = (
+        r"^(?:(\d+)(?=\s)|(\d+(?:\.\d+)+)(?=\s|[A-Z]))"
+    )
+    return p
+
+
+def test_heading_with_no_space_before_title_classified():
+    """PyMuPDF text extraction can drop the space between section number
+    and title for bold-rendered headings (e.g. `1.4.3.1.1.5EMM Cause Code 19`).
+    The relaxed gate must classify these so subsections aren't silently lost."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1.4.3.1.1 PARENT SECTION HEADING"),
+        _block(1, "1.4.3.1.1.5EMM Cause Code 19"),  # no space between number and title
+        _block(2, "body text under 1.4.3.1.1.5"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(
+        (r for r in tree.requirements if r.section_number == "1.4.3.1.1.5"),
+        None,
+    )
+    assert sec is not None, (
+        f"Expected section 1.4.3.1.1.5 to be classified; got "
+        f"{[r.section_number for r in tree.requirements]}"
+    )
+    assert sec.title == "EMM Cause Code 19", f"unexpected title: {sec.title!r}"
+
+
+def test_two_digit_final_segment_no_space_classified():
+    """Same fix must work for two-digit final segments — e.g.
+    `1.4.3.1.1.10Upon receipt` (no space, two-digit `.10`)."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1.4.3.1.1 PARENT"),
+        _block(1, "1.4.3.1.1.10Upon receipt of an ATTACH REJECT"),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec = next(
+        (r for r in tree.requirements if r.section_number == "1.4.3.1.1.10"),
+        None,
+    )
+    assert sec is not None
+    assert sec.title.startswith("Upon receipt"), f"unexpected title: {sec.title!r}"
+
+
+def test_no_space_lowercase_following_rejected():
+    """Section number followed directly by a LOWERCASE letter (no space)
+    must NOT classify — these are body-text artifacts like '5.0gnetwork'
+    or rare PDF cases where a sentence runs into a number. Uppercase
+    enforces the title-case heading convention."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1 Real Top"),
+        _block(1, "5.0gnetwork bandwidth note"),  # lowercase after — body text
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    nums = [r.section_number for r in tree.requirements]
+    assert "5.0" not in nums, "no-space-lowercase variant should not classify"
+    assert "1" in nums
+
+
+def test_top_level_no_space_uppercase_rejected_3gpp_case():
+    """Body text starting with `3GPP TS 24.301` MUST NOT be misread as
+    section `3` with title `GPP TS 24.301`. The fix: top-level (no-dot)
+    numbers require whitespace; only multi-dot numbers may run directly
+    into an uppercase title."""
+    profile = _profile_no_space_heading()
+    blocks = [
+        _block(0, "1 Real Top"),
+        _block(1, "3GPP TS 24.301 specifies the EMM cause codes."),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    nums = [r.section_number for r in tree.requirements]
+    assert "3" not in nums, "'3GPP' must not classify as section 3 heading"
+    assert "1" in nums
+
+
+# ---------------------------------------------------------------------------
+# Phantom-section replace on duplicate section_number (TOC residual defense)
+# ---------------------------------------------------------------------------
+
+
+def test_phantom_section_replaced_by_real_heading():
+    """If a previous heading classification created an "empty" section
+    (no req_id, no body, no children) — typically a TOC entry that
+    slipped past the TOC drop — and a later real heading with the same
+    section_number arrives, the real heading must REPLACE the phantom
+    rather than be demoted to body text. Demotion would shift req_id
+    assignment by one slot and cascade through the entire subtree."""
+    profile = _profile_no_space_heading()
+    # Simulate: phantom heading first (no following req_id, no body),
+    # then later the real heading with a req_id following it.
+    phantom_block = _block(0, "1.1.1 Phantom — TOC residual")
+    real_block = _block(1, "1.1.1 Real Heading")
+    real_id = ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=2, index=2),
+        text="VZ_REQ_TEST_42",
+        font_info=FontInfo(size=7.0, bold=True),  # small font = req_id block
+    )
+    body = _block(3, "real body content under 1.1.1", size=12.0)
+    blocks = [phantom_block, real_block, real_id, body]
+
+    # Profile needs requirement_id pattern + body_text for req_id-block detection.
+    profile.requirement_id = RequirementIdPattern(pattern=r"VZ_REQ_[A-Z0-9_]+_\d+")
+    profile.body_text = BodyText(font_size_min=11.0, font_size_max=12.0)
+
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+
+    # Exactly one section 1.1.1 — the real one, not the phantom.
+    sec_111 = [r for r in tree.requirements if r.section_number == "1.1.1"]
+    assert len(sec_111) == 1, f"Expected 1 section 1.1.1, got {len(sec_111)}"
+    sec = sec_111[0]
+    assert sec.title == "Real Heading", f"unexpected title {sec.title!r}"
+    assert sec.req_id == "VZ_REQ_TEST_42", (
+        f"req_id should attach to the REAL heading, got {sec.req_id!r}"
+    )
+    assert "real body content" in sec.text
+
+
+def test_extra_req_id_in_section_does_not_lateral_to_next_heading():
+    """OA convention: req_ids are TRAILING markers — they belong to the
+    section they appear in. If a section already has a req_id and another
+    small-font id appears (artifact, footer, duplicate), it must NOT be
+    lateralled to the next heading via `pending_req_id`. Otherwise every
+    subsequent heading inherits the wrong id and the assignment cascade
+    is off by one across the whole subtree."""
+    profile = _profile_no_space_heading()
+    profile.requirement_id = RequirementIdPattern(pattern=r"VZ_REQ_[A-Z0-9_]+_\d+")
+    profile.body_text = BodyText(font_size_min=11.0, font_size_max=12.0)
+
+    sec_a_heading = _block(0, "1 Section A")
+    sec_a_id = ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=1),
+        text="VZ_REQ_TEST_100",
+        font_info=FontInfo(size=7.0, bold=True),
+    )
+    sec_a_extra = ContentBlock(  # extra id — must NOT lateral
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=2),
+        text="VZ_REQ_TEST_999",
+        font_info=FontInfo(size=7.0, bold=True),
+    )
+    sec_b_heading = _block(3, "2 Section B")
+    sec_b_id = ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=4),
+        text="VZ_REQ_TEST_200",
+        font_info=FontInfo(size=7.0, bold=True),
+    )
+    blocks = [sec_a_heading, sec_a_id, sec_a_extra, sec_b_heading, sec_b_id]
+
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    secs = {r.section_number: r.req_id for r in tree.requirements}
+    assert secs.get("1") == "VZ_REQ_TEST_100", (
+        f"Section 1 must keep its first req_id; got {secs.get('1')!r}"
+    )
+    assert secs.get("2") == "VZ_REQ_TEST_200", (
+        f"Section 2 must get its OWN trailing id, not lateralled _999; "
+        f"got {secs.get('2')!r}"
+    )
+
+
+def test_real_duplicate_section_still_demoted():
+    """If a duplicate section_number arrives but the existing section
+    already has a req_id (real, not phantom), the duplicate is still
+    demoted to body text per the existing invariant."""
+    profile = _profile_no_space_heading()
+    profile.requirement_id = RequirementIdPattern(pattern=r"VZ_REQ_[A-Z0-9_]+_\d+")
+    profile.body_text = BodyText(font_size_min=11.0, font_size_max=12.0)
+
+    real_block = _block(0, "1.1.1 First Real Heading")
+    real_id = ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=1),
+        text="VZ_REQ_TEST_99",
+        font_info=FontInfo(size=7.0, bold=True),
+    )
+    duplicate = _block(2, "1.1.1 Stray Duplicate")  # demoted; existing has req_id
+    blocks = [real_block, real_id, duplicate]
+
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    sec_111 = [r for r in tree.requirements if r.section_number == "1.1.1"]
+    assert len(sec_111) == 1
+    sec = sec_111[0]
+    assert sec.title == "First Real Heading"
+    assert sec.req_id == "VZ_REQ_TEST_99"
+    # Duplicate's text appears as body content under the real section.
+    assert "Stray Duplicate" in sec.text
+
+
+# ---------------------------------------------------------------------------
 # FR-34: TOC omission
 # ---------------------------------------------------------------------------
 

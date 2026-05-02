@@ -199,11 +199,15 @@ class DocumentProfile:
     leader-dot-page-number suffix ('Section Title ........ 47'). Empty
     string disables TOC detection. Anchored at end-of-line by default."""
 
-    toc_page_threshold: float = 0.8
+    toc_page_threshold: float = 0.7
     """A page is treated as a TOC page (all blocks dropped wholesale) when
     this fraction or more of its paragraph blocks match
     `toc_detection_pattern`. Range [0.0, 1.0]; 1.0 disables page-level
-    drop (only individual matching blocks dropped)."""
+    drop (only individual matching blocks dropped). Default 0.7 — chosen
+    after observing that PDF extractors commonly wrap TOC entries across
+    two blocks (the leader-dot suffix lands in a separate block from the
+    section title), which lowers the per-page match rate. Real-content
+    pages essentially never reach 70% leader-dot patterns."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

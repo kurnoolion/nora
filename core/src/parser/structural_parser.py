@@ -447,35 +447,79 @@ class GenericStructuralParser:
                 if self._is_req_id_block(block):
                     req_ids = self._req_id_re.findall(block.text) if self._req_id_re else []
                     if req_ids:
-                        # If we have a current section without a req_id, assign it
-                        if current_section and not current_section.req_id:
+                        if current_section is None:
+                            # No section opened yet — hold for the first heading.
+                            # (Rare; only fires when a doc-level id precedes
+                            # any structural heading.)
+                            pending_req_id = req_ids[0]
+                        elif not current_section.req_id:
+                            # Trailing-marker pattern (OA): the small-font id
+                            # right after a heading is THIS section's id.
                             current_section.req_id = req_ids[0]
                             _record_paragraph_anchor(req_ids[0])
                         else:
-                            pending_req_id = req_ids[0]
+                            # Section already has a req_id. Ignore — the first
+                            # one wins. Lateralling to the next section's
+                            # `pending_req_id` is wrong for trailing-marker
+                            # corpora and produces an off-by-one cascade.
+                            logger.debug(
+                                "Extra req_id %s ignored — section %r already has %r",
+                                req_ids[0],
+                                current_section.section_number,
+                                current_section.req_id,
+                            )
                     continue
 
                 # Check if this is a heading block
                 section_num, heading_text = self._classify_heading(block)
-                if section_num and section_num not in seen_section_numbers:
+                if section_num:
                     # FR-31: extract priority marker (if any) from heading text
                     # before storing — title carries the cleaned form.
                     priority, heading_text = self._extract_priority(heading_text)
-                    # New section
-                    current_section = Requirement(
-                        section_number=section_num,
-                        title=heading_text,
-                        req_id=pending_req_id,
-                        zone_type=self._classify_zone(section_num),
-                        priority=priority,
+                    if section_num not in seen_section_numbers:
+                        # New section — first occurrence wins.
+                        current_section = Requirement(
+                            section_number=section_num,
+                            title=heading_text,
+                            req_id=pending_req_id,
+                            zone_type=self._classify_zone(section_num),
+                            priority=priority,
+                        )
+                        if pending_req_id:
+                            _record_paragraph_anchor(pending_req_id)
+                        pending_req_id = ""
+                        sections.append(current_section)
+                        seen_section_numbers.add(section_num)
+                        continue
+                    # Duplicate section_number. If the prior occurrence is a
+                    # "phantom" — empty req_id AND empty body AND no children
+                    # yet — it likely came from a TOC residual or other
+                    # noise. Replace it with this real heading rather than
+                    # demote the real heading to body text. Preserves the
+                    # invariant that section_numbers are unique while
+                    # protecting against off-by-one cascades on req_id
+                    # assignment when TOC bleed-through creates a phantom.
+                    existing = next(
+                        (s for s in sections if s.section_number == section_num),
+                        None,
                     )
-                    if pending_req_id:
-                        _record_paragraph_anchor(pending_req_id)
-                    pending_req_id = ""
-                    sections.append(current_section)
-                    seen_section_numbers.add(section_num)
-                    continue
-                # Section number duplicate or no match → fall through to body text.
+                    if (
+                        existing is not None
+                        and not existing.req_id
+                        and not existing.text
+                        and not existing.children
+                    ):
+                        existing.title = heading_text
+                        existing.req_id = pending_req_id
+                        existing.zone_type = self._classify_zone(section_num)
+                        existing.priority = priority
+                        if pending_req_id:
+                            _record_paragraph_anchor(pending_req_id)
+                        pending_req_id = ""
+                        current_section = existing
+                        continue
+                # Section number duplicate (real, with content) or no match
+                # → fall through to body text path.
 
                 # Body text — append to current section
                 if current_section:

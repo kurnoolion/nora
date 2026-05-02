@@ -352,13 +352,24 @@ class DocumentProfiler:
     ) -> tuple[str, int]:
         """Detect section numbering scheme from heading text.
 
-        The relaxed pattern matches both top-level numbers without dots
+        The pattern matches both top-level numbers without dots
         ("2 LTE Data Retry") and nested forms ("2.1", "2.1.1.1") uniformly,
-        so the parser doesn't miss top-level chapter headings just because
-        they lack a trailing dot. Style/font is not part of the contract;
-        any block matching the pattern is a heading candidate.
+        and accepts dotted-number headings where the title runs directly
+        into the section number with no whitespace separator (a common
+        PDF-extraction artifact for bold-rendered headings — e.g.
+        `"1.4.3.1.1.5EMM Cause Code 19"`). Acceptance:
+          - top-level (no dot): must be followed by whitespace, e.g. `"2 LTE Data Retry"`.
+          - multi-dot: followed by whitespace OR an uppercase letter
+            (non-consuming lookahead).
+        Tightening top-level to require whitespace prevents body text like
+        `"3GPP TS 24.301"` from being misread as section `"3"` with title
+        `"GPP TS 24.301"`. Length and terminal-punctuation guards in
+        `parser._classify_heading` further defend against numbered list
+        items in body text.
         """
-        section_number_re = re.compile(r"^(\d+(?:\.\d+)*)\s+\S")
+        section_number_re = re.compile(
+            r"^(?:(\d+)(?=\s)|(\d+(?:\.\d+)+)(?=\s|[A-Z]))"
+        )
         depths = []
 
         for b in text_blocks:
@@ -366,7 +377,11 @@ class DocumentProfiler:
                 continue
             m = section_number_re.match(b.text.strip())
             if m:
-                num = m.group(1).rstrip(".")
+                # group 1 = top-level (e.g. "2"); group 2 = multi-dot
+                # (e.g. "1.4.3"). Whichever fired carries the number.
+                num = (m.group(1) or m.group(2) or "").rstrip(".")
+                if not num:
+                    continue
                 depth = num.count(".") + 1
                 depths.append(depth)
 
@@ -374,8 +389,8 @@ class DocumentProfiler:
             return "", 0
 
         max_depth = max(depths)
-        # Emit the same relaxed pattern so the parser uses it directly.
-        pattern = r"^(\d+(?:\.\d+)*)\s+\S"
+        # Emit the same pattern so the parser uses it directly as its gate.
+        pattern = r"^(?:(\d+)(?=\s)|(\d+(?:\.\d+)+)(?=\s|[A-Z]))"
         return pattern, max_depth
 
     def _detect_requirement_ids(
