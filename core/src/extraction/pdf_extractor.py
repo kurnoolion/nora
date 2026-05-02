@@ -103,6 +103,12 @@ class PDFExtractor(BaseExtractor):
             plumber_page = plumber_pdf.pages[page_num]
             page_height = page.rect.height
 
+            # --- Strike-through line candidates (FR-33 [D-031]) ---
+            # Collected once per page; used both by table strike detection
+            # (immediately below) and by the per-span strike check
+            # inside `_extract_text_segments` for paragraph blocks.
+            strike_lines = self._collect_strike_lines(page)
+
             # --- Tables (pdfplumber) ---
             table_bboxes: list[tuple[float, float, float, float]] = []
             plumber_tables = plumber_page.find_tables()
@@ -125,6 +131,13 @@ class PDFExtractor(BaseExtractor):
                 total_cells = sum(1 for row in rows for c in row if c)
                 if len(non_empty_headers) <= 1 and total_cells == 0:
                     continue
+                # FR-33: detect when the table is struck through. PDF
+                # strikethrough is geometric (horizontal lines drawn over
+                # text); a table is treated as struck when multiple
+                # horizontal strike lines fall within its bbox AND each
+                # crosses a meaningful fraction of its width. The parser
+                # then drops the block via the existing FR-33 path.
+                table_struck = self._table_is_struck(bbox, strike_lines)
                 all_blocks.append(
                     ContentBlock(
                         type=BlockType.TABLE,
@@ -135,13 +148,12 @@ class PDFExtractor(BaseExtractor):
                         ),
                         headers=headers,
                         rows=rows,
+                        font_info=FontInfo(
+                            size=12.0,
+                            strikethrough=table_struck,
+                        ),
                     )
                 )
-
-            # --- Strike-through line candidates (FR-33 [D-031]) ---
-            # Collected once per page; passed to _extract_text_segments so
-            # each span can be checked against page-level strike marks.
-            strike_lines = self._collect_strike_lines(page)
 
             # --- Text blocks (pymupdf) ---
             fitz_blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)[
@@ -402,6 +414,37 @@ class PDFExtractor(BaseExtractor):
                     x0, x1 = sorted([p1.x, p2.x])
                     lines.append((y_c, x0, x1))
         return lines
+
+    @staticmethod
+    def _table_is_struck(
+        table_bbox: tuple[float, float, float, float],
+        strike_lines: list[tuple[float, float, float]],
+        min_lines: int = 2,
+        min_overlap_frac: float = 0.5,
+    ) -> bool:
+        """Decide whether a table block is struck through (FR-33 [D-031]).
+
+        Heuristic: count horizontal strike lines whose y-coordinate falls
+        within the table's vertical extent AND that horizontally cover
+        >= `min_overlap_frac` of the table's width. When at least
+        `min_lines` such lines are found, the table is treated as struck.
+        Avoids false positives on tables that happen to be near a single
+        horizontal divider line.
+        """
+        x0, y0, x1, y1 = table_bbox
+        table_width = x1 - x0
+        if table_width <= 0 or y1 - y0 <= 0:
+            return False
+        crossing = 0
+        for line_y, line_x0, line_x1 in strike_lines:
+            if line_y < y0 or line_y > y1:
+                continue
+            overlap = min(x1, line_x1) - max(x0, line_x0)
+            if overlap >= table_width * min_overlap_frac:
+                crossing += 1
+                if crossing >= min_lines:
+                    return True
+        return False
 
     @staticmethod
     def _span_struck(
