@@ -654,15 +654,18 @@ class GenericStructuralParser:
                         )
                     )
 
-        # Second pass: extract table-anchored reqs now that paragraph_req_ids
-        # and struck_req_ids are fully populated. Any req_id appearing as
-        # paragraph-anchored or as struck takes precedence — table
-        # extraction skips it.
-        skip_set = paragraph_req_ids | struck_req_ids
-        for tbl_block, parent_section in deferred_tables:
-            self._extract_table_anchored_reqs(
-                tbl_block, parent_section, sections, skip_set
-            )
+        # Second pass: extract table-anchored reqs (D-027) when enabled.
+        # Disabled corpora (paragraph-only-requirement docs like Verizon
+        # OA) drop any id that lives ONLY in a table — those are
+        # cross-references, changelog entries, or other non-requirement
+        # content per the corpus convention. When enabled, paragraph
+        # anchors and struck ids still take precedence (skip_set).
+        if self.profile.enable_table_anchored_extraction:
+            skip_set = paragraph_req_ids | struck_req_ids
+            for tbl_block, parent_section in deferred_tables:
+                self._extract_table_anchored_reqs(
+                    tbl_block, parent_section, sections, skip_set
+                )
 
         return sections
 

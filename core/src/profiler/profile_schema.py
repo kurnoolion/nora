@@ -185,6 +185,17 @@ class DocumentProfile:
     via the corrections workflow for corpora that abuse strikethrough
     as emphasis or annotation rather than deletion."""
 
+    enable_table_anchored_extraction: bool = True
+    """When True (default), the parser extracts table-anchored Requirements
+    per D-027 — req_ids found in table cells that have NO paragraph anchor
+    elsewhere become standalone Requirement nodes. Flip to False for
+    corpora where requirements are exclusively paragraph-anchored and
+    table-cell req_ids are always cross-references, changelog entries,
+    or other non-requirement content (Verizon OA is one such corpus).
+    With it off, ids that appear only in tables are dropped — the
+    cleaner default for paragraph-only-requirement docs at the cost of
+    losing genuinely table-defined reqs in MNOs that use that convention."""
+
     # ── Definitions extraction (FR-35 [D-032]) ────────────────────
     definitions_entry_pattern: str = r"^([A-Z][A-Z0-9/-]{1,15})\s*[—–:\-]\s*(.+?)$"
     """Regex (matched per line of the definitions section's body text)
@@ -279,6 +290,9 @@ class DocumentProfile:
                 **data.get("applicability_detection", {})
             ),
             ignore_strikeout=data.get("ignore_strikeout", True),
+            enable_table_anchored_extraction=data.get(
+                "enable_table_anchored_extraction", True
+            ),
             definitions_entry_pattern=data.get(
                 "definitions_entry_pattern",
                 r"^([A-Z][A-Z0-9/-]{1,15})\s*[—–:\-]\s*(.+?)$",

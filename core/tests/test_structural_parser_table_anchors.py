@@ -171,6 +171,56 @@ class TestColumnOneAnchoring:
         assert "Req ID: VZ_REQ_LTEB13NAC_36963" in anchored.text
 
 
+class TestDisableTableAnchoredExtraction:
+    """When `profile.enable_table_anchored_extraction` is False, table cells
+    never produce Requirement nodes — appropriate for paragraph-only-
+    requirement corpora (Verizon OA) where table-cell req_ids are
+    always cross-references, changelog entries, or other non-requirement
+    content."""
+
+    def test_table_only_id_dropped_when_disabled(self):
+        profile = _profile()
+        profile.enable_table_anchored_extraction = False
+        blocks = [
+            _para_heading_block(0, 1, "1.6 Some Section"),
+            _small_id_block(1, 1, "VZ_REQ_LTEB13NAC_36963"),  # paragraph anchor
+            _body_block(2, 1, "actual requirement body text"),
+            _para_heading_block(3, 5, "9.1 Cross-Reference Tables"),
+            _table_block(
+                4, 5,
+                headers=["Req ID"],
+                rows=[
+                    ["VZ_REQ_LTEB13NAC_99999"],   # only here — would be table-anchored
+                    ["VZ_REQ_LTEB13NAC_36963"],   # also paragraph-anchored
+                ],
+            ),
+        ]
+        tree = GenericStructuralParser(profile).parse(_doc(blocks))
+        ids = {r.req_id for r in tree.requirements if r.req_id}
+        # _36963 still present (paragraph anchor wins regardless of flag)
+        assert "VZ_REQ_LTEB13NAC_36963" in ids
+        # _99999 (only-in-table) NOT present — table extraction disabled
+        assert "VZ_REQ_LTEB13NAC_99999" not in ids
+
+    def test_table_only_id_kept_when_enabled(self):
+        """Default-True path: only-in-table id surfaces as a table-anchored
+        Requirement (D-027 behavior preserved)."""
+        profile = _profile()
+        # Default is True — verify explicitly.
+        assert profile.enable_table_anchored_extraction is True
+        blocks = [
+            _para_heading_block(0, 1, "1.6 Some Section"),
+            _table_block(
+                1, 1,
+                headers=["Req ID"],
+                rows=[["VZ_REQ_LTEB13NAC_99999"]],  # only in table
+            ),
+        ]
+        tree = GenericStructuralParser(profile).parse(_doc(blocks))
+        ids = {r.req_id for r in tree.requirements if r.req_id}
+        assert "VZ_REQ_LTEB13NAC_99999" in ids
+
+
 class TestParagraphWinsOnDuplicate:
     def test_paragraph_anchor_first_then_table_with_same_id(self):
         blocks = [
