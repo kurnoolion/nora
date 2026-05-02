@@ -965,11 +965,26 @@ class GenericStructuralParser:
         section number of the definitions / acronyms / glossary section.
 
         Section detection runs `definitions_section_pattern` against each
-        section's title. The first match's body text is scanned line by
-        line via `definitions_entry_pattern`. The section itself stays in
-        the parsed tree (callers may still query it directly); the map
-        and section_number are returned for downstream stages. No-op when
-        either regex is None.
+        section's title. Two layouts are supported per OA-corpus
+        observation:
+
+        - **Body-text** layout (line-based). The section's `text` is
+          scanned via `definitions_entry_pattern` (default targets
+          `TERM — expansion`-style lines). Used by docs that inline
+          their glossary as paragraphs.
+        - **Table-anchored** layout (the OA convention). The section's
+          `tables` carry the actual term→expansion pairs as 2-col rows
+          (`Acronym/Term | Definition`, `Term | Definition`,
+          `Term [Abbreviation] | Definition`, etc.). For each row, col[0]
+          is the term, col[1] is the expansion; the column header is
+          already in `headers`, not `rows`, so no skip needed. Whitespace
+          (incl. embedded newlines from PDF wrap) is collapsed in both
+          fields. Both layouts contribute to the same map; on duplicate
+          terms the first occurrence wins (body-text first, then
+          tables in document order).
+
+        The section itself stays in the parsed tree; the map and
+        section_number are returned for downstream stages.
 
         Per-document scope — the returned map is stored on
         `RequirementTree.definitions_map` and never aggregated across
@@ -978,7 +993,7 @@ class GenericStructuralParser:
         Returns (definitions_map, section_number). When no section
         matches, returns ({}, "").
         """
-        if self._definitions_section_re is None or self._definitions_entry_re is None:
+        if self._definitions_section_re is None:
             return {}, ""
 
         target: Requirement | None = None
@@ -986,21 +1001,38 @@ class GenericStructuralParser:
             if s.title and self._definitions_section_re.search(s.title):
                 target = s
                 break
-        if target is None or not target.text:
-            return {}, (target.section_number if target else "")
+        if target is None:
+            return {}, ""
 
         defs: dict[str, str] = {}
-        for m in self._definitions_entry_re.finditer(target.text):
-            if not m.groups() or len(m.groups()) < 2:
-                continue
-            term = m.group(1).strip()
-            expansion = m.group(2).strip()
-            if not term or not expansion:
-                continue
-            # First definition wins on duplicate term.
-            if term in defs:
-                continue
-            defs[term] = expansion
+
+        # Layout 1 — body-text line scan (when entry pattern is set).
+        if self._definitions_entry_re is not None and target.text:
+            for m in self._definitions_entry_re.finditer(target.text):
+                if not m.groups() or len(m.groups()) < 2:
+                    continue
+                term = m.group(1).strip()
+                expansion = m.group(2).strip()
+                if not term or not expansion:
+                    continue
+                if term not in defs:
+                    defs[term] = expansion
+
+        # Layout 2 — table-anchored (OA convention). Every 2+ col row
+        # in the section's tables is a candidate definition. We don't
+        # gate on column headers — a glossary section's tables are
+        # defs by convention.
+        for tbl in target.tables:
+            for row in tbl.rows:
+                if len(row) < 2:
+                    continue
+                term = re.sub(r"\s+", " ", (row[0] or "")).strip()
+                expansion = re.sub(r"\s+", " ", (row[1] or "")).strip()
+                if not term or not expansion:
+                    continue
+                if term not in defs:
+                    defs[term] = expansion
+
         return defs, target.section_number
 
     def _extract_applicability_labels(self, text: str) -> list[str]:

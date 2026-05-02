@@ -931,6 +931,97 @@ def test_definitions_first_occurrence_wins():
     }
 
 
+def test_definitions_extracted_from_table_anchored_glossary():
+    """OA-corpus convention: the glossary section has a brief intro
+    paragraph and the actual term/expansion pairs live in 2-col tables
+    (`Acronym/Term | Definition`). Each row is a definition; the body-
+    text path doesn't see them. The table-anchored path picks them up
+    using col[0] as term, col[1] as expansion, with whitespace
+    collapsed across embedded newlines."""
+    profile = _profile()
+    profile.definitions_entry_pattern = ""  # disable body-text path entirely
+    glossary_table = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=2, index=2),
+        headers=["Acronym/Term", "Definition"],
+        rows=[
+            ["3GPP", "rd\n3 Generation Partnership Project, manages GSM, LTE standards"],
+            ["APN", "Access Point Name"],
+            ["RAT", "Radio Access Technology"],
+            ["", "empty term — should be skipped"],  # filtered out
+            ["NoExpansion", ""],                      # filtered out
+        ],
+        font_info=FontInfo(size=11.0),
+    )
+    blocks = [
+        _block(0, "1 Top"),
+        _block(1, "1.1 Acronyms/Glossary/Definitions"),
+        _block(2, "This section defines acronyms used throughout the document."),
+        glossary_table,
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {
+        "3GPP": "rd 3 Generation Partnership Project, manages GSM, LTE standards",
+        "APN": "Access Point Name",
+        "RAT": "Radio Access Technology",
+    }
+    assert tree.definitions_section_number == "1.1"
+    assert tree.parse_stats.defs_extracted == 3
+
+
+def test_definitions_table_layout_first_occurrence_wins():
+    """Across multiple tables in the glossary section, duplicate terms
+    keep the first occurrence — same precedence rule as body-text."""
+    profile = _profile()
+    profile.definitions_entry_pattern = ""
+    table_a = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=2, index=2),
+        headers=["Acronym/Term", "Definition"],
+        rows=[["RAT", "Radio Access Technology"]],
+        font_info=FontInfo(size=11.0),
+    )
+    table_b = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=3, index=3),
+        headers=["Acronym/Term", "Definition"],
+        rows=[["RAT", "Some Other Expansion (ignored)"]],
+        font_info=FontInfo(size=11.0),
+    )
+    blocks = [
+        _block(0, "1 Glossary"),
+        table_a,
+        table_b,
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {"RAT": "Radio Access Technology"}
+
+
+def test_definitions_combine_body_text_and_table_layouts():
+    """A doc that has BOTH a paragraph entry AND a table — both layouts
+    contribute to the same map. Body-text scans first."""
+    profile = _profile()  # default entry_pattern is set
+    body = "ETWS - Earthquake and Tsunami Warning System"
+    glossary_table = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=2, index=2),
+        headers=["Term", "Definition"],
+        rows=[["APN", "Access Point Name"]],
+        font_info=FontInfo(size=11.0),
+    )
+    blocks = [
+        _block(0, "1 Glossary"),
+        _block(1, body),
+        glossary_table,
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {
+        "ETWS": "Earthquake and Tsunami Warning System",
+        "APN": "Access Point Name",
+    }
+    assert tree.parse_stats.defs_extracted == 2
+
+
 def test_definitions_empty_when_section_pattern_unset():
     """Profile.heading_detection.definitions_section_pattern empty → no
     extraction, definitions_map stays empty, defs_extracted=0."""
