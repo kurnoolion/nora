@@ -138,6 +138,25 @@ class ChromaDBStore:
         )
         logger.info(f"Reset collection '{self._collection_name}'")
 
+    def get_all(self) -> QueryResult:
+        """Return every document in the collection.
+
+        Used by companion sparse retrievers (BM25) that need the full
+        corpus text to build their own index, and by audit tooling.
+        Distances is empty (no similarity scoring on this path).
+        """
+        result = self._collection.get(include=["documents", "metadatas"])
+        ids = result.get("ids") or []
+        documents = result.get("documents") or []
+        raw_metadatas = result.get("metadatas") or []
+        metadatas = [self._deserialize_metadata(m) for m in raw_metadatas]
+        return QueryResult(
+            ids=list(ids),
+            documents=list(documents),
+            metadatas=metadatas,
+            distances=[],
+        )
+
     @staticmethod
     def _sanitize_metadata(meta: dict[str, Any]) -> dict[str, Any]:
         """Convert non-primitive metadata values to JSON strings.

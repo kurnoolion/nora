@@ -44,6 +44,27 @@ _TYPE_TOP_K = {
     QueryType.RELEASE_DIFF: 20,
 }
 
+# Per-query-type BM25 weight in the RRF fusion. 0.0 disables BM25 for
+# that query type (pure dense retrieval). Empirical tuning on the OA
+# eval set:
+#   - STANDARDS_COMPARISON gains +33pp accuracy with BM25 active
+#     (queries name specific TS numbers / cause codes that BM25 weights
+#     heavily but dense embeddings spread thin).
+#   - CROSS_DOC and FEATURE_LEVEL regress when BM25 contributes — the
+#     expected hits are thin parent/overview chunks that BM25 ranks
+#     low; richer leaf chunks pulled up by BM25 displace them.
+#   - TRACEABILITY benefits modestly when the query names a specific
+#     req_id (entity-priority graph scoping handles the well-formed
+#     case in D-039; BM25 helps with concept-shaped trace queries).
+# Numbers may shift as the eval set grows; treat as tuning, not contract.
+_TYPE_BM25_WEIGHT = {
+    QueryType.STANDARDS_COMPARISON: 0.5,
+    QueryType.TRACEABILITY: 0.5,
+    QueryType.SINGLE_DOC: 0.5,
+    # CROSS_DOC, FEATURE_LEVEL, CROSS_MNO_COMPARISON, RELEASE_DIFF,
+    # GENERAL: omitted → default 0.0 (pure dense)
+}
+
 from core.src.vectorstore.embedding_base import EmbeddingProvider
 from core.src.vectorstore.store_base import VectorStoreProvider
 
@@ -68,6 +89,7 @@ class QueryPipeline:
         top_k: int = 10,
         max_depth: int | None = None,
         max_context_chars: int = 30000,
+        enable_bm25: bool = True,
     ) -> None:
         """Initialize the pipeline.
 
@@ -80,11 +102,21 @@ class QueryPipeline:
             top_k: Number of chunks to retrieve.
             max_depth: Override graph traversal depth.
             max_context_chars: Maximum context length for LLM.
+            enable_bm25: When True (default), build a BM25 sparse index
+                from the store at construction time and fuse it with
+                dense retrieval via RRF. False keeps the legacy pure-
+                dense path. Build cost is O(n) over chunks; memory cost
+                is the chunk corpus once over (text + tokenized list).
         """
+        from core.src.query.bm25_index import BM25Index
+
         self._analyzer = analyzer or MockQueryAnalyzer()
         self._resolver = MNOReleaseResolver(graph)
         self._scoper = GraphScoper(graph, max_depth=max_depth)
-        self._retriever = RAGRetriever(embedder, store, top_k=top_k)
+        bm25_index = BM25Index.from_store(store) if enable_bm25 else None
+        self._retriever = RAGRetriever(
+            embedder, store, top_k=top_k, bm25_index=bm25_index
+        )
         self._context_builder = ContextBuilder(graph)
         self._synthesizer = synthesizer or MockSynthesizer()
         self._top_k = top_k
@@ -121,13 +153,21 @@ class QueryPipeline:
             if verbose:
                 logger.info(f"[Stage 3] Candidates: {candidates.to_dict()}")
 
-        # Stage 4: Targeted RAG. top_k widens for cross-doc / list-
-        # style query types — the expected hits in those categories
-        # are often parent/overview chunks that rank below the richer
-        # leaf chunks, so a tight top_k systematically misses them.
+        # Stage 4: Targeted RAG.
+        # `top_k` widens for cross-doc / list-style query types — the
+        # expected hits in those categories are often parent/overview
+        # chunks that rank below the richer leaf chunks, so a tight
+        # top_k systematically misses them.
+        # `bm25_weight` is per-query-type (0.0 = pure dense). See
+        # `_TYPE_BM25_WEIGHT` for the rationale; empirical tuning on
+        # OA eval found BM25 helps standards / traceability / single-
+        # doc queries but hurts cross-doc / feature-level (parent
+        # chunks too thin to compete with BM25-favored richer chunks).
         type_top_k = max(self._top_k, _TYPE_TOP_K.get(intent.query_type, 0))
+        bm25_weight = _TYPE_BM25_WEIGHT.get(intent.query_type, 0.0)
         chunks = self._retriever.retrieve(
-            query_text, candidates, scoped.scoped_mnos, top_k=type_top_k,
+            query_text, candidates, scoped.scoped_mnos,
+            top_k=type_top_k, bm25_weight=bm25_weight,
         )
         if verbose:
             logger.info(

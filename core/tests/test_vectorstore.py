@@ -112,6 +112,14 @@ class MockStore:
     def reset(self):
         self._docs.clear()
 
+    def get_all(self):
+        return QueryResult(
+            ids=list(self._docs.keys()),
+            documents=[d["document"] for d in self._docs.values()],
+            metadatas=[d["metadata"] for d in self._docs.values()],
+            distances=[],
+        )
+
 
 # ── Test data ───────────────────────────────────────────────────
 

@@ -101,3 +101,16 @@ class VectorStoreProvider(Protocol):
     def reset(self) -> None:
         """Delete all documents from the store."""
         ...
+
+    def get_all(self) -> QueryResult:
+        """Return every document in the store (id + text + metadata).
+
+        No similarity scoring — used by sparse-retrieval companions
+        (BM25, term-frequency) that need the full corpus to build
+        their own index, and by debug/audit tooling. `distances` is
+        empty in the returned QueryResult.
+
+        For very large stores this can be expensive; callers should
+        cache the result.
+        """
+        ...

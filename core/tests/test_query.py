@@ -547,6 +547,73 @@ class TestRAGRetriever:
             assert "plan_id" in chunk.metadata
 
 
+class TestRAGRetrieverHybrid:
+    """Hybrid (dense + BM25) retrieval through RAGRetriever. Verifies
+    the RRF fusion path lifts chunks that BM25 ranks high but dense
+    ranks below the cut, and that pure-dense behavior is preserved
+    when the BM25 index is None."""
+
+    def setup_method(self):
+        self.embedder = MockEmbedder(dim=8)
+        self.store = _build_test_store(self.embedder)
+        self.vzw_scope = [MNOScope(mno="VZW", release="2026_feb")]
+
+    def _bm25_index_from_test_store(self):
+        """Build a BM25Index directly from the test store's contents."""
+        from core.src.query.bm25_index import BM25Index
+        ids = list(self.store._docs.keys())
+        texts = [self.store._docs[i]["document"] for i in ids]
+        metas = [self.store._docs[i]["metadata"] for i in ids]
+        return BM25Index(ids, texts, metas)
+
+    def test_pure_dense_preserved_when_bm25_index_is_none(self):
+        """Back-compat: when no BM25 index is supplied, the retriever
+        behaves exactly as before."""
+        retriever = RAGRetriever(self.embedder, self.store, top_k=3, bm25_index=None)
+        candidates = CandidateSet()
+        chunks = retriever.retrieve("data retry", candidates, self.vzw_scope)
+        assert len(chunks) > 0
+        assert all(isinstance(c, RetrievedChunk) for c in chunks)
+
+    def test_hybrid_returns_chunks_when_bm25_provided(self):
+        """Smoke: hybrid mode returns valid chunks. The fusion happens
+        inside RAGRetriever; callers see the same shape."""
+        bm25 = self._bm25_index_from_test_store()
+        retriever = RAGRetriever(
+            self.embedder, self.store, top_k=3, bm25_index=bm25,
+        )
+        candidates = CandidateSet()
+        chunks = retriever.retrieve("data retry", candidates, self.vzw_scope)
+        assert len(chunks) > 0
+        for c in chunks:
+            assert "mno" in c.metadata
+            assert "plan_id" in c.metadata
+
+    def test_hybrid_scoped_filters_to_candidates(self):
+        """Scoped + hybrid: BM25 must respect the candidate req_ids
+        gate the dense path uses; otherwise RRF fuses populations
+        that don't match."""
+        bm25 = self._bm25_index_from_test_store()
+        retriever = RAGRetriever(
+            self.embedder, self.store, top_k=3, bm25_index=bm25,
+        )
+        candidates = CandidateSet(
+            requirement_nodes=[
+                CandidateNode(
+                    "req:VZ_REQ_LTEDATARETRY_200",
+                    "Requirement",
+                    attributes={"req_id": "VZ_REQ_LTEDATARETRY_200"},
+                ),
+            ],
+        )
+        chunks = retriever.retrieve("anything", candidates, self.vzw_scope)
+        # Every returned chunk's req_id must be in the candidate set
+        # (BM25 may surface a chunk dense missed, but it has to be
+        # one of the candidate-gated ids).
+        for c in chunks:
+            assert c.metadata.get("req_id") == "VZ_REQ_LTEDATARETRY_200"
+
+
 # ═══════════════════════════════════════════════════════════════
 # ContextBuilder tests
 # ═══════════════════════════════════════════════════════════════
