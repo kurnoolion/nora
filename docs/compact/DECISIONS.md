@@ -1162,3 +1162,116 @@ hierarchy this consumes), D-027 (table-anchored Requirements that
 make some "parents" thin), D-040 (per-type top_k — interacts with
 augmentation because wider top_k gives more room for both parents
 and children to coexist).
+
+
+## D-043: Acronym lookup chain — parser fix + glossary chunks + query-side pin
+
+**Date**: 2026-05-03
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+A user-submitted question on the Test page — *"What is SDM?"* —
+returned a hallucinated definition ("SIMOTA Device Management
+server"). The corpus glossary in fact defines SDM as "Subscriber
+Device Management — APN Management and Device profiling" in the
+LTEOTADM document. Three independent failures stacked:
+
+1. The parser's `definitions_map` was missing SDM (18 of 19
+   acronyms extracted). Markdown extractors split the glossary
+   into two tables when a divider line (`|---|`) appears mid-
+   table; the row immediately after the divider lands in
+   `tbl.headers`, not `tbl.rows`. `_extract_definitions` only
+   walked rows, so SDM was silently dropped.
+2. Even with the chunk text containing the acronym, retrieval
+   couldn't rank it for *"What is SDM?"*. The glossary chunk is
+   dominated by 18 other acronyms; BM25 weights the chunk with
+   the most "SDM" mentions (an operational chunk), and dense
+   similarity for a 4-token query is noisy.
+3. No mechanism to let the system route definitional queries
+   directly to glossary entries.
+
+**Decision**
+Implement a three-layer fix; ship all three together because any
+one alone is insufficient.
+
+**A. Parser** (`structural_parser._extract_definitions`)
+- Walk `tbl.headers` in addition to `tbl.rows`.
+- Filter the canonical column-header row via a token-set check:
+  both columns' headers must be entirely from a known canonical
+  set (`acronym, term, definition, abbreviation, meaning,
+  description, …`) to be treated as a real header. Otherwise
+  fold them into the candidates list.
+- VZW LTEOTADM `definitions_map`: 18 → 19 entries.
+
+**B. Glossary chunks** (`vectorstore.chunk_builder._build_glossary_chunks`)
+- Each entry in `definitions_map` becomes its own chunk:
+  - `chunk_id = "glossary:<plan_id>:<acronym-slug>"` —
+    slug strips non-`[A-Za-z0-9_-]+`.
+  - `metadata.doc_type = "glossary_entry"`,
+    `metadata.{acronym, expansion}` populated.
+  - Text leads with `<ACRONYM>: <expansion>` so BM25 (high TF)
+    and dense (concise definition) both rank it top for short
+    acronym queries.
+- These are *additional* to the requirement chunk for the
+  definitions section, not a replacement.
+
+**C. Glossary pin** (`query.rag_retriever`)
+- `_ACRONYM_QUERY_RE` matches: "What is X", "What does X mean",
+  "What does X stand for", "Define X", "Definition of X",
+  "Meaning of X", "Expand acronym X" / "Expand X".
+  X = 2-15 chars, first char letter, rest letters/digits/dash/
+  underscore. Case-insensitive.
+- `RAGRetriever.__init__` builds `_glossary_by_acronym` once by
+  scanning `store.get_all()` for `doc_type=glossary_entry`
+  chunks. Empty on pre-D-043 corpora (back-compat).
+- `retrieve()` runs normal retrieval (graph scope → BM25+dense →
+  rerank → diversity) FIRST, then if the regex matches AND the
+  acronym is in the index, prepends matched glossary chunks
+  with dedup-by-chunk-id, and trims back to top_k.
+- Pin runs *after* the cross-encoder so the encoder doesn't
+  demote a chunk we know is the answer.
+
+**Why this over alternatives**
+- *Augment retrieval with a synthetic acronym field instead of a
+  separate chunk* — rejected. Would require dual-indexing
+  (acronyms vs body) or per-query field weighting; adds surface
+  area without obviously winning over the deterministic pin.
+- *Boost glossary chunks via a score multiplier in
+  `_TYPE_BM25_WEIGHT`-style policy* — rejected. Score-boosting is
+  fragile (depends on score distribution) and doesn't solve the
+  case where the glossary chunk doesn't make the candidate cut.
+- *LLM-side fix only — let the synthesizer query a definitions
+  service* — rejected. Adds an LLM call per acronym query,
+  doubles latency, and removes citations (the corpus chunk *is*
+  the citation surface).
+- *Parser fix only* — rejected per §1.2-3 above; necessary but
+  not sufficient.
+
+**Consequences**
+- New `Citation.llm_cited: bool` flag (default False) lets
+  callers separate LLM-extracted citations from context-fallback
+  citations. Eval keeps the legacy aggregate count via
+  `len(response.citations)` — the new field is purely additive.
+- New `QueryResponse.retrieved_chunks: list[RetrievedChunk]`
+  surfaces the post-Stage-4 retrieval set so the Test page can
+  render "Returned by RAG" alongside "Cited by LLM". Off the LLM
+  hot-path.
+- `RAGRetriever.__init__` reads from the store at construction
+  time. With the pipeline cache on `app.state` (see web routes),
+  this happens once per process.
+- 13 new tests (3 parser + 3 chunk-builder + 7 retriever
+  glossary-pin scenarios) pin the contract: regex coverage,
+  unknown-acronym fall-through, non-acronym queries skipped,
+  dedup, back-compat with empty index, slug safety for
+  acronyms with spaces / punctuation.
+- Future corpora benefit automatically — any plan whose
+  `definitions_map` contains an acronym gets a glossary chunk
+  AND becomes pin-eligible.
+
+**Related**: D-032 (per-document definitions_map + chunk-build
+inline expansion), D-038 (table-anchored definitions extraction),
+D-041 (BM25 hybrid — pin runs after fusion). See
+[`core/src/query/RETRIEVAL.md`](../../core/src/query/RETRIEVAL.md)
+for the end-to-end retrieval architecture in which this lookup
+chain sits.

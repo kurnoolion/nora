@@ -127,6 +127,7 @@ python -m core.src.web.app
 - **Pipeline** — Submit pipeline runs via form (select stages, model, document path)
 - **Jobs** — Monitor running jobs with real-time log streaming (SSE)
 - **Query** — Submit questions against the knowledge graph, view results
+- **Test** — Free-form Q&A with thumbs-up/down + comment capture (logged to `<env_dir>/state/nora_test_feedback.db`). Surfaces two citation views — *Cited by LLM* (extracted from the answer text) and *Returned by RAG* (full Stage-4 retrieval) — each clickable to expand the underlying chunk text inline.
 - **Corrections** — In-browser profile and taxonomy editing with compact FIX reports (see below)
 - **Environments** — Create/manage team member environments
 - **Files** — Browse shared network folders (Windows paths auto-mapped to Linux)
@@ -134,7 +135,7 @@ python -m core.src.web.app
 
 **Offline-friendly assets:** Bootstrap 5, Bootstrap Icons, and HTMX are vendored under `src/web/static/vendor/`, so the UI renders correctly on proxy-restricted machines with no CDN access.
 
-**Configuration** (`web/config.json`):
+**Configuration** (`config/web.json`):
 ```json
 {
     "host": "0.0.0.0",
@@ -142,6 +143,7 @@ python -m core.src.web.app
     "root_path": "/nora",
     "ollama_url": "http://localhost:11434",
     "default_model": "gemma3:12b",
+    "env_dir": "",
     "path_mappings": [
         {
             "windows": "\\\\SERVER\\OADocs",
@@ -155,6 +157,38 @@ python -m core.src.web.app
 **Path mappings** translate Windows UNC paths (used by team members on Windows PCs) to Linux mount points on the server. Team members can paste Windows paths in forms; the server resolves them automatically.
 
 **Reverse proxy:** Set `root_path` to match your reverse proxy prefix (e.g., `/nora`). All URLs in the UI will be prefixed accordingly.
+
+### env_dir resolution
+
+The web app needs to know which `<env_dir>` (D-022) holds your `out/`, `state/`, and `corrections/` directories. Resolution chain (highest priority first):
+
+1. `env_dir` field in `config/web.json` — leave empty if you don't want to commit a machine path here.
+2. `--env-dir <path>` flag on `python -m core.src.web.app`.
+3. `ENV_DIR` environment variable.
+4. `env_dir` field in `config/env.json`.
+
+If none are set, the Test page returns a descriptive error.
+
+### Configurable database paths
+
+The web app uses three SQLite DBs under `<env_dir>/state/` by default: `nora.db` (jobs), `nora_metrics.db` (metrics), `nora_test_feedback.db` (Test page Q&A + feedback log). Each path is independently overridable. Per-DB resolution chain (highest priority first):
+
+1. CLI flag — `--jobs-db <path>`, `--metrics-db <path>`, `--feedback-db <path>` (full path including filename).
+2. Environment variable — `NORA_JOBS_DB`, `NORA_METRICS_DB`, `NORA_FEEDBACK_DB`.
+3. Field in `config/env.json` — `jobs_db`, `metrics_db`, `feedback_db`.
+4. Default — `<env_dir>/state/<name>.db`.
+
+Layers can be mixed (e.g. override only the feedback DB; let jobs + metrics fall through to the default).
+
+`config/env.json` is a tracked template with empty defaults — fill it in locally or leave empty to fall through to layers above/below.
+
+### Pipeline CLI ENV_DIR fallback
+
+`python -m core.src.pipeline.run_cli` accepts the same `ENV_DIR` fallback the web does. Priority: `--env <name>` (env-config lookup) > `--env-dir <path>` > `$ENV_DIR`. With `ENV_DIR` exported you can run:
+
+```bash
+ENV_DIR=/home/me/work/env_vzw python -m core.src.pipeline.run_cli --start parse --end vectorstore
+```
 
 ## Corrections UI
 
@@ -764,6 +798,16 @@ python -m core.src.query.query_cli --query "..." --output response.json
 **Graph scoping strategies:** Entity lookup (req IDs, timers), feature lookup (maps_to edges), plan lookup (all reqs in plan), title search (text matching). BFS edge traversal with configurable depth and score decay (0.7^depth).
 
 **RAG retrieval:** Two strategies — scoped retrieval (filter vector store by graph candidate req_ids) and metadata retrieval (filter by MNO/release when no graph candidates). Diversity enforcement ensures minimum chunks per plan.
+
+**Retrieval enhancements:** The retriever runs more than vector similarity:
+- **BM25 hybrid (D-041)** — sparse BM25 over a telecom-aware tokenized index, fused with dense via Reciprocal Rank Fusion. Per-query-type weight (`_TYPE_BM25_WEIGHT`) — STANDARDS_COMPARISON / TRACEABILITY / SINGLE_DOC = 0.5, CROSS_DOC / FEATURE_LEVEL = 0.0.
+- **Per-type top_k (D-040)** — list/breadth queries widen retrieval to 25; lookups stay at 10.
+- **Query rewriting** — optional pre-retrieval LLM expansion (3 paraphrases concatenated for embedding+BM25); on for concept-shaped types, off for SINGLE_DOC where D-039 entity priority handles it.
+- **Cross-encoder reranker** — optional reorder of the post-fusion pool with a small cross-encoder; degrades to passthrough when the model isn't cached. Default model: `cross-encoder/ms-marco-MiniLM-L6-v2`.
+- **Acronym expansion in chunks (D-032 / D-038)** — first occurrence of every known acronym is inline-expanded `SDM → SDM (Subscriber Device Management)` at chunk-build time so queries that use either form match.
+- **Glossary lookup chain (D-043)** — definitional queries ("What is X?", "Define X", "Meaning of X", …) hard-pin the matching glossary chunk to the top of retrieval. Three layers: parser recovers misclassified table-header rows so `definitions_map` is complete; chunk_builder emits one short chunk per acronym; retriever detects the query pattern and prepends.
+
+See [`core/src/query/RETRIEVAL.md`](core/src/query/RETRIEVAL.md) for the end-to-end retrieval design including per-query-type policy maps, the glossary lookup architecture, and ADR cross-references.
 
 **Mock implementations:** `MockQueryAnalyzer` uses keyword matching and regex patterns. `MockSynthesizer` returns structured summaries grouping results by plan with req IDs and standards references. Both exercise the full pipeline without requiring LLM API keys.
 
