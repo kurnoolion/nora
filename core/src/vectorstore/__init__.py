@@ -45,12 +45,20 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
         )
 
     if provider == "ollama":
+        import os
         from core.src.vectorstore.embedding_ollama import (
             _DEFAULT_MAX_INPUT_CHARS,
             OllamaEmbedder,
         )
         ollama_url = config.extra.get("ollama_url", "http://localhost:11434")
-        timeout = int(config.extra.get("ollama_timeout_s", 60))
+        # Per-request timeout. Default raised from 60 → 300 for larger
+        # embedding models (qwen3-embedding-4B class) on CPU where a
+        # single ~8000-char chunk can exceed 60s. Override via
+        # `extra.ollama_timeout_s` in config or `NORA_OLLAMA_TIMEOUT_S`
+        # env var (config wins if both set).
+        env_timeout = os.environ.get("NORA_OLLAMA_TIMEOUT_S")
+        default_timeout = int(env_timeout) if env_timeout else 300
+        timeout = int(config.extra.get("ollama_timeout_s", default_timeout))
         max_chars = int(
             config.extra.get("ollama_max_input_chars", _DEFAULT_MAX_INPUT_CHARS)
         )

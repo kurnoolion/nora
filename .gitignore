@@ -43,3 +43,4 @@ environments/*.json
 # Vim swap files
 *.swp
 *.swo
+.claude/scheduled_tasks.lock
