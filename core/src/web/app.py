@@ -181,15 +181,77 @@ async def health_check():
 # -- Entry point --------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+    import os
     import uvicorn
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
     )
+
+    parser = argparse.ArgumentParser(description="NORA Web UI")
+    parser.add_argument(
+        "--env-dir",
+        default=None,
+        help=(
+            "Per-environment runtime directory. Used only when "
+            "`env_dir` is not set in config/web.json. Overrides "
+            "$ENV_DIR. Example: --env-dir /home/me/work/env_vzw"
+        ),
+    )
+    parser.add_argument("--host", default=None, help="Override host (default: web.json)")
+    parser.add_argument("--port", default=None, type=int, help="Override port (default: web.json)")
+    # DB path overrides (highest-priority layer in load_config's
+    # resolution chain). Each flag sets a corresponding env var so
+    # uvicorn's reload-spawned worker picks it up via load_config.
+    parser.add_argument(
+        "--jobs-db", default=None,
+        help=(
+            "Full path to the jobs SQLite DB (overrides $NORA_JOBS_DB, "
+            "config/env.json, and the <env_dir>/state/nora.db default)."
+        ),
+    )
+    parser.add_argument(
+        "--metrics-db", default=None,
+        help=(
+            "Full path to the metrics SQLite DB (overrides $NORA_METRICS_DB, "
+            "config/env.json, and the <env_dir>/state/nora_metrics.db default)."
+        ),
+    )
+    parser.add_argument(
+        "--feedback-db", default=None,
+        help=(
+            "Full path to the test-feedback SQLite DB (overrides "
+            "$NORA_FEEDBACK_DB, config/env.json, and the "
+            "<env_dir>/state/nora_test_feedback.db default)."
+        ),
+    )
+    args = parser.parse_args()
+
+    # CLI flags feed env vars before uvicorn spawns the worker. The
+    # worker re-imports `core.src.web.app` (because reload=True), so
+    # its `config = load_config()` call reads the env vars set here.
+    # Order: web.json > CLI > $ENV_DIR for env_dir; CLI > env var >
+    # config/env.json > computed default for DB paths.
+    if args.env_dir:
+        os.environ["ENV_DIR"] = args.env_dir
+    if args.jobs_db:
+        os.environ["NORA_JOBS_DB"] = args.jobs_db
+    if args.metrics_db:
+        os.environ["NORA_METRICS_DB"] = args.metrics_db
+    if args.feedback_db:
+        os.environ["NORA_FEEDBACK_DB"] = args.feedback_db
+
+    if any([args.env_dir, args.jobs_db, args.metrics_db, args.feedback_db]):
+        # Re-resolve so the startup log lines show effective values
+        # in this process (the worker re-imports anyway).
+        from core.src.web.config import load_config as _load
+        config = _load()
+
     uvicorn.run(
         "core.src.web.app:app",
-        host=config.host,
-        port=config.port,
+        host=args.host or config.host,
+        port=args.port or config.port,
         reload=True,
     )

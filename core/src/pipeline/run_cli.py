@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -88,6 +89,7 @@ def main() -> None:
             "Examples:\n"
             "  %(prog)s --env-dir /data/vzw-feb2026 --start extract --end parse\n"
             "  %(prog)s --env profiler-review\n"
+            "  ENV_DIR=/data/vzw-feb2026 %(prog)s --start parse --end vectorstore\n"
             "  %(prog)s --list-stages\n"
             "  %(prog)s --detect-hw\n"
         ),
@@ -192,7 +194,28 @@ def main() -> None:
         # Use env's stage range as default, allow CLI override
         start = resolve_stage(args.start) if args.start else env.stage_start
         end = resolve_stage(args.end) if args.end else env.stage_end
-    elif args.env_dir:
+    else:
+        # Resolve standalone env_dir from --env-dir or, as a fallback,
+        # the $ENV_DIR environment variable. Same priority chain the
+        # web UI uses (web.json > --env-dir > $ENV_DIR), letting a
+        # single `export ENV_DIR=...` work for both surfaces.
+        env_dir = args.env_dir
+        env_dir_source = "--env-dir"
+        if env_dir is None:
+            env_var = os.environ.get("ENV_DIR", "").strip()
+            if env_var:
+                env_dir = Path(env_var)
+                env_dir_source = "$ENV_DIR"
+        if env_dir is None:
+            parser.print_help()
+            print(
+                "\nError: specify --env, --env-dir, or set $ENV_DIR "
+                "environment variable."
+            )
+            sys.exit(1)
+        if env_dir_source == "$ENV_DIR":
+            print(f"Using env_dir from $ENV_DIR: {env_dir}")
+
         from core.src.env.config import (
             resolve_embedding_model,
             resolve_embedding_provider,
@@ -200,7 +223,7 @@ def main() -> None:
             resolve_standards_source,
         )
         ctx = PipelineContext.standalone(
-            env_dir=args.env_dir,
+            env_dir=env_dir,
             profile_path=args.profile,
             model_provider=resolve_llm_provider(args.llm_provider),
             model_name=args.model,
@@ -211,10 +234,6 @@ def main() -> None:
         )
         start = resolve_stage(args.start) if args.start else "extract"
         end = resolve_stage(args.end) if args.end else "eval"
-    else:
-        parser.print_help()
-        print("\nError: specify --env or --env-dir")
-        sys.exit(1)
 
     ctx.verbose = args.verbose
     if args.model != "auto":

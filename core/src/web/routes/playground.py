@@ -115,7 +115,7 @@ async def playground_ask(request: Request):
     # existing /query path's pipeline construction.
     start = time.time()
     try:
-        result = await asyncio.to_thread(_run_query_for_test, question)
+        result = await asyncio.to_thread(_run_query_for_test, question, request.app)
     except Exception as e:
         logger.exception("Test query failed")
         return _template_response(request, "test/_answer.html", {
@@ -147,6 +147,9 @@ async def playground_ask(request: Request):
         "question": question,
         "answer": result.get("answer", ""),
         "citations": result.get("citations", []),
+        "llm_citations": result.get("llm_citations", []),
+        "rag_chunks": result.get("rag_chunks", []),
+        "rag_chunk_count": result.get("rag_chunk_count", 0),
         "elapsed_ms": elapsed_ms,
         "candidate_count": result.get("candidate_count"),
         "section": section,
@@ -197,15 +200,22 @@ async def playground_feedback(
 # -- Helpers ----------------------------------------------------------------
 
 
-def _run_query_for_test(question: str) -> dict:
+def _run_query_for_test(question: str, app=None) -> dict:
     """Adapt the existing /query pipeline runner into a dict shape
     the test page templates can consume directly. Re-imports the
     helper from the query module so we don't fork pipeline
-    construction logic.
+    construction logic. `app` is passed through so the cached
+    pipeline on `app.state` is reused across requests.
+
+    Surfaces three citation views to the template:
+      - `citations`: legacy combined list (LLM-cited + fallback)
+      - `llm_citations`: subset cited explicitly in the answer text
+      - `rag_chunks`: every chunk RAG returned (with text for the
+        click-to-expand fragment view)
     """
     from core.src.web.routes.query import _run_query_sync
 
-    raw = _run_query_sync(question)
+    raw = _run_query_sync(question, app=app)
     if "error" in raw:
         return {"error": raw["error"]}
 
@@ -213,11 +223,12 @@ def _run_query_for_test(question: str) -> dict:
     # display it on the test page).
     raw.pop("_llm_metrics", None)
 
-    answer = raw.get("answer", "")
-    citations = raw.get("citations", []) or []
     return {
-        "answer": answer,
-        "citations": citations,
+        "answer": raw.get("answer", ""),
+        "citations": raw.get("citations", []) or [],
+        "llm_citations": raw.get("llm_citations", []) or [],
+        "rag_chunks": raw.get("rag_chunks", []) or [],
+        "rag_chunk_count": raw.get("rag_chunk_count", 0),
         "candidate_count": raw.get("candidate_count"),
         "llm_model": raw.get("llm_model"),
     }

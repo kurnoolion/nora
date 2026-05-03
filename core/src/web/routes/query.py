@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -17,8 +18,75 @@ from core.src.web.jobs import JobQueue
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-GRAPH_PATH = PROJECT_ROOT / "data" / "graph" / "knowledge_graph.json"
-VECTORSTORE_DIR = PROJECT_ROOT / "data" / "vectorstore"
+
+
+def _graph_path() -> Path:
+    """Resolve `<env_dir>/out/graph/knowledge_graph.json`. The Web UI
+    is env_dir-bound (D-022); set `env_dir` in `config/web.json`."""
+    from core.src.web.app import config
+    return config.env_dir_path() / "out" / "graph" / "knowledge_graph.json"
+
+
+def _vectorstore_dir() -> Path:
+    """Resolve `<env_dir>/out/vectorstore/`."""
+    from core.src.web.app import config
+    return config.env_dir_path() / "out" / "vectorstore"
+
+
+def _find_env_config_for_web():
+    """Locate the env JSON whose `env_dir` matches the Web UI's
+    configured env_dir. Returns an EnvironmentConfig or None if no
+    match (env_dir unset, or no environments/*.json with that path).
+    """
+    from core.src.web.app import config as web_config
+    if not web_config.env_dir:
+        return None
+    from core.src.env.config import EnvironmentConfig
+    target = Path(web_config.env_dir).resolve()
+    envs_dir = PROJECT_ROOT / "environments"
+    if not envs_dir.exists():
+        return None
+    for json_path in sorted(envs_dir.glob("*.json")):
+        try:
+            env = EnvironmentConfig.load_json(json_path)
+            if Path(env.env_dir).resolve() == target:
+                return env
+        except Exception as e:
+            logger.debug("Skipping env file %s: %s", json_path, e)
+    return None
+
+
+def _build_llm_from_env_or_default():
+    """Construct the LLM provider for /query and /test. Reads the
+    LLM config (provider/model/timeout) from the env JSON tied to
+    the Web UI's env_dir; falls back to local Ollama gemma4:e4b
+    when no env is matched. Returns the provider or None on error.
+    Reuses PipelineContext.create_llm_provider so the dispatch
+    matches the eval pipeline exactly."""
+    from core.src.pipeline.runner import PipelineContext
+    env_cfg = _find_env_config_for_web()
+    if env_cfg is not None:
+        ctx = PipelineContext(
+            documents_dir=Path("."),
+            corrections_dir=None,
+            eval_dir=None,
+            verbose=False,
+            model_provider=env_cfg.model_provider,
+            model_name=env_cfg.model_name,
+            model_timeout=env_cfg.model_timeout,
+        )
+        return ctx.create_llm_provider(require_real=False)
+    # No env match — preserve legacy behavior (local Ollama).
+    ctx = PipelineContext(
+        documents_dir=Path("."),
+        corrections_dir=None,
+        eval_dir=None,
+        verbose=False,
+        model_provider="ollama",
+        model_name="gemma4:e4b",
+        model_timeout=300,
+    )
+    return ctx.create_llm_provider(require_real=False)
 
 router = APIRouter()
 
@@ -29,8 +97,8 @@ router = APIRouter()
 async def query_page(request: Request):
     from core.src.web.app import _template_response
 
-    graph_exists = GRAPH_PATH.exists()
-    vs_config_path = VECTORSTORE_DIR / "config.json"
+    graph_exists = _graph_path().exists()
+    vs_config_path = _vectorstore_dir() / "config.json"
     vectorstore_exists = vs_config_path.exists()
 
     return _template_response(request, "query.html", {
@@ -100,33 +168,32 @@ async def query_result(request: Request, job_id: str):
 
 # -- Background execution ---------------------------------------------------
 
-def _run_query_sync(query_text: str) -> dict:
-    """Run the query pipeline synchronously (called via asyncio.to_thread)."""
-    start = time.time()
+class _PipelineBuildError(RuntimeError):
+    """Raised by `_build_pipeline` when prerequisites aren't met
+    (e.g. empty vectorstore). Caller surfaces the message to the UI."""
 
-    if not GRAPH_PATH.exists():
-        return {
-            "error": (
-                "Knowledge graph not found at data/graph/knowledge_graph.json. "
-                "Run the graph-building pipeline stage first "
-                "(Pipeline page, or: python -m core.src.graph.graph_cli)."
-            ),
-        }
 
-    vs_config_path = VECTORSTORE_DIR / "config.json"
+_pipeline_build_lock = threading.Lock()
 
+
+def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
+    """Construct a QueryPipeline + LLM. Heavy: loads graph (~10MB),
+    embedder model weights, opens Chroma, builds BM25 over the full
+    chunk corpus. ~5-15s cold. Idempotent per env_dir; cache the
+    result on `app.state`."""
     from core.src.query.pipeline import QueryPipeline, load_graph
+    from core.src.vectorstore.config import VectorStoreConfig
+    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
+    from core.src.vectorstore.store_chroma import ChromaDBStore
 
-    graph = load_graph(GRAPH_PATH)
+    graph = load_graph(graph_path)
 
+    vs_config_path = vectorstore_dir / "config.json"
     if vs_config_path.exists():
-        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig.load_json(vs_config_path)
     else:
-        from core.src.vectorstore.config import VectorStoreConfig
-        vs_config = VectorStoreConfig(persist_directory=str(VECTORSTORE_DIR))
+        vs_config = VectorStoreConfig(persist_directory=str(vectorstore_dir))
 
-    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
     embedder = SentenceTransformerEmbedder(
         model_name=vs_config.embedding_model,
         device=vs_config.embedding_device,
@@ -134,7 +201,6 @@ def _run_query_sync(query_text: str) -> dict:
         normalize=vs_config.normalize_embeddings,
     )
 
-    from core.src.vectorstore.store_chroma import ChromaDBStore
     store = ChromaDBStore(
         persist_directory=vs_config.persist_directory,
         collection_name=vs_config.collection_name,
@@ -142,22 +208,19 @@ def _run_query_sync(query_text: str) -> dict:
     )
 
     if store.count == 0:
-        return {
-            "error": (
-                "Vector store is empty. Run the vectorstore pipeline stage first "
-                "(Pipeline page, or: python -m core.src.vectorstore.vectorstore_cli)."
-            ),
-        }
+        raise _PipelineBuildError(
+            "Vector store is empty. Run the vectorstore pipeline stage "
+            "first (Pipeline page, or: "
+            "python -m core.src.vectorstore.vectorstore_cli)."
+        )
 
-    llm = None
+    llm = _build_llm_from_env_or_default()
     synthesizer = None
-    try:
-        from core.src.llm.ollama_provider import OllamaProvider
+    if llm is not None and not getattr(llm, "_is_mock", False):
         from core.src.query.synthesizer import LLMSynthesizer
-        llm = OllamaProvider(model="gemma4:e4b", timeout=300)
         synthesizer = LLMSynthesizer(llm, max_tokens=30000 // 4)
-    except Exception:
-        logger.info("Ollama not available, falling back to mock synthesizer")
+    else:
+        logger.info("No real LLM configured, falling back to mock synthesizer")
 
     pipeline = QueryPipeline(
         graph=graph,
@@ -167,6 +230,81 @@ def _run_query_sync(query_text: str) -> dict:
         top_k=10,
         max_context_chars=30000,
     )
+    return pipeline, llm
+
+
+def _get_or_build_pipeline(app, graph_path: Path, vectorstore_dir: Path):
+    """Return (pipeline, llm) cached on `app.state`. First call pays
+    the cold-start (~5-15s); subsequent calls are immediate.
+
+    When `app` is None (e.g. in tests calling `_run_query_sync`
+    directly) the cache is bypassed and a fresh pipeline is built.
+
+    Concurrent first-callers serialize on `_pipeline_build_lock` so
+    only one expensive build runs even under burst load.
+
+    Cache invalidation: today the cache lives until process restart.
+    Re-running the graph or vectorstore pipeline stages does NOT
+    refresh it — restart the web server (or add an explicit reset
+    endpoint later)."""
+    if app is None:
+        return _build_pipeline(graph_path, vectorstore_dir)
+
+    cached = getattr(app.state, "query_pipeline", None)
+    if cached is not None:
+        return cached
+
+    with _pipeline_build_lock:
+        cached = getattr(app.state, "query_pipeline", None)
+        if cached is not None:
+            return cached
+        logger.info(
+            "Building QueryPipeline for the first time "
+            "(graph=%s, vectorstore=%s)…", graph_path, vectorstore_dir,
+        )
+        t0 = time.time()
+        pipeline, llm = _build_pipeline(graph_path, vectorstore_dir)
+        logger.info("QueryPipeline ready in %.1fs (cached on app.state)", time.time() - t0)
+        app.state.query_pipeline = (pipeline, llm)
+        return pipeline, llm
+
+
+def _run_query_sync(query_text: str, app=None) -> dict:
+    """Run the query pipeline synchronously (called via asyncio.to_thread).
+
+    Pass `app` (the FastAPI instance) to reuse the cached pipeline
+    across requests. Without it, every call rebuilds — only used in
+    legacy tests."""
+    start = time.time()
+
+    from core.src.web.app import config as web_config
+    if not web_config.env_dir:
+        return {
+            "error": (
+                "env_dir is not configured. Set it via one of: "
+                "(1) `env_dir` in config/web.json, "
+                "(2) `--env-dir <path>` on the CLI, or "
+                "(3) the `ENV_DIR` environment variable. "
+                "Example path: /home/you/work/env_vzw."
+            ),
+        }
+
+    graph_path = _graph_path()
+    vectorstore_dir = _vectorstore_dir()
+
+    if not graph_path.exists():
+        return {
+            "error": (
+                f"Knowledge graph not found at {graph_path}. "
+                "Run the graph-building pipeline stage first "
+                "(Pipeline page, or: python -m core.src.graph.graph_cli)."
+            ),
+        }
+
+    try:
+        pipeline, llm = _get_or_build_pipeline(app, graph_path, vectorstore_dir)
+    except _PipelineBuildError as e:
+        return {"error": str(e)}
 
     llm_calls_before = llm.call_count if llm else 0
     llm_start = time.time()
@@ -175,7 +313,14 @@ def _run_query_sync(query_text: str) -> dict:
     elapsed = time.time() - start
     llm_calls_after = llm.call_count if llm else 0
 
+    # Two views of citations for the UI:
+    #   - `citations`: legacy/back-compat — every citation surface in
+    #     the response (LLM-cited + context-fallback). The /query page
+    #     and metrics use this.
+    #   - `llm_citations`: subset where Citation.llm_cited is True —
+    #     the ones the LLM actually mentioned in the answer text.
     citations = []
+    llm_citations = []
     for c in response.citations:
         entry = {}
         if c.req_id:
@@ -188,12 +333,34 @@ def _run_query_sync(query_text: str) -> dict:
             entry["spec"] = c.spec
         if c.spec_section:
             entry["spec_section"] = c.spec_section
-        if entry:
-            citations.append(entry)
+        if not entry:
+            continue
+        entry["llm_cited"] = bool(c.llm_cited)
+        citations.append(entry)
+        if c.llm_cited:
+            llm_citations.append(entry)
+
+    # Full RAG retrieval — every chunk that came back from Stage 4
+    # (post-rerank top-K). The Test page renders these collapsed and
+    # expands the text on click.
+    rag_chunks = []
+    for ch in response.retrieved_chunks:
+        meta = ch.metadata or {}
+        rag_chunks.append({
+            "chunk_id": ch.chunk_id,
+            "req_id": meta.get("req_id", ""),
+            "plan_id": meta.get("plan_id", ""),
+            "section_number": meta.get("section_number", ""),
+            "similarity_score": round(float(ch.similarity_score), 3),
+            "text": ch.text,
+        })
 
     result = {
         "answer": response.answer,
         "citations": citations,
+        "llm_citations": llm_citations,
+        "rag_chunks": rag_chunks,
+        "rag_chunk_count": len(rag_chunks),
         "timing": f"{elapsed:.1f}",
     }
 
@@ -222,7 +389,7 @@ async def run_query_background(
         await job_queue.update_status(job_id, "running")
         await job_queue.append_log(job_id, f"Query: {query_text}")
 
-        result = await asyncio.to_thread(_run_query_sync, query_text)
+        result = await asyncio.to_thread(_run_query_sync, query_text, request_app)
 
         if "error" in result:
             await job_queue.update_status(

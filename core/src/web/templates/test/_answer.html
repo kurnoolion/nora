@@ -9,22 +9,63 @@
     </div>
     <div class="answer-body" style="white-space: pre-wrap; line-height: 1.5;">{{ answer }}</div>
 
-    {% if citations %}
+    {# LLM-cited subset — what the answer actually leans on. #}
+    {% if llm_citations %}
       <hr>
       <div class="small">
-        <strong>Citations</strong>
-        ({{ citations|length }} requirement{% if citations|length != 1 %}s{% endif %}):
-        <ul class="list-unstyled mt-1">
-          {% for c in citations %}
-            <li>
-              <code>{{ c.req_id }}</code>
-              {% if c.plan_id %}<span class="badge bg-secondary ms-1">{{ c.plan_id }}</span>{% endif %}
-              {% if c.section_number %}
-                — sec <code>{{ c.section_number }}</code>
-              {% endif %}
-              {% if c.standards_spec %}
-                — {{ c.standards_spec }}{% if c.standards_section %} §{{ c.standards_section }}{% endif %}
-              {% endif %}
+        <strong>Cited by LLM</strong>
+        ({{ llm_citations|length }} requirement{% if llm_citations|length != 1 %}s{% endif %}):
+        <ul class="list-unstyled mt-1 mb-0">
+          {% for c in llm_citations %}
+            {% if c.req_id %}
+              {% set chunk_target = "frag-llm-" ~ row_id ~ "-" ~ loop.index %}
+              <li class="mb-1">
+                <button type="button"
+                        class="btn btn-sm btn-link p-0 align-baseline"
+                        data-bs-toggle="collapse"
+                        data-bs-target="#{{ chunk_target }}"
+                        aria-expanded="false"
+                        aria-controls="{{ chunk_target }}">
+                  <code>{{ c.req_id }}</code>
+                </button>
+                {% if c.plan_id %}<span class="badge bg-secondary ms-1">{{ c.plan_id }}</span>{% endif %}
+                {% if c.section_number %} — sec <code>{{ c.section_number }}</code>{% endif %}
+                {% if c.spec %} — {{ c.spec }}{% if c.spec_section %} §{{ c.spec_section }}{% endif %}{% endif %}
+                {# fragment text from the matching RAG chunk, if any #}
+                <div id="{{ chunk_target }}" class="collapse mt-1">
+                  <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap; max-height: 320px; overflow: auto;">{% set frag = namespace(text=None) %}{% for ch in rag_chunks %}{% if ch.req_id == c.req_id and frag.text is none %}{% set frag.text = ch.text %}{% endif %}{% endfor %}{{ frag.text or "(no fragment text — chunk not in current RAG window)" }}</pre>
+                </div>
+              </li>
+            {% endif %}
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    {# Full RAG retrieval — every chunk that came back from Stage 4. #}
+    {% if rag_chunks %}
+      <hr>
+      <div class="small">
+        <strong>Returned by RAG</strong>
+        ({{ rag_chunk_count }} chunk{% if rag_chunk_count != 1 %}s{% endif %}):
+        <ul class="list-unstyled mt-1 mb-0">
+          {% for ch in rag_chunks %}
+            {% set frag_id = "frag-rag-" ~ row_id ~ "-" ~ loop.index %}
+            <li class="mb-1">
+              <button type="button"
+                      class="btn btn-sm btn-link p-0 align-baseline"
+                      data-bs-toggle="collapse"
+                      data-bs-target="#{{ frag_id }}"
+                      aria-expanded="false"
+                      aria-controls="{{ frag_id }}">
+                {% if ch.req_id %}<code>{{ ch.req_id }}</code>{% else %}<code>{{ ch.chunk_id }}</code>{% endif %}
+              </button>
+              {% if ch.plan_id %}<span class="badge bg-secondary ms-1">{{ ch.plan_id }}</span>{% endif %}
+              {% if ch.section_number %} — sec <code>{{ ch.section_number }}</code>{% endif %}
+              <span class="text-muted ms-1">score {{ ch.similarity_score }}</span>
+              <div id="{{ frag_id }}" class="collapse mt-1">
+                <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap; max-height: 320px; overflow: auto;">{{ ch.text }}</pre>
+              </div>
             </li>
           {% endfor %}
         </ul>
