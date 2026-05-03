@@ -25,6 +25,7 @@ from core.src.query.graph_scope import GraphScoper
 from core.src.query.rag_retriever import RAGRetriever
 from core.src.query.context_builder import ContextBuilder
 from core.src.query.synthesizer import MockSynthesizer
+from core.src.query.rewriter import MockQueryRewriter, expand_query
 from core.src.query.schema import QueryResponse, CandidateSet, QueryType
 
 
@@ -65,6 +66,23 @@ _TYPE_BM25_WEIGHT = {
     # GENERAL: omitted → default 0.0 (pure dense)
 }
 
+# Per-query-type rewrite enable. SINGLE_DOC lookups already work via
+# entity-priority graph scoping (D-039) so query rewriting adds noise
+# without recall benefit. Concept-shaped queries (CROSS_DOC,
+# STANDARDS_COMPARISON, FEATURE_LEVEL, etc.) lack specific terms that
+# embedding/BM25 can grab onto — rewriting injects telecom-specific
+# terminology (acronym ↔ expansion, NAS message names, spec citations)
+# that lifts retrieval recall.
+_TYPE_REWRITE_ENABLED = {
+    QueryType.CROSS_DOC: True,
+    QueryType.STANDARDS_COMPARISON: True,
+    QueryType.FEATURE_LEVEL: True,
+    QueryType.CROSS_MNO_COMPARISON: True,
+    QueryType.TRACEABILITY: True,
+    QueryType.RELEASE_DIFF: True,
+    # SINGLE_DOC, GENERAL: omitted → default False
+}
+
 from core.src.vectorstore.embedding_base import EmbeddingProvider
 from core.src.vectorstore.store_base import VectorStoreProvider
 
@@ -86,6 +104,7 @@ class QueryPipeline:
         store: VectorStoreProvider,
         analyzer=None,
         synthesizer=None,
+        rewriter=None,
         top_k: int = 10,
         max_depth: int | None = None,
         max_context_chars: int = 30000,
@@ -99,6 +118,9 @@ class QueryPipeline:
             store: Vector store for chunk retrieval.
             analyzer: Query analyzer (default: MockQueryAnalyzer).
             synthesizer: LLM synthesizer (default: MockSynthesizer).
+            rewriter: Optional pre-retrieval query rewriter
+                (default: MockQueryRewriter — no rewrites). Pass an
+                `LLMQueryRewriter(llm_provider)` for production.
             top_k: Number of chunks to retrieve.
             max_depth: Override graph traversal depth.
             max_context_chars: Maximum context length for LLM.
@@ -119,6 +141,7 @@ class QueryPipeline:
         )
         self._context_builder = ContextBuilder(graph)
         self._synthesizer = synthesizer or MockSynthesizer()
+        self._rewriter = rewriter or MockQueryRewriter()
         self._top_k = top_k
         self._max_context_chars = max_context_chars
         self._bypass_graph = False
@@ -153,6 +176,27 @@ class QueryPipeline:
             if verbose:
                 logger.info(f"[Stage 3] Candidates: {candidates.to_dict()}")
 
+        # Stage 3.5: Query rewriting (pre-retrieval expansion).
+        # Per-query-type — single-doc lookups rely on entity-priority
+        # graph scoping (D-039) so adding paraphrases is noise; concept-
+        # shaped queries (cross-doc, standards-comparison, etc.) gain
+        # recall from telecom-specific terminology the user query
+        # didn't contain. The rewriter is no-op (MockQueryRewriter)
+        # by default, so existing pipelines see unchanged behavior.
+        retrieval_query = query_text
+        if _TYPE_REWRITE_ENABLED.get(intent.query_type, False):
+            rewrites = self._rewriter.rewrite(query_text)
+            if rewrites:
+                retrieval_query = expand_query(query_text, rewrites)
+                if verbose:
+                    logger.info(
+                        f"[Stage 3.5] Rewrites ({len(rewrites)}): {rewrites}"
+                    )
+                else:
+                    logger.info(
+                        f"Query rewrite: {len(rewrites)} variants added"
+                    )
+
         # Stage 4: Targeted RAG.
         # `top_k` widens for cross-doc / list-style query types — the
         # expected hits in those categories are often parent/overview
@@ -166,7 +210,7 @@ class QueryPipeline:
         type_top_k = max(self._top_k, _TYPE_TOP_K.get(intent.query_type, 0))
         bm25_weight = _TYPE_BM25_WEIGHT.get(intent.query_type, 0.0)
         chunks = self._retriever.retrieve(
-            query_text, candidates, scoped.scoped_mnos,
+            retrieval_query, candidates, scoped.scoped_mnos,
             top_k=type_top_k, bm25_weight=bm25_weight,
         )
         if verbose:

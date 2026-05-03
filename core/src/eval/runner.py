@@ -135,6 +135,7 @@ class EvalRunner:
         store,
         analyzer=None,
         synthesizer=None,
+        rewriter=None,
         top_k: int = 10,
         max_depth: int | None = None,
         max_context_chars: int = 30000,
@@ -144,6 +145,7 @@ class EvalRunner:
         self._store = store
         self._analyzer = analyzer
         self._synthesizer = synthesizer
+        self._rewriter = rewriter
         self._top_k = top_k
         self._max_depth = max_depth
         self._max_context_chars = max_context_chars
@@ -156,6 +158,7 @@ class EvalRunner:
             store=self._store,
             analyzer=self._analyzer,
             synthesizer=self._synthesizer,
+            rewriter=self._rewriter,
             top_k=self._top_k,
             max_depth=self._max_depth,
             max_context_chars=self._max_context_chars,

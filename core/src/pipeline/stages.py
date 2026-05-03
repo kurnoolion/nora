@@ -555,7 +555,22 @@ def run_eval(ctx: PipelineContext) -> StageResult:
         from core.src.query.synthesizer import LLMSynthesizer
         synthesizer = LLMSynthesizer(llm)
 
-    runner = EvalRunner(graph=graph, embedder=embedder, store=store, synthesizer=synthesizer)
+    # Pre-retrieval query rewriter — when a real LLM is available,
+    # use it to expand concept-shaped queries with telecom-specific
+    # paraphrases before retrieval. Per-query-type policy gates which
+    # query types actually call the rewriter (see
+    # `pipeline._TYPE_REWRITE_ENABLED`); this construction just makes
+    # the rewriter available. Falls back to the mock (no rewrites)
+    # when the LLM is unavailable, preserving deterministic behavior.
+    rewriter = None
+    if llm and not hasattr(llm, "_is_mock"):
+        from core.src.query.rewriter import LLMQueryRewriter
+        rewriter = LLMQueryRewriter(llm)
+
+    runner = EvalRunner(
+        graph=graph, embedder=embedder, store=store,
+        synthesizer=synthesizer, rewriter=rewriter,
+    )
     report = runner.run_all(questions)
 
     # Save report
