@@ -134,6 +134,14 @@ def main() -> None:
              "overrides NORA_STANDARDS_SOURCE env var).",
     )
     parser.add_argument("--continue-on-error", action="store_true", help="Continue past failed stages")
+    parser.add_argument(
+        "--skip-taxonomy", action="store_true",
+        help="Skip the taxonomy stage entirely (no LLM call, no feature/maps_to "
+             "edges in the graph). Downstream stages tolerate the missing "
+             "taxonomy.json. Useful when taxonomy LLM output is noisy or "
+             "non-deterministic; trades feature-aware retrieval for a "
+             "reproducible graph topology.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
@@ -237,6 +245,19 @@ def main() -> None:
     start_idx = STAGE_NUM[start] - 1
     end_idx = STAGE_NUM[end]
     stages = STAGE_NAMES[start_idx:end_idx]
+
+    # `--skip-taxonomy` (or env config `skip_taxonomy=True`) drops the
+    # taxonomy stage from the run list. Graph and vectorstore stages
+    # already tolerate a missing taxonomy.json (return None / log a
+    # warning); the resulting graph just lacks feature: nodes and
+    # maps_to edges. Used when taxonomy LLM output is noisy or non-
+    # deterministic.
+    skip_taxonomy = bool(args.skip_taxonomy) or bool(
+        args.env and getattr(env, "skip_taxonomy", False)
+    )
+    if skip_taxonomy and "taxonomy" in stages:
+        stages = [s for s in stages if s != "taxonomy"]
+        print("Note: taxonomy stage skipped (--skip-taxonomy)")
 
     if not stages:
         print(f"Error: No stages in range {start} -> {end}")

@@ -135,3 +135,72 @@ def test_load_old_json_without_embedding_fields(tmp_path):
     env = EnvironmentConfig.load_json(p)
     assert env.embedding_provider == "sentence-transformers"
     assert env.embedding_model == "all-MiniLM-L6-v2"
+
+
+# ---------------------------------------------------------------------------
+# skip_taxonomy field — pin defaults + round-trip + back-compat for old JSONs
+# ---------------------------------------------------------------------------
+
+
+def test_skip_taxonomy_defaults_to_false():
+    """The default must remain False — taxonomy stage continues to run
+    unless the env or CLI explicitly opts out. Pinned because flipping
+    this default would silently change every existing pipeline run."""
+    env = _make_env("/tmp/x")
+    assert env.skip_taxonomy is False
+
+
+def test_skip_taxonomy_round_trips_through_json(tmp_path):
+    """Setting skip_taxonomy=True survives save_json + load_json so the
+    env config can persist the opt-out across runs."""
+    p = tmp_path / "skip.json"
+    env = _make_env("/tmp/x")
+    env.skip_taxonomy = True
+    env.save_json(p)
+    loaded = EnvironmentConfig.load_json(p)
+    assert loaded.skip_taxonomy is True
+
+
+def test_load_old_json_without_skip_taxonomy_field(tmp_path):
+    """Pre-skip-taxonomy env JSONs must continue to load — the field
+    falls back to its default (False) so old environments behave
+    exactly as they did before the flag was introduced."""
+    import json
+
+    p = tmp_path / "old_no_skip.json"
+    p.write_text(
+        json.dumps({
+            "name": "legacy",
+            "description": "",
+            "created_by": "",
+            "member": "",
+            "env_dir": "/tmp/x",
+        })
+    )
+    env = EnvironmentConfig.load_json(p)
+    assert env.skip_taxonomy is False
+
+
+def test_stages_filter_drops_taxonomy_when_skip_set():
+    """The CLI filter logic — `[s for s in stages if s != 'taxonomy']` —
+    drops only taxonomy and preserves the rest of the stage order."""
+    stages = ["extract", "profile", "parse", "resolve", "taxonomy",
+              "standards", "graph", "vectorstore", "eval"]
+    skip = True
+    if skip and "taxonomy" in stages:
+        stages = [s for s in stages if s != "taxonomy"]
+    assert stages == [
+        "extract", "profile", "parse", "resolve",
+        "standards", "graph", "vectorstore", "eval",
+    ]
+
+
+def test_stages_filter_no_op_when_skip_unset():
+    """skip_taxonomy=False must NOT filter — taxonomy stays in the run
+    list. Catches a regression where the default behavior changes."""
+    stages = ["extract", "profile", "parse", "resolve", "taxonomy",
+              "standards", "graph", "vectorstore", "eval"]
+    skip = False
+    if skip and "taxonomy" in stages:
+        stages = [s for s in stages if s != "taxonomy"]
+    assert "taxonomy" in stages

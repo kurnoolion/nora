@@ -245,6 +245,11 @@ class EnvironmentConfig:
     # Standards source: "huggingface" (default) | "3gpp"
     standards_source: str = DEFAULT_STANDARDS_SOURCE
 
+    # Skip the taxonomy stage entirely. Graph and vectorstore stages
+    # tolerate missing taxonomy (no feature: nodes, no maps_to edges).
+    # Useful when taxonomy LLM output is noisy or non-deterministic.
+    skip_taxonomy: bool = False
+
     # Metadata
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
 
