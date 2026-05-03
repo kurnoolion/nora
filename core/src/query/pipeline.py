@@ -83,6 +83,26 @@ _TYPE_REWRITE_ENABLED = {
     # SINGLE_DOC, GENERAL: omitted → default False
 }
 
+# Cross-encoder reranking enable per query-type. Reranker reorders
+# the fused top-K from BM25 + dense retrieval using a small cross-
+# encoder model that scores (query, chunk) pairs jointly. Most
+# expensive of the retrieval-quality knobs but generally the
+# highest-quality reordering signal.
+#
+# Default: enabled for the same query types that benefit from
+# wider top_k — concept-shaped breadth queries. SINGLE_DOC entity
+# lookups already work via D-039 and don't need the extra
+# compute. Numbers are best-effort defaults; tune per corpus.
+_TYPE_RERANK_ENABLED = {
+    QueryType.CROSS_DOC: True,
+    QueryType.STANDARDS_COMPARISON: True,
+    QueryType.FEATURE_LEVEL: True,
+    QueryType.CROSS_MNO_COMPARISON: True,
+    QueryType.TRACEABILITY: True,
+    QueryType.RELEASE_DIFF: True,
+    # SINGLE_DOC, GENERAL: omitted → default False (no rerank)
+}
+
 from core.src.vectorstore.embedding_base import EmbeddingProvider
 from core.src.vectorstore.store_base import VectorStoreProvider
 
@@ -105,6 +125,7 @@ class QueryPipeline:
         analyzer=None,
         synthesizer=None,
         rewriter=None,
+        reranker=None,
         top_k: int = 10,
         max_depth: int | None = None,
         max_context_chars: int = 30000,
@@ -137,7 +158,9 @@ class QueryPipeline:
         self._scoper = GraphScoper(graph, max_depth=max_depth)
         bm25_index = BM25Index.from_store(store) if enable_bm25 else None
         self._retriever = RAGRetriever(
-            embedder, store, top_k=top_k, bm25_index=bm25_index
+            embedder, store, top_k=top_k,
+            bm25_index=bm25_index,
+            reranker=reranker,
         )
         self._context_builder = ContextBuilder(graph)
         self._synthesizer = synthesizer or MockSynthesizer()
@@ -209,9 +232,10 @@ class QueryPipeline:
         # chunks too thin to compete with BM25-favored richer chunks).
         type_top_k = max(self._top_k, _TYPE_TOP_K.get(intent.query_type, 0))
         bm25_weight = _TYPE_BM25_WEIGHT.get(intent.query_type, 0.0)
+        rerank = _TYPE_RERANK_ENABLED.get(intent.query_type, False)
         chunks = self._retriever.retrieve(
             retrieval_query, candidates, scoped.scoped_mnos,
-            top_k=type_top_k, bm25_weight=bm25_weight,
+            top_k=type_top_k, bm25_weight=bm25_weight, rerank=rerank,
         )
         if verbose:
             logger.info(

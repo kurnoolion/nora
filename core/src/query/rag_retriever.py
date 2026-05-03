@@ -28,6 +28,7 @@ from core.src.query.schema import (
     MNOScope,
 )
 from core.src.query.bm25_index import BM25Index, rrf_fuse
+from core.src.query.reranker import MockReranker, Reranker
 from core.src.vectorstore.embedding_base import EmbeddingProvider
 from core.src.vectorstore.store_base import VectorStoreProvider, QueryResult
 
@@ -62,12 +63,17 @@ class RAGRetriever:
         top_k: int = 10,
         diversity_min_per_plan: int = 1,
         bm25_index: BM25Index | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
         self._embedder = embedder
         self._store = store
         self._top_k = top_k
         self._diversity_min = diversity_min_per_plan
         self._bm25 = bm25_index
+        # Reranker runs after RRF fusion, before diversity. None
+        # falls back to a Mock (passthrough) so the existing
+        # retrieval order is preserved when no reranker is supplied.
+        self._reranker = reranker or MockReranker()
 
     def retrieve(
         self,
@@ -76,6 +82,7 @@ class RAGRetriever:
         scopes: list[MNOScope],
         top_k: int | None = None,
         bm25_weight: float | None = None,
+        rerank: bool = True,
     ) -> list[RetrievedChunk]:
         """Retrieve and rank chunks for the query.
 
@@ -108,14 +115,33 @@ class RAGRetriever:
         bm25_active = self._bm25 is not None and weight > 0.0
         candidate_req_ids = candidates.requirement_ids()
 
+        # When a reranker is active, pull a wider pool from retrieval
+        # so the cross-encoder has more candidates to reorder.
+        # `rerank=False` from the caller (per-query-type gate) skips
+        # the reranker entirely. Passthrough MockReranker also skips.
+        rerank_active = (
+            rerank and not isinstance(self._reranker, MockReranker)
+        )
+        retrieval_k = k * 2 if rerank_active else k
+
         if candidate_req_ids:
             chunks = self._retrieve_scoped(
-                query, candidate_req_ids, k, weight, bm25_active,
+                query, candidate_req_ids, retrieval_k, weight, bm25_active,
             )
         else:
             chunks = self._retrieve_metadata(
-                query, scopes, k, weight, bm25_active,
+                query, scopes, retrieval_k, weight, bm25_active,
             )
+
+        # Cross-encoder rerank — applied to the full retrieval pool
+        # before truncation to top_k. Reranker returns the same chunks
+        # in a (possibly) different order; we then take top_k.
+        if rerank_active and len(chunks) > 1:
+            chunks = self._reranker.rerank(query, chunks)
+            logger.info(
+                f"Reranker reordered {len(chunks)} chunks; keeping top {k}"
+            )
+            chunks = chunks[:k]
 
         if self._diversity_min > 0 and len(chunks) > self._diversity_min:
             chunks = self._enforce_diversity(chunks, k)

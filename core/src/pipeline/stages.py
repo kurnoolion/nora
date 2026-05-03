@@ -567,9 +567,22 @@ def run_eval(ctx: PipelineContext) -> StageResult:
         from core.src.query.rewriter import LLMQueryRewriter
         rewriter = LLMQueryRewriter(llm)
 
+    # Cross-encoder reranker — final-pass relevance scoring on the
+    # fused top-K from BM25 + dense retrieval. Per-query-type policy
+    # gates which queries actually rerank (see
+    # `pipeline._TYPE_RERANK_ENABLED`). Construction is graceful:
+    # if the cross-encoder model isn't cached locally and offline
+    # mode is on, the reranker logs a warning and degrades to a
+    # passthrough. No new dependency — uses sentence-transformers'
+    # `CrossEncoder` already in requirements.txt.
+    from core.src.query.reranker import CrossEncoderReranker
+    reranker = CrossEncoderReranker()
+    if not reranker.available:
+        reranker = None  # falls back to MockReranker in pipeline
+
     runner = EvalRunner(
         graph=graph, embedder=embedder, store=store,
-        synthesizer=synthesizer, rewriter=rewriter,
+        synthesizer=synthesizer, rewriter=rewriter, reranker=reranker,
     )
     report = runner.run_all(questions)
 
