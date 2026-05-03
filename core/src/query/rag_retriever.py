@@ -15,11 +15,20 @@ Each mode runs in two flavors:
     Fusion (RRF). Lifts queries with specific terms ("T3402",
     "VZ_REQ_X") whose dense embeddings rank just below richer leaf
     chunks. See `bm25_index.py` for the sparse side.
+
+Glossary pin (D-043): when a query is acronym-shaped — "What is X?",
+"Define X", "what does X mean" — and X is in the corpus's glossary
+chunks (`doc_type=glossary_entry`), the matching glossary chunk is
+prepended to the retrieval result. This is hard-pinned because
+short acronym queries don't match the dense+BM25 signal well; the
+glossary chunk would otherwise rank below operational chunks that
+mention the acronym in passing.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from core.src.query.schema import (
@@ -31,6 +40,28 @@ from core.src.query.bm25_index import BM25Index, rrf_fuse
 from core.src.query.reranker import MockReranker, Reranker
 from core.src.vectorstore.embedding_base import EmbeddingProvider
 from core.src.vectorstore.store_base import VectorStoreProvider, QueryResult
+
+
+# Recognizes "What is X", "What does X mean", "What does X stand for",
+# "Define X", "Definition of X", "Meaning of X". X is captured as an
+# acronym candidate (2-15 chars, dominant uppercase / digits / dashes
+# / underscores; first char is a letter). The optional question mark
+# and trailing whitespace are tolerated.
+_ACRONYM_QUERY_RE = re.compile(
+    r"""(?ix)                                # case-insensitive, verbose
+    \b(?:
+        what\s+is                          |
+        what\s+does                        |
+        what\s+do                          |
+        define                             |
+        definition\s+of                    |
+        meaning\s+of                       |
+        expand\s+(?:the\s+)?(?:acronym\s+)?
+    )\s+
+    (?P<acronym>[A-Za-z][A-Za-z0-9_\-]{1,14})
+    \b
+    """
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +105,63 @@ class RAGRetriever:
         # falls back to a Mock (passthrough) so the existing
         # retrieval order is preserved when no reranker is supplied.
         self._reranker = reranker or MockReranker()
+        # In-memory glossary index for the acronym-pin path. Built
+        # once from the store's `doc_type=glossary_entry` chunks (D-
+        # 043). Cheap (~one entry per acronym per plan) and avoids a
+        # filtered store query per request.
+        self._glossary_by_acronym: dict[str, list[RetrievedChunk]] = (
+            self._build_glossary_index(store)
+        )
+
+    @staticmethod
+    def _build_glossary_index(
+        store: VectorStoreProvider,
+    ) -> dict[str, list[RetrievedChunk]]:
+        """Scan the store once for glossary chunks; index by lowercase
+        acronym. Returns `{}` when no glossary chunks exist (back-compat
+        with corpora built before D-043)."""
+        try:
+            all_ = store.get_all()
+        except Exception as e:
+            logger.warning("Glossary index build skipped: %s", e)
+            return {}
+        idx: dict[str, list[RetrievedChunk]] = {}
+        for cid, doc, meta in zip(all_.ids, all_.documents, all_.metadatas):
+            if (meta or {}).get("doc_type") != "glossary_entry":
+                continue
+            term = (meta.get("acronym") or "").strip()
+            if not term:
+                continue
+            chunk = RetrievedChunk(
+                chunk_id=cid,
+                text=doc,
+                metadata=dict(meta),
+                # Score 1.0 — glossary chunks pin to the top by design,
+                # not by similarity. We don't run them through the
+                # cross-encoder either; the user query is acronym-shaped
+                # and the answer is already in the chunk.
+                similarity_score=1.0,
+                graph_node_id=cid,
+            )
+            idx.setdefault(term.lower(), []).append(chunk)
+        if idx:
+            logger.info("Glossary index: %d acronyms across %d chunks",
+                        len(idx), sum(len(v) for v in idx.values()))
+        return idx
+
+    def _detect_acronym_query(self, query: str) -> str | None:
+        """Return the acronym X when `query` matches an acronym
+        lookup pattern AND X is in the glossary index. Returns None
+        otherwise — the caller falls through to normal retrieval."""
+        if not self._glossary_by_acronym:
+            return None
+        m = _ACRONYM_QUERY_RE.search(query)
+        if not m:
+            return None
+        candidate = m.group("acronym")
+        if candidate.lower() in self._glossary_by_acronym:
+            return candidate
+        return None
 
     def retrieve(
         self,
@@ -145,6 +233,27 @@ class RAGRetriever:
 
         if self._diversity_min > 0 and len(chunks) > self._diversity_min:
             chunks = self._enforce_diversity(chunks, k)
+
+        # Glossary pin (D-043). Detect acronym-shaped queries and
+        # prepend the matching glossary chunk(s) to the result. The
+        # pin happens AFTER diversity / rerank so we don't have the
+        # cross-encoder reorder a chunk we know is the answer. Dedup
+        # by chunk_id with the regular retrieval; if the glossary
+        # chunk was already pulled, just promote it to the front.
+        pin_term = self._detect_acronym_query(query)
+        if pin_term:
+            pinned = self._glossary_by_acronym.get(pin_term.lower(), [])
+            if pinned:
+                pinned_ids = {c.chunk_id for c in pinned}
+                rest = [c for c in chunks if c.chunk_id not in pinned_ids]
+                chunks = pinned + rest
+                # Trim back to k after the prepend so the budget
+                # downstream (context builder) is unchanged.
+                chunks = chunks[:k]
+                logger.info(
+                    "Glossary pin: %r matched acronym %r → %d chunk(s) prepended",
+                    query, pin_term, len(pinned),
+                )
 
         return chunks
 

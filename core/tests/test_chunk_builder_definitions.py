@@ -34,9 +34,76 @@ def _tree(reqs: list[dict], definitions_map: dict[str, str], defs_section_num: s
     }
 
 
+def _req_chunks(chunks):
+    """Filter to per-requirement chunks. Glossary-entry chunks
+    (`doc_type=glossary_entry`) are produced alongside (D-043) but
+    are tested separately — keep the inline-expansion tests focused
+    on requirement chunks."""
+    return [c for c in chunks if c.metadata.get("doc_type") == "requirement"]
+
+
 # ---------------------------------------------------------------------------
 # Basic expansion
 # ---------------------------------------------------------------------------
+
+
+def test_glossary_chunks_one_per_acronym():
+    """D-043: every entry in `definitions_map` becomes its own short
+    chunk. These are the answer surfaces for "What is X?" queries —
+    short, acronym-prefixed, easy for both BM25 and dense retrieval
+    to rank top when the query is acronym-shaped."""
+    builder = ChunkBuilder(_config())
+    reqs = [
+        {
+            "req_id": "REQ_1",
+            "section_number": "2.1",
+            "title": "ETWS Behavior",
+            "text": "The device shall support ETWS as defined.",
+            "tables": [],
+            "images": [],
+        },
+    ]
+    defs = {
+        "ETWS": "Earthquake and Tsunami Warning System",
+        "SDM": "Subscriber Device Management",
+    }
+    tree = _tree(reqs, defs)
+    chunks = builder.build_chunks([tree])
+    glossary = [c for c in chunks if c.metadata.get("doc_type") == "glossary_entry"]
+    by_term = {c.metadata["acronym"]: c for c in glossary}
+    assert set(by_term.keys()) == {"ETWS", "SDM"}
+    sdm = by_term["SDM"]
+    assert sdm.chunk_id == "glossary:TESTPLAN:SDM"
+    assert sdm.metadata["expansion"] == "Subscriber Device Management"
+    # The chunk text leads with the acronym so dense embedding picks
+    # it up on short queries like "What is SDM?".
+    assert "SDM:" in sdm.text
+    assert "Subscriber Device Management" in sdm.text
+
+
+def test_glossary_chunks_skipped_when_no_defs():
+    """No definitions_map → no glossary chunks (not even an empty one)."""
+    builder = ChunkBuilder(_config())
+    reqs = [{
+        "req_id": "REQ_1", "section_number": "2.1", "title": "x",
+        "text": "body", "tables": [], "images": [],
+    }]
+    tree = _tree(reqs, {})
+    chunks = builder.build_chunks([tree])
+    assert all(c.metadata.get("doc_type") != "glossary_entry" for c in chunks)
+
+
+def test_glossary_chunk_id_slugifies_special_chars():
+    """Some acronyms have spaces / punctuation (e.g. `IMEI SV`,
+    `OMA-DM`). The chunk_id slug must remain filesystem-safe and
+    unique without losing readability."""
+    builder = ChunkBuilder(_config())
+    tree = _tree([], {"OMA-DM": "Open Mobile Alliance Device Management",
+                       "IMEI SV": "IMEI Software Version"})
+    chunks = builder.build_chunks([tree])
+    ids = {c.chunk_id for c in chunks if c.metadata.get("doc_type") == "glossary_entry"}
+    assert "glossary:TESTPLAN:OMA-DM" in ids
+    assert "glossary:TESTPLAN:IMEI_SV" in ids
 
 
 def test_first_occurrence_expanded_inline():
@@ -53,7 +120,7 @@ def test_first_occurrence_expanded_inline():
         },
     ]
     tree = _tree(reqs, {"ETWS": "Earthquake and Tsunami Warning System"})
-    chunks = builder.build_chunks([tree])
+    chunks = _req_chunks(builder.build_chunks([tree]))
     assert len(chunks) == 1
     text = chunks[0].text
     assert "ETWS (Earthquake and Tsunami Warning System)" in text
@@ -99,7 +166,7 @@ def test_multiple_terms_all_expanded():
         "SUPL": "Secure User Plane Location",
         "ETWS": "Earthquake and Tsunami Warning System",
     })
-    text = builder.build_chunks([tree])[0].text
+    text = _req_chunks(builder.build_chunks([tree]))[0].text
     assert "SUPL (Secure User Plane Location)" in text
     assert "ETWS (Earthquake and Tsunami Warning System)" in text
 
@@ -122,7 +189,7 @@ def test_longer_term_matches_before_shorter():
         "IMS": "IP Multimedia Subsystem",
         "IMS REGISTRATION": "Registration with the IP Multimedia Subsystem",
     })
-    text = builder.build_chunks([tree])[0].text
+    text = _req_chunks(builder.build_chunks([tree]))[0].text
     # The multi-word term should win — its expansion is present, and the
     # bare "IMS" expansion shouldn't fire (one expansion per term).
     assert "IMS REGISTRATION (Registration with the IP Multimedia Subsystem)" in text
@@ -142,7 +209,7 @@ def test_no_expansion_when_definitions_map_empty():
         },
     ]
     tree = _tree(reqs, {})
-    text = builder.build_chunks([tree])[0].text
+    text = _req_chunks(builder.build_chunks([tree]))[0].text
     assert "(Earthquake" not in text
 
 
@@ -160,7 +227,7 @@ def test_word_boundary_prevents_false_match():
         },
     ]
     tree = _tree(reqs, {"RAT": "Radio Access Technology"})
-    text = builder.build_chunks([tree])[0].text
+    text = _req_chunks(builder.build_chunks([tree]))[0].text
     # RAT (whole word) expanded once; RATIO untouched.
     assert "RAT (Radio Access Technology)" in text
     assert "RATIO" in text
@@ -234,7 +301,7 @@ def test_definitions_descendant_section_also_skipped():
         {"ETWS": "Earthquake and Tsunami Warning System"},
         defs_section_num="1.1",
     )
-    chunks = builder.build_chunks([tree])
+    chunks = _req_chunks(builder.build_chunks([tree]))
     assert "ETWS (Earthquake and Tsunami Warning System)" not in chunks[0].text
 
 
@@ -258,7 +325,7 @@ def test_table_anchored_under_definitions_skipped():
         {"ETWS": "Earthquake and Tsunami Warning System"},
         defs_section_num="1.1",
     )
-    chunks = builder.build_chunks([tree])
+    chunks = _req_chunks(builder.build_chunks([tree]))
     assert "ETWS (Earthquake" not in chunks[0].text
 
 
@@ -286,7 +353,7 @@ def _expanded_chunk(term: str, expansion: str) -> str:
         },
     ]
     tree = _tree(reqs, {term: expansion})
-    chunks = builder.build_chunks([tree])
+    chunks = _req_chunks(builder.build_chunks([tree]))
     assert len(chunks) == 1
     return chunks[0].text
 

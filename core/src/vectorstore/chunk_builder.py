@@ -139,7 +139,81 @@ class ChunkBuilder:
             chunk_id = f"req:{req_id}"
             chunks.append(Chunk(chunk_id=chunk_id, text=text, metadata=metadata))
 
+        # One short, retrieval-friendly chunk per glossary entry
+        # (D-043). The whole acronym table also lives inside the
+        # definitions-section req chunk, but that chunk is dominated
+        # by the other 18 entries — short queries like "What is X?"
+        # rank it low. A dedicated chunk with the acronym in the
+        # first ~80 chars wins on both BM25 (high TF-IDF) and dense
+        # similarity (concise definition).
+        for entry in self._build_glossary_chunks(
+            definitions_map=definitions_map,
+            mno=mno,
+            release=release,
+            plan_id=plan_id,
+            plan_name=plan_name,
+            defs_section_num=defs_section_num,
+            feature_ids=feature_ids,
+        ):
+            chunks.append(entry)
+
         return chunks
+
+    @staticmethod
+    def _build_glossary_chunks(
+        definitions_map: dict[str, str],
+        mno: str,
+        release: str,
+        plan_id: str,
+        plan_name: str,
+        defs_section_num: str,
+        feature_ids: list[str],
+    ) -> list[Chunk]:
+        """Build one Chunk per (acronym, expansion) pair.
+
+        These are tiny — a header, the acronym, the expansion — so
+        BM25 weights the acronym heavily and dense embedding
+        captures the natural-language definition. Used for queries
+        like "What is SDM?" where the answer is the expansion text
+        itself, not the requirement-shaped chunk that contains it.
+
+        chunk_id format: `glossary:<plan_id>:<acronym>`. We slug
+        the acronym for filesystem/store safety.
+        """
+        out: list[Chunk] = []
+        for acronym, expansion in (definitions_map or {}).items():
+            term = (acronym or "").strip()
+            exp = (expansion or "").strip()
+            if not term or not exp:
+                continue
+            # Header lines mirror the per-requirement chunk format so
+            # BM25 / dense models see consistent prefixes across the
+            # corpus.
+            text = (
+                f"[MNO: {mno} | Release: {release} | Plan: {plan_name or plan_id}]\n"
+                f"[Glossary entry — {plan_id}]\n"
+                f"[Acronym: {term}]\n\n"
+                f"{term}: {exp}"
+            )
+            slug = re.sub(r"[^A-Za-z0-9_-]+", "_", term).strip("_") or "term"
+            chunk_id = f"glossary:{plan_id}:{slug}"
+            out.append(Chunk(
+                chunk_id=chunk_id,
+                text=text,
+                metadata={
+                    "mno": mno,
+                    "release": release,
+                    "doc_type": "glossary_entry",
+                    "plan_id": plan_id,
+                    "req_id": "",
+                    "section_number": defs_section_num,
+                    "zone_type": "",
+                    "feature_ids": feature_ids,
+                    "acronym": term,
+                    "expansion": exp,
+                },
+            ))
+        return out
 
     @staticmethod
     def _compile_definitions_regex(definitions_map: dict[str, str]):

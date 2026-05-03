@@ -969,6 +969,76 @@ def test_definitions_extracted_from_table_anchored_glossary():
     assert tree.parse_stats.defs_extracted == 3
 
 
+def test_definitions_recovers_misclassified_table_header_row():
+    """Real corpus bug (VZ LTEOTADM 'SDM' row): a markdown extractor
+    can split a glossary into multiple tables when a divider line
+    (`|---|`) appears mid-table. The row immediately following the
+    divider then ends up in `headers`, not `rows`, and would
+    otherwise be silently dropped from `definitions_map`. The
+    parser should recover that row when the headers don't look
+    like canonical column names."""
+    profile = _profile()
+    profile.definitions_entry_pattern = ""
+    table_a = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=2, index=2),
+        headers=["Acronym/Term", "Definition"],
+        rows=[
+            ["ADD", "Automatic Device Detection"],
+            ["PST", "Product Support Tool"],
+        ],
+        font_info=FontInfo(size=11.0),
+    )
+    # Table B: the SDM row was misread as the column header.
+    table_b = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=3, index=3),
+        headers=[
+            "SDM",
+            "Subscriber Device Management — APN Management and Device profiling",
+        ],
+        rows=[
+            ["UI", "User Interface"],
+            ["VZW", "Verizon Wireless"],
+        ],
+        font_info=FontInfo(size=11.0),
+    )
+    blocks = [
+        _block(0, "1 Glossary"),
+        table_a,
+        table_b,
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    # SDM must be recovered from table_b's headers; UI/VZW from rows.
+    assert "SDM" in tree.definitions_map
+    assert tree.definitions_map["SDM"].startswith("Subscriber Device Management")
+    assert tree.definitions_map["UI"] == "User Interface"
+    assert tree.definitions_map["VZW"] == "Verizon Wireless"
+    assert tree.definitions_map["ADD"] == "Automatic Device Detection"
+
+
+def test_definitions_canonical_header_row_not_treated_as_entry():
+    """Inverse of the above: when the headers ARE the canonical
+    column-header row (e.g. `Acronym/Term | Definition`), they
+    must NOT be folded into `definitions_map` as a fake entry."""
+    profile = _profile()
+    profile.definitions_entry_pattern = ""
+    table = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=2, index=2),
+        headers=["Acronym / Term", "Definition"],
+        rows=[["APN", "Access Point Name"]],
+        font_info=FontInfo(size=11.0),
+    )
+    blocks = [
+        _block(0, "1 Glossary"),
+        table,
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    # Only the data row, never the column-header row.
+    assert tree.definitions_map == {"APN": "Access Point Name"}
+
+
 def test_definitions_table_layout_first_occurrence_wins():
     """Across multiple tables in the glossary section, duplicate terms
     keep the first occurrence — same precedence rule as body-text."""

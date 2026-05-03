@@ -257,6 +257,10 @@ class QueryPipeline:
         # Stage 6: LLM Synthesis
         response = self._synthesizer.synthesize(context, intent)
         response.candidate_count = candidates.total
+        # Surface the retrieval set for the UI / Test page. This is
+        # the post-rerank top-K returned by Stage 4 (RAG) — it's what
+        # "All returned by RAG" means on the Test page.
+        response.retrieved_chunks = chunks
 
         if verbose:
             logger.info(

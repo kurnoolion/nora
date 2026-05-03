@@ -138,6 +138,7 @@ class LLMSynthesizer:
                 citations.append(Citation(
                     req_id=req_id,
                     plan_id=plan_id,
+                    llm_cited=True,
                 ))
                 seen.add(req_id)
 
@@ -153,6 +154,7 @@ class LLMSynthesizer:
                 citations.append(Citation(
                     spec=f"3GPP TS {spec}",
                     spec_section=section,
+                    llm_cited=True,
                 ))
                 seen.add(key)
 

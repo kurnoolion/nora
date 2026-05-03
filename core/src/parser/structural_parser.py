@@ -1019,10 +1019,22 @@ class GenericStructuralParser:
                     defs[term] = expansion
 
         # Layout 2 — table-anchored (OA convention). Every 2+ col row
-        # in the section's tables is a candidate definition. We don't
-        # gate on column headers — a glossary section's tables are
-        # defs by convention.
+        # in the section's tables is a candidate definition. We also
+        # walk `tbl.headers` because some markdown extractors split a
+        # glossary into multiple tables when a divider line (`|---|`)
+        # appears mid-table — the first row of the second table then
+        # ends up in `headers`, not `rows`, and would otherwise be
+        # silently dropped (real corpus bug: SDM row in VZ LTEOTADM).
+        # We filter the obvious "Acronym | Definition" canonical
+        # header row so it doesn't pollute the map.
         for tbl in target.tables:
+            candidates: list[tuple[str, str]] = []
+            headers = getattr(tbl, "headers", None) or []
+            if len(headers) >= 2:
+                h0 = re.sub(r"\s+", " ", (headers[0] or "")).strip()
+                h1 = re.sub(r"\s+", " ", (headers[1] or "")).strip()
+                if h0 and h1 and not self._looks_like_definition_column_header(h0, h1):
+                    candidates.append((h0, h1))
             for row in tbl.rows:
                 if len(row) < 2:
                     continue
@@ -1030,10 +1042,37 @@ class GenericStructuralParser:
                 expansion = re.sub(r"\s+", " ", (row[1] or "")).strip()
                 if not term or not expansion:
                     continue
+                candidates.append((term, expansion))
+            for term, expansion in candidates:
                 if term not in defs:
                     defs[term] = expansion
 
         return defs, target.section_number
+
+    @staticmethod
+    def _looks_like_definition_column_header(h0: str, h1: str) -> bool:
+        """True when (h0, h1) looks like the canonical column-header
+        row of a glossary table — `Acronym | Definition`, `Term |
+        Description`, etc. Used to decide whether to fold table
+        headers into the definitions map."""
+        canonical = {
+            "acronym", "acronyms", "term", "terms",
+            "abbreviation", "abbreviations", "abbr",
+            "definition", "definitions", "description",
+            "meaning", "expansion",
+        }
+        def normalize(s: str) -> set[str]:
+            tokens = re.split(r"[\s/]+", s.strip().lower())
+            return {t.rstrip("./:") for t in tokens if t}
+        h0_tokens = normalize(h0)
+        h1_tokens = normalize(h1)
+        # If both columns' header tokens are entirely from the canonical
+        # set, this is the real header row.
+        return (
+            bool(h0_tokens) and bool(h1_tokens)
+            and h0_tokens.issubset(canonical)
+            and h1_tokens.issubset(canonical)
+        )
 
     def _extract_applicability_labels(self, text: str) -> list[str]:
         """Run requirement_patterns over `text`; first match wins. Capture

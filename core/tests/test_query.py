@@ -119,6 +119,17 @@ class MockVectorStore:
     def reset(self):
         self._docs.clear()
 
+    def get_all(self):
+        """Return every document — used by RAGRetriever to build its
+        glossary-pin index (D-043) and by BM25Index."""
+        ids = list(self._docs.keys())
+        return QueryResult(
+            ids=ids,
+            documents=[self._docs[i]["document"] for i in ids],
+            metadatas=[self._docs[i]["metadata"] for i in ids],
+            distances=[],
+        )
+
     def _matches_filter(self, meta, where):
         if "$and" in where:
             return all(self._matches_filter(meta, cond) for cond in where["$and"])
@@ -545,6 +556,100 @@ class TestRAGRetriever:
         for chunk in chunks:
             assert "mno" in chunk.metadata
             assert "plan_id" in chunk.metadata
+
+
+class TestRAGRetrieverGlossaryPin:
+    """D-043 glossary pin: when the query is acronym-shaped and X is
+    in the glossary index, the matching `glossary:*` chunk is hard-
+    pinned to the front of the result list. Skips: queries that
+    aren't acronym-shaped, queries naming an acronym not in the
+    index, and corpora without any glossary chunks (back-compat)."""
+
+    def setup_method(self):
+        self.embedder = MockEmbedder(dim=8)
+        self.store = _build_test_store(self.embedder)
+        # Add a glossary chunk so the pin index has something to find.
+        self.store.add(
+            ids=["glossary:LTEDATARETRY:SDM"],
+            embeddings=self.embedder.embed(["SDM glossary"]),
+            documents=["SDM: Subscriber Device Management — APN management."],
+            metadatas=[{
+                "mno": "VZW", "release": "2026_feb",
+                "plan_id": "LTEDATARETRY",
+                "doc_type": "glossary_entry",
+                "acronym": "SDM",
+                "expansion": "Subscriber Device Management",
+            }],
+        )
+        self.vzw_scope = [MNOScope(mno="VZW", release="2026_feb")]
+
+    def test_pin_prepends_glossary_chunk_for_what_is_acronym(self):
+        retriever = RAGRetriever(self.embedder, self.store, top_k=5)
+        chunks = retriever.retrieve(
+            "What is SDM?", CandidateSet(), self.vzw_scope,
+        )
+        assert chunks
+        assert chunks[0].chunk_id == "glossary:LTEDATARETRY:SDM"
+        assert chunks[0].metadata.get("doc_type") == "glossary_entry"
+
+    def test_pin_handles_define_x_phrasing(self):
+        retriever = RAGRetriever(self.embedder, self.store, top_k=5)
+        chunks = retriever.retrieve(
+            "Define SDM", CandidateSet(), self.vzw_scope,
+        )
+        assert chunks[0].chunk_id == "glossary:LTEDATARETRY:SDM"
+
+    def test_pin_handles_what_does_x_mean_phrasing(self):
+        retriever = RAGRetriever(self.embedder, self.store, top_k=5)
+        chunks = retriever.retrieve(
+            "what does SDM mean", CandidateSet(), self.vzw_scope,
+        )
+        assert chunks[0].chunk_id == "glossary:LTEDATARETRY:SDM"
+
+    def test_pin_no_match_when_acronym_unknown(self):
+        """`What is XYZ?` where XYZ isn't in the glossary → no pin,
+        falls through to ordinary retrieval. The detector must
+        return None so no chunk is force-prepended; what regular
+        retrieval surfaces by similarity is independent of this."""
+        retriever = RAGRetriever(self.embedder, self.store, top_k=5)
+        assert retriever._detect_acronym_query("What is XYZ?") is None
+
+    def test_pin_skipped_when_query_not_acronym_shaped(self):
+        """Operational query that mentions SDM in passing must NOT
+        pin the glossary chunk — only definitional queries should."""
+        retriever = RAGRetriever(self.embedder, self.store, top_k=5)
+        chunks = retriever.retrieve(
+            "How does the device handle the SDM session timeout?",
+            CandidateSet(), self.vzw_scope,
+        )
+        if chunks:
+            assert chunks[0].chunk_id != "glossary:LTEDATARETRY:SDM"
+
+    def test_pin_dedupes_when_glossary_already_retrieved(self):
+        """If normal retrieval already pulled the glossary chunk, the
+        pin must not duplicate it — promote it to the front instead."""
+        retriever = RAGRetriever(self.embedder, self.store, top_k=8)
+        chunks = retriever.retrieve(
+            "What is SDM?", CandidateSet(), self.vzw_scope,
+        )
+        ids = [c.chunk_id for c in chunks]
+        assert ids[0] == "glossary:LTEDATARETRY:SDM"
+        # No duplicates anywhere in the result set.
+        assert len(ids) == len(set(ids))
+
+    def test_pin_index_empty_for_corpus_without_glossary(self):
+        """Back-compat: a store with no `doc_type=glossary_entry`
+        chunks (pre-D-043 corpora) yields an empty pin index, and
+        retrieve() behaves as before."""
+        embedder = MockEmbedder(dim=8)
+        store = _build_test_store(embedder)  # no glossary chunks added
+        retriever = RAGRetriever(embedder, store, top_k=3)
+        assert retriever._glossary_by_acronym == {}
+        chunks = retriever.retrieve(
+            "What is SDM?", CandidateSet(), [MNOScope(mno="VZW", release="2026_feb")],
+        )
+        # Falls through to normal retrieval
+        assert all(c.metadata.get("doc_type") != "glossary_entry" for c in chunks)
 
 
 class TestRAGRetrieverHybrid:

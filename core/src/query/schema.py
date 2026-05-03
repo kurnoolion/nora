@@ -190,12 +190,18 @@ class AssembledContext:
 
 @dataclass
 class Citation:
-    """A citation to a specific requirement or standard."""
+    """A citation to a specific requirement or standard.
+
+    `llm_cited=True` means the LLM mentioned this in its answer text;
+    `False` means the chunk was in the LLM's context (returned by RAG)
+    but not explicitly cited. The Test page surfaces both views.
+    """
     req_id: str = ""
     plan_id: str = ""
     section_number: str = ""
     spec: str = ""
     spec_section: str = ""
+    llm_cited: bool = False
 
 
 @dataclass
@@ -210,6 +216,10 @@ class QueryResponse:
     candidate_count: int = 0
     retrieved_count: int = 0
     context_tokens_approx: int = 0
+    # Full RAG retrieval — populated by QueryPipeline.query so the
+    # Test page can render "all returned by RAG" alongside the
+    # subset cited by the LLM. Off the LLM hot-path.
+    retrieved_chunks: list[RetrievedChunk] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = {
