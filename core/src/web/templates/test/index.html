@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}NORA — Test{% endblock %}
+{% block nav_test %}active{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+  <h1 class="mb-2">Test</h1>
+  <p class="text-muted">
+    Free-form playground for ad-hoc testing of the requirement bot
+    and (later) other workflows. Each question and the user's
+    thumbs-up/down + comments are persisted for offline review.
+  </p>
+
+  <!-- Section tabs -->
+  <ul class="nav nav-tabs mb-3" role="tablist">
+    {% for section in sections %}
+      <li class="nav-item" role="presentation">
+        <a class="nav-link {% if section.id == active_section %}active{% endif %}
+                          {% if not section.enabled %}disabled{% endif %}"
+           {% if section.enabled %}
+             href="{{ root_path }}/test?section={{ section.id }}"
+           {% else %}
+             href="#" tabindex="-1" aria-disabled="true"
+             title="Coming soon"
+           {% endif %}>
+          {{ section.label }}
+          {% if not section.enabled %}
+            <small class="text-muted ms-1">(soon)</small>
+          {% endif %}
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+
+  <!-- Active section body -->
+  {% for section in sections %}
+    {% if section.id == active_section %}
+      <div class="card">
+        <div class="card-body">
+          {% if section.enabled %}
+
+            <p class="text-muted small mb-3">{{ section.blurb }}</p>
+
+            <!-- Question form -->
+            <form
+              hx-post="{{ root_path }}/api/test/ask"
+              hx-target="#test-answer"
+              hx-swap="innerHTML"
+              hx-indicator="#test-spinner"
+              hx-disabled-elt="find button"
+            >
+              <input type="hidden" name="section" value="{{ section.id }}">
+              <div class="mb-3">
+                <label for="test-question" class="form-label">
+                  <strong>Question</strong>
+                </label>
+                <textarea
+                  id="test-question"
+                  name="question"
+                  rows="3"
+                  class="form-control"
+                  placeholder="e.g. What are the IMS registration retry rules in VZW?"
+                  required></textarea>
+              </div>
+              <button class="btn btn-primary" type="submit">
+                <span class="htmx-indicator-fallback">Ask</span>
+                <span id="test-spinner" class="htmx-indicator">
+                  <span class="spinner-border spinner-border-sm me-1"></span>
+                  Querying…
+                </span>
+              </button>
+            </form>
+
+            <!-- Answer + feedback area (HTMX swaps into this) -->
+            <div id="test-answer" class="mt-4"></div>
+
+          {% else %}
+            <p class="text-muted">
+              <i class="bi bi-tools"></i>
+              This section isn't implemented yet. The Requirement Bot
+              tab is the only functional section in this build.
+            </p>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+  {% endfor %}
+</div>
+
+<style>
+  /* Match the existing UI's pattern: HTMX swaps the indicator
+     in by toggling display. */
+  .htmx-indicator { display: none; }
+  .htmx-request .htmx-indicator { display: inline-block; }
+  .htmx-request .htmx-indicator-fallback { display: none; }
+</style>
+{% endblock %}

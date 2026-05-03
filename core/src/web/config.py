@@ -75,6 +75,10 @@ class WebConfig:
     def metrics_db_path(self) -> Path:
         return self.state_path() / "nora_metrics.db"
 
+    def feedback_db_path(self) -> Path:
+        """SQLite path for the Test page's question/answer/vote/feedback log."""
+        return self.state_path() / "nora_test_feedback.db"
+
 
 def load_config(path: Path | None = None) -> WebConfig:
     """Load config from JSON file, falling back to defaults."""

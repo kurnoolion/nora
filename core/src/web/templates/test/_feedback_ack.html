@@ -1,0 +1,8 @@
+{% if error %}
+  <span class="text-danger">{{ error }}</span>
+{% else %}
+  <span class="text-success">
+    <i class="bi bi-check-circle"></i>
+    Thanks — feedback saved (row #{{ row_id }}{% if vote %}, vote: {{ vote }}{% endif %}).
+  </span>
+{% endif %}

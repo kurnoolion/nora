@@ -1,0 +1,76 @@
+{% if error %}
+  <div class="alert alert-danger">
+    <strong>Error:</strong> {{ error }}
+  </div>
+{% else %}
+  <div class="border rounded p-3 mb-3 bg-light">
+    <div class="text-muted small mb-2">
+      <strong>Q:</strong> {{ question }}
+    </div>
+    <div class="answer-body" style="white-space: pre-wrap; line-height: 1.5;">{{ answer }}</div>
+
+    {% if citations %}
+      <hr>
+      <div class="small">
+        <strong>Citations</strong>
+        ({{ citations|length }} requirement{% if citations|length != 1 %}s{% endif %}):
+        <ul class="list-unstyled mt-1">
+          {% for c in citations %}
+            <li>
+              <code>{{ c.req_id }}</code>
+              {% if c.plan_id %}<span class="badge bg-secondary ms-1">{{ c.plan_id }}</span>{% endif %}
+              {% if c.section_number %}
+                — sec <code>{{ c.section_number }}</code>
+              {% endif %}
+              {% if c.standards_spec %}
+                — {{ c.standards_spec }}{% if c.standards_section %} §{{ c.standards_section }}{% endif %}
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    <div class="text-muted small mt-2">
+      retrieved in {{ elapsed_ms }} ms
+      {% if candidate_count %} · {{ candidate_count }} candidates from graph{% endif %}
+    </div>
+  </div>
+
+  <!-- Feedback widget -->
+  <form
+    hx-post="{{ root_path }}/api/test/feedback"
+    hx-target="#test-feedback-ack"
+    hx-swap="innerHTML"
+    hx-disabled-elt="find button"
+  >
+    <input type="hidden" name="row_id" value="{{ row_id }}">
+    <div class="mb-2">
+      <strong>Was this helpful?</strong>
+    </div>
+    <div class="btn-group mb-2" role="group">
+      <input type="radio" class="btn-check" name="vote" id="vote-up-{{ row_id }}" value="up">
+      <label class="btn btn-outline-success" for="vote-up-{{ row_id }}">
+        <i class="bi bi-hand-thumbs-up"></i> Helpful
+      </label>
+
+      <input type="radio" class="btn-check" name="vote" id="vote-down-{{ row_id }}" value="down">
+      <label class="btn btn-outline-danger" for="vote-down-{{ row_id }}">
+        <i class="bi bi-hand-thumbs-down"></i> Not helpful
+      </label>
+    </div>
+    <div class="mb-2">
+      <label for="ff-{{ row_id }}" class="form-label small text-muted">
+        Optional comment (specific issue, missing info, wrong citation, etc.)
+      </label>
+      <textarea
+        id="ff-{{ row_id }}"
+        name="free_form_feedback"
+        rows="2"
+        class="form-control form-control-sm"
+        placeholder=""></textarea>
+    </div>
+    <button class="btn btn-primary btn-sm" type="submit">Submit feedback</button>
+    <span id="test-feedback-ack" class="ms-2 small"></span>
+  </form>
+{% endif %}

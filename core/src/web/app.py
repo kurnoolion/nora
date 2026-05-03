@@ -32,6 +32,7 @@ from core.src.web.routes.jobs import router as jobs_router
 from core.src.web.routes.metrics_route import router as metrics_router
 from core.src.web.routes.pipeline import router as pipeline_router
 from core.src.web.routes.query import router as query_router
+from core.src.web.routes.playground import router as playground_router
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,11 @@ async def lifespan(app: FastAPI):
     await metrics_store.init_db()
     app.state.metrics = metrics_store
 
+    from core.src.web.feedback_db import FeedbackStore
+    feedback_store = FeedbackStore(str(config.feedback_db_path()))
+    await feedback_store.initialize()
+    app.state.feedback_store = feedback_store
+
     path_mapper = PathMapper(config.path_mappings)
     app.state.path_mapper = path_mapper
 
@@ -128,6 +134,7 @@ app.include_router(jobs_router)
 app.include_router(metrics_router)
 app.include_router(pipeline_router)
 app.include_router(query_router)
+app.include_router(playground_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["duration"] = _duration_filter
