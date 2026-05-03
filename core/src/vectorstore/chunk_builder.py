@@ -92,6 +92,17 @@ class ChunkBuilder:
         defs_section_num = tree.get("definitions_section_number", "") or ""
         defs_pattern = self._compile_definitions_regex(definitions_map)
 
+        # Build a `req_id → title` lookup once per tree so
+        # `_build_chunk_text` can resolve children's titles for the
+        # `[Subsections: ...]` augmentation. children references are
+        # req_id strings; the tree's `requirements` list is flat with
+        # paragraph + table-anchored reqs both present.
+        id_to_title: dict[str, str] = {}
+        for r in tree.get("requirements", []):
+            rid = r.get("req_id", "")
+            if rid:
+                id_to_title[rid] = (r.get("title", "") or "").strip()
+
         chunks = []
         for req in tree.get("requirements", []):
             req_id = req.get("req_id", "")
@@ -99,7 +110,7 @@ class ChunkBuilder:
                 continue
 
             text = self._build_chunk_text(
-                req, mno, release, plan_name, version,
+                req, mno, release, plan_name, version, id_to_title,
             )
 
             # Skip chunks with no meaningful content
@@ -200,6 +211,7 @@ class ChunkBuilder:
         release: str,
         plan_name: str,
         version: str,
+        id_to_title: dict[str, str] | None = None,
     ) -> str:
         """Build the contextualized text for a single requirement.
 
@@ -268,6 +280,37 @@ class ChunkBuilder:
                 caption = image.get("surrounding_text", "")
                 if caption:
                     parts.append(f"[Image: {caption}]")
+
+        # Subsection titles — lifts thin parent/overview chunks for
+        # breadth queries. Gated by body-thinness: only parents with
+        # body text below `children_titles_body_threshold` get
+        # augmented. Augmenting substantial-body parents displaces
+        # their children from cross-doc top-k (parents already rank
+        # well; the breadth query actually wants the leaves).
+        cap = max(0, self.config.max_children_titles)
+        body_thinness_ok = (
+            len((body or "").strip())
+            < self.config.children_titles_body_threshold
+        )
+        if (
+            self.config.include_children_titles
+            and id_to_title
+            and cap > 0
+            and body_thinness_ok
+        ):
+            children = req.get("children", []) or []
+            child_titles: list[str] = []
+            for cid in children:
+                t = id_to_title.get(cid, "")
+                if t:
+                    child_titles.append(t)
+            if child_titles:
+                if len(child_titles) > cap:
+                    extra = len(child_titles) - cap
+                    visible = child_titles[:cap]
+                    visible.append(f"(+{extra} more)")
+                    child_titles = visible
+                parts.append(f"[Subsections: {'; '.join(child_titles)}]")
 
         return "\n".join(parts)
 

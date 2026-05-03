@@ -102,6 +102,51 @@ class VectorStoreConfig:
     include_image_context: bool = True
     """Append image captions / surrounding text."""
 
+    include_children_titles: bool = False
+    """Append [Subsections: t1, t2, ...] line with the immediate
+    children's titles when the requirement has children. Lifts thin
+    parent/overview chunks for breadth queries — e.g., a "SMS over
+    IMS - OVERVIEW" parent whose body is just a heading becomes
+    retrievable for "what are all the SMS over IMS requirements?"
+    when its children's titles ('MO SMS', 'MT SMS', ...) are
+    embedded alongside.
+
+    Gated by `children_titles_body_threshold`: only emitted on
+    parents whose own body text is below the threshold (most OA
+    parents are heading-only, so the gate's selectivity is corpus-
+    dependent — on OA, ~94% of parents pass).
+
+    Capped at `max_children_titles` to bound chunk growth on
+    highly-branching parents.
+
+    **Default off.** Empirical tuning on the OA eval (88.9% / 80.1%
+    pre-feature) showed the augmentation creates a tradeoff:
+    single_doc / lookup queries gained +8pp accuracy (parents made
+    more findable for "find this section" queries), but cross_doc /
+    breadth queries lost ~10-14pp (augmented parents displace their
+    children from top-k, and breadth queries want the children).
+    Net was -0.4 to -1.3pp accuracy depending on cap. Feature stays
+    available behind the flag for corpora / eval mixes where the
+    balance flips the other way (rich-bodied parents, lookup-heavy
+    questions, or breadth queries that explicitly want overview
+    chunks)."""
+
+    children_titles_body_threshold: int = 300
+    """Body-text length (characters) below which a parent's chunk
+    gets augmented with `[Subsections: ...]`. 300 chars is roughly
+    the OA convention's gap between heading-only / 1-sentence-
+    intro overviews (typically <200 chars) and substantive content
+    sections (typically >500 chars). Tune per corpus."""
+
+    max_children_titles: int = 3
+    """Maximum number of child titles to include when augmentation
+    fires. Truncated suffixes get "(+N more)" appended. Default 3
+    is empirically tuned: larger caps (tested 12) make parents
+    dominate cross-doc breadth queries, displacing the children
+    that breadth queries actually want; smaller caps cap the
+    displacement effect while still adding meaningful concept
+    breadth to overview chunks."""
+
     # ── Retrieval defaults ───────────────────────────────────────
     default_n_results: int = 10
     """Default number of results for queries."""
