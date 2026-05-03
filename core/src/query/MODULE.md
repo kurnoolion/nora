@@ -4,14 +4,18 @@
 Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language question into a grounded, citation-bearing answer: `Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis`. Serves FR-9, FR-10, FR-11, FR-12, FR-13, FR-14 (one FR per stage). Implements D-001: the **graph routes, RAG ranks** — retrieval never runs unscoped, and the graph decides which subset of the corpus is even eligible.
 
 **Public surface**
-- Entry point: `QueryPipeline(graph, embedder, store, analyzer=None, synthesizer=None, top_k=10, max_depth=None, max_context_chars=30000)` (pipeline.py) — `query(raw_query) -> QueryResponse`
+- Entry point: `QueryPipeline(graph, embedder, store, analyzer=None, synthesizer=None, top_k=10, max_depth=None, max_context_chars=30000, enable_bm25=True)` (pipeline.py) — `query(raw_query) -> QueryResponse`
 - Stages (each replaceable by injection):
   - `LLMQueryAnalyzer`, `MockQueryAnalyzer` (analyzer.py) — Stage 1
   - `MNOReleaseResolver` (resolver.py) — Stage 2
   - `GraphScoper` (graph_scope.py) — Stage 3
-  - `RAGRetriever` (rag_retriever.py) — Stage 4
+  - `RAGRetriever` (rag_retriever.py) — Stage 4 — accepts optional `bm25_index` constructor param and per-call `bm25_weight: float | None` for hybrid retrieval [D-041]
   - `ContextBuilder` (context_builder.py) — Stage 5
   - `LLMSynthesizer`, `MockSynthesizer` (synthesizer.py) — Stage 6
+- Sparse retrieval (bm25_index.py) [D-041]:
+  - `BM25Index` — telecom-aware tokenized chunk index with `from_store(store)` factory + `search(query, top_k, filter_ids, filter_metadata)` returning `[(chunk_id, score)]`
+  - `tokenize(text) -> list[str]` — preserves req-ids / spec numbers / release codes as single tokens
+  - `rrf_fuse(*ranked_lists, weights, k=60, top_k)` — Reciprocal Rank Fusion across ranked id lists
 - Schema (schema.py):
   - Enums: `QueryType` (single_doc, cross_doc, cross_mno_comparison, release_diff, standards_comparison, traceability, feature_level, general), `DocTypeScope`
   - Per-stage dataclasses: `QueryIntent`, `MNOScope`, `ScopedQuery`, `CandidateNode`, `CandidateSet`, `RetrievedChunk`, `StandardsContext`, `ChunkContext`, `AssembledContext`, `Citation`, `QueryResponse`
@@ -32,7 +36,8 @@ Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language q
 - Prompting is few-shot + explicit grounding instructions; `LLMSynthesizer` includes a context fallback path for cases where the LLM skips citations (fix kept because dropping it caused regression in internal tests).
 - Pipeline defaults (`top_k=10`, `max_context_chars=30000`) live on the class, not in env config — most callers accept defaults; eval overrides. **Per-query-type override** [D-040]: `QueryPipeline.query` picks `top_k` from a `_TYPE_TOP_K` map keyed by `intent.query_type` — list/breadth queries (CROSS_DOC / FEATURE_LEVEL / STANDARDS_COMPARISON / CROSS_MNO_COMPARISON) widen to 25 because their expected hits include parent/overview reqs whose chunks are short (heading + path only) and rank below richer leaf chunks; TRACEABILITY / RELEASE_DIFF widen to 20; lookups stay at 10. Pipeline takes `max(self._top_k, type_top_k)` so callers can still raise the floor explicitly.
 - **Specific-entity queries are authoritative for graph scope** [D-039]: when `GraphScoper._entity_lookup` matches (the analyzer extracted req IDs that exist as `req:*` nodes), expansion via `_feature_lookup` / `_plan_lookup` / `_title_search` is skipped. Edge traversal from the entity seeds still runs and provides the immediate neighborhood (sibling sections, referenced standards, parent containers) — the named-req anchor isn't diluted into a feature-wide scope where vector ranking can no longer surface the specific chunk.
-- Cross-doc / list-style queries are detected by phrase triggers in `_classify_query_type` [D-040]: `across all`, `across the`, `in all`, `across vzw|mnos|plans|specs`, `all the requirements`, `what are all`, `what requirements` map to `QueryType.CROSS_DOC`. FEATURE_LEVEL still wins on more-specific phrasing (`everything about`, `related to`) — the analyzer checks FEATURE_LEVEL first to preserve the existing classification contract.
+- Cross-doc / list-style queries are detected by phrase triggers in `_classify_query_type` [D-040]: `across all`, `across the`, `in all`, `across vzw|mnos|plans|specs`, `all the requirements`, `what are all`, `what requirements` map to `QueryType.CROSS_DOC`. FEATURE_LEVEL still wins on more-specific phrasing (`everything about`, `related to`) — the analyzer checks FEATURE_LEVEL first to preserve the existing classification contract. `mention` / `mentions` / `mentioned` (with trailing space) route to TRACEABILITY before the cross-doc check so concept-lookup queries get BM25 weight rather than the disabled cross-doc weight.
+- **BM25 hybrid retrieval** [D-041]: `RAGRetriever` parallels dense retrieval with a sparse `BM25Index` and fuses via Reciprocal Rank Fusion (Cormack 2009, k=60, weighted). Per-query-type BM25 weight from `pipeline._TYPE_BM25_WEIGHT`: STANDARDS_COMPARISON / TRACEABILITY / SINGLE_DOC = 0.5; CROSS_DOC / FEATURE_LEVEL = 0.0 (parent chunks too thin to compete with BM25-favored leaves). BM25 filter uses `metadata.req_id` (NOT `chunk_id`, which is `req:<req_id>`) so the candidate gate matches the dense path's `where` filter. `_TYPE_BM25_WEIGHT` is empirical hyperparameter tuning, not architectural contract — values shift as the eval set grows.
 
 **Non-goals**
 - Not a compliance checker. "Is device X compliant with plan Y?" is a separate workflow that uses this pipeline as a primitive; don't collapse the two.

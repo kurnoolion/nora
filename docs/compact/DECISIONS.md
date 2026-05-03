@@ -968,3 +968,197 @@ revealed two compounding issues:
 
 **Related**: FR-22, D-039 (entity-priority scoping — companion fix for
 the lookup side).
+
+
+## D-041: BM25 hybrid retrieval — sparse index, RRF fusion, per-type weights
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+A4 evaluation showed pure-dense retrieval missed concept queries with
+specific high-IDF terms. `standards_comparison` was at 50% accuracy
+because queries like "How does VZW T3402 differ from 3GPP TS 24.301?"
+have rare terms (`T3402`, `24.301`) that pure-dense embeddings spread
+thin across many topically-related chunks. The expected reqs existed
+in the graph and vector store but ranked outside top-k.
+
+A purely-dense system has no good way to surface these. BM25 over
+chunk text is the textbook complement — it weights rare exact terms
+by IDF, so `T3402` (occurring in 1-2 of 794 chunks) ranks the
+matching chunks above topically-broader matches.
+
+**Decision** — five layered choices:
+
+1. **Add `rank_bm25.BM25Okapi` as the sparse retriever**. Pure-Python,
+   no compilation, ~10KB wheel. Sufficient for corpus sizes through
+   the v1 multi-MNO scope (~10k chunks max).
+
+2. **Build the index in-memory at `QueryPipeline` init time** from a
+   one-shot `store.get_all()` snapshot. ~50-100ms for 794 chunks; fits
+   the cost of a CLI/process startup. Persistence would add a build
+   step + a stale-index-vs-store contract; not worth the complexity
+   at this corpus size.
+
+3. **Custom telecom-aware tokenizer**. Standard tokenizers split on
+   underscores/dots/hyphens, breaking the corpus's most discriminating
+   tokens (`vz_req_lteat_45`, `24.301`, `rel-9`) into uninformative
+   sub-tokens. Pattern: `[a-z0-9_.\-]+` lowercase, drop len-1 tokens.
+   No stemming (telecom acronyms don't stem), no stopword filtering
+   (BM25's IDF already penalizes common words).
+
+4. **Reciprocal Rank Fusion (RRF) with per-list weights**, k=60
+   (Cormack 2009). Chosen over score normalization because BM25 raw
+   scores and dense distances aren't on comparable scales; rank-based
+   fusion sidesteps the issue. Weighted variant
+   `score(d) = Σ w_i / (k + rank_i(d))` lets dense dominate when the
+   query type doesn't benefit from BM25.
+
+5. **Per-query-type BM25 weights**, configured in
+   `pipeline._TYPE_BM25_WEIGHT`:
+   - `STANDARDS_COMPARISON` / `TRACEABILITY` / `SINGLE_DOC` → 0.5
+   - `CROSS_DOC` / `FEATURE_LEVEL` (and unmapped types) → 0.0 (pure
+     dense)
+   Empirically: BM25 hurts cross-doc / breadth queries because the
+   expected hits are thin parent/overview chunks that BM25 ranks low;
+   richer leaf chunks dominate the fusion. CROSS_DOC went 37.5%→8.3%
+   when BM25 fired uniformly at 0.5; per-type policy preserves the
+   gain on standards / traceability without the regression elsewhere.
+
+**Why this over alternatives**
+- *Always-on uniform BM25 weight* — rejected. Regressed cross-doc
+  by 29pp; the parent/overview-chunk problem is real and corpus-
+  shape-dependent.
+- *Persisted BM25 index alongside ChromaDB* — rejected for v1.
+  Build cost is negligible at corpus scale; persistence adds a
+  stale-vs-store contract to maintain.
+- *Off-the-shelf tokenizer (NLTK / sklearn)* — rejected. Splitting
+  `vz_req_lteat_45` into `vz / req / lteat / 45` discards the most
+  important token signal in the corpus.
+- *Score normalization + linear combination* — rejected over RRF.
+  BM25 scores are corpus-size-dependent and dense distances are
+  metric-specific; normalizing them to a comparable scale is
+  brittle. RRF is rank-based and parameter-free aside from `k`.
+- *Cross-encoder reranker on dense top-k* — deferred (see Next).
+  Higher leverage but heavier lift (model selection, latency
+  budget, training data); BM25 was the cheap win to capture first.
+
+**Consequences**
+- `VectorStoreProvider` protocol gains `get_all() -> QueryResult`
+  with empty `distances`. Existing implementers need to add it;
+  back-compat preserved by the optional `from_store(store)`
+  fallback in `BM25Index` returning None when the method is absent.
+- `RAGRetriever` constructor accepts optional `bm25_index`; the
+  `retrieve()` signature gains optional `bm25_weight: float | None`
+  for per-call override. None / 0.0 / `bm25_index=None` all
+  short-circuit to pure-dense (back-compat, perf when not needed).
+- BM25 filter must use `metadata.req_id` (not `chunk_id`) to gate
+  candidates — chunk_ids are `req:<req_id>` while the dense path
+  filters on the metadata field. Mismatched filter spaces produce
+  empty BM25 results; learned the hard way during integration.
+- `_TYPE_BM25_WEIGHT` is empirical tuning, not architectural
+  contract. Numbers will shift as the eval set grows; treat as
+  hyperparameter, not invariant.
+- Empirical impact on env_vzw: standards_comparison 50%→83.3%
+  (+33pp); traceability +16.7pp via the companion `mention`
+  classifier route; overall accuracy 67.6%→73.1% (+5.5pp from
+  BM25 alone).
+
+**Related**: D-001 (KG-scoped RAG), D-002 (unified vector store),
+D-039 (entity-priority graph scoping — companion fix for the
+specific-id lookup path), D-040 (per-type top_k + cross-doc
+detection — the existing companion that BM25 was layered onto).
+
+
+## D-042: Parent-chunk subsection augmentation — opt-in, default off
+
+**Date**: 2026-05-02
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+After BM25 hybrid retrieval landed, A4 still had concept queries
+where the right req existed in the corpus but didn't rank in
+top-k. Hypothesis: parent/overview chunks (`SMS over IMS - OVERVIEW`,
+`DETACH REQUEST`, etc.) lose to richer leaf chunks because their
+own bodies are heading-only — a query about "SMS over IMS
+requirements" has a rich-body chunk about MO-SMS-procedure outranking
+the literal "SMS over IMS - OVERVIEW" parent.
+
+Mooted fix: augment parent chunks with their immediate children's
+titles so the parent's chunk text gains breadth-relevant tokens
+without changing the leaf chunks. Tested empirically.
+
+**Decision**
+Implement the augmentation as a chunk-builder feature, ship default
+**off**, expose three config knobs for opt-in tuning:
+
+- `VectorStoreConfig.include_children_titles: bool = False`
+- `VectorStoreConfig.children_titles_body_threshold: int = 300` —
+  body-thinness gate (only parents with `len(body) < threshold` get
+  augmented)
+- `VectorStoreConfig.max_children_titles: int = 3` — cap on the
+  emitted list with `(+N more)` overflow marker
+
+When enabled, `_build_chunk_text` appends a single line:
+`[Subsections: child1; child2; (+N more)]` after the body / tables /
+images.
+
+**Why default off** — empirical tuning on env_vzw (BM25 hybrid +
+per-type top_k baseline = 88.9% / 80.1%):
+
+  Augmentation on, cap=12: 88.6% / 78.8% (single_doc +8pp,
+    cross_doc -14pp — net -1.3pp accuracy)
+  Augmentation on, cap=3:  88.8% / 79.7% (single_doc +8pp,
+    cross_doc -10pp — net -0.4pp accuracy)
+  Augmentation off:        88.9% / 80.1% (baseline)
+
+Body-thinness gate doesn't selectively help on OA: 89% of parents
+have body<50 chars (heading-only), 94% are <300. The gate's
+selectivity is corpus-shape-dependent.
+
+The single_doc gain is real (parents become findable for "find
+this section" queries) but the cross_doc loss is structurally the
+same effect from the other side — augmented parents displace their
+own children from top-k, and breadth queries explicitly want the
+children. The two effects offset.
+
+**Why this over alternatives**
+- *Augment unconditionally (default on)* — rejected. -1.3pp
+  accuracy regression on the eval the user just curated.
+- *Per-query-type augmentation in retrieval (use augmented chunks
+  for SINGLE_DOC, plain chunks for CROSS_DOC)* — rejected for v1.
+  Would require dual-indexing (two embedding sets per chunk) or
+  retrieval-time text manipulation; both add surface area for a
+  feature that's a wash.
+- *Augment but don't include in the embedded text — only in the
+  chunk metadata* — rejected. Metadata isn't searched by the
+  embedder or BM25; the augmentation has no effect.
+- *Drop the feature entirely* — rejected. Implementation cost is
+  paid; the principled hypothesis is sound; corpora with rich-
+  bodied parents (less heading-only) should benefit; lookup-heavy
+  question mixes should benefit. Keep it behind a flag for those
+  cases; document the tradeoff so future evaluators don't flip it
+  blind.
+
+**Consequences**
+- New config surface stays back-compat (default-off preserves
+  prior chunk text exactly).
+- `ChunkBuilder._build_chunk_text` signature gained an optional
+  `id_to_title: dict[str, str] | None` param; `_build_tree_chunks`
+  builds the lookup once per tree.
+- 8 new tests pin the contract: emit-when-enabled, suppress-when-
+  disabled, cap behavior, overflow marker, unresolved-child-id
+  defense, body-thinness gate fires correctly on both sides.
+- Future eval re-runs on TMO / AT&T corpora are the right
+  trigger to re-evaluate the default. If their parent sections
+  carry substantive body content (less heading-only than OA), the
+  augmentation tradeoff likely flips positive and the default
+  could be flipped to on.
+
+**Related**: FR-3 (profile-driven generic parser produces the
+hierarchy this consumes), D-027 (table-anchored Requirements that
+make some "parents" thin), D-040 (per-type top_k — interacts with
+augmentation because wider top_k gives more room for both parents
+and children to coexist).

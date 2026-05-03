@@ -6,7 +6,7 @@ Unified vector-store construction and configuration. Defines two structural-typi
 **Public surface**
 - Protocols:
   - `EmbeddingProvider` (embedding_base.py) — `embed(texts)`, `embed_query(text)`, `dimension`, `model_name`
-  - `VectorStoreProvider` (store_base.py) — `add()`, `query()`, `count`, `reset()`
+  - `VectorStoreProvider` (store_base.py) — `add()`, `query()`, `count`, `reset()`, `get_all() -> QueryResult` (full-corpus dump used by companion sparse retrievers and audit tooling; distances empty)
   - `QueryResult` (store_base.py) — `ids`, `documents`, `metadatas`, `distances`
 - Implementations:
   - `SentenceTransformerEmbedder` (embedding_st.py) — ST backend; respects offline HF cache
@@ -17,7 +17,7 @@ Unified vector-store construction and configuration. Defines two structural-typi
 - Builder / chunking:
   - `VectorStoreBuilder` (builder.py) — orchestrates load → chunk → embed → store
   - `BuildStats` — per-build metrics: chunks_by_plan, embedding model/dim, backend, metric, collection
-  - `ChunkBuilder`, `Chunk` (chunk_builder.py) — builds contextualized chunks with configurable headers (MNO / Release / Plan / Path / Req ID) and optional inline tables/image context. Accepts an optional per-document `definitions_map: dict[str, str]` and expands the first occurrence of each known term inline before chunk text is finalized [D-032].
+  - `ChunkBuilder`, `Chunk` (chunk_builder.py) — builds contextualized chunks with configurable headers (MNO / Release / Plan / Path / Req ID) and optional inline tables/image context. Accepts an optional per-document `definitions_map: dict[str, str]` and expands the first occurrence of each known term inline before chunk text is finalized [D-032]. Optionally appends `[Subsections: ...]` line to thin-bodied parents when `config.include_children_titles=True` (default off — see Key choices) [D-042].
 - Config: `VectorStoreConfig` (config.py) — every tuneable parameter (embedding provider/model/batch/device, store backend/metric/persist_dir, chunk contextualization toggles, defaults). Provider options: `'sentence-transformers'` (default) | `'ollama'`.
 - Offline support:
   - `hf_offline.enable_offline_if_cached(model_name)` — switches HF to offline mode when the cache already has the model (sentence-transformers path)
@@ -42,6 +42,7 @@ Unified vector-store construction and configuration. Defines two structural-typi
 - Config includes chunk-contextualization toggles so A/B tests can isolate retrieval gains from chunk decoration vs. model changes.
 - `BuildStats` saved alongside the store — a build is reproducible from `(VectorStoreConfig, BuildStats)` without re-reading any tree.
 - Definitions expansion happens at **chunk-build time, not query-time** — vectors are computed from expanded text, so retrieval recall on acronym-shaped queries (`"ETWS"`, `"SUPL requirements"`) actually improves. Query-time expansion would leave un-expanded vectors in the store [D-032].
+- **Parent-chunk subsection augmentation is opt-in (default off)** [D-042]. `config.include_children_titles=True` appends `[Subsections: child1; child2; (+N more)]` to parents whose body is below `children_titles_body_threshold` (default 300 chars), capped at `max_children_titles` (default 3). Default off because empirical OA tuning showed +8pp single_doc / -10..14pp cross_doc tradeoff (augmented parents displace their own children from top-k; breadth queries want the children). Available behind the flag for corpora with rich-bodied parents or lookup-heavy question mixes.
 
 **Non-goals**
 - No retrieval logic beyond `query()` — ranking, reranking, hybrid merging, and MNO/release scoping live in [query](../query/MODULE.md).
