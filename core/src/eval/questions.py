@@ -65,8 +65,8 @@ Q_SINGLE_01 = EvalQuestion(
     ground_truth=GroundTruth(
         expected_plans=["LTEDATARETRY"],
         expected_req_ids=[
-            "VZ_REQ_LTEDATARETRY_7742",   # TIMER T3402 section
-            "VZ_REQ_LTEDATARETRY_2377",   # T3402 on a PLMN basis
+            "VZ_REQ_LTEDATARETRY_2377",   # TIMER T3402 section
+            "VZ_REQ_LTEDATARETRY_7743",   # Actual Timer T3402 timer behavior requirement
         ],
         expected_features=["TIMER_MANAGEMENT"],
         expected_standards=["3GPP TS 24.301"],
@@ -82,9 +82,14 @@ Q_SINGLE_02 = EvalQuestion(
     ground_truth=GroundTruth(
         expected_plans=["LTEDATARETRY"],
         expected_req_ids=[
-            "VZ_REQ_LTEDATARETRY_7731",  # GENERIC THROTTLING ALGORITHM
-            "VZ_REQ_LTEDATARETRY_2376",  # Generic Throttling Algorithm detail
-            "VZ_REQ_LTEDATARETRY_7735",  # PER SYSTEM NATURE OF THROTTLING
+            "VZ_REQ_LTEDATARETRY_2376",  # GENERIC THROTTLING ALGORITHM
+            "VZ_REQ_LTEDATARETRY_7732",  # Generic Throttling Algorithm detail
+            "VZ_REQ_LTEDATARETRY_23757",  # GENERAL RULES
+            "VZ_REQ_LTEDATARETRY_7733",  # General Rules 
+            "VZ_REQ_LTEDATARETRY_23758",  # ALGORITHM DETAILS
+            "VZ_REQ_LTEDATARETRY_7734",  # Algorithm Details - Notes
+            "VZ_REQ_LTEDATARETRY_7735",  # Algorithm Details
+            "VZ_REQ_LTEDATARETRY_23759",  # PER SYSTEM NATURE OF THROTTLING
         ],
         expected_features=["DATA_RETRY"],
         expected_concepts=["throttl"],
@@ -99,11 +104,14 @@ Q_SINGLE_03 = EvalQuestion(
     ground_truth=GroundTruth(
         expected_plans=["LTEAT"],
         expected_req_ids=[
-            "VZ_REQ_LTEAT_33081",   # SOFTWARE SPECIFICATIONS
-            "VZ_REQ_LTEAT_21030",   # AT interface disabled by default
-            "VZ_REQ_LTEAT_21031",   # support all AT commands
+            "VZ_REQ_LTEAT_21030",   # LTE devices shall support an interface capable of interpreting AT commands 
+            "VZ_REQ_LTEAT_21032",   # LTE devices shall support all AT commands listed in sections 3.1.2 and 3.1.3. 
+            "VZ_REQ_LTEAT_21033",   # In addition, LTE devices should support all mandatory and optional AT commands pertaining to the devices end us
+            "VZ_REQ_LTEAT_21034",   # Additional AT Commands Required All Device TypesStandards ReferenceDescriptionAT Command3GPP TS 27.0 
+            "VZ_REQ_LTEAT_21035",   # Additional AT Commands Required Handset Devices OnlyStandards ReferenceDescriptionAT Command3GPP TS 
         ],
         expected_features=["AT_COMMANDS"],
+        expected_standards=["3GPP TS 27.007"],
     ),
 )
 
@@ -133,8 +141,11 @@ Q_CROSS_01 = EvalQuestion(
         expected_plans=["LTESMS", "LTEB13NAC"],
         expected_req_ids=[
             "VZ_REQ_LTESMS_30258",     # SMS OVER IMS - OVERVIEW
-            "VZ_REQ_LTESMS_30284",     # SMS OVER IMS
-            "VZ_REQ_LTEB13NAC_23507",  # SMS over IMS Support
+            "VZ_REQ_LTESMS_29575",    # SMS over IMS - overview
+            "VZ_REQ_LTEB13NAC_6336",    # SMS over IMS Support
+            "VZ_REQ_LTESMS_29576",    # MO SMS
+            "VZ_REQ_LTESMS_29578",    # MT SMS
+            "VZ_REQ_LTESMS_4105999311951475",    # TEXT-TO-988
         ],
         expected_features=["SMS"],
         min_plans=2,
@@ -145,13 +156,16 @@ Q_CROSS_01 = EvalQuestion(
 Q_CROSS_02 = EvalQuestion(
     id="cross_02",
     category="cross_doc",
-    question="What are the PDN connectivity requirements across all VZW plans?",
+    question="What are the PDN connectivity requirements?",
     description="PDN connectivity spans LTEB13NAC and LTEDATARETRY",
     ground_truth=GroundTruth(
         expected_plans=["LTEB13NAC", "LTEDATARETRY"],
         expected_req_ids=[
-            "VZ_REQ_LTEB13NAC_6309",        # PDN CONNECTIONS
-            "VZ_REQ_LTEDATARETRY_23892",     # PDN CONNECTIVITY REQUEST
+            "VZ_REQ_LTEB13NAC_22715",        # PDN SUPPORT 
+            "VZ_REQ_LTEB13NAC_6308",        # UE PDN SUPPORT 
+            "VZ_REQ_LTEB13NAC_6309",        # UE BEARER AND PDN SUPPORT 
+            "VZ_REQ_LTEDATARETRY_7765",        # If the UE receives a 'PDN CONNECTIVITY REJECT' message after sending a 'PDN CONNE
+            "VZ_REQ_LTEDATARETRY_7766",        #  Non-IMS PDN
         ],
         expected_features=["BEARER_MANAGEMENT"],
         min_plans=2,
@@ -163,31 +177,21 @@ Q_CROSS_03 = EvalQuestion(
     id="cross_03",
     category="cross_doc",
     question=(
-        "What are the IMS registration requirements and "
-        "how do they relate to SMS?"
+        "What application directed SMS "
+        "and what mode it will not supported"
     ),
-    description="IMS registration in LTEB13NAC + LTESMS, cross-doc relationship",
+    description="Application directed behavior inin LTESMS + LTEB13NAC , cross-doc relationship",
     ground_truth=GroundTruth(
-        expected_plans=["LTEB13NAC", "LTESMS"],
+        expected_plans=["LTESMS", "LTEB13NAC"],
         expected_req_ids=[
-            # _23513 (IMS REGISTRATION REQUIREMENTS parent header) was
-            # the prior expected hit but is struck-through in source —
-            # parser correctly drops it. Replaced with the live retry
-            # algorithm req that captures concrete IMS-registration
-            # requirement content in LTEB13NAC.
-            "VZ_REQ_LTEB13NAC_6444",   # IMS Registration/Re-Registration Retry Algorithm
-            # _LTESMS_30259 was the prior expected LTESMS hit but its
-            # chunk content is just "VOID" (the requirement was
-            # voided in source but kept as a queryable section per
-            # FR-35 [D-032]); retrieval can't surface meaningful
-            # content from it. Replaced with the SMS-over-IMS
-            # overview that directly answers "how does IMS
-            # registration relate to SMS".
-            "VZ_REQ_LTESMS_29575",     # SMS over IMS - overview (LTESMS sec 1.4.2.1.1.1)
+            "VZ_REQ_LTESMS_30314",   # APPLICATION DIRECTED SMS
+            "VZ_REQ_LTESMS_29571",   # When a MT SMS message arrives via the SMS over IMS method, the device shall remove the SIP headers and decode th
+            "VZ_REQ_LTESMS_29572",   # If the device receives a MO SMS from the UICC, the device shall accept the 3GPP formatted SMS message from the UE
+            "VZ_REQ_LTEB13NAC_6443",   # MSISDN and MSISDN-based SIP URI Validity 
         ],
         expected_features=["IMS_REGISTRATION", "SMS"],
         min_plans=2,
-        expected_concepts=["ims registr"],
+        expected_concepts=["sms over ims"],
     ),
 )
 
@@ -202,14 +206,16 @@ Q_CROSS_04 = EvalQuestion(
     ground_truth=GroundTruth(
         expected_plans=["LTEB13NAC", "LTEDATARETRY"],
         expected_req_ids=[
-            "VZ_REQ_LTEB13NAC_6373",       # LTE NETWORK DETACHMENT
+            "VZ_REQ_LTEB13NAC_23586",       # LTE NETWORK DETACHMENT
             # _23850 was the prior expected hit but its content is
             # ATTACH retry ("ATTACH ATTEMPT COUNTER REACHES A VALUE
             # OF 5"), not detach — mis-categorized in the original
             # ground-truth curation. Replaced with the substantive
             # detach-content req at sec 1.4.3.3.1.1.
+            "VZ_REQ_LTEB13NAC_6374",     # LTE NETWORK DETACHMENT
             "VZ_REQ_LTEDATARETRY_7760",     # RE-ATTACH NOT REQUIRED AND EMM CAUSE CODE
-            "VZ_REQ_LTEDATARETRY_7758",     # DETACH REQUEST handling
+            "VZ_REQ_LTEDATARETRY_23853",     # 
+            "VZ_REQ_LTEDATARETRY_7759",     #
         ],
         expected_features=["EPS_MOBILITY"],
         min_plans=2,
