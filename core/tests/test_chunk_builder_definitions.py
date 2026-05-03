@@ -260,3 +260,121 @@ def test_table_anchored_under_definitions_skipped():
     )
     chunks = builder.build_chunks([tree])
     assert "ETWS (Earthquake" not in chunks[0].text
+
+
+# ---------------------------------------------------------------------------
+# Dual-form retrievability — both the acronym AND the expansion must
+# survive into the chunk as independently-matchable tokens, so a query
+# for either form retrieves the chunk. Pinning the chunker's "keep
+# acronym + add bracketed expansion" contract end-to-end through the
+# BM25 tokenizer.
+# ---------------------------------------------------------------------------
+
+
+def _expanded_chunk(term: str, expansion: str) -> str:
+    """Build a single chunk's text with one acronym known to the
+    definitions map and one body sentence that mentions it once."""
+    builder = ChunkBuilder(_config())
+    reqs = [
+        {
+            "req_id": "REQ_1",
+            "section_number": "2.1",
+            "title": f"{term} Behavior",
+            "text": f"The device shall support {term} as defined in the spec.",
+            "tables": [],
+            "images": [],
+        },
+    ]
+    tree = _tree(reqs, {term: expansion})
+    chunks = builder.build_chunks([tree])
+    assert len(chunks) == 1
+    return chunks[0].text
+
+
+def test_expanded_chunk_contains_both_forms():
+    """The chunker's contract: keep the acronym AND add the expansion
+    in brackets on first occurrence. Both must literally be present in
+    the chunk text so dense embeddings see both."""
+    text = _expanded_chunk("ETWS", "Earthquake and Tsunami Warning System")
+    # Acronym still there
+    assert "ETWS" in text
+    # Expansion text spans intact (not just substrings — full phrase)
+    assert "Earthquake and Tsunami Warning System" in text
+    # Bracketed format on first occurrence
+    assert "ETWS (Earthquake and Tsunami Warning System)" in text
+
+
+def test_acronym_query_tokenizes_to_chunk_token():
+    """A query for just the acronym ("ETWS support") must yield a
+    token that's also in the expanded chunk's token set — so BM25
+    can match. Tests against the production BM25 tokenizer."""
+    from core.src.query.bm25_index import tokenize
+
+    chunk_text = _expanded_chunk("ETWS", "Earthquake and Tsunami Warning System")
+    chunk_tokens = set(tokenize(chunk_text))
+    query_tokens = set(tokenize("ETWS support"))
+
+    # The acronym tokenizes to a token both sides share
+    assert "etws" in query_tokens
+    assert "etws" in chunk_tokens
+    # i.e. there's at least one shared term, so BM25 idf > 0
+    assert query_tokens & chunk_tokens
+
+
+def test_expansion_query_tokenizes_to_chunk_tokens():
+    """The dual: a query that uses ONLY the expansion (no acronym) must
+    still share tokens with the chunk thanks to the bracketed expansion
+    landing in the chunk text."""
+    from core.src.query.bm25_index import tokenize
+
+    chunk_text = _expanded_chunk("ETWS", "Earthquake and Tsunami Warning System")
+    chunk_tokens = set(tokenize(chunk_text))
+    # Query uses the expansion phrase, NOT the acronym
+    query_tokens = set(tokenize("Earthquake and Tsunami Warning System support"))
+
+    # All content tokens from the expansion are in the chunk
+    assert "earthquake" in chunk_tokens
+    assert "tsunami" in chunk_tokens
+    assert "warning" in chunk_tokens
+    assert "system" in chunk_tokens
+    # Query and chunk share the expansion tokens (BM25 idf > 0)
+    assert "earthquake" in query_tokens
+    overlap = query_tokens & chunk_tokens
+    # At least the four content tokens must overlap
+    assert {"earthquake", "tsunami", "warning", "system"} <= overlap
+
+
+def test_neither_acronym_nor_expansion_query_matches_when_definitions_map_empty():
+    """Sanity: when the definitions map is empty, no expansion happens.
+    A chunk that mentions the acronym but NOT the expansion shares only
+    the acronym token with an acronym query, and shares NOTHING with an
+    expansion-only query. Confirms the dual-form property is provided
+    by the expansion, not by accident."""
+    from core.src.query.bm25_index import tokenize
+
+    builder = ChunkBuilder(_config())
+    reqs = [
+        {
+            "req_id": "REQ_1",
+            "section_number": "2.1",
+            "title": "ETWS Behavior",
+            "text": "The device shall support ETWS as defined in the spec.",
+            "tables": [],
+            "images": [],
+        },
+    ]
+    # Empty definitions_map → no expansion
+    tree = _tree(reqs, {})
+    chunks = builder.build_chunks([tree])
+    chunk_tokens = set(tokenize(chunks[0].text))
+
+    # Acronym query still matches (the acronym is in the title/body
+    # regardless of the map)
+    assert "etws" in chunk_tokens
+    # Expansion-only query does NOT match — no expansion was injected
+    expansion_tokens = set(tokenize("Earthquake and Tsunami Warning System"))
+    assert not (expansion_tokens & chunk_tokens), (
+        "Expansion-only query unexpectedly matched a chunk built with "
+        "an empty definitions map — expansion must be the only source "
+        "of those tokens"
+    )
