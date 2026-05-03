@@ -875,6 +875,108 @@ Capture per-machine choices in `environments/<name>.json` and select with `--env
   "embedding_provider": "ollama", "embedding_model": "nomic-embed-text", ... }
 ```
 
+## Tuning
+
+The system exposes tunable parameters at four layers. Most live in
+JSON config files that ride alongside their stage's outputs (so a
+re-run from that stage onwards picks them up); a few are Python
+constants that take effect on the next process start.
+
+### 1. Document profile — corpus-specific structural rules
+
+**Location**: `<env_dir>/corrections/profile.json` (per-environment override; takes precedence over `<env_dir>/out/profile/profile.json` which the profile stage auto-generates).
+
+**When to tune**: when the parser misclassifies headings, drops legitimate content, or retains content the source struck through. This is the primary correction surface for new MNO corpora.
+
+**Re-run**: `python -m core.src.pipeline.run_cli --env-dir <env> --start profile` (the profile stage copies your override to `out/`; downstream stages then pick it up).
+
+| Field | Default | What it does |
+|---|---|---|
+| `heading_detection.numbering_pattern` | `^(?:(\d+)(?=\s)|(\d+(?:\.\d+)+)(?=\s|[A-Z]))` | Section-number regex. Multi-dot variant accepts whitespace OR uppercase letter as the next char (matches OA's `1.2.3.4Title` no-space convention). [D-033] |
+| `heading_detection.priority_marker_pattern` | `""` | Optional regex to extract a priority marker from heading text (FR-31). Empty disables. |
+| `heading_detection.definitions_section_pattern` | `(?i)acronym|definition|glossary` | Title pattern to identify the glossary section. (FR-35 [D-032]) |
+| `requirement_id.pattern` | corpus-derived | Req-id regex; profile-driven so adding a new MNO needs no parser change. |
+| `toc_detection_pattern` | `.*\.{3,}\s*\d+\s*$` | TOC entry regex (leader-dot-page-number suffix). Empty disables TOC drop. (FR-34) |
+| `toc_page_threshold` | `0.7` | Fraction of paragraph blocks on a page that must match the TOC pattern before the whole page is dropped. `1.0` disables page-level drop, keeps line-level. |
+| `revision_history_heading_pattern` | `(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$` | Revhist heading regex; profiler narrows to corpus-observed phrasing. Drops the heading + all subsequent table/image blocks until the next paragraph. (FR-34 [D-035]) |
+| `definitions_entry_pattern` | `^([A-Z][A-Z0-9/-]{1,15})\s*[—–:\-]\s*(.+?)$` | Per-line term→expansion regex for body-text glossaries. Empty disables. Table-anchored definitions are extracted regardless. [D-038] |
+| `ignore_strikeout` | `True` | Drop content marked struck-through. Flip to `False` for corpora that abuse strikethrough as emphasis. (FR-33 [D-031]) |
+| `enable_table_anchored_extraction` | `True` | Allow req_ids found only in table cells to become Requirements. Set `False` for paragraph-only-requirement corpora (e.g., VZW OA) to avoid phantom duplicates. [D-027, D-034] |
+
+**Profile stage detects the patterns automatically from your corpus**; you typically only edit `corrections/profile.json` after seeing parse errors in `<env_dir>/reports/audit/<doc>_audit.csv`.
+
+### 2. Vectorstore — chunk content + embedding
+
+**Location**: `<env_dir>/out/vectorstore/config.json` (auto-saved by the vectorstore stage; edit and re-run the stage).
+
+**When to tune**: chunk-text composition (what's prepended to chunk text before embedding) directly affects retrieval recall — adding hierarchy paths and req-ids materially helps lookup queries; the children-titles augmentation is corpus-dependent.
+
+**Re-run**: `--start vectorstore --end eval` (rebuilds the index, then evaluates).
+
+| Field | Default | What it does |
+|---|---|---|
+| `embedding_provider` | `sentence-transformers` | Or `ollama`, `huggingface` (alias). [D-029] |
+| `embedding_model` | `all-MiniLM-L6-v2` | Provider-specific. Ollama default is `qwen3-embedding-q8-0:4b`. |
+| `embedding_batch_size` | `64` | Per-call batch for embedding. |
+| `distance_metric` | `cosine` | Or `l2`, `ip`. Pair with `normalize_embeddings=True` for cosine. |
+| `include_mno_header` | `True` | Prepend `[MNO: X \| Release: Y \| Plan: Z \| Version: V]`. |
+| `include_hierarchy_path` | `True` | Prepend `[Path: A > B > C]`. Big retrieval-recall win for path-style queries. |
+| `include_req_id` | `True` | Prepend `[Req ID: ...]`. Required for entity-priority lookup. [D-039] |
+| `include_tables` | `True` | Append tables as Markdown inside the chunk text. |
+| `include_image_context` | `True` | Append `[Image: <caption>]` for inline figures. |
+| `include_children_titles` | `False` | Append `[Subsections: t1; t2; ...]` to thin parent chunks. **Off by default** — empirical tuning showed +8pp single_doc accuracy at the cost of -10pp cross_doc on the OA corpus. Worth enabling on rich-bodied-parent corpora. |
+| `children_titles_body_threshold` | `300` | Body-length gate for the above (in characters). Only parents with body shorter than this get augmented. |
+| `max_children_titles` | `3` | Cap on the subsection list; overflow gets `(+N more)` appended. |
+
+### 3. Query pipeline — retrieval breadth + hybrid fusion
+
+**Location**: `core/src/query/pipeline.py` (Python constants — `_TYPE_TOP_K`, `_TYPE_BM25_WEIGHT`) and `core/src/query/rag_retriever.py` (`_DENSE_WEIGHT`, `_DEFAULT_BM25_WEIGHT`, `_HYBRID_FANOUT_MULT`).
+
+**When to tune**: when retrieval consistently misses specific kinds of queries (lookup vs breadth), or when the BM25/dense balance needs adjustment for a new corpus.
+
+**Re-run**: `--start eval --end eval` (no rebuild needed — these are runtime constants).
+
+| Knob | Default | What it does |
+|---|---|---|
+| `_TYPE_TOP_K[QueryType]` | `{CROSS_DOC: 25, FEATURE_LEVEL: 25, STANDARDS_COMPARISON: 25, CROSS_MNO_COMPARISON: 25, TRACEABILITY: 20, RELEASE_DIFF: 20}` | Per-query-type top_k. Lookup queries (`SINGLE_DOC`) fall through to the constructor `top_k`. List/breadth queries widen because expected hits include parent/overview chunks that rank below richer leaves. [D-040] |
+| `_TYPE_BM25_WEIGHT[QueryType]` | `{STANDARDS_COMPARISON: 0.5, TRACEABILITY: 0.5, SINGLE_DOC: 0.5}` | Per-query-type BM25 weight in RRF. Missing types default to `0.0` (pure dense) — empirically `CROSS_DOC` and `FEATURE_LEVEL` regress when BM25 is added because parent chunks are token-thin. [D-040] |
+| `_DENSE_WEIGHT` | `1.0` | RRF weight for the dense side. Always 1.0; BM25 is the variable counterpart. |
+| `_HYBRID_FANOUT_MULT` | `3` | Per-side fanout: each retriever pulls `top_k * 3` candidates before RRF fusion. Larger gives RRF more material to fuse; smaller cuts retrieval cost. |
+| `QueryPipeline(top_k=...)` | `10` | Floor that the per-type map clips upward from. |
+| `QueryPipeline(max_depth=...)` | per-type via `_DEFAULT_DEPTH` | Graph traversal depth from seed nodes. |
+| `QueryPipeline(max_context_chars=...)` | `30000` | LLM context window cap; chunks are truncated highest-score-first. |
+| `QueryPipeline(enable_bm25=...)` | `True` | Hard-disable BM25 hybrid retrieval (for perf-sensitive deploys or A/B tests). |
+| `RAGRetriever(diversity_min_per_plan=...)` | `1` | Minimum chunks per contributing plan before filling top-k from the ranked list. |
+
+### 4. Environment / runtime — provider selection
+
+**Location**: env vars or CLI flags. Precedence: **CLI > env var > config file > code default**.
+
+**When to tune**: switching LLM/embedding backends across machines or environments (cloud LLM on dev box, local Ollama on work laptop, mock for offline tests).
+
+| Variable / flag | Equivalent CLI flag | Purpose |
+|---|---|---|
+| `NORA_LLM_PROVIDER` | `--llm-provider` | `ollama` (default), `openai-compatible`, `mock` |
+| `NORA_LLM_MODEL` | `--llm-model` | Model tag (e.g. `gemma4:e4b`, `qwen/qwen3-235b-a22b`). `auto` picks Ollama tag from detected hardware. |
+| `NORA_LLM_BASE_URL` | — | OpenAI-compatible endpoint base (e.g. OpenRouter, Together, Groq). |
+| `NORA_LLM_API_KEY` | — | OpenAI-compatible API key. |
+| `NORA_LLM_TIMEOUT` | — | Per-call timeout (seconds; default 300). |
+| `NORA_EMBEDDING_PROVIDER` | `--embedding-provider` | `sentence-transformers` (default), `ollama`. Aliases: `huggingface`, `hf`, `st`. |
+| `NORA_EMBEDDING_MODEL` | `--embedding-model` | Model name; provider-specific defaults if unset. |
+| `NORA_STANDARDS_SOURCE` | `--standards-source` | `huggingface` (default, DOCX-only) or `3gpp` (FTP, full coverage but heavier). [D-025] |
+| `NORA_DOC_ROOT` (legacy) | `--env-dir` | Per-environment runtime directory containing `input/`, `out/`, `state/`, `corrections/`, `reports/`, `eval/`. [D-022, D-023] |
+
+### Where to start tuning
+
+| Symptom | First knob to try |
+|---|---|
+| Parser misclassifies headings on a new corpus | `numbering_pattern` and audit CSV at `<env_dir>/reports/audit/` |
+| Specific reqs missing from retrieval (lookup) | `_TYPE_BM25_WEIGHT` for the query type, or chunk content flags (`include_hierarchy_path`, `include_req_id`) |
+| Breadth queries miss expected reqs | Widen `_TYPE_TOP_K` for the type; consider `include_children_titles` if many parents are heading-only |
+| Specific terms (TS numbers, codes) not surfacing | Confirm BM25 is enabled for that query type (`_TYPE_BM25_WEIGHT > 0`) |
+| Eval citation_quality drop after model switch | LLM-side; tune the synthesizer prompt or rubric, not the retrieval knobs |
+| Standards stage failing on specific specs | Try `--standards-source 3gpp` for fallback; check `STD-E002` in compact report |
+
 ## Project Structure
 
 ```
