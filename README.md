@@ -190,6 +190,41 @@ Layers can be mixed (e.g. override only the feedback DB; let jobs + metrics fall
 ENV_DIR=/home/me/work/env_vzw python -m core.src.pipeline.run_cli --start parse --end vectorstore
 ```
 
+### LLM + embedding configuration (`config/llm.json`)
+
+All LLM / embedding settings — provider, model, timeout, base URL, API key, embedding provider/model, Ollama URL/timeout, and the pipeline mode toggles `skip_taxonomy` / `skip_graph` — live in a single tracked file: `config/llm.json` (template with empty defaults).
+
+Per-field resolution chain (highest priority first):
+
+1. CLI flag — `--llm-provider`, `--model`, `--model-timeout`, `--embedding-provider`, `--embedding-model`, `--skip-taxonomy`, `--skip-graph`, `--rag-only`.
+2. Environment variable — `NORA_LLM_PROVIDER`, `NORA_LLM_MODEL`, `NORA_LLM_BASE_URL`, `NORA_LLM_API_KEY`, `NORA_EMBEDDING_PROVIDER`, `NORA_EMBEDDING_MODEL`, `NORA_OLLAMA_TIMEOUT_S`, `NORA_SKIP_TAXONOMY`, `NORA_SKIP_GRAPH`, `NORA_RAG_ONLY`.
+3. Field in `config/llm.json`.
+4. Default (built-in) — also accepts the legacy `model_provider` / `model_name` / `embedding_provider` / `embedding_model` / `skip_taxonomy` fields under `environments/<name>.json` for back-compat. Prefer migrating those to `config/llm.json`.
+
+### RAG-only mode (skip taxonomy + graph)
+
+Two pipeline mode toggles let you bypass the LLM-derived feature taxonomy and the unified knowledge graph entirely. Useful when:
+- Taxonomy LLM output is non-deterministic and you want reproducible runs.
+- You only need vectorstore-based retrieval for a quick experiment.
+- The eval set is concept-shaped (RAG-friendly) and graph scoping is dead weight.
+
+Three knobs, three tiers each:
+
+| Knob | CLI flag | Env var | `config/llm.json` field | Effect |
+|---|---|---|---|---|
+| Skip taxonomy stage | `--skip-taxonomy` | `NORA_SKIP_TAXONOMY=1` | `skip_taxonomy: true` | Drops `taxonomy` from the run list. Graph + vectorstore tolerate missing taxonomy. |
+| Skip graph stage | `--skip-graph` | `NORA_SKIP_GRAPH=1` | `skip_graph: true` | Drops `graph` from the run list. Query path builds a stub graph from vectorstore metadata at query time and runs with `_bypass_graph=True`. |
+| Both at once | `--rag-only` | `NORA_RAG_ONLY=1` | (set both fields) | Convenience for the two flags above. |
+
+End-to-end RAG-only run:
+
+```bash
+NORA_RAG_ONLY=1 ENV_DIR=/home/me/work/env_vzw \
+  python -m core.src.pipeline.run_cli --start extract --end eval
+```
+
+The `eval` stage tolerates a missing graph too — it builds the same stub at eval time and the `EvalRunner` runs in `bypass_graph=True` mode (Stage 3 emits an empty CandidateSet; Stage 4 falls back to metadata-only retrieval).
+
 ## Corrections UI
 
 Requirement engineers can correct generated artifacts directly in the browser. Each environment gets its own `corrections/` directory that the pipeline auto-detects as an override on the next run.

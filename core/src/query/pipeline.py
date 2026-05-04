@@ -282,3 +282,61 @@ def load_graph(graph_path: Path) -> nx.DiGraph:
         f"{graph.number_of_edges()} edges"
     )
     return graph
+
+
+def build_stub_graph_from_store(store) -> nx.DiGraph:
+    """Construct a minimal MNO/Release/Plan-only graph from the
+    vector store's chunk metadata. Used when the full knowledge
+    graph stage was skipped (`--rag-only` / `--skip-graph`) — the
+    QueryPipeline still needs *something* graph-shaped for resolver
+    construction, and `_bypass_graph=True` makes Stage 3 emit an
+    empty CandidateSet so retrieval falls back to the metadata
+    path.
+
+    Built nodes:
+      - mno:<MNO>
+      - release:<MNO>:<RELEASE>
+      - plan:<MNO>:<RELEASE>:<PLAN_ID>
+
+    No Requirement / Standard / Feature nodes; no maps_to / depends_on
+    edges. The resolver only walks the MNO → release edges to enumerate
+    available scopes — that's enough.
+    """
+    g: nx.DiGraph = nx.DiGraph()
+    seen_mno: set[str] = set()
+    seen_release: set[str] = set()
+    seen_plan: set[str] = set()
+    try:
+        all_ = store.get_all()
+    except Exception as e:
+        logger.warning(f"Stub graph: store.get_all() failed ({e!r}); empty graph")
+        return g
+    for meta in all_.metadatas:
+        meta = meta or {}
+        mno = (meta.get("mno") or "").strip()
+        release = (meta.get("release") or "").strip()
+        plan = (meta.get("plan_id") or "").strip()
+        if mno and mno not in seen_mno:
+            g.add_node(f"mno:{mno}", node_type="MNO", mno=mno, name=mno)
+            seen_mno.add(mno)
+        if mno and release:
+            rid = f"release:{mno}:{release}"
+            if rid not in seen_release:
+                g.add_node(rid, node_type="Release", mno=mno, release=release)
+                g.add_edge(f"mno:{mno}", rid, edge_type="has_release")
+                seen_release.add(rid)
+        if mno and release and plan:
+            pid = f"plan:{mno}:{release}:{plan}"
+            if pid not in seen_plan:
+                g.add_node(
+                    pid, node_type="Plan", plan_id=plan,
+                    mno=mno, release=release,
+                )
+                g.add_edge(f"release:{mno}:{release}", pid, edge_type="contains_plan")
+                seen_plan.add(pid)
+    logger.info(
+        f"Stub graph: {g.number_of_nodes()} nodes ({len(seen_mno)} MNOs, "
+        f"{len(seen_release)} releases, {len(seen_plan)} plans), "
+        f"{g.number_of_edges()} edges"
+    )
+    return g

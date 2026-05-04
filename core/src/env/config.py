@@ -29,10 +29,90 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# config/llm.json — single canonical home for LLM + embedding settings
+# ---------------------------------------------------------------------------
+
+# core/src/env/config.py -> core/src/env -> core/src -> core -> <repo_root>
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+DEFAULT_LLM_CONFIG_PATH = _PROJECT_ROOT / "config" / "llm.json"
+
+
+@dataclass
+class LLMConfigFile:
+    """Schema for `config/llm.json`. Empty/zero values mean "fall through".
+
+    Treated as the lowest CLI/env-var-overridable layer. The legacy
+    LLM fields under `environments/<name>.json` (`model_provider`,
+    `model_name`, `model_timeout`, `embedding_provider`, `embedding_model`)
+    are still honored as a back-compat fallback below this file but
+    are deprecated — prefer this file going forward."""
+
+    llm_provider: str = ""
+    llm_model: str = ""
+    llm_timeout: int = 0  # 0 = unset / fall through
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    embedding_provider: str = ""
+    embedding_model: str = ""
+    ollama_url: str = ""
+    ollama_timeout_s: int = 0  # 0 = unset / fall through
+    skip_taxonomy: bool = False
+    skip_graph: bool = False
+
+    @classmethod
+    def load(cls, path: Path | None = None) -> LLMConfigFile:
+        config_path = path or DEFAULT_LLM_CONFIG_PATH
+        if not config_path.exists():
+            return cls()
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.warning("Could not parse %s: %s — using empty defaults",
+                           config_path, e)
+            return cls()
+        return cls(
+            llm_provider=str(data.get("llm_provider", "") or "").strip(),
+            llm_model=str(data.get("llm_model", "") or "").strip(),
+            llm_timeout=int(data.get("llm_timeout", 0) or 0),
+            llm_base_url=str(data.get("llm_base_url", "") or "").strip(),
+            llm_api_key=str(data.get("llm_api_key", "") or "").strip(),
+            embedding_provider=str(data.get("embedding_provider", "") or "").strip(),
+            embedding_model=str(data.get("embedding_model", "") or "").strip(),
+            ollama_url=str(data.get("ollama_url", "") or "").strip(),
+            ollama_timeout_s=int(data.get("ollama_timeout_s", 0) or 0),
+            skip_taxonomy=bool(data.get("skip_taxonomy", False)),
+            skip_graph=bool(data.get("skip_graph", False)),
+        )
+
+
+# Module-level cache so repeat calls don't re-read the file. Tests can
+# clear it via `_reset_llm_config_cache()`.
+_LLM_CONFIG_CACHE: LLMConfigFile | None = None
+
+
+def _llm_config() -> LLMConfigFile:
+    global _LLM_CONFIG_CACHE
+    if _LLM_CONFIG_CACHE is None:
+        _LLM_CONFIG_CACHE = LLMConfigFile.load()
+    return _LLM_CONFIG_CACHE
+
+
+def _reset_llm_config_cache() -> None:
+    """Test hook — drop the cached config so the next read picks up
+    a freshly-written file."""
+    global _LLM_CONFIG_CACHE
+    _LLM_CONFIG_CACHE = None
 
 # ---------------------------------------------------------------------------
 # Standards source selection — see core/src/standards/spec_downloader.py
@@ -82,13 +162,15 @@ def resolve_llm_provider(
 ) -> str:
     """Resolve the effective LLM provider.
 
-    Precedence: CLI flag > NORA_LLM_PROVIDER env var > EnvironmentConfig
-    field > default ("ollama"). Raises ValueError if any provided value is
-    not in LLM_PROVIDERS.
+    Precedence: CLI flag > NORA_LLM_PROVIDER env var > config/llm.json
+    `llm_provider` > EnvironmentConfig field (deprecated, back-compat
+    only) > default ("ollama"). Raises ValueError if any provided value
+    is not in LLM_PROVIDERS.
     """
     for label, value in (
         ("--llm-provider", cli_value),
         (LLM_PROVIDER_ENV_VAR, os.environ.get(LLM_PROVIDER_ENV_VAR)),
+        ("config/llm.json:llm_provider", _llm_config().llm_provider),
         ("EnvironmentConfig.model_provider", env_config_value),
     ):
         if value:
@@ -118,13 +200,15 @@ def resolve_embedding_provider(
     """Resolve the effective embedding provider.
 
     Precedence: CLI flag > NORA_EMBEDDING_PROVIDER env var >
-    EnvironmentConfig field > default ("sentence-transformers"). The
-    "huggingface" alias is accepted but the canonical name is preserved
-    (make_embedder normalizes aliases internally).
+    config/llm.json `embedding_provider` > EnvironmentConfig field
+    (deprecated, back-compat) > default ("sentence-transformers").
+    The "huggingface" alias is accepted but the canonical name is
+    preserved (make_embedder normalizes aliases internally).
     """
     for label, value in (
         ("--embedding-provider", cli_value),
         (EMBEDDING_PROVIDER_ENV_VAR, os.environ.get(EMBEDDING_PROVIDER_ENV_VAR)),
+        ("config/llm.json:embedding_provider", _llm_config().embedding_provider),
         ("EnvironmentConfig.embedding_provider", env_config_value),
     ):
         if value:
@@ -142,18 +226,87 @@ def resolve_embedding_model(
 ) -> str:
     """Resolve the effective embedding model name.
 
-    Precedence: CLI flag > NORA_EMBEDDING_MODEL env var > EnvironmentConfig
-    field > default ("all-MiniLM-L6-v2"). No enum validation — model names
-    are provider-specific.
+    Precedence: CLI flag > NORA_EMBEDDING_MODEL env var >
+    config/llm.json `embedding_model` > EnvironmentConfig field
+    (deprecated, back-compat) > default ("all-MiniLM-L6-v2"). No
+    enum validation — model names are provider-specific.
     """
     for value in (
         cli_value,
         os.environ.get(EMBEDDING_MODEL_ENV_VAR),
+        _llm_config().embedding_model,
         env_config_value,
     ):
         if value:
             return value
     return DEFAULT_EMBEDDING_MODEL
+
+
+# ---------------------------------------------------------------------------
+# Pipeline mode toggles — three-tier resolution (CLI > env var > config/llm.json)
+# ---------------------------------------------------------------------------
+
+SKIP_TAXONOMY_ENV_VAR: str = "NORA_SKIP_TAXONOMY"
+SKIP_GRAPH_ENV_VAR: str = "NORA_SKIP_GRAPH"
+RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
+
+
+def _truthy(value: str | None) -> bool:
+    """Treat env-var strings as bool. `1 / true / yes / on` → True."""
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_skip_taxonomy(
+    cli_value: bool | None = None,
+    env_config_value: bool | None = None,
+) -> bool:
+    """Resolve whether to skip the taxonomy stage.
+
+    Precedence: --skip-taxonomy / --rag-only CLI flag > NORA_SKIP_TAXONOMY
+    or NORA_RAG_ONLY env var > config/llm.json `skip_taxonomy` > env
+    config `skip_taxonomy` (back-compat) > default (False)."""
+    if cli_value is not None:
+        return cli_value
+    if _truthy(os.environ.get(SKIP_TAXONOMY_ENV_VAR)):
+        return True
+    if _truthy(os.environ.get(RAG_ONLY_ENV_VAR)):
+        return True
+    cfg = _llm_config()
+    if cfg.skip_taxonomy:
+        return True
+    if env_config_value is not None:
+        return env_config_value
+    return False
+
+
+def resolve_skip_graph(
+    cli_value: bool | None = None,
+    env_config_value: bool | None = None,
+) -> bool:
+    """Resolve whether to skip the knowledge-graph stage.
+
+    Precedence: --skip-graph / --rag-only CLI flag > NORA_SKIP_GRAPH or
+    NORA_RAG_ONLY env var > config/llm.json `skip_graph` > env config
+    `skip_graph` (back-compat) > default (False).
+
+    Implies `skip_taxonomy` semantically — taxonomy output is consumed
+    only by the graph stage, so skipping graph makes taxonomy moot.
+    Callers can still set `skip_taxonomy=False` explicitly if they
+    want the LLM-extracted taxonomy artifact for some other purpose."""
+    if cli_value is not None:
+        return cli_value
+    if _truthy(os.environ.get(SKIP_GRAPH_ENV_VAR)):
+        return True
+    if _truthy(os.environ.get(RAG_ONLY_ENV_VAR)):
+        return True
+    cfg = _llm_config()
+    if cfg.skip_graph:
+        return True
+    if env_config_value is not None:
+        return env_config_value
+    return False
 
 # ---------------------------------------------------------------------------
 # Pipeline stage registry — single source of truth for names and ordering
@@ -249,6 +402,14 @@ class EnvironmentConfig:
     # tolerate missing taxonomy (no feature: nodes, no maps_to edges).
     # Useful when taxonomy LLM output is noisy or non-deterministic.
     skip_taxonomy: bool = False
+
+    # Skip the knowledge-graph stage entirely. Implies pure-RAG
+    # retrieval at query time — pipeline detects missing graph and
+    # builds a stub from vectorstore metadata so the QueryPipeline
+    # can still construct, with `_bypass_graph=True`. Pairs with
+    # `skip_taxonomy` for a fully RAG-only pipeline (set both via
+    # `--rag-only` or `NORA_RAG_ONLY=1`).
+    skip_graph: bool = False
 
     # Metadata
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))

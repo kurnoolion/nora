@@ -4,8 +4,16 @@
 Per-environment scoped workspace configuration. An environment names a workspace (one team member × one `env_dir` × a stage range × MNO/release scope × objectives) so multiple contributors can run partial pipelines in parallel without stepping on each other's outputs. Serves FR-28 (env_dir CLI/config/UI parameterization), FR-29 (single-root partition layout); implements D-022 (per-env directory layout).
 
 **Public surface**
-- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path(key)`, `input_path(mno, release)`, `out_path(stage)`, `state_path()`, `corrections_path()`, `correction_file(artifact)`, `reports_path()`, `eval_path()`, `init_directories()`
-- Registry constants: `PIPELINE_STAGES`, `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`
+- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`, `embedding_provider/model`, `standards_source`, `skip_taxonomy`, `skip_graph`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path(key)`, `input_path(mno, release)`, `out_path(stage)`, `state_path()`, `corrections_path()`, `correction_file(artifact)`, `reports_path()`, `eval_path()`, `init_directories()`
+- `LLMConfigFile` (config.py) — schema for `config/llm.json`: `llm_provider`, `llm_model`, `llm_timeout`, `llm_base_url`, `llm_api_key`, `embedding_provider`, `embedding_model`, `ollama_url`, `ollama_timeout_s`, `skip_taxonomy`, `skip_graph`. Empty/zero values fall through. `load(path=None)` with malformed/missing tolerance.
+- Registry constants: `PIPELINE_STAGES`, `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`, `DEFAULT_LLM_CONFIG_PATH`
+- Resolvers (3-tier — CLI > env var > config/llm.json > env-config back-compat > default):
+  - `resolve_llm_provider(cli, env_cfg)` — `--llm-provider` / `NORA_LLM_PROVIDER` / `llm_provider`
+  - `resolve_embedding_provider(cli, env_cfg)` — `--embedding-provider` / `NORA_EMBEDDING_PROVIDER` / `embedding_provider`
+  - `resolve_embedding_model(cli, env_cfg)` — `--embedding-model` / `NORA_EMBEDDING_MODEL` / `embedding_model`
+  - `resolve_standards_source(cli, env_cfg)` — `--standards-source` / `NORA_STANDARDS_SOURCE` / env config
+  - `resolve_skip_taxonomy(cli, env_cfg)` — `--skip-taxonomy` or `--rag-only` / `NORA_SKIP_TAXONOMY` or `NORA_RAG_ONLY` / `skip_taxonomy`
+  - `resolve_skip_graph(cli, env_cfg)` — `--skip-graph` or `--rag-only` / `NORA_SKIP_GRAPH` or `NORA_RAG_ONLY` / `skip_graph`
 - `resolve_stage(value)` — accepts either stage name or 1-based number, returns canonical name
 - `env_cli.main` — CLI: `stages | create | list | show | init | delete`
 
@@ -19,7 +27,8 @@ Per-environment scoped workspace configuration. An environment names a workspace
 **Key choices**
 - Stage registry is a list of tuples (not an enum) so stages can be referenced by name, by 1-based number, or by description without three parallel definitions.
 - `EnvironmentConfig` stores `env_dir` as a string (not `Path`) to keep JSON round-tripping trivial; `env_dir_path` property exposes it as a `Path` (rename from `document_root` / `doc_root` per D-022).
-- Model provider/name/timeout live on the env config (not a separate model config file) — keeps a run fully reproducible from one JSON artifact.
+- **LLM + embedding config has a single canonical home**: `config/llm.json`. Per-field 3-tier resolution (CLI > env var > `config/llm.json`) with the `EnvironmentConfig` LLM/embedding fields kept as a back-compat fallback below the file. The env config keeps these fields for now to avoid breaking existing `environments/<name>.json` files; new environments should leave them at defaults and put global LLM settings in `config/llm.json`.
+- **Pipeline mode toggles** (`skip_taxonomy`, `skip_graph`) follow the same 3-tier resolution. `--rag-only` and `NORA_RAG_ONLY` are convenience knobs that imply both. Skipping graph at run-time means downstream stages (eval) and the web query path build a stub MNO/Release/Plan-only graph from vectorstore metadata and run with `_bypass_graph=True`.
 
 **Non-goals**
 - Not a pipeline runner — execution lives in [pipeline](../pipeline/MODULE.md); this module only defines the scope and paths.

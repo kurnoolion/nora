@@ -21,10 +21,13 @@ Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language q
 - Schema (schema.py):
   - Enums: `QueryType` (single_doc, cross_doc, cross_mno_comparison, release_diff, standards_comparison, traceability, feature_level, general), `DocTypeScope`
   - Per-stage dataclasses: `QueryIntent`, `MNOScope`, `ScopedQuery`, `CandidateNode`, `CandidateSet`, `RetrievedChunk`, `StandardsContext`, `ChunkContext`, `AssembledContext`, `Citation`, `QueryResponse`
+- Graph helpers (pipeline.py):
+  - `load_graph(path) -> nx.DiGraph` — loads the full knowledge graph from JSON.
+  - `build_stub_graph_from_store(store) -> nx.DiGraph` — derives a minimal MNO/Release/Plan-only graph from vectorstore metadata. Used by web/query and eval when the graph stage was skipped (RAG-only mode); pair with `pipeline._bypass_graph = True` so Stage 3 emits an empty CandidateSet.
 - CLI: `query_cli.main`
 
 **Invariants**
-- **Graph-first, then RAG.** Vector retrieval is always filtered to the `requirement_ids` produced by `GraphScoper`. Unscoped retrieval is a D-001 violation, not a shortcut.
+- **Graph-first, then RAG.** Vector retrieval is always filtered to the `requirement_ids` produced by `GraphScoper`. Unscoped retrieval is a D-001 violation, not a shortcut. *Exception*: RAG-only mode (`pipeline._bypass_graph = True`) skips Stage 3 entirely; Stage 4 falls back to MNO/release metadata filtering. Used when the graph stage was deliberately skipped (`--rag-only` / `--skip-graph` / `config/llm.json:skip_graph=true`); the stub graph from `build_stub_graph_from_store` keeps the resolver constructible without forcing a full graph build.
 - The 6 stages pass typed dataclasses — each stage's output is the next stage's only input. No stage reaches back for state.
 - Every stage is injectable — `QueryPipeline(analyzer=MyAnalyzer())` swaps Stage 1 without touching the rest. Mocks (`MockQueryAnalyzer`, `MockSynthesizer`) exist so the pipeline runs without any LLM for offline debugging.
 - `QueryResponse.citations` reference **specific** `(req_id, plan_id, section_number)` tuples (plus optional standards spec/section). Answers without citations are a bug in the synthesizer, not the default.

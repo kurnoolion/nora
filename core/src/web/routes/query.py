@@ -180,13 +180,21 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     """Construct a QueryPipeline + LLM. Heavy: loads graph (~10MB),
     embedder model weights, opens Chroma, builds BM25 over the full
     chunk corpus. ~5-15s cold. Idempotent per env_dir; cache the
-    result on `app.state`."""
-    from core.src.query.pipeline import QueryPipeline, load_graph
+    result on `app.state`.
+
+    RAG-only mode: when `graph_path` doesn't exist (graph stage was
+    skipped via --rag-only / --skip-graph / config), a stub graph is
+    built from the vectorstore's chunk metadata and the pipeline runs
+    with `_bypass_graph=True`. Stage 3 then emits an empty
+    CandidateSet so retrieval falls back to the metadata path."""
+    from core.src.query.pipeline import (
+        QueryPipeline,
+        build_stub_graph_from_store,
+        load_graph,
+    )
     from core.src.vectorstore.config import VectorStoreConfig
     from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
     from core.src.vectorstore.store_chroma import ChromaDBStore
-
-    graph = load_graph(graph_path)
 
     vs_config_path = vectorstore_dir / "config.json"
     if vs_config_path.exists():
@@ -214,6 +222,23 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
             "python -m core.src.vectorstore.vectorstore_cli)."
         )
 
+    # Graph: prefer the on-disk graph; fall back to a metadata-derived
+    # stub when the graph stage was skipped (--rag-only / --skip-graph
+    # / config). `_bypass_graph=True` makes Stage 3 emit empty
+    # candidates so retrieval uses the metadata path. RAG-only mode is
+    # also chosen when the graph file simply doesn't exist (pipeline
+    # not yet run).
+    if graph_path.exists():
+        graph = load_graph(graph_path)
+        rag_only = False
+    else:
+        logger.info(
+            "Graph file %s missing — running in RAG-only mode "
+            "(stub graph from vectorstore metadata).", graph_path,
+        )
+        graph = build_stub_graph_from_store(store)
+        rag_only = True
+
     llm = _build_llm_from_env_or_default()
     synthesizer = None
     if llm is not None and not getattr(llm, "_is_mock", False):
@@ -230,6 +255,8 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         top_k=10,
         max_context_chars=30000,
     )
+    if rag_only:
+        pipeline._bypass_graph = True
     return pipeline, llm
 
 
@@ -292,15 +319,10 @@ def _run_query_sync(query_text: str, app=None) -> dict:
     graph_path = _graph_path()
     vectorstore_dir = _vectorstore_dir()
 
-    if not graph_path.exists():
-        return {
-            "error": (
-                f"Knowledge graph not found at {graph_path}. "
-                "Run the graph-building pipeline stage first "
-                "(Pipeline page, or: python -m core.src.graph.graph_cli)."
-            ),
-        }
-
+    # Note: missing graph_path is not an error — _build_pipeline
+    # falls back to a stub graph + RAG-only mode in that case.
+    # The vectorstore must still exist; that check happens inside
+    # _build_pipeline (raises _PipelineBuildError on empty store).
     try:
         pipeline, llm = _get_or_build_pipeline(app, graph_path, vectorstore_dir)
     except _PipelineBuildError as e:

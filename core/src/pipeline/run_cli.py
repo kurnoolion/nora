@@ -137,12 +137,27 @@ def main() -> None:
     )
     parser.add_argument("--continue-on-error", action="store_true", help="Continue past failed stages")
     parser.add_argument(
-        "--skip-taxonomy", action="store_true",
+        "--skip-taxonomy", action="store_true", default=None,
         help="Skip the taxonomy stage entirely (no LLM call, no feature/maps_to "
              "edges in the graph). Downstream stages tolerate the missing "
              "taxonomy.json. Useful when taxonomy LLM output is noisy or "
              "non-deterministic; trades feature-aware retrieval for a "
-             "reproducible graph topology.",
+             "reproducible graph topology. Overrides $NORA_SKIP_TAXONOMY / "
+             "config/llm.json:skip_taxonomy.",
+    )
+    parser.add_argument(
+        "--skip-graph", action="store_true", default=None,
+        help="Skip the knowledge-graph stage entirely (no graph file built). "
+             "Query path falls back to pure-RAG retrieval (the pipeline builds "
+             "a stub graph from vectorstore metadata at query time). Overrides "
+             "$NORA_SKIP_GRAPH / config/llm.json:skip_graph.",
+    )
+    parser.add_argument(
+        "--rag-only", action="store_true", default=None,
+        help="Convenience for --skip-taxonomy --skip-graph. Pipeline builds "
+             "extract → profile → parse → resolve → standards → vectorstore, "
+             "skipping the LLM-derived feature taxonomy and the unified "
+             "knowledge graph. Query path operates in pure-RAG mode.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 
@@ -265,18 +280,44 @@ def main() -> None:
     end_idx = STAGE_NUM[end]
     stages = STAGE_NAMES[start_idx:end_idx]
 
-    # `--skip-taxonomy` (or env config `skip_taxonomy=True`) drops the
-    # taxonomy stage from the run list. Graph and vectorstore stages
-    # already tolerate a missing taxonomy.json (return None / log a
-    # warning); the resulting graph just lacks feature: nodes and
-    # maps_to edges. Used when taxonomy LLM output is noisy or non-
-    # deterministic.
-    skip_taxonomy = bool(args.skip_taxonomy) or bool(
-        args.env and getattr(env, "skip_taxonomy", False)
+    # `--skip-taxonomy` / `--skip-graph` / `--rag-only` (or env vars
+    # / config/llm.json) drop the corresponding stages from the run
+    # list. Graph and vectorstore stages already tolerate a missing
+    # taxonomy.json. The query path tolerates a missing graph by
+    # building a stub from vectorstore metadata at query time.
+    from core.src.env.config import resolve_skip_taxonomy, resolve_skip_graph
+
+    # --rag-only is a convenience that implies both flags. It only
+    # forces them ON; it doesn't override an explicit --skip-X=False.
+    rag_only_cli = bool(args.rag_only)
+    cli_skip_tax = True if (args.skip_taxonomy is True or rag_only_cli) else None
+    cli_skip_graph = True if (args.skip_graph is True or rag_only_cli) else None
+
+    env_skip_tax = (
+        bool(getattr(env, "skip_taxonomy", False))
+        if args.env else None
     )
+    env_skip_graph = (
+        bool(getattr(env, "skip_graph", False))
+        if args.env else None
+    )
+
+    skip_taxonomy = resolve_skip_taxonomy(
+        cli_value=cli_skip_tax, env_config_value=env_skip_tax,
+    )
+    skip_graph = resolve_skip_graph(
+        cli_value=cli_skip_graph, env_config_value=env_skip_graph,
+    )
+
+    notes: list[str] = []
     if skip_taxonomy and "taxonomy" in stages:
         stages = [s for s in stages if s != "taxonomy"]
-        print("Note: taxonomy stage skipped (--skip-taxonomy)")
+        notes.append("taxonomy stage skipped")
+    if skip_graph and "graph" in stages:
+        stages = [s for s in stages if s != "graph"]
+        notes.append("graph stage skipped (RAG-only mode)")
+    if notes:
+        print("Note: " + "; ".join(notes))
 
     if not stages:
         print(f"Error: No stages in range {start} -> {end}")

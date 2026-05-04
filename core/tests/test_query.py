@@ -1150,3 +1150,72 @@ class TestIntegration:
         # With mock embedder, diversity isn't guaranteed, but the pipeline
         # should at least return results
         assert response.retrieved_count > 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# Stub graph for RAG-only mode
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestStubGraphFromStore:
+    """`build_stub_graph_from_store` derives MNO/Release/Plan nodes
+    from chunk metadata when the full graph stage was skipped."""
+
+    def test_stub_emits_one_node_per_unique_mno_release_plan(self):
+        from core.src.query.pipeline import build_stub_graph_from_store
+        embedder = MockEmbedder(dim=8)
+        store = _build_test_store(embedder)
+        g = build_stub_graph_from_store(store)
+        # Test fixture has 1 MNO (VZW), 1 release (2026_feb), 2 plans (LTEDATARETRY, LTESMS)
+        mnos = [n for n, d in g.nodes(data=True) if d.get("node_type") == "MNO"]
+        releases = [n for n, d in g.nodes(data=True) if d.get("node_type") == "Release"]
+        plans = [n for n, d in g.nodes(data=True) if d.get("node_type") == "Plan"]
+        assert mnos == ["mno:VZW"]
+        assert releases == ["release:VZW:2026_feb"]
+        assert set(plans) == {
+            "plan:VZW:2026_feb:LTEDATARETRY",
+            "plan:VZW:2026_feb:LTESMS",
+        }
+
+    def test_stub_wires_mno_release_plan_edges(self):
+        """The resolver only walks `has_release` and `contains_plan`
+        edges to enumerate available scopes — those edges must exist."""
+        from core.src.query.pipeline import build_stub_graph_from_store
+        embedder = MockEmbedder(dim=8)
+        store = _build_test_store(embedder)
+        g = build_stub_graph_from_store(store)
+        edges = {(u, v, d.get("edge_type")) for u, v, d in g.edges(data=True)}
+        assert ("mno:VZW", "release:VZW:2026_feb", "has_release") in edges
+        assert ("release:VZW:2026_feb", "plan:VZW:2026_feb:LTEDATARETRY",
+                "contains_plan") in edges
+
+    def test_stub_omits_requirement_and_feature_nodes(self):
+        """Stub is intentionally minimal — no Requirement or Feature
+        nodes. _bypass_graph=True downstream means Stage 3 emits an
+        empty CandidateSet anyway."""
+        from core.src.query.pipeline import build_stub_graph_from_store
+        embedder = MockEmbedder(dim=8)
+        store = _build_test_store(embedder)
+        g = build_stub_graph_from_store(store)
+        types = {d.get("node_type") for _, d in g.nodes(data=True)}
+        assert "Requirement" not in types
+        assert "Feature" not in types
+        assert "Standard_Section" not in types
+
+    def test_stub_pipeline_with_bypass_returns_chunks(self):
+        """End-to-end: stub graph + _bypass_graph=True + RAGRetriever
+        falls back to metadata path and returns chunks for a query."""
+        from core.src.query.pipeline import (
+            QueryPipeline,
+            build_stub_graph_from_store,
+        )
+        embedder = MockEmbedder(dim=8)
+        store = _build_test_store(embedder)
+        graph = build_stub_graph_from_store(store)
+        pipeline = QueryPipeline(graph=graph, embedder=embedder, store=store, top_k=3)
+        pipeline._bypass_graph = True
+        response = pipeline.query("data retry T3402")
+        # Mock synthesizer returns a structured stub; the contract is
+        # that the call doesn't crash and we got at least one chunk
+        # surfaced for citation.
+        assert response.retrieved_count > 0

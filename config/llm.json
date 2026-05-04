@@ -1,0 +1,14 @@
+{
+  "_comment": "LLM + embedding configuration. Empty values fall through. Resolution priority for each field (highest first): CLI flag (e.g. --llm-provider) > matching env var (e.g. NORA_LLM_PROVIDER) > value in this file > built-in default. The legacy LLM fields under environments/<name>.json (model_provider / model_name / model_timeout / embedding_provider / embedding_model) are still honored as a back-compat fallback below this file but are deprecated; prefer setting them here.",
+  "llm_provider": "",
+  "llm_model": "",
+  "llm_timeout": 0,
+  "llm_base_url": "",
+  "llm_api_key": "",
+  "embedding_provider": "",
+  "embedding_model": "",
+  "ollama_url": "",
+  "ollama_timeout_s": 0,
+  "skip_taxonomy": false,
+  "skip_graph": false
+}

@@ -510,18 +510,19 @@ def run_eval(ctx: PipelineContext) -> StageResult:
     try:
         from core.src.eval.questions import ALL_QUESTIONS
         from core.src.eval.runner import EvalRunner
-        from core.src.query.pipeline import load_graph
+        from core.src.query.pipeline import build_stub_graph_from_store, load_graph
         from core.src.vectorstore import make_embedder
         from core.src.vectorstore.config import VectorStoreConfig
         from core.src.vectorstore.store_chroma import ChromaDBStore
     except ImportError as e:
         return _fail(stage, "EVL-E001", f"Import error: {e}", time.time() - t0)
 
-    # Load graph
+    # Load graph; fall back to a stub if absent (RAG-only mode —
+    # graph stage was skipped via --rag-only / --skip-graph). The stub
+    # has only MNO/Release/Plan nodes so resolver works; pipeline is
+    # set to bypass Stage 3 below.
     graph_path = Path(ctx.state.get("graph_path", ctx.stage_output("graph") / "knowledge_graph.json"))
-    if not graph_path.exists():
-        return _fail(stage, "PIP-E002", f"Graph not found: {graph_path}", time.time() - t0)
-    graph = load_graph(graph_path)
+    rag_only_mode = not graph_path.exists()
 
     # Load vector store
     vs_dir = ctx.stage_output("vectorstore")
@@ -541,6 +542,11 @@ def run_eval(ctx: PipelineContext) -> StageResult:
         persist_directory=vs_config.persist_directory, collection_name=vs_config.collection_name,
         distance_metric=vs_config.distance_metric,
     )
+
+    if rag_only_mode:
+        graph = build_stub_graph_from_store(store)
+    else:
+        graph = load_graph(graph_path)
 
     # Load user-supplied eval questions from Excel if available
     questions = list(ALL_QUESTIONS)
@@ -584,7 +590,7 @@ def run_eval(ctx: PipelineContext) -> StageResult:
         graph=graph, embedder=embedder, store=store,
         synthesizer=synthesizer, rewriter=rewriter, reranker=reranker,
     )
-    report = runner.run_all(questions)
+    report = runner.run_all(questions, bypass_graph=rag_only_mode)
 
     # Save report
     report_path = out_dir / "report.json"

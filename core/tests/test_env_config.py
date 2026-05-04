@@ -204,3 +204,137 @@ def test_stages_filter_no_op_when_skip_unset():
     if skip and "taxonomy" in stages:
         stages = [s for s in stages if s != "taxonomy"]
     assert "taxonomy" in stages
+
+
+# ---------------------------------------------------------------------------
+# config/llm.json layer + skip_taxonomy / skip_graph 3-tier resolution
+# ---------------------------------------------------------------------------
+
+
+def test_llm_config_file_load_missing_returns_defaults(tmp_path):
+    from core.src.env.config import LLMConfigFile
+    cfg = LLMConfigFile.load(tmp_path / "no-such-llm.json")
+    assert cfg == LLMConfigFile()
+    assert cfg.skip_taxonomy is False
+    assert cfg.skip_graph is False
+
+
+def test_llm_config_file_parses_canonical_fields(tmp_path):
+    import json
+    from core.src.env.config import LLMConfigFile
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({
+        "llm_provider": "openai-compatible",
+        "llm_model": "qwen/qwen3-235b-a22b",
+        "llm_timeout": 600,
+        "embedding_provider": "sentence-transformers",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "ollama_url": "http://localhost:11434",
+        "ollama_timeout_s": 300,
+        "skip_taxonomy": True,
+        "skip_graph": True,
+    }))
+    cfg = LLMConfigFile.load(p)
+    assert cfg.llm_provider == "openai-compatible"
+    assert cfg.llm_model == "qwen/qwen3-235b-a22b"
+    assert cfg.llm_timeout == 600
+    assert cfg.embedding_provider == "sentence-transformers"
+    assert cfg.embedding_model == "all-MiniLM-L6-v2"
+    assert cfg.ollama_url == "http://localhost:11434"
+    assert cfg.ollama_timeout_s == 300
+    assert cfg.skip_taxonomy is True
+    assert cfg.skip_graph is True
+
+
+def test_resolve_llm_provider_uses_llm_config_when_no_cli_or_env(tmp_path, monkeypatch):
+    """3-tier behavior: with CLI=None and env unset, value comes from
+    config/llm.json. Tested by pointing the loader at a temp file."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.LLM_PROVIDER_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({"llm_provider": "openai-compatible"}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_llm_provider() == "openai-compatible"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_llm_provider_env_var_beats_llm_config(tmp_path, monkeypatch):
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.setenv(env_cfg.LLM_PROVIDER_ENV_VAR, "ollama")
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({"llm_provider": "openai-compatible"}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_llm_provider() == "ollama"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_llm_provider_cli_beats_env_and_config(tmp_path, monkeypatch):
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.setenv(env_cfg.LLM_PROVIDER_ENV_VAR, "ollama")
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({"llm_provider": "openai-compatible"}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_llm_provider(cli_value="mock") == "mock"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_skip_graph_3tier(tmp_path, monkeypatch):
+    """CLI True > env var > config/llm.json > env config > False."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.SKIP_GRAPH_ENV_VAR, raising=False)
+    monkeypatch.delenv(env_cfg.RAG_ONLY_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        # Default
+        assert env_cfg.resolve_skip_graph() is False
+        # Env config (back-compat)
+        assert env_cfg.resolve_skip_graph(env_config_value=True) is True
+        # config/llm.json beats env config
+        p.write_text(json.dumps({"skip_graph": True}))
+        env_cfg._reset_llm_config_cache()
+        assert env_cfg.resolve_skip_graph(env_config_value=False) is True
+        # Env var beats config
+        p.write_text(json.dumps({"skip_graph": False}))
+        env_cfg._reset_llm_config_cache()
+        monkeypatch.setenv(env_cfg.SKIP_GRAPH_ENV_VAR, "1")
+        assert env_cfg.resolve_skip_graph(env_config_value=False) is True
+        # CLI False overrides everything
+        assert env_cfg.resolve_skip_graph(cli_value=False) is False
+        # CLI True is the strongest
+        assert env_cfg.resolve_skip_graph(cli_value=True) is True
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_skip_rag_only_envvar_implies_both(tmp_path, monkeypatch):
+    """`NORA_RAG_ONLY=1` flips both skip_taxonomy and skip_graph on."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.SKIP_TAXONOMY_ENV_VAR, raising=False)
+    monkeypatch.delenv(env_cfg.SKIP_GRAPH_ENV_VAR, raising=False)
+    monkeypatch.setenv(env_cfg.RAG_ONLY_ENV_VAR, "1")
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_skip_taxonomy() is True
+        assert env_cfg.resolve_skip_graph() is True
+    finally:
+        env_cfg._reset_llm_config_cache()
