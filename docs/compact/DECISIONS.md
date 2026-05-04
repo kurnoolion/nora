@@ -1275,3 +1275,218 @@ D-041 (BM25 hybrid — pin runs after fusion). See
 [`core/src/query/RETRIEVAL.md`](../../core/src/query/RETRIEVAL.md)
 for the end-to-end retrieval architecture in which this lookup
 chain sits.
+
+
+## D-044: Unified LLM/embedding config — `config/llm.json` + uniform 3-tier resolution
+
+**Date**: 2026-05-04
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+LLM and embedding settings were scattered across four surfaces:
+- `EnvironmentConfig` fields (`model_provider`, `model_name`,
+  `model_timeout`, `embedding_provider`, `embedding_model`) on
+  `environments/<name>.json`.
+- `WebConfig` fields (`ollama_url`, `default_model`) on
+  `config/web.json`.
+- Per-knob env vars (`NORA_LLM_PROVIDER`, `NORA_LLM_MODEL`,
+  `NORA_LLM_BASE_URL`, `NORA_LLM_API_KEY`, `NORA_EMBEDDING_PROVIDER`,
+  `NORA_EMBEDDING_MODEL`, `NORA_OLLAMA_TIMEOUT_S`).
+- CLI flags on `pipeline/run_cli.py` (`--llm-provider`,
+  `--model`, `--model-timeout`, `--embedding-provider`,
+  `--embedding-model`).
+
+The dispersion meant: machine-specific defaults landed in tracked
+env-config files (problem for teammates committing their personal
+paths); web and pipeline read different sources for the same
+"what LLM should we use?" question; the documented precedence
+order varied per knob; and adding a new knob required edits in
+five places.
+
+**Decision**
+One canonical home, one resolution rule:
+
+- **File**: `config/llm.json` (tracked template, empty defaults).
+  Fields: `llm_provider`, `llm_model`, `llm_timeout`, `llm_base_url`,
+  `llm_api_key`, `embedding_provider`, `embedding_model`,
+  `ollama_url`, `ollama_timeout_s`, `skip_taxonomy`, `skip_graph`.
+  Loaded once per process via `LLMConfigFile.load()` (cached).
+
+- **Resolution chain (per field, highest priority first)**:
+  1. CLI flag (`--llm-provider`, `--model`, …).
+  2. Env var (`NORA_LLM_PROVIDER`, `NORA_LLM_MODEL`, …).
+  3. `config/llm.json` field.
+  4. Built-in default.
+
+  Each `resolve_*` function in `core/src/env/config.py` walks the
+  chain in this exact order and returns on the first non-empty value.
+
+- **Back-compat**: legacy `EnvironmentConfig` LLM/embedding fields
+  remain a fallback **below** `config/llm.json` (so existing
+  `environments/env_vzw.json` still works) with a log line
+  documenting deprecation. Removable in a future release once
+  user envs have migrated.
+
+**Why this over alternatives**
+- *Keep settings spread across `WebConfig` + `EnvironmentConfig`*
+  — rejected. Adding a new LLM knob requires edits in both files,
+  duplicate validation, and inconsistent precedence (web reads
+  one path, pipeline reads another for the same question).
+- *Merge into `config/web.json`* — rejected. Web-specific
+  settings (host, port, root_path, path_mappings) are unrelated
+  to "what LLM is the project using?" and tying them couples
+  unrelated lifecycles.
+- *Flat env-var-only config* — rejected. Twelve knobs is too
+  many env vars for a clean shell prompt; users want a file
+  they can edit + check into a personal setup script.
+- *Strict 3-tier (drop env-config back-compat entirely)* —
+  rejected for v1; would force teammates to migrate their
+  existing `environments/<name>.json` files in lockstep with
+  this commit. Deferred until a major-version bump.
+
+**Consequences**
+- One new tracked file (`config/llm.json`); empty defaults so
+  fresh clones are unaffected unless the user opts in.
+- Each `resolve_*` in `core/src/env/config.py` walks 4 tiers
+  (CLI → env var → config/llm.json → env-config back-compat) and
+  returns the first non-empty value.
+- New `LLMConfigFile` dataclass + module-level cache + test
+  `_reset_llm_config_cache()` hook.
+- Module-level constants `DEFAULT_LLM_CONFIG_PATH`,
+  `SKIP_TAXONOMY_ENV_VAR`, `SKIP_GRAPH_ENV_VAR`, `RAG_ONLY_ENV_VAR`
+  added to the env module's public surface.
+- 11 new tests pin the per-field resolution chain (CLI beats env
+  var beats config beats env-config beats default for
+  `llm_provider`; analogous pins for `embedding_provider`,
+  `embedding_model`, `skip_taxonomy`, `skip_graph`,
+  `NORA_RAG_ONLY` implies both).
+- README config table consolidates 5 prose subsections into one
+  19-row, 4-column reference (commit babd9f0).
+
+**Related**: D-022 (per-env runtime directory; settings scoped to
+the env vs settings global to the install — `config/llm.json` is
+intentionally the latter), D-045 (RAG-only mode shares the same
+3-tier resolution shape for `skip_taxonomy` / `skip_graph`).
+
+
+## D-045: RAG-only pipeline mode — skip taxonomy + graph, stub-graph fallback at query time
+
+**Date**: 2026-05-04
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+The pipeline assumes a full nine-stage build: extract → profile →
+parse → resolve → taxonomy → standards → graph → vectorstore →
+eval. Two stages — taxonomy and graph — make every run depend on
+LLM-derived feature mappings (taxonomy) and a constructed
+`networkx.DiGraph` (graph). This is structurally fine but operationally
+heavy:
+
+- The taxonomy LLM is the dominant source of run-to-run
+  non-determinism (A8 variance experiment showed up to 6.7pp
+  spread across three runs on the same vectorstore).
+- For concept-shaped queries (cross_doc, standards_comparison)
+  the graph scoping in Stage 3 of the query pipeline can do more
+  harm than good — it shrinks the candidate pool to a feature-
+  mapped subset, occasionally excluding the correct chunk that
+  RAG would otherwise rank high.
+- A user wanting to A/B "what does retrieval look like without
+  the graph?" had no way to answer that without manually deleting
+  artifacts and writing a stub.
+
+A baseline-comparison option that pipes around taxonomy + graph
+without rewriting the pipeline is a real need.
+
+**Decision**
+Add a runtime mode that skips the two stages and makes the rest
+of the pipeline tolerate their absence.
+
+- **Three knobs, parallel 3-tier resolution** (per D-044's chain):
+
+  | Knob | CLI | Env var | `config/llm.json` |
+  |---|---|---|---|
+  | `skip_taxonomy` | `--skip-taxonomy` | `NORA_SKIP_TAXONOMY=1` | `skip_taxonomy: true` |
+  | `skip_graph` | `--skip-graph` | `NORA_SKIP_GRAPH=1` | `skip_graph: true` |
+  | both at once | `--rag-only` | `NORA_RAG_ONLY=1` | (set both fields) |
+
+  Existing `EnvironmentConfig.skip_taxonomy` (D-040 era) gains a
+  parallel `skip_graph: bool = False` field for env-config
+  back-compat below the new file.
+
+- **Pipeline-side**: `pipeline/run_cli.py` stage-filter drops
+  `taxonomy` and/or `graph` from the run list when the corresponding
+  knob is on.
+
+- **Query-side**: `core/src/query/pipeline.py` gains
+  `build_stub_graph_from_store(store) -> nx.DiGraph` which derives
+  a minimal MNO/Release/Plan-only graph from chunk metadata. Both
+  the web `/test` route and the eval stage detect missing
+  `<env_dir>/out/graph/knowledge_graph.json` and:
+    1. Build the stub via `build_stub_graph_from_store`.
+    2. Construct `QueryPipeline(graph=stub, …)`.
+    3. Set `pipeline._bypass_graph = True` so Stage 3 emits an
+       empty `CandidateSet`.
+    4. Stage 4 (`RAGRetriever.retrieve`) routes to the metadata-
+       only path (`_retrieve_metadata`) — filters by MNO/release
+       only, no candidate-req-id gate.
+  EvalRunner picks up the bypass via its existing
+  `run_all(questions, bypass_graph=True)` hook from D-001 era.
+
+**Why this over alternatives**
+- *Pure runtime flag (no stage-filter)* — rejected. Building a
+  graph nobody will read wastes a stage's worth of LLM calls and
+  ~30s of compute on every run.
+- *Drop `_bypass_graph` and let the resolver/scoper handle a
+  None graph* — rejected. Resolver depends on graph for available-
+  MNO/release discovery; making graph nullable cascades type
+  changes through five files. Stub graph is cheap (~3 nodes, ~2
+  edges for env_vzw) and keeps every existing constructor working.
+- *Make RAG-only the default* — rejected for v1. Graph scoping
+  is a known win on lookup-shaped queries (D-039 entity priority);
+  the empirical question of which mode wins per category is what
+  the new flag exists to answer.
+- *Build the stub at vectorstore stage time, not lazily at query
+  time* — considered. Lazy is better because:
+    a. Vectorstore stage currently has no graph dependency; adding
+       one would couple a previously-clean module boundary.
+    b. The stub construction is fast (~milliseconds for env_vzw
+       scale) so caching it on disk has negligible benefit.
+    c. Lazy means the stub auto-updates if the vectorstore changes
+       without requiring a separate "stub-rebuild" step.
+
+**Consequences**
+- New invariant exception in `core/src/query/MODULE.md`: the
+  "Graph-first, then RAG" rule (D-001) is suspended when
+  `pipeline._bypass_graph = True`. Documented inline.
+- Eval results in RAG-only mode are NOT directly comparable to
+  full-pipeline baselines — Stage 3 is a different filter (or
+  no filter). New baselines need their own A-letter labels in
+  STATUS.md.
+- `_run_query_sync` on the web side previously errored on missing
+  graph file ("Knowledge graph not found at …"); the early exit
+  is removed, replaced with the stub-graph fallback.
+- `_build_pipeline` in `routes/query.py` switches from
+  hardcoded `SentenceTransformerEmbedder` to `make_embedder(
+  vs_config)` factory — needed because RAG-only with Ollama-
+  built vectorstores (e.g. `qwen3-embedding:4b`) was unreachable
+  through the old path. (Caught and fixed mid-session — error
+  was "Repo id must use alphanumeric chars" because HF prefixed
+  the Ollama model name with `sentence-transformers/`.)
+- 4 new tests pin the stub-graph contract: emits the right node
+  types per metadata, wires `has_release` / `contains_plan`
+  edges, omits Requirement / Feature / Standard nodes, and an
+  end-to-end QueryPipeline+stub+`_bypass_graph=True` returns
+  chunks for a query.
+- Future per-corpus tuning: corpora with rich-bodied parents and
+  lookup-heavy questions should keep graph mode on; corpora with
+  thin parents and concept-heavy questions are candidates to
+  flip RAG-only on by default.
+
+**Related**: D-001 (graph-routes-then-RAG; this is the explicit
+exception), D-039 (entity-priority graph scoping; only useful
+when graph is on), D-040 (per-type top_k; both modes use it),
+D-041 (BM25 hybrid; works in both modes), D-044 (unified LLM
+config; this decision uses the same 3-tier shape for its
+knobs).
