@@ -192,8 +192,8 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         build_stub_graph_from_store,
         load_graph,
     )
+    from core.src.vectorstore import make_embedder
     from core.src.vectorstore.config import VectorStoreConfig
-    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
     from core.src.vectorstore.store_chroma import ChromaDBStore
 
     vs_config_path = vectorstore_dir / "config.json"
@@ -202,12 +202,11 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     else:
         vs_config = VectorStoreConfig(persist_directory=str(vectorstore_dir))
 
-    embedder = SentenceTransformerEmbedder(
-        model_name=vs_config.embedding_model,
-        device=vs_config.embedding_device,
-        batch_size=vs_config.embedding_batch_size,
-        normalize=vs_config.normalize_embeddings,
-    )
+    # Use the provider factory so vectorstores built with Ollama
+    # embeddings (e.g. qwen3-embedding:4b) load via OllamaEmbedder
+    # rather than HuggingFace — HF rejects the `:` in model names
+    # when prefixing them with "sentence-transformers/".
+    embedder = make_embedder(vs_config)
 
     store = ChromaDBStore(
         persist_directory=vs_config.persist_directory,
