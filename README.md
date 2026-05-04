@@ -158,72 +158,42 @@ python -m core.src.web.app
 
 **Reverse proxy:** Set `root_path` to match your reverse proxy prefix (e.g., `/nora`). All URLs in the UI will be prefixed accordingly.
 
-### env_dir resolution
+### Configuration — 3-tier resolution
 
-The web app needs to know which `<env_dir>` (D-022) holds your `out/`, `state/`, and `corrections/` directories. Resolution chain (highest priority first):
+Every runtime setting below resolves through the same chain (highest priority wins): **CLI flag → environment variable → config file**. Empty / unset values at any tier fall through. Config files under `config/` are tracked templates with empty defaults; fill in locally.
 
-1. `env_dir` field in `config/web.json` — leave empty if you don't want to commit a machine path here.
-2. `--env-dir <path>` flag on `python -m core.src.web.app`.
-3. `ENV_DIR` environment variable.
-4. `env_dir` field in `config/env.json`.
+| Module       | Setting              | CLI flag                                                  | Env var                  | Config file                                         |
+|--------------|----------------------|-----------------------------------------------------------|--------------------------|-----------------------------------------------------|
+| **env**      | env_dir              | `--env-dir <path>` (web + pipeline)                       | `ENV_DIR`                | `config/web.json:env_dir` ¹ / `config/env.json:env_dir` |
+| **web db**   | jobs_db              | `--jobs-db <path>`                                        | `NORA_JOBS_DB`           | `config/env.json:jobs_db`                           |
+| **web db**   | metrics_db           | `--metrics-db <path>`                                     | `NORA_METRICS_DB`        | `config/env.json:metrics_db`                        |
+| **web db**   | feedback_db          | `--feedback-db <path>`                                    | `NORA_FEEDBACK_DB`       | `config/env.json:feedback_db`                       |
+| **web**      | host                 | `--host <ip>`                                             | —                        | `config/web.json:host`                              |
+| **web**      | port                 | `--port <n>`                                              | —                        | `config/web.json:port`                              |
+| **llm**      | llm_provider         | `--llm-provider {ollama,openai-compatible,mock}`          | `NORA_LLM_PROVIDER`      | `config/llm.json:llm_provider` ²                    |
+| **llm**      | llm_model            | `--model <name>`                                          | `NORA_LLM_MODEL`         | `config/llm.json:llm_model` ²                       |
+| **llm**      | llm_timeout          | `--model-timeout <sec>`                                   | —                        | `config/llm.json:llm_timeout`                       |
+| **llm**      | llm_base_url         | —                                                         | `NORA_LLM_BASE_URL`      | `config/llm.json:llm_base_url`                      |
+| **llm**      | llm_api_key          | —                                                         | `NORA_LLM_API_KEY`       | `config/llm.json:llm_api_key`                       |
+| **llm**      | embedding_provider   | `--embedding-provider {sentence-transformers,huggingface,ollama}` | `NORA_EMBEDDING_PROVIDER` | `config/llm.json:embedding_provider` ²              |
+| **llm**      | embedding_model      | `--embedding-model <name>`                                | `NORA_EMBEDDING_MODEL`   | `config/llm.json:embedding_model` ²                 |
+| **llm**      | ollama_url           | —                                                         | —                        | `config/llm.json:ollama_url`                        |
+| **llm**      | ollama_timeout_s     | —                                                         | `NORA_OLLAMA_TIMEOUT_S`  | `config/llm.json:ollama_timeout_s`                  |
+| **pipeline** | skip_taxonomy        | `--skip-taxonomy`                                         | `NORA_SKIP_TAXONOMY=1`   | `config/llm.json:skip_taxonomy`                     |
+| **pipeline** | skip_graph           | `--skip-graph`                                            | `NORA_SKIP_GRAPH=1`      | `config/llm.json:skip_graph`                        |
+| **pipeline** | rag_only             | `--rag-only` (sets both above)                            | `NORA_RAG_ONLY=1`        | (set both `skip_taxonomy` + `skip_graph`)           |
+| **pipeline** | standards_source     | `--standards-source {huggingface,3gpp}`                   | `NORA_STANDARDS_SOURCE`  | `environments/<name>.json:standards_source`         |
 
-If none are set, the Test page returns a descriptive error.
+¹ For `env_dir` only, `config/web.json` wins over `$ENV_DIR` (back-compat with pre-existing single-machine setups). The order is **`config/web.json` > `--env-dir` > `$ENV_DIR` > `config/env.json`**. Web app: leaves `web.json:env_dir` empty if you don't want to commit a machine-specific path.
 
-### Configurable database paths
+² Legacy fields on `environments/<name>.json` (`model_provider`, `model_name`, `model_timeout`, `embedding_provider`, `embedding_model`) are still honored as a back-compat fallback **below** `config/llm.json`. Deprecated; prefer migrating settings to `config/llm.json`.
 
-The web app uses three SQLite DBs under `<env_dir>/state/` by default: `nora.db` (jobs), `nora_metrics.db` (metrics), `nora_test_feedback.db` (Test page Q&A + feedback log). Each path is independently overridable. Per-DB resolution chain (highest priority first):
-
-1. CLI flag — `--jobs-db <path>`, `--metrics-db <path>`, `--feedback-db <path>` (full path including filename).
-2. Environment variable — `NORA_JOBS_DB`, `NORA_METRICS_DB`, `NORA_FEEDBACK_DB`.
-3. Field in `config/env.json` — `jobs_db`, `metrics_db`, `feedback_db`.
-4. Default — `<env_dir>/state/<name>.db`.
-
-Layers can be mixed (e.g. override only the feedback DB; let jobs + metrics fall through to the default).
-
-`config/env.json` is a tracked template with empty defaults — fill it in locally or leave empty to fall through to layers above/below.
-
-### Pipeline CLI ENV_DIR fallback
-
-`python -m core.src.pipeline.run_cli` accepts the same `ENV_DIR` fallback the web does. Priority: `--env <name>` (env-config lookup) > `--env-dir <path>` > `$ENV_DIR`. With `ENV_DIR` exported you can run:
-
-```bash
-ENV_DIR=/home/me/work/env_vzw python -m core.src.pipeline.run_cli --start parse --end vectorstore
-```
-
-### LLM + embedding configuration (`config/llm.json`)
-
-All LLM / embedding settings — provider, model, timeout, base URL, API key, embedding provider/model, Ollama URL/timeout, and the pipeline mode toggles `skip_taxonomy` / `skip_graph` — live in a single tracked file: `config/llm.json` (template with empty defaults).
-
-Per-field resolution chain (highest priority first):
-
-1. CLI flag — `--llm-provider`, `--model`, `--model-timeout`, `--embedding-provider`, `--embedding-model`, `--skip-taxonomy`, `--skip-graph`, `--rag-only`.
-2. Environment variable — `NORA_LLM_PROVIDER`, `NORA_LLM_MODEL`, `NORA_LLM_BASE_URL`, `NORA_LLM_API_KEY`, `NORA_EMBEDDING_PROVIDER`, `NORA_EMBEDDING_MODEL`, `NORA_OLLAMA_TIMEOUT_S`, `NORA_SKIP_TAXONOMY`, `NORA_SKIP_GRAPH`, `NORA_RAG_ONLY`.
-3. Field in `config/llm.json`.
-4. Default (built-in) — also accepts the legacy `model_provider` / `model_name` / `embedding_provider` / `embedding_model` / `skip_taxonomy` fields under `environments/<name>.json` for back-compat. Prefer migrating those to `config/llm.json`.
-
-### RAG-only mode (skip taxonomy + graph)
-
-Two pipeline mode toggles let you bypass the LLM-derived feature taxonomy and the unified knowledge graph entirely. Useful when:
-- Taxonomy LLM output is non-deterministic and you want reproducible runs.
-- You only need vectorstore-based retrieval for a quick experiment.
-- The eval set is concept-shaped (RAG-friendly) and graph scoping is dead weight.
-
-Three knobs, three tiers each:
-
-| Knob | CLI flag | Env var | `config/llm.json` field | Effect |
-|---|---|---|---|---|
-| Skip taxonomy stage | `--skip-taxonomy` | `NORA_SKIP_TAXONOMY=1` | `skip_taxonomy: true` | Drops `taxonomy` from the run list. Graph + vectorstore tolerate missing taxonomy. |
-| Skip graph stage | `--skip-graph` | `NORA_SKIP_GRAPH=1` | `skip_graph: true` | Drops `graph` from the run list. Query path builds a stub graph from vectorstore metadata at query time and runs with `_bypass_graph=True`. |
-| Both at once | `--rag-only` | `NORA_RAG_ONLY=1` | (set both fields) | Convenience for the two flags above. |
-
-End-to-end RAG-only run:
+**RAG-only mode**: skip the taxonomy + graph stages and run on pure RAG retrieval. The query path builds a stub MNO/Release/Plan graph from vectorstore metadata at runtime; Stage 3 (graph scoping) is bypassed; Stage 4 falls back to MNO/release metadata filtering. Eval stage tolerates the missing graph the same way.
 
 ```bash
 NORA_RAG_ONLY=1 ENV_DIR=/home/me/work/env_vzw \
   python -m core.src.pipeline.run_cli --start extract --end eval
 ```
-
-The `eval` stage tolerates a missing graph too — it builds the same stub at eval time and the `EvalRunner` runs in `bypass_graph=True` mode (Stage 3 emits an empty CandidateSet; Stage 4 falls back to metadata-only retrieval).
 
 ## Corrections UI
 
