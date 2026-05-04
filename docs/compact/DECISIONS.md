@@ -450,7 +450,7 @@ documents).
 **Date**: 2026-05-01
 **Status**: Accepted
 **Phase**: Architecture (captured retroactively from the development-phase
-commit that landed it; commit 3839dcb)
+commit that landed it; commit 9df8a19)
 
 **Context**
 Real-corpus review of profile.json against the VZW OA documents surfaced
