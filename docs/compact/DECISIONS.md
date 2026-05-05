@@ -1490,3 +1490,298 @@ when graph is on), D-040 (per-type top_k; both modes use it),
 D-041 (BM25 hybrid; works in both modes), D-044 (unified LLM
 config; this decision uses the same 3-tier shape for its
 knobs).
+
+---
+
+## D-046: Document-rooted hierarchy paths in chunks (text + metadata)
+
+**Date**: 2026-05-05
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+Pre-D-046, `chunk_builder` emitted `[Path: SCENARIOS > ATTACH]`
+on chunk text — section path within the document, no document
+identifier in the path string. The full Document > Section >
+Subsection chain wasn't anywhere on the chunk: the embedder
+only saw "SCENARIOS > ATTACH", and the retrieval-side context
+builder had to walk back to the graph node to recover which
+document the chunk came from.
+
+This caused two problems:
+- Embeddings for chunks from different documents that happened
+  to share a section title clustered together. "ATTACH" reqs
+  from LTEDATARETRY and LTEOTADM were near-duplicates in vector
+  space because the embedded text was identical structurally.
+- Retrieval-side grouping (the eventual Step 3 hierarchy
+  grouping) needed to read paths from somewhere structured.
+  Reading from the graph forced a graph dependency on the
+  grouping logic; reading from chunk text required parsing the
+  `[Path: ...]` line back out of free-form text.
+
+**Decision**
+Two coupled changes:
+
+- **In chunk text**: prepend `plan_name` (or `plan_id` fallback
+  when `plan_name` is empty) as the root segment of the
+  `[Path: ...]` line. Output: `[Path: LTEDATARETRY > SCENARIOS
+  > ATTACH]`. Disabled when `include_hierarchy_path=False`.
+  Suppressed entirely when both `plan_name` and `plan_id` are
+  empty AND the requirement's hierarchy is empty.
+
+- **In chunk metadata**: store the full path as a `list[str]`
+  under the `hierarchy_path` key on every chunk's metadata
+  dict (requirement chunks AND glossary chunks). Always
+  populated; `include_hierarchy_path` only gates the text
+  prefix, not the metadata. Glossary chunks store
+  `[doc_root]` (single-element list).
+
+`context_builder._enrich_chunk` prefers the chunk-metadata
+path; falls back to the graph node's `hierarchy_path` when
+the metadata is absent (back-compat for vectorstores built
+before D-046).
+
+**Why this over alternatives**
+- *Path in text only, not metadata* — rejected. Forces
+  retrieval-side grouping to parse free-form chunk text. Brittle
+  if the prefix line ever changes shape (e.g. when the MNO
+  header or req_id line is reordered).
+- *Path in metadata only, not text* — rejected. The embedder
+  loses the structural signal. The whole point is for the dense
+  vector to encode "this chunk is from document X about topic Y"
+  not just "this chunk is about topic Y".
+- *Use plan_id everywhere (not plan_name)* — rejected. plan_id
+  is opaque (`LTEDATARETRY`); plan_name is human-readable
+  (`LTE Data Retry`). Embeddings benefit from the natural
+  language form. plan_id remains the fallback when plan_name
+  is missing.
+- *Include the full hierarchy chain in chunk text already* —
+  was already the case for hierarchy below the document; this
+  decision only adds the document root above it.
+
+**Consequences**
+- **Vectorstore must be rebuilt** to surface the new metadata
+  field on existing data. Old vectorstores work — context
+  builder falls back to the graph node — but they won't get
+  the embedding-quality benefit until rebuilt.
+- ChromaDB metadata supports `list[str]` values, so the path
+  stores natively. They can't be used in `where=` equality
+  filters but read-back works fine.
+- New `_build_chunk_text` parameter `plan_id: str = ""` with
+  the corresponding call-site update in `_build_tree_chunks`.
+- 11 new tests in `core/tests/test_chunk_builder_hierarchy.py`
+  pin: text format, plan_id fallback, both-empty suppression,
+  metadata always-present (independent of text flag),
+  glossary-chunk root.
+- Existing `test_vectorstore.py::test_chunk_text_has_hierarchy_path`
+  updated for the new `LTE_DATARETRY > ROOT > Section 2 Title`
+  format.
+- Verified live: env_vzw chunks show paths like
+  `['LTE_ATCommands_For_Test_Automation', 'LTE AT commands for
+  Test automation']`.
+
+**Related**: D-001 (graph + RAG hybrid; this strengthens RAG by
+giving embeddings document-level structure), D-038 (definitions
+extraction; glossary chunks now also carry the metadata path),
+D-043 (acronym lookup chain; glossary chunks were the unit
+introduced there, this adds doc-root metadata to them), D-047
+(threshold filter consumes the same chunk metadata for the
+"not found" path).
+
+---
+
+## D-047: Relevance threshold + "not found" response (Stage 4.5)
+
+**Date**: 2026-05-05
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+Off-topic queries ("recipe for chocolate cake") still produced
+synthesized answers because the LLM was given Stage-4 retrieval
+even when every chunk was a weak distance match. Empirical
+sweep against env_vzw + qwen3-embedding:4b-q8_0:
+
+- Relevant queries (T3402, attach reject): cosine distances
+  0.20–0.41
+- Off-topic queries (Westphalia, cake): cosine distances
+  0.74–0.77
+
+A 0.33-wide gap between the worst relevant and the best
+off-topic chunk. The LLM was synthesizing from chunks at 0.75
+distance — primary source of confabulated answers on queries
+that simply have no good match in the corpus.
+
+The user's stated principle: *"the system shall not pretend it
+is an Oracle."* Off-topic queries should return an explicit
+"not found" message rather than an LLM hallucination dressed up
+in formatting that mimics a cited answer.
+
+**Decision**
+New optional Stage 4.5 in `QueryPipeline.query()`:
+
+- New constructor param `max_distance_threshold: float | None
+  = None`. None → filter disabled (back-compat).
+- After Stage 4 retrieval, drop chunks where
+  `similarity_score > threshold`.
+- If the filtered list is empty, return a `QueryResponse` with
+  the deterministic `_NOT_FOUND_ANSWER` text **without** running
+  Stage 5 (context assembly) or Stage 6 (LLM synthesis). This
+  saves the LLM call AND prevents the LLM from being given an
+  empty context that it would politely confabulate around.
+- New `_TYPE_MAX_DISTANCE` dict keyed by `QueryType`, empty for
+  now. Reserved for Step 4 (intent classification) where the
+  Fact intent will need a stricter threshold than the general
+  pipeline default.
+- Web pipeline build sets the default to **0.5** with a
+  `NORA_MAX_DISTANCE_THRESHOLD` env-var runtime override
+  (`off`/`none`/`""` disables; any float overrides). Logs the
+  effective value at pipeline-build time.
+
+**Why this over alternatives**
+- *Filter inside `RAGRetriever`* — rejected. The retriever is
+  generic and shared between query paths (eval, web, CLI). A
+  threshold is a query-pipeline policy, not a retrieval
+  concern. Keeping it in `QueryPipeline` lets the retriever
+  return raw scores and lets the pipeline (which has the query
+  type / intent) make the policy decision.
+- *Filter inside `ContextBuilder`* — rejected. Context builder
+  doesn't know about per-query-type thresholds and would have
+  to grow that responsibility. Stage 4.5 (between retrieval and
+  context assembly) is the natural place.
+- *Use a similarity score (1 - distance) instead of distance* —
+  considered. Would let users think in "min similarity" terms
+  (higher = stricter), which matches their mental model better
+  than "max distance" (lower = stricter). Rejected for now to
+  keep `similarity_score` field semantics stable across the
+  codebase; flipping the field at this point would change UI
+  display values that users have already seen. Revisit if a
+  cleaner abstraction emerges.
+- *Per-vectorstore threshold (stored in the saved config.json
+  next to chroma data)* — considered. Threshold is calibrated
+  to the embedding model + corpus, so co-locating it with the
+  vectorstore is logically clean. Rejected for v1 because no
+  existing code reads back from the saved config at query
+  time, and adding a path felt premature for a single tuning
+  value. Promote to that scheme if/when multiple vectorstores
+  with different models coexist in one process.
+- *Hard-fail with an exception* — rejected. The "not found"
+  outcome is a normal answer in the user's workflow, not an
+  error. Returning `QueryResponse` keeps the call site uniform.
+
+**Consequences**
+- **Threshold is model-specific.** Default 0.5 is pinned to
+  qwen3-embedding:4b-q8_0 on the OA corpus. Switching the
+  embedding model requires a re-sweep. Flagged in STATUS.md.
+- New public field on `QueryPipeline.__init__`; new module-
+  level constants `_NOT_FOUND_ANSWER`, `_TYPE_MAX_DISTANCE`.
+- 13 new tests in `core/tests/test_query_threshold.py` pin:
+  threshold disabled (back-compat), all-above, all-below,
+  mixed, exactly-at-threshold, just-above-threshold,
+  not-found shape (intent carried, candidate count carried,
+  no citations, message non-empty), strict/lenient sweeps.
+- Web wiring (`core/src/web/routes/query.py`) adds the helper
+  `_resolve_max_distance_threshold` reading
+  `NORA_MAX_DISTANCE_THRESHOLD` and logs the effective value
+  at pipeline-build time.
+- `_TYPE_MAX_DISTANCE` is the seam Step 4 will populate for
+  per-intent overrides — Fact intent will get a stricter cap.
+
+**Related**: D-046 (chunk metadata; threshold reads
+`similarity_score` populated alongside the new
+`hierarchy_path`), D-040 (per-type top_k; per-type threshold
+mirrors the same shape), D-041 (BM25 hybrid; threshold is
+applied after fusion + diversity, not per-component).
+
+---
+
+## D-048: `vectorstore_cli` `--config <path>` replaces `config/llm.json` (Option A precedence)
+
+**Date**: 2026-05-05
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+`vectorstore_cli`'s `_build_config` previously knew nothing
+about `config/llm.json` — it read `--config <path>` if given
+and fell back to its own dataclass defaults otherwise. Users
+setting `embedding_model: qwen3-embedding:4b-q8_0` in
+`config/llm.json` were surprised when `vectorstore_cli` still
+defaulted to `sentence-transformers/all-MiniLM-L6-v2`. The
+pipeline runner (`run_cli.py`) honored `config/llm.json`; the
+standalone vectorstore CLI didn't, so the two diverged on the
+"which embedding model is the project using?" question.
+
+Wiring `config/llm.json` into `vectorstore_cli` was
+straightforward — the existing `resolve_embedding_provider` /
+`resolve_embedding_model` helpers in `core/src/env/config.py`
+already implement the canonical 3-tier rule
+(CLI > env > config/llm.json > default). The interesting
+question was: how should `--config <path>` interact with
+`config/llm.json`?
+
+Two options were on the table:
+
+- **Option A (chosen).** `--config <path>` *replaces*
+  `config/llm.json` at the config-file tier. Precedence:
+  CLI > env > (`--config` if supplied, else `config/llm.json`)
+  > default.
+- **Option B.** `--config <path>` is just another value
+  source. Precedence: CLI > env > config/llm.json > `--config`
+  > default. Both files contribute; one of them wins by some
+  sub-rule.
+
+**Decision**
+**Option A.** When `--config <path>` is supplied, the resolver
+chain treats that file as the config-file tier and skips
+`config/llm.json` entirely for that run.
+
+Implementation (in `_build_config`): if `args.config` is set,
+load the file and inline the tier walk
+(`args.provider or env_var or config.embedding_provider or
+DEFAULT`). If not set, call the existing `resolve_*` helpers
+(which read `config/llm.json` at tier 3).
+
+**Why this over Option B**
+- A user typing `--config experiment.json` is being explicit
+  about reproducing a frozen experiment. Letting
+  `config/llm.json` silently override the experiment defeats
+  the purpose of pinning the config file at all.
+- Option B's "stack and let one win" rule (whichever wins) is
+  hard to predict from the call site. Option A is one rule:
+  "file you point at replaces the project default."
+- The user's stated rule is "CLI > env var > config json
+  file under config/" — three tiers. Option A keeps three
+  tiers from the user's perspective; Option B introduces a
+  fourth.
+- CLI flags + env vars still override `--config`, so the user
+  can scope-narrow within an experiment without editing the
+  pinned file.
+
+**Consequences**
+- New imports from `core.src.env.config` in
+  `vectorstore_cli._build_config`:
+  `DEFAULT_EMBEDDING_*`, `EMBEDDING_*_ENV_VAR`,
+  `EMBEDDING_PROVIDERS`, `resolve_embedding_*`.
+- Two pre-existing `test_env_config.py` bugs surfaced + fixed:
+  `test_resolve_embedding_provider_precedence` and
+  `test_resolve_embedding_model_precedence` previously
+  assumed `config/llm.json` was empty (the project's prior
+  state). Now monkey-patch `DEFAULT_LLM_CONFIG_PATH` to a tmp
+  empty file. These tests were latent and only failed once
+  the user populated `config/llm.json`.
+- `_build_config`'s docstring now spells out the 4-tier
+  resolution explicitly so future maintainers don't re-derive.
+- Inverse-scenario verified live: with `config/llm.json`
+  populated, no `--config`, no env var → resolver picks up
+  qwen3-embedding:4b-q8_0. With `--config experiment.json`
+  pinning bge-large → resolver picks up bge-large
+  (config/llm.json is bypassed).
+- The same pattern (Option A) is the likely answer for any
+  future CLI that adds a `--config <path>` flag while
+  participating in `config/llm.json`-driven defaults.
+
+**Related**: D-044 (unified LLM/embedding config; this
+extends D-044's resolution chain to a CLI that previously
+didn't participate). The "back-compat to deprecated env-config
+fields" tier from D-044 stays at the bottom and is unaffected.

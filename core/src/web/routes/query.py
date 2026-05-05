@@ -19,6 +19,40 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 
+# Relevance threshold for the QueryPipeline's Stage-4.5 filter. Chunks
+# with cosine distance above this value are dropped; if every chunk is
+# dropped, the pipeline returns its "not found" answer instead of
+# synthesizing from weak fragments.
+#
+# Default 0.5 was calibrated on the OA corpus + qwen3-embedding:4b-q8_0
+# via tools/threshold_sweep — relevant queries scored 0.20-0.41,
+# off-topic queries 0.74-0.77, leaving a comfortable 0.33 gap. Different
+# embedding models produce different distance distributions, so this
+# default may need re-tuning when the embedding model changes. Override
+# at runtime via NORA_MAX_DISTANCE_THRESHOLD=<float>; set to "off" / ""
+# to disable the filter entirely.
+_DEFAULT_MAX_DISTANCE_THRESHOLD = 0.5
+_MAX_DISTANCE_THRESHOLD_ENV_VAR = "NORA_MAX_DISTANCE_THRESHOLD"
+
+
+def _resolve_max_distance_threshold() -> float | None:
+    """Return the threshold to pass to QueryPipeline. None disables it."""
+    import os
+    raw = os.environ.get(_MAX_DISTANCE_THRESHOLD_ENV_VAR)
+    if raw is None:
+        return _DEFAULT_MAX_DISTANCE_THRESHOLD
+    raw = raw.strip().lower()
+    if raw in ("", "off", "none", "disable", "disabled"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a valid float; using default %.2f",
+            _MAX_DISTANCE_THRESHOLD_ENV_VAR, raw, _DEFAULT_MAX_DISTANCE_THRESHOLD,
+        )
+        return _DEFAULT_MAX_DISTANCE_THRESHOLD
+
 
 def _graph_path() -> Path:
     """Resolve `<env_dir>/out/graph/knowledge_graph.json`. The Web UI
@@ -246,6 +280,12 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     else:
         logger.info("No real LLM configured, falling back to mock synthesizer")
 
+    threshold = _resolve_max_distance_threshold()
+    if threshold is None:
+        logger.info("Relevance threshold filter: DISABLED")
+    else:
+        logger.info("Relevance threshold filter: max_distance=%.3f", threshold)
+
     pipeline = QueryPipeline(
         graph=graph,
         embedder=embedder,
@@ -253,6 +293,7 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         synthesizer=synthesizer,
         top_k=10,
         max_context_chars=30000,
+        max_distance_threshold=threshold,
     )
     if rag_only:
         pipeline._bypass_graph = True
