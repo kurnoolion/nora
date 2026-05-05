@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Resolve Review — NORA{% endblock %}
+{% block nav_resolve_review %}active{% endblock %}
+
+{% block extra_head %}
+<style>
+.status-badge { display:inline-block; padding:1px 7px; border-radius:3px; font-size:.7rem; font-weight:600; }
+.s-resolved  { background:#22c55e; color:#fff; }
+.s-broken    { background:#ef4444; color:#fff; }
+.s-unresolved{ background:#94a3b8; color:#fff; }
+.s-corrected { background:#f59e0b; color:#fff; }
+.src-text    { font-size:.75rem; color:#6b7280; max-height:4rem; overflow:hidden; }
+.src-text.expanded { max-height:none; }
+.ref-table th { font-size:.75rem; white-space:nowrap; }
+.ref-table td { font-size:.78rem; vertical-align:top; }
+.corr-input  { font-size:.75rem; }
+.section-hdr { font-weight:600; font-size:.9rem; padding:6px 0 4px; border-bottom:2px solid #e5e7eb; margin-bottom:8px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between pt-3 pb-2 mb-2 border-bottom">
+    <h1 class="h5 mb-0"><i class="bi bi-link-45deg me-2"></i>Resolve Review</h1>
+</div>
+
+{% if no_resolve_output %}
+<div class="alert alert-warning">No resolver output found. Run the <strong>resolve</strong> stage first.</div>
+{% elif not docs %}
+<div class="alert alert-info">No resolved documents found.</div>
+{% else %}
+
+<div class="d-flex align-items-center gap-3 mb-3">
+    <div style="max-width:320px; flex:1;">
+        <select id="doc-select" class="form-select form-select-sm">
+            <option value="">— select document —</option>
+            {% for doc in docs %}
+            <option value="{{ doc }}">{{ doc }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <span class="text-muted small">Select a document to review cross-reference resolution.</span>
+</div>
+
+<div id="review-area">
+    <p class="text-muted small">No document selected.</p>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ root_path }}/static/js/resolve_review.js"></script>
+<script>
+(function () {
+    const sel = document.getElementById('doc-select');
+    if (!sel) return;
+    const ROOT = document.body.dataset.rootPath || '';
+    sel.addEventListener('change', function () {
+        const docId = this.value;
+        if (!docId) {
+            document.getElementById('review-area').innerHTML = '<p class="text-muted small">No document selected.</p>';
+            return;
+        }
+        document.getElementById('review-area').innerHTML =
+            '<div class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
+        fetch(ROOT + '/resolve-review/' + encodeURIComponent(docId) + '/view')
+            .then(r => r.text())
+            .then(html => {
+                document.getElementById('review-area').innerHTML = html;
+                if (window.initResolveReview) window.initResolveReview(docId, ROOT);
+            })
+            .catch(err => {
+                document.getElementById('review-area').innerHTML =
+                    '<div class="alert alert-danger">Failed to load: ' + err + '</div>';
+            });
+    });
+})();
+</script>
+{% endblock %}

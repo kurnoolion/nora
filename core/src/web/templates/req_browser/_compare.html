@@ -1,0 +1,39 @@
+<!-- Cross-doc requirement comparison -->
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <span class="fw-semibold small"><i class="bi bi-layout-split me-1"></i>Cross-Document Comparison</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="rbBackToReq()" style="font-size:.75rem;">
+        <i class="bi bi-arrow-left me-1"></i>Back
+    </button>
+</div>
+
+<div class="row g-3" style="min-height:60vh;">
+
+    <div class="col-6 d-flex flex-column">
+        <div class="d-flex align-items-baseline gap-2 mb-1">
+            <span class="badge bg-primary" style="font-size:.7rem;">{{ a_doc }}</span>
+            {% if req_a %}<code class="small text-secondary">{{ req_a.req_id }}</code>{% endif %}
+        </div>
+        {% if req_a %}
+        <div class="text-muted small mb-1">§&nbsp;{{ req_a.section_number }} — {{ req_a.title }}</div>
+        <pre class="bg-light border rounded p-3 flex-grow-1 mb-0"
+             style="white-space:pre-wrap;word-break:break-word;font-size:.8rem;overflow-y:auto;">{{ req_a.text or '(no text extracted)' }}</pre>
+        {% else %}
+        <div class="alert alert-warning small">Requirement <code>{{ a_req }}</code> not found in <strong>{{ a_doc }}</strong>.</div>
+        {% endif %}
+    </div>
+
+    <div class="col-6 d-flex flex-column">
+        <div class="d-flex align-items-baseline gap-2 mb-1">
+            <span class="badge bg-info text-dark" style="font-size:.7rem;">{{ b_doc }}</span>
+            {% if req_b %}<code class="small text-secondary">{{ req_b.req_id }}</code>{% endif %}
+        </div>
+        {% if req_b %}
+        <div class="text-muted small mb-1">§&nbsp;{{ req_b.section_number }} — {{ req_b.title }}</div>
+        <pre class="bg-light border rounded p-3 flex-grow-1 mb-0"
+             style="white-space:pre-wrap;word-break:break-word;font-size:.8rem;overflow-y:auto;">{{ req_b.text or '(no text extracted)' }}</pre>
+        {% else %}
+        <div class="alert alert-warning small">Requirement <code>{{ b_req }}</code> not found in <strong>{{ b_doc }}</strong>.</div>
+        {% endif %}
+    </div>
+
+</div>

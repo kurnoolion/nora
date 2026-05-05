@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Parse Review — NORA{% endblock %}
+{% block nav_parse_review %}active{% endblock %}
+
+{% block extra_head %}
+<style>
+.review-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; border: 1px solid #dee2e6; border-radius: 4px; }
+.pane-header { padding: 6px 10px; background: #f8f9fa; border-bottom: 1px solid #dee2e6; font-weight: 600; font-size: .8rem; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-footer { flex-shrink: 0; max-height: 220px; overflow-y: auto; background: #fdfdfd; font-size: .8rem; }
+.pane-body { overflow-y: auto; flex: 1; padding: 6px 8px; font-size: .8rem; }
+.review-block { position: relative; padding: 4px 6px; margin-bottom: 3px; border-radius: 3px; border: 1px solid transparent; }
+.review-block:hover { border-color: #ced4da; }
+.block-pg { position: absolute; right: 4px; top: 2px; font-size: .65rem; color: #adb5bd; font-family: monospace; }
+.block-actions { position: absolute; right: 28px; top: 2px; display: none; gap: 2px; }
+.review-block:hover .block-actions { display: flex; }
+.btn-xs { padding: 0 4px; font-size: .7rem; line-height: 1.4; border-radius: 2px; }
+/* Annotation colours */
+.ann-dropped-toc     { background: #dbeafe80; }
+.ann-dropped-revhist { background: #ede9fe80; }
+.ann-dropped-struck  { background: #fee2e280; text-decoration: line-through; color: #6b7280; }
+.ann-dropped-cascade { background: #ffedd580; color: #6b7280; }
+.ann-glossary        { background: #d1fae580; }
+.ann-section-heading { border-left: 3px solid #059669 !important; }
+/* Review state overrides */
+.rev-accepted { border-left: 3px solid #22c55e !important; background: #f0fdf480 !important; }
+.rev-rejected { border-left: 3px solid #ef444480 !important; background: #fff1f180 !important; opacity: .65; }
+.rev-added    { border-left: 3px solid #f59e0b !important; background: #fffbeb80 !important; }
+/* Annotation badges */
+.ann-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: .65rem; font-weight: 600; letter-spacing: .02em; margin-bottom: 2px; }
+.ann-badge-dropped-toc     { background: #3b82f6; color: #fff; }
+.ann-badge-dropped-revhist { background: #8b5cf6; color: #fff; }
+.ann-badge-dropped-struck  { background: #ef4444; color: #fff; }
+.ann-badge-dropped-cascade { background: #f97316; color: #fff; }
+.ann-badge-glossary        { background: #10b981; color: #fff; }
+.ann-badge-section-heading { background: #059669; color: #fff; }
+/* Context menu */
+.ctx-menu { position: fixed; z-index: 9999; background: #fff; border: 1px solid #dee2e6; border-radius: 6px; box-shadow: 0 4px 16px #0002; min-width: 200px; padding: 4px 0; }
+.ctx-menu-hdr { padding: 4px 12px; font-size: .7rem; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.ctx-menu-item { padding: 6px 14px; cursor: pointer; font-size: .82rem; display: flex; align-items: center; gap: 6px; }
+.ctx-menu-item:hover { background: #f3f4f6; }
+.ctx-menu-divider { border-top: 1px solid #e5e7eb; margin: 3px 0; }
+/* Table inside blocks */
+.review-block table { font-size: .72rem; }
+/* Sync-scroll highlight on active pane */
+.pane-body.scroll-source { outline: 2px solid #3b82f620; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between pt-3 pb-2 mb-2 border-bottom">
+    <h1 class="h5 mb-0"><i class="bi bi-clipboard-check me-2"></i>Parse Review</h1>
+</div>
+
+{% if log_dir_missing %}
+<div class="alert alert-warning">
+    No parse output found. Run the <strong>extract</strong> and <strong>parse</strong> stages first.
+</div>
+{% elif not docs %}
+<div class="alert alert-info">No parsed documents found.</div>
+{% else %}
+
+<!-- Selector -->
+<div class="d-flex align-items-center gap-3 mb-2">
+    <div style="max-width:320px; flex:1;">
+        <select id="doc-select" class="form-select form-select-sm">
+            <option value="">— select document —</option>
+            {% for doc in docs %}
+            <option value="{{ doc }}">{{ doc }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <span class="text-muted small">Select a document to open the 3-pane review.</span>
+</div>
+
+<!-- 3-pane area — loaded via fetch() into this div -->
+<div id="review-area">
+    <p class="text-muted small">No document selected.</p>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ root_path }}/static/js/parse_review.js"></script>
+<script>
+(function () {
+    const sel = document.getElementById('doc-select');
+    if (!sel) return;
+    const ROOT = document.body.dataset.rootPath || '';
+    sel.addEventListener('change', function () {
+        const docId = this.value;
+        if (!docId) {
+            document.getElementById('review-area').innerHTML = '<p class="text-muted small">No document selected.</p>';
+            return;
+        }
+        document.getElementById('review-area').innerHTML =
+            '<div class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
+        fetch(ROOT + '/parse-review/' + encodeURIComponent(docId) + '/view')
+            .then(r => r.text())
+            .then(html => {
+                document.getElementById('review-area').innerHTML = html;
+                if (window.initParseReview) window.initParseReview(docId, ROOT);
+            })
+            .catch(err => {
+                document.getElementById('review-area').innerHTML =
+                    '<div class="alert alert-danger">Failed to load: ' + err + '</div>';
+            });
+    });
+})();
+</script>
+{% endblock %}

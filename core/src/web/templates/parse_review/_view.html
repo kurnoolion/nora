@@ -1,0 +1,220 @@
+{# 3-pane review view — injected into #review-area by fetch() #}
+{# Renders: original blocks | annotated blocks | review/corrections pane #}
+
+{% macro block_text(block) %}
+  {%- if block.type in ('heading', 'paragraph') -%}
+    <p class="mb-0 {% if block.bold %}fw-bold{% endif %}{% if block.italic %} fst-italic{% endif %}{% if block.strikethrough %} text-decoration-line-through text-muted{% endif %}">
+      {{- block.text | e -}}
+    </p>
+  {%- elif block.type == 'table' -%}
+    <div class="table-responsive" style="max-height:160px;overflow:auto;">
+      <table class="table table-bordered table-sm mb-0" style="font-size:.7rem;">
+        {% if block.headers %}<thead class="table-light"><tr>{% for h in block.headers %}<th>{{ h | e }}</th>{% endfor %}</tr></thead>{% endif %}
+        <tbody>
+          {% for row in block.rows[:6] %}<tr>{% for cell in row %}<td>{{ cell | e }}</td>{% endfor %}</tr>{% endfor %}
+          {% if block.rows | length > 6 %}<tr><td colspan="{{ (block.headers | length) or 1 }}" class="text-center text-muted small">… {{ block.rows | length - 6 }} more rows</td></tr>{% endif %}
+        </tbody>
+      </table>
+    </div>
+  {%- elif block.type == 'image' -%}
+    <span class="text-muted fst-italic small"><i class="bi bi-image me-1"></i>Image{% if block.surrounding_text %} — {{ block.surrounding_text[:60] | e }}{% endif %}</span>
+  {%- else -%}
+    <span class="text-muted small">[{{ block.type }}]</span>
+  {%- endif -%}
+{% endmacro %}
+
+<!-- Toolbar -->
+<div class="d-flex align-items-center gap-2 mb-2 flex-wrap py-1 border-bottom">
+    <input id="rv-reviewer" type="text" class="form-control form-control-sm" style="max-width:140px"
+           placeholder="Reviewer" value="{{ review.get('reviewer','') }}">
+    <input id="rv-date" type="date" class="form-control form-control-sm" style="max-width:155px"
+           value="{{ review.get('review_date','') }}">
+    <select id="rv-verdict" class="form-select form-select-sm" style="max-width:110px">
+        <option value="">Verdict</option>
+        <option value="pass"    {% if review.get('overall_verdict')=='pass'    %}selected{% endif %}>pass</option>
+        <option value="fail"    {% if review.get('overall_verdict')=='fail'    %}selected{% endif %}>fail</option>
+        <option value="partial" {% if review.get('overall_verdict')=='partial' %}selected{% endif %}>partial</option>
+    </select>
+
+    <!-- Sync scroll toggle -->
+    <div class="form-check form-switch mb-0 ms-1">
+        <input class="form-check-input" type="checkbox" id="sync-scroll-toggle">
+        <label class="form-check-label small" for="sync-scroll-toggle">Sync scroll</label>
+    </div>
+
+    <!-- Stats badges -->
+    <span class="badge bg-secondary">{{ block_count }} blocks</span>
+    <span class="badge bg-primary">{{ annotated_count }} annotated</span>
+
+    <!-- Action buttons -->
+    <button class="btn btn-sm btn-primary ms-auto" id="btn-save" onclick="prSave()">
+        <i class="bi bi-save me-1"></i>Save
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" id="btn-report" onclick="prReport()">
+        <i class="bi bi-clipboard-data me-1"></i>Report
+    </button>
+    <span id="save-indicator" class="small text-muted"></span>
+</div>
+
+{% if error %}
+<div class="alert alert-warning py-2 mb-2">{{ error }}</div>
+{% endif %}
+
+<!-- Annotation legend -->
+<div class="d-flex flex-wrap gap-1 mb-2">
+    <span class="small text-muted me-1">Parser:</span>
+    <span class="ann-badge ann-badge-dropped-toc">TOC</span>
+    <span class="ann-badge ann-badge-dropped-revhist">REVHIST</span>
+    <span class="ann-badge ann-badge-dropped-struck">STRUCK</span>
+    <span class="ann-badge ann-badge-dropped-cascade">CASCADE</span>
+    <span class="ann-badge ann-badge-glossary">GLOSSARY</span>
+    <span class="ann-badge ann-badge-section-heading">HEADING</span>
+    <span class="small text-muted ms-3 me-1">Review:</span>
+    <span class="ann-badge" style="background:#22c55e;color:#fff;">✓ accepted</span>
+    <span class="ann-badge" style="background:#ef4444;color:#fff;">✗ rejected</span>
+    <span class="ann-badge" style="background:#f59e0b;color:#fff;">+ added</span>
+</div>
+
+<!-- Three panes -->
+<div class="d-flex gap-1" id="review-panes" style="height: calc(100vh - 270px); min-height: 420px;">
+
+  <!-- ===== PANE 1: Original ===== -->
+  <div class="review-pane" id="pane-1">
+    <div class="pane-header"><i class="bi bi-file-text me-1"></i>Original &nbsp;<span class="fw-normal text-muted">{{ block_count }} blocks · {{ log.get('source_file', doc_id) }}</span></div>
+    <div class="pane-body" id="pane-1-body">
+      {% for block in blocks %}
+      <div class="review-block" data-idx="{{ block.idx }}" data-page="{{ block.page }}">
+          <span class="block-pg">p{{ block.page }}</span>
+          {{ block_text(block) }}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- ===== PANE 2: Annotated ===== -->
+  <div class="review-pane" id="pane-2">
+    <div class="pane-header"><i class="bi bi-tags me-1"></i>Annotated &nbsp;<span class="fw-normal text-muted">{{ annotated_count }} labelled</span></div>
+    <div class="pane-body" id="pane-2-body">
+      {% for block in blocks %}
+      <div class="review-block {% for ann in block.annotations %}ann-{{ ann.type | replace('_','-') }} {% endfor %}" data-idx="{{ block.idx }}" data-page="{{ block.page }}">
+          <span class="block-pg">p{{ block.page }}</span>
+          {%- for ann in block.annotations %}
+          <span class="ann-badge ann-badge-{{ ann.type | replace('_','-') }}">
+              {{- ann.type | replace('dropped_','') | upper -}}
+              {%- if ann.get('section_number') %} §{{ ann.section_number }}{%- endif %}
+          </span>
+          {%- endfor %}
+          {{ block_text(block) }}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- ===== PANE 3: Review ===== -->
+  <div class="review-pane" id="pane-3">
+    <div class="pane-header">
+        <i class="bi bi-pencil-square me-1"></i>Review
+        <span id="rv-stats" class="fw-normal text-muted small ms-1"></span>
+        <span class="fw-normal text-muted small ms-2">· right-click to annotate</span>
+    </div>
+    <div class="pane-body" id="pane-3-body">
+      {% for block in blocks %}
+      {% set has_ann = block.annotations | length > 0 %}
+      <div class="review-block"
+           id="rv-{{ block.idx }}"
+           data-idx="{{ block.idx }}"
+           data-page="{{ block.page }}"
+           data-anns="{{ block.annotations | tojson | e }}">
+
+          <span class="block-pg">p{{ block.page }}</span>
+
+          <!-- Action buttons (visible on hover) -->
+          <div class="block-actions">
+              {% if has_ann %}
+              <button class="btn btn-xs btn-outline-success" title="Accept" onclick="prAccept({{ block.idx }})">✓</button>
+              <button class="btn btn-xs btn-outline-danger"  title="Reject" onclick="prReject({{ block.idx }})">✗</button>
+              {% else %}
+              <button class="btn btn-xs btn-outline-secondary" title="Add annotation" onclick="prShowAddMenu(event, {{ block.idx }})">+</button>
+              {% endif %}
+          </div>
+
+          <!-- Annotation badges (compact) -->
+          {%- for ann in block.annotations %}
+          <span class="ann-badge ann-badge-{{ ann.type | replace('_','-') }}">
+              {{- ann.type | replace('dropped_','') | upper -}}
+          </span>
+          {%- endfor %}
+          {{ block_text(block) }}
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Acronym correction panel (fixed at pane bottom) -->
+    {% set acronyms = log.get('acronyms', []) %}
+    {% if acronyms %}
+    <div class="pane-footer p-2">
+        <div class="fw-semibold small mb-1"><i class="bi bi-spell-check me-1"></i>Acronym Corrections</div>
+        {% for a in acronyms %}
+        <div class="d-flex align-items-center gap-1 mb-1">
+            <code class="small" style="min-width:60px">{{ a.acronym }}</code>
+            <input type="text" class="form-control form-control-sm acr-correction"
+                   data-acronym="{{ a.acronym }}" data-original="{{ a.expansion }}"
+                   placeholder="{{ a.expansion | e }}"
+                   value="{{ (review.get('corrections',{}).get('acronym_wrong_expansion',[]) | selectattr('acronym','equalto',a.acronym) | first | default({})).get('correct','') }}"
+                   style="max-width:220px">
+            <select class="form-select form-select-sm acr-status" data-acronym="{{ a.acronym }}" style="max-width:95px">
+                {% set ae_list = review.get('corrections',{}).get('acronym_extra',[]) | map(attribute='acronym') | list %}
+                <option value="ok">OK</option>
+                <option value="wrong" {% if (review.get('corrections',{}).get('acronym_wrong_expansion',[]) | selectattr('acronym','equalto',a.acronym) | list) %}selected{% endif %}>Wrong</option>
+                <option value="extra" {% if a.acronym in ae_list %}selected{% endif %}>Extra</option>
+            </select>
+        </div>
+        {% endfor %}
+        <div id="missed-acr-rows">
+            {% for am in review.get('corrections',{}).get('acronym_missed',[]) %}
+            <div class="d-flex gap-1 mb-1 missed-acr-row">
+                <input type="text" class="form-control form-control-sm" placeholder="Acronym" style="max-width:90px" value="{{ am.acronym }}">
+                <input type="text" class="form-control form-control-sm" placeholder="Expansion" value="{{ am.expansion }}">
+                <button class="btn btn-xs btn-outline-danger" onclick="this.closest('.missed-acr-row').remove()">✕</button>
+            </div>
+            {% endfor %}
+        </div>
+        <button class="btn btn-xs btn-outline-secondary mt-1" onclick="prAddMissedAcr()">+ Missed acronym</button>
+        <!-- Notes -->
+        <div class="mt-2">
+            <textarea id="rv-notes" class="form-control form-control-sm" rows="2"
+                      placeholder="Notes (no proprietary content)">{{ review.get('notes','') }}</textarea>
+        </div>
+    </div>
+    {% else %}
+    <div class="pane-footer p-2">
+        <div class="mt-1">
+            <textarea id="rv-notes" class="form-control form-control-sm" rows="2"
+                      placeholder="Notes (no proprietary content)">{{ review.get('notes','') }}</textarea>
+        </div>
+    </div>
+    {% endif %}
+  </div>
+
+</div><!-- /review-panes -->
+
+<!-- Report output -->
+<div id="report-output" class="mt-2"></div>
+
+<!-- Context menu (shared, hidden) -->
+<div id="pr-ctx-menu" class="ctx-menu d-none">
+    <div class="ctx-menu-hdr">Annotate block</div>
+    <div class="ctx-menu-item" data-reason="text_strikethrough"><i class="bi bi-dash-circle text-danger"></i>Drop: Struck through</div>
+    <div class="ctx-menu-item" data-reason="toc"><i class="bi bi-list-ol text-primary"></i>Drop: TOC</div>
+    <div class="ctx-menu-item" data-reason="revhist"><i class="bi bi-clock-history" style="color:#8b5cf6"></i>Drop: Revision History</div>
+    <div class="ctx-menu-item" data-reason="cascade"><i class="bi bi-arrow-down-short text-warning"></i>Drop: Cascade</div>
+    <div class="ctx-menu-divider"></div>
+    <div class="ctx-menu-item" data-reason="__cancel"><i class="bi bi-x"></i>Cancel</div>
+</div>
+
+<!-- Serialize existing review state for JS -->
+<script>
+window._prDocId    = {{ doc_id | tojson }};
+window._prReview   = {{ review | tojson }};
+window._prLog      = {{ log | tojson }};
+</script>

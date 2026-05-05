@@ -18,7 +18,7 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract â
 
 **Invariants**
 - **Every failure surfaces a stable prefixed code** registered in `error_codes.CODES`. Ad-hoc strings are a D-012 violation â€” the user can't diagnose chat-pasted logs without the code.
-- Each stage is **re-runnable and idempotent** over the same inputs. Outputs go under `<env_dir>/out/<stage>/`; `<env_dir>/corrections/*.json` is picked up automatically on the next run (D-011, D-022).
+- Each stage is **re-runnable and idempotent** over the same inputs. Outputs go under `<env_dir>/out/<stage>/`; `<env_dir>/corrections/*.json` is picked up automatically on the next run (D-011, D-022). `run_parse` additionally writes `<env_dir>/reports/parse_log/<doc_id>_parse_log.json` per document (parse transparency log).
 - Stage order is fixed and matches `env.config.PIPELINE_STAGES`. Running a downstream stage without its prerequisites emits `PIP-E002` (required input missing) rather than silently failing later.
 - `StageResult.status` uses four discrete values: `OK` (clean), `WARN` (completed but flagged), `FAIL` (aborted), `SKIP` (not run this invocation). Collapsing WARN into OK loses the signal that drives compact QC reports.
 - `PipelineContext.create_llm_provider()` falls back to `MockLLMProvider` when Ollama is unreachable unless `require_real=True`. This keeps offline stages runnable on work laptops without an LLM server.

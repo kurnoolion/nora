@@ -1,0 +1,25 @@
+{% if not tree %}
+<p class="text-muted small px-2 py-2">No requirements found.</p>
+{% else %}
+{% for node in tree recursive %}
+<div class="tree-node" data-req-id="{{ node.req_id }}" data-depth="{{ loop.depth0 }}">
+    <div class="tree-row"
+         id="tree-row-{{ node.req_id }}"
+         style="padding-left:{{ 6 + loop.depth0 * 14 }}px;"
+         onclick="rbSelectReq('{{ node.req_id }}', this)">
+        {% if node.child_nodes %}
+        <span class="tree-toggle" onclick="event.stopPropagation(); rbToggle(this)">▶</span>
+        {% else %}
+        <span class="tree-toggle">&nbsp;</span>
+        {% endif %}
+        <span class="tree-sec">{{ node.section_number }}</span>
+        <span class="tree-title" title="{{ node.title or node.req_id }}">{{ node.title or node.req_id }}</span>
+    </div>
+    {% if node.child_nodes %}
+    <div class="tree-children">
+        {{ loop(node.child_nodes) }}
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}

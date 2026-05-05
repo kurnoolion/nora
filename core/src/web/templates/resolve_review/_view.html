@@ -1,0 +1,326 @@
+{# Resolve review view — injected into #review-area by fetch() #}
+
+{% set si = summary %}
+{% set int_total  = si.get('total_internal',   0) %}
+{% set int_res    = si.get('resolved_internal', 0) %}
+{% set int_brk    = si.get('broken_internal',   0) %}
+{% set xp_total   = si.get('total_cross_plan',  0) %}
+{% set xp_res     = si.get('resolved_cross_plan',0) %}
+{% set xp_unr     = si.get('unresolved_cross_plan',0) %}
+{% set st_total   = si.get('total_standards',   0) %}
+{% set st_res     = si.get('resolved_standards',0) %}
+{% set st_unr     = si.get('unresolved_standards',0) %}
+
+{% set int_rows   = rows.get('internal',   []) %}
+{% set xp_rows    = rows.get('cross_plan', []) %}
+{% set std_rows   = rows.get('standards',  []) %}
+
+<!-- Toolbar -->
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap py-1 border-bottom">
+    <input id="rv-reviewer" type="text" class="form-control form-control-sm" style="max-width:140px"
+           placeholder="Reviewer" value="{{ review.get('reviewer','') }}">
+    <input id="rv-date" type="date" class="form-control form-control-sm" style="max-width:155px"
+           value="{{ review.get('review_date','') }}">
+    <select id="rv-verdict" class="form-select form-select-sm" style="max-width:110px">
+        <option value="">Verdict</option>
+        <option value="pass"    {% if review.get('overall_verdict')=='pass'    %}selected{% endif %}>pass</option>
+        <option value="fail"    {% if review.get('overall_verdict')=='fail'    %}selected{% endif %}>fail</option>
+        <option value="partial" {% if review.get('overall_verdict')=='partial' %}selected{% endif %}>partial</option>
+    </select>
+
+    <!-- Show all toggle -->
+    <div class="form-check form-switch mb-0 ms-2">
+        <input class="form-check-input" type="checkbox" id="show-all-toggle">
+        <label class="form-check-label small" for="show-all-toggle">Show all refs</label>
+    </div>
+
+    <!-- Stats -->
+    <span class="badge bg-secondary">int {{ int_total }}({{ int_res }}r/{{ int_brk }}b)</span>
+    <span class="badge bg-secondary">xplan {{ xp_total }}({{ xp_res }}r/{{ xp_unr }}u)</span>
+    <span class="badge bg-secondary">std {{ st_total }}({{ st_res }}r/{{ st_unr }}u)</span>
+
+    <button class="btn btn-sm btn-primary ms-auto" onclick="rrSave()">
+        <i class="bi bi-save me-1"></i>Save
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="rrReport()">
+        <i class="bi bi-clipboard-data me-1"></i>Report
+    </button>
+    <span id="save-indicator" class="small text-muted"></span>
+</div>
+
+{% if error %}
+<div class="alert alert-warning py-2">{{ error }}</div>
+{% endif %}
+
+{% if not has_tree %}
+<div class="alert alert-info py-2 small">
+    <i class="bi bi-info-circle me-1"></i>Tree file not found — source requirement text unavailable.
+    Run the <strong>parse</strong> stage to generate it.
+</div>
+{% endif %}
+
+{% macro status_badge(status) %}
+  {% if status == 'resolved' %}<span class="status-badge s-resolved">resolved</span>
+  {% elif status == 'broken' %}<span class="status-badge s-broken">broken</span>
+  {% elif status == 'corrected' %}<span class="status-badge s-corrected">corrected</span>
+  {% else %}<span class="status-badge s-unresolved">{{ status }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro src_cell(row) %}
+  <div class="fw-semibold small text-nowrap">{{ row.source_req_id }}</div>
+  {% if row.source_section %}<div class="text-muted" style="font-size:.7rem;">§{{ row.source_section }}</div>{% endif %}
+  {% if row.source_text %}
+  <div class="src-text mt-1" id="st-{{ loop.index }}">{{ row.source_text }}</div>
+  {% if row.source_text | length >= 219 %}
+  <a href="#" class="small" onclick="toggleText('st-{{ loop.index }}', this); return false;">more</a>
+  {% endif %}
+  {% endif %}
+{% endmacro %}
+
+<!-- ========= INTERNAL REFS ========= -->
+<div class="section-hdr">
+    <i class="bi bi-arrow-repeat me-1 text-primary"></i>
+    Internal References
+    <span class="fw-normal text-muted ms-2 small">{{ int_total }} total · {{ int_brk }} broken</span>
+</div>
+
+{% set int_display = int_rows | selectattr('status', 'in', ['broken']) | list if not false else int_rows %}
+{# We filter in JS based on toggle — render all rows, hidden ones have class "ref-resolved" #}
+<div class="table-responsive mb-4">
+<table class="table table-sm table-bordered ref-table align-top">
+    <thead class="table-light">
+        <tr>
+            <th style="width:22%">Source Requirement</th>
+            <th style="width:18%">Target Req ID</th>
+            <th style="width:8%">Status</th>
+            <th>Correction</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for row in int_rows %}
+    <tr class="ref-row {% if row.status == 'resolved' %}ref-resolved{% endif %}"
+        data-status="{{ row.status }}"
+        data-src="{{ row.source_req_id }}"
+        data-tgt="{{ row.target_req_id }}">
+        <td>
+            <div class="fw-semibold small text-nowrap">{{ row.source_req_id }}</div>
+            {% if row.source_section %}<div class="text-muted" style="font-size:.7rem;">§{{ row.source_section }}</div>{% endif %}
+            {% if row.source_text %}
+            <div class="src-text mt-1" id="ist-{{ loop.index }}">{{ row.source_text }}</div>
+            {% if row.source_text | length >= 219 %}
+            <a href="#" class="small" onclick="toggleText('ist-{{ loop.index }}',this);return false;">more</a>
+            {% endif %}
+            {% endif %}
+        </td>
+        <td>
+            <div class="fw-semibold small">{{ row.target_req_id }}</div>
+            {% if row.target_section %}<div class="text-muted" style="font-size:.7rem;">§{{ row.target_section }}</div>{% endif %}
+            {% if row.target_title %}<div class="small text-muted">{{ row.target_title[:60] }}</div>{% endif %}
+        </td>
+        <td>{{ status_badge(row.review_status if row.review_status else row.status) }}</td>
+        <td>
+            {% if row.status == 'broken' %}
+            <div class="d-flex flex-column gap-1">
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input int-fb-check" type="checkbox"
+                           id="fb-{{ loop.index }}"
+                           data-target="{{ row.target_req_id }}"
+                           {% if row.review_status == 'corrected' and row.correction.get('target_req_id') == row.target_req_id %}checked{% endif %}
+                           onchange="toggleFbDetail('fb-detail-{{ loop.index }}', this.checked)">
+                    <label class="form-check-label small" for="fb-{{ loop.index }}">False broken</label>
+                </div>
+                <div id="fb-detail-{{ loop.index }}"
+                     style="display:{% if row.review_status == 'corrected' and row.correction.get('target_req_id') == row.target_req_id %}block{% else %}none{% endif %}">
+                    <input type="text" class="form-control form-control-sm corr-input fb-note"
+                           data-target="{{ row.target_req_id }}"
+                           placeholder="Note (optional, no proprietary content)"
+                           value="{{ row.correction.get('note','') if row.review_status == 'corrected' else '' }}">
+                </div>
+            </div>
+            {% elif row.status == 'resolved' %}
+            <div class="d-flex flex-column gap-1">
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input int-wt-check" type="checkbox"
+                           id="wt-{{ loop.index }}"
+                           data-src="{{ row.source_req_id }}"
+                           data-wrong="{{ row.target_req_id }}"
+                           {% if row.review_status == 'corrected' %}checked{% endif %}
+                           onchange="toggleFbDetail('wt-detail-{{ loop.index }}', this.checked)">
+                    <label class="form-check-label small" for="wt-{{ loop.index }}">Wrong target</label>
+                </div>
+                <div id="wt-detail-{{ loop.index }}"
+                     style="display:{% if row.review_status == 'corrected' %}block{% else %}none{% endif %}">
+                    <input type="text" class="form-control form-control-sm corr-input wt-correct mb-1"
+                           data-src="{{ row.source_req_id }}" data-wrong="{{ row.target_req_id }}"
+                           placeholder="Correct target req ID"
+                           value="{{ row.correction.get('correct_target','') if row.review_status == 'corrected' else '' }}">
+                </div>
+            </div>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    {% if not int_rows %}
+    <tr><td colspan="4" class="text-center text-muted small">No internal references.</td></tr>
+    {% endif %}
+    </tbody>
+</table>
+</div>
+
+<!-- ========= CROSS-PLAN REFS ========= -->
+<div class="section-hdr">
+    <i class="bi bi-diagram-3 me-1 text-success"></i>
+    Cross-Plan References
+    <span class="fw-normal text-muted ms-2 small">{{ xp_total }} total · {{ xp_unr }} unresolved</span>
+</div>
+
+<div class="table-responsive mb-4">
+<table class="table table-sm table-bordered ref-table align-top">
+    <thead class="table-light">
+        <tr>
+            <th style="width:28%">Source Requirement</th>
+            <th style="width:15%">Target Plan</th>
+            <th style="width:8%">Status</th>
+            <th>Correction</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for row in xp_rows %}
+    <tr class="ref-row {% if row.status == 'resolved' %}ref-resolved{% endif %}"
+        data-status="{{ row.status }}"
+        data-src="{{ row.source_req_id }}">
+        <td>
+            <div class="fw-semibold small">{{ row.source_req_id }}</div>
+            {% if row.source_section %}<div class="text-muted" style="font-size:.7rem;">§{{ row.source_section }}</div>{% endif %}
+            {% if row.source_text %}
+            <div class="src-text mt-1" id="xst-{{ loop.index }}">{{ row.source_text }}</div>
+            {% if row.source_text | length >= 219 %}
+            <a href="#" class="small" onclick="toggleText('xst-{{ loop.index }}',this);return false;">more</a>
+            {% endif %}
+            {% endif %}
+        </td>
+        <td>
+            <div class="fw-semibold small">{{ row.target_plan_id }}</div>
+            {% if row.target_req_ids %}
+            <div class="text-muted" style="font-size:.7rem;">{{ row.target_req_ids | join(', ') }}</div>
+            {% endif %}
+        </td>
+        <td>{{ status_badge(row.review_status if row.review_status else row.status) }}</td>
+        <td>
+            {% if row.status == 'unresolved' %}
+            <div class="d-flex flex-column gap-1">
+                <div class="form-check">
+                    <input class="form-check-input xp-wp-check" type="checkbox"
+                           id="wp-{{ loop.index }}"
+                           data-src="{{ row.source_req_id }}"
+                           data-wrong="{{ row.target_plan_id }}"
+                           {% if row.review_status == 'corrected' %}checked{% endif %}
+                           onchange="toggleFbDetail('wp-detail-{{ loop.index }}', this.checked)">
+                    <label class="form-check-label small" for="wp-{{ loop.index }}">Wrong plan ID</label>
+                </div>
+                <div id="wp-detail-{{ loop.index }}"
+                     style="display:{% if row.review_status == 'corrected' %}block{% else %}none{% endif %}">
+                    <input type="text" class="form-control form-control-sm corr-input wp-correct"
+                           data-src="{{ row.source_req_id }}" data-wrong="{{ row.target_plan_id }}"
+                           placeholder="Correct plan ID"
+                           value="{{ row.correction.get('correct_plan_id','') if row.review_status == 'corrected' else '' }}">
+                </div>
+            </div>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    {% if not xp_rows %}
+    <tr><td colspan="4" class="text-center text-muted small">No cross-plan references.</td></tr>
+    {% endif %}
+    </tbody>
+</table>
+</div>
+
+<!-- ========= STANDARDS REFS ========= -->
+<div class="section-hdr">
+    <i class="bi bi-journal-code me-1 text-warning"></i>
+    Standards References (3GPP)
+    <span class="fw-normal text-muted ms-2 small">{{ st_total }} total · {{ st_unr }} unresolved</span>
+</div>
+
+<div class="table-responsive mb-4">
+<table class="table table-sm table-bordered ref-table align-top">
+    <thead class="table-light">
+        <tr>
+            <th style="width:28%">Source Requirement</th>
+            <th style="width:20%">Spec</th>
+            <th style="width:10%">Release</th>
+            <th style="width:8%">Status</th>
+            <th>Correction</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for row in std_rows %}
+    <tr class="ref-row {% if row.status == 'resolved' %}ref-resolved{% endif %}"
+        data-status="{{ row.status }}"
+        data-src="{{ row.source_req_id }}">
+        <td>
+            <div class="fw-semibold small">{{ row.source_req_id }}</div>
+            {% if row.source_section %}<div class="text-muted" style="font-size:.7rem;">§{{ row.source_section }}</div>{% endif %}
+            {% if row.source_text %}
+            <div class="src-text mt-1" id="sst-{{ loop.index }}">{{ row.source_text }}</div>
+            {% if row.source_text | length >= 219 %}
+            <a href="#" class="small" onclick="toggleText('sst-{{ loop.index }}',this);return false;">more</a>
+            {% endif %}
+            {% endif %}
+        </td>
+        <td><div class="small">{{ row.spec }}</div>
+            {% if row.section %}<div class="text-muted" style="font-size:.7rem;">§{{ row.section }}</div>{% endif %}
+            <div class="text-muted" style="font-size:.65rem;">src={{ row.release_source or '—' }}</div>
+        </td>
+        <td><div class="small">{{ row.release or '—' }}</div></td>
+        <td>{{ status_badge(row.review_status if row.review_status else row.status) }}</td>
+        <td>
+            <div class="d-flex flex-column gap-1">
+                <div class="form-check">
+                    <input class="form-check-input std-ws-check" type="checkbox"
+                           id="ws-{{ loop.index }}"
+                           data-src="{{ row.source_req_id }}"
+                           data-wrong="{{ row.spec }}"
+                           {% if row.review_status == 'corrected' %}checked{% endif %}
+                           onchange="toggleFbDetail('ws-detail-{{ loop.index }}', this.checked)">
+                    <label class="form-check-label small" for="ws-{{ loop.index }}">Wrong spec / release</label>
+                </div>
+                <div id="ws-detail-{{ loop.index }}"
+                     style="display:{% if row.review_status == 'corrected' %}block{% else %}none{% endif %}">
+                    <input type="text" class="form-control form-control-sm corr-input ws-correct-spec mb-1"
+                           data-src="{{ row.source_req_id }}" data-wrong="{{ row.spec }}"
+                           placeholder="Correct spec (leave blank if spec is right)"
+                           value="{{ row.correction.get('correct_spec','') if row.review_status == 'corrected' else '' }}">
+                    <input type="text" class="form-control form-control-sm corr-input ws-correct-rel"
+                           data-src="{{ row.source_req_id }}"
+                           placeholder="Correct release (e.g. Rel-16)"
+                           value="{{ row.correction.get('correct_release','') if row.review_status == 'corrected' else '' }}">
+                </div>
+            </div>
+        </td>
+    </tr>
+    {% endfor %}
+    {% if not std_rows %}
+    <tr><td colspan="5" class="text-center text-muted small">No standards references.</td></tr>
+    {% endif %}
+    </tbody>
+</table>
+</div>
+
+<!-- Notes -->
+<div class="mb-3" style="max-width:600px;">
+    <label class="form-label small fw-semibold">Notes</label>
+    <textarea id="rv-notes" class="form-control form-control-sm" rows="2"
+              placeholder="Notes (no proprietary content)">{{ review.get('notes','') }}</textarea>
+</div>
+
+<!-- Report output -->
+<div id="report-output" class="mt-2"></div>
+
+<script>
+window._rrDocId  = {{ doc_id | tojson }};
+window._rrReview = {{ review | tojson }};
+</script>

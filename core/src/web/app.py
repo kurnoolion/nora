@@ -30,6 +30,9 @@ from core.src.web.routes.environments import router as environments_router
 from core.src.web.routes.files import router as files_router
 from core.src.web.routes.jobs import router as jobs_router
 from core.src.web.routes.metrics_route import router as metrics_router
+from core.src.web.routes.parse_review import router as parse_review_router
+from core.src.web.routes.req_browser import router as req_browser_router
+from core.src.web.routes.resolve_review import router as resolve_review_router
 from core.src.web.routes.pipeline import router as pipeline_router
 from core.src.web.routes.query import router as query_router
 from core.src.web.routes.playground import router as playground_router
@@ -132,6 +135,9 @@ app.include_router(environments_router)
 app.include_router(files_router)
 app.include_router(jobs_router)
 app.include_router(metrics_router)
+app.include_router(parse_review_router)
+app.include_router(req_browser_router)
+app.include_router(resolve_review_router)
 app.include_router(pipeline_router)
 app.include_router(query_router)
 app.include_router(playground_router)

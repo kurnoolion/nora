@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-05-03 by regen-map. Do not hand-edit.
+Generated 2026-05-05 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -88,8 +88,11 @@ flowchart TD
     m_vectorstore --> m_parser
     m_web --> m_corrections
     m_web --> m_env
+    m_web --> m_models
+    m_web --> m_parser
     m_web --> m_pipeline
     m_web --> m_query
+    m_web --> m_resolver
 ```
 
 ## Project File Structure
@@ -160,6 +163,9 @@ nora/
 │   │   │   ├── MODULE.md
 │   │   │   ├── parse_audit.py                         # Per-document parse audit — confidence scoring + correction template.
 │   │   │   ├── parse_cli.py                           # CLI entry point for the generic structural parser.
+│   │   │   ├── parse_log.py                           # Per-document parse transparency log.
+│   │   │   ├── parse_review.py                        # Parse-log review format and compact report generator.
+│   │   │   ├── parse_review_cli.py                    # CLI for parse-log review: generate templates and compact chat reports.
 │   │   │   └── structural_parser.py                   # Generic, profile-driven structural parser (TDD 5.3).
 │   │   ├── pipeline/                                  # Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract → profile → parse → resolve → taxonomy → standards → graph → vectorstore → eval`.
 │   │   │   ├── __init__.py
@@ -196,6 +202,8 @@ nora/
 │   │   │   ├── __init__.py
 │   │   │   ├── MODULE.md
 │   │   │   ├── resolve_cli.py                         # CLI entry point for cross-reference resolution.
+│   │   │   ├── resolve_review.py                      # Resolve-review: template generation and compact RES-CHK report.
+│   │   │   ├── resolve_review_cli.py                  # CLI for resolve-log review: generate templates and compact chat reports.
 │   │   │   └── resolver.py                            # Cross-reference resolver (TDD 5.5, Methods 1 & 2).
 │   │   ├── standards/                                 # 3GPP standards ingestion — generic, release-aware, LLM-free (TDD §5.6, D-004).
 │   │   │   ├── __init__.py
@@ -248,14 +256,20 @@ nora/
 │   │       │   ├── files.py                           # File browser page and routes.
 │   │       │   ├── jobs.py                            # Jobs routes -- listing, detail, SSE log streaming, cancel.
 │   │       │   ├── metrics_route.py                   # Metrics page and API routes.
+│   │       │   ├── parse_review.py                    # Parse-review routes — 3-pane document annotation review UI.
 │   │       │   ├── pipeline.py                        # Pipeline page and API routes.
 │   │       │   ├── playground.py                      # Test page — multi-section playground for free-form requirement
-│   │       │   └── query.py                           # Query page and API routes.
+│   │       │   ├── query.py                           # Query page and API routes.
+│   │       │   ├── req_browser.py                     # Requirement browser routes — browse, view, and compare requirements.
+│   │       │   └── resolve_review.py                  # Resolve-review routes — table-based cross-reference resolution review UI.
 │   │       ├── static/
 │   │       │   ├── css/
 │   │       │   │   └── style.css
 │   │       │   ├── js/
-│   │       │   │   └── app.js
+│   │       │   │   ├── app.js
+│   │       │   │   ├── parse_review.js
+│   │       │   │   ├── req_browser.js
+│   │       │   │   └── resolve_review.js
 │   │       │   └── vendor/
 │   │       │       ├── bootstrap/
 │   │       │       │   ├── bootstrap.bundle.min.js
@@ -281,6 +295,10 @@ nora/
 │   │           ├── job_detail.html
 │   │           ├── jobs.html
 │   │           ├── metrics.html
+│   │           ├── parse_review/
+│   │           │   ├── _report.html
+│   │           │   ├── _view.html
+│   │           │   └── index.html
 │   │           ├── partials/
 │   │           │   ├── dashboard_jobs.html
 │   │           │   ├── dashboard_status.html
@@ -290,6 +308,15 @@ nora/
 │   │           │   └── query_result.html
 │   │           ├── pipeline.html
 │   │           ├── query.html
+│   │           ├── req_browser/
+│   │           │   ├── _compare.html
+│   │           │   ├── _req_detail.html
+│   │           │   ├── _tree.html
+│   │           │   └── index.html
+│   │           ├── resolve_review/
+│   │           │   ├── _report.html
+│   │           │   ├── _view.html
+│   │           │   └── index.html
 │   │           └── test/
 │   │               ├── _answer.html
 │   │               ├── _feedback_ack.html
@@ -309,6 +336,8 @@ nora/
 │       ├── test_integration_oa_corpus.py              # Integration test: extract → profile → parse against the 5 Verizon OA PDFs.
 │       ├── test_openai_provider.py                    # Tests for OpenAICompatibleProvider — fully mocked, no network.
 │       ├── test_parse_audit.py                        # Tests for the per-document parse-audit tool (parse_audit.py).
+│       ├── test_parse_log.py                          # Tests for ParseLog generation: dropped block recording, range merging,
+│       ├── test_parse_review.py                       # Tests for parse_review: template generation and compact report format.
 │       ├── test_patterns.py                           # Tests for regex patterns used across extraction, profiling, and parsing.
 │       ├── test_pdf_extractor_strike.py               # Unit tests for PDF strike-detection geometry helpers (FR-33 [D-031]).
 │       ├── test_pipeline.py                           # Pipeline smoke tests — extract, profile, and parse real PDFs.

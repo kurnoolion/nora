@@ -2,7 +2,7 @@
 
 **Active phase**: development
 **Last updated**: 2026-05-04
-**Last drift-check**: 2026-05-02 — mode: dev-full — 9 drift(s) resolved (all direction [b]: MODULE.md → match code; reflecting D-035..D-040 just landed), 0 deferred surfaced
+**Last drift-check**: 2026-05-05 — mode: dev-full — 3 drift(s) resolved (all direction [a]: MODULE.md → match code; resolver public surface for resolve_review + resolve_review_cli; web routers list + Depends on for new parse_review / req_browser / resolve_review routes), 3 deferred surfaced
 
 ## Done
 

@@ -191,6 +191,10 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
+    # Derive env_dir from stage layout (works in both from_env and standalone mode).
+    # ctx.stage_output("parse") == <env_dir>/out/parse → parent.parent == <env_dir>
+    _env_dir = ctx.stage_output("parse").parent.parent
+    log_dir = _env_dir / "reports" / "parse_log"
 
     for f in ir_files:
         try:
@@ -200,6 +204,9 @@ def run_parse(ctx: PipelineContext) -> StageResult:
             out_path = out_dir / out_name
             tree.save_json(out_path)
             tree_paths.append(str(out_path))
+            if tree.parse_log is not None:
+                log_path = log_dir / f"{Path(doc.source_file).stem}_parse_log.json"
+                tree.parse_log.save_json(log_path)
             stats["docs"] += 1
             stats["reqs"] += len(tree.requirements)
             depth = max((r.section_number.count(".") for r in tree.requirements), default=0) + 1

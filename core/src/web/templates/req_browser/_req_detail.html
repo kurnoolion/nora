@@ -1,0 +1,113 @@
+<!-- Requirement detail panel -->
+<div class="d-flex align-items-start justify-content-between mb-3">
+    <div>
+        <div class="text-muted small mb-1">
+            <span class="fw-semibold">{{ doc_id }}</span>
+            <span class="mx-1">›</span>
+            §&nbsp;{{ req.section_number }}
+        </div>
+        <h5 class="mb-0">{{ req.title or req.req_id }}</h5>
+        <code class="small text-secondary">{{ req.req_id }}</code>
+        {% if req.priority %}
+        <span class="badge bg-secondary ms-2" style="font-size:.65rem;">{{ req.priority }}</span>
+        {% endif %}
+        {% if req.zone_type %}
+        <span class="badge bg-light text-dark border ms-1" style="font-size:.65rem;">{{ req.zone_type }}</span>
+        {% endif %}
+    </div>
+</div>
+
+<div class="mb-4">
+    {% if req.text %}
+    <pre class="bg-light border rounded p-3 mb-0" style="white-space:pre-wrap;word-break:break-word;font-size:.82rem;max-height:50vh;overflow-y:auto;">{{ req.text }}</pre>
+    {% else %}
+    <p class="text-muted small fst-italic">No requirement text extracted (section heading or container node).</p>
+    {% endif %}
+</div>
+
+{% set has_refs = refs.internal or refs.cross_plan or refs.standards %}
+{% if has_refs %}
+<div class="fw-semibold small mb-2 text-uppercase text-muted" style="letter-spacing:.04em; font-size:.7rem;">
+    <i class="bi bi-diagram-3 me-1"></i>Cross-References
+</div>
+<table class="table table-sm table-bordered mb-0" style="font-size:.78rem;">
+    <thead class="table-light">
+        <tr>
+            <th style="width:90px;">Type</th>
+            <th>Target</th>
+            <th style="width:90px;">Status</th>
+            <th style="width:80px;"></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for ref in refs.internal %}
+    <tr>
+        <td><span class="badge bg-primary" style="font-size:.65rem;">Internal</span></td>
+        <td>
+            <strong>{{ ref.target_req_id }}</strong>
+            {% if ref.target_title %}<br><small class="text-muted">{{ ref.target_title }}</small>{% endif %}
+            {% if ref.target_section %}<br><small class="text-muted">§ {{ ref.target_section }}</small>{% endif %}
+        </td>
+        <td>
+            {% if ref.status == 'resolved' %}<span class="badge bg-success" style="font-size:.65rem;">resolved</span>
+            {% elif ref.status == 'broken'  %}<span class="badge bg-danger"  style="font-size:.65rem;">broken</span>
+            {% else %}<span class="badge bg-secondary" style="font-size:.65rem;">{{ ref.status }}</span>
+            {% endif %}
+        </td>
+        <td>
+            {% if ref.status == 'resolved' %}
+            <button class="btn btn-outline-primary btn-sm py-0 px-1" style="font-size:.7rem;"
+                    onclick="rbSelectReqById('{{ ref.target_req_id }}')">View</button>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+
+    {% for ref in refs.cross_plan %}
+    {% set tgt_reqs = ref.target_req_ids or [] %}
+    <tr>
+        <td><span class="badge bg-info text-dark" style="font-size:.65rem;">Cross-Plan</span></td>
+        <td>
+            <strong>{{ ref.target_plan_id }}</strong>
+            {% if tgt_reqs %}
+            <br><small class="text-muted">→ {{ tgt_reqs | join(', ') }}</small>
+            {% endif %}
+        </td>
+        <td>
+            {% if ref.status == 'resolved'   %}<span class="badge bg-success"           style="font-size:.65rem;">resolved</span>
+            {% elif ref.status == 'unresolved'%}<span class="badge bg-secondary"         style="font-size:.65rem;">unresolved</span>
+            {% elif ref.status == 'broken'    %}<span class="badge bg-warning text-dark" style="font-size:.65rem;">broken</span>
+            {% else %}<span class="badge bg-secondary" style="font-size:.65rem;">{{ ref.status }}</span>
+            {% endif %}
+        </td>
+        <td>
+            {% if ref.status == 'resolved' and tgt_reqs %}
+            <button class="btn btn-outline-info btn-sm py-0 px-1" style="font-size:.7rem;"
+                    onclick="rbOpenCompare('{{ doc_id }}','{{ req.req_id }}','{{ ref.target_plan_id }}','{{ tgt_reqs[0] }}')">Compare</button>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+
+    {% for ref in refs.standards %}
+    <tr>
+        <td><span class="badge bg-secondary" style="font-size:.65rem;">Standards</span></td>
+        <td>
+            <strong>{{ ref.spec }}</strong>
+            {% if ref.section %}&nbsp;§&nbsp;{{ ref.section }}{% endif %}
+            {% if ref.release %}<br><small class="text-muted">Release: {{ ref.release }}</small>{% endif %}
+        </td>
+        <td>
+            {% if ref.status == 'resolved'   %}<span class="badge bg-success"  style="font-size:.65rem;">resolved</span>
+            {% elif ref.status == 'unresolved'%}<span class="badge bg-secondary" style="font-size:.65rem;">unresolved</span>
+            {% else %}<span class="badge bg-secondary" style="font-size:.65rem;">{{ ref.status }}</span>
+            {% endif %}
+        </td>
+        <td></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="text-muted small fst-italic">No cross-references recorded for this requirement.</p>
+{% endif %}

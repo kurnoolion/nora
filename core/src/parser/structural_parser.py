@@ -136,9 +136,15 @@ class RequirementTree:
     skip inline expansion within the section's own chunks (and its
     descendants), avoiding `ETWS (Earthquake...) — Earthquake...`-style
     double-anchoring."""
+    parse_log: Any = field(default=None)
+    """ParseLog built during parsing; not serialized to the tree JSON.
+    Consumed by the pipeline parse stage to write the separate
+    parse_log/<doc_id>_parse_log.json audit file."""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("parse_log", None)  # not embedded in tree JSON — written separately
+        return d
 
     def save_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,6 +298,12 @@ class GenericStructuralParser:
         # extract content. Surfaced in the compact RPT.
         self._parse_stats = ParseStats()
 
+        # Parse-log collectors — reset per document.
+        # Each entry: (block_index, page, reason).
+        self._dropped_entries: list[tuple[int, int, str]] = []
+        # Each entry: (section_number, depth, block_index, page).
+        self._heading_entries: list[tuple[str, int, int, int]] = []
+
         # 1. Extract plan metadata
         plan_meta = self._extract_plan_metadata(doc)
 
@@ -326,8 +338,21 @@ class GenericStructuralParser:
         # 8. Extract definitions / acronyms map from the glossary section
         #    (FR-35 [D-032]). The section itself stays in the parsed tree;
         #    the map is consumed at chunk-build time by the vectorstore.
-        definitions_map, definitions_section_number = self._extract_definitions(sections)
+        (
+            definitions_map,
+            definitions_section_number,
+            definitions_section_title,
+            acronym_entries,
+        ) = self._extract_definitions(sections)
         self._parse_stats.defs_extracted = len(definitions_map)
+
+        # 9. Build parse transparency log.
+        parse_log = self._build_parse_log(
+            doc,
+            definitions_section_number,
+            definitions_section_title,
+            acronym_entries,
+        )
 
         tree = RequirementTree(
             mno=doc.mno,
@@ -341,6 +366,7 @@ class GenericStructuralParser:
             parse_stats=self._parse_stats,
             definitions_map=definitions_map,
             definitions_section_number=definitions_section_number,
+            parse_log=parse_log,
         )
 
         logger.info(
@@ -541,6 +567,9 @@ class GenericStructuralParser:
                     if cascade_depth is None or depth < cascade_depth:
                         cascade_depth = depth
                 self._parse_stats.struck_blocks_dropped += 1
+                self._dropped_entries.append(
+                    (block.position.index, block.position.page, "text_strikethrough")
+                )
                 continue
 
             # FR-33 cascade: a struck section heading deletes the whole
@@ -558,12 +587,18 @@ class GenericStructuralParser:
                     # and must be processed normally.
                 else:
                     self._parse_stats.cascade_blocks_dropped += 1
+                    self._dropped_entries.append(
+                        (block.position.index, block.position.page, "cascade")
+                    )
                     continue
 
             # FR-34: drop entire-page TOC content (any block type) and any
             # block that matches the TOC entry pattern.
             if block.position.page in toc_pages:
                 self._parse_stats.toc_blocks_dropped += 1
+                self._dropped_entries.append(
+                    (block.position.index, block.position.page, "toc")
+                )
                 continue
             if (
                 self._toc_re is not None
@@ -572,6 +607,9 @@ class GenericStructuralParser:
                 and self._toc_re.search(block.text.strip())
             ):
                 self._parse_stats.toc_blocks_dropped += 1
+                self._dropped_entries.append(
+                    (block.position.index, block.position.page, "toc")
+                )
                 continue
 
             # FR-34: revhist consume. After the revhist heading matched,
@@ -586,6 +624,9 @@ class GenericStructuralParser:
                     # fall through — process this paragraph normally
                 else:
                     self._parse_stats.revhist_blocks_dropped += 1
+                    self._dropped_entries.append(
+                        (block.position.index, block.position.page, "revhist")
+                    )
                     continue
 
             if (
@@ -595,6 +636,9 @@ class GenericStructuralParser:
                 and self._revhist_re.match(block.text.strip())
             ):
                 self._parse_stats.revhist_blocks_dropped += 1
+                self._dropped_entries.append(
+                    (block.position.index, block.position.page, "revhist")
+                )
                 revhist_active = True
                 continue
 
@@ -688,6 +732,9 @@ class GenericStructuralParser:
                         pending_req_id = ""
                         sections.append(current_section)
                         seen_section_numbers.add(section_num)
+                        self._heading_entries.append(
+                            (section_num, new_depth, block.position.index, block.position.page)
+                        )
                         previous_block_was_heading = True
                         if new_depth >= 2:
                             seen_deep_section = True
@@ -958,9 +1005,179 @@ class GenericStructuralParser:
             if root_default:
                 s.applicability = list(root_default)
 
+    # ── Parse transparency log helpers ─────────────────────────────────
+
+    def _glossary_section_range(
+        self, definitions_section_number: str, doc: "DocumentIR"
+    ) -> tuple[int, int, int, int] | None:
+        """Return (block_start, block_end, page_start, page_end) for the
+        glossary section, or None when the section is not in heading_entries.
+
+        block_start is the heading block; block_end is the last block
+        before the next peer (same-or-shallower depth) heading.
+        """
+        if not definitions_section_number or not self._heading_entries:
+            return None
+
+        target_pos: int | None = None
+        target_depth: int = 0
+        block_start: int = 0
+        page_start: int = 1
+
+        for i, (sec_num, depth, block_idx, page) in enumerate(self._heading_entries):
+            if sec_num == definitions_section_number:
+                target_pos = i
+                target_depth = depth
+                block_start = block_idx
+                page_start = page
+                break
+
+        if target_pos is None:
+            return None
+
+        # Find the next heading at same or shallower depth → that is where
+        # the glossary section ends.
+        block_end: int | None = None
+        for sec_num, depth, block_idx, page in self._heading_entries[target_pos + 1:]:
+            if depth <= target_depth:
+                block_end = block_idx - 1
+                break
+
+        if block_end is None:
+            # Glossary is the last section — use the last block in the doc.
+            block_end = (
+                doc.content_blocks[-1].position.index if doc.content_blocks else block_start
+            )
+
+        # Scan content blocks for the max page within [block_start, block_end].
+        page_end = page_start
+        for b in doc.content_blocks:
+            if block_start <= b.position.index <= block_end:
+                if b.position.page > page_end:
+                    page_end = b.position.page
+
+        return block_start, block_end, page_start, page_end
+
+    def _build_parse_log(
+        self,
+        doc: "DocumentIR",
+        definitions_section_number: str,
+        definitions_section_title: str,
+        acronym_entries: list[tuple[str, str, str]],
+    ) -> "ParseLog":
+        """Assemble the ParseLog from the drop and heading entries collected
+        during this parse run."""
+        from datetime import datetime, timezone
+
+        from core.src.parser.parse_log import (
+            AcronymEntry,
+            DroppedRange,
+            GlossaryInfo,
+            ParseLog,
+            ParseLogSummary,
+            SectionRange,
+        )
+
+        doc_id = Path(doc.source_file).stem
+
+        # Sort by block_index and merge consecutive same-reason runs.
+        entries = sorted(self._dropped_entries, key=lambda e: e[0])
+        ranges: list[DroppedRange] = []
+
+        if entries:
+            cur_idx, cur_page, cur_reason = entries[0]
+            run_start_idx, run_start_page = cur_idx, cur_page
+            run_end_idx, run_end_page = cur_idx, cur_page
+
+            for block_idx, page, reason in entries[1:]:
+                if reason == cur_reason and block_idx == run_end_idx + 1:
+                    run_end_idx = block_idx
+                    run_end_page = page
+                else:
+                    ranges.append(DroppedRange(
+                        block_start=run_start_idx,
+                        block_end=run_end_idx,
+                        page_start=run_start_page,
+                        page_end=run_end_page,
+                        block_count=run_end_idx - run_start_idx + 1,
+                        reason=cur_reason,
+                    ))
+                    run_start_idx, run_start_page = block_idx, page
+                    run_end_idx, run_end_page = block_idx, page
+                    cur_reason = reason
+
+            ranges.append(DroppedRange(
+                block_start=run_start_idx,
+                block_end=run_end_idx,
+                page_start=run_start_page,
+                page_end=run_end_page,
+                block_count=run_end_idx - run_start_idx + 1,
+                reason=cur_reason,
+            ))
+
+        # Quick-access TOC and revhist (spanning all ranges of that reason).
+        def _span(reason: str) -> SectionRange | None:
+            rs = [r for r in ranges if r.reason == reason]
+            if not rs:
+                return None
+            return SectionRange(
+                block_start=rs[0].block_start,
+                block_end=rs[-1].block_end,
+                page_start=rs[0].page_start,
+                page_end=rs[-1].page_end,
+            )
+
+        toc_range = _span("toc")
+        revhist_range = _span("revhist")
+
+        # Glossary section location.
+        glossary_info: GlossaryInfo | None = None
+        if definitions_section_number:
+            result = self._glossary_section_range(definitions_section_number, doc)
+            if result:
+                g_bs, g_be, g_ps, g_pe = result
+                glossary_info = GlossaryInfo(
+                    section_number=definitions_section_number,
+                    section_title=definitions_section_title,
+                    block_start=g_bs,
+                    block_end=g_be,
+                    page_start=g_ps,
+                    page_end=g_pe,
+                    acronym_count=len(acronym_entries),
+                )
+
+        # Summary counters (from raw entry list, not merged ranges, so they
+        # match parse_stats exactly).
+        by_reason: dict[str, int] = {}
+        for _, _, reason in entries:
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+
+        summary = ParseLogSummary(
+            toc_blocks_dropped=by_reason.get("toc", 0),
+            revhist_blocks_dropped=by_reason.get("revhist", 0),
+            struck_blocks_dropped=by_reason.get("text_strikethrough", 0),
+            cascade_blocks_dropped=by_reason.get("cascade", 0),
+            total_dropped=len(entries),
+            glossary_acronyms=len(acronym_entries),
+        )
+
+        return ParseLog(
+            doc_id=doc_id,
+            source_file=doc.source_file,
+            mno=doc.mno,
+            release=doc.release,
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            dropped_blocks=ranges,
+            toc=toc_range,
+            revision_history=revhist_range,
+            glossary_section=glossary_info,
+            acronyms=[AcronymEntry(a, e, s) for a, e, s in acronym_entries],
+            summary=summary,
+        )
+
     def _extract_definitions(
         self, sections: list[Requirement]
-    ) -> tuple[dict[str, str], str]:
+    ) -> tuple[dict[str, str], str, str, list[tuple[str, str, str]]]:
         """FR-35 [D-032]: extract `term -> expansion` pairs and the
         section number of the definitions / acronyms / glossary section.
 
@@ -990,11 +1207,12 @@ class GenericStructuralParser:
         `RequirementTree.definitions_map` and never aggregated across
         trees. `RAT` may mean different things in different MNO documents.
 
-        Returns (definitions_map, section_number). When no section
-        matches, returns ({}, "").
+        Returns (definitions_map, section_number, section_title, acronym_entries).
+        acronym_entries is a list of (acronym, expansion, source) where source
+        is "body_text" or "table". When no section matches, returns ({}, "", "", []).
         """
         if self._definitions_section_re is None:
-            return {}, ""
+            return {}, "", "", []
 
         target: Requirement | None = None
         for s in sections:
@@ -1002,9 +1220,10 @@ class GenericStructuralParser:
                 target = s
                 break
         if target is None:
-            return {}, ""
+            return {}, "", "", []
 
         defs: dict[str, str] = {}
+        acronym_entries: list[tuple[str, str, str]] = []
 
         # Layout 1 — body-text line scan (when entry pattern is set).
         if self._definitions_entry_re is not None and target.text:
@@ -1017,6 +1236,7 @@ class GenericStructuralParser:
                     continue
                 if term not in defs:
                     defs[term] = expansion
+                    acronym_entries.append((term, expansion, "body_text"))
 
         # Layout 2 — table-anchored (OA convention). Every 2+ col row
         # in the section's tables is a candidate definition. We also
@@ -1046,8 +1266,9 @@ class GenericStructuralParser:
             for term, expansion in candidates:
                 if term not in defs:
                     defs[term] = expansion
+                    acronym_entries.append((term, expansion, "table"))
 
-        return defs, target.section_number
+        return defs, target.section_number, target.title or "", acronym_entries
 
     @staticmethod
     def _looks_like_definition_column_header(h0: str, h1: str) -> bool:
