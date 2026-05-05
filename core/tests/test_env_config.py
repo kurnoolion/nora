@@ -75,23 +75,33 @@ def test_validate_rejects_unknown_embedding_provider():
     assert any("embedding_provider" in e for e in errors)
 
 
-def test_resolve_embedding_provider_precedence(monkeypatch):
+def test_resolve_embedding_provider_precedence(monkeypatch, tmp_path):
+    from core.src.env import config as env_cfg
     from core.src.env.config import (
         DEFAULT_EMBEDDING_PROVIDER,
         EMBEDDING_PROVIDER_ENV_VAR,
         resolve_embedding_provider,
     )
 
-    monkeypatch.delenv(EMBEDDING_PROVIDER_ENV_VAR, raising=False)
-    # default
-    assert resolve_embedding_provider() == DEFAULT_EMBEDDING_PROVIDER
-    # config-file-level value
-    assert resolve_embedding_provider(env_config_value="ollama") == "ollama"
-    # env var beats config
-    monkeypatch.setenv(EMBEDDING_PROVIDER_ENV_VAR, "huggingface")
-    assert resolve_embedding_provider(env_config_value="ollama") == "huggingface"
-    # CLI beats env var
-    assert resolve_embedding_provider(cli_value="ollama", env_config_value="huggingface") == "ollama"
+    # Isolate from any real config/llm.json on disk — point the resolver
+    # at an empty file so only the precedence under test contributes.
+    empty_llm_cfg = tmp_path / "llm.json"
+    empty_llm_cfg.write_text("{}")
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", empty_llm_cfg)
+    env_cfg._reset_llm_config_cache()
+    try:
+        monkeypatch.delenv(EMBEDDING_PROVIDER_ENV_VAR, raising=False)
+        # default
+        assert resolve_embedding_provider() == DEFAULT_EMBEDDING_PROVIDER
+        # config-file-level value
+        assert resolve_embedding_provider(env_config_value="ollama") == "ollama"
+        # env var beats config
+        monkeypatch.setenv(EMBEDDING_PROVIDER_ENV_VAR, "huggingface")
+        assert resolve_embedding_provider(env_config_value="ollama") == "huggingface"
+        # CLI beats env var
+        assert resolve_embedding_provider(cli_value="ollama", env_config_value="huggingface") == "ollama"
+    finally:
+        env_cfg._reset_llm_config_cache()
 
 
 def test_resolve_embedding_provider_rejects_unknown():
@@ -103,19 +113,28 @@ def test_resolve_embedding_provider_rejects_unknown():
         resolve_embedding_provider(cli_value="bogus")
 
 
-def test_resolve_embedding_model_precedence(monkeypatch):
+def test_resolve_embedding_model_precedence(monkeypatch, tmp_path):
+    from core.src.env import config as env_cfg
     from core.src.env.config import (
         DEFAULT_EMBEDDING_MODEL,
         EMBEDDING_MODEL_ENV_VAR,
         resolve_embedding_model,
     )
 
-    monkeypatch.delenv(EMBEDDING_MODEL_ENV_VAR, raising=False)
-    assert resolve_embedding_model() == DEFAULT_EMBEDDING_MODEL
-    assert resolve_embedding_model(env_config_value="my-model") == "my-model"
-    monkeypatch.setenv(EMBEDDING_MODEL_ENV_VAR, "env-model")
-    assert resolve_embedding_model(env_config_value="cfg-model") == "env-model"
-    assert resolve_embedding_model(cli_value="cli-model", env_config_value="cfg-model") == "cli-model"
+    # Isolate from any real config/llm.json on disk.
+    empty_llm_cfg = tmp_path / "llm.json"
+    empty_llm_cfg.write_text("{}")
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", empty_llm_cfg)
+    env_cfg._reset_llm_config_cache()
+    try:
+        monkeypatch.delenv(EMBEDDING_MODEL_ENV_VAR, raising=False)
+        assert resolve_embedding_model() == DEFAULT_EMBEDDING_MODEL
+        assert resolve_embedding_model(env_config_value="my-model") == "my-model"
+        monkeypatch.setenv(EMBEDDING_MODEL_ENV_VAR, "env-model")
+        assert resolve_embedding_model(env_config_value="cfg-model") == "env-model"
+        assert resolve_embedding_model(cli_value="cli-model", env_config_value="cfg-model") == "cli-model"
+    finally:
+        env_cfg._reset_llm_config_cache()
 
 
 def test_load_old_json_without_embedding_fields(tmp_path):

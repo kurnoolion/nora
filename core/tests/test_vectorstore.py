@@ -420,10 +420,12 @@ class TestChunkBuilder:
         builder = ChunkBuilder(config)
         tree = _make_tree(n_reqs=2)
 
-        # Second req has hierarchy path ["ROOT", "Section 2 Title"]
+        # ChunkBuilder prepends plan_name as the document root so the
+        # embedding captures the full Document > Section > Subsection
+        # chain. _make_tree sets plan_name="LTE_DATARETRY".
         chunks = builder.build_chunks([tree])
         text = chunks[1].text
-        assert "[Path: ROOT > Section 2 Title]" in text
+        assert "[Path: LTE_DATARETRY > ROOT > Section 2 Title]" in text
 
     def test_chunk_text_has_req_id(self):
         config = VectorStoreConfig()

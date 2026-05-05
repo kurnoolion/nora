@@ -110,7 +110,7 @@ class ChunkBuilder:
                 continue
 
             text = self._build_chunk_text(
-                req, mno, release, plan_name, version, id_to_title,
+                req, mno, release, plan_name, version, id_to_title, plan_id,
             )
 
             # Skip chunks with no meaningful content
@@ -125,6 +125,10 @@ class ChunkBuilder:
             ):
                 text = self._expand_definitions(text, defs_pattern, definitions_map)
 
+            doc_root = plan_name or plan_id
+            req_hier = req.get("hierarchy_path", []) or []
+            full_hier: list[str] = ([doc_root] + req_hier) if doc_root else req_hier
+
             metadata = {
                 "mno": mno,
                 "release": release,
@@ -134,6 +138,7 @@ class ChunkBuilder:
                 "section_number": req.get("section_number", ""),
                 "zone_type": req.get("zone_type", ""),
                 "feature_ids": feature_ids,
+                "hierarchy_path": full_hier,
             }
 
             chunk_id = f"req:{req_id}"
@@ -197,6 +202,7 @@ class ChunkBuilder:
             )
             slug = re.sub(r"[^A-Za-z0-9_-]+", "_", term).strip("_") or "term"
             chunk_id = f"glossary:{plan_id}:{slug}"
+            doc_root = plan_name or plan_id
             out.append(Chunk(
                 chunk_id=chunk_id,
                 text=text,
@@ -211,6 +217,7 @@ class ChunkBuilder:
                     "feature_ids": feature_ids,
                     "acronym": term,
                     "expansion": exp,
+                    "hierarchy_path": [doc_root] if doc_root else [],
                 },
             ))
         return out
@@ -286,6 +293,7 @@ class ChunkBuilder:
         plan_name: str,
         version: str,
         id_to_title: dict[str, str] | None = None,
+        plan_id: str = "",
     ) -> str:
         """Build the contextualized text for a single requirement.
 
@@ -319,11 +327,14 @@ class ChunkBuilder:
             if header_parts:
                 parts.append(f"[{' | '.join(header_parts)}]")
 
-        # Hierarchy path
+        # Hierarchy path — document name is the root so the embedding
+        # captures the full Document > Section > Subsection chain.
         if self.config.include_hierarchy_path:
-            hierarchy = req.get("hierarchy_path", [])
-            if hierarchy:
-                parts.append(f"[Path: {' > '.join(hierarchy)}]")
+            hierarchy = req.get("hierarchy_path", []) or []
+            doc_root = plan_name or plan_id
+            full_path = ([doc_root] + hierarchy) if doc_root else hierarchy
+            if full_path:
+                parts.append(f"[Path: {' > '.join(full_path)}]")
 
         # Requirement ID
         if self.config.include_req_id:

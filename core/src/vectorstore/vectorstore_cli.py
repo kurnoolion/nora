@@ -57,18 +57,69 @@ def _create_store(config: VectorStoreConfig):
 
 
 def _build_config(args: argparse.Namespace) -> VectorStoreConfig:
-    """Build config from file + CLI overrides."""
+    """Build config from file + CLI overrides + config/llm.json fallback.
+
+    Embedding provider/model resolution priority (highest first):
+      1. `--provider` / `--model` CLI flag
+      2. NORA_EMBEDDING_PROVIDER / NORA_EMBEDDING_MODEL env vars
+      3. Config-file layer (only one of these contributes):
+         - `--config <path>` file values, when --config is supplied
+         - else config/llm.json `embedding_provider` / `embedding_model`
+      4. Built-in defaults (sentence-transformers / all-MiniLM-L6-v2)
+
+    `--config` replaces config/llm.json at the same tier — when a user
+    points at a frozen experiment config they don't want the project
+    default also stacked on top, but CLI flags and env vars still beat
+    it. Other VectorStoreConfig fields (collection name, distance metric,
+    persist dir, batching) are not in config/llm.json's schema and stay
+    on `--config` + CLI flags.
+    """
+    import os
+    from core.src.env.config import (
+        DEFAULT_EMBEDDING_MODEL,
+        DEFAULT_EMBEDDING_PROVIDER,
+        EMBEDDING_MODEL_ENV_VAR,
+        EMBEDDING_PROVIDER_ENV_VAR,
+        EMBEDDING_PROVIDERS,
+        resolve_embedding_model,
+        resolve_embedding_provider,
+    )
+
     if args.config:
         config = VectorStoreConfig.load_json(Path(args.config))
         logger.info(f"Loaded config from {args.config}")
+        # --config replaces config/llm.json at the config-file tier;
+        # CLI flags and env vars still beat it. Don't call the resolve_*
+        # helpers — they always read config/llm.json, which the user has
+        # opted out of by passing --config.
+        provider = (
+            args.provider
+            or os.environ.get(EMBEDDING_PROVIDER_ENV_VAR)
+            or config.embedding_provider
+            or DEFAULT_EMBEDDING_PROVIDER
+        )
+        if provider not in EMBEDDING_PROVIDERS:
+            raise ValueError(
+                f"embedding_provider={provider!r} not in {EMBEDDING_PROVIDERS}"
+            )
+        config.embedding_provider = provider
+        config.embedding_model = (
+            args.model
+            or os.environ.get(EMBEDDING_MODEL_ENV_VAR)
+            or config.embedding_model
+            or DEFAULT_EMBEDDING_MODEL
+        )
     else:
         config = VectorStoreConfig()
+        # No --config; resolver chain consults config/llm.json at tier 3.
+        config.embedding_provider = resolve_embedding_provider(
+            cli_value=args.provider,
+        )
+        config.embedding_model = resolve_embedding_model(
+            cli_value=args.model,
+        )
 
-    # CLI overrides
-    if args.model:
-        config.embedding_model = args.model
-    if args.provider:
-        config.embedding_provider = args.provider
+    # Remaining CLI overrides (not in config/llm.json's schema).
     if args.backend:
         config.vector_store_backend = args.backend
     if args.metric:

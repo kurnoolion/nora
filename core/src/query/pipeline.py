@@ -28,6 +28,25 @@ from core.src.query.synthesizer import MockSynthesizer
 from core.src.query.rewriter import MockQueryRewriter, expand_query
 from core.src.query.schema import QueryResponse, CandidateSet, QueryType
 
+# "Not found" answer returned when every retrieved chunk scores below the
+# quality bar set by max_distance_threshold. The pipeline returns this
+# instead of synthesizing from weak fragments, which is the primary
+# hallucination class for out-of-scope queries.
+_NOT_FOUND_ANSWER = (
+    "No matching requirements were found in the indexed corpus for this query. "
+    "The query may reference a topic, feature, or MNO release that is not yet "
+    "ingested, or the phrasing may need to be adjusted. "
+    "Try rephrasing, specifying an MNO/release, or checking which documents "
+    "have been indexed."
+)
+
+# Per-query-type distance threshold overrides. When a query type is listed
+# here, its threshold takes precedence over the pipeline-level default. Left
+# empty for now — Step 4 (intent classification) will populate this when
+# the Fact intent type is added (which needs a stricter threshold than
+# general queries).
+_TYPE_MAX_DISTANCE: dict[QueryType, float] = {}
+
 
 # Per-query-type retrieval breadth. Lookup-style queries ("What is
 # VZ_REQ_X?") work best with a tight top_k anchored on the entity
@@ -130,6 +149,7 @@ class QueryPipeline:
         max_depth: int | None = None,
         max_context_chars: int = 30000,
         enable_bm25: bool = True,
+        max_distance_threshold: float | None = None,
     ) -> None:
         """Initialize the pipeline.
 
@@ -150,6 +170,16 @@ class QueryPipeline:
                 dense retrieval via RRF. False keeps the legacy pure-
                 dense path. Build cost is O(n) over chunks; memory cost
                 is the chunk corpus once over (text + tokenized list).
+            max_distance_threshold: Maximum cosine distance for a chunk
+                to be considered relevant. Chunks with
+                similarity_score > threshold are discarded. When all
+                retrieved chunks are discarded, the pipeline returns
+                _NOT_FOUND_ANSWER instead of synthesizing from weak
+                fragments. None (default) disables the filter — all
+                retrieved chunks are passed to synthesis.
+                Typical values: 0.5 (lenient), 0.35 (moderate),
+                0.25 (strict). Tune against your embedding model and
+                corpus; cosine distances are in [0, 2] with 0 = identical.
         """
         from core.src.query.bm25_index import BM25Index
 
@@ -168,6 +198,7 @@ class QueryPipeline:
         self._top_k = top_k
         self._max_context_chars = max_context_chars
         self._bypass_graph = False
+        self._max_distance_threshold = max_distance_threshold
 
     def query(self, query_text: str, verbose: bool = False) -> QueryResponse:
         """Run the full query pipeline.
@@ -242,6 +273,35 @@ class QueryPipeline:
                 f"[Stage 4] Retrieved: {len(chunks)} chunks "
                 f"from {len(set(c.metadata.get('plan_id','') for c in chunks))} plans"
             )
+
+        # Stage 4.5: Relevance threshold filter.
+        # Per-query-type threshold takes precedence over the pipeline default.
+        # Chunks with similarity_score (cosine distance) above the threshold
+        # are too dissimilar to be useful; passing them to the LLM is the
+        # primary source of hallucinated or confabulated answers.
+        threshold = _TYPE_MAX_DISTANCE.get(
+            intent.query_type, self._max_distance_threshold
+        )
+        if threshold is not None:
+            before = len(chunks)
+            chunks = [c for c in chunks if c.similarity_score <= threshold]
+            dropped = before - len(chunks)
+            if dropped:
+                logger.info(
+                    f"Threshold filter (max_distance={threshold}): "
+                    f"dropped {dropped}/{before} chunks"
+                )
+            if not chunks:
+                logger.info(
+                    "All chunks below threshold — returning not-found response"
+                )
+                return QueryResponse(
+                    answer=_NOT_FOUND_ANSWER,
+                    citations=[],
+                    query_intent=intent,
+                    candidate_count=candidates.total,
+                    retrieved_count=0,
+                )
 
         # Stage 5: Context Assembly
         context = self._context_builder.build(

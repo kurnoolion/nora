@@ -163,24 +163,25 @@ class ContextBuilder:
     def _enrich_chunk(self, chunk: RetrievedChunk) -> ChunkContext:
         """Enrich a chunk with graph context (hierarchy, standards, etc.)."""
         node_id = chunk.graph_node_id
-        hierarchy_path = []
         parent_text = ""
         standards = []
         related_ids = []
 
+        # Prefer chunk metadata hierarchy_path: ChunkBuilder stores the full
+        # Document > Section > Subsection chain there (plan_name as root).
+        # Fall back to graph node for vectorstores built before this change.
+        raw_meta = chunk.metadata.get("hierarchy_path", [])
+        hierarchy_path: list[str] = list(raw_meta) if raw_meta else []
+
         if node_id in self._graph:
-            data = self._graph.nodes[node_id]
-            hierarchy_path = data.get("hierarchy_path", [])
-            if isinstance(hierarchy_path, str):
-                hierarchy_path = [hierarchy_path]
+            if not hierarchy_path:
+                graph_path = self._graph.nodes[node_id].get("hierarchy_path", [])
+                if isinstance(graph_path, str):
+                    graph_path = [graph_path]
+                hierarchy_path = list(graph_path)
 
-            # Get parent context
             parent_text = self._get_parent_text(node_id)
-
-            # Get standards context
             standards = self._get_standards_context(node_id)
-
-            # Get related requirement IDs (depends_on targets)
             related_ids = self._get_related_ids(node_id)
 
         return ChunkContext(
