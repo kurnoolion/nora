@@ -331,13 +331,13 @@ class DOCXExtractor(BaseExtractor):
 
         for child in cell._element:
             if child.tag == p_tag:
-                para = DocxParagraph(child, cell._element)
+                para = DocxParagraph(child, cell)
                 text = (para.text or "").strip()
                 if text:
                     text_parts.append(text)
             elif child.tag == tbl_tag:
                 _flush_text()
-                nested = DocxTable(child, cell._element)
+                nested = DocxTable(child, cell)
                 blocks.extend(self._table_blocks(nested, page))
 
         _flush_text()
