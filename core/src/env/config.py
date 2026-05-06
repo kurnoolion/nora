@@ -153,7 +153,11 @@ def resolve_standards_source(
 
 LLM_PROVIDERS: tuple[str, ...] = ("ollama", "openai-compatible", "mock")
 DEFAULT_LLM_PROVIDER: str = "ollama"
+DEFAULT_LLM_MODEL: str = "auto"
+DEFAULT_LLM_TIMEOUT: int = 600
 LLM_PROVIDER_ENV_VAR: str = "NORA_LLM_PROVIDER"
+LLM_MODEL_ENV_VAR: str = "NORA_LLM_MODEL"
+LLM_TIMEOUT_ENV_VAR: str = "NORA_LLM_TIMEOUT"
 
 
 def resolve_llm_provider(
@@ -180,6 +184,58 @@ def resolve_llm_provider(
                 )
             return value
     return DEFAULT_LLM_PROVIDER
+
+
+def resolve_llm_model(
+    cli_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the effective LLM model name.
+
+    Precedence: CLI flag > NORA_LLM_MODEL env var > config/llm.json
+    `llm_model` > EnvironmentConfig field (deprecated, back-compat
+    only) > default ("auto"). No enum validation — model names are
+    provider-specific. "auto" is meaningful only for the ollama
+    provider; cloud providers require an explicit name.
+    """
+    for value in (
+        cli_value,
+        os.environ.get(LLM_MODEL_ENV_VAR),
+        _llm_config().llm_model,
+        env_config_value,
+    ):
+        if value:
+            return value
+    return DEFAULT_LLM_MODEL
+
+
+def resolve_llm_timeout(
+    cli_value: int | None = None,
+    env_config_value: int | None = None,
+) -> int:
+    """Resolve the effective LLM request timeout (seconds).
+
+    Precedence: CLI flag > NORA_LLM_TIMEOUT env var > config/llm.json
+    `llm_timeout` > EnvironmentConfig field (deprecated, back-compat
+    only) > default (600). Each layer's "0" is treated as unset and
+    falls through.
+    """
+    if cli_value:
+        return cli_value
+    env_raw = os.environ.get(LLM_TIMEOUT_ENV_VAR)
+    if env_raw:
+        try:
+            n = int(env_raw)
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    cfg_value = _llm_config().llm_timeout
+    if cfg_value:
+        return cfg_value
+    if env_config_value:
+        return env_config_value
+    return DEFAULT_LLM_TIMEOUT
 
 
 # ---------------------------------------------------------------------------

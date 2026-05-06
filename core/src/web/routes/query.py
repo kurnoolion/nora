@@ -91,34 +91,46 @@ def _find_env_config_for_web():
 
 
 def _build_llm_from_env_or_default():
-    """Construct the LLM provider for /query and /test. Reads the
-    LLM config (provider/model/timeout) from the env JSON tied to
-    the Web UI's env_dir; falls back to local Ollama gemma4:e4b
-    when no env is matched. Returns the provider or None on error.
-    Reuses PipelineContext.create_llm_provider so the dispatch
-    matches the eval pipeline exactly."""
+    """Construct the LLM provider for /query and /test.
+
+    Resolves provider / model / timeout via the unified D-044 chain:
+    CLI flag (n/a here) > NORA_LLM_* env var > config/llm.json >
+    EnvironmentConfig (legacy back-compat) > default. The
+    OpenAI-compatible provider additionally reads NORA_LLM_BASE_URL /
+    NORA_LLM_API_KEY directly at construction time.
+
+    Reuses PipelineContext.create_llm_provider so the dispatch matches
+    the eval pipeline exactly. Returns the provider, or a mock on
+    failure (web path is non-fail-loud — falls back to mock so the
+    UI keeps responding).
+    """
+    from core.src.env.config import (
+        resolve_llm_provider, resolve_llm_model, resolve_llm_timeout,
+    )
     from core.src.pipeline.runner import PipelineContext
+
     env_cfg = _find_env_config_for_web()
-    if env_cfg is not None:
-        ctx = PipelineContext(
-            documents_dir=Path("."),
-            corrections_dir=None,
-            eval_dir=None,
-            verbose=False,
-            model_provider=env_cfg.model_provider,
-            model_name=env_cfg.model_name,
-            model_timeout=env_cfg.model_timeout,
-        )
-        return ctx.create_llm_provider(require_real=False)
-    # No env match — preserve legacy behavior (local Ollama).
+    provider = resolve_llm_provider(
+        env_config_value=env_cfg.model_provider if env_cfg else None,
+    )
+    model = resolve_llm_model(
+        env_config_value=env_cfg.model_name if env_cfg else None,
+    )
+    timeout = resolve_llm_timeout(
+        env_config_value=env_cfg.model_timeout if env_cfg else None,
+    )
+    logger.info(
+        "Web LLM resolved: provider=%s model=%s timeout=%ds",
+        provider, model, timeout,
+    )
     ctx = PipelineContext(
         documents_dir=Path("."),
         corrections_dir=None,
         eval_dir=None,
         verbose=False,
-        model_provider="ollama",
-        model_name="gemma4:e4b",
-        model_timeout=300,
+        model_provider=provider,
+        model_name=model,
+        model_timeout=timeout,
     )
     return ctx.create_llm_provider(require_real=False)
 
