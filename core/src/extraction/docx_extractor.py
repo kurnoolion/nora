@@ -97,9 +97,7 @@ class DOCXExtractor(BaseExtractor):
 
             elif tag == qn("w:tbl"):
                 tbl = DocxTable(child, doc)
-                block = self._table_block(tbl, page)
-                if block is not None:
-                    all_blocks.append(block)
+                all_blocks.extend(self._table_blocks(tbl, page))
 
         # Assign sequential indices
         for i, b in enumerate(all_blocks):
@@ -284,7 +282,80 @@ class DOCXExtractor(BaseExtractor):
     # Table handling
     # ------------------------------------------------------------------
 
-    def _table_block(self, tbl: DocxTable, page: int) -> ContentBlock | None:
+    def _table_blocks(self, tbl: DocxTable, page: int) -> list[ContentBlock]:
+        """Return ContentBlocks for *tbl*, handling nested tables.
+
+        If the table contains no nested tables it is emitted as a single
+        ContentBlock (original behaviour).  If any cell contains a nested
+        table the outer table is treated as a container and its content is
+        walked in document order: consecutive paragraph runs are flushed as
+        a 1-row/1-column text block, and each nested table is emitted as its
+        own block (recursively).  This preserves document order across all
+        four cases documented in the extraction spec.
+        """
+        if not self._has_nested_tables(tbl):
+            block = self._flat_table_block(tbl, page)
+            return [block] if block is not None else []
+
+        blocks: list[ContentBlock] = []
+        for row in tbl.rows:
+            for cell in row.cells:
+                blocks.extend(self._cell_content_blocks(cell, page))
+        return blocks
+
+    def _cell_content_blocks(self, cell, page: int) -> list[ContentBlock]:
+        """Walk a cell's direct children in document order.
+
+        Consecutive paragraphs are accumulated and flushed as a 1×1 text
+        block when a nested table is encountered (or at end of cell).  Each
+        nested table is emitted via _table_blocks() so the recursion handles
+        arbitrarily deep nesting.
+        """
+        p_tag   = qn("w:p")
+        tbl_tag = qn("w:tbl")
+
+        blocks: list[ContentBlock] = []
+        text_parts: list[str] = []
+
+        def _flush_text() -> None:
+            combined = " ".join(t for t in text_parts if t).strip()
+            text_parts.clear()
+            if not combined:
+                return
+            blocks.append(ContentBlock(
+                type=BlockType.TABLE,
+                position=Position(page=page, index=0, bbox=None),
+                headers=[combined],
+                rows=[],
+            ))
+
+        for child in cell._element:
+            if child.tag == p_tag:
+                para = DocxParagraph(child, cell._element)
+                text = (para.text or "").strip()
+                if text:
+                    text_parts.append(text)
+            elif child.tag == tbl_tag:
+                _flush_text()
+                nested = DocxTable(child, cell._element)
+                blocks.extend(self._table_blocks(nested, page))
+
+        _flush_text()
+        return blocks
+
+    @staticmethod
+    def _has_nested_tables(tbl: DocxTable) -> bool:
+        """Return True if any cell in *tbl* directly contains a nested table."""
+        tbl_tag = qn("w:tbl")
+        for row in tbl.rows:
+            for cell in row.cells:
+                for child in cell._element:
+                    if child.tag == tbl_tag:
+                        return True
+        return False
+
+    def _flat_table_block(self, tbl: DocxTable, page: int) -> ContentBlock | None:
+        """Emit a plain (non-nested) table as a single ContentBlock."""
         rows_text: list[list[str]] = []
         for row in tbl.rows:
             cells = [(c.text or "").strip() for c in row.cells]
@@ -293,7 +364,7 @@ class DOCXExtractor(BaseExtractor):
         if not rows_text:
             return None
 
-        headers = rows_text[0]
+        headers   = rows_text[0]
         body_rows = rows_text[1:]
 
         # Skip degenerate tables — single empty column
