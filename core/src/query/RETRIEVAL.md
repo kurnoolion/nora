@@ -312,7 +312,287 @@ After D-043:
    "profiling".`
 7. Answer is grounded.
 
-## 10. ADR cross-reference
+## 10. Debugging retrieval quality
+
+When retrieval feels "off" — answers look fabricated, relevant
+reqs don't surface, or the not-found path fires on queries that
+should have hit — work down this checklist before assuming the
+algorithm is broken.
+
+### 10.1 Most common cause: embedding-model mismatch
+
+The vectorstore stores chunks embedded by the model named in
+`<env_dir>/out/vectorstore/config.json`. The query path
+re-embeds the user's query with whatever model the active
+config resolves at runtime. If those two differ, every distance
+is meaningless — vectors live in different spaces.
+
+Verify with:
+
+```bash
+cat <env_dir>/out/vectorstore/config.json | grep -E "embedding_(provider|model)"
+```
+
+Compare against the model the query path will use: `config/llm.json`'s
+`embedding_provider` / `embedding_model`, modulo CLI / env-var
+overrides. The two must match. If they don't, either rebuild
+the vectorstore against the new model, or update the query
+config to match the existing vectorstore.
+
+### 10.2 Confirm chunks carry the new metadata (D-046)
+
+After D-046, every chunk carries `hierarchy_path` (a `list[str]`
+with `plan_name` as the document root). Old vectorstores built
+before D-046 won't have it; the context builder falls back to
+the graph node, but retrieval-side grouping (Step 3 onwards)
+won't see the document distinction in the embedding.
+
+```bash
+cd <repo_root> && python -c "
+from core.src.vectorstore.store_chroma import ChromaDBStore
+s = ChromaDBStore(persist_directory='<env_dir>/out/vectorstore')
+r = s.get_all()
+print(f'Total docs: {len(r.ids)}')
+total = len(r.metadatas)
+with_path = sum(1 for m in r.metadatas if m.get('hierarchy_path'))
+print(f'With hierarchy_path: {with_path}/{total}')
+for cid, m in list(zip(r.ids, r.metadatas))[:3]:
+    print(f'  {cid} -> {m.get(\"hierarchy_path\")}')
+"
+```
+
+Expect: `with_path == total`, and the first element of each
+path should be the document root (e.g. `LTEDATARETRY`,
+`LTE_OTA_Device_Management`). Empty paths or `None` mean the
+vectorstore predates D-046 — rebuild required.
+
+### 10.3 Threshold sweep — diagnose the relevance distribution
+
+After D-047, the pipeline filters chunks by cosine distance. If
+the threshold is wrong for the active model + corpus, either
+relevant chunks get falsely dropped (no answers) or off-topic
+chunks slip through (hallucinations). Save as
+`/tmp/threshold_sweep.py` and run:
+
+```python
+"""Probe the relevance threshold against the live vectorstore."""
+import sys
+sys.path.insert(0, "<repo_root>")
+
+from pathlib import Path
+
+from core.src.query.pipeline import (
+    QueryPipeline, load_graph, build_stub_graph_from_store, _NOT_FOUND_ANSWER,
+)
+from core.src.vectorstore import make_embedder
+from core.src.vectorstore.config import VectorStoreConfig
+from core.src.vectorstore.store_chroma import ChromaDBStore
+
+VS_DIR = "<env_dir>/out/vectorstore"
+GRAPH_PATH = Path("<env_dir>/out/graph/knowledge_graph.json")
+
+cfg = VectorStoreConfig.load_json(Path(VS_DIR) / "config.json")
+embedder = make_embedder(cfg)
+store = ChromaDBStore(
+    persist_directory=cfg.persist_directory,
+    collection_name=cfg.collection_name,
+    distance_metric=cfg.distance_metric,
+)
+
+if GRAPH_PATH.exists():
+    graph = load_graph(GRAPH_PATH)
+    bypass = False
+else:
+    graph = build_stub_graph_from_store(store)
+    bypass = True
+
+def run(query, threshold):
+    p = QueryPipeline(
+        graph, embedder, store, top_k=5,
+        max_distance_threshold=threshold, enable_bm25=False,
+    )
+    if bypass:
+        p._bypass_graph = True
+    resp = p.query(query)
+    not_found = resp.answer == _NOT_FOUND_ANSWER
+    scores = [round(c.similarity_score, 4) for c in resp.retrieved_chunks]
+    return resp.retrieved_count, not_found, scores
+
+# Replace these with queries appropriate to your corpus —
+# pick 2 in-domain queries you know should hit, and 2
+# clearly out-of-domain queries you know should miss.
+queries = [
+    ("RELEVANT-1  : <in-domain query 1>", "<in-domain query 1>"),
+    ("RELEVANT-2  : <in-domain query 2>", "<in-domain query 2>"),
+    ("OFF-TOPIC-1 : Treaty of Westphalia", "Treaty of Westphalia"),
+    ("OFF-TOPIC-2 : Recipe for chocolate cake", "Recipe for chocolate cake"),
+]
+
+print(f"Embedding: {cfg.embedding_provider} / {cfg.embedding_model}")
+print(f"Distance:  {cfg.distance_metric}\n")
+
+print("=== Baseline raw scores (threshold disabled) ===\n")
+for label, q in queries:
+    n, nf, scores = run(q, threshold=None)
+    print(f"{label}\n  scores: {scores}\n")
+
+print("=== Threshold sweep ===")
+print(f"{'threshold':<12} {'query':<40} {'kept':>5} {'not_found':>10}")
+for t in [0.8, 0.6, 0.5, 0.4, 0.3, 0.2]:
+    for label, q in queries:
+        n, nf, _ = run(q, threshold=t)
+        print(f"{t:<12} {label:<40} {n:>5} {str(nf):>10}")
+    print()
+```
+
+Run with: `python /tmp/threshold_sweep.py`
+
+Read the baseline scores first:
+
+- **Relevant queries should cluster low** (well under the
+  threshold). On qwen3-embedding:4b-q8_0 + the OA corpus, in-
+  domain top-5 distances were 0.20–0.41.
+- **Off-topic queries should cluster high.** Same calibration:
+  off-topic distances were 0.74–0.77.
+- **The gap matters more than the absolute values.** A 0.30+
+  gap between worst-relevant and best-off-topic means the
+  threshold can sit comfortably in the middle. A narrow gap
+  (< 0.15) means the embedding isn't separating in-domain from
+  out-of-domain content well — reranker, BM25 weight, or
+  embedding-model choice need attention before the threshold
+  can do its job.
+
+The default `max_distance_threshold = 0.5` is calibrated to
+qwen3-embedding:4b-q8_0 on the OA corpus. Different models
+will need different defaults. Override at runtime via:
+
+```bash
+NORA_MAX_DISTANCE_THRESHOLD=0.6 python -m core.src.web.app ...   # stricter / looser
+NORA_MAX_DISTANCE_THRESHOLD=off python -m core.src.web.app ...   # disable
+```
+
+### 10.4 Run the full pipeline with explicit provider / model flags
+
+When the underlying state (vectorstore, graph, taxonomy) is
+suspect, rebuild end-to-end. The pipeline runner accepts CLI
+flags for every provider knob; resolution priority is **CLI >
+env var > config/llm.json > defaults**.
+
+**Caveat — one-way flags.** `--skip-taxonomy` / `--skip-graph` /
+`--rag-only` are `store_true`. They can force-skip a stage but
+cannot un-skip one set in `config/llm.json`. To run the full
+pipeline when `config/llm.json` has `skip_taxonomy: true` or
+`skip_graph: true`, edit the file and flip those to `false`
+first (or remove them). The CLI will not override an already-
+true config value.
+
+Full-pipeline command:
+
+```bash
+cd <repo_root> && python -m core.src.pipeline.run_cli \
+  --env-dir <env_dir> \
+  --start extract --end eval \
+  --embedding-provider <ollama | sentence-transformers | huggingface> \
+  --embedding-model <model-name> \
+  --llm-provider <ollama | openai-compatible | mock> \
+  --model <llm-model-name> \
+  --model-timeout 600 \
+  --standards-source <huggingface | 3gpp> \
+  --verbose
+```
+
+#### Flag reference
+
+| Flag | Purpose | Valid values |
+|---|---|---|
+| `--env-dir` | Per-env runtime dir (input/, out/, state/, ...) | absolute path |
+| `--start` / `--end` | Stage range | `extract`, `profile`, `parse`, `resolve`, `taxonomy`, `standards`, `graph`, `vectorstore`, `eval` |
+| `--embedding-provider` | Embedding backend | `sentence-transformers` / `huggingface` (alias) / `ollama` |
+| `--embedding-model` | Embedding model | provider-specific (e.g. `all-MiniLM-L6-v2`, `qwen3-embedding:4b`, `qwen3-embedding:4b-q8_0`, `nomic-embed-text`) |
+| `--llm-provider` | LLM backend | `ollama` / `openai-compatible` / `mock` |
+| `--model` | LLM model name | e.g. `gemma3:12b`, `gemma4:e4b`, or for openai-compatible: `qwen/qwen3-235b-a22b`, etc. |
+| `--model-timeout` | LLM request timeout (sec) | typically 300–600 for local Ollama on CPU |
+| `--standards-source` | 3GPP spec source | `huggingface` (DOCX-only, no auth) / `3gpp` (FTP fallback) |
+| `--verbose` | Per-stage logging | flag |
+| `--continue-on-error` | Don't abort the pipeline on a single-stage failure | flag |
+| `--skip-taxonomy` / `--skip-graph` / `--rag-only` | Force-skip stages (one-way; see caveat above) | flag |
+
+#### Suggested provider combos
+
+**A. Full local (no API key needed; slowest):**
+```bash
+--embedding-provider ollama --embedding-model qwen3-embedding:4b-q8_0 \
+--llm-provider ollama --model gemma3:12b --model-timeout 600
+```
+
+**B. Local embeddings + cloud LLM (best taxonomy quality):**
+```bash
+--embedding-provider ollama --embedding-model qwen3-embedding:4b-q8_0 \
+--llm-provider openai-compatible --model qwen/qwen3-235b-a22b --model-timeout 600
+# also: NORA_LLM_BASE_URL=https://openrouter.ai/api/v1 NORA_LLM_API_KEY=sk-...
+```
+
+**C. Fast local (smaller embedding + smaller LLM):**
+```bash
+--embedding-provider sentence-transformers --embedding-model all-MiniLM-L6-v2 \
+--llm-provider ollama --model gemma4:e4b --model-timeout 300
+```
+
+### 10.5 Targeted vectorstore rebuild only
+
+If only the vectorstore is suspect (taxonomy / graph already
+look fine), rebuild just that stage:
+
+```bash
+cd <repo_root> && python -m core.src.vectorstore.vectorstore_cli \
+  --trees-dir <env_dir>/out/parse \
+  --persist-dir <env_dir>/out/vectorstore \
+  --provider <ollama | sentence-transformers> \
+  --model <embedding-model-name> \
+  --rebuild
+```
+
+Notes:
+- The trees source is `<env_dir>/out/parse/` (parsed `*_tree.json`
+  files), **not** `<env_dir>/out/resolve/` (cross-reference
+  outputs only).
+- `--taxonomy` is optional; omit it for RAG-only setups where
+  the taxonomy stage has been skipped.
+- The CLI saves the resolved config to
+  `<env_dir>/out/vectorstore/config.json`. Downstream query
+  paths read that file to construct the embedder, so rebuilding
+  propagates the model choice automatically.
+
+### 10.6 Truncation warnings during rebuild
+
+```
+WARNING Text N length 9415 > max_input_chars 8000; truncating
+        (1415 chars dropped)
+```
+
+Intentional safety cap. Ollama embedding models reject very
+long inputs (qwen3-embedding fails above ~16K chars; the 8K
+default is conservative). The first 8K of a chunk carries
+header lines + title + opening text — the load-bearing
+content for retrieval. Trailing tables / image surrounding
+text get truncated, a small bounded loss.
+
+To raise the cap if you know your model handles more, set
+`extra={"ollama_max_input_chars": 12000}` on `VectorStoreConfig`.
+
+### 10.7 Common failure modes
+
+| Symptom | Likely cause | Diagnostic |
+|---|---|---|
+| Every query returns "not found" | Embedding model mismatch (built with X, queried with Y) | §10.1 — compare `<env_dir>/out/vectorstore/config.json` against the active config |
+| Relevant queries return "not found"; off-topic returns answers | Threshold too strict for current model | §10.3 — sweep; raise threshold or disable |
+| Off-topic queries return synthesized answers | Threshold too loose, or filter disabled | §10.3 — confirm threshold value in pipeline-build log |
+| Vectorstore rebuild shows `Loaded 0 parsed trees` | Wrong `--trees-dir` (pointed at `out/resolve` instead of `out/parse`) | §10.5 |
+| `Loaded 0 parsed trees` and trees-dir is correct | Parse stage hasn't run; rerun the pipeline up to parse | `--start extract --end parse` |
+| Acronym queries get hallucinated answers | Glossary chunks missing from vectorstore (rebuilt without `definitions_map` populated) | Spot-check with §10.2; ensure `<doc_type>=glossary_entry` chunks exist |
+| Hierarchy paths show single-element `[doc_root]` only | Requirements have no hierarchy populated by parser | Open a parsed tree JSON, inspect `requirements[*].hierarchy_path` |
+
+## 11. ADR cross-reference
 
 - D-001 — Graph routes, RAG ranks (foundational).
 - D-032 — Per-document `definitions_map` + chunk-build inline
@@ -328,3 +608,8 @@ After D-043:
 - D-043 — Acronym lookup chain (parser fix + glossary chunks +
   query-side pin). Adds glossary-aware retrieval as a
   deterministic answer surface for short definitional queries.
+- D-046 — Document-rooted hierarchy paths in chunk text +
+  metadata. Embedding captures Document > Section > Subsection.
+- D-047 — Relevance threshold + "not found" response (Stage 4.5).
+  Off-topic queries return a deterministic message instead of
+  LLM hallucination from weak fragments.
