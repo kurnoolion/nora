@@ -47,6 +47,9 @@ _BODY_DEFAULT_SIZE = 11.0
 
 _HEADING_STYLE_RE = re.compile(r"^heading\s*(\d+)$", re.IGNORECASE)
 
+# Req-ID marker used to identify the title/id split point in a heading.
+_VZ_REQ_MARKER = "VZ_REQ_"
+
 
 class DOCXExtractor(BaseExtractor):
     """Extract paragraphs, tables, and images from DOCX files."""
@@ -135,13 +138,22 @@ class DOCXExtractor(BaseExtractor):
     def _paragraph_block(
         self, para: DocxParagraph, page: int
     ) -> ContentBlock | None:
-        text = (para.text or "").strip()
-        if not text:
-            return None
-
         style_name = para.style.name if para.style is not None else ""
         level = self._heading_level(style_name)
         block_type = BlockType.HEADING if level is not None else BlockType.PARAGRAPH
+
+        text = self._text_without_strikes(para)
+        if not text:
+            return None
+
+        # 1.1: For headings, if the entire title portion (everything before
+        # VZ_REQ_) was struck through and only the req-ID survives, the
+        # heading is effectively deleted — skip it.
+        if level is not None and _VZ_REQ_MARKER in text:
+            title_part = text.split(_VZ_REQ_MARKER, 1)[0].strip()
+            if not title_part:
+                return None
+
         font = self._paragraph_font(para, level)
 
         return ContentBlock(
@@ -152,6 +164,22 @@ class DOCXExtractor(BaseExtractor):
             style=style_name,
             font_info=font,
         )
+
+    @staticmethod
+    def _text_without_strikes(para: DocxParagraph) -> str:
+        """Concatenate run text, skipping any run with strikethrough formatting.
+
+        Handles 1.2 (partial strike in title) and 1.3 (struck paragraph text)
+        by operating at run level — only the struck words are dropped; the rest
+        of the text is preserved verbatim.
+        """
+        parts: list[str] = []
+        for run in para.runs:
+            font = run.font
+            if getattr(font, "strike", None) or getattr(font, "double_strike", None):
+                continue
+            parts.append(run.text or "")
+        return "".join(parts).strip()
 
     @staticmethod
     def _heading_level(style_name: str) -> int | None:
