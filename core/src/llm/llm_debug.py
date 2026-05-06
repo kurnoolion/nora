@@ -224,18 +224,23 @@ def cmd_probe(args: argparse.Namespace) -> int:
         headers=headers if args.api_key else None,
     )
     print(f"    status: {status}")
-    if status in (200, 400, 404):
-        # 200 ridiculously unlikely for fake model; 400 confirms shape
-        if status == 400:
-            print("    400 — endpoint understands the OpenAI chat shape")
-        elif status == 404:
-            print("    404 — chat endpoint missing")
-        else:
-            print("    200 — OpenAI-compat chat works")
-        if body:
-            print(f"    body excerpt: {body[:120]}")
+    if status == 200:
+        # Ridiculously unlikely for a fake model name to actually return 200,
+        # but if it does the endpoint clearly works.
+        print("    200 — OpenAI-compat chat works")
+        findings["openai_compat"] = True
+    elif status == 400:
+        # Standard "invalid model" / "bad request" — the endpoint
+        # understood the OpenAI chat-completions shape. Confirms support
+        # even if /v1/models was missing.
+        print("    400 — endpoint understands the OpenAI chat shape")
+        findings["openai_compat"] = True
     elif status == 401:
-        print("    401 — auth required (provide --api-key)")
+        # Auth gate proves the endpoint exists; treat as openai-compat.
+        print("    401 — auth required (provide --api-key) — endpoint exists")
+        findings["openai_compat"] = True
+    elif status == 404:
+        print("    404 — chat endpoint missing")
     elif status == 0:
         print(f"    NETWORK: {body}")
     else:
@@ -257,8 +262,11 @@ def cmd_probe(args: argparse.Namespace) -> int:
         if args.api_key:
             print(f"  export NORA_LLM_API_KEY=<your-key>")
         else:
-            print("  export NORA_LLM_API_KEY=ollama  # any non-empty string for native Ollama proxies")
-        print("  export NORA_LLM_MODEL=<model-name-from-listing-above>")
+            print("  export NORA_LLM_API_KEY=ollama  # any non-empty string for native-Ollama proxies")
+        print("  export NORA_LLM_MODEL=<model-name>")
+        print()
+        print("  After setting the env vars, verify with:")
+        print("    python -m core.src.llm.llm_debug --check")
     elif findings["ollama_native"]:
         print("ENDPOINT is native-Ollama-only (no /v1 OpenAI surface).")
         print("Use NORA_LLM_PROVIDER=ollama with this endpoint, but note the codebase")
