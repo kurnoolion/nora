@@ -26,6 +26,7 @@ Cline reads the playbook and executes the steps.
 | [`feedback-loop.md`](feedback-loop.md) | **Day-N rule refinement** from Parse Review feedback | `FEEDBACK` report (≤20 lines) |
 | [`derive-rule.md`](derive-rule.md) | **Fallback** rule derivation (no annotations / no feedback yet) | `RULE` report (~8–10 lines) |
 | [`debug-pipeline.md`](debug-pipeline.md) | Run pipeline stages, capture stats | `RPT` report (~15–25 lines) |
+| [`derive-prompts.md`](derive-prompts.md) | Derive corpus-grounded SIRA prompts (wraps `.claude/skills/derive-sira-prompts/SKILL.md`) | three `sandbox/prompts/*_v<N>.txt` files + inventory summary |
 | [`share-back.md`](share-back.md) | Bundle multiple reports for one typing trip | `BUNDLE` report (≤40 lines) |
 
 ### Reference (not invoked, just read)
