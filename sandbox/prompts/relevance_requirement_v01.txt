@@ -1,6 +1,10 @@
 # Telecom-requirement variant of SIRA's relevance_v04.txt.
 # Same 0-100 scoring scale, retuned scoring guidance for normative
 # device-requirement language.
+#
+# Iteration history:
+#   v01 (initial)  — LTE-EMM-biased examples in the scoring guidance.
+#   v01 (current)  — examples span LTE, 5G, VoWiFi, IMS, eSIM, SMS.
 Given a query and a device requirement, rate how useful the requirement is for answering the query.
 
 Query: {query}
@@ -8,20 +12,23 @@ Query: {query}
 Requirement: {document}
 
 Before scoring, follow these steps:
-1. What is the query actually asking? Identify the specific information needed (a timer value, a procedure step, a feature applicability rule, a cause-code mapping, a spec citation, etc.).
-2. Scan the requirement sentence by sentence: does ANY sentence contain or imply the answer? In MNO specs, the normative content typically uses "shall", "shall not", "should", or "may" — that's where the answer lives. Note that one sentence in the requirement with the answer is enough.
-3. If the requirement is the section heading or anchor for the topic the query asks about (even with little body text), score at least 41 — heading-anchored requirements in MNO docs often delegate the actual behavior to nearby reqs, and finding the heading is the navigational first step.
+1. What is the query actually asking? Identify the specific information needed: a timer value, a procedure step, a feature applicability rule, a cause-code mapping, a spec citation, an authentication step, a profile install step, a Cell Broadcast Message ID, etc.
+2. Identify the query's subdomain (LTE EMM / LTE RRC / 5G NR / 5G Core / VoLTE/IMS / VoWiFi / WLAN / eSIM/RSP / SMS / Device Management / SRVCC). Note both the query's and the requirement's subdomain — they must overlap meaningfully for any score above 0.
+3. Scan the requirement sentence by sentence: does ANY sentence contain or imply the answer? In MNO specs, the normative content typically uses "shall", "shall not", "should", or "may" — that's where the answer lives. One sentence with the answer is enough.
+4. If the requirement is the section heading or anchor for the topic the query asks about (even with little body text), score at least 41 — heading-anchored requirements in MNO docs often delegate the actual behavior to nearby reqs, and finding the heading is the navigational first step.
 
 Rate usefulness from 0 to 100:
-- 0: completely unrelated topic, no shared specs / procedures / network elements / plan codes / feature names
-- 1-20: peripherally related (shared spec family or RAT) but no sentence addresses what the query asks
-- 21-40: discusses related concepts (same procedure family, same timer family, same applicability dimension) without the specific answer
-- 41-60: the heading / anchor requirement for the queried topic, OR contains partial information (e.g. mentions the timer but not its value)
-- 61-80: contains the answer, even if only in one normative sentence ("shall" / "shall not" / "should")
-- 81-100: directly and clearly states the answer to the query, with the relevant normative verb
+- 0: completely unrelated topic. The requirement's subdomain has no meaningful overlap with the query's subdomain — no shared specs, procedures, network elements, plan codes, feature names.
+- 1-20: peripherally related (shared spec family or RAT) but no sentence addresses what the query asks. Example: query "ePDG selection" with a generic IMS-registration requirement that doesn't mention ePDG.
+- 21-40: discusses related concepts (same procedure family, same timer family, same applicability dimension) without the specific answer. Example: query "WiFi Calling handover requirements" with a requirement that describes general VoWiFi authentication but not the handover trigger.
+- 41-60: the heading / anchor requirement for the queried topic, OR contains partial information. Examples: query "what bands does a device support" matched against a 5G NR band-list heading; query "T3402 value" matched against a requirement that mentions T3402 but not its specific value.
+- 61-80: contains the answer, even if only in one normative sentence ("shall" / "shall not" / "should"). Examples: requirement states "the UE shall set T3402 to 720 seconds"; requirement states "the device shall support n41, n78, n260 NR bands"; requirement states "the device shall establish an IKEv2 SA with the ePDG using EAP-AKA".
+- 81-100: directly and clearly states the answer to the query, with the relevant normative verb, AND scoped narrowly to the query's subdomain.
 
-IMPORTANT: Score based on whether the ANSWER is present, not whether the requirement is "about" the query topic. A requirement that states "the UE shall set T3402 to 720 seconds" fully answers "what value does T3402 use" and scores 81+, even if the requirement also covers other timers. A requirement that lists "applicable form factors: smartphone, tablet" answers "which form factors does this feature apply to" and scores 81+.
+IMPORTANT: Score based on whether the ANSWER is present, not whether the requirement is "about" the query topic. A requirement that fully states a specific timer value, band list, cause code, or procedure step gets 81+, even if it also covers adjacent topics. A requirement that lists "applicable form factors: smartphone, tablet" fully answers "which form factors does this feature apply to" and scores 81+.
 
-IMPORTANT: A score of 0 means the requirement has NOTHING to do with the query — no shared 3GPP/GSMA spec, no shared procedure family, no shared network element, no shared plan code, no shared feature name. If the requirement mentions ANY entity from the query (a spec number, a plan code, a procedure name, a network-element name, a feature family), the score must be above 0.
+IMPORTANT: A score of 0 means the requirement has NOTHING to do with the query — no shared spec, no shared procedure family, no shared network element, no shared plan code, no shared feature name. If the requirement mentions ANY entity from the query's subdomain (a spec number, a plan code, a procedure name, a network-element name, a feature family from the same subdomain), the score must be above 0.
+
+IMPORTANT (cross-subdomain): If the query is about VoWiFi / 5G / eSIM / SMS but the requirement is purely about LTE EMM (or vice versa), score it 0-10. Do not give credit just because both are "telecom" or share the word "device" — subdomain mismatch should suppress the score even if surface keywords overlap.
 
 Output only: {{"score": <integer>}}

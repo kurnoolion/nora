@@ -1,21 +1,61 @@
 # Telecom-requirement variant of SIRA's query_v07.txt.
 # Mirrors the doc_requirement_v01.txt vocabulary universe.
-You are expanding a search query against a corpus of US Mobile Network Operator (MNO) device requirement specifications. Generate NEW terms that are NOT already present in the query.
+#
+# Iteration history:
+#   v01 (initial)  — LTE-EMM-biased examples; expanded most queries
+#                    with NAS/EMM/RRC tokens regardless of subject.
+#   v01 (current)  — domain-inference step first; examples cover
+#                    LTE/5G/VoWiFi/IMS/eSIM/SMS proportionally.
+You are expanding a search query against a corpus of US Mobile Network Operator (MNO) device requirement specifications (Verizon / AT&T / T-Mobile). Generate NEW terms that are NOT already present in the query.
 
 Query:
 {doc_text}
 
-Your task: generate vocabulary that the relevant device-requirement document would use, but that is MISSING from the query.
+STEP 1 — Identify the subdomain the query is asking about. US MNO device specs cover many distinct technical areas. Before generating any phrase, decide which family the query targets (a query may target more than one):
+
+- LTE EMM/NAS, LTE RRC/Access — attach, detach, EMM timers (T3402/etc.), TAU, RRC connection, PRACH. Refs: TS 24.301, TS 36.331.
+- 5G NR/NAS, 5G Core — 5G registration, NR bands, 5G NAS, network slicing, AMF/SMF. Refs: TS 24.501, TS 23.501, TS 38.331.
+- VoLTE/IMS — IMS registration, SIP signaling, P-CSCF, voice call setup, supplementary services. Refs: TS 24.229, GSMA IR.92.
+- VoWiFi/Untrusted-WLAN — Wi-Fi Calling, ePDG, SWu, IKEv2/IPSec, EAP-AKA, IMS-over-WLAN. Refs: TS 23.402, TS 33.402, GSMA IR.51.
+- WLAN/WiFi — 802.11, ANQP, Hotspot 2.0, WPA2/WPA3.
+- eSIM/RSP — Profile download, EID/ICCID, SM-DP+, LPA. Refs: SGP.21, SGP.22.
+- SMS — SMS over LTE, Cell Broadcast, CMAS/WEA. Refs: TS 23.040, TS 23.041.
+- Device Management — OMA-DM, OMA LwM2M, FOTA. Refs: OMA-DM 2.0.
+- Voice continuity / SRVCC — VoLTE↔VoWiFi handover, SRVCC, ePDG↔PGW path switch. Refs: TS 23.216, TS 23.402.
+- Device capabilities — supported bands, form factor, power class, antenna config.
+
+STEP 2 — Generate vocabulary that the relevant device-requirement document would use, but that is MISSING from the query. Stay within the subdomain identified in Step 1.
 
 CRITICAL RULES:
-- Do NOT guess the answer to the question. If the query asks "what value does timer T3402 use", do NOT generate specific timer values. If it asks "which procedure handles X", do NOT generate procedure-name guesses. If it asks "which plan defines Y", do NOT generate plan codes you're guessing. The answer is UNKNOWN — your job is to help FIND it, not to predict it.
-- Instead, expand with TOPIC and DOMAIN vocabulary: the relevant 3GPP / GSMA spec family, the procedure family, the network-element category, and contextual terms that the answering requirement would use alongside the answer.
-- For questions about procedures (attach, registration, handover, paging): generate procedure-family names ("EPS Mobility Management", "NAS layer", "RRC Connection"), spec family ("3GPP TS 24.301", "TS 23.401") — NOT specific cause codes, specific timer values, or specific message-IE values that you'd be guessing.
-- For questions about timers / counters: generate timer-family names ("T3xxx timer family", "EMM timer", "NAS retransmission"), behavior categories ("exponential backoff", "PLMN-specific timer") — NOT specific durations or specific transition rules you'd be guessing.
-- For questions about features / applicability: generate feature-family names ("VoLTE registration", "IMS subscription", "data retry") and applicability dimensions ("form factor", "service type", "RAT") — NOT specific yes/no answers.
+- Do NOT guess the answer to the question. If the query asks "what value does T3402 use", do NOT generate specific timer values. If it asks "which procedure handles X", do NOT generate procedure-name guesses. If it asks "which plan defines Y", do NOT generate plan codes you're guessing. The answer is UNKNOWN — your job is to help FIND it, not to predict it.
+- Instead, expand with TOPIC and DOMAIN vocabulary appropriate to the subdomain: the relevant 3GPP / GSMA / IETF / OMA / SGP spec family, the procedure family, the network-element category, and contextual terms that the answering requirement would use alongside the answer.
+- STAY IN SUBDOMAIN. If the query is about VoWiFi / 5G / eSIM / SMS, do NOT emit LTE-EMM tokens (ATTACH REQUEST, EPS Mobility Management, T3402) just because LTE is common in the corpus. Emit the subdomain's actual vocabulary.
 
-Good example: "What is the T3402 timer behavior in VZW data retry?" → expand with: EMM timer, mobility management retry, PLMN throttling, 3GPP TS 24.301 Section 5, exponential backoff (NOT specific seconds, NOT specific PLMN names)
-Bad example: same query → 12 minutes, Verizon, AT&T, succeeded (guessing values or wrong scope)
+EXAMPLES — by subdomain, what good expansion looks like:
+
+LTE-EMM query: "What is the T3402 timer behavior in VZW data retry?"
+  Good: "EPS Mobility Management", "EMM timer family", "PLMN-specific timer", "exponential backoff", "3GPP TS 24.301 Section 5"
+  Bad:  "12 minutes", "Verizon", "AT&T" (guessing values or wrong scope)
+
+VoWiFi query: "Summarize WiFi Calling requirements"
+  Good: "ePDG selection", "SWu tunnel", "IKEv2 IPSec", "EAP-AKA authentication", "IMS over WLAN registration", "TS 23.402", "GSMA IR.51"
+  Bad:  "NAS Attach", "RRC Idle", "EMM CAUSE", "EPS Mobility Management" (off-domain LTE-EMM vocabulary)
+
+5G query: "What 5G bands shall a device support?"
+  Good: "5G NR band list", "FR1 sub-6 bands", "FR2 mmWave", "n41 n78 n260", "TS 38.101", "supported NR band combinations"
+  Bad:  "LTE Band 13", "B13 NAC", "EARFCN" (LTE not 5G)
+
+IMS/VoLTE query: "What are P-CSCF discovery requirements?"
+  Good: "IMS registration", "DHCP option 120", "EPC PCO information element", "PDN connectivity for IMS APN", "TS 24.229", "GSMA IR.92"
+  Bad:  "RACH preamble", "T3402 timer" (off-domain)
+
+eSIM query: "How is a profile downloaded onto the device?"
+  Good: "SM-DP+ bound profile", "LPA confirmation code", "EID", "Profile installation", "SGP.22 Section 3", "RSP download flow"
+  Bad:  "PDN connection", "PLMN selection" (LTE-EMM not eSIM)
+
+SMS query: "How is a CMAS alert delivered?"
+  Good: "Cell Broadcast Service", "CB Message ID range", "WEA alert", "ETWS", "TS 23.041 Section 9.4"
+  Bad:  "ATTACH REQUEST", "PDN connectivity" (off-domain)
 
 Rules:
 - Do NOT include any word or phrase already present in the query text above.
@@ -23,7 +63,7 @@ Rules:
 - Generate at most 10 phrases, 1-{max_n} words each.
 - Each phrase must add new vocabulary not already in the query.
 - Be DIVERSE: cover multiple distinct facets of the topic — do not generate synonyms for the same concept.
-- Prefer terms that NARROW the topic (e.g., "EPS Mobility Management" not "telecom"; "T3xxx timer" not "timer") without guessing the specific answer.
+- Prefer terms that NARROW the topic within its subdomain (e.g., "ePDG tunnel establishment" not "tunnel"; "n78 band combination" not "band") without guessing the specific answer.
 
 Think shortly, not more than 10 sentences. Then output only:
 {{"keywords": ["...", "..."]}}

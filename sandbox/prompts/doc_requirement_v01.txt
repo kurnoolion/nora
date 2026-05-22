@@ -1,30 +1,73 @@
 # Telecom-requirement variant of SIRA's doc_v07.txt. Tunes the
 # Wikipedia/factoid priorities for US MNO device requirement specs
 # (Verizon / AT&T / T-Mobile quarterly device-spec releases) plus
-# their 3GPP / GSMA citations. Iterate as v02, v03 based on what the
-# LLM proposes against a real corpus.
+# their 3GPP / GSMA / IETF / OMA / SGP citations.
+#
+# Iteration history:
+#   v01 (initial)   — LTE-EMM-biased examples; produced LTE-flavored
+#                     phrases even on VoWiFi / 5G / eSIM / SMS reqs.
+#   v01 (current)   — restructured around domain inference; examples
+#                     span LTE-EMM, VoWiFi, VoLTE, 5G NR, 5G Core, IMS,
+#                     eSIM, SMS, device management, voice continuity.
 You are improving a search index over US Mobile Network Operator (MNO) device requirement specifications (Verizon / AT&T / T-Mobile). Given a single requirement, generate NEW search terms that are NOT already present in the requirement text.
 
 Requirement:
 {doc_text}
 
-Your task: generate terms that a device engineer or compliance analyst would use to find this requirement. Focus on what makes this requirement UNIQUELY identifiable in a corpus of thousands of similar-shaped requirements.
+STEP 1 — Identify the subdomain. US MNO device specs cover many distinct technical areas. Before generating any phrase, decide which of the following families this requirement belongs to (a requirement may belong to more than one):
 
-Prioritize in this order:
-1. Specific 3GPP / GSMA spec identifiers and sections likely relevant but not cited (e.g., "TS 24.301 Section 5.5", "TS 23.401 Annex P", "GSMA TS.34")
-2. Network element / procedure / protocol terms a reader would search by: e.g. "EPS Mobility Management", "PDN connectivity", "NAS Attach reject", "RRC Idle", "PLMN selection", "VoLTE registration", "5G NAS registration"
-3. Timer and counter names (T3402, T3346, T3245, N400) and message types (ATTACH REQUEST, EMM CAUSE 14)
-4. Plan code / feature family this requirement belongs to (e.g., "LTE Data Retry", "LTE OTA DM", "IMS Registration", "B13 NAC")
-5. Closely-related requirement aliases or shorthand engineers use (e.g., "throttling algorithm", "exponential backoff", "registration retry", "barred PLMN")
+- LTE EMM/NAS — attach, detach, TAU, EMM timers (T3402/T3346/etc.), EMM cause codes, EPS bearer, PDN connectivity. Refs: 3GPP TS 24.301, TS 23.401, TS 36.331.
+- LTE RRC/Access — RRC connection, RACH, PRACH, idle/connected mode, PLMN selection, cell selection. Refs: TS 36.331, TS 36.304.
+- 5G NR/NAS — 5G registration, NR bands (n1-n79, n257-n261), beam management, 5G NAS, 5G PDU sessions. Refs: TS 38.300, TS 38.331, TS 24.501.
+- 5G Core — AMF, SMF, UPF, PCF, NRF, NSSF, network slicing, service-based interfaces. Refs: TS 23.501, TS 23.502.
+- VoLTE/IMS — IMS registration, SIP signaling, RTP/RTCP, P-CSCF discovery, voice call setup, supplementary services. Refs: TS 24.229, TS 23.228, TS 24.628, GSMA IR.92/IR.94.
+- VoWiFi/Untrusted-WLAN access — ePDG selection, SWu interface, IKEv2/IPSec tunnel, EAP-AKA authentication, IMS-over-WLAN registration, voice call continuity. Refs: TS 23.402, TS 33.402, TS 24.302, RFC 7296, GSMA IR.51/IR.61.
+- WLAN/WiFi — 802.11 association, ANQP/Hotspot 2.0, WPA2/WPA3, EAP methods, BSSID/SSID selection. Refs: IEEE 802.11, Hotspot 2.0 Release 3.
+- eSIM/RSP — Profile download, EID/ICCID, SM-DP+/SM-DS, profile installation, LPA. Refs: GSMA SGP.21, SGP.22, TS.34.
+- SMS — SMS over GERAN/LTE, SMS-CB (Cell Broadcast), CMAS/WEA alerts, SMSC routing. Refs: TS 23.040, TS 23.041.
+- Device Management — OMA-DM, OMA LwM2M, firmware update (FOTA), bootstrap, configuration. Refs: OMA-DM 2.0, TS.42.
+- Voice continuity / SRVCC / handover — VoLTE→VoWiFi handover, SRVCC, ePDG↔PGW path switch, idle-mode mobility between 3GPP/non-3GPP. Refs: TS 23.216, TS 23.402.
+- Device capabilities / form factor — applicability rules, supported bands, supported features, power class, antenna config.
+
+If the requirement spans multiple subdomains, treat all of them as in-scope for phrase generation.
+
+STEP 2 — Generate terms a device engineer or compliance analyst would search by. Focus on what makes this requirement UNIQUELY identifiable in a corpus of thousands of similar-shaped requirements. Prioritize, IN THIS ORDER:
+
+1. Specific 3GPP / GSMA / IETF / OMA / SGP spec identifiers and sections likely relevant but not cited in the requirement text. Example shapes (use the family that matches the subdomain identified in Step 1):
+   - LTE EMM:    "TS 24.301 Section 5.5", "TS 23.401 Annex P"
+   - 5G NAS:     "TS 24.501 Section 5.4", "TS 23.502 Section 4.2"
+   - IMS/VoLTE:  "TS 24.229 Section 5.1", "GSMA IR.92"
+   - VoWiFi:     "TS 33.402 Section 8", "RFC 7296 IKEv2", "GSMA IR.51"
+   - eSIM:       "SGP.22 Section 3", "GSMA TS.34"
+   - SMS:        "TS 23.040 Section 9.2", "TS 23.041 Section 9.4"
+
+2. Network element / procedure / protocol terms specific to the subdomain. Example shapes:
+   - LTE EMM:    "EPS Mobility Management", "NAS Attach reject", "Tracking Area Update"
+   - 5G NR:      "5G NAS registration", "PDU session establishment", "NR beam failure recovery"
+   - VoLTE/IMS:  "IMS registration", "P-CSCF discovery", "RTP media bearer"
+   - VoWiFi:     "ePDG selection", "SWu tunnel establishment", "IKEv2 child SA", "EAP-AKA authentication"
+   - eSIM:       "Profile download", "SM-DP+ bound", "LPA confirmation code"
+   - SMS:        "SMSC routing", "Cell Broadcast Service", "CMAS alert delivery"
+
+3. Identifiers, codes, timer/counter names, message types specific to the subdomain:
+   - LTE EMM:    "T3402", "T3346", "EMM CAUSE 14", "ATTACH REQUEST"
+   - 5G NAS:     "T3502", "T3510", "5GMM CAUSE 9", "REGISTRATION REQUEST"
+   - VoWiFi:     "IKE_SA_INIT", "IKE_AUTH", "CHILD_SA", "EAP-AKA round 1"
+   - SMS:        "TP-DCS", "TP-MTI SUBMIT", "CB Message ID 4370"
+
+4. Plan code / feature family this requirement belongs to (use the corpus's actual plan code shapes, e.g. "LTE Data Retry", "VoWiFi", "5G NR SA", "OTA DM", "B13 NAC", "SMS over LTE").
+
+5. Closely-related requirement aliases or shorthand engineers use within the identified subdomain (e.g., "registration retry", "Wi-Fi calling handover", "profile install flow", "RACH preamble selection").
 
 Rules:
 - Do NOT include any word or phrase (or close variant) already present in the requirement text above.
-- Do NOT generate the specific req_id of this requirement or other req_ids — readers don't search by foreign req_id.
+- Do NOT generate the req_id of this requirement or other req_ids — readers don't search by foreign req_id.
 - Generate at most 10 phrases, 1-{max_n} words each.
 - Each phrase must be genuinely new vocabulary, not a rewording of what is already there.
-- Be SPECIFIC: prefer "EPS Mobility Management" over "mobility", prefer "ATTACH REQUEST message" over "request message".
+- STAY IN SUBDOMAIN: if Step 1 identified the requirement as VoWiFi / 5G / eSIM / SMS, do NOT emit LTE-EMM-specific phrases (T3402, EPS Mobility Management, ATTACH REQUEST). Emit the subdomain's own vocabulary.
+- Be SPECIFIC: prefer "ePDG tunnel establishment" over "tunnel", prefer "5G NAS registration" over "registration".
 - Do NOT generate broad telecom topic words that thousands of requirements share (e.g., "wireless", "mobile", "cellular", "device", "specification", "requirement").
-- Stay within US MNO + 3GPP + GSMA + IETF terminology. Do not invent identifiers that don't exist in the standards (e.g., do not invent timer names).
+- Stay within US MNO + 3GPP + GSMA + IETF + OMA + SGP terminology. Do not invent identifiers that don't exist in the standards.
 
 Think shortly, not more than 10 sentences. Then output only:
 {{"keywords": ["...", "..."]}}
