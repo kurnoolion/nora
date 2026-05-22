@@ -54,3 +54,30 @@ Options considered:
 - `/healthz` surfaces the active mode + resolved TLS / proxy / model-override config — single-curl debugging.
 - The shim now has ~250 LOC, two distinct code paths, and six env-var knobs. Beyond the original "50-line shim" framing in D-DRAFT-1 but the additions are all corporate-friction fixes; no new architectural commitments.
 - If a future deployment needs to test multiple proprietary LLMs side-by-side, restart the shim with different env vars between runs. Single-instance limitation, fine for our use case.
+
+## D-DRAFT-3: Pinned-chunk synthesizer path + two-gate score filter
+**Status**: Active · **Date**: 2026-05-22.
+
+**Decision**: Add a `pinned_chunk_ids` early-return path to `QueryPipeline.query()` that skips Stages 3-5 (graph/retrieval/rerank) and feeds caller-provided chunks into `_context_builder.build()` + `LLMSynthesizer.synthesize()`. Gate which chunks reach the synthesizer with a two-floor filter: absolute (`NORA_SIRA_PIN_MIN_SCORE=30`) AND relative (`score ≥ NORA_SIRA_PIN_REL_THRESHOLD=0.5 × max_score`). Filtered chunks render dimmed in the UI, not hidden.
+
+**Why**: External retrievers (SIRA) need NORA's synthesizer for apples-to-apples answers. Rank-K cutoff was the obvious alternative and rejected — K has no principled value. Score-based gating uses the reranker's own signal; two floors handle two failure modes (uniform-low confidence vs relative outliers in a high-scoring set).
+
+**Consequences**: Any external retriever is now A/B-testable against NORA via the shared synthesizer. Pinned-chunk is the only `query()` path that synthesizes without running graph/retrieval. Thresholds are eyeballed; flagged for sweep. Filtered chunks visible (not silently dropped) is deliberate — debugging needs to see exclusions.
+
+## D-DRAFT-4: Per-query SIRA probing stays in sandbox boundary
+**Status**: Active · **Date**: 2026-05-22.
+
+**Decision**: Interactive per-query SIRA probing runs as a separate FastAPI service (`sandbox/sira_query/service.py`); NORA's Test page calls it over HTTP via `httpx`. SIRA primitives are *not* ported into `core/src/query/`.
+
+**Why**: Extends D-DRAFT-1's "standalone sandbox" principle from bulk eval to interactive probing. Porting reranker/enrichment into NORA's retrieval lane was the alternative — rejected because Phase 1 verdict was adverse and porting would commit code to `core/` for a primitive we may archive. HTTP boundary keeps the strand archive-able by `rm -rf sandbox/sira_query/` if SIRA loses.
+
+**Consequences**: One extra process to keep alive during Test-page use (shim:8030 + SIRA service:8040 + NORA web). Latency added vs in-process call, acceptable for probing. Service is independently shutdown-able when strand archives.
+
+## D-DRAFT-5: Phase 1 verdict — SIRA does not improve retrieval on the NORA corpus
+**Status**: Active · **Date**: 2026-05-22.
+
+**Decision**: Record the measured Phase 1 outcome: SIRA loses to BM25 baseline on the 18-Q eval set. doc-enrich −18pp Recall@10 vs 53.4% baseline; query-enrich identical to doc-enrich; rerank 0% Recall@10 with 52% zero-scores from the LLM judge.
+
+**Why**: Consistent with the paper's Wikipedia/factoid prompt tuning — telecom-requirements is a different text genre. DF-filtered enrichment produces low-signal terms on this corpus; the relevance-judging prompt fails to discriminate.
+
+**Consequences**: Phase 2 question narrows to "iterate on telecom-specific prompts or archive." Per-query probe (D-DRAFT-4) is the inspection surface. If we archive, this finding promotes to canonical DECISIONS as the strand's verdict ("tested and rejected on this corpus, archived").

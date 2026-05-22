@@ -54,3 +54,31 @@
 ### Flags
 - **Throughput vs. wall-clock asymmetry**: at 36s/call, the 13k-req enrichment is the long pole. If results tomorrow look promising and we want fast iteration on prompts or `max_doc_chars`, we'd need to either (a) raise concurrency above 8 (untested if the proprietary endpoint absorbs it), or (b) sample with `max_docs=N` for iteration loops, then full-run only at end. Decide post-eval.
 - **NLTK / other transitive deps**: SIRA's pipeline LLM stages (`enrich_corpus` / `enrich_query` / `rerank`) haven't been exercised yet on work PC. If they need any deps the BM25 stage didn't (nltk, scipy, pandas), we'll discover them only after overnight run progresses past BM25. Monitoring tomorrow.
+
+## 2026-05-22 — Phase 1 verdict + Test-page per-query probe shipped
+
+### Done this session
+- **Verify-D completed.** Overnight run finished with 110 doc failures (60 socket/HTTP-502, 50 `no_phrases`); retried via SIRA's resume (`+run_name=enrich-1779146356`). All four stages have `best.json`.
+- **Eval verdict — SIRA loses on this corpus** (vs BM25 baseline 53.4% Recall@10):
+  - doc-enrich: **−18pp**
+  - query-enrich: identical to doc-enrich (no query-side lift)
+  - rerank: **0%** — 52% of candidates got zero scores from the LLM judge
+  - Consistent with the paper's Wikipedia/factoid prompt tuning; telecom-requirements is a different genre.
+- **Per-query SIRA probe.** New `sandbox/sira_query/service.py` (~370 LOC) exposes `POST /sira-query` with per-call rerank latency histogram. NORA's Test page gained a "SIRA Retrieval" tab; apples-to-apples via pinned-chunk path through NORA's `LLMSynthesizer`.
+- **Two-gate score filter** for which chunks reach the synthesizer: absolute floor `NORA_SIRA_PIN_MIN_SCORE=30` + relative floor `NORA_SIRA_PIN_REL_THRESHOLD=0.5×max`. Replaces rank-K cutoff per user pushback. Filtered chunks render dimmed so exclusions are visible.
+- **Diagnostics restored on Test page.** Refactored `_answer.html` to fold SIRA into the shared `else` branch — both tabs share BM25/dense scores, Citation Audit, Show LLM Prompt, sentence coverage. Suppressed misleading "10 candidates from graph" footer on SIRA tab (`candidate_count=0`).
+- **Sandbox concurrency=1 default** in `enrich/nora.yaml` + `rerank/nora.yaml` (proxy throttling).
+- **Diagnostic: NORA-tab graph/query_intent panels.** Root cause = `QueryPipeline` cached on `app.state` until process restart (`query.py:459-462`); graph stage gates on `graph_path.exists()`, not on Config-page or `config/llm.json` skip flags (those only drive the ingestion runner). Recommended: restart web process.
+
+### In progress
+- Phase 1 → Phase 2 decision pending. Open question: is the loss from reranker prompt being telecom-blind (fixable), or from DF-filter enrichment producing low-signal terms on this corpus (harder)?
+
+### Next
+- Per-query failure-mode triage on 5–10 queries where NORA wins / SIRA loses, via the Test-page probe.
+- Strand decision after triage: archive (tested & rejected) vs iterate on `relevance_v01_telecom` prompt + re-rerank.
+- Optional: `docs/compact/env-vars.md` consolidation (~20 distinct vars, no canonical doc today).
+
+### Flags
+- **Web-app pipeline cache + skip-flag gap.** Config-page DB doesn't reach the cached pipeline, and `skip_taxonomy` doesn't appear honored at QueryPipeline construction at all (grep miss in `pipeline.py`). Not strand-specific; worth raising separately.
+- **Reranker 52% zero-score rate** → prompt mis-fit, not noise. `relevance_v04` → telecom variant is the obvious next experiment.
+- **Two-gate thresholds (30 / 0.5×) are eyeballed** — sweep if the strand continues.
