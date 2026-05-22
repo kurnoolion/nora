@@ -11,8 +11,9 @@ You are expanding a search query against a corpus of US Mobile Network Operator 
 Query:
 {doc_text}
 
-STEP 1 — Identify the subdomain the query is asking about. US MNO device specs cover many distinct technical areas. Before generating any phrase, decide which family the query targets (a query may target more than one):
+STEP 1 — Identify the subdomain the query is asking about. US MNO device specs span TWO broad families: standards-body protocol layers (3GPP / GSMA / IETF / IEEE / OMA / SGP), AND the device's software stack and user-facing surfaces (Android platform / apps / UI / hardware). A query may target either family or both.
 
+STANDARDS-BODY subdomains:
 - LTE EMM/NAS, LTE RRC/Access — attach, detach, EMM timers (T3402/etc.), TAU, RRC connection, PRACH. Refs: TS 24.301, TS 36.331.
 - 5G NR/NAS, 5G Core — 5G registration, NR bands, 5G NAS, network slicing, AMF/SMF. Refs: TS 24.501, TS 23.501, TS 38.331.
 - VoLTE/IMS — IMS registration, SIP signaling, P-CSCF, voice call setup, supplementary services. Refs: TS 24.229, GSMA IR.92.
@@ -22,7 +23,15 @@ STEP 1 — Identify the subdomain the query is asking about. US MNO device specs
 - SMS — SMS over LTE, Cell Broadcast, CMAS/WEA. Refs: TS 23.040, TS 23.041.
 - Device Management — OMA-DM, OMA LwM2M, FOTA. Refs: OMA-DM 2.0.
 - Voice continuity / SRVCC — VoLTE↔VoWiFi handover, SRVCC, ePDG↔PGW path switch. Refs: TS 23.216, TS 23.402.
-- Device capabilities — supported bands, form factor, power class, antenna config.
+- Device capabilities (RF) — supported bands, form factor, power class, antenna config, SAR.
+
+PLATFORM / APP / UX subdomains:
+- Android Platform / Telephony API — TelephonyManager, SubscriptionManager, ImsManager, CarrierConfigManager; CarrierConfig keys; system properties; HAL/AIDL; AOSP CDD/CTS; Android version + API level.
+- Android Applications — Dialer / Settings / Messaging / LPA apps; package names; Activity/Service classes; manifest permissions; intent actions.
+- UI / UX / strings — settings menu paths, notification channels, dialog wording, screen flows, accessibility, RTL.
+- Device hardware / modem / RF — chipset (Qualcomm/MediaTek/Samsung), baseband firmware, AT commands, antenna tuning, GNSS, Bluetooth, FCC ID.
+- Privacy / security / regulatory — KeyStore, BiometricPrompt, FCC/FDA/ADA compliance, location-privacy strings.
+- Carrier services / VAS — RCS Universal Profile, MaaP, RBM, carrier-bundled apps.
 
 STEP 2 — Generate vocabulary that the relevant device-requirement document would use, but that is MISSING from the query. Stay within the subdomain identified in Step 1.
 
@@ -56,6 +65,26 @@ eSIM query: "How is a profile downloaded onto the device?"
 SMS query: "How is a CMAS alert delivered?"
   Good: "Cell Broadcast Service", "CB Message ID range", "WEA alert", "ETWS", "TS 23.041 Section 9.4"
   Bad:  "ATTACH REQUEST", "PDN connectivity" (off-domain)
+
+Android Platform query: "How does the device expose IMS registration state to apps?"
+  Good: "ImsManager registration callback", "RegistrationManager", "CarrierConfig KEY_CARRIER_VOLTE_AVAILABLE_BOOL", "android.permission.READ_PRIVILEGED_PHONE_STATE", "AOSP CDD 7.4.1"
+  Bad:  "SIP REGISTER", "P-CSCF discovery" (these are 3GPP-layer answers, not Android-API surface — the query asks how the API surfaces the state)
+
+Android Apps query: "What is the default dialer's emergency call behavior?"
+  Good: "default-dialer role", "com.android.dialer", "ACTION_CALL_EMERGENCY intent", "TelecomManager placeCall", "Emergency Number List"
+  Bad:  "PSAP routing", "E911 location" (these are network-layer, not the dialer-app behavior question)
+
+UI / UX query: "What strings does the device show when no service is available?"
+  Good: "no_service_notification string resource", "Settings → Network & internet → Mobile network status", "carrier_name display logic", "no service icon", "emergency-calls-only indicator"
+  Bad:  "RRC connection failure", "PLMN selection" (3GPP-layer reasons for no service, not the user-visible string question)
+
+Device HW / modem query: "Which chipsets are supported for 5G SA?"
+  Good: "Qualcomm Snapdragon X75", "MediaTek Dimensity modem", "modem firmware version", "5G SA capability flag", "ro.boot.hardware.platform"
+  Bad:  "n78 band", "5G NAS" (these are protocol-layer, not chipset-identification answers)
+
+RCS / VAS query: "What is the Universal Profile version requirement for RCS chat?"
+  Good: "RCS Universal Profile 2.5", "MaaP", "jibe platform", "carrier-id keyed RCS config", "GSMA RCC.71"
+  Bad:  "SIP", "IMS registration" (lower-layer, not the UP-version question)
 
 Rules:
 - Do NOT include any word or phrase already present in the query text above.

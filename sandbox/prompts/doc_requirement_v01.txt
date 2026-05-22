@@ -14,50 +14,73 @@ You are improving a search index over US Mobile Network Operator (MNO) device re
 Requirement:
 {doc_text}
 
-STEP 1 — Identify the subdomain. US MNO device specs cover many distinct technical areas. Before generating any phrase, decide which of the following families this requirement belongs to (a requirement may belong to more than one):
+STEP 1 — Identify the subdomain. US MNO device specs span TWO broad families of subdomains: standards-body protocol layers (3GPP / GSMA / IETF / IEEE / OMA / SGP), AND the device's software stack and user-facing surfaces (Android platform / apps / UI / hardware). A single requirement may sit in either family, or both at once. Before generating any phrase, decide which subdomain(s) this requirement targets:
 
+STANDARDS-BODY subdomains:
 - LTE EMM/NAS — attach, detach, TAU, EMM timers (T3402/T3346/etc.), EMM cause codes, EPS bearer, PDN connectivity. Refs: 3GPP TS 24.301, TS 23.401, TS 36.331.
 - LTE RRC/Access — RRC connection, RACH, PRACH, idle/connected mode, PLMN selection, cell selection. Refs: TS 36.331, TS 36.304.
 - 5G NR/NAS — 5G registration, NR bands (n1-n79, n257-n261), beam management, 5G NAS, 5G PDU sessions. Refs: TS 38.300, TS 38.331, TS 24.501.
 - 5G Core — AMF, SMF, UPF, PCF, NRF, NSSF, network slicing, service-based interfaces. Refs: TS 23.501, TS 23.502.
 - VoLTE/IMS — IMS registration, SIP signaling, RTP/RTCP, P-CSCF discovery, voice call setup, supplementary services. Refs: TS 24.229, TS 23.228, TS 24.628, GSMA IR.92/IR.94.
-- VoWiFi/Untrusted-WLAN access — ePDG selection, SWu interface, IKEv2/IPSec tunnel, EAP-AKA authentication, IMS-over-WLAN registration, voice call continuity. Refs: TS 23.402, TS 33.402, TS 24.302, RFC 7296, GSMA IR.51/IR.61.
-- WLAN/WiFi — 802.11 association, ANQP/Hotspot 2.0, WPA2/WPA3, EAP methods, BSSID/SSID selection. Refs: IEEE 802.11, Hotspot 2.0 Release 3.
+- VoWiFi/Untrusted-WLAN access — ePDG selection, SWu interface, IKEv2/IPSec tunnel, EAP-AKA authentication, IMS-over-WLAN registration. Refs: TS 23.402, TS 33.402, TS 24.302, RFC 7296, GSMA IR.51/IR.61.
+- WLAN/WiFi — 802.11 association, ANQP/Hotspot 2.0, WPA2/WPA3, EAP methods. Refs: IEEE 802.11, Hotspot 2.0 Release 3.
 - eSIM/RSP — Profile download, EID/ICCID, SM-DP+/SM-DS, profile installation, LPA. Refs: GSMA SGP.21, SGP.22, TS.34.
 - SMS — SMS over GERAN/LTE, SMS-CB (Cell Broadcast), CMAS/WEA alerts, SMSC routing. Refs: TS 23.040, TS 23.041.
-- Device Management — OMA-DM, OMA LwM2M, firmware update (FOTA), bootstrap, configuration. Refs: OMA-DM 2.0, TS.42.
-- Voice continuity / SRVCC / handover — VoLTE→VoWiFi handover, SRVCC, ePDG↔PGW path switch, idle-mode mobility between 3GPP/non-3GPP. Refs: TS 23.216, TS 23.402.
-- Device capabilities / form factor — applicability rules, supported bands, supported features, power class, antenna config.
+- Device Management — OMA-DM, OMA LwM2M, firmware update (FOTA), bootstrap. Refs: OMA-DM 2.0, TS.42.
+- Voice continuity / SRVCC — VoLTE↔VoWiFi handover, SRVCC, ePDG↔PGW path switch. Refs: TS 23.216, TS 23.402.
+- Device capabilities (RF) — supported bands, power class, antenna config, SAR. Refs: TS 38.101, TS 36.101, FCC.
 
-If the requirement spans multiple subdomains, treat all of them as in-scope for phrase generation.
+PLATFORM / APP / UX subdomains (these target the device's software stack and UI, NOT 3GPP-style specs):
+- Android Platform / Telephony API — TelephonyManager, SubscriptionManager, ImsManager, CarrierConfigManager APIs; CarrierConfig keys (KEY_*_BOOL/INT/STRING); system properties (persist.radio.*, gsm.*, telephony.*); RIL/IMS HAL interfaces; AOSP CDD/CTS conformance; Android API level / version-specific behavior.
+- Android Applications — system apps (default Dialer, Settings, Messaging, eSIM LPA), package names, Activity/Service/Receiver class names, manifest permissions (e.g. android.permission.READ_PHONE_STATE), intent actions, content URIs, default-app role assignments.
+- UI / UX / strings — screen flows, settings menu paths (e.g. "Settings → Network & internet → Mobile network → Advanced"), notification channels, dialog wording, user-visible strings, accessibility, RTL behavior.
+- Device hardware / modem / RF (beyond 3GPP layer) — chipset references (Qualcomm/MediaTek/Samsung Snapdragon/Dimensity/Exynos), baseband firmware, AT commands, antenna tuning, eSIM hardware, GNSS, Bluetooth, FCC certification.
+- Privacy / security / regulatory — Android KeyStore, BiometricPrompt, attestation, location-privacy strings, FCC/FDA/ADA compliance.
+- Carrier services / VAS — RCS Universal Profile, MaaP, RBM, jibe-style business messaging, carrier-bundled apps.
 
-STEP 2 — Generate terms a device engineer or compliance analyst would search by. Focus on what makes this requirement UNIQUELY identifiable in a corpus of thousands of similar-shaped requirements. Prioritize, IN THIS ORDER:
+A requirement may sit purely in one family or span both (e.g., an IMS-registration requirement that also specifies the Android API to expose registration state). If it spans both, treat all relevant subdomains as in-scope for phrase generation — emit references from each.
 
-1. Specific 3GPP / GSMA / IETF / OMA / SGP spec identifiers and sections likely relevant but not cited in the requirement text. Example shapes (use the family that matches the subdomain identified in Step 1):
-   - LTE EMM:    "TS 24.301 Section 5.5", "TS 23.401 Annex P"
-   - 5G NAS:     "TS 24.501 Section 5.4", "TS 23.502 Section 4.2"
-   - IMS/VoLTE:  "TS 24.229 Section 5.1", "GSMA IR.92"
-   - VoWiFi:     "TS 33.402 Section 8", "RFC 7296 IKEv2", "GSMA IR.51"
-   - eSIM:       "SGP.22 Section 3", "GSMA TS.34"
-   - SMS:        "TS 23.040 Section 9.2", "TS 23.041 Section 9.4"
+STEP 2 — Generate terms a device engineer or compliance analyst would search by. Focus on what makes this requirement UNIQUELY identifiable in a corpus of thousands of similar-shaped requirements. The shapes of useful terms DEPEND ON the subdomain — a 3GPP-protocol requirement is identifiable by spec section + timer/message name, while an Android-platform requirement is identifiable by TelephonyManager API + CarrierConfig key + Android version. Pick shapes appropriate to whichever subdomain(s) you identified in Step 1.
 
-2. Network element / procedure / protocol terms specific to the subdomain. Example shapes:
-   - LTE EMM:    "EPS Mobility Management", "NAS Attach reject", "Tracking Area Update"
-   - 5G NR:      "5G NAS registration", "PDU session establishment", "NR beam failure recovery"
-   - VoLTE/IMS:  "IMS registration", "P-CSCF discovery", "RTP media bearer"
-   - VoWiFi:     "ePDG selection", "SWu tunnel establishment", "IKEv2 child SA", "EAP-AKA authentication"
-   - eSIM:       "Profile download", "SM-DP+ bound", "LPA confirmation code"
-   - SMS:        "SMSC routing", "Cell Broadcast Service", "CMAS alert delivery"
+Prioritize, IN THIS ORDER:
 
-3. Identifiers, codes, timer/counter names, message types specific to the subdomain:
-   - LTE EMM:    "T3402", "T3346", "EMM CAUSE 14", "ATTACH REQUEST"
-   - 5G NAS:     "T3502", "T3510", "5GMM CAUSE 9", "REGISTRATION REQUEST"
-   - VoWiFi:     "IKE_SA_INIT", "IKE_AUTH", "CHILD_SA", "EAP-AKA round 1"
-   - SMS:        "TP-DCS", "TP-MTI SUBMIT", "CB Message ID 4370"
+1. Specific identifiers from external specs OR platform references, likely relevant but not cited. Example shapes by subdomain:
+   - LTE EMM:           "TS 24.301 Section 5.5", "TS 23.401 Annex P"
+   - 5G NAS:            "TS 24.501 Section 5.4", "TS 23.502 Section 4.2"
+   - IMS/VoLTE:         "TS 24.229 Section 5.1", "GSMA IR.92"
+   - VoWiFi:            "TS 33.402 Section 8", "RFC 7296 IKEv2", "GSMA IR.51"
+   - eSIM:              "SGP.22 Section 3", "GSMA TS.34"
+   - Android Platform:  "TelephonyManager.getDataNetworkType()", "CarrierConfigManager KEY_CARRIER_VOLTE_AVAILABLE_BOOL", "persist.radio.calls.on.ims", "Android 14 API level 34", "AOSP CDD 7.4.1"
+   - Android Apps:      "com.android.dialer", "android.intent.action.CALL_EMERGENCY", "android.permission.READ_PRIVILEGED_PHONE_STATE", "default-dialer role"
+   - UI / UX:           "Settings → Network & internet → Mobile network → Advanced", "notification channel high-importance", "incoming-call screen"
+   - Device HW / modem: "Qualcomm Snapdragon X75 modem", "AT+CSQ", "antenna port 0/1", "SAR exposure"
+   - RCS / VAS:         "RCS Universal Profile 2.5", "MaaP bot", "RBM merchant"
 
-4. Plan code / feature family this requirement belongs to (use the corpus's actual plan code shapes, e.g. "LTE Data Retry", "VoWiFi", "5G NR SA", "OTA DM", "B13 NAC", "SMS over LTE").
+2. Network element / procedure / API / surface terms specific to the subdomain:
+   - LTE EMM:           "EPS Mobility Management", "NAS Attach reject", "Tracking Area Update"
+   - 5G NR:             "5G NAS registration", "PDU session establishment", "NR beam failure recovery"
+   - VoLTE/IMS:         "IMS registration", "P-CSCF discovery", "RTP media bearer"
+   - VoWiFi:            "ePDG selection", "SWu tunnel establishment", "IKEv2 child SA", "EAP-AKA authentication"
+   - eSIM:              "Profile download", "SM-DP+ bound", "LPA confirmation code"
+   - SMS:               "SMSC routing", "Cell Broadcast Service", "CMAS alert delivery"
+   - Android Platform:  "ImsManager.registerImsRegistrationCallback", "SubscriptionManager active SIM list", "CarrierConfigManager.getConfigForSubId", "telephony HAL AIDL"
+   - Android Apps:      "Dialer call log Activity", "Settings APN editor", "Messaging RCS chat thread", "LPA QR code scan flow"
+   - UI / UX:           "data roaming toggle", "emergency call dialog", "no service notification", "voicemail badge"
+   - Device HW / modem: "modem firmware version", "antenna tuner", "RF front-end PA", "GNSS lock acquisition"
 
-5. Closely-related requirement aliases or shorthand engineers use within the identified subdomain (e.g., "registration retry", "Wi-Fi calling handover", "profile install flow", "RACH preamble selection").
+3. Identifiers, codes, timer/counter names, message types, OR API class/method names, OR settings keys / system properties — specific to the subdomain:
+   - LTE EMM:           "T3402", "T3346", "EMM CAUSE 14", "ATTACH REQUEST"
+   - 5G NAS:            "T3502", "T3510", "5GMM CAUSE 9", "REGISTRATION REQUEST"
+   - VoWiFi:            "IKE_SA_INIT", "IKE_AUTH", "CHILD_SA", "EAP-AKA round 1"
+   - SMS:               "TP-DCS", "TP-MTI SUBMIT", "CB Message ID 4370"
+   - Android Platform:  "DATA_DISCONNECTED state constant", "NETWORK_TYPE_LTE", "EXTRA_SUB_ID intent extra", "PERSIST_RADIO_VOLTE_ENABLE property"
+   - Android Apps:      "EXTRA_PHONE_NUMBER", "ACTION_DIAL", "PHONE_STATE broadcast"
+   - UI / UX:           "android:label notification title", "string resource id", "shortcut intent"
+   - Device HW / modem: "MSM8998 chipset id", "modem-config-id", "FCC ID prefix", "Bluetooth class-of-device"
+
+4. Plan code / feature family this requirement belongs to (use the corpus's actual plan code shapes, e.g. "LTE Data Retry", "VoWiFi", "5G NR SA", "OTA DM", "B13 NAC", "SMS over LTE", "Telephony API", "Dialer UI", "eSIM LPA").
+
+5. Closely-related requirement aliases or shorthand engineers use within the identified subdomain (e.g., "registration retry", "Wi-Fi calling handover", "profile install flow", "default-dialer hand-off", "carrier-privileged app").
 
 Rules:
 - Do NOT include any word or phrase (or close variant) already present in the requirement text above.
@@ -67,7 +90,7 @@ Rules:
 - STAY IN SUBDOMAIN: if Step 1 identified the requirement as VoWiFi / 5G / eSIM / SMS, do NOT emit LTE-EMM-specific phrases (T3402, EPS Mobility Management, ATTACH REQUEST). Emit the subdomain's own vocabulary.
 - Be SPECIFIC: prefer "ePDG tunnel establishment" over "tunnel", prefer "5G NAS registration" over "registration".
 - Do NOT generate broad telecom topic words that thousands of requirements share (e.g., "wireless", "mobile", "cellular", "device", "specification", "requirement").
-- Stay within US MNO + 3GPP + GSMA + IETF + OMA + SGP terminology. Do not invent identifiers that don't exist in the standards.
+- Stay within real, established terminology from EITHER family — 3GPP / GSMA / IETF / IEEE / OMA / SGP / FCC for standards-body subdomains, OR Android (AOSP / CDD / CTS / public-SDK class names) / OEM-chipset vendor docs / RCS UP for platform-app-UX subdomains. Do not invent identifiers, API class names, settings keys, or spec sections that don't exist.
 
 Think shortly, not more than 10 sentences. Then output only:
 {{"keywords": ["...", "..."]}}

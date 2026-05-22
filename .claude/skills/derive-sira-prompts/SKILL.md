@@ -74,7 +74,9 @@ stage.
 The skill recognizes this taxonomy (extend if your corpus has a
 subdomain not listed — note the addition in the summary):
 
-| Subdomain | Heuristic plan-name signals | Example spec citations |
+**Standards-body subdomains** — requirements written against external specifications:
+
+| Subdomain | Heuristic plan-name signals | Example references |
 |---|---|---|
 | LTE EMM/NAS | EMM, NAS, ATTACH, DATARETRY, DATA_RETRY | TS 24.301, TS 23.401 |
 | LTE RRC/Access | RRC, RACH, ACCESS, B13NAC, NAC, BAND | TS 36.331, TS 36.304 |
@@ -87,7 +89,20 @@ subdomain not listed — note the addition in the summary):
 | SMS | SMS, CMAS, WEA, CELL_BROADCAST, CB | TS 23.040, TS 23.041 |
 | Device Management | OTADM, DM, FOTA, LWM2M, BOOTSTRAP | OMA-DM 2.0, TS.42 |
 | Voice continuity / SRVCC | SRVCC, HANDOVER, CONTINUITY | TS 23.216 |
-| Device capabilities | CAPABILITIES, FORM_FACTOR, BANDS_SUPPORTED | TS 38.101, TS 36.101 |
+| Device capabilities (RF) | CAPABILITIES, FORM_FACTOR, BANDS_SUPPORTED, SAR | TS 38.101, TS 36.101, FCC |
+
+**Platform / app / UX subdomains** — requirements written against the device's software stack and user-facing surfaces, NOT against 3GPP-style protocol specs:
+
+| Subdomain | Heuristic plan-name signals | Example references |
+|---|---|---|
+| Android Platform / Telephony API | ANDROID, PLATFORM, TELEPHONY, TELMGR, SUBMGR, IMSMGR, CARRIERCONFIG | TelephonyManager, SubscriptionManager, ImsManager, CarrierConfigManager, CarrierConfig keys, system properties (`persist.radio.*`, `gsm.*`, `telephony.*`), API level, Android version, AOSP CDD, CTS |
+| Android Applications | DIALER, SETTINGS, MESSAGING, LPA, APP, SYSTEMAPP, VENDORAPP | package name, Activity / Service / BroadcastReceiver class, Intent action, manifest permission (e.g. `READ_PHONE_STATE`), content URI, default-app role |
+| UI / UX / strings | UI, UX, SCREEN, NOTIFICATION, STRINGS, DIALOG, FLOW | screen flow, notification channel, dialog string, settings menu path (e.g. `Settings → Network & internet → Mobile network`), accessibility, RTL |
+| Device hardware / modem / RF | MODEM, BASEBAND, CHIPSET, ANTENNA, RF, SAR, GNSS, BLUETOOTH | Qualcomm / MediaTek / Samsung chipset, AT commands, baseband firmware, antenna tuning, SAR limits, FCC ID, GPS / GNSS, BT version |
+| Privacy / security / regulatory | PRIVACY, SECURITY, BIOMETRIC, KEYSTORE, FCC, FDA, ACCESSIBILITY | BiometricPrompt, KeyStore, attestation, FCC certification, FDA Class II, ADA accessibility, location-privacy strings |
+| Carrier services / VAS | CARRIER, RCS, CHAT, FILE_TRANSFER, ENRICHED, RBM, BUSINESS_MESSAGING | RCS Universal Profile, MaaP, RBM, jibe, carrier-bundled apps |
+
+A plan's primary subdomain might be from EITHER table. Many MNO device specs are "horizontal" — a single plan covers a feature end-to-end from 3GPP layer down through the Android API surface up through the dialer UI and user-visible strings. In that case classify with two tags (e.g. `:primary VoLTE/IMS, :secondary Android-Platform`).
 
 For each plan, choose the **primary** subdomain by reading the sampled
 reqs, not the plan name alone — plan names can mislead. If a plan
@@ -100,8 +115,12 @@ If no taxonomy entry fits, propose a new subdomain in the summary
 ### 5. Harvest subdomain-specific vocabulary
 
 For each subdomain that has ≥1 plan classified to it, scan ALL reqs
-in those plans (not just the samples) and extract:
+in those plans (not just the samples) and extract whichever of these
+categories apply — different subdomains surface different shapes of
+discriminative term, so don't assume a single regex set covers
+everything.
 
+**For standards-body subdomains (3GPP/GSMA/IETF/IEEE/OMA/SGP/FCC):**
 - **Spec citations** — regex `TS \d{2}\.\d{3}`, `GSMA (?:IR|TS|SGP)\.\d+`,
   `RFC \d{3,5}`, `IEEE \d{3}\.\d{2}\w*`. Top 10 by frequency.
 - **Timer/counter names** — regex `T\d{4}` or `\bN\d{3}\b`. Top 10.
@@ -109,9 +128,56 @@ in those plans (not just the samples) and extract:
   that look like protocol message names (filter via length + caps
   ratio). Top 10.
 - **Procedure / network-element names** — bigrams and trigrams from
-  section titles, lowercased, deduplicated. Filter common stopwords
-  ("the", "of", "for"). Top 15.
+  section titles, lowercased, deduplicated. Filter common stopwords.
+  Top 15.
+
+**For Android Platform / Telephony API subdomain:**
+- **API class names** — `TelephonyManager`, `SubscriptionManager`,
+  `ImsManager`, `CarrierConfigManager`, etc. Match
+  `\b[A-Z][a-zA-Z]+Manager\b` and `\b[A-Z][a-zA-Z]+Service\b`.
+- **Method names** — `getDataNetworkType()`, `setPreferredNetworkType()`,
+  etc. Match `\b[a-z][a-zA-Z]+\(\)` in body.
+- **CarrierConfig keys** — match `KEY_[A-Z][A-Z0-9_]+_(?:BOOL|INT|STRING|ARRAY)`.
+- **System properties** — match `(?:persist|ro|sys|gsm|telephony)\.[a-z][a-z0-9_.]+`.
+- **Android version refs** — match `Android \d+(\.\d+)*` and `API level \d+`.
+- **Permission strings** — match `android\.permission\.[A-Z_]+`.
+
+**For Android Applications subdomain:**
+- **Package names** — match `(?:com|org|net|android)\.[a-z][a-z0-9.]+`.
+- **Activity / Service / Receiver class names** — `\b[A-Z][a-zA-Z]+(?:Activity|Service|Receiver|Fragment)\b`.
+- **Intent action strings** — match `android\.intent\.action\.[A-Z_]+`
+  and carrier-specific `com\.[a-z]+\.intent\.action\.[A-Z_]+`.
+- **Content URIs** — match `content://[a-z0-9./_-]+`.
+
+**For UI / UX / strings subdomain:**
+- **Settings paths** — match `Settings (?:>|→|>>) [\w &/()]+(?: (?:>|→) [\w &/()]+)*`.
+- **Notification channels / categories** — `\b[a-z][a-z_]+_channel\b`,
+  `\b[a-z][a-z_]+_category\b`.
+- **Quoted strings** — extract `"..."` substrings that look like user-
+  visible text (≤80 chars, no class-name shape). Top 20.
+- **Screen / dialog names** — bigrams from section titles containing
+  "screen", "dialog", "notification", "popup", "prompt".
+
+**For Device hardware / modem / RF subdomain:**
+- **Chipset / vendor names** — match `\b(?:Qualcomm|MediaTek|Samsung|Snapdragon|Dimensity|Exynos|MSM|SM\d{4}|MT\d{4})\b`.
+- **AT commands** — match `\bAT\+[A-Z]{3,8}\b` and `\bAT\^[A-Z]+\b`.
+- **RF / antenna terms** — `SAR`, `EIRP`, `RSRP`, `RSRQ`, `dBm`, antenna-port
+  identifiers, band-class refs.
+
+**For Carrier services / VAS subdomain:**
+- **RCS terms** — `Universal Profile \d`, `MaaP`, `RBM`, `Jibe`, `chat`,
+  `file transfer`, `enriched calling`.
+- **Server / endpoint URLs** — match `https?://[a-z0-9.-]+\.[a-z]{2,}(?:/[a-z0-9./_-]*)?`.
+
+**Universal categories** (apply to all subdomains):
 - **Plan codes themselves** — pass through the actual plan_ids.
+- **Feature family names** — frequent uppercase multi-word phrases that
+  appear in section titles AND req body (intersect to find genuine
+  feature labels vs heading-only).
+
+**Quality filter — same as before:** drop terms that appear in <3 reqs
+(too rare to be discriminative) or in >40% of reqs across all
+subdomains (too generic, indistinguishable noise).
 
 The harvested vocab is the example pool. Quality matters more than
 quantity — drop terms that appear in <3 reqs (too rare to be
