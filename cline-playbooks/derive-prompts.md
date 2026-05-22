@@ -13,6 +13,35 @@ VoWiFi-heavy or Android-API-heavy corpus produces matching prompts automatically
 **Input**: optional version slug (default `v02`). Refuses to overwrite an
 existing version unless `--force` is passed.
 
+## Step 0 — resolve `env_dir` before reading the corpus
+
+The SKILL.md references `<env_dir>` as the root of the parsed-corpus directory
+tree, but doesn't tell you how to resolve it. Resolve it with this chain
+BEFORE proceeding to Step 1 of the SKILL.md:
+
+1. **User override.** If the user said something like "use env_dir `/path/to/env`",
+   use that path. Skip the rest.
+2. **`$ENV_DIR` environment variable.** Try `echo $ENV_DIR`. If non-empty,
+   use it.
+3. **`environments/*.json` in the repo root.** Each environment file has a
+   top-level `env_dir` field. Read all files matching `environments/*.json`:
+   - If exactly one file exists, use its `env_dir`.
+   - If multiple files exist, list them with their `env_dir` values and ask
+     the user which environment to operate on. Do NOT pick by guessing.
+4. **Ask the user** with the explicit prompt:
+   > "I could not resolve env_dir. Please tell me the absolute path of your
+   > NORA environment directory (the one containing `out/parse/`)."
+
+Once resolved, verify the directory exists and contains `out/parse/` with at
+least one `*/tree.json` inside. If not, abort and report which check failed —
+don't proceed to fall back to `sandbox/adapter/out/<dataset>/raw/corpus.jsonl`
+silently. (The skill's Step 1 fallback rule still applies, but only AFTER you
+confirm that the user knew the parsed corpus is unavailable and explicitly
+wants to use the adapter output instead.)
+
+Surface the resolved path in your first response so the user can correct it
+before you spend time scanning hundreds of trees against the wrong corpus.
+
 ## Implementation reference
 
 The procedure (read sources, classify plans, harvest vocab per subdomain,
