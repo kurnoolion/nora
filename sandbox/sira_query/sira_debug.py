@@ -79,7 +79,7 @@ def _paths() -> dict[str, Path]:
     return {
         "base": base,
         "corpus": base / "raw" / "corpus.jsonl",
-        "queries": base / "raw" / "queries.jsonl",
+        "queries": base / "raw" / "queries-test.jsonl",
         "qrels": base / "raw" / "qrels-test.jsonl",
         "index": base / "index" / "best",
         "doc_phrases": base / "enrichments" / "doc" / "best.jsonl",
