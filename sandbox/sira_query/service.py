@@ -70,6 +70,22 @@ _EXPANSION_WEIGHT = float(os.getenv("NORA_SIRA_EXPANSION_WEIGHT", "0.5"))
 _DEFAULT_TOP_K = int(os.getenv("NORA_SIRA_TOP_K", "10"))
 _RERANK_TOP_N = int(os.getenv("NORA_SIRA_RERANK_TOP_N", "20"))
 
+# Run-pinning — determinism across "which offline run drives this service?".
+# Three knobs (each independent):
+#   NORA_SIRA_DOC_ENRICH_RUN   — exact run-name under runs/doc-enrich/<name>
+#   NORA_SIRA_QUERY_ENRICH_RUN — exact run-name under runs/query-enrich/<name>
+#   NORA_SIRA_RERANK_RUN       — exact run-name under runs/rerank/<name>
+# Plus a shortcut:
+#   NORA_SIRA_USE_LATEST_RUNS=true — auto-pick most-recently-modified run
+#                                    in each stage dir (when above env vars
+#                                    are unset).
+# Fallback when nothing resolves: best.jsonl / SIRA_CLONE_ROOT prompts
+# (the historical pre-patch behavior).
+_DOC_ENRICH_RUN = os.getenv("NORA_SIRA_DOC_ENRICH_RUN", "")
+_QUERY_ENRICH_RUN = os.getenv("NORA_SIRA_QUERY_ENRICH_RUN", "")
+_RERANK_RUN = os.getenv("NORA_SIRA_RERANK_RUN", "")
+_USE_LATEST = os.getenv("NORA_SIRA_USE_LATEST_RUNS", "").lower() in ("1", "true", "yes")
+
 
 # ── Lazy-loaded state ──────────────────────────────────────────────
 
@@ -81,6 +97,31 @@ _rerank_prompt_template: str = ""
 _max_df_absolute: int = 0
 _load_error: str | None = None
 
+# Provenance — surfaced via /healthz so the user can verify what's
+# actually loaded without grepping startup logs.
+_doc_enrich_source: str | None = None
+_doc_enrich_applied_docs: int = 0
+_query_prompt_source: str | None = None
+_rerank_prompt_source: str | None = None
+
+
+def _resolve_run_dir(stage_dir: Path, pinned_name: str) -> Path | None:
+    """Resolve a per-stage run directory.
+
+    - If pinned_name is non-empty, use that exact subdir (or fail).
+    - Else if NORA_SIRA_USE_LATEST_RUNS is set, pick the most-recently-
+      modified subdir.
+    - Else return None (caller falls back to best-pointer behavior).
+    """
+    if pinned_name:
+        cand = stage_dir / pinned_name
+        return cand if cand.is_dir() else None
+    if _USE_LATEST and stage_dir.is_dir():
+        subs = [p for p in stage_dir.iterdir() if p.is_dir()]
+        if subs:
+            return max(subs, key=lambda p: p.stat().st_mtime)
+    return None
+
 
 def _load_state() -> None:
     """Load BM25 index + corpus + prompts. Called once on first use.
@@ -90,6 +131,8 @@ def _load_state() -> None:
     setup; the user can curl healthz to see what's missing.
     """
     global _bm25, _max_df_absolute, _query_prompt_template, _rerank_prompt_template, _load_error
+    global _doc_enrich_source, _doc_enrich_applied_docs
+    global _query_prompt_source, _rerank_prompt_source
     if _bm25 is not None:
         return
 
@@ -126,25 +169,121 @@ def _load_state() -> None:
             }
     _max_df_absolute = max(1, int(len(_doc_ids) * _MAX_DF_RATIO))
 
-    # BM25 index
+    # BM25 index — baseline (not run-specific). SIRA's enrichment is
+    # applied to a loaded index via batch_enrich; the index file itself
+    # is the vanilla one regardless of which doc-enrich run we use.
     from bm25x import BM25
     _bm25 = BM25.load(str(index_dir))
 
-    # Prompts (telecom variants from sandbox/prompts/, copied into the
-    # SIRA clone by install_configs.sh).
-    qp = _SIRA_CLONE_ROOT / _QUERY_PROMPT_PATH
-    rp = _SIRA_CLONE_ROOT / _RERANK_PROMPT_PATH
-    _query_prompt_template = qp.read_text(encoding="utf-8") if qp.exists() else ""
-    _rerank_prompt_template = rp.read_text(encoding="utf-8") if rp.exists() else ""
-    if not _query_prompt_template:
-        logger.warning("Query enrichment prompt not found at %s — expansion stage skipped", qp)
-    if not _rerank_prompt_template:
-        logger.warning("Reranker prompt not found at %s — rerank stage skipped", rp)
+    # Resolve per-stage run directories (or None if falling back to
+    # best-pointer behavior).
+    doc_run = _resolve_run_dir(base / "runs" / "doc-enrich", _DOC_ENRICH_RUN)
+    query_run = _resolve_run_dir(base / "runs" / "query-enrich", _QUERY_ENRICH_RUN)
+    rerank_run = _resolve_run_dir(base / "runs" / "rerank", _RERANK_RUN)
+
+    # Doc enrichment: apply phrases to the loaded BM25 index. Prefer the
+    # pinned/latest run's `enrichments.kept.jsonl`; fall back to
+    # `enrichments/doc/best.jsonl` (the SIRA-promoted best run by score).
+    # If neither exists, the service runs vanilla BM25 + query-side
+    # enrichment only (the historical pre-patch behavior).
+    phrases_path: Path | None = None
+    if doc_run is not None:
+        cand = doc_run / "enrichments.kept.jsonl"
+        if cand.exists():
+            phrases_path = cand
+    if phrases_path is None:
+        fallback = base / "enrichments" / "doc" / "best.jsonl"
+        if fallback.exists() and fallback.stat().st_size > 0:
+            phrases_path = fallback
+
+    if phrases_path is not None:
+        doc_id_to_idx = {did: i for i, did in enumerate(_doc_ids)}
+        items: list[tuple[int, list[str]]] = []
+        missing_in_corpus = 0
+        with open(phrases_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                did = row.get("doc_id") or row.get("_id")
+                phrases = row.get("phrases") or []
+                if did in doc_id_to_idx and phrases:
+                    items.append((doc_id_to_idx[did], list(phrases)))
+                elif did:
+                    missing_in_corpus += 1
+        try:
+            _bm25.batch_enrich(items)
+            _doc_enrich_applied_docs = len(items)
+            _doc_enrich_source = str(phrases_path)
+            logger.info(
+                "Doc enrichment applied: %d docs from %s",
+                len(items), phrases_path,
+            )
+            if missing_in_corpus:
+                logger.warning(
+                    "Phrases file referenced %d doc_ids not in corpus.jsonl (skipped)",
+                    missing_in_corpus,
+                )
+        except Exception as exc:
+            logger.error(
+                "batch_enrich failed (%s) — falling back to vanilla BM25", exc,
+            )
+            _doc_enrich_source = None
+            _doc_enrich_applied_docs = 0
+    else:
+        logger.warning(
+            "No doc-enrichment phrases found — running vanilla BM25 + query-side enrichment only"
+        )
+
+    # Query enrichment prompt — prefer the run's own copy so the prompt
+    # used at query time is byte-identical to what the offline pipeline
+    # used. Fall back to SIRA_CLONE_ROOT/sandbox-copied prompt if not
+    # found in the run.
+    qp_path: Path | None = None
+    if query_run is not None:
+        cand = query_run / "query_prompt.txt"
+        if cand.exists():
+            qp_path = cand
+    if qp_path is None:
+        fallback_qp = _SIRA_CLONE_ROOT / _QUERY_PROMPT_PATH
+        if fallback_qp.exists():
+            qp_path = fallback_qp
+    if qp_path is not None:
+        _query_prompt_template = qp_path.read_text(encoding="utf-8")
+        _query_prompt_source = str(qp_path)
+        logger.info("Query enrichment prompt loaded from %s", qp_path)
+    else:
+        _query_prompt_template = ""
+        logger.warning(
+            "Query enrichment prompt not found in run dir or SIRA_CLONE_ROOT — expansion stage skipped"
+        )
+
+    # Rerank prompt — same logic.
+    rp_path: Path | None = None
+    if rerank_run is not None:
+        cand = rerank_run / "prompt.txt"
+        if cand.exists():
+            rp_path = cand
+    if rp_path is None:
+        fallback_rp = _SIRA_CLONE_ROOT / _RERANK_PROMPT_PATH
+        if fallback_rp.exists():
+            rp_path = fallback_rp
+    if rp_path is not None:
+        _rerank_prompt_template = rp_path.read_text(encoding="utf-8")
+        _rerank_prompt_source = str(rp_path)
+        logger.info("Rerank prompt loaded from %s", rp_path)
+    else:
+        _rerank_prompt_template = ""
+        logger.warning(
+            "Rerank prompt not found in run dir or SIRA_CLONE_ROOT — rerank stage skipped"
+        )
 
     _load_error = None
     logger.info(
-        "SIRA query service ready — corpus=%d docs, max_df=%d, expansion_weight=%.2f, top_n=%d",
+        "SIRA query service ready — corpus=%d docs, max_df=%d, expansion_weight=%.2f, top_n=%d, doc_enrich_applied=%d",
         len(_doc_ids), _max_df_absolute, _EXPANSION_WEIGHT, _RERANK_TOP_N,
+        _doc_enrich_applied_docs,
     )
 
 
@@ -185,6 +324,15 @@ def healthz() -> dict[str, Any]:
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
         "query_prompt_loaded": bool(_query_prompt_template),
         "rerank_prompt_loaded": bool(_rerank_prompt_template),
+        # Provenance — verify everything ties back to the run you expect.
+        "doc_enrich_source": _doc_enrich_source or "(none — vanilla BM25)",
+        "doc_enrich_applied_docs": _doc_enrich_applied_docs,
+        "query_prompt_source": _query_prompt_source or "(none)",
+        "rerank_prompt_source": _rerank_prompt_source or "(none)",
+        "doc_enrich_run_pinned": _DOC_ENRICH_RUN or "(unset)",
+        "query_enrich_run_pinned": _QUERY_ENRICH_RUN or "(unset)",
+        "rerank_run_pinned": _RERANK_RUN or "(unset)",
+        "use_latest_runs": _USE_LATEST,
     }
 
 
