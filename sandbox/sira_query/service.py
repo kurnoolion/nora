@@ -198,7 +198,10 @@ def _load_state() -> None:
 
     if phrases_path is not None:
         doc_id_to_idx = {did: i for i, did in enumerate(_doc_ids)}
-        items: list[tuple[int, list[str]]] = []
+        # Aggregate phrases per doc_id — `enrichments.kept.jsonl` can have
+        # multiple lines for the same doc_id (from sharded enrichment
+        # runs). Mirror SIRA's add_doc_index_adapter.py:365-371 pattern.
+        enrichments: dict[str, list[str]] = {}
         missing_in_corpus = 0
         with open(phrases_path, encoding="utf-8") as f:
             for line in f:
@@ -208,12 +211,21 @@ def _load_state() -> None:
                 row = json.loads(line)
                 did = row.get("doc_id") or row.get("_id")
                 phrases = row.get("phrases") or []
-                if did in doc_id_to_idx and phrases:
-                    items.append((doc_id_to_idx[did], list(phrases)))
-                elif did:
+                if not did or not phrases:
+                    continue
+                if did in doc_id_to_idx:
+                    enrichments.setdefault(did, []).extend(phrases)
+                else:
                     missing_in_corpus += 1
+        items: list[tuple[int, list[str]]] = [
+            (doc_id_to_idx[did], phrases)
+            for did, phrases in enrichments.items()
+        ]
         try:
-            _bm25.batch_enrich(items)
+            # The bm25x Python API method is `enrich_batch` (verb_noun);
+            # the Rust internal docstring says "Batch enrich:" which
+            # describes the action, not the binding name.
+            _bm25.enrich_batch(items)
             _doc_enrich_applied_docs = len(items)
             _doc_enrich_source = str(phrases_path)
             logger.info(
@@ -227,7 +239,7 @@ def _load_state() -> None:
                 )
         except Exception as exc:
             logger.error(
-                "batch_enrich failed (%s) — falling back to vanilla BM25", exc,
+                "enrich_batch failed (%s) — falling back to vanilla BM25", exc,
             )
             _doc_enrich_source = None
             _doc_enrich_applied_docs = 0
