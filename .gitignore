@@ -41,9 +41,6 @@ assets/hf_cache/
 # Pytest
 .pytest_cache/
 
-#git-sync files
-git-sync/
-
 # Local environment definitions (keep .gitkeep only)
 environments/*.json
 # customizations/mappings/ is NOT gitignored [D-062]:
