@@ -530,10 +530,15 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
     except ImportError as e:
         return _fail(stage, "VEC-E001", f"Import error: {e}", time.time() - t0)
 
+    # env_dir is documents_dir's parent (per D-022 layout: documents_dir
+    # = <env_dir>/input/). Marker-classification audit log lives under
+    # <env_dir>/reports/ alongside parse-audit and pipeline reports.
+    env_dir = ctx.documents_dir.parent
     config = VectorStoreConfig(
         persist_directory=str(out_dir),
         embedding_provider=ctx.embedding_provider,
         embedding_model=ctx.embedding_model,
+        skipped_headers_log=str(env_dir / "reports" / "marker_headers.csv"),
     )
     embedder = make_embedder(config)
     store = ChromaDBStore(
