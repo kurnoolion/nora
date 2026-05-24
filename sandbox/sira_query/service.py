@@ -46,6 +46,25 @@ _DATASET = os.getenv("NORA_SIRA_DATASET", "nora")
 _SHIM_URL = os.getenv("NORA_LLM_SHIM_URL", "http://127.0.0.1:8030").rstrip("/")
 _SHIM_MODEL = os.getenv("NORA_LLM_MODEL", "")
 
+# Rerank-only LLM override. Query enrichment continues to go through
+# the standard shim (and so reaches whatever upstream LLM the shim
+# was configured with — typically the proprietary 100B+). Setting any
+# of these env vars routes the rerank stage to a DIFFERENT endpoint
+# without touching the rest of the pipeline. Use case: keep proprietary
+# LLM for high-quality query enrichment, swap to local Ollama for fast
+# rerank (proprietary path is ~5s/call × 50 candidates = 4min; local
+# 8B Ollama is ~300ms/call × 50 = ~15s).
+#
+# Env vars (all optional, all empty → use shim defaults):
+#   NORA_SIRA_RERANK_LLM_URL   base URL (e.g. http://localhost:11434
+#                              for Ollama's OpenAI-compat endpoint)
+#   NORA_SIRA_RERANK_LLM_MODEL model name (e.g. qwen3:8b-q4_k_m)
+#   NORA_SIRA_RERANK_LLM_API_KEY  auth header value; non-empty needed
+#                              for some endpoints, Ollama ignores it.
+_RERANK_LLM_URL = os.getenv("NORA_SIRA_RERANK_LLM_URL", "").rstrip("/")
+_RERANK_LLM_MODEL = os.getenv("NORA_SIRA_RERANK_LLM_MODEL", "")
+_RERANK_LLM_API_KEY = os.getenv("NORA_SIRA_RERANK_LLM_API_KEY", "")
+
 # Defaults to ../sira/ relative to this file (the upstream clone).
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
@@ -344,6 +363,12 @@ def healthz() -> dict[str, Any]:
         "default_top_k": _DEFAULT_TOP_K,
         "rerank_top_n": _RERANK_TOP_N,
         "rerank_enabled": _RERANK_ENABLED,
+        # Rerank-only LLM override. When any of these is set, rerank
+        # calls bypass the shim and go directly to the configured
+        # endpoint. Query enrichment continues to use the shim.
+        "rerank_llm_url": _RERANK_LLM_URL or "(unset → uses shim)",
+        "rerank_llm_model": _RERANK_LLM_MODEL or "(unset → uses shim model)",
+        "rerank_llm_api_key_set": bool(_RERANK_LLM_API_KEY),
         "shim_url": _SHIM_URL,
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
         "query_prompt_loaded": bool(_query_prompt_template),
@@ -367,20 +392,35 @@ async def _llm_call(
     prompt: str,
     max_tokens: int = 512,
     temperature: float = 0.0,
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> str:
-    """One OpenAI-shaped chat-completion call via the shim. Returns
-    the `choices[0].message.content` string."""
+    """One OpenAI-shaped chat-completion call. Routes to the shim by
+    default; pass `base_url` / `model` / `api_key` to override for a
+    specific call site (used by the rerank stage to swap to a local
+    Ollama LLM while leaving query enrichment on the shim/proprietary
+    path)."""
+    url = base_url or _SHIM_URL
+    used_model = model or _SHIM_MODEL or "sira-shim"
     payload: dict[str, Any] = {
-        "model": _SHIM_MODEL or "sira-shim",
+        "model": used_model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    headers: dict[str, str] = {}
+    if api_key:
+        # OpenAI-style Authorization header. Ollama ignores it but
+        # accepts it; some OpenAI-compat endpoints require it.
+        headers["Authorization"] = f"Bearer {api_key}"
     resp = await client.post(
-        f"{_SHIM_URL}/v1/chat/completions", json=payload,
+        f"{url}/v1/chat/completions", json=payload, headers=headers or None,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"shim returned {resp.status_code}: {resp.text[:200]}")
+        raise RuntimeError(
+            f"LLM endpoint ({url}) returned {resp.status_code}: {resp.text[:200]}"
+        )
     data = resp.json()
     return data["choices"][0]["message"]["content"] or ""
 
@@ -504,7 +544,17 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
                     )
                     call_t0 = time.time()
                     try:
-                        raw = await _llm_call(client, prompt, max_tokens=64, temperature=0.0)
+                        raw = await _llm_call(
+                            client, prompt,
+                            max_tokens=64, temperature=0.0,
+                            # Route rerank to the rerank-specific
+                            # endpoint when configured; otherwise
+                            # falls through to the shim (which is what
+                            # query enrichment already uses).
+                            base_url=_RERANK_LLM_URL or None,
+                            model=_RERANK_LLM_MODEL or None,
+                            api_key=_RERANK_LLM_API_KEY or None,
+                        )
                         rerank_score = _parse_score(raw)
                     except Exception as exc:
                         notes.append(f"rerank failed for {rid}: {exc}")
