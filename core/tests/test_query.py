@@ -144,6 +144,12 @@ class MockVectorStore:
             if isinstance(val, dict) and "$in" in val:
                 if meta.get(key) not in val["$in"]:
                     return False
+            elif isinstance(val, dict) and "$ne" in val:
+                # $ne matches when field is absent (mirrors ChromaDB semantics).
+                # Added for chunk_role marker filtering — backwards-compatible
+                # with chunks built before the chunk_role distinction existed.
+                if meta.get(key) == val["$ne"]:
+                    return False
             elif meta.get(key) != val:
                 return False
         return True

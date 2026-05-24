@@ -93,6 +93,14 @@ class BM25Index:
         snapshot. Returns None if the store is empty or `get_all` is
         unavailable — the caller should treat None as "BM25 not
         available; fall back to pure dense retrieval".
+
+        Chunks whose metadata carries `chunk_role == "marker"` are
+        EXCLUDED from the BM25 index. Marker chunks stay in the
+        vectorstore for citation-by-req_id lookup but must not
+        participate in retrieval scoring (see strand
+        nora-retrieval-parent-displacement). Chunks without a
+        chunk_role key default to "primary" — backwards-compatible
+        with vectorstores built before this distinction existed.
         """
         if not hasattr(store, "get_all"):
             logger.warning(
@@ -107,7 +115,33 @@ class BM25Index:
         if not snapshot.ids:
             logger.warning("Store is empty — BM25 disabled")
             return None
-        return cls(snapshot.ids, snapshot.documents, snapshot.metadatas)
+        # Filter out marker chunks.
+        keep_ids: list[str] = []
+        keep_docs: list[str] = []
+        keep_metas: list[dict] = []
+        marker_count = 0
+        for cid, doc, meta in zip(
+            snapshot.ids, snapshot.documents, snapshot.metadatas,
+        ):
+            role = (meta or {}).get("chunk_role", "primary")
+            if role == "marker":
+                marker_count += 1
+                continue
+            keep_ids.append(cid)
+            keep_docs.append(doc)
+            keep_metas.append(meta)
+        if marker_count:
+            logger.info(
+                "BM25 index excludes %d marker chunks (citation-only)",
+                marker_count,
+            )
+        if not keep_ids:
+            logger.warning(
+                "Store has %d chunks but all are marker — BM25 disabled",
+                len(snapshot.ids),
+            )
+            return None
+        return cls(keep_ids, keep_docs, keep_metas)
 
     def search(
         self,

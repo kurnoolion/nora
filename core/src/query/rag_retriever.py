@@ -396,6 +396,25 @@ class RAGRetriever:
             out.append(chunk)
         return out
 
+    @staticmethod
+    def _exclude_markers(where: dict | None) -> dict:
+        """Append `chunk_role != marker` to an existing where clause.
+
+        Marker chunks (introduced in strand
+        nora-retrieval-parent-displacement) live in the vectorstore
+        for citation lookup but must be excluded from dense
+        retrieval. ChromaDB's $ne is field-aware: chunks built
+        before chunk_role was introduced (no such metadata field)
+        pass the filter unaffected — backwards-compatible with
+        pre-existing vectorstores.
+        """
+        marker_filter = {"chunk_role": {"$ne": "marker"}}
+        if where is None:
+            return marker_filter
+        if "$and" in where and isinstance(where["$and"], list):
+            return {"$and": list(where["$and"]) + [marker_filter]}
+        return {"$and": [where, marker_filter]}
+
     def _scoped_retrieve(
         self,
         query_embedding: list[float],
@@ -410,15 +429,18 @@ class RAGRetriever:
         """
         # ChromaDB supports $in for list filtering
         if len(req_ids) <= 500:
-            where = {"req_id": {"$in": req_ids}}
+            where = self._exclude_markers({"req_id": {"$in": req_ids}})
             result = self._store.query(
                 query_embedding, n_results=top_k, where=where
             )
             return self._to_chunks(result)
         else:
-            # Large candidate set — retrieve more and filter client-side
+            # Large candidate set — retrieve more and filter client-side.
+            # Apply marker exclusion to the where filter so ChromaDB
+            # doesn't return markers in the over-fetched pool.
             result = self._store.query(
-                query_embedding, n_results=top_k * 3
+                query_embedding, n_results=top_k * 3,
+                where=self._exclude_markers(None),
             )
             chunks = self._to_chunks(result)
             req_id_set = set(req_ids)
@@ -453,6 +475,7 @@ class RAGRetriever:
         else:
             where = None
 
+        where = self._exclude_markers(where)
         result = self._store.query(
             query_embedding, n_results=top_k, where=where
         )

@@ -147,6 +147,76 @@ class VectorStoreConfig:
     displacement effect while still adding meaningful concept
     breadth to overview chunks."""
 
+    # ── Parent context augmentation (Tier-1 fix for parent
+    #    displacement; nora-retrieval-parent-displacement strand) ──
+    include_parent_body: bool = True
+    """Prepend `[Parent context: <parent_body, capped>]` to a leaf
+    chunk's text when the parent has non-empty body. Closes the
+    asymmetry where parent body text was visible to the synthesizer
+    at synthesis-time (via context_builder._get_parent_text, capped
+    at 500 chars) but NOT visible to dense/BM25 retrieval at index
+    time. Result: a query that semantically matches parent normative
+    content ("device shall support X") reaches the leaf chunks that
+    actually list X, instead of being captured by the heading-only
+    parent itself."""
+
+    parent_body_max_chars: int = 500
+    """Character cap on the parent body text included in each leaf's
+    `[Parent context: ...]` block. Matches context_builder's existing
+    cap at synthesis time. Tune up for corpora with longer normative
+    parent paragraphs."""
+
+    # ── Marker-chunk classification (chunk_role: primary vs marker;
+    #    nora-retrieval-parent-displacement strand) ──
+    skip_uninformative_headers: bool = True
+    """When True, chunks with body empty (or effectively empty per
+    `effectively_empty_patterns`) AND a non-informative title get
+    `chunk_role="marker"` and are excluded from BM25 + dense
+    retrieval at query time. They remain in the vectorstore for
+    citation-by-req_id lookup. When False, all chunks are role
+    "primary" — historical behavior."""
+
+    normative_verb_pattern: str = (
+        r"\b(shall|must|should|may|shall not|must not|should not|"
+        r"required|mandatory|prohibited|optional)\b"
+    )
+    """Case-insensitive regex. Title that matches → classified
+    "primary" (assertion-shaped title, KEEP). Title that doesn't
+    match + body empty → falls through to marker_max_title_chars
+    check."""
+
+    marker_max_title_chars: int = 50
+    """Fallback length threshold. When body is empty AND title
+    has no normative verb AND title length < this → classified
+    "marker". Otherwise → "primary". 50 chars is roughly the line
+    between short categorization headings ("5.1.1 5G SA bands")
+    and short assertion sentences ("Device shall support n41")."""
+
+    effectively_empty_patterns: list[str] = field(default_factory=lambda: [
+        r"^\s*VOID\s*$",
+        r"^\s*TBD\s*$",
+        r"^\s*TBA\s*$",
+        r"^\s*N/?A\s*$",
+        r"^\s*[Nn]one\s*$",
+        r"^\s*[Nn]o\s+requirements?\s*$",
+        r"^\s*[Rr]eserved\s*$",
+        r"^\s*[Dd]eleted\s*$",
+        r"^\s*\(\s*\)\s*$",
+    ])
+    """Body text matching any of these regexes is treated as
+    effectively empty for marker classification. Case-sensitive
+    where the regex says so (e.g., VOID is corpus convention all-caps;
+    "None" can be either case)."""
+
+    skipped_headers_log: str = ""
+    """Optional path to a CSV log of every chunk classified "marker"
+    (with full provenance: plan_id, plan_name, section_number,
+    hierarchy_path, title, req_id, reason). When non-empty, the file
+    is rewritten on each `build_chunks` call. When empty (default),
+    no log is written. Useful for auditing the heuristic — grep the
+    file to confirm no answer-bearing headings were skipped
+    accidentally."""
+
     # ── Retrieval defaults ───────────────────────────────────────
     default_n_results: int = 10
     """Default number of results for queries."""

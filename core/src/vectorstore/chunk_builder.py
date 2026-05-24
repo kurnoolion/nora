@@ -17,14 +17,24 @@ Design decisions:
 
 from __future__ import annotations
 
+import csv
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from core.src.vectorstore.config import VectorStoreConfig
 
 logger = logging.getLogger(__name__)
+
+# chunk_role enum-equivalent. "primary" = participates in BM25 + dense
+# retrieval. "marker" = stays in store for citation-by-req_id lookup,
+# excluded from retrieval scoring. Plumbed via Chunk.metadata["chunk_role"];
+# rag_retriever applies the where-filter, bm25_index.from_store applies
+# the skip-during-build filter.
+CHUNK_ROLE_PRIMARY = "primary"
+CHUNK_ROLE_MARKER = "marker"
 
 
 @dataclass
@@ -45,6 +55,47 @@ class ChunkBuilder:
 
     def __init__(self, config: VectorStoreConfig) -> None:
         self.config = config
+        # Compiled regex caches — recompiled per-builder, not per-chunk.
+        self._normative_re = re.compile(
+            config.normative_verb_pattern, re.IGNORECASE,
+        )
+        self._effectively_empty_res = [
+            re.compile(p) for p in config.effectively_empty_patterns
+        ]
+
+    # ── Marker classification (heuristic for now — LLM-judged is a
+    #    follow-up; see strand nora-retrieval-parent-displacement) ──
+
+    def _is_effectively_empty(self, body: str) -> bool:
+        """Body is empty, whitespace-only, or matches a known
+        placeholder pattern (VOID / TBD / N/A / etc.)."""
+        if not body or not body.strip():
+            return True
+        for pat in self._effectively_empty_res:
+            if pat.match(body):
+                return True
+        return False
+
+    def _classify_chunk_role(
+        self, title: str, body: str,
+    ) -> tuple[str, str]:
+        """Heuristic classifier: return (role, reason).
+
+        - body non-empty → "primary" (always — body itself carries content)
+        - body empty + title matches normative-verb regex → "primary"
+          (title IS the assertion, e.g., "Device shall support n41")
+        - body empty + title is long (>= marker_max_title_chars) →
+          "primary" (likely a sentence even without "shall")
+        - otherwise → "marker"
+        """
+        if not self._is_effectively_empty(body):
+            return CHUNK_ROLE_PRIMARY, "non_empty_body"
+        title_stripped = (title or "").strip()
+        if self._normative_re.search(title_stripped):
+            return CHUNK_ROLE_PRIMARY, "title_has_normative_verb"
+        if len(title_stripped) >= self.config.marker_max_title_chars:
+            return CHUNK_ROLE_PRIMARY, "title_long_enough"
+        return CHUNK_ROLE_MARKER, "empty_body_short_uninformative_title"
 
     def build_chunks(
         self,
@@ -63,20 +114,68 @@ class ChunkBuilder:
         # Pre-compute plan_id -> feature_ids mapping from taxonomy
         plan_features = self._build_plan_feature_map(taxonomy)
 
+        # Optional CSV log of every chunk classified "marker". Opened
+        # in write-truncate mode so each `build_chunks` run starts
+        # fresh; closed at end of this method.
+        marker_log_path = self.config.skipped_headers_log
+        marker_log_file = None
+        marker_log_writer = None
+        if marker_log_path:
+            try:
+                p = Path(marker_log_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                marker_log_file = open(p, "w", newline="", encoding="utf-8")
+                marker_log_writer = csv.writer(marker_log_file)
+                marker_log_writer.writerow([
+                    "plan_id", "plan_name", "section_number",
+                    "hierarchy_path", "title", "req_id", "verdict", "reason",
+                ])
+            except Exception as e:
+                logger.warning(
+                    "Failed to open skipped_headers_log at %s (%s) — "
+                    "continuing without marker log",
+                    marker_log_path, e,
+                )
+                marker_log_file = None
+                marker_log_writer = None
+
         chunks = []
+        role_counts = {CHUNK_ROLE_PRIMARY: 0, CHUNK_ROLE_MARKER: 0}
         for tree in trees:
-            tree_chunks = self._build_tree_chunks(tree, plan_features)
+            tree_chunks = self._build_tree_chunks(
+                tree, plan_features, marker_log_writer,
+            )
+            for c in tree_chunks:
+                role = c.metadata.get("chunk_role", CHUNK_ROLE_PRIMARY)
+                role_counts[role] = role_counts.get(role, 0) + 1
             chunks.extend(tree_chunks)
 
-        logger.info(f"Built {len(chunks)} chunks from {len(trees)} trees")
+        if marker_log_file is not None:
+            marker_log_file.close()
+            logger.info(
+                "Marker-header log written to %s (%d markers)",
+                marker_log_path, role_counts.get(CHUNK_ROLE_MARKER, 0),
+            )
+
+        logger.info(
+            "Built %d chunks from %d trees (primary=%d, marker=%d)",
+            len(chunks), len(trees),
+            role_counts.get(CHUNK_ROLE_PRIMARY, 0),
+            role_counts.get(CHUNK_ROLE_MARKER, 0),
+        )
         return chunks
 
     def _build_tree_chunks(
         self,
         tree: dict,
         plan_features: dict[str, list[str]],
+        marker_log_writer: Any = None,
     ) -> list[Chunk]:
-        """Build chunks for all requirements in one tree."""
+        """Build chunks for all requirements in one tree.
+
+        marker_log_writer: optional csv.writer. When non-None, every
+        chunk classified `marker` gets a row appended for audit.
+        """
         mno = tree.get("mno", "")
         release = tree.get("release", "")
         plan_id = tree.get("plan_id", "")
@@ -92,16 +191,18 @@ class ChunkBuilder:
         defs_section_num = tree.get("definitions_section_number", "") or ""
         defs_pattern = self._compile_definitions_regex(definitions_map)
 
-        # Build a `req_id → title` lookup once per tree so
-        # `_build_chunk_text` can resolve children's titles for the
-        # `[Subsections: ...]` augmentation. children references are
-        # req_id strings; the tree's `requirements` list is flat with
-        # paragraph + table-anchored reqs both present.
+        # Build req_id → title AND req_id → body lookups once per
+        # tree. title-lookup feeds the existing [Subsections: ...]
+        # augmentation; text-lookup feeds the new [Parent context: ...]
+        # augmentation (Tier-1 fix — see strand journal). Building both
+        # in one pass keeps the per-tree pre-compute cheap.
         id_to_title: dict[str, str] = {}
+        id_to_text: dict[str, str] = {}
         for r in tree.get("requirements", []):
             rid = r.get("req_id", "")
             if rid:
                 id_to_title[rid] = (r.get("title", "") or "").strip()
+                id_to_text[rid] = (r.get("text", "") or "").strip()
 
         chunks = []
         for req in tree.get("requirements", []):
@@ -109,11 +210,24 @@ class ChunkBuilder:
             if not req_id:
                 continue
 
+            # Classify chunk role (primary vs marker). The text-builder
+            # uses id_to_text for parent-body lookup; classification is
+            # independent of text-builder output (uses raw req fields).
+            role, reason = (CHUNK_ROLE_PRIMARY, "skip_disabled")
+            if self.config.skip_uninformative_headers:
+                role, reason = self._classify_chunk_role(
+                    req.get("title", ""), req.get("text", ""),
+                )
+
             text = self._build_chunk_text(
-                req, mno, release, plan_name, version, id_to_title, plan_id,
+                req, mno, release, plan_name, version,
+                id_to_title, plan_id, id_to_text,
             )
 
-            # Skip chunks with no meaningful content
+            # Skip chunks with no meaningful content (e.g., everything
+            # got stripped). Distinct from `marker` — markers KEEP
+            # their text and stay in the store; this branch drops the
+            # chunk entirely because there's nothing to index OR cite.
             if not text.strip():
                 continue
 
@@ -139,10 +253,26 @@ class ChunkBuilder:
                 "zone_type": req.get("zone_type", ""),
                 "feature_ids": feature_ids,
                 "hierarchy_path": full_hier,
+                "chunk_role": role,
             }
 
             chunk_id = f"req:{req_id}"
             chunks.append(Chunk(chunk_id=chunk_id, text=text, metadata=metadata))
+
+            # Log marker classification for audit. Caller can grep the
+            # CSV to confirm no answer-bearing headings are being skipped
+            # by the heuristic.
+            if role == CHUNK_ROLE_MARKER and marker_log_writer is not None:
+                marker_log_writer.writerow([
+                    plan_id,
+                    plan_name,
+                    req.get("section_number", ""),
+                    " > ".join(full_hier),
+                    (req.get("title", "") or "").strip(),
+                    req_id,
+                    role,
+                    reason,
+                ])
 
         # One short, retrieval-friendly chunk per glossary entry
         # (D-043). The whole acronym table also lives inside the
@@ -302,6 +432,7 @@ class ChunkBuilder:
         version: str,
         id_to_title: dict[str, str] | None = None,
         plan_id: str = "",
+        id_to_text: dict[str, str] | None = None,
     ) -> str:
         """Build the contextualized text for a single requirement.
 
@@ -349,6 +480,27 @@ class ChunkBuilder:
             req_id = req.get("req_id", "")
             if req_id:
                 parts.append(f"[Req ID: {req_id}]")
+
+        # Parent context (Tier-1 fix — see nora-retrieval-parent-displacement
+        # strand). Prepends the parent requirement's body text so dense +
+        # BM25 retrieval can match queries that semantically target the
+        # parent's normative content even when the leaf's body uses
+        # different vocabulary (e.g. parent: "device shall support the
+        # following bands"; leaf: "n41 n78"). Capped at
+        # parent_body_max_chars to bound chunk growth. Skipped when:
+        # - include_parent_body is False (config opt-out)
+        # - id_to_text lookup is not provided (callers that don't build it)
+        # - no parent_req_id on the req
+        # - parent body is empty / not in lookup
+        if self.config.include_parent_body and id_to_text is not None:
+            parent_id = req.get("parent_req_id", "")
+            if parent_id:
+                parent_body = id_to_text.get(parent_id, "").strip()
+                if parent_body:
+                    cap = self.config.parent_body_max_chars
+                    if len(parent_body) > cap:
+                        parent_body = parent_body[:cap] + "…"
+                    parts.append(f"[Parent context: {parent_body}]")
 
         # Section title (always included — it's the heading)
         title = req.get("title", "")
