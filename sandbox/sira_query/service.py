@@ -70,6 +70,17 @@ _EXPANSION_WEIGHT = float(os.getenv("NORA_SIRA_EXPANSION_WEIGHT", "0.5"))
 _DEFAULT_TOP_K = int(os.getenv("NORA_SIRA_TOP_K", "10"))
 _RERANK_TOP_N = int(os.getenv("NORA_SIRA_RERANK_TOP_N", "20"))
 
+# Quick-disable for the LLM-as-judge rerank stage. The reranker makes
+# one LLM call per candidate via the shim; at proxy-throttled
+# concurrency=1 that's the dominant latency in interactive queries
+# (~5s mean, ~18s p95 on user's work PC). Set false to skip the
+# rerank stage entirely and return BM25-with-expansion results in
+# BM25-score order — useful for measuring whether rerank is adding
+# meaningful Recall@10 lift on a given corpus + prompt combination.
+_RERANK_ENABLED = os.getenv("NORA_SIRA_RERANK_ENABLED", "true").lower() in {
+    "1", "true", "yes", "on",
+}
+
 # Run-pinning — determinism across "which offline run drives this service?".
 # Three knobs (each independent):
 #   NORA_SIRA_DOC_ENRICH_RUN   — exact run-name under runs/doc-enrich/<name>
@@ -332,6 +343,7 @@ def healthz() -> dict[str, Any]:
         "expansion_weight": _EXPANSION_WEIGHT,
         "default_top_k": _DEFAULT_TOP_K,
         "rerank_top_n": _RERANK_TOP_N,
+        "rerank_enabled": _RERANK_ENABLED,
         "shim_url": _SHIM_URL,
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
         "query_prompt_loaded": bool(_query_prompt_template),
@@ -480,7 +492,7 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         t0 = time.time()
         reranked: list[tuple[int, float, int]] = []
         rerank_call_ms: list[int] = []
-        if _rerank_prompt_template and hits:
+        if _RERANK_ENABLED and _rerank_prompt_template and hits:
             try:
                 for idx, score in hits:
                     rid = _doc_ids[idx]
@@ -505,7 +517,12 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
                 notes.append(f"rerank stage aborted: {exc}")
                 reranked = [(idx, score, 0) for idx, score in hits]
         else:
-            if not _rerank_prompt_template:
+            if not _RERANK_ENABLED:
+                notes.append(
+                    "rerank stage disabled via NORA_SIRA_RERANK_ENABLED=false "
+                    "— results are BM25-with-expansion only (no LLM rerank)"
+                )
+            elif not _rerank_prompt_template:
                 notes.append("rerank prompt missing — results are BM25-with-expansion only")
             reranked = [(idx, score, 0) for idx, score in hits]
         timings["rerank_ms"] = int((time.time() - t0) * 1000)
