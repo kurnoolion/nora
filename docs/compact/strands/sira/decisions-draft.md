@@ -81,3 +81,31 @@ Options considered:
 **Why**: Consistent with the paper's Wikipedia/factoid prompt tuning — telecom-requirements is a different text genre. DF-filtered enrichment produces low-signal terms on this corpus; the relevance-judging prompt fails to discriminate.
 
 **Consequences**: Phase 2 question narrows to "iterate on telecom-specific prompts or archive." Per-query probe (D-DRAFT-4) is the inspection surface. If we archive, this finding promotes to canonical DECISIONS as the strand's verdict ("tested and rejected on this corpus, archived").
+
+**Status update (2026-05-23): SUPERSEDED by D-DRAFT-7.** Measurement conditions were broken (LTE-biased prompts + service-level doc-enrichment gap). Kept in this draft file for audit-trail purposes; will NOT be promoted at land-strand time.
+
+## D-DRAFT-6: Pin `sira_query` service to specific offline run via per-stage env vars
+**Status**: Active · **Date**: 2026-05-23.
+
+**Decision**: Three independent env vars (`NORA_SIRA_DOC_ENRICH_RUN`, `NORA_SIRA_QUERY_ENRICH_RUN`, `NORA_SIRA_RERANK_RUN`) pin the service to a specific run per stage; `NORA_SIRA_USE_LATEST_RUNS=true` is a shortcut to auto-pick newest mtime. Fallback when none resolve: SIRA's `enrichments/doc/best.jsonl` pointer + `SIRA_CLONE_ROOT` prompts (historical pre-patch behavior). `/healthz` surfaces every resolved source path so deployments can record exact provenance in one curl. Doc-side enrichment is now applied at service startup via `_bm25.enrich_batch(items)` — was inert pre-patch.
+
+**Why**: SIRA's stage timestamps are per-stage (`enrich-<T1>`, `query-enrich-<T2>`, `rerank-<T3>` with T1<T2<T3), so a single `NORA_SIRA_RUN_NAME` doesn't span all three stages. Pure `best/`-pointer reliance is non-deterministic — the pointer follows scoring, not recency, so a re-run that scored lower would silently not propagate to the service. Three explicit env vars allow ablation experiments (mix-and-match across runs) while making provenance auditable.
+
+**Consequences**:
+- Service deployments now have end-to-end provenance via `/healthz` — save alongside experimental results.
+- Doc-side enrichment finally applies; D-DRAFT-5's verdict was against an incomplete service and needs re-measurement (addressed in D-DRAFT-7).
+- New env-var surface area needs SETUP.md docs (follow-up).
+- Three independent env vars put consistency responsibility on the user; worth noting in launch-runbook docs.
+
+## D-DRAFT-7: SIRA is a retrieval lane, not a wholesale replacement (supersedes D-DRAFT-5)
+**Status**: Active · **Date**: 2026-05-23. Supersedes D-DRAFT-5.
+
+**Decision**: Supersede D-DRAFT-5's "SIRA tested and rejected on this corpus." That measurement was taken against (a) LTE-EMM-biased v01 prompts that mis-pattern-matched non-LTE reqs, and (b) a `sira_query` service that silently dropped doc-side enrichment (fixed in D-DRAFT-6). With both corrected, observed behavior is consistent with SIRA's design: DF-filtered enrichment + pointwise LLM rerank correctly surfaces reqs whose enrichment phrases overlap the query, including related reqs from sibling plans; reqs without strong discriminative phrases drop out of rank by design. SIRA is structurally **a lookup retriever** — strong on specific-entity queries, weak on breadth/summarize queries (where the DF-filter prunes exactly the shared vocabulary breadth queries want). For NORA's mixed query workload, SIRA is a **candidate as one retrieval lane (the lookup lane) alongside other lanes**, not a wholesale replacement.
+
+**Why**: "Tested and rejected" (D-DRAFT-5 as-is) is wrong because the measurement conditions were broken. "Adopt wholesale" is wrong because the 3/25-VoWiFi result on a breadth query — even after fixes — is correct for SIRA's design but unsatisfactory user behavior. "Continue iterating SIRA prompts to fix breadth queries" doesn't solve it because the limitation is in the algorithm (DF-filter pruning shared vocabulary), not the prompts; prompts can move the line but not eliminate the structural mismatch.
+
+**Consequences**:
+- The breadth-query problem becomes an independent problem; natural home is `nora-retrieval-parent-displacement` strand or a new sibling, not `sira`.
+- SIRA's sandbox infrastructure (offline pipeline, per-query service, debug CLI, prompts, eval adapter) survives and remains a candidate for the lookup lane.
+- Phase 2's framing shifts from "decide integration shape if SIRA wins" → "decide how to integrate SIRA as one lane in a multi-lane retrieval architecture." Deferred to architect-driven work post-landing.
+- D-DRAFT-5 is marked SUPERSEDED in decisions-draft.md (kept for audit trail); only D-DRAFT-7 gets promoted to canonical DECISIONS at `/land-strand` time.

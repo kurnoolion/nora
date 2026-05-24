@@ -82,3 +82,34 @@
 - **Web-app pipeline cache + skip-flag gap.** Config-page DB doesn't reach the cached pipeline, and `skip_taxonomy` doesn't appear honored at QueryPipeline construction at all (grep miss in `pipeline.py`). Not strand-specific; worth raising separately.
 - **Reranker 52% zero-score rate** → prompt mis-fit, not noise. `relevance_v04` → telecom variant is the obvious next experiment.
 - **Two-gate thresholds (30 / 0.5×) are eyeballed** — sweep if the strand continues.
+
+## 2026-05-23 — Service-level fixes + strand-pivoting finding
+
+### Done this session
+- **`sira_query` service silently dropped doc enrichment.** Pre-patch service loaded `index/best/` (vanilla BM25) and never called any enrichment-apply step. Service was running query-side SIRA + rerank only, not the full pipeline. Discovered while triaging "Summarize WiFi Calling" returning ~16% VoWiFi reqs.
+- **Run-pinning landed** (commit `601f587`). Three env vars (`NORA_SIRA_{DOC_ENRICH,QUERY_ENRICH,RERANK}_RUN`) + a `NORA_SIRA_USE_LATEST_RUNS` shortcut pin the service to a specific offline run. `/healthz` now surfaces every resolved source path + applied-doc count for end-to-end provenance with one curl.
+- **`bm25x` method-name bug fixed** (commit `438c1ab`). Initial patch called `_bm25.batch_enrich(items)` — actual binding is `enrich_batch` (verb_noun). The Rust internal docstring "Batch enrich:" describes the action, not the API. Symptom was AttributeError caught by surrounding try, logged at ERROR, `_doc_enrich_source` reset to None. `/healthz` reported `(none — vanilla BM25)` even with run dir + phrases file correctly resolved. Also added per-`doc_id` phrase aggregation, mirroring SIRA's own `add_doc_index_adapter.py:365-371` pattern.
+- **`retrieval_debug --inspect-req` mode** (commit `c7cd068`) — out-of-strand but worth surfacing. Dumps vectorstore + BM25 view of a single requirement: full chunk text, body-only view (after `_strip_chunk_headers`), BM25 tokenization, optional dense+BM25 ranking against a query. First test case on the same corpus immediately demonstrated the parent-displacement diagnosis on real data (a 383-char chunk where body-only is 35 chars and BM25 tokens are 80% header metadata). Will live alongside `sira_debug` in the inspection toolkit.
+
+### Strand-pivoting finding
+- **D-DRAFT-5's "SIRA tested and rejected on this corpus" needs revision.** That verdict was measured against an incomplete service (no doc enrichment) AND LTE-biased prompts. With both fixed and the service now exercising the full pipeline against the corpus-grounded run, the observed behavior is correct: SIRA returns the reqs whose discriminative-term enrichment overlaps the query, including correctly-related reqs from sibling plans. Reqs without strong enrichment phrases drop out of rank by design — that's the DF-filter doing its job, not failing.
+- **The actual finding**: SIRA is a *lookup* retriever and structurally a poor fit for *breadth/summarize* queries. The DF-filter prunes terms shared across many reqs (which is exactly what a "summarize X" query wants). For NORA's mixed query workload, SIRA is a partial solution — useful as one retrieval lane, not a wholesale replacement.
+
+### In progress
+- D-DRAFT-5 reframe pending. Current draft says "tested and rejected"; needs to become "exercised correctly; lookup-fit, breadth-misfit; candidate as one retrieval lane among several."
+
+### Next
+- Decide strand disposition based on the reframed verdict:
+  - **(A)** Land the strand with the reframed D-DRAFT-5, leaving SIRA-as-lookup-lane as future-work for the architect to wire into a query-router.
+  - **(B)** Continue the strand: prototype query-type routing (SIRA for lookup, something else for breadth) within this strand.
+  - **(C)** Continue the strand: prototype multi-granularity corpus (per-source-doc rows alongside per-req rows) so breadth queries match document-level rows.
+- The breadth-retrieval problem is now an *independent* problem; natural home is `nora-retrieval-parent-displacement` strand (or a new sibling) rather than `sira`.
+
+### Flags
+- **D-DRAFT-5 wording** must be rewritten before landing the strand.
+- **`/healthz` doesn't surface last error message** — when `enrich_batch` threw, `/healthz` showed `(none)` and the user had to read server logs to find the real cause. Worth adding a `last_load_error` field; minor follow-up.
+- **Doc-enrichment LLM produces no phrases for some reqs** (observed during VoWiFi query analysis). Those reqs become invisible to enriched BM25 — a known limitation of the DF-filter approach but worth quantifying (what % of reqs have zero kept phrases?). Could surface via `sira_debug phrases --filter '' --min-count 0` or similar; minor follow-up.
+
+### Out-of-scope work in same session
+- Repo hygiene cleanup (commits b1b164a / 967d1c1 / e45265c / d58d2e7): deleted stale overview docs, moved presentation scripts to `presentations/`, removed local `git-sync/`, dropped `alice-demo.json` env config, ~71 MB freed on disk. Out of strand scope; canonical-layer change so won't be in strand journal at land time.
+- `retrieval_debug --inspect-req` actually belongs to `nora-retrieval-parent-displacement` strand. Cross-listed here because we worked on it while bound to sira and it's adjacent.
