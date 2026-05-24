@@ -73,10 +73,21 @@ def _select_pinned_chunks(
 ) -> tuple[list[dict[str, Any]], int]:
     """Apply the score-based filter to SIRA's ranked results.
     Returns (pinned_results, max_rerank_score).
+
+    When max_rerank_score is 0, the rerank stage was disabled (via
+    NORA_SIRA_RERANK_ENABLED=false) OR every candidate scored 0. In
+    both cases the score-based filter has no signal to act on, so
+    we pin all results trusting whatever ordering came out of the
+    upstream stages (BM25-with-expansion). The user is opted into
+    "no rerank" by toggling the env var; bypassing the filter is the
+    consistent behavior.
     """
     if not sira_results:
         return [], 0
     max_score = max(int(r.get("rerank_score", 0) or 0) for r in sira_results)
+    if max_score == 0:
+        # Rerank disabled or universally-zero: pin everything as-is.
+        return list(sira_results), 0
     rel_floor = max_score * _PIN_REL_THRESHOLD
     pinned = [
         r for r in sira_results
