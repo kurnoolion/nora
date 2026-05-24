@@ -203,3 +203,232 @@ class CrossEncoderReranker:
         if len(text) <= self._max_chunk_chars:
             return text
         return text[: self._max_chunk_chars]
+
+
+# ── Ollama-backed reranker ──────────────────────────────────────────
+
+
+class OllamaReranker:
+    """Cross-encoder reranker that scores (query, document) pairs via
+    a local Ollama server. Same role as `CrossEncoderReranker` but
+    uses Ollama's HTTP API instead of sentence_transformers + HF cache.
+
+    Recommended Ollama models (must be pulled with `ollama pull <name>`):
+      - `bbjson/bge-reranker-base:latest` — ~280M, BGE-reranker-base
+        port. Strong on out-of-domain queries.
+
+    Wire protocol: POST /api/embed with `input` = "query [SEP] passage"
+    (newer Ollama) — modern reranker-capable Ollama servers return a
+    single-float "embedding" that IS the relevance score. Falls back
+    to /api/embeddings (older Ollama) if /api/embed 404s.
+
+    Graceful degradation matches CrossEncoderReranker: connection
+    failures or unexpected response shapes set `available=False` and
+    the rerank() call passes through the input chunks unchanged. The
+    pipeline keeps working with pre-rerank ordering.
+
+    Satisfies the Reranker Protocol.
+    """
+
+    # Default separator between query and passage in the API input.
+    # bge-reranker-base on HF uses `[SEP]` token; for an Ollama API
+    # call we pass plain text — the server tokenizes. Empirically
+    # newline-separated or "query: ... passage: ..." both work.
+    _PAIR_SEP = "\n"
+
+    def __init__(
+        self,
+        model_name: str = "bbjson/bge-reranker-base:latest",
+        base_url: str = "http://localhost:11434",
+        timeout: int = 60,
+        max_chunk_chars: int = 4000,
+    ) -> None:
+        import urllib.error
+        import urllib.request
+
+        self._model_name = model_name
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._max_chunk_chars = max_chunk_chars
+        # Reuse OllamaEmbedder's loopback-proxy-bypass logic so corporate
+        # HTTP_PROXY env vars don't intercept localhost:11434.
+        from core.src.vectorstore.embedding_ollama import _build_opener
+        self._opener = _build_opener(self._base_url)
+        # Which endpoint to use — detected on first call, cached.
+        self._endpoint: str | None = None
+        self._available = False
+
+        # Reachability + model-presence check, matching OllamaEmbedder.
+        try:
+            req = urllib.request.Request(f"{self._base_url}/api/tags")
+            with self._opener.open(req, timeout=5) as resp:
+                import json as _json
+                data = _json.loads(resp.read())
+        except urllib.error.URLError as e:
+            logger.warning(
+                "OllamaReranker: cannot reach Ollama at %s (%s) — "
+                "reranking disabled, retrieval order preserved",
+                self._base_url, e,
+            )
+            return
+
+        models = [m.get("name", "") for m in data.get("models", [])]
+        present = (
+            model_name in models
+            or any(m.startswith(f"{model_name}:") for m in models)
+        )
+        if not present:
+            available_list = ", ".join(models) if models else "none"
+            logger.warning(
+                "OllamaReranker: model %r not pulled. Available: %s. "
+                "Pull with: ollama pull %s — reranking disabled until then",
+                model_name, available_list, model_name,
+            )
+            return
+
+        # Probe the scoring endpoint with a tiny pair; cache the working
+        # endpoint name. If neither works, log and stay unavailable.
+        if self._probe_endpoint():
+            self._available = True
+            logger.info(
+                "OllamaReranker ready: model=%s, server=%s, endpoint=%s",
+                model_name, self._base_url, self._endpoint,
+            )
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def _probe_endpoint(self) -> bool:
+        """Discover which Ollama endpoint serves the reranker. Try
+        /api/embed first (modern), then /api/embeddings (legacy).
+        Cache the working endpoint."""
+        for endpoint in ("/api/embed", "/api/embeddings"):
+            try:
+                score = self._score_pair_via(
+                    endpoint, query="test", passage="test"
+                )
+                if score is not None:
+                    self._endpoint = endpoint
+                    return True
+            except Exception as e:
+                logger.debug(
+                    "OllamaReranker: endpoint %s probe failed (%s); "
+                    "trying next", endpoint, e,
+                )
+        logger.warning(
+            "OllamaReranker: no working scoring endpoint at %s; "
+            "model %r may not be a reranker — falling back to passthrough",
+            self._base_url, self._model_name,
+        )
+        return False
+
+    def _score_pair_via(
+        self, endpoint: str, query: str, passage: str,
+    ) -> float | None:
+        """One scoring call. Returns the relevance score (float) or
+        None if the response shape doesn't look like a reranker output
+        (e.g., model returns a multi-dim vector — not a reranker)."""
+        import json as _json
+        import urllib.request
+
+        text = query + self._PAIR_SEP + passage
+        # /api/embed uses `input`; /api/embeddings uses `prompt`. Both
+        # accept the same body otherwise.
+        if endpoint == "/api/embed":
+            body = {"model": self._model_name, "input": text}
+        else:
+            body = {"model": self._model_name, "prompt": text}
+        payload = _json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base_url}{endpoint}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self._opener.open(req, timeout=self._timeout) as resp:
+            data = _json.loads(resp.read())
+
+        # Response shape varies. Look for known keys.
+        # Newer /api/embed: {"embeddings": [[score]]} (reranker mode)
+        #                   or {"embeddings": [[v1, v2, ...]]} (embedding mode).
+        # Older /api/embeddings: {"embedding": [score]} or [v1, v2, ...].
+        embs = data.get("embeddings") or []
+        if embs and isinstance(embs, list) and embs[0]:
+            row = embs[0]
+            if isinstance(row, list):
+                # A single-element vector IS the reranker score. If the
+                # row has >1 element, the model is acting as a plain
+                # embedder — not what we want.
+                if len(row) == 1:
+                    return float(row[0])
+                logger.debug(
+                    "OllamaReranker: %s returned multi-dim vector (%d-d); "
+                    "model is acting as embedder, not reranker",
+                    endpoint, len(row),
+                )
+                return None
+
+        emb = data.get("embedding")
+        if isinstance(emb, list):
+            if len(emb) == 1:
+                return float(emb[0])
+            logger.debug(
+                "OllamaReranker: %s returned multi-dim vector (%d-d); "
+                "model is acting as embedder, not reranker",
+                endpoint, len(emb),
+            )
+            return None
+
+        return None
+
+    def rerank(
+        self,
+        query: str,
+        chunks: list[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        """Score each (query, chunk_text) pair via the Ollama scoring
+        endpoint; return chunks sorted by descending score. Graceful
+        degradation: empty / single-element / unavailable → passthrough.
+        Wire-level failures during scoring log a warn and preserve input
+        ordering (same shape as CrossEncoderReranker)."""
+        if not chunks:
+            return []
+        if len(chunks) == 1 or not self._available:
+            return list(chunks)
+        assert self._endpoint is not None  # set by _probe_endpoint when available
+
+        scored: list[tuple[RetrievedChunk, float]] = []
+        for c in chunks:
+            try:
+                s = self._score_pair_via(
+                    self._endpoint,
+                    query=query,
+                    passage=self._truncate(c.text),
+                )
+            except Exception as e:
+                logger.warning(
+                    "OllamaReranker: scoring failed for chunk %s (%r); "
+                    "skipping (preserving input order)",
+                    c.chunk_id, e,
+                )
+                return list(chunks)
+            if s is None:
+                logger.warning(
+                    "OllamaReranker: scoring returned None for chunk %s; "
+                    "preserving input order",
+                    c.chunk_id,
+                )
+                return list(chunks)
+            scored.append((c, s))
+
+        # Stable sort by descending score
+        scored.sort(key=lambda p: -p[1])
+        return [c for c, _ in scored]
+
+    def _truncate(self, text: str) -> str:
+        if not text:
+            return ""
+        if len(text) <= self._max_chunk_chars:
+            return text
+        return text[: self._max_chunk_chars]

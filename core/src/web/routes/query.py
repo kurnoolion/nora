@@ -100,19 +100,29 @@ def _resolve_top_k_cap() -> int | None:
 
 
 def _resolve_reranker():
-    """Resolve and instantiate the cross-encoder reranker from the
-    3-tier config chain.
+    """Resolve and instantiate the reranker from the 3-tier config chain.
 
-    Returns ``None`` when reranking is disabled (default) — caller
-    passes ``None`` to ``QueryPipeline`` and ``RAGRetriever`` falls
-    back to ``MockReranker`` (passthrough). When enabled, returns a
-    ``CrossEncoderReranker(model_name=<resolved>)``. If the model
-    fails to load (missing local files, SSL block, etc.) the helper
-    returns ``None`` and logs a WARN so the query path still runs in
-    passthrough mode rather than failing the request."""
+    Two backends supported (selected via `reranker_provider`):
+
+      - "huggingface" (default): CrossEncoderReranker wrapping
+        sentence_transformers.CrossEncoder. Loads from HF cache.
+
+      - "ollama": OllamaReranker calling a local Ollama server. For
+        deployments without HF access but with Ollama running locally.
+        Model is whatever was pulled via `ollama pull <name>` (e.g.
+        `bbjson/bge-reranker-base:latest`).
+
+    Returns ``None`` when reranking is disabled or when the chosen
+    backend fails to initialize (missing model, unreachable server,
+    incompatible response shape) — caller passes ``None`` to
+    ``QueryPipeline`` and ``RAGRetriever`` falls back to MockReranker
+    passthrough. Same graceful-degradation contract regardless of
+    provider."""
     from core.src.env.config import (
         resolve_reranker_enabled,
         resolve_reranker_model,
+        resolve_reranker_ollama_url,
+        resolve_reranker_provider,
     )
     db_enabled = _config_store_get("llm", "reranker_enabled")
     if db_enabled is not None:
@@ -122,21 +132,33 @@ def _resolve_reranker():
         }
     enabled = resolve_reranker_enabled(config_store_value=db_enabled)
     if not enabled:
-        logger.info("Cross-encoder reranker: disabled (MockReranker passthrough)")
+        logger.info("Reranker: disabled (MockReranker passthrough)")
         return None
 
     db_model = _config_store_get("llm", "reranker_model")
     model_name = resolve_reranker_model(config_store_value=db_model)
-    logger.info("Cross-encoder reranker: ENABLED model=%s", model_name)
+    db_provider = _config_store_get("llm", "reranker_provider")
+    provider = resolve_reranker_provider(config_store_value=db_provider)
+    logger.info(
+        "Reranker: ENABLED provider=%s model=%s", provider, model_name,
+    )
 
     try:
-        from core.src.query.reranker import CrossEncoderReranker
-        reranker = CrossEncoderReranker(model_name=model_name)
+        if provider == "ollama":
+            from core.src.query.reranker import OllamaReranker
+            db_url = _config_store_get("llm", "reranker_ollama_url")
+            base_url = resolve_reranker_ollama_url(config_store_value=db_url)
+            reranker = OllamaReranker(
+                model_name=model_name, base_url=base_url,
+            )
+        else:
+            from core.src.query.reranker import CrossEncoderReranker
+            reranker = CrossEncoderReranker(model_name=model_name)
         if not getattr(reranker, "available", True):
             logger.warning(
-                "CrossEncoderReranker for %r not available — falling back "
-                "to MockReranker passthrough for this query session.",
-                model_name,
+                "Reranker (%s) for %r not available — falling back to "
+                "MockReranker passthrough for this query session.",
+                provider, model_name,
             )
             return None
         return reranker

@@ -143,13 +143,34 @@ _LLM_FIELDS: list[ConfigField] = [
         module="llm", key="reranker_model",
         label="Reranker Model", kind="string", category="value",
         help=(
-            "HuggingFace cross-encoder id OR local filesystem path "
-            "(local sidesteps the online HF download when the host is "
-            "firewalled). Defaults to cross-encoder/ms-marco-"
-            "MiniLM-L6-v2 when blank. Suggested for technical specs: "
-            "BAAI/bge-reranker-base (~280M, strong on out-of-domain) "
-            "or BAAI/bge-reranker-large (~560M, best accuracy). "
-            "Empty = built-in default."
+            "Model id / name. For provider=huggingface: HuggingFace "
+            "cross-encoder id (BAAI/bge-reranker-base, BAAI/bge-"
+            "reranker-large, cross-encoder/ms-marco-MiniLM-L6-v2) or "
+            "local filesystem path. For provider=ollama: name of an "
+            "Ollama-pulled reranker (e.g. bbjson/bge-reranker-base:"
+            "latest). Empty = built-in default."
+        ),
+    ),
+    ConfigField(
+        module="llm", key="reranker_provider",
+        label="Reranker Provider", kind="string", category="value",
+        help=(
+            "Backend to instantiate when the reranker is enabled. "
+            "'huggingface' loads via sentence_transformers from HF "
+            "cache (requires the model files locally OR HF Hub "
+            "access at startup). 'ollama' calls a local Ollama "
+            "server — use this on proxy-restricted machines that "
+            "have Ollama running but no HF access. Empty = default "
+            "'huggingface'."
+        ),
+    ),
+    ConfigField(
+        module="llm", key="reranker_ollama_url",
+        label="Reranker Ollama URL", kind="string", category="value",
+        help=(
+            "Base URL of the local Ollama server for "
+            "provider=ollama. Defaults to http://localhost:11434 "
+            "when blank. Ignored when provider=huggingface."
         ),
     ),
 ]

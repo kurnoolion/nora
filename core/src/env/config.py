@@ -72,6 +72,8 @@ class LLMConfigFile:
     skip_standards: bool = False
     reranker_enabled: bool = False
     reranker_model: str = ""
+    reranker_provider: str = ""
+    reranker_ollama_url: str = ""
 
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
@@ -101,6 +103,8 @@ class LLMConfigFile:
             skip_standards=bool(data.get("skip_standards", False)),
             reranker_enabled=bool(data.get("reranker_enabled", False)),
             reranker_model=str(data.get("reranker_model", "") or "").strip(),
+            reranker_provider=str(data.get("reranker_provider", "") or "").strip(),
+            reranker_ollama_url=str(data.get("reranker_ollama_url", "") or "").strip(),
         )
 
 
@@ -683,13 +687,29 @@ SKIP_RESOLVE_ENV_VAR: str = "NORA_SKIP_RESOLVE"
 SKIP_STANDARDS_ENV_VAR: str = "NORA_SKIP_STANDARDS"
 RERANKER_ENABLED_ENV_VAR: str = "NORA_RERANKER_ENABLED"
 RERANKER_MODEL_ENV_VAR: str = "NORA_RERANKER_MODEL"
+RERANKER_PROVIDER_ENV_VAR: str = "NORA_RERANKER_PROVIDER"
+RERANKER_OLLAMA_URL_ENV_VAR: str = "NORA_RERANKER_OLLAMA_URL"
 RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
 
 DEFAULT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
 """Sentence-transformers cross-encoder model id (or local filesystem
 path). When the work-PC corpus is firewalled from HuggingFace, pre-
 download via ``huggingface-cli download <id> --local-dir <path>`` and
-set this to the local-dir path."""
+set this to the local-dir path. For provider=ollama, set to an
+Ollama-pulled reranker model name like
+``bbjson/bge-reranker-base:latest`` instead."""
+
+DEFAULT_RERANKER_PROVIDER: str = "huggingface"
+"""Which reranker backend to instantiate. "huggingface" uses
+sentence_transformers.CrossEncoder (loads from HF cache). "ollama"
+uses OllamaReranker (calls a local Ollama server). For deployments
+on proxy-restricted machines without HF access but with Ollama
+running locally, "ollama" lets you reuse a model already pulled with
+`ollama pull <name>` — no separate HF cache to manage."""
+
+DEFAULT_RERANKER_OLLAMA_URL: str = "http://localhost:11434"
+"""Base URL for the local Ollama server when provider=ollama. Same
+default as OllamaEmbedder."""
 
 
 def _truthy(value: str | None) -> bool:
@@ -855,6 +875,53 @@ def resolve_reranker_model(
     if env_config_value:
         return env_config_value.strip()
     return DEFAULT_RERANKER_MODEL
+
+
+def resolve_reranker_provider(
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve the reranker backend: "huggingface" or "ollama".
+
+    Precedence: NORA_RERANKER_PROVIDER env var > Config-page DB
+    (``llm.reranker_provider``) > config/llm.json ``reranker_provider``
+    > built-in ``DEFAULT_RERANKER_PROVIDER`` ("huggingface").
+
+    Unknown values fall back to the default with a warning. Lets
+    deployments on proxy-restricted machines without HF access use
+    a locally-pulled Ollama model (e.g. ``bbjson/bge-reranker-base``)
+    via the OllamaReranker backend instead of sentence_transformers
+    + HF cache."""
+    raw_env = (os.environ.get(RERANKER_PROVIDER_ENV_VAR) or "").strip().lower()
+    if raw_env in {"huggingface", "ollama"}:
+        return raw_env
+    if config_store_value:
+        v = str(config_store_value).strip().lower()
+        if v in {"huggingface", "ollama"}:
+            return v
+    cfg = _llm_config()
+    if getattr(cfg, "reranker_provider", "") in {"huggingface", "ollama"}:
+        return cfg.reranker_provider
+    return DEFAULT_RERANKER_PROVIDER
+
+
+def resolve_reranker_ollama_url(
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve the Ollama server URL for provider=ollama.
+
+    Precedence: NORA_RERANKER_OLLAMA_URL env var > Config-page DB >
+    config/llm.json ``reranker_ollama_url`` > built-in
+    ``DEFAULT_RERANKER_OLLAMA_URL``."""
+    raw_env = (os.environ.get(RERANKER_OLLAMA_URL_ENV_VAR) or "").strip()
+    if raw_env:
+        return raw_env
+    if config_store_value:
+        return str(config_store_value).strip()
+    cfg = _llm_config()
+    if getattr(cfg, "reranker_ollama_url", ""):
+        return cfg.reranker_ollama_url
+    return DEFAULT_RERANKER_OLLAMA_URL
+
 
 # ---------------------------------------------------------------------------
 # Pipeline stage registry — single source of truth for names and ordering
