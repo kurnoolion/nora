@@ -132,26 +132,24 @@ _TYPE_REWRITE_ENABLED = {
 # expensive of the retrieval-quality knobs but generally the
 # highest-quality reordering signal.
 #
-# Default: enabled for the same query types that benefit from
-# wider top_k — concept-shaped breadth queries. SINGLE_DOC entity
-# lookups already work via D-039 and don't need the extra
-# compute. Numbers are best-effort defaults; tune per corpus.
-_TYPE_RERANK_ENABLED = {
-    QueryType.CROSS_DOC: True,
-    QueryType.STANDARDS_COMPARISON: True,
-    QueryType.FEATURE_LEVEL: True,
-    QueryType.CROSS_MNO_COMPARISON: True,
-    QueryType.TRACEABILITY: True,
-    QueryType.RELEASE_DIFF: True,
-    # FACT precision matters most — rerank reorders the top-K so the
-    # most semantically-aligned chunk gets cited, even when BM25 +
-    # dense disagree on ordering.
-    QueryType.FACT: True,
-    # SUMMARIZE intentionally OFF — top_k=50 makes per-chunk rerank
-    # expensive, and rerank ordering matters less when the LLM is
-    # going to read every chunk anyway.
-    # SINGLE_DOC, GENERAL: omitted → default False (no rerank)
+# Default: enabled for ALL query types when reranker_enabled is True.
+# Previously gated to broad/concept query types only based on
+# pre-strand empirical tuning; the
+# nora-retrieval-parent-displacement strand reverted that gating
+# because GENERAL-classified queries were silently skipping rerank
+# and producing the same ordering as raw retrieval. Per-type override
+# via this dict still possible — set an entry to False to skip rerank
+# for that type (e.g. SUMMARIZE if per-chunk cost dominates).
+_TYPE_RERANK_ENABLED: dict[QueryType, bool] = {
+    # No explicit entries → all types get the .get() default below,
+    # which is True. Add `QueryType.X: False` here to selectively
+    # disable rerank for a specific type.
 }
+
+# Default applied by .get(qt, _DEFAULT_RERANK_ENABLED) when a
+# QueryType isn't in _TYPE_RERANK_ENABLED. Set True so a globally-
+# enabled reranker actually fires on every query.
+_DEFAULT_RERANK_ENABLED: bool = True
 
 # Query types that bypass Stage 4.7 grouping even when grouping is
 # globally enabled. SUMMARIZE intent inherently wants ALL groups
@@ -447,7 +445,7 @@ class QueryPipeline:
         # (3-tier resolver) + the Config page table editor.
         from core.src.env.config import resolve_bm25_weight
         bm25_weight = resolve_bm25_weight(query_type=intent.query_type.value)
-        rerank = _TYPE_RERANK_ENABLED.get(intent.query_type, False)
+        rerank = _TYPE_RERANK_ENABLED.get(intent.query_type, _DEFAULT_RERANK_ENABLED)
         # Per-query effective-knob log so admins can verify the
         # ConfigStore + resolver chain landed the values they expected.
         logger.info(

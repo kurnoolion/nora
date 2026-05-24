@@ -129,12 +129,19 @@ class TestPerTypeKnobs:
         # Looser than fact — wants breadth
         assert _TYPE_MAX_DISTANCE[QueryType.SUMMARIZE] > _TYPE_MAX_DISTANCE[QueryType.FACT]
 
-    def test_fact_rerank_on(self):
-        assert _TYPE_RERANK_ENABLED.get(QueryType.FACT) is True
+    def test_rerank_default_is_on_for_all_types(self):
+        """Post nora-retrieval-parent-displacement strand: rerank is
+        enabled by default for every query type when a reranker is
+        configured. _TYPE_RERANK_ENABLED is an override-only dict;
+        missing entries resolve to True via _DEFAULT_RERANK_ENABLED."""
+        from core.src.query.pipeline import _DEFAULT_RERANK_ENABLED
+        assert _DEFAULT_RERANK_ENABLED is True
 
-    def test_summarize_rerank_off(self):
-        # SUMMARIZE explicitly excluded from rerank (cost vs benefit)
-        assert _TYPE_RERANK_ENABLED.get(QueryType.SUMMARIZE) is not True
+        # Every QueryType — explicit entries OR the default — should
+        # resolve to True (selective opt-out done by adding False entries).
+        for qt in QueryType:
+            effective = _TYPE_RERANK_ENABLED.get(qt, _DEFAULT_RERANK_ENABLED)
+            assert effective is True, f"rerank effective for {qt} is {effective}"
 
     def test_fact_rewrite_off(self):
         # Fact queries should not be paraphrased
