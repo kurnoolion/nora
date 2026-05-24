@@ -3,8 +3,9 @@
 Covers:
 - Analyzer triggers route fact-shaped and summary-shaped queries to the
   new types instead of falling through to SINGLE_DOC / GENERAL.
-- _TYPE_TOP_K, _TYPE_BM25_WEIGHT, _TYPE_RERANK_ENABLED,
-  _TYPE_REWRITE_ENABLED, _TYPE_MAX_DISTANCE entries are populated.
+- resolve_top_k routes FACT/SUMMARIZE to narrow/broad buckets;
+  _TYPE_BM25_WEIGHT, _TYPE_RERANK_ENABLED, _TYPE_REWRITE_ENABLED,
+  _TYPE_MAX_DISTANCE entries are populated.
 - _TYPE_DISABLE_GROUPING contains SUMMARIZE so Stage 4.7 bypasses.
 - System prompts cover both intents.
 """
@@ -15,6 +16,7 @@ import networkx as nx
 
 from core.src.query.analyzer import MockQueryAnalyzer
 from core.src.query.context_builder import _SYSTEM_PROMPTS
+from core.src.env.config import resolve_top_k
 from core.src.query.pipeline import (
     QueryPipeline,
     _DISAMBIGUATION_ANSWER,
@@ -23,7 +25,6 @@ from core.src.query.pipeline import (
     _TYPE_MAX_DISTANCE,
     _TYPE_RERANK_ENABLED,
     _TYPE_REWRITE_ENABLED,
-    _TYPE_TOP_K,
 )
 from core.src.query.schema import QueryType
 from core.src.vectorstore.store_base import QueryResult
@@ -116,7 +117,9 @@ class TestClassificationPriority:
 
 class TestPerTypeKnobs:
     def test_summarize_top_k_is_wide(self):
-        assert _TYPE_TOP_K[QueryType.SUMMARIZE] >= 25
+        # SUMMARIZE → broad bucket (default 25). Wider than the narrow
+        # default (10) used by FACT/SINGLE_DOC/GENERAL.
+        assert resolve_top_k(QueryType.SUMMARIZE.value) >= 25
 
     def test_fact_max_distance_is_strict(self):
         # Stricter than the conservative pipeline default (~0.5)

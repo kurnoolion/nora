@@ -203,6 +203,29 @@ _RETRIEVAL_FIELDS: list[ConfigField] = [
         ),
     ),
     ConfigField(
+        module="retrieval", key="broad_query_top_k",
+        label="Broad Query Top-K",
+        kind="int", category="tunable",
+        help=(
+            "Number of chunks retrieved for broad / breadth queries "
+            "(CROSS_DOC, CROSS_MNO_COMPARISON, STANDARDS_COMPARISON, "
+            "FEATURE_LEVEL, SUMMARIZE, TRACEABILITY, RELEASE_DIFF). "
+            "Default 25. Resolved in order: this value > env var "
+            "NORA_BROAD_QUERY_TOP_K > default 25."
+        ),
+    ),
+    ConfigField(
+        module="retrieval", key="narrow_query_top_k",
+        label="Narrow Query Top-K",
+        kind="int", category="tunable",
+        help=(
+            "Number of chunks retrieved for narrow / lookup queries "
+            "(SINGLE_DOC, FACT, GENERAL). Default 10. Resolved in "
+            "order: this value > env var NORA_NARROW_QUERY_TOP_K > "
+            "default 10."
+        ),
+    ),
+    ConfigField(
         module="retrieval", key="bm25_weight_by_type",
         label="BM25 Weight by QueryType",
         kind="dict_by_query_type", value_kind="float",

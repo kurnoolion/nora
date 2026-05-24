@@ -176,6 +176,23 @@ class RetrievalConfig:
     tuning hybrid retrieval against a new corpus where the default
     empirical values are off."""
 
+    broad_query_top_k: int | None = None
+    """Number of chunks to retrieve for broad / breadth queries
+    (CROSS_DOC, CROSS_MNO_COMPARISON, STANDARDS_COMPARISON,
+    FEATURE_LEVEL, SUMMARIZE, TRACEABILITY, RELEASE_DIFF). None /
+    unset means "fall through" — the resolver consults the
+    NORA_BROAD_QUERY_TOP_K env var, then the built-in default (25).
+    This field is populated by the ConfigStore overlay when the web
+    app runs with --config-db; the pipeline runner sees None here
+    and falls through to env / default."""
+
+    narrow_query_top_k: int | None = None
+    """Number of chunks to retrieve for narrow / lookup queries
+    (SINGLE_DOC, FACT, GENERAL). None / unset means "fall through" —
+    the resolver consults NORA_NARROW_QUERY_TOP_K, then the
+    built-in default (10). Same overlay semantics as
+    `broad_query_top_k`."""
+
     @classmethod
     def load(cls, path: Path | None = None) -> RetrievalConfig:
         config_path = path or DEFAULT_RETRIEVAL_CONFIG_PATH
@@ -193,6 +210,8 @@ class RetrievalConfig:
         gt = data.get("gap_threshold")
         gtbt = data.get("gap_threshold_by_type") or {}
         bm25bt = data.get("bm25_weight_by_type") or {}
+        bq = data.get("broad_query_top_k")
+        nq = data.get("narrow_query_top_k")
         return cls(
             enable_grouping=bool(eg) if eg is not None else None,
             gap_threshold=float(gt) if gt is not None else None,
@@ -204,6 +223,8 @@ class RetrievalConfig:
                 str(k): float(v) for k, v in bm25bt.items()
                 if isinstance(v, (int, float))
             },
+            broad_query_top_k=int(bq) if isinstance(bq, (int, float)) and bq > 0 else None,
+            narrow_query_top_k=int(nq) if isinstance(nq, (int, float)) and nq > 0 else None,
         )
 
 
@@ -251,6 +272,85 @@ def resolve_grouping_enabled(cli_value: bool | None = None) -> bool:
     if cfg_value is not None:
         return cfg_value
     return DEFAULT_ENABLE_GROUPING
+
+
+# ---------------------------------------------------------------------------
+# Top-K resolver — broad vs narrow buckets
+# ---------------------------------------------------------------------------
+
+BROAD_QUERY_TOP_K_ENV_VAR: str = "NORA_BROAD_QUERY_TOP_K"
+NARROW_QUERY_TOP_K_ENV_VAR: str = "NORA_NARROW_QUERY_TOP_K"
+DEFAULT_BROAD_QUERY_TOP_K: int = 25
+DEFAULT_NARROW_QUERY_TOP_K: int = 10
+
+# Bucket assignment per QueryType. Broad = "user wants many chunks
+# covering the topic"; narrow = "user wants the specific answer". The
+# split is intentionally coarse — two knobs (broad / narrow) cover all
+# query types without proliferating per-type config. If a corpus needs
+# finer per-type control, layer it via top_k_cap (ceiling).
+_BROAD_QUERY_TYPES: frozenset[str] = frozenset({
+    "cross_doc",
+    "cross_mno_comparison",
+    "standards_comparison",
+    "feature_level",
+    "summarize",
+    "traceability",
+    "release_diff",
+})
+
+
+def is_broad_query_type(query_type: str | None) -> bool:
+    """True when the query_type belongs to the broad bucket. Unknown
+    types fall back to narrow (more conservative — fewer chunks)."""
+    return (query_type or "").lower() in _BROAD_QUERY_TYPES
+
+
+def _resolve_int_env_or_default(env_var: str, default: int) -> int:
+    """Read int from env var; fall back to default on absent / invalid."""
+    raw = os.environ.get(env_var, "")
+    if raw:
+        try:
+            v = int(raw)
+            if v > 0:
+                return v
+        except (ValueError, TypeError):
+            pass
+    return default
+
+
+def resolve_top_k(
+    query_type: str | None = None,
+    cli_value: int | None = None,
+) -> int:
+    """Resolve the per-query top-k for retrieval.
+
+    Two-bucket design: every QueryType maps to either broad (default 25)
+    or narrow (default 10). Resolution priority:
+
+      cli_value > config DB (overlaid into RetrievalConfig) > env var > default
+
+    The DB overlay populates `RetrievalConfig.broad_query_top_k` /
+    `narrow_query_top_k` via `ConfigStore.apply_to_caches`. Web app runs
+    with --config-db go through DB → env → default. Pipeline runner
+    has no DB; its `RetrievalConfig` fields stay None and the chain
+    collapses to env → default. First-time DB creation seeds the keys
+    from env / defaults at web-app startup so the DB is always the
+    source of truth thereafter (see ConfigStore.seed_missing).
+    """
+    if cli_value is not None and cli_value > 0:
+        return int(cli_value)
+    cfg = _retrieval_config()
+    if is_broad_query_type(query_type):
+        if cfg.broad_query_top_k is not None and cfg.broad_query_top_k > 0:
+            return int(cfg.broad_query_top_k)
+        return _resolve_int_env_or_default(
+            BROAD_QUERY_TOP_K_ENV_VAR, DEFAULT_BROAD_QUERY_TOP_K,
+        )
+    if cfg.narrow_query_top_k is not None and cfg.narrow_query_top_k > 0:
+        return int(cfg.narrow_query_top_k)
+    return _resolve_int_env_or_default(
+        NARROW_QUERY_TOP_K_ENV_VAR, DEFAULT_NARROW_QUERY_TOP_K,
+    )
 
 
 def resolve_bm25_weight(

@@ -279,10 +279,11 @@ class TestTopKCap:
             top_k=10,  # floor
             top_k_cap=None,  # no cap
         )
-        # SUMMARIZE-shaped query → _TYPE_TOP_K[SUMMARIZE]=50 widens
+        # SUMMARIZE-shaped query → broad bucket (default 25).
+        # (Pre-strand behavior was 50 via the now-removed _TYPE_TOP_K
+        # dict; the two-bucket design intentionally collapses to 25.)
         resp = p.query("Explain the X requirements")
-        # Synthesized at full breadth (mock store returns all 50)
-        assert resp.retrieved_count == 50
+        assert resp.retrieved_count == 25
 
     def test_cap_overrides_per_type_widening(self):
         """With cap=25, SUMMARIZE queries that would widen to 50
@@ -324,8 +325,8 @@ class TestTopKCap:
             top_k=10, top_k_cap=0,
         )
         resp = p.query("Explain the X requirements")
-        # No cap → SUMMARIZE widening to 50 applies
-        assert resp.retrieved_count == 50
+        # No cap → SUMMARIZE returns broad bucket default (25).
+        assert resp.retrieved_count == 25
 
 
 class TestPinnedChunksPath:

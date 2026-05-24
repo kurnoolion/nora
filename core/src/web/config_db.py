@@ -193,6 +193,29 @@ class ConfigStore:
                     module, key,
                 )
 
+    def seed_missing(
+        self,
+        specs: list[tuple[str, str, Any]],
+        updated_by: str = "seed_from_env",
+    ) -> int:
+        """Write each (module, key, value) only when the key is absent.
+
+        Idempotent — does NOT overwrite existing values. Returns the
+        count of keys actually written. Used at web-app startup to seed
+        a fresh ConfigStore with values from env vars / defaults so
+        first-run behavior matches the runtime resolution chain.
+
+        Once seeded, the DB is authoritative — subsequent runs use the
+        stored value regardless of env-var changes (per the design in
+        the nora-retrieval-parent-displacement strand).
+        """
+        written = 0
+        for module, key, value in specs:
+            if self.get(module, key) is None:
+                self.set(module, key, value, updated_by=updated_by)
+                written += 1
+        return written
+
     def reapply_one(self, module: str, key: str) -> None:
         """After a single write, re-overlay just that value onto the
         appropriate cache. Cheaper than apply_to_caches() when the UI

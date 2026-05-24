@@ -809,3 +809,132 @@ def test_retrieval_config_parses_bm25_weight_by_type(tmp_path):
     }))
     cfg = RetrievalConfig.load(p)
     assert cfg.bm25_weight_by_type == {"single_doc": 0.7, "summarize": 0.1}
+
+
+# ─── resolve_top_k (broad/narrow buckets) ──────────────────────────
+
+
+def test_resolve_top_k_defaults(monkeypatch, tmp_path):
+    """No DB, no env, no file overrides → 25 (broad) / 10 (narrow)."""
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(monkeypatch, tmp_path)
+    monkeypatch.delenv("NORA_BROAD_QUERY_TOP_K", raising=False)
+    monkeypatch.delenv("NORA_NARROW_QUERY_TOP_K", raising=False)
+    try:
+        assert env_cfg.resolve_top_k("cross_doc") == 25
+        assert env_cfg.resolve_top_k("feature_level") == 25
+        assert env_cfg.resolve_top_k("summarize") == 25
+        assert env_cfg.resolve_top_k("traceability") == 25
+        assert env_cfg.resolve_top_k("release_diff") == 25
+        assert env_cfg.resolve_top_k("single_doc") == 10
+        assert env_cfg.resolve_top_k("fact") == 10
+        assert env_cfg.resolve_top_k("general") == 10
+        assert env_cfg.resolve_top_k(None) == 10  # unknown → narrow
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_top_k_env_overrides_default(monkeypatch, tmp_path):
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("NORA_BROAD_QUERY_TOP_K", "40")
+    monkeypatch.setenv("NORA_NARROW_QUERY_TOP_K", "7")
+    try:
+        assert env_cfg.resolve_top_k("cross_doc") == 40
+        assert env_cfg.resolve_top_k("single_doc") == 7
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_top_k_db_overlay_beats_env(monkeypatch, tmp_path):
+    """DB-overlaid value (set on RetrievalConfig directly) wins over env."""
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(
+        monkeypatch, tmp_path,
+        broad_query_top_k=33, narrow_query_top_k=8,
+    )
+    monkeypatch.setenv("NORA_BROAD_QUERY_TOP_K", "40")
+    monkeypatch.setenv("NORA_NARROW_QUERY_TOP_K", "5")
+    try:
+        # File-loaded values should be the cfg.broad/narrow values that
+        # the DB overlay normally writes; either way, resolve_top_k must
+        # return the cfg value when set.
+        assert env_cfg.resolve_top_k("cross_doc") == 33
+        assert env_cfg.resolve_top_k("single_doc") == 8
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_top_k_cli_beats_all(monkeypatch, tmp_path):
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(
+        monkeypatch, tmp_path,
+        broad_query_top_k=33,
+    )
+    monkeypatch.setenv("NORA_BROAD_QUERY_TOP_K", "40")
+    try:
+        assert env_cfg.resolve_top_k("cross_doc", cli_value=99) == 99
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_top_k_invalid_env_falls_through(monkeypatch, tmp_path):
+    """Non-int env value → default."""
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("NORA_BROAD_QUERY_TOP_K", "not-a-number")
+    monkeypatch.setenv("NORA_NARROW_QUERY_TOP_K", "0")  # 0 → invalid (> 0 required)
+    try:
+        assert env_cfg.resolve_top_k("cross_doc") == 25
+        assert env_cfg.resolve_top_k("single_doc") == 10
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_is_broad_query_type_classification():
+    from core.src.env.config import is_broad_query_type
+    # Broad
+    for qt in (
+        "cross_doc", "cross_mno_comparison", "standards_comparison",
+        "feature_level", "summarize", "traceability", "release_diff",
+    ):
+        assert is_broad_query_type(qt), f"{qt} should be broad"
+    # Narrow / unknown
+    for qt in ("single_doc", "fact", "general", None, "", "bogus"):
+        assert not is_broad_query_type(qt), f"{qt} should be narrow"
+
+
+def test_retrieval_config_parses_top_k_fields(tmp_path):
+    """RetrievalConfig.load round-trips broad/narrow_query_top_k."""
+    import json
+    from core.src.env.config import RetrievalConfig
+    p = tmp_path / "retrieval.json"
+    p.write_text(json.dumps({
+        "broad_query_top_k": 30, "narrow_query_top_k": 5,
+    }))
+    cfg = RetrievalConfig.load(p)
+    assert cfg.broad_query_top_k == 30
+    assert cfg.narrow_query_top_k == 5
+
+
+def test_config_store_seed_missing(tmp_path):
+    """seed_missing writes only absent keys; subsequent calls are no-ops."""
+    from core.src.web.config_db import ConfigStore
+    db_path = tmp_path / "config.db"
+    cs = ConfigStore(db_path)
+    specs = [
+        ("retrieval", "broad_query_top_k", 25),
+        ("retrieval", "narrow_query_top_k", 10),
+    ]
+    n = cs.seed_missing(specs)
+    assert n == 2
+    assert cs.get("retrieval", "broad_query_top_k") == 25
+    assert cs.get("retrieval", "narrow_query_top_k") == 10
+    # Idempotent: a second call writes nothing
+    n2 = cs.seed_missing(specs)
+    assert n2 == 0
+    # Explicitly written different value isn't overwritten
+    cs.set("retrieval", "broad_query_top_k", 99, updated_by="test")
+    n3 = cs.seed_missing(specs)
+    assert n3 == 0
+    assert cs.get("retrieval", "broad_query_top_k") == 99

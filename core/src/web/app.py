@@ -128,8 +128,40 @@ async def lifespan(app: FastAPI):
     config_db_path = _os.environ.get("NORA_CONFIG_DB")
     if config_db_path:
         from core.src.web.config_db import ConfigStore
+        from core.src.env.config import (
+            BROAD_QUERY_TOP_K_ENV_VAR,
+            DEFAULT_BROAD_QUERY_TOP_K,
+            DEFAULT_NARROW_QUERY_TOP_K,
+            NARROW_QUERY_TOP_K_ENV_VAR,
+        )
         try:
             cs = ConfigStore(config_db_path)
+            # Seed first-creation values for retrieval.broad/narrow top-k.
+            # Resolution at runtime: DB > env > default. On first DB
+            # creation (no keys yet), this writes the env value (or
+            # default if env var unset) into DB so the DB becomes the
+            # authoritative source thereafter.
+            def _seed_int(env_var: str, default: int) -> int:
+                raw = _os.environ.get(env_var, "")
+                if raw:
+                    try:
+                        v = int(raw)
+                        if v > 0:
+                            return v
+                    except (ValueError, TypeError):
+                        pass
+                return default
+            n_seeded = cs.seed_missing([
+                ("retrieval", "broad_query_top_k",
+                 _seed_int(BROAD_QUERY_TOP_K_ENV_VAR, DEFAULT_BROAD_QUERY_TOP_K)),
+                ("retrieval", "narrow_query_top_k",
+                 _seed_int(NARROW_QUERY_TOP_K_ENV_VAR, DEFAULT_NARROW_QUERY_TOP_K)),
+            ])
+            if n_seeded:
+                logger.info(
+                    "ConfigStore: seeded %d missing key(s) from env / defaults",
+                    n_seeded,
+                )
             cs.apply_to_caches()
             app.state.config_store = cs
             logger.info("ConfigStore active at %s", config_db_path)

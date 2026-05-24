@@ -68,29 +68,11 @@ _TYPE_MAX_DISTANCE: dict[QueryType, float] = {
 }
 
 
-# Per-query-type retrieval breadth. Lookup-style queries ("What is
-# VZ_REQ_X?") work best with a tight top_k anchored on the entity
-# match. List/breadth-style queries ("What requirements exist for X
-# across all specs?") need more headroom because the expected hits
-# are often parent/overview reqs whose chunks are short (heading +
-# path only) and rank just below richer leaf chunks; widening top_k
-# lets those surface.
-_TYPE_TOP_K = {
-    QueryType.CROSS_DOC: 25,
-    QueryType.CROSS_MNO_COMPARISON: 25,
-    QueryType.STANDARDS_COMPARISON: 25,
-    QueryType.FEATURE_LEVEL: 25,
-    QueryType.TRACEABILITY: 20,
-    QueryType.RELEASE_DIFF: 20,
-    # SUMMARIZE retrieves widely — the user wants every relevant
-    # chunk so the LLM can produce a TL;DR + per-section breakdown.
-    # Per-requirement chunks are typically ~1KB; top_k=50 yields
-    # ~50KB of context, well under max_context_chars (30K → truncates
-    # if over but the LLM sees a meaningful prefix).
-    QueryType.SUMMARIZE: 50,
-    # FACT keeps the pipeline default (10) — fact answers come from
-    # 1-3 chunks; widening just adds noise.
-}
+# Per-query-type retrieval breadth is resolved via env/config.resolve_top_k.
+# Two-bucket design — each QueryType maps to broad (default 25, env var
+# NORA_BROAD_QUERY_TOP_K) or narrow (default 10, NORA_NARROW_QUERY_TOP_K),
+# with DB override via the Config page. The bucket assignment lives in
+# env.config._BROAD_QUERY_TYPES; queries not in that set are narrow.
 
 # Per-query-type BM25 weight in the RRF fusion. 0.0 disables BM25 for
 # that query type (pure dense retrieval). Empirical tuning on the OA
@@ -255,12 +237,13 @@ class QueryPipeline:
                 gap_threshold_by_type[<query_type>] > config scalar
                 > built-in default 0.05).
             top_k_cap: Hard upper limit on chunks retrieved per query.
-                Applied AFTER per-type widening (e.g. SUMMARIZE
-                normally retrieves _TYPE_TOP_K[SUMMARIZE]=50; with
-                top_k_cap=25 it retrieves min(50, 25)=25). None (default)
-                = no cap, current widening behavior preserved.
-                `top_k` (the floor) and `top_k_cap` (the ceiling) bound
-                the effective top-K from below and above respectively.
+                Applied AFTER per-bucket widening (resolve_top_k
+                returns broad=25 / narrow=10 by default; cap to 5
+                forces min(25, 5)=5 even for broad queries). None
+                (default) = no cap. `top_k` is no longer used as a
+                floor since resolve_top_k always returns a positive
+                value; it's retained as a constructor parameter for
+                callers that still pass it.
         """
         from core.src.query.bm25_index import BM25Index
 
@@ -447,10 +430,14 @@ class QueryPipeline:
         # OA eval found BM25 helps standards / traceability / single-
         # doc queries but hurts cross-doc / feature-level (parent
         # chunks too thin to compete with BM25-favored richer chunks).
-        type_top_k = max(self._top_k, _TYPE_TOP_K.get(intent.query_type, 0))
-        # Apply user-configured cap (Config page) AFTER per-type widening
-        # so an explicit "I want at most N" cap wins over breadth-query
-        # widening. None / 0 = no cap.
+        # Two-bucket resolver: every QueryType maps to broad (default 25)
+        # or narrow (default 10). Resolution chain: cli > DB > env >
+        # default. See env.config.resolve_top_k and the
+        # nora-retrieval-parent-displacement strand.
+        from core.src.env.config import resolve_top_k
+        type_top_k = resolve_top_k(query_type=intent.query_type.value)
+        # Apply user-configured cap (Config page) AFTER bucket widening
+        # so an explicit "I want at most N" cap wins. None / 0 = no cap.
         if self._top_k_cap and self._top_k_cap > 0:
             type_top_k = min(type_top_k, self._top_k_cap)
         # BM25 weight: resolved through the unified chain so admins can
