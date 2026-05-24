@@ -218,11 +218,13 @@ def test_cross_encoder_stable_on_ties():
 # ── OllamaReranker ──────────────────────────────────────────────────
 
 
-def _make_ollama_reranker(score_map: dict[tuple[str, str], float] | None = None,
-                          endpoint: str = "/api/embed"):
-    """Build an OllamaReranker bypassing __init__ network probes, with
-    a stubbed `_score_pair_via` driven by score_map (defaults to scoring
-    by chunk text length descending)."""
+def _make_ollama_reranker_score_mode(
+    score_map: dict[str, float] | None = None,
+    endpoint: str = "/api/embed",
+):
+    """Build an OllamaReranker in true-reranker (score) mode, bypassing
+    network probes. `_embed_raw` is stubbed to return a single-element
+    vector — the score. Defaults to scoring by passage-text length."""
     r = OllamaReranker.__new__(OllamaReranker)
     r._model_name = "bbjson/bge-reranker-base:latest"
     r._base_url = "http://127.0.0.1:11434"
@@ -230,17 +232,54 @@ def _make_ollama_reranker(score_map: dict[tuple[str, str], float] | None = None,
     r._max_chunk_chars = 4000
     r._opener = None
     r._endpoint = endpoint
+    r._mode = "rerank_score"
     r._available = True
 
-    def _stub_score(_endpoint, query, passage):
+    def _stub_embed(_endpoint, text):
+        # In score mode, text = "query<sep>passage". Score = explicit
+        # map (passage as key) or fallback to passage length.
         if score_map is not None:
-            key = (query, passage)
-            if key in score_map:
-                return score_map[key]
-        # Default: passage length is the score (longer = more relevant)
-        return float(len(passage))
+            for passage, score in score_map.items():
+                if text.endswith(passage):
+                    return [score]
+        # Default — extract passage from concatenated input
+        if r._PAIR_SEP in text:
+            _, passage = text.split(r._PAIR_SEP, 1)
+            return [float(len(passage))]
+        return [float(len(text))]
 
-    r._score_pair_via = _stub_score
+    r._embed_raw = _stub_embed
+    return r
+
+
+def _make_ollama_reranker_similarity_mode(
+    query_vec: list[float] | None = None,
+    passage_vecs: dict[str, list[float]] | None = None,
+):
+    """Build an OllamaReranker in embedding-similarity mode. Stubs
+    `_embed_raw` to return query_vec for queries and lookup-by-text
+    vectors for passages."""
+    r = OllamaReranker.__new__(OllamaReranker)
+    r._model_name = "bbjson/bge-reranker-base:latest"
+    r._base_url = "http://127.0.0.1:11434"
+    r._timeout = 60
+    r._max_chunk_chars = 4000
+    r._opener = None
+    r._endpoint = "/api/embed"
+    r._mode = "embedding_similarity"
+    r._available = True
+
+    qv = query_vec or [1.0, 0.0]
+    pvs = passage_vecs or {}
+
+    def _stub_embed(_endpoint, text):
+        if text == "query":
+            return qv
+        if text in pvs:
+            return pvs[text]
+        return [0.0, 0.0]
+
+    r._embed_raw = _stub_embed
     return r
 
 
@@ -257,8 +296,8 @@ def test_ollama_reranker_unavailable_when_ollama_unreachable():
     assert [c.chunk_id for c in out] == [c.chunk_id for c in chunks]
 
 
-def test_ollama_reranker_sorts_descending_by_score():
-    r = _make_ollama_reranker()
+def test_ollama_reranker_score_mode_sorts_descending():
+    r = _make_ollama_reranker_score_mode()
     chunks = [
         _chunk("req:short", text="A"),       # score 1
         _chunk("req:medium", text="AAAAA"),  # score 5
@@ -268,13 +307,9 @@ def test_ollama_reranker_sorts_descending_by_score():
     assert [c.chunk_id for c in out] == ["req:long", "req:medium", "req:short"]
 
 
-def test_ollama_reranker_explicit_score_map():
-    score_map = {
-        ("q", "doc-a"): 0.1,
-        ("q", "doc-b"): 0.9,
-        ("q", "doc-c"): 0.5,
-    }
-    r = _make_ollama_reranker(score_map=score_map)
+def test_ollama_reranker_score_mode_explicit_map():
+    score_map = {"doc-a": 0.1, "doc-b": 0.9, "doc-c": 0.5}
+    r = _make_ollama_reranker_score_mode(score_map=score_map)
     chunks = [
         _chunk("req:a", text="doc-a"),
         _chunk("req:b", text="doc-b"),
@@ -284,8 +319,32 @@ def test_ollama_reranker_explicit_score_map():
     assert [c.chunk_id for c in out] == ["req:b", "req:c", "req:a"]
 
 
+def test_ollama_reranker_similarity_mode_sorts_by_cosine():
+    """Embedding-similarity mode: cosine of query vector with each
+    passage vector decides ordering."""
+    # Query is [1, 0]. Three passages with different angles:
+    # - "doc-aligned" is [1, 0]   → cosine = 1.0
+    # - "doc-half"    is [1, 1]   → cosine ≈ 0.707
+    # - "doc-orth"    is [0, 1]   → cosine = 0.0
+    r = _make_ollama_reranker_similarity_mode(
+        query_vec=[1.0, 0.0],
+        passage_vecs={
+            "doc-aligned": [1.0, 0.0],
+            "doc-half": [1.0, 1.0],
+            "doc-orth": [0.0, 1.0],
+        },
+    )
+    chunks = [
+        _chunk("req:orth", text="doc-orth"),
+        _chunk("req:aligned", text="doc-aligned"),
+        _chunk("req:half", text="doc-half"),
+    ]
+    out = r.rerank("query", chunks)
+    assert [c.chunk_id for c in out] == ["req:aligned", "req:half", "req:orth"]
+
+
 def test_ollama_reranker_passthrough_when_unavailable():
-    r = _make_ollama_reranker()
+    r = _make_ollama_reranker_score_mode()
     r._available = False  # simulate failed probe
     chunks = [_chunk("req:1"), _chunk("req:2")]
     out = r.rerank("q", chunks)
@@ -293,27 +352,27 @@ def test_ollama_reranker_passthrough_when_unavailable():
 
 
 def test_ollama_reranker_passthrough_on_single_chunk():
-    r = _make_ollama_reranker()
+    r = _make_ollama_reranker_score_mode()
     out = r.rerank("q", [_chunk("req:only")])
     assert [c.chunk_id for c in out] == ["req:only"]
 
 
 def test_ollama_reranker_passthrough_on_empty_chunks():
-    r = _make_ollama_reranker()
+    r = _make_ollama_reranker_score_mode()
     assert r.rerank("q", []) == []
 
 
 def test_ollama_reranker_score_failure_falls_back_to_input_order():
-    """If a single scoring call throws, the whole rerank falls back to
-    passthrough — graceful degradation matching CrossEncoderReranker."""
-    r = _make_ollama_reranker()
+    """If a scoring call throws mid-pair, the whole rerank falls back
+    to passthrough — graceful degradation."""
+    r = _make_ollama_reranker_score_mode()
 
-    def _flaky_score(endpoint, query, passage):
-        if passage == "doc-b":
+    def _flaky_embed(endpoint, text):
+        if text.endswith("doc-b"):
             raise RuntimeError("simulated wire failure")
-        return 1.0
+        return [1.0]
 
-    r._score_pair_via = _flaky_score
+    r._embed_raw = _flaky_embed
     chunks = [
         _chunk("req:a", text="doc-a"),
         _chunk("req:b", text="doc-b"),
@@ -323,22 +382,50 @@ def test_ollama_reranker_score_failure_falls_back_to_input_order():
     assert [c.chunk_id for c in out] == ["req:a", "req:b", "req:c"]
 
 
-def test_ollama_reranker_none_score_falls_back_to_input_order():
-    """If a scoring call returns None (multi-dim vector response —
-    model is acting as embedder, not reranker), preserve input order."""
-    r = _make_ollama_reranker()
+def test_ollama_reranker_score_mode_wrong_shape_falls_back():
+    """If the model unexpectedly returns multi-dim vectors mid-rerank
+    (shape changed since probe), preserve input order."""
+    r = _make_ollama_reranker_score_mode()
 
-    def _none_score(endpoint, query, passage):
-        return None
+    def _wrong_shape(endpoint, text):
+        return [0.1, 0.2, 0.3]  # 3-dim, not 1-dim
 
-    r._score_pair_via = _none_score
+    r._embed_raw = _wrong_shape
     chunks = [_chunk("req:a"), _chunk("req:b")]
     out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:a", "req:b"]
+
+
+def test_ollama_reranker_similarity_mode_handles_zero_norm():
+    """When the query vector has zero norm (e.g. all zeros), cosine
+    is defined as 0.0 — ordering preserved (stable sort)."""
+    r = _make_ollama_reranker_similarity_mode(
+        query_vec=[0.0, 0.0],
+        passage_vecs={
+            "doc-a": [1.0, 0.0],
+            "doc-b": [0.0, 1.0],
+        },
+    )
+    chunks = [_chunk("req:a", text="doc-a"), _chunk("req:b", text="doc-b")]
+    out = r.rerank("query", chunks)
+    # All scores = 0.0, stable sort preserves input order
     assert [c.chunk_id for c in out] == ["req:a", "req:b"]
 
 
 def test_ollama_reranker_satisfies_reranker_protocol():
     """Duck-typing check: OllamaReranker is interchangeable with the
     other Reranker implementations."""
-    r = _make_ollama_reranker()
-    assert isinstance(r, Reranker)  # Protocol check via runtime_checkable
+    r = _make_ollama_reranker_score_mode()
+    assert isinstance(r, Reranker)
+
+
+def test_ollama_reranker_cosine_helper():
+    """Cosine helper returns 0.0 for degenerate inputs."""
+    cos = OllamaReranker._cosine
+    assert cos([1.0, 0.0], [1.0, 0.0]) == 1.0
+    assert cos([1.0, 0.0], [0.0, 1.0]) == 0.0
+    assert abs(cos([1.0, 1.0], [1.0, 0.0]) - 0.7071) < 0.001
+    # Degenerate
+    assert cos([], [1.0]) == 0.0
+    assert cos([0.0, 0.0], [1.0, 0.0]) == 0.0
+    assert cos([1.0, 0.0], [1.0]) == 0.0  # mismatched dims

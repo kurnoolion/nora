@@ -217,10 +217,25 @@ class OllamaReranker:
       - `bbjson/bge-reranker-base:latest` — ~280M, BGE-reranker-base
         port. Strong on out-of-domain queries.
 
-    Wire protocol: POST /api/embed with `input` = "query [SEP] passage"
-    (newer Ollama) — modern reranker-capable Ollama servers return a
-    single-float "embedding" that IS the relevance score. Falls back
-    to /api/embeddings (older Ollama) if /api/embed 404s.
+    Wire protocol — supports two response shapes detected at probe time:
+
+      - "rerank_score" — modern reranker-capable Ollama servers
+        return `{"embeddings": [[score]]}` (single-float) for a
+        concatenated (query, passage) input. Used directly as the
+        relevance score. One HTTP call per pair.
+
+      - "embedding_similarity" — when the response is a multi-dim
+        vector, the model is packaged as a plain embedder (not a
+        cross-encoder). Used by computing cosine similarity between
+        the query embedding and each passage embedding. Two calls
+        per pair (one query embed, N passage embeds reused-once).
+        Lower quality than a true cross-encoder — no joint
+        query/passage attention — but still useful as a second-
+        stage discriminator since the embedding model is typically
+        different from the dense retrieval embedder.
+
+    Endpoint fallback: tries /api/embed first (modern), then
+    /api/embeddings (legacy).
 
     Graceful degradation matches CrossEncoderReranker: connection
     failures or unexpected response shapes set `available=False` and
@@ -256,6 +271,10 @@ class OllamaReranker:
         self._opener = _build_opener(self._base_url)
         # Which endpoint to use — detected on first call, cached.
         self._endpoint: str | None = None
+        # Scoring mode — "rerank_score" (single-float per pair) or
+        # "embedding_similarity" (cosine over multi-dim vectors).
+        # Detected at probe time alongside the endpoint.
+        self._mode: str | None = None
         self._available = False
 
         # Reachability + model-presence check, matching OllamaEmbedder.
@@ -287,54 +306,76 @@ class OllamaReranker:
             return
 
         # Probe the scoring endpoint with a tiny pair; cache the working
-        # endpoint name. If neither works, log and stay unavailable.
-        if self._probe_endpoint():
+        # endpoint + mode. If neither works, log and stay unavailable.
+        if self._probe_endpoint_and_mode():
             self._available = True
             logger.info(
-                "OllamaReranker ready: model=%s, server=%s, endpoint=%s",
-                model_name, self._base_url, self._endpoint,
+                "OllamaReranker ready: model=%s, server=%s, endpoint=%s, mode=%s",
+                model_name, self._base_url, self._endpoint, self._mode,
             )
 
     @property
     def available(self) -> bool:
         return self._available
 
-    def _probe_endpoint(self) -> bool:
-        """Discover which Ollama endpoint serves the reranker. Try
-        /api/embed first (modern), then /api/embeddings (legacy).
-        Cache the working endpoint."""
+    def _probe_endpoint_and_mode(self) -> bool:
+        """Discover which Ollama endpoint + scoring mode this model
+        supports. Try /api/embed first (modern), then /api/embeddings.
+        Cache both endpoint and mode on success.
+
+        Mode is auto-detected from the response shape:
+          - single-element vector → "rerank_score" (true cross-encoder
+            packaging — the float IS the relevance score).
+          - multi-dim vector → "embedding_similarity" (model is
+            packaged as a plain embedder; rerank() will compute
+            cosine over query/passage embeddings).
+        """
         for endpoint in ("/api/embed", "/api/embeddings"):
             try:
-                score = self._score_pair_via(
-                    endpoint, query="test", passage="test"
-                )
-                if score is not None:
-                    self._endpoint = endpoint
-                    return True
+                vec = self._embed_raw(endpoint, "probe")
             except Exception as e:
                 logger.debug(
                     "OllamaReranker: endpoint %s probe failed (%s); "
                     "trying next", endpoint, e,
                 )
+                continue
+            if not vec:
+                continue
+            self._endpoint = endpoint
+            if len(vec) == 1:
+                self._mode = "rerank_score"
+                logger.info(
+                    "OllamaReranker: model %r returns single-float "
+                    "scores → using cross-encoder reranker mode",
+                    self._model_name,
+                )
+            else:
+                self._mode = "embedding_similarity"
+                logger.info(
+                    "OllamaReranker: model %r returns %d-dim "
+                    "embeddings → using embedding-similarity mode "
+                    "(cosine over query/passage). Lower quality than "
+                    "a true cross-encoder but still useful as a "
+                    "second-stage discriminator.",
+                    self._model_name, len(vec),
+                )
+            return True
         logger.warning(
-            "OllamaReranker: no working scoring endpoint at %s; "
-            "model %r may not be a reranker — falling back to passthrough",
+            "OllamaReranker: no working scoring endpoint at %s for "
+            "model %r — falling back to passthrough",
             self._base_url, self._model_name,
         )
         return False
 
-    def _score_pair_via(
-        self, endpoint: str, query: str, passage: str,
-    ) -> float | None:
-        """One scoring call. Returns the relevance score (float) or
-        None if the response shape doesn't look like a reranker output
-        (e.g., model returns a multi-dim vector — not a reranker)."""
+    def _embed_raw(
+        self, endpoint: str, text: str,
+    ) -> list[float]:
+        """One Ollama call; return the raw vector (any dimensionality).
+        Throws on HTTP / connection errors. Returns [] on empty body."""
         import json as _json
         import urllib.request
 
-        text = query + self._PAIR_SEP + passage
-        # /api/embed uses `input`; /api/embeddings uses `prompt`. Both
-        # accept the same body otherwise.
+        # /api/embed uses `input`; /api/embeddings uses `prompt`.
         if endpoint == "/api/embed":
             body = {"model": self._model_name, "input": text}
         else:
@@ -349,80 +390,116 @@ class OllamaReranker:
         with self._opener.open(req, timeout=self._timeout) as resp:
             data = _json.loads(resp.read())
 
-        # Response shape varies. Look for known keys.
-        # Newer /api/embed: {"embeddings": [[score]]} (reranker mode)
-        #                   or {"embeddings": [[v1, v2, ...]]} (embedding mode).
-        # Older /api/embeddings: {"embedding": [score]} or [v1, v2, ...].
+        # /api/embed: {"embeddings": [[v1, v2, ...]]}
         embs = data.get("embeddings") or []
-        if embs and isinstance(embs, list) and embs[0]:
-            row = embs[0]
-            if isinstance(row, list):
-                # A single-element vector IS the reranker score. If the
-                # row has >1 element, the model is acting as a plain
-                # embedder — not what we want.
-                if len(row) == 1:
-                    return float(row[0])
-                logger.debug(
-                    "OllamaReranker: %s returned multi-dim vector (%d-d); "
-                    "model is acting as embedder, not reranker",
-                    endpoint, len(row),
-                )
-                return None
-
+        if embs and isinstance(embs, list) and isinstance(embs[0], list):
+            return [float(x) for x in embs[0]]
+        # /api/embeddings: {"embedding": [v1, v2, ...]}
         emb = data.get("embedding")
         if isinstance(emb, list):
-            if len(emb) == 1:
-                return float(emb[0])
-            logger.debug(
-                "OllamaReranker: %s returned multi-dim vector (%d-d); "
-                "model is acting as embedder, not reranker",
-                endpoint, len(emb),
-            )
-            return None
+            return [float(x) for x in emb]
+        return []
 
-        return None
+    @staticmethod
+    def _cosine(a: list[float], b: list[float]) -> float:
+        """Cosine similarity. Returns 0.0 when either vector is empty
+        or has zero norm — preserves a deterministic ordering in those
+        degenerate cases."""
+        if not a or not b or len(a) != len(b):
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b))
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(y * y for y in b) ** 0.5
+        if na == 0.0 or nb == 0.0:
+            return 0.0
+        return dot / (na * nb)
 
     def rerank(
         self,
         query: str,
         chunks: list[RetrievedChunk],
     ) -> list[RetrievedChunk]:
-        """Score each (query, chunk_text) pair via the Ollama scoring
-        endpoint; return chunks sorted by descending score. Graceful
-        degradation: empty / single-element / unavailable → passthrough.
-        Wire-level failures during scoring log a warn and preserve input
-        ordering (same shape as CrossEncoderReranker)."""
+        """Score each chunk against the query; return descending order.
+
+        Two scoring paths, selected at probe time:
+          - "rerank_score": one Ollama call per (query, passage)
+            concatenation. Single-float response IS the score.
+          - "embedding_similarity": one call for the query, one per
+            passage, then cosine similarity between the vectors.
+
+        Graceful degradation: empty / single-element / unavailable →
+        passthrough. Any wire failure during scoring logs a warn and
+        returns the input order (same shape as CrossEncoderReranker)."""
         if not chunks:
             return []
         if len(chunks) == 1 or not self._available:
             return list(chunks)
-        assert self._endpoint is not None  # set by _probe_endpoint when available
+        assert self._endpoint is not None and self._mode is not None
+
+        if self._mode == "embedding_similarity":
+            return self._rerank_by_similarity(query, chunks)
+        return self._rerank_by_score(query, chunks)
+
+    def _rerank_by_score(
+        self, query: str, chunks: list[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        """True cross-encoder mode: one call per (query, passage) pair;
+        the returned single-float IS the score."""
+        scored: list[tuple[RetrievedChunk, float]] = []
+        for c in chunks:
+            text = query + self._PAIR_SEP + self._truncate(c.text)
+            try:
+                vec = self._embed_raw(self._endpoint, text)
+            except Exception as e:
+                logger.warning(
+                    "OllamaReranker: score call failed for chunk %s (%r); "
+                    "preserving input order", c.chunk_id, e,
+                )
+                return list(chunks)
+            if len(vec) != 1:
+                logger.warning(
+                    "OllamaReranker: expected single-float score for "
+                    "chunk %s, got %d-d vector — preserving input order",
+                    c.chunk_id, len(vec),
+                )
+                return list(chunks)
+            scored.append((c, vec[0]))
+        scored.sort(key=lambda p: -p[1])
+        return [c for c, _ in scored]
+
+    def _rerank_by_similarity(
+        self, query: str, chunks: list[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        """Embedding-similarity mode: embed query once, embed each
+        passage, sort by cosine similarity. Used when the model is
+        packaged as a plain embedder (e.g., bbjson/bge-reranker-base
+        port returns 3072-dim vectors, not single-float scores)."""
+        try:
+            qvec = self._embed_raw(self._endpoint, query)
+        except Exception as e:
+            logger.warning(
+                "OllamaReranker: query embed failed (%r); preserving "
+                "input order", e,
+            )
+            return list(chunks)
+        if not qvec:
+            logger.warning(
+                "OllamaReranker: query embed returned empty vector — "
+                "preserving input order"
+            )
+            return list(chunks)
 
         scored: list[tuple[RetrievedChunk, float]] = []
         for c in chunks:
             try:
-                s = self._score_pair_via(
-                    self._endpoint,
-                    query=query,
-                    passage=self._truncate(c.text),
-                )
+                pvec = self._embed_raw(self._endpoint, self._truncate(c.text))
             except Exception as e:
                 logger.warning(
-                    "OllamaReranker: scoring failed for chunk %s (%r); "
-                    "skipping (preserving input order)",
-                    c.chunk_id, e,
+                    "OllamaReranker: passage embed failed for chunk %s "
+                    "(%r); preserving input order", c.chunk_id, e,
                 )
                 return list(chunks)
-            if s is None:
-                logger.warning(
-                    "OllamaReranker: scoring returned None for chunk %s; "
-                    "preserving input order",
-                    c.chunk_id,
-                )
-                return list(chunks)
-            scored.append((c, s))
-
-        # Stable sort by descending score
+            scored.append((c, self._cosine(qvec, pvec)))
         scored.sort(key=lambda p: -p[1])
         return [c for c, _ in scored]
 
