@@ -149,40 +149,83 @@ def _section_prefixes(section_number: str, max_depth: int) -> list[str]:
     return out
 
 
+def _section_sort_key(section_num: str) -> tuple[int, ...]:
+    """Natural-sort key for section numbers. "5.10" → (5, 10),
+    "5.2" → (5, 2); tuples sort so (5, 2) < (5, 10)."""
+    out: list[int] = []
+    for part in section_num.split("."):
+        try:
+            out.append(int(part))
+        except ValueError:
+            # Non-numeric segment (e.g. "5.A") — sort lexically as a
+            # large tuple of char codes so it stays stable.
+            out.extend(ord(c) for c in part)
+    return tuple(out)
+
+
 def _build_doc_row_text(
     plan_id: str, plan_name: str, req_ids: list[str],
+    depth1_sections: list[tuple[str, str]],
 ) -> str:
-    """Doc-level row body — short header + req_id pointer list.
+    """Doc-level row body — short header + section-title list +
+    req_id pointer list. The section titles widen the matching
+    surface so concept-shaped queries (e.g. "WiFi calling") can
+    bridge to the plan even when SIRA's query-side enrichment LLM
+    misses the plan-name expansion (plan-aware-sira / D-DRAFT-10).
 
-    Kept short on purpose: BM25 length-normalization penalizes long
-    rows, so the body is just (plan-name-saturated TF) + IDs. The
-    actual content lives in per-req rows; fan-out at retrieval time
-    surfaces it for the synthesizer.
+    BM25 length-normalization stays manageable because section titles
+    are typically a few hundred bytes total (5-20 depth-1 sections);
+    the req_id list remains the bulk of the body.
+
+    `depth1_sections`: list of (section_number, section_title) for
+    all sections at depth 1 within this plan.
     """
     display = plan_name or plan_id
     lines = [
         f"# {display} plan",
         f"**plan**: {plan_id}" + (f" / {plan_name}" if plan_name else ""),
+    ]
+    if depth1_sections:
+        lines.append("")
+        lines.append("**sections**:")
+        for num, title in depth1_sections:
+            lines.append(f"  - {num} {title}".rstrip())
+    lines.extend([
         "",
         f"Contains {len(req_ids)} requirements:",
         " ".join(req_ids),
-    ]
+    ])
     return "\n".join(lines)
 
 
 def _build_section_row_text(
     plan_id: str, plan_name: str, section_num: str,
     section_title: str, req_ids: list[str],
+    subsection_titles: list[tuple[str, str]],
 ) -> str:
-    """Section-level row body — same shape as doc-level."""
+    """Section-level row body — header + subsection-title list +
+    req_id pointer list. Subsection titles serve the same vocabulary-
+    bridging role as section titles in the doc-level row.
+
+    `subsection_titles`: list of (section_number, section_title) for
+    immediate child sections (one level deeper). May be empty for
+    leaf-most section rows.
+    """
     lines = [
         f"# {section_num} {section_title}".strip(),
         f"**plan**: {plan_id}" + (f" / {plan_name}" if plan_name else ""),
         f"**section**: {section_num}",
+    ]
+    if subsection_titles:
+        lines.append("")
+        lines.append("**subsections**:")
+        for num, title in subsection_titles:
+            lines.append(f"  - {num} {title}".rstrip())
+    lines.extend([
         "",
         f"Contains {len(req_ids)} requirements:",
         " ".join(req_ids),
-    ]
+    ])
     return "\n".join(lines)
 
 
@@ -238,23 +281,47 @@ def _emit_multigranularity_rows(
         if not all_req_ids:
             continue
 
+        # Collect immediate-child sections per parent for the title-
+        # augmentation pass. For the doc-level row, the "parent" is
+        # the plan itself; its children are depth-1 sections (no dots
+        # in section_number). For a section row at "5.1", its
+        # children are "5.1.*" sections at depth +1.
+        depth1_sections: list[tuple[str, str]] = []
+        children_of_section: dict[str, list[tuple[str, str]]] = {}
+        for sec_num, title in section_anchors.items():
+            if "." not in sec_num:
+                depth1_sections.append((sec_num, title))
+            else:
+                parent = sec_num[: sec_num.rfind(".")]
+                children_of_section.setdefault(parent, []).append((sec_num, title))
+        # Stable natural-sort order
+        depth1_sections.sort(key=lambda p: _section_sort_key(p[0]))
+        for k in children_of_section:
+            children_of_section[k].sort(key=lambda p: _section_sort_key(p[0]))
+
         # Doc-level row
         f_out.write(json.dumps({
             "_id": f"doc:{plan_id}",
             "title": f"{plan_name or plan_id} plan",
-            "text": _build_doc_row_text(plan_id, plan_name, all_req_ids),
+            "text": _build_doc_row_text(
+                plan_id, plan_name, all_req_ids, depth1_sections,
+            ),
         }, ensure_ascii=False) + "\n")
         n_doc += 1
 
         # Section-level rows
-        for prefix in sorted(section_to_descendants.keys()):
+        for prefix in sorted(
+            section_to_descendants.keys(), key=_section_sort_key,
+        ):
             descendants = section_to_descendants[prefix]
             section_title = section_anchors.get(prefix, f"Section {prefix}")
+            subsection_titles = children_of_section.get(prefix, [])
             f_out.write(json.dumps({
                 "_id": f"section:{plan_id}:{prefix}",
                 "title": f"{prefix} {section_title}".strip(),
                 "text": _build_section_row_text(
                     plan_id, plan_name, prefix, section_title, descendants,
+                    subsection_titles,
                 ),
             }, ensure_ascii=False) + "\n")
             n_section += 1
