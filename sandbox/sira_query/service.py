@@ -75,6 +75,22 @@ _RERANK_LLM_API_KEY = os.getenv("NORA_SIRA_RERANK_LLM_API_KEY", "")
 # see thinking blocks that get cut off.
 _RERANK_MAX_TOKENS = int(os.getenv("NORA_SIRA_RERANK_MAX_TOKENS", "256"))
 
+# Batch rerank: score N chunks per LLM call instead of one chunk per
+# call. Saves 25× API round-trip overhead when set to top_n. Default
+# 0 = per-call mode (current behavior). Set to e.g. 25 to batch all
+# candidates into one call. Smaller batch sizes (5-10) trade some
+# speed for less context pressure on the LLM.
+#
+# Failure-mode tradeoff: per-call degrades gracefully (one bad call =
+# one zero score). Batch fails atomically (one bad call = N zero
+# scores for that batch). Worth testing on your model before committing.
+_RERANK_BATCH_SIZE = int(os.getenv("NORA_SIRA_RERANK_BATCH_SIZE", "0"))
+
+# Output budget when batching. Each chunk needs ~10-15 tokens in the
+# JSON output ({"id": N, "score": NN}, plus formatting). 4096 covers
+# batch_size up to ~50 with CoT models that add a thinking preamble.
+_RERANK_BATCH_MAX_TOKENS = int(os.getenv("NORA_SIRA_RERANK_BATCH_MAX_TOKENS", "4096"))
+
 # Defaults to ../sira/ relative to this file (the upstream clone).
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
@@ -380,6 +396,8 @@ def healthz() -> dict[str, Any]:
         "rerank_llm_model": _RERANK_LLM_MODEL or "(unset → uses shim model)",
         "rerank_llm_api_key_set": bool(_RERANK_LLM_API_KEY),
         "rerank_max_tokens": _RERANK_MAX_TOKENS,
+        "rerank_batch_size": _RERANK_BATCH_SIZE,
+        "rerank_batch_max_tokens": _RERANK_BATCH_MAX_TOKENS,
         "shim_url": _SHIM_URL,
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
         "query_prompt_loaded": bool(_query_prompt_template),
@@ -472,6 +490,85 @@ def _parse_score(raw: str) -> int:
         return 0
 
 
+def _format_batch_rerank_prompt(query: str, docs: list[tuple[int, str]]) -> str:
+    """Build a batch-scoring prompt for `docs = [(local_id, text), ...]`.
+    Output spec is a JSON array of `{"id": N, "score": <0-100>}` in
+    document order. Rubric mirrors the per-call relevance_v01 prompt's
+    scoring bands so batch mode produces comparable scores."""
+    docs_block = "\n\n".join(
+        f"[{lid}] {text[:4000]}" for lid, text in docs
+    )
+    return (
+        "You are scoring documents for relevance to a query. For each "
+        "document, output an integer 0-100 score.\n\n"
+        "Scoring rubric:\n"
+        "- 0: completely unrelated topic, no shared concepts\n"
+        "- 1-20: tangentially related (shared spec family or RAT) but no "
+        "sentence addresses the query\n"
+        "- 21-40: same procedure / topic family, no specific answer\n"
+        "- 41-60: heading/anchor for the queried topic, OR partial info\n"
+        "- 61-80: contains the answer in one normative sentence "
+        "(\"shall\" / \"shall not\" / \"should\")\n"
+        "- 81-100: directly and clearly answers the query with a normative verb\n"
+        "\n"
+        f"Query: {query}\n\n"
+        "Documents:\n"
+        f"{docs_block}\n\n"
+        "Output ONLY a JSON array, one entry per document, in the same "
+        "order. Use the bracketed id from each document. Example shape:\n"
+        '[{"id": 0, "score": 75}, {"id": 1, "score": 12}, ...]'
+    )
+
+
+def _parse_batch_scores(raw: str, expected_ids: list[int]) -> dict[int, int]:
+    """Extract `{id: score}` pairs from a batch rerank LLM response.
+
+    Returns a dict keyed by local id. Missing / unparseable ids
+    default to 0 (matches per-call _parse_score failure semantics).
+    Tolerates: CoT thinking preambles before the JSON, trailing
+    commentary after, single-object vs nested array, extra whitespace.
+    """
+    out: dict[int, int] = {i: 0 for i in expected_ids}
+    # Find the JSON array: first '[' followed by content with ']' that
+    # parses as a list. Naively find first '[' / last ']' and try
+    # json.loads; if that fails, scan for individual `{"id": N, "score": M}`
+    # objects as a fallback.
+    lb = raw.find("[")
+    rb = raw.rfind("]")
+    if lb != -1 and rb > lb:
+        try:
+            arr = json.loads(raw[lb : rb + 1])
+            if isinstance(arr, list):
+                for item in arr:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        i = int(item.get("id"))
+                        s = int(item.get("score", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if i in out:
+                        out[i] = max(0, min(100, s))
+                return out
+        except json.JSONDecodeError:
+            pass
+    # Fallback: per-object regex-ish scan. Helps when the model emits
+    # commentary between objects or wraps each in backticks.
+    import re
+    obj_re = re.compile(
+        r'\{\s*"id"\s*:\s*(\d+)\s*,\s*"score"\s*:\s*(\d+)\s*\}'
+    )
+    for m in obj_re.finditer(raw):
+        try:
+            i = int(m.group(1))
+            s = int(m.group(2))
+        except ValueError:
+            continue
+        if i in out:
+            out[i] = max(0, min(100, s))
+    return out
+
+
 # ── Main endpoint ──────────────────────────────────────────────────
 
 @app.post("/sira-query")
@@ -545,33 +642,79 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         rerank_call_ms: list[int] = []
         if _RERANK_ENABLED and _rerank_prompt_template and hits:
             try:
-                for idx, score in hits:
-                    rid = _doc_ids[idx]
-                    doc = _corpus_by_id[rid]
-                    # Mirror SIRA's batch reranker — title + body, capped at 4000 chars.
-                    doc_text = (f"{doc['title']}\n\n{doc['text']}")[:4000]
-                    prompt = _rerank_prompt_template.format(
-                        query=req.query, document=doc_text,
-                    )
-                    call_t0 = time.time()
-                    try:
-                        raw = await _llm_call(
-                            client, prompt,
-                            max_tokens=_RERANK_MAX_TOKENS, temperature=0.0,
-                            # Route rerank to the rerank-specific
-                            # endpoint when configured; otherwise
-                            # falls through to the shim (which is what
-                            # query enrichment already uses).
-                            base_url=_RERANK_LLM_URL or None,
-                            model=_RERANK_LLM_MODEL or None,
-                            api_key=_RERANK_LLM_API_KEY or None,
+                if _RERANK_BATCH_SIZE > 0:
+                    # ── Batch mode ──────────────────────────────────
+                    # Score N chunks per LLM call. One call's failure
+                    # zeroes the whole batch (per-call mode degrades
+                    # one chunk at a time).
+                    rerank_scores_by_idx: dict[int, int] = {}
+                    for batch_start in range(0, len(hits), _RERANK_BATCH_SIZE):
+                        batch_hits = hits[batch_start : batch_start + _RERANK_BATCH_SIZE]
+                        docs = []
+                        for local_id, (idx, _bm25_score) in enumerate(batch_hits):
+                            rid = _doc_ids[idx]
+                            doc = _corpus_by_id[rid]
+                            doc_text = (f"{doc['title']}\n\n{doc['text']}")[:4000]
+                            docs.append((local_id, doc_text))
+                        prompt = _format_batch_rerank_prompt(req.query, docs)
+                        call_t0 = time.time()
+                        try:
+                            raw = await _llm_call(
+                                client, prompt,
+                                max_tokens=_RERANK_BATCH_MAX_TOKENS,
+                                temperature=0.0,
+                                base_url=_RERANK_LLM_URL or None,
+                                model=_RERANK_LLM_MODEL or None,
+                                api_key=_RERANK_LLM_API_KEY or None,
+                            )
+                            scores_map = _parse_batch_scores(
+                                raw, [lid for lid, _ in docs],
+                            )
+                        except Exception as exc:
+                            notes.append(
+                                f"batch rerank failed for batch "
+                                f"{batch_start}-{batch_start + len(batch_hits)}: {exc}"
+                            )
+                            scores_map = {lid: 0 for lid, _ in docs}
+                        rerank_call_ms.append(int((time.time() - call_t0) * 1000))
+                        # Map local ids → global hit idx → rerank score.
+                        for local_id, (idx, _bm25_score) in enumerate(batch_hits):
+                            rerank_scores_by_idx[idx] = scores_map.get(local_id, 0)
+                    # Materialize the reranked tuples in original hit
+                    # order; sort below normalizes.
+                    reranked = [
+                        (idx, score, rerank_scores_by_idx.get(idx, 0))
+                        for idx, score in hits
+                    ]
+                else:
+                    # ── Per-call mode ───────────────────────────────
+                    for idx, score in hits:
+                        rid = _doc_ids[idx]
+                        doc = _corpus_by_id[rid]
+                        # Mirror SIRA's batch reranker — title + body, capped at 4000 chars.
+                        doc_text = (f"{doc['title']}\n\n{doc['text']}")[:4000]
+                        prompt = _rerank_prompt_template.format(
+                            query=req.query, document=doc_text,
                         )
-                        rerank_score = _parse_score(raw)
-                    except Exception as exc:
-                        notes.append(f"rerank failed for {rid}: {exc}")
-                        rerank_score = 0
-                    rerank_call_ms.append(int((time.time() - call_t0) * 1000))
-                    reranked.append((idx, score, rerank_score))
+                        call_t0 = time.time()
+                        try:
+                            raw = await _llm_call(
+                                client, prompt,
+                                max_tokens=_RERANK_MAX_TOKENS, temperature=0.0,
+                                # Route rerank to the rerank-specific
+                                # endpoint when configured; otherwise
+                                # falls through to the shim (which is what
+                                # query enrichment already uses).
+                                base_url=_RERANK_LLM_URL or None,
+                                model=_RERANK_LLM_MODEL or None,
+                                api_key=_RERANK_LLM_API_KEY or None,
+                            )
+                            rerank_score = _parse_score(raw)
+                        except Exception as exc:
+                            notes.append(f"rerank failed for {rid}: {exc}")
+                            rerank_score = 0
+                        rerank_call_ms.append(int((time.time() - call_t0) * 1000))
+                        reranked.append((idx, score, rerank_score))
                 # Sort by rerank score desc, then BM25 desc as tiebreaker.
                 reranked.sort(key=lambda x: (-x[2], -x[1]))
             except Exception as exc:
