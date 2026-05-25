@@ -91,6 +91,23 @@ _RERANK_BATCH_SIZE = int(os.getenv("NORA_SIRA_RERANK_BATCH_SIZE", "0"))
 # batch_size up to ~50 with CoT models that add a thinking preamble.
 _RERANK_BATCH_MAX_TOKENS = int(os.getenv("NORA_SIRA_RERANK_BATCH_MAX_TOKENS", "4096"))
 
+# Plan-aware-sira fan-out (see strand plan-aware-sira / D-DRAFT-10).
+# The BEIR adapter now emits doc-level (`doc:<plan>`) and section-level
+# (`section:<plan>:<num>`) rows alongside per-requirement rows. The
+# multi-granularity rows carry req_id POINTER LISTS rather than full
+# content — they exist to provide a strong matching signal for plan-
+# level queries while sidestepping BM25's length-norm penalty. At
+# retrieval time, this service fans them out into their constituent
+# req-level chunks so the synthesizer receives real content (and so
+# req-level citations resolve correctly).
+_FANOUT_ENABLED = os.getenv("NORA_SIRA_FANOUT_ENABLED", "true").lower() in {
+    "1", "true", "yes", "on",
+}
+# Max req_ids to fan out from a single doc/section hit. Bounds the
+# synthesizer's context budget; large plans (200+ reqs) would
+# otherwise dominate the top-K.
+_FANOUT_PER_HIT = int(os.getenv("NORA_SIRA_FANOUT_PER_HIT", "50"))
+
 # Defaults to ../sira/ relative to this file (the upstream clone).
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
@@ -147,6 +164,7 @@ _USE_LATEST = os.getenv("NORA_SIRA_USE_LATEST_RUNS", "").lower() in ("1", "true"
 
 _bm25 = None
 _doc_ids: list[str] = []
+_doc_id_to_idx: dict[str, int] = {}
 _corpus_by_id: dict[str, dict[str, str]] = {}
 _query_prompt_template: str = ""
 _rerank_prompt_template: str = ""
@@ -213,11 +231,13 @@ def _load_state() -> None:
         )
         return
 
-    # Corpus: build id → {title, text} mapping
+    # Corpus: build id → {title, text} mapping. Also build the
+    # reverse id → index lookup used by fan-out (plan-aware-sira).
     with open(corpus_path, encoding="utf-8") as f:
         for line in f:
             obj = json.loads(line)
             rid = obj["_id"]
+            _doc_id_to_idx[rid] = len(_doc_ids)
             _doc_ids.append(rid)
             _corpus_by_id[rid] = {
                 "title": obj.get("title", ""),
@@ -398,6 +418,16 @@ def healthz() -> dict[str, Any]:
         "rerank_max_tokens": _RERANK_MAX_TOKENS,
         "rerank_batch_size": _RERANK_BATCH_SIZE,
         "rerank_batch_max_tokens": _RERANK_BATCH_MAX_TOKENS,
+        "fanout_enabled": _FANOUT_ENABLED,
+        "fanout_per_hit": _FANOUT_PER_HIT,
+        # Counts of doc/section rows in the loaded corpus — confirms the
+        # adapter wrote multi-granularity rows (plan-aware-sira).
+        "n_doc_rows": sum(1 for x in _doc_ids if x.startswith("doc:")),
+        "n_section_rows": sum(1 for x in _doc_ids if x.startswith("section:")),
+        "n_req_rows": sum(
+            1 for x in _doc_ids
+            if not x.startswith("doc:") and not x.startswith("section:")
+        ),
         "shim_url": _SHIM_URL,
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
         "query_prompt_loaded": bool(_query_prompt_template),
@@ -488,6 +518,89 @@ def _parse_score(raw: str) -> int:
         return int(obj.get("score", 0))
     except (json.JSONDecodeError, ValueError, TypeError):
         return 0
+
+
+# ── Multi-granularity fan-out (plan-aware-sira / D-DRAFT-10) ───────
+
+
+def _is_pointer_row(corpus_id: str) -> bool:
+    """True for doc-level / section-level rows whose text body is a
+    pointer list rather than full requirement content."""
+    return corpus_id.startswith("doc:") or corpus_id.startswith("section:")
+
+
+def _extract_referenced_req_ids(text: str) -> list[str]:
+    """Pull req_ids out of a doc/section row's text body.
+
+    The adapter writes the body as a "Contains N requirements:\\n<space-
+    separated ids>" block. Implementation just splits on whitespace
+    and keeps any token that exists in `_corpus_by_id` — corpus-
+    agnostic (no assumption about req_id prefix shape) and tolerant of
+    surrounding text. Preserves the order ids appear in the body.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for tok in text.split():
+        tok = tok.strip().strip(",.;()[]")
+        if not tok or tok in seen:
+            continue
+        if tok in _corpus_by_id and not _is_pointer_row(tok):
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
+def _fanout_reranked(
+    reranked: list[tuple[int, float, int]],
+) -> list[tuple[int, float, int, str]]:
+    """Expand doc/section pointer rows into their constituent req-level
+    chunks. Returns 4-tuples `(idx, bm25_score, rerank_score, source)`
+    where `source` is `"direct"` for normally-retrieved rows or
+    `"fanout:<parent_id>"` for expanded children.
+
+    Behavior:
+      - Preserves input rerank ordering for direct results.
+      - Fanned-out children are inserted immediately after their
+        parent doc/section row.
+      - Dedup by chunk-index — a child req only appears once even if
+        retrieved directly AND fanned out from multiple parents.
+        First occurrence wins.
+      - Each fanned-out child INHERITS its parent's rerank score (so
+        downstream score-based filtering treats them as the parent's
+        equivalent).
+      - Per-hit cap (`_FANOUT_PER_HIT`) bounds the synthesizer's
+        context budget — large plans don't dominate top-K.
+
+    When `_FANOUT_ENABLED` is False, returns the input list tagged
+    `"direct"` for every row (no expansion).
+    """
+    if not _FANOUT_ENABLED:
+        return [(idx, bm, rr, "direct") for idx, bm, rr in reranked]
+
+    out: list[tuple[int, float, int, str]] = []
+    seen_idx: set[int] = set()
+    for idx, bm, rr in reranked:
+        if idx in seen_idx:
+            continue
+        seen_idx.add(idx)
+        cid = _doc_ids[idx]
+        out.append((idx, bm, rr, "direct"))
+        if not _is_pointer_row(cid):
+            continue
+        # Pointer row — fan out
+        text = _corpus_by_id.get(cid, {}).get("text", "")
+        child_ids = _extract_referenced_req_ids(text)
+        added = 0
+        for child_rid in child_ids:
+            if added >= _FANOUT_PER_HIT:
+                break
+            child_idx = _doc_id_to_idx.get(child_rid)
+            if child_idx is None or child_idx in seen_idx:
+                continue
+            seen_idx.add(child_idx)
+            out.append((child_idx, 0.0, rr, f"fanout:{cid}"))
+            added += 1
+    return out
 
 
 def _format_batch_rerank_prompt(query: str, docs: list[tuple[int, str]]) -> str:
@@ -763,9 +876,20 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
             sorted_ms[-1],
         )
 
-    # Format final response -----------------------------------------
+    # Fan-out doc/section pointer rows into req-level chunks
+    # (plan-aware-sira). Direct results stay in place; children are
+    # inserted right after their parent. Disabled / no pointer rows
+    # in top-K → no-op.
+    fanned = _fanout_reranked(reranked)
+
+    # Format final response. top_k is applied to the fanned-out list,
+    # so a single doc/section hit can expand top_k's effective coverage
+    # by up to _FANOUT_PER_HIT children — the synthesizer ends up with
+    # actual req-level content for plan-summarize queries.
     out: list[dict[str, Any]] = []
-    for rank, (idx, bm25_score, rerank_score) in enumerate(reranked[:top_k], 1):
+    for rank, (idx, bm25_score, rerank_score, source) in enumerate(
+        fanned[:top_k], 1,
+    ):
         rid = _doc_ids[idx]
         doc = _corpus_by_id[rid]
         text_preview = doc["text"].replace("\n", " ").strip()[:400]
@@ -776,6 +900,7 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
             "bm25_score": round(float(bm25_score), 4),
             "title": doc["title"],
             "text_preview": text_preview,
+            "source": source,
         })
 
     return {

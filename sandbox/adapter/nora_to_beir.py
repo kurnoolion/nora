@@ -130,13 +130,154 @@ def _build_text(req: dict[str, Any], tree: dict[str, Any],
     return "\n".join(lines)
 
 
-def _emit_corpus(trees: list[dict[str, Any]], out_path: Path) -> int:
+def _section_prefixes(section_number: str, max_depth: int) -> list[str]:
+    """All ancestor section prefixes of `section_number` up to max_depth.
+
+    >>> _section_prefixes("5.1.2.3", 2)
+    ['5', '5.1']
+    >>> _section_prefixes("5.1", 2)
+    ['5', '5.1']
+    >>> _section_prefixes("5", 2)
+    ['5']
+    """
+    if not section_number:
+        return []
+    parts = [p for p in section_number.split(".") if p]
+    out: list[str] = []
+    for i in range(1, min(max_depth, len(parts)) + 1):
+        out.append(".".join(parts[:i]))
+    return out
+
+
+def _build_doc_row_text(
+    plan_id: str, plan_name: str, req_ids: list[str],
+) -> str:
+    """Doc-level row body — short header + req_id pointer list.
+
+    Kept short on purpose: BM25 length-normalization penalizes long
+    rows, so the body is just (plan-name-saturated TF) + IDs. The
+    actual content lives in per-req rows; fan-out at retrieval time
+    surfaces it for the synthesizer.
+    """
+    display = plan_name or plan_id
+    lines = [
+        f"# {display} plan",
+        f"**plan**: {plan_id}" + (f" / {plan_name}" if plan_name else ""),
+        "",
+        f"Contains {len(req_ids)} requirements:",
+        " ".join(req_ids),
+    ]
+    return "\n".join(lines)
+
+
+def _build_section_row_text(
+    plan_id: str, plan_name: str, section_num: str,
+    section_title: str, req_ids: list[str],
+) -> str:
+    """Section-level row body — same shape as doc-level."""
+    lines = [
+        f"# {section_num} {section_title}".strip(),
+        f"**plan**: {plan_id}" + (f" / {plan_name}" if plan_name else ""),
+        f"**section**: {section_num}",
+        "",
+        f"Contains {len(req_ids)} requirements:",
+        " ".join(req_ids),
+    ]
+    return "\n".join(lines)
+
+
+def _emit_multigranularity_rows(
+    trees: list[dict[str, Any]],
+    f_out,
+    section_max_depth: int = 2,
+) -> tuple[int, int]:
+    """Emit doc-level (one per plan) + section-level (one per
+    (plan, section-prefix) up to max_depth) rows alongside the
+    per-requirement rows.
+
+    Returns (n_doc_rows, n_section_rows). Per the plan-aware-sira
+    strand (D-DRAFT-10): rows carry req_id pointer lists, not full
+    content. Fan-out at retrieval time expands them into req-level
+    chunks for the synthesizer.
+
+    Row _id conventions:
+      - `doc:<plan_id>`               — one per plan
+      - `section:<plan_id>:<prefix>`  — one per (plan, section_prefix)
+
+    Section title for `section:<plan_id>:<num>` uses the title of
+    the exact-match anchor req (i.e., the heading-only req with
+    section_number == num); falls back to "Section <num>" when no
+    anchor exists.
+    """
+    n_doc = 0
+    n_section = 0
+    for tree in trees:
+        plan_id = (tree.get("plan_id") or "").strip()
+        plan_name = (tree.get("plan_name") or "").strip()
+        if not plan_id:
+            continue  # no plan_id → can't construct stable row IDs
+
+        # First pass: collect req_ids in tree order + (section_number → req_id) anchor map.
+        all_req_ids: list[str] = []
+        section_anchors: dict[str, str] = {}  # section_num → req's title
+        section_to_descendants: dict[str, list[str]] = {}
+
+        for req in tree.get("requirements") or []:
+            rid = (req.get("req_id") or "").strip()
+            if not rid:
+                continue
+            all_req_ids.append(rid)
+            sec_num = (req.get("section_number") or "").strip()
+            if sec_num:
+                # Anchor — this req IS the section heading
+                section_anchors[sec_num] = (req.get("title") or "").strip()
+                # Descendant of every ancestor prefix up to max_depth
+                for prefix in _section_prefixes(sec_num, section_max_depth):
+                    section_to_descendants.setdefault(prefix, []).append(rid)
+
+        if not all_req_ids:
+            continue
+
+        # Doc-level row
+        f_out.write(json.dumps({
+            "_id": f"doc:{plan_id}",
+            "title": f"{plan_name or plan_id} plan",
+            "text": _build_doc_row_text(plan_id, plan_name, all_req_ids),
+        }, ensure_ascii=False) + "\n")
+        n_doc += 1
+
+        # Section-level rows
+        for prefix in sorted(section_to_descendants.keys()):
+            descendants = section_to_descendants[prefix]
+            section_title = section_anchors.get(prefix, f"Section {prefix}")
+            f_out.write(json.dumps({
+                "_id": f"section:{plan_id}:{prefix}",
+                "title": f"{prefix} {section_title}".strip(),
+                "text": _build_section_row_text(
+                    plan_id, plan_name, prefix, section_title, descendants,
+                ),
+            }, ensure_ascii=False) + "\n")
+            n_section += 1
+
+    return n_doc, n_section
+
+
+def _emit_corpus(
+    trees: list[dict[str, Any]],
+    out_path: Path,
+    section_max_depth: int = 2,
+) -> tuple[int, int, int]:
+    """Emit corpus.jsonl with per-req + doc-level + section-level rows.
+
+    Returns (n_req_rows, n_doc_rows, n_section_rows).
+    """
     seen_ids: set[str] = set()
     written = 0
     skipped_no_id = 0
     skipped_dup = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
+        # Per-requirement rows (existing behavior, unchanged shape)
         for tree in trees:
             definitions_map = tree.get("definitions_map") or {}
             defs_re = _compile_defs(definitions_map) if definitions_map else None
@@ -163,9 +304,16 @@ def _emit_corpus(trees: list[dict[str, Any]], out_path: Path) -> int:
                 }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 written += 1
-    print(f"  corpus.jsonl: wrote {written} rows "
+        # Doc-level + section-level rows (plan-aware-sira / D-DRAFT-10)
+        n_doc, n_section = _emit_multigranularity_rows(
+            trees, f, section_max_depth=section_max_depth,
+        )
+    print(f"  corpus.jsonl: wrote {written} per-req rows "
           f"(skipped: {skipped_no_id} no-id, {skipped_dup} duplicate)")
-    return written
+    print(f"  corpus.jsonl: wrote {n_doc} doc-level rows "
+          f"+ {n_section} section-level rows "
+          f"(section_max_depth={section_max_depth})")
+    return written, n_doc, n_section
 
 
 def _emit_queries_and_qrels(
@@ -250,6 +398,13 @@ def main() -> int:
     p.add_argument("--name", default=None,
                    help="Dataset name in metadata.json. Defaults to "
                         "the basename of --output.")
+    p.add_argument("--section-max-depth", type=int, default=2,
+                   help=(
+                       "Max section-prefix depth for section-level "
+                       "multi-granularity rows. 2 = emit `section:<plan>:5` "
+                       "and `section:<plan>:5.1` but not `5.1.1`. Default "
+                       "2 (matches plan-aware-sira D-DRAFT-10 default)."
+                   ))
     args = p.parse_args()
     if args.name is None:
         args.name = args.output.name
@@ -269,7 +424,11 @@ def main() -> int:
 
     raw_dir.mkdir(parents=True, exist_ok=True)
     print("emitting raw/corpus.jsonl ...")
-    num_corpus = _emit_corpus(trees, raw_dir / "corpus.jsonl")
+    n_req, n_doc, n_section = _emit_corpus(
+        trees, raw_dir / "corpus.jsonl",
+        section_max_depth=args.section_max_depth,
+    )
+    num_corpus = n_req + n_doc + n_section
     print()
     print("emitting raw/queries-test.jsonl + raw/qrels-test.jsonl ...")
     n_queries, n_qrels, _ = _emit_queries_and_qrels(raw_dir)
