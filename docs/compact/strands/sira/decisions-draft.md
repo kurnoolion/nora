@@ -109,3 +109,30 @@ Options considered:
 - SIRA's sandbox infrastructure (offline pipeline, per-query service, debug CLI, prompts, eval adapter) survives and remains a candidate for the lookup lane.
 - Phase 2's framing shifts from "decide integration shape if SIRA wins" → "decide how to integrate SIRA as one lane in a multi-lane retrieval architecture." Deferred to architect-driven work post-landing.
 - D-DRAFT-5 is marked SUPERSEDED in decisions-draft.md (kept for audit trail); only D-DRAFT-7 gets promoted to canonical DECISIONS at `/land-strand` time.
+
+## D-DRAFT-8: Per-stage LLM routing in SIRA service
+**Status**: Active · **Date**: 2026-05-25.
+
+**Decision**: Three env vars (`NORA_SIRA_RERANK_LLM_URL`, `NORA_SIRA_RERANK_LLM_MODEL`, `NORA_SIRA_RERANK_LLM_API_KEY`) route SIRA's rerank stage to a different OpenAI-compatible endpoint than query enrichment. Query enrichment continues through the standard shim. When unset, rerank falls back to the shim — preserves prior behavior.
+
+**Why**: Query enrichment quality benefits from a strong LLM (proprietary 100B+ via shim); rerank just needs to output a 0-100 integer score — small local LLMs suffice. Alternatives: (a) repoint entire shim to a local LLM (rejected — sacrifices enrichment quality); (b) run two shim processes (rejected — extra ops); (c) **chosen** — per-stage env-var overrides on the SIRA service.
+
+**Consequences**: New env-var surface on the SIRA service (3 knobs, surfaced via `/healthz`). Asymmetric routing introduces small consistency risk — operator can point rerank at a non-OpenAI-compat endpoint. Mitigated by graceful error logging per call (falls back to score=0). Establishes a reusable pattern for any future SIRA stage that wants its own LLM endpoint.
+
+## D-DRAFT-9: Batch rerank via `NORA_SIRA_RERANK_BATCH_SIZE`
+**Status**: Active · **Date**: 2026-05-25.
+
+**Decision**: Opt-in batch reranking via `NORA_SIRA_RERANK_BATCH_SIZE`. Default 0 = per-call (current behavior). N > 0 = batch in groups of N. New built-in batch prompt asks for JSON array `[{"id": N, "score": M}, ...]` mirroring the per-call rubric. Parser handles well-formed arrays, CoT preambles, per-object regex fallback for messy output, partial responses, and score clamping (0-100).
+
+**Why**: Per-call dominated query latency on proxy-throttled environments (~5s/call × 25 candidates = 2 min). Batch eliminates 24/25 API round-trips. Alternatives: (a) `asyncio.gather` parallel (rejected — proxy throttling serializes anyway); (b) hardcoded mini-batches only (rejected — operator should pick the size). **Chosen** — fully configurable; default 0 preserves per-call back-compat.
+
+**Consequences**: New failure mode is atomic per batch — one bad LLM call zeros N scores instead of 1. Quality risk on long-context LLMs (gemma3:12b can't fit 25-chunk JSON in 4096 output tokens; proprietary works but triggers aggressive pin filtering downstream). Recommendation captured: 5-10 is the practical batch-size sweet spot pending further measurement.
+
+## D-DRAFT-10: Plan-summarize gap → Tier-3 multi-granularity rows + fan-out (not taxonomy expansion)
+**Status**: Active · **Date**: 2026-05-25.
+
+**Decision**: Address SIRA's plan-summarize blind spot via Tier-3 multi-granularity rows in the BEIR adapter (doc-level + section-level rows alongside per-requirement rows), with a fan-out step in the SIRA service that expands doc/section matches into their constituent req-level chunks at retrieval time. Doc/section rows carry **`req_id` pointer lists** rather than full content — sidesteps BM25 length-normalization penalty while preserving req-level citation through the synthesizer. Implementation lives in new strand `plan-aware-sira`.
+
+**Why**: SIRA's DF-filter is anti-breadth by design — prunes terms shared across many chunks, which is exactly what plan-summarize queries want. Alternatives: (a) **taxonomy-guided query expansion** (inject NORA's taxonomy features/phrases for the detected plan into SIRA's expansion) — rejected after user inspected taxonomy content and found it insufficient to drive retrieval; (b) **per-source-doc rows with full content** — rejected because Okapi BM25 length-norm penalizes long rows, defeating the purpose; (c) **chosen** — doc/section rows as pointer surfaces, fan-out at retrieval time. Best of both: strong plan-level matching AND req-level content for synthesis.
+
+**Consequences**: Adapter gains an aggregation step; SIRA service gains a fan-out step. Per-req row format unchanged → backwards-compatible. Full SIRA pipeline rebuild required after adapter change. Two new row-id prefixes (`doc:`, `section:`) become a persistent shape — downstream code indexing by `_id` must tolerate. Per-req citation preserved through fan-out (synthesizer sees req-level chunks, cites correctly).

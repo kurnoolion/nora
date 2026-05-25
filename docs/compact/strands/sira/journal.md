@@ -113,3 +113,39 @@
 ### Out-of-scope work in same session
 - Repo hygiene cleanup (commits b1b164a / 967d1c1 / e45265c / d58d2e7): deleted stale overview docs, moved presentation scripts to `presentations/`, removed local `git-sync/`, dropped `alice-demo.json` env config, ~71 MB freed on disk. Out of strand scope; canonical-layer change so won't be in strand journal at land time.
 - `retrieval_debug --inspect-req` actually belongs to `nora-retrieval-parent-displacement` strand. Cross-listed here because we worked on it while bound to sira and it's adjacent.
+
+## 2026-05-24 — Reranker tuning; SIRA's plan-summarize blind spot; spin off plan-aware-sira
+
+### Done this session
+- **Quick-disable for SIRA rerank** (commit `a1161de`). `NORA_SIRA_RERANK_ENABLED=false` skips the rerank stage entirely; results = BM25-with-expansion only. Useful for measuring rerank's actual contribution + fast iteration on other stages.
+- **Pin-filter bypass when rerank is disabled** (commit `a2fe6fd`). With rerank off, all `rerank_score=0` would have failed the `score≥30` floor → 0 chunks pinned. Now: when `max_score==0`, pin all results as-is, trusting BM25 ordering.
+- **Per-stage LLM routing** (commit `1545221`). Three new env vars (`NORA_SIRA_RERANK_LLM_{URL,MODEL,API_KEY}`) route rerank to a different endpoint than query enrichment. Lets the user keep proprietary LLM for enrichment quality while sending rerank to a local fast LLM.
+- **CoT max-tokens fix** (commit `0207cf2`). Qwen3:8b emits `<think>...</think>` preamble before JSON; old `max_tokens=64` cap cut off mid-thought → no JSON → `_parse_score` returns 0 → all chunks scored 0. New default 256 (`NORA_SIRA_RERANK_MAX_TOKENS`) + configurable.
+- **Batch rerank** (commit `c83c46e`). `NORA_SIRA_RERANK_BATCH_SIZE` scores N chunks per LLM call instead of 1. Built-in batch prompt with same 0-100 rubric. Parser handles well-formed array, regex-fallback for messy output, partial responses, score clamping.
+
+### Strand-internal findings (pre-decision, journal-only)
+- **Reranker model assessment on this corpus.** gemma3:12b gives consistent scores at ~2s/call = 50s/query. Qwen3:8b broke at default max_tokens but works with 256+. Proprietary LLM works but slow (~5s/call). bbjson/bge-reranker-base via NORA's `OllamaReranker` returns 3072-dim embeddings (encoder packaging, not cross-encoder head) → embedding-similarity mode is net-negative on this corpus per user's measurement.
+- **Batch rerank limits.** Batch size 25 on gemma3:12b failed (couldn't fit 25-chunk JSON output in 4096 output tokens). Batch via proprietary LLM works but produces score distributions where the `0.5×max` relative pin threshold filters too aggressively. Smaller batches (5-10) likely the practical sweet spot but not yet tested.
+- **Net practical config:** SIRA rerank disabled for now (`NORA_SIRA_RERANK_ENABLED=false`). BM25-with-expansion alone is "OK" per user.
+- **SIRA's structural blind spot:** plan-summarize queries ("Summarize VOWIFI requirements") are the remaining gap. SIRA's DF-filter is *anti-breadth by design* — prunes terms shared across many chunks, which is exactly what summarize-shape queries want.
+
+### Strand-pivot
+- User proposed taxonomy-guided expansion as a plan-summarize fix. After inspecting NORA's taxonomy content, scrapped — taxonomy doesn't capture enough of a plan's surface to drive retrieval.
+- Pivoted to Tier-3 multi-granularity adapter rows + fan-out at SIRA service. User refined the design: doc/section rows carry req_id pointers (not full content), keeping rows short for BM25 + fan-out at retrieval surfaces the actual req-level content. Sidesteps BM25 length-norm penalty AND preserves req-level citation.
+- Opened new strand `plan-aware-sira` (scaffold committed in this close-session). Strand directory is at `docs/compact/strands/plan-aware-sira/`. Code work lives entirely in sandbox/adapter + sandbox/sira_query — no NORA core touched.
+
+### In progress
+- SIRA reranker work paused. Current config: rerank disabled, BM25-with-expansion only.
+
+### Next
+- Hand off plan-summarize problem to the new `plan-aware-sira` strand.
+- If/when rerank gets reactivated: revisit pin filter's `0.5×max` relative threshold for batch + proprietary distributions, OR drop relative threshold in favor of absolute-only.
+
+### Flags
+- **Pin filter calibrated to per-call distributions.** Aggressive when batch + proprietary produces wide score gaps. Needs separate knob OR distribution-shape-aware logic.
+- **gemma3:12b output-token capacity** is the bottleneck for full-batch rerank. Smaller batches (5-10) not validated.
+- **Reranker model fit unresolved.** True cross-encoder (BGE-reranker-base via HF cache transfer) still on the table if proxy environment improves. The infrastructure (per-stage routing, batch toggle, auto-detect modes in NORA's OllamaReranker) is reusable when a working model lands.
+
+### Out-of-scope work in same session
+- `nora-retrieval-parent-displacement` strand: 4 commits (`8bf05c5`, `02012e2`, `28323b7`, `6d630c5`) — Tier-1 parent body, marker classification, two-bucket configurable top-k, rerank default-on. Captured at that strand's next close-session, not here.
+- Strand scaffolds for both `nora-retrieval-parent-displacement` (from 2026-05-22) and the new `plan-aware-sira` are untracked in git; committed via this close-session.
