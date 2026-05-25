@@ -65,6 +65,16 @@ _RERANK_LLM_URL = os.getenv("NORA_SIRA_RERANK_LLM_URL", "").rstrip("/")
 _RERANK_LLM_MODEL = os.getenv("NORA_SIRA_RERANK_LLM_MODEL", "")
 _RERANK_LLM_API_KEY = os.getenv("NORA_SIRA_RERANK_LLM_API_KEY", "")
 
+# Max tokens for the rerank LLM call. Default was 64 sized for the
+# proprietary LLM (no chain-of-thought preamble). Modern reasoning-
+# trained models (Qwen3, DeepSeek-R1, etc.) emit <think>...</think>
+# blocks before the actual answer — at 64 tokens the response gets
+# cut off inside the thinking block and the {"score": <int>} JSON
+# never reaches the parser, which then returns 0 for every chunk.
+# 256 is a safe default for CoT-capable models; bump to 512+ if you
+# see thinking blocks that get cut off.
+_RERANK_MAX_TOKENS = int(os.getenv("NORA_SIRA_RERANK_MAX_TOKENS", "256"))
+
 # Defaults to ../sira/ relative to this file (the upstream clone).
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
@@ -369,6 +379,7 @@ def healthz() -> dict[str, Any]:
         "rerank_llm_url": _RERANK_LLM_URL or "(unset → uses shim)",
         "rerank_llm_model": _RERANK_LLM_MODEL or "(unset → uses shim model)",
         "rerank_llm_api_key_set": bool(_RERANK_LLM_API_KEY),
+        "rerank_max_tokens": _RERANK_MAX_TOKENS,
         "shim_url": _SHIM_URL,
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
         "query_prompt_loaded": bool(_query_prompt_template),
@@ -546,7 +557,7 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
                     try:
                         raw = await _llm_call(
                             client, prompt,
-                            max_tokens=64, temperature=0.0,
+                            max_tokens=_RERANK_MAX_TOKENS, temperature=0.0,
                             # Route rerank to the rerank-specific
                             # endpoint when configured; otherwise
                             # falls through to the shim (which is what
