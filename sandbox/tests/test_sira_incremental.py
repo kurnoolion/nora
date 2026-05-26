@@ -14,9 +14,12 @@ import pytest
 from sandbox.sira_incremental import (
     compute_evictions,
     corpus_hashes,
+    growth_assessment,
     load_hash_store,
+    load_meta,
     prune_run_files,
     save_hash_store,
+    save_meta,
     _combined_text,
 )
 
@@ -184,6 +187,60 @@ def test_prune_preserves_unparseable_lines(tmp_path):
     assert "garbage-not-json" in lines
     assert any('"doc_id": "B"' in l for l in lines)
     assert not any('"doc_id": "A"' in l for l in lines)
+
+
+# ── growth assessment (cumulative-drift detection) ─────────────────
+
+
+def test_growth_assessment_no_baseline():
+    ratio, exceeded = growth_assessment(1000, None, 1.5)
+    assert ratio is None and exceeded is False
+
+
+def test_growth_assessment_under_threshold():
+    ratio, exceeded = growth_assessment(1200, 1000, 1.5)
+    assert ratio == pytest.approx(1.2)
+    assert exceeded is False
+
+
+def test_growth_assessment_over_threshold():
+    ratio, exceeded = growth_assessment(1600, 1000, 1.5)
+    assert ratio == pytest.approx(1.6)
+    assert exceeded is True
+
+
+def test_growth_assessment_exactly_at_threshold_not_exceeded():
+    # ratio == threshold is NOT "exceeded" (strict >)
+    ratio, exceeded = growth_assessment(1500, 1000, 1.5)
+    assert ratio == pytest.approx(1.5)
+    assert exceeded is False
+
+
+def test_meta_roundtrip(tmp_path):
+    meta_path = tmp_path / ".incremental_meta.json"
+    assert load_meta(meta_path) == {}
+    save_meta(meta_path, {"full_rebuild_size": 13974, "full_rebuild_date": "2026-05-26"})
+    loaded = load_meta(meta_path)
+    assert loaded["full_rebuild_size"] == 13974
+
+
+def test_cumulative_drift_across_many_small_ingests():
+    """The motivating case: 10 incremental ingests of 10% each. Each
+    individual ingest looks small (baseline moves forward every commit),
+    but cumulative growth vs the last FULL rebuild is ~2.6x and SHOULD
+    trip the drift warning."""
+    full_rebuild_size = 1000
+    size = full_rebuild_size
+    tripped_at = None
+    for i in range(1, 11):
+        size = int(size * 1.1)  # +10% each round
+        ratio, exceeded = growth_assessment(size, full_rebuild_size, 1.5)
+        if exceeded and tripped_at is None:
+            tripped_at = i
+    # 1.1^N > 1.5 first at N=5 (1.1^5 ≈ 1.61)
+    assert tripped_at == 5, tripped_at
+    # Final cumulative ratio well past threshold
+    assert size / full_rebuild_size > 2.5
 
 
 # ── end-to-end: a 10x-ish growth cycle ──────────────────────────────

@@ -63,6 +63,14 @@ from pathlib import Path
 
 
 _HASH_STORE_NAME = ".incremental_hashes.json"
+_META_NAME = ".incremental_meta.json"
+
+# Default cumulative-growth ratio (current corpus size ÷ size at last
+# full rebuild) above which we warn that the corpus-wide DF statistics
+# have likely drifted enough that cached enrichment is meaningfully
+# stale and a --wipe-all-derived full rebuild is advisable. 1.5 = 50%
+# cumulative growth since the last full re-baseline. Tunable per corpus.
+_DEFAULT_MAX_GROWTH_RATIO = 1.5
 
 
 def _combined_text(title: str, text: str) -> str:
@@ -109,6 +117,36 @@ def load_hash_store(path: Path) -> dict[str, str]:
 def save_hash_store(path: Path, hashes: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(hashes, indent=0, sort_keys=True), encoding="utf-8")
+
+
+def load_meta(path: Path) -> dict:
+    """Incremental metadata sidecar: tracks the corpus size + date at
+    the last FULL rebuild, for cumulative-drift detection. Distinct
+    from the per-doc hash store (which moves forward on every commit
+    and so can't see cumulative drift)."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_meta(path: Path, meta: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def growth_assessment(
+    current_size: int, full_rebuild_size: int | None, max_ratio: float,
+) -> tuple[float | None, bool]:
+    """Return (ratio, exceeded). ratio is current/full-rebuild size, or
+    None when no full-rebuild baseline is recorded. exceeded is True
+    when ratio > max_ratio."""
+    if not full_rebuild_size:
+        return None, False
+    ratio = current_size / full_rebuild_size
+    return ratio, ratio > max_ratio
 
 
 def compute_evictions(
@@ -171,17 +209,46 @@ def prune_run_files(run_dir: Path, evict_ids: set[str]) -> dict[str, int]:
 # ── CLI ─────────────────────────────────────────────────────────────
 
 
-def _resolve_paths(dataset_dir: Path, run_name: str) -> tuple[Path, Path, Path]:
-    """Return (corpus_path, hash_store_path, run_dir)."""
+def _resolve_paths(
+    dataset_dir: Path, run_name: str,
+) -> tuple[Path, Path, Path, Path]:
+    """Return (corpus_path, hash_store_path, meta_path, run_dir)."""
     corpus = dataset_dir / "raw" / "corpus.jsonl"
     hash_store = dataset_dir / _HASH_STORE_NAME
+    meta = dataset_dir / _META_NAME
     run_dir = dataset_dir / "runs" / "doc-enrich" / run_name
-    return corpus, hash_store, run_dir
+    return corpus, hash_store, meta, run_dir
+
+
+def _print_growth_banner(ratio: float, full_rebuild_size: int,
+                         current_size: int, max_ratio: float) -> None:
+    pct = (ratio - 1.0) * 100.0
+    print()
+    print("  " + "#" * 70)
+    print("  # CORPUS DRIFT WARNING — consider a FULL rebuild")
+    print("  #")
+    print(f"  # Corpus has grown {pct:.0f}% since the last full rebuild")
+    print(f"  #   last full rebuild: {full_rebuild_size} docs")
+    print(f"  #   now:               {current_size} docs  (ratio {ratio:.2f}x)")
+    print(f"  #   threshold:         {max_ratio:.2f}x")
+    print("  #")
+    print("  # SIRA's doc-enrichment + DF-filter depend on CORPUS-WIDE")
+    print("  # document-frequency statistics. Cached enrichment was")
+    print("  # DF-filtered against the smaller corpus; at this much growth")
+    print("  # those kept-phrase decisions may be meaningfully stale.")
+    print("  #")
+    print("  # Recommended: re-run the adapter with --wipe-all-derived and")
+    print("  # do a full re-enrich, then `commit --full` to re-baseline.")
+    print("  # (Incremental will still WORK if you proceed — this is about")
+    print("  #  retrieval quality, not a hard failure.)")
+    print("  " + "#" * 70)
 
 
 def cmd_prune(args: argparse.Namespace) -> int:
     dataset_dir = Path(args.dataset)
-    corpus, hash_store_path, run_dir = _resolve_paths(dataset_dir, args.run_name)
+    corpus, hash_store_path, meta_path, run_dir = _resolve_paths(
+        dataset_dir, args.run_name,
+    )
 
     if not corpus.exists():
         print(f"ERROR: corpus not found at {corpus}")
@@ -197,6 +264,27 @@ def cmd_prune(args: argparse.Namespace) -> int:
     print(f"  new:     {len(new)} (not in baseline → SIRA enriches natively)")
     print(f"  changed: {len(changed)} (content differs → evict from trace, re-enrich)")
     print(f"  removed: {len(removed)} (gone from corpus → drop from trace/enrichments)")
+
+    # Cumulative-drift assessment against the last FULL rebuild.
+    meta = load_meta(meta_path)
+    full_size = meta.get("full_rebuild_size")
+    ratio, exceeded = growth_assessment(
+        len(current), full_size, args.max_growth_ratio,
+    )
+    if full_size is None:
+        print(f"\nNOTE: no full-rebuild baseline recorded ({meta_path.name} "
+              f"missing). Run `commit --full` after your next full rebuild "
+              f"so cumulative-drift warnings can fire.")
+    elif exceeded:
+        _print_growth_banner(ratio, full_size, len(current), args.max_growth_ratio)
+        if args.strict_growth:
+            print("\n--strict-growth set → exiting non-zero (2) so an "
+                  "automated pipeline halts. Do a full rebuild, or re-run "
+                  "prune without --strict-growth to proceed incrementally.")
+            return 2
+    else:
+        print(f"\ncumulative growth since last full rebuild: {ratio:.2f}x "
+              f"(under {args.max_growth_ratio:.2f}x threshold — incremental OK)")
 
     if not run_dir.is_dir():
         print(f"\nNo run dir at {run_dir} — nothing to prune. "
@@ -219,14 +307,29 @@ def cmd_prune(args: argparse.Namespace) -> int:
 
 def cmd_commit(args: argparse.Namespace) -> int:
     dataset_dir = Path(args.dataset)
-    corpus, hash_store_path, _ = _resolve_paths(dataset_dir, args.run_name)
+    corpus, hash_store_path, meta_path, _ = _resolve_paths(
+        dataset_dir, args.run_name,
+    )
     if not corpus.exists():
         print(f"ERROR: corpus not found at {corpus}")
         return 1
     current = corpus_hashes(corpus)
     save_hash_store(hash_store_path, current)
     print(f"baseline updated: {len(current)} doc hashes → {hash_store_path}")
-    print("→ next `prune` compares against this baseline.")
+
+    if args.full:
+        import datetime
+        meta = load_meta(meta_path)
+        meta["full_rebuild_size"] = len(current)
+        meta["full_rebuild_date"] = datetime.date.today().isoformat()
+        save_meta(meta_path, meta)
+        print(f"FULL-rebuild baseline recorded: {len(current)} docs "
+              f"→ {meta_path.name}")
+        print("→ cumulative-drift warnings now measure growth from here.")
+    else:
+        print("→ next `prune` compares against this baseline. (Pass --full "
+              "if this commit followed a full --wipe-all-derived rebuild, so "
+              "the cumulative-drift baseline resets.)")
     return 0
 
 
@@ -249,6 +352,30 @@ def main(argv: list[str] | None = None) -> int:
     for parser in (pp, pc):
         for a, kw in common_args:
             parser.add_argument(*a, **kw)
+
+    pp.add_argument("--max-growth-ratio", type=float,
+                    default=_DEFAULT_MAX_GROWTH_RATIO,
+                    help=(
+                        "Cumulative-growth ratio (current size ÷ size at "
+                        "last full rebuild) above which prune prints a "
+                        f"DRIFT WARNING. Default {_DEFAULT_MAX_GROWTH_RATIO}. "
+                        "Corpus-wide DF stats drift as the corpus grows; "
+                        "past this point a full rebuild is advisable."
+                    ))
+    pp.add_argument("--strict-growth", action="store_true",
+                    help=(
+                        "Make the drift warning a hard stop: exit code 2 "
+                        "when cumulative growth exceeds --max-growth-ratio. "
+                        "For automated pipelines that should halt and "
+                        "require a deliberate full rebuild."
+                    ))
+    pc.add_argument("--full", action="store_true",
+                    help=(
+                        "Mark this commit as following a FULL rebuild "
+                        "(--wipe-all-derived). Records the current corpus "
+                        "size as the cumulative-drift baseline. Omit for "
+                        "ordinary incremental commits."
+                    ))
 
     args = p.parse_args(argv)
     return {"prune": cmd_prune, "commit": cmd_commit}[args.cmd](args)
