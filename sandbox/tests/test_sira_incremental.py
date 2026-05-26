@@ -6,17 +6,21 @@ Run: python -m pytest sandbox/tests/test_sira_incremental.py
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from sandbox.sira_incremental import (
+    cmd_promote,
     compute_evictions,
     corpus_hashes,
     growth_assessment,
     load_hash_store,
     load_meta,
+    merge_kept_enrichments,
     prune_run_files,
     save_hash_store,
     save_meta,
@@ -241,6 +245,81 @@ def test_cumulative_drift_across_many_small_ingests():
     assert tripped_at == 5, tripped_at
     # Final cumulative ratio well past threshold
     assert size / full_rebuild_size > 2.5
+
+
+# ── promote (full-resume best.jsonl reconstruction) ─────────────────
+
+
+def test_merge_kept_enrichments_merges_per_doc_no_dedup(tmp_path):
+    kept = tmp_path / "enrichments.kept.jsonl"
+    kept.write_text(
+        json.dumps({"doc_id": "A", "phrases": ["x", "y"]}) + "\n"
+        + json.dumps({"doc_id": "B", "phrases": ["z"]}) + "\n"
+        + json.dumps({"doc_id": "A", "phrases": ["x", "w"]}) + "\n"  # 2nd row, dup x
+        + "\n"                                                        # blank line
+        + "garbage-not-json\n",                                       # skipped
+        encoding="utf-8",
+    )
+    merged = merge_kept_enrichments(kept)
+    # insertion order preserved; A merged across rows; dups kept (matches SIRA)
+    assert list(merged) == ["A", "B"]
+    assert merged["A"] == ["x", "y", "x", "w"]
+    assert merged["B"] == ["z"]
+
+
+def test_merge_kept_skips_empty_and_missing_fields(tmp_path):
+    kept = tmp_path / "enrichments.kept.jsonl"
+    kept.write_text(
+        json.dumps({"doc_id": "A", "phrases": []}) + "\n"       # empty phrases → skip
+        + json.dumps({"doc_id": "B"}) + "\n"                    # no phrases → skip
+        + json.dumps({"phrases": ["x"]}) + "\n"                 # no doc_id → skip
+        + json.dumps({"doc_id": "C", "phrases": ["ok"]}) + "\n",
+        encoding="utf-8",
+    )
+    merged = merge_kept_enrichments(kept)
+    assert list(merged) == ["C"]
+
+
+def test_cmd_promote_writes_run_jsonl_and_resolves_best(tmp_path):
+    """The motivating bug: a full-resume run left best.jsonl dangling.
+    promote writes the per-run target so best.jsonl resolves."""
+    ds = tmp_path / "ds"
+    run_dir = ds / "runs" / "doc-enrich" / "enrich-stable"
+    run_dir.mkdir(parents=True)
+    (run_dir / "enrichments.kept.jsonl").write_text(
+        json.dumps({"doc_id": "A", "phrases": ["alpha"]}) + "\n"
+        + json.dumps({"doc_id": "B", "phrases": ["beta", "b2"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    # Simulate SIRA's dangling best.jsonl symlink (target not yet written).
+    enr_dir = ds / "enrichments" / "doc"
+    enr_dir.mkdir(parents=True)
+    dangling = enr_dir / "best.jsonl"
+    os.symlink("enrich-stable.jsonl", dangling)
+    assert not dangling.exists()  # dangling → exists() is False (the bug symptom)
+
+    args = argparse.Namespace(dataset=str(ds), run_name="enrich-stable")
+    assert cmd_promote(args) == 0
+
+    # Per-run target now written, and best.jsonl resolves to it.
+    run_jsonl = enr_dir / "enrich-stable.jsonl"
+    assert run_jsonl.exists()
+    best = enr_dir / "best.jsonl"
+    assert best.exists()  # no longer dangling
+    assert os.readlink(best) == "enrich-stable.jsonl"  # relative, matches SIRA
+    rows = {
+        json.loads(l)["doc_id"]: json.loads(l)["phrases"]
+        for l in run_jsonl.read_text().splitlines() if l.strip()
+    }
+    assert rows == {"A": ["alpha"], "B": ["beta", "b2"]}
+
+
+def test_cmd_promote_missing_kept_returns_error(tmp_path):
+    ds = tmp_path / "ds"
+    (ds / "runs" / "doc-enrich" / "enrich-stable").mkdir(parents=True)
+    args = argparse.Namespace(dataset=str(ds), run_name="enrich-stable")
+    assert cmd_promote(args) == 1
 
 
 # ── end-to-end: a 10x-ish growth cycle ──────────────────────────────

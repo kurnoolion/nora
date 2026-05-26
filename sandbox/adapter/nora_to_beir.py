@@ -407,13 +407,20 @@ def _check_stale_downstream(
       (changed enrichment prompt, or major composition shift that
       warrants re-baselining the DF-filter).
 
-    wipe_index → wipe index/ + enrichments/ (incremental-safe).
+    wipe_index → wipe index/ + enrichments/ + eval/ + retrieval/
+                 (incremental-safe: keeps runs/ enrichment cache).
     wipe_all   → also wipe runs/ (full rebuild — re-enriches everything).
     Neither    → warn only.
     """
     import shutil
 
-    size_dependent = [d for d in ("index", "enrichments")
+    # All of these are derived from the corpus and become stale on any
+    # corpus-size change. eval/ and retrieval/ matter specifically because
+    # the bm25 baseline stage short-circuits on a cached eval/baseline/*.json
+    # (eval_bm25._build_and_evaluate_one) — leaving them behind makes the
+    # index rebuild silently skip, then the index/best symlink fails with
+    # FileNotFoundError. None of these hold LLM enrichment work (that's runs/).
+    size_dependent = [d for d in ("index", "enrichments", "eval", "retrieval")
                       if (out_dir / d).is_dir()]
     cache_dir_present = (out_dir / "runs").is_dir()
 
@@ -421,12 +428,12 @@ def _check_stale_downstream(
         return
 
     if wipe_all:
-        for d in ("index", "enrichments", "runs"):
+        for d in ("index", "enrichments", "eval", "retrieval", "runs"):
             if (out_dir / d).is_dir():
                 shutil.rmtree(out_dir / d)
         print()
         print("  wiped ALL SIRA-derived dirs (full rebuild): "
-              "index, enrichments, runs")
+              "index, enrichments, eval, retrieval, runs")
         print("  → next pipeline run re-enriches every doc from scratch.")
         return
 

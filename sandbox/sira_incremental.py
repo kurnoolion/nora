@@ -56,6 +56,7 @@ Usage (work-PC flow, run_name pinned):
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -206,6 +207,32 @@ def prune_run_files(run_dir: Path, evict_ids: set[str]) -> dict[str, int]:
     return counts
 
 
+def merge_kept_enrichments(
+    kept_path: Path,
+) -> "collections.OrderedDict[str, list]":
+    """Merge a run's enrichments.kept.jsonl into per-doc_id phrase lists.
+
+    Mirrors SIRA's apply step (add_doc_index_adapter.py: setdefault +
+    extend, no dedup, insertion order) so the reconstructed per-run file
+    is byte-equivalent to what SIRA would have written itself.
+    """
+    merged: "collections.OrderedDict[str, list]" = collections.OrderedDict()
+    with open(kept_path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            did = rec.get("doc_id")
+            phrases = rec.get("phrases")
+            if did is None or not phrases:
+                continue
+            merged.setdefault(did, []).extend(phrases)
+    return merged
+
+
 # ── CLI ─────────────────────────────────────────────────────────────
 
 
@@ -333,6 +360,64 @@ def cmd_commit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_promote(args: argparse.Namespace) -> int:
+    """Reconstruct enrichments/doc/<run_name>.jsonl from the run's
+    enrichments.kept.jsonl and (re)point best.jsonl at it.
+
+    Needed for the full-resume case: when SIRA's enrich_corpus resumes a
+    run where every doc is already enriched (enriched_count == 0), it
+    skips the apply block (add_doc_index_adapter.py:363 `if ... and
+    enriched_count > 0`). That block is what writes the per-run
+    enrichments/doc/<run_name>.jsonl. The unconditional update_best still
+    creates the best.jsonl symlink → <run_name>.jsonl, but the target is
+    never written, leaving best.jsonl DANGLING. enrich_query then logs
+    "No doc enrichments found, using base index" and retrieval runs on the
+    bare index. This command writes the missing target so best.jsonl
+    resolves and the cached enrichment is actually used.
+    """
+    dataset_dir = Path(args.dataset)
+    _, _, _, run_dir = _resolve_paths(dataset_dir, args.run_name)
+    kept = run_dir / "enrichments.kept.jsonl"
+    if not kept.exists():
+        print(f"ERROR: no enrichments.kept.jsonl at {kept}")
+        return 1
+
+    merged = merge_kept_enrichments(kept)
+    if not merged:
+        print(f"ERROR: {kept} held no usable enrichments — nothing to promote.")
+        return 1
+
+    enr_dir = dataset_dir / "enrichments" / "doc"
+    enr_dir.mkdir(parents=True, exist_ok=True)
+    run_jsonl = enr_dir / f"{args.run_name}.jsonl"
+    total_phrases = 0
+    with open(run_jsonl, "w", encoding="utf-8") as f:
+        for did, phrases in merged.items():
+            total_phrases += len(phrases)
+            f.write(
+                json.dumps({"doc_id": did, "phrases": phrases}, ensure_ascii=False)
+                + "\n"
+            )
+    print(f"wrote {len(merged)} docs / {total_phrases} phrases → {run_jsonl}")
+
+    # (Re)point best.jsonl at this run's file with a relative symlink,
+    # matching SIRA's update_best convention.
+    best = enr_dir / "best.jsonl"
+    if best.is_symlink() or best.exists():
+        best.unlink()
+    os.symlink(f"{args.run_name}.jsonl", best)
+    print(f"linked best.jsonl → {os.readlink(best)}")
+    print(
+        "\n→ enrich_query / the per-query service will now apply these "
+        "enrichments\n  (best.jsonl resolves). Re-run the enrich_query + "
+        "rerank stages, e.g.:\n    python scripts/run_pipeline.py data=nora "
+        "enrich=nora rerank=nora \\\n        db_root=$(realpath ../adapter/out) "
+        f"sglang.port=8030 +run_name={args.run_name} \\\n        "
+        "stages='[enrich_query,rerank]'"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="sira_incremental",
@@ -349,7 +434,8 @@ def main(argv: list[str] | None = None) -> int:
 
     pp = sub.add_parser("prune", help="Pre-enrich: evict changed/removed docs from the resume trace.")
     pc = sub.add_parser("commit", help="Post-enrich: record current corpus hashes as the new baseline.")
-    for parser in (pp, pc):
+    pr = sub.add_parser("promote", help="Reconstruct enrichments/doc/<run>.jsonl + best.jsonl from a full-resume run.")
+    for parser in (pp, pc, pr):
         for a, kw in common_args:
             parser.add_argument(*a, **kw)
 
@@ -378,7 +464,11 @@ def main(argv: list[str] | None = None) -> int:
                     ))
 
     args = p.parse_args(argv)
-    return {"prune": cmd_prune, "commit": cmd_commit}[args.cmd](args)
+    return {
+        "prune": cmd_prune,
+        "commit": cmd_commit,
+        "promote": cmd_promote,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":
