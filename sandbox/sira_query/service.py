@@ -131,6 +131,15 @@ _MAX_DF_RATIO = float(os.getenv("NORA_SIRA_MAX_DF_RATIO", "0.05"))
 _EXPANSION_WEIGHT = float(os.getenv("NORA_SIRA_EXPANSION_WEIGHT", "0.5"))
 _DEFAULT_TOP_K = int(os.getenv("NORA_SIRA_TOP_K", "10"))
 _RERANK_TOP_N = int(os.getenv("NORA_SIRA_RERANK_TOP_N", "20"))
+# Query-enrichment sampling temperature. Was hardcoded 0.4 — non-zero
+# sampling makes the proposed expansion phrases vary run-to-run, which
+# (with rerank off) cascades into wildly different BM25 retrieval for the
+# same query. Default 0.0 (greedy/deterministic) so retrieval is
+# reproducible and the other knobs are tunable. Set >0 only if you
+# deliberately want expansion diversity.
+_QUERY_ENRICH_TEMPERATURE = float(
+    os.getenv("NORA_SIRA_QUERY_ENRICH_TEMPERATURE", "0.0")
+)
 
 # Quick-disable for the LLM-as-judge rerank stage. The reranker makes
 # one LLM call per candidate via the shim; at proxy-throttled
@@ -406,6 +415,7 @@ def healthz() -> dict[str, Any]:
         "max_df_ratio": _MAX_DF_RATIO,
         "max_df_absolute": _max_df_absolute,
         "expansion_weight": _EXPANSION_WEIGHT,
+        "query_enrich_temperature": _QUERY_ENRICH_TEMPERATURE,
         "default_top_k": _DEFAULT_TOP_K,
         "rerank_top_n": _RERANK_TOP_N,
         "rerank_enabled": _RERANK_ENABLED,
@@ -715,7 +725,10 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         if _query_prompt_template:
             try:
                 prompt = _query_prompt_template.format(doc_text=req.query, max_n=4)
-                raw = await _llm_call(client, prompt, max_tokens=512, temperature=0.4)
+                raw = await _llm_call(
+                    client, prompt, max_tokens=512,
+                    temperature=_QUERY_ENRICH_TEMPERATURE,
+                )
                 proposed = _parse_phrases(raw)
                 # DF-filter via bm25x — exactly what the batch script does.
                 kept_phrases, _rejected = _bm25.filter_query_expansion(

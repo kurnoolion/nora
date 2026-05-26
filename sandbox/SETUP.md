@@ -375,6 +375,14 @@ Interactive latency is dominated by the LLM rerank step on the SIRA side — at 
 
 For a quick first-look at SIRA's retrieval shape, drop `NORA_SIRA_RERANK_TOP_N=10` — interactive latency drops to ~6 min on a 36s/call endpoint.
 
+**Reproducibility — query-enrichment temperature:**
+
+| Setting | Default | Effect |
+|---|---|---|
+| `NORA_SIRA_QUERY_ENRICH_TEMPERATURE` | `0.0` | Sampling temperature for the query-expansion LLM call. `0.0` = greedy/deterministic → same query gives the same expansion (and, with rerank off, the same retrieval) every run. Was hardcoded `0.4`, which made identical queries return wildly different results run-to-run. |
+
+Keep this at `0.0` while tuning the other knobs — you can't tell whether a change to `NORA_SIRA_EXPANSION_WEIGHT` / `NORA_SIRA_MAX_DF_RATIO` / `NORA_SIRA_FANOUT_ENABLED` helped if the expansion is itself random each call. Set it `>0` only if you deliberately want expansion diversity. Confirm the active value via `/healthz` (`query_enrich_temperature`). Note: some serving backends are non-deterministic even at `0.0` (batching / MoE routing / FP) — if residual variance remains, that's the endpoint, not this knob.
+
 **Synthesizer chunk filter (set on the NORA web side, not the SIRA service):**
 
 SIRA returns a ranked list of `top_k` candidates regardless of how relevant they actually are. Pinning all of them to NORA's synthesizer feeds the LLM low-confidence chunks alongside high-confidence ones — the LLM ends up citing whatever has matching keywords, including the noisy tail. To prevent this, the SIRA tab applies a **two-gate score filter** to decide which chunks to pin:
