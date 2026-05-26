@@ -383,53 +383,80 @@ def _emit_corpus(
     return written, n_doc, n_section
 
 
-def _check_stale_downstream(out_dir: Path, wipe: bool) -> None:
+def _check_stale_downstream(
+    out_dir: Path, wipe_index: bool, wipe_all: bool,
+) -> None:
     """Detect (and optionally wipe) SIRA-derived artifacts that are now
     stale because the corpus just changed.
 
     When the corpus row-count changes (e.g., this adapter adds doc/
-    section rows), any pre-existing BM25 index + enrichment outputs no
-    longer match. SIRA's pipeline does NOT detect this — it reuses the
-    cached `index/` and then panics in `enrich_corpus` with
-    "doc_id N out of range (num_docs=N)" when the new corpus has more
-    rows than the stale index.
+    section rows, or a new release/MNO is ingested), the pre-existing
+    BM25 `index/` no longer matches the corpus. SIRA does NOT detect
+    this — it reuses the cached index and then panics in enrich_corpus
+    with "doc_id N out of range (num_docs=N)".
 
-    `index/`, `enrichments/`, `runs/` are all corpus-shape-dependent
-    and must be rebuilt. `raw/` (corpus + queries + qrels + metadata,
-    which this adapter just wrote) is kept.
+    Two wipe scopes, because the right answer differs by scenario:
 
-    wipe=False → warn loudly and leave the dirs in place.
-    wipe=True  → remove them so the next SIRA pipeline run rebuilds
-                 from scratch.
+    - `index/` + `enrichments/` are corpus-SIZE-dependent and cheap to
+      regenerate (eval_bm25 rebuilds the index in seconds-minutes).
+      These MUST be wiped on any corpus-size change.
+    - `runs/` holds the doc-enrichment CACHE — the trace files SIRA's
+      resume reads to skip already-enriched docs, AND the basis for
+      incremental (content-hash-aware) enrichment. KEEP it for
+      incremental growth; only wipe it for a deliberate full rebuild
+      (changed enrichment prompt, or major composition shift that
+      warrants re-baselining the DF-filter).
+
+    wipe_index → wipe index/ + enrichments/ (incremental-safe).
+    wipe_all   → also wipe runs/ (full rebuild — re-enriches everything).
+    Neither    → warn only.
     """
     import shutil
 
-    stale = [d for d in ("index", "enrichments", "runs")
-             if (out_dir / d).is_dir()]
-    if not stale:
+    size_dependent = [d for d in ("index", "enrichments")
+                      if (out_dir / d).is_dir()]
+    cache_dir_present = (out_dir / "runs").is_dir()
+
+    if not size_dependent and not cache_dir_present:
         return
 
-    if wipe:
-        for d in stale:
+    if wipe_all:
+        for d in ("index", "enrichments", "runs"):
+            if (out_dir / d).is_dir():
+                shutil.rmtree(out_dir / d)
+        print()
+        print("  wiped ALL SIRA-derived dirs (full rebuild): "
+              "index, enrichments, runs")
+        print("  → next pipeline run re-enriches every doc from scratch.")
+        return
+
+    if wipe_index:
+        for d in size_dependent:
             shutil.rmtree(out_dir / d)
         print()
-        print(f"  wiped stale SIRA-derived dirs (corpus changed): "
-              f"{', '.join(stale)}")
-        print(f"  → next SIRA pipeline run rebuilds the index from the "
-              f"new corpus.")
-    else:
-        print()
-        print("  " + "!" * 68)
-        print(f"  WARNING: stale SIRA-derived dirs present: {', '.join(stale)}")
-        print(f"  The corpus row-count just changed. SIRA will reuse the "
-              f"cached")
-        print(f"  index/ and then PANIC in enrich_corpus with 'doc_id N out "
-              f"of range'.")
-        print(f"  Before re-running the SIRA pipeline, either:")
-        for d in stale:
-            print(f"    rm -rf {out_dir / d}")
-        print(f"  or re-run this adapter with --wipe-stale-index.")
-        print("  " + "!" * 68)
+        print(f"  wiped size-dependent dirs: {', '.join(size_dependent) or '(none)'}")
+        if cache_dir_present:
+            print("  KEPT runs/ (enrichment cache) — incremental enrich will "
+                  "reuse it; only new/changed docs get LLM-enriched.")
+        print("  → next pipeline run rebuilds the index; enrich resumes "
+              "from the cache.")
+        return
+
+    # Warn-only
+    print()
+    print("  " + "!" * 68)
+    print(f"  WARNING: stale SIRA-derived dirs present: "
+          f"{', '.join(size_dependent + (['runs'] if cache_dir_present else []))}")
+    print("  The corpus changed. SIRA will reuse the cached index/ and "
+          "then PANIC")
+    print("  in enrich_corpus with 'doc_id N out of range'. Before "
+          "re-running:")
+    print("    • incremental (added release/MNO, same prompts):")
+    print("        re-run this adapter with --wipe-stale-index  "
+          "(keeps runs/ cache)")
+    print("    • full rebuild (changed enrich prompt / major composition shift):")
+    print("        re-run this adapter with --wipe-all-derived")
+    print("  " + "!" * 68)
 
 
 def _emit_queries_and_qrels(
@@ -523,12 +550,20 @@ def main() -> int:
                    ))
     p.add_argument("--wipe-stale-index", action="store_true",
                    help=(
-                       "After writing the corpus, remove SIRA-derived dirs "
-                       "(index/, enrichments/, runs/) under --output that "
-                       "are now stale because the corpus row-count changed. "
-                       "Without this flag the adapter only warns. Prevents "
-                       "the 'doc_id N out of range' panic SIRA hits when it "
-                       "reuses a cached index against a grown corpus."
+                       "Incremental-safe wipe: remove size-dependent "
+                       "index/ + enrichments/ under --output (cheap to "
+                       "rebuild) but KEEP runs/ (the enrichment cache), so "
+                       "the next SIRA run re-enriches only new/changed docs. "
+                       "Use for steady-state growth (added release / MNO, "
+                       "same enrichment prompts)."
+                   ))
+    p.add_argument("--wipe-all-derived", action="store_true",
+                   help=(
+                       "Full-rebuild wipe: remove index/ + enrichments/ + "
+                       "runs/ — re-enriches every doc from scratch. Use "
+                       "only when the enrichment prompt changed or the "
+                       "corpus composition shifted enough to re-baseline "
+                       "the DF-filter (e.g., 1 MNO -> 3 MNOs)."
                    ))
     args = p.parse_args()
     if args.name is None:
@@ -562,9 +597,14 @@ def main() -> int:
     _emit_metadata(raw_dir, name=args.name, num_corpus=num_corpus,
                    n_queries=n_queries, n_qrels=n_qrels)
     print()
-    # Staleness guard — the corpus just changed; any pre-existing
-    # index/ + enrichments/ + runs/ no longer match it.
-    _check_stale_downstream(out_dir, wipe=args.wipe_stale_index)
+    # Staleness guard — the corpus just changed; pre-existing
+    # index/ + enrichments/ no longer match it. runs/ (enrichment
+    # cache) is kept unless --wipe-all-derived.
+    _check_stale_downstream(
+        out_dir,
+        wipe_index=args.wipe_stale_index,
+        wipe_all=args.wipe_all_derived,
+    )
     print()
     print(f"done — point SIRA at db_root={out_dir.parent}, data.name={args.name}")
     return 0
