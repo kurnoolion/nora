@@ -288,6 +288,8 @@ Critical flags:
 
 Output: per-stage eval JSONs at `sandbox/adapter/out/nora/eval/{baseline, doc-enrich, query-enrich, rerank}/best.json`. Compare `recall@10` across stages — that's the per-stage lift attributable to corpus enrichment / query enrichment / LLM reranking. Compare the final `recall@10` against NORA's A4 baseline (88.0% overall / 67.6% accuracy on the same 18-Q set).
 
+> This section is the **first** full build. Later, when you ingest more releases/MNOs (corpus grows), don't re-run this verbatim — it would re-enrich everything (~13h). Use the incremental flow in **"Re-ingesting after corpus growth"** below, which re-enriches only new/changed docs.
+
 ### E. Per-query SIRA probe (NORA Test page "SIRA Retrieval" tab)
 
 Interactive way to type a query and see SIRA's ranked retrieval **and a synthesized answer composed from those chunks by NORA's existing synthesizer**. Apples-to-apples vs. the Requirement Bot tab: same synthesizer, the ONLY variable is the retrieval lane (NORA's hybrid vs. SIRA's BM25 + query enrichment + LLM rerank).
@@ -389,6 +391,125 @@ A chunk must clear **both** gates to be pinned. The retrieval view in the UI sho
 - Per-stage timings (`expand`, `search`, `rerank`) plus total
 - Rerank call distribution: count, mean, p50, p95, max per query — surfaces tail latency from individual slow LLM calls. The full ordered call list is also returned in JSON for further analysis (not displayed in the UI).
 
+## Re-ingesting after corpus growth (steady state)
+
+Sections A–E cover the **first** build. Ingesting a new release or MNO later
+grows `corpus.jsonl`, which invalidates the corpus-size-dependent artifacts
+(BM25 index, eval/retrieval caches) and means new rows need enrichment. The
+goal: **re-enrich only the new/changed docs**. A full re-enrich is ~13h, and
+10× corpus growth must not force a 10× rebuild.
+
+The helper `sandbox/sira_incremental.py` rides SIRA's native doc_id-keyed
+resume (`add_doc_index_adapter.py` "Resume: skip already-processed docs") and
+adds content-hash awareness so a doc whose *text* changed under the same
+`doc_id` (e.g. a correction) is re-enriched instead of wrongly skipped.
+**Pin a stable `run_name`** across runs so the enrichment trace accumulates:
+
+```bash
+RUN=enrich-stable                       # pin once, reuse every ingest
+DSP=$(realpath sandbox/adapter/out)     # db_root (parent of the dataset dir)
+DS=$DSP/nora                            # the dataset dir itself (raw/, runs/, …)
+```
+
+### Incremental path (added a release / MNO; prompts unchanged)
+
+```bash
+# 1. Rebuild corpus rows; wipe size-dependent caches but KEEP runs/ (the
+#    enrichment cache). --wipe-stale-index clears index/ + enrichments/ +
+#    eval/ + retrieval/ — all four are corpus-size-dependent and must go,
+#    or a stale cached eval/baseline/*.json makes the index rebuild skip
+#    (see Troubleshooting: the index/best symlink error).
+python -m sandbox.adapter.nora_to_beir \
+    --env-dir <your_env_dir> --output sandbox/adapter/out/nora --wipe-stale-index
+
+# 2. Evict changed/removed docs from the resume trace (content-hash diff vs
+#    the stored baseline). Also prints a CORPUS DRIFT WARNING if cumulative
+#    growth since the last full rebuild is large enough that the corpus-wide
+#    DF statistics have likely drifted (default threshold 1.5×; --strict-growth
+#    makes it a hard exit-2 stop for automated pipelines).
+python -m sandbox.sira_incremental prune --dataset "$DS" --run-name $RUN
+
+# 3. Rebuild the BM25 index (seconds–minutes, no LLM), then resume-enrich.
+#    Only NEW + CHANGED docs hit the LLM; unchanged ones are skipped via the
+#    trace. (Terminal 1 must already be running the shim on :8030.)
+cd sandbox/sira
+python scripts/eval_bm25.py data=nora db_root="$DSP"
+python scripts/run_pipeline.py data=nora enrich=nora rerank=nora \
+    db_root="$DSP" sglang.port=8030 +run_name=$RUN
+
+# 4. Record the new baseline for the next round.
+cd $REPO_ROOT
+python -m sandbox.sira_incremental commit --dataset "$DS" --run-name $RUN
+```
+
+`+run_name=$RUN` is required — `run_name` isn't declared in the YAML, so the
+`+` prefix appends it. The same pinned `$RUN` must be used in steps 2–4.
+
+### Full-rebuild path (prompts changed, or the drift warning fired)
+
+Doc enrichment + the DF filter depend on **corpus-wide** document-frequency
+statistics. After enough cumulative growth, cached enrichment (DF-filtered
+against the smaller corpus) is meaningfully stale. When `prune` prints the
+DRIFT WARNING — or whenever you edit the enrichment prompts — do a full
+rebuild instead:
+
+```bash
+# --wipe-all-derived ALSO wipes runs/ → every doc re-enriches from scratch (~13h).
+python -m sandbox.adapter.nora_to_beir \
+    --env-dir <your_env_dir> --output sandbox/adapter/out/nora --wipe-all-derived
+cd sandbox/sira
+python scripts/eval_bm25.py data=nora db_root="$DSP"
+python scripts/run_pipeline.py data=nora enrich=nora rerank=nora \
+    db_root="$DSP" sglang.port=8030 +run_name=$RUN
+cd $REPO_ROOT
+# --full resets the cumulative-drift baseline to the current corpus size.
+python -m sandbox.sira_incremental commit --dataset "$DS" --run-name $RUN --full
+```
+
+### Recovering a resume that says "No doc enrichments found"
+
+If a resume enriches **0 new docs** (every doc already in the trace — e.g. you
+rebuilt the index after a stale-index panic but added no docs), SIRA's
+`enrich_corpus` skips its apply block (gated on `enriched_count > 0`), so it
+never writes `enrichments/doc/<run>.jsonl` while `update_best` still creates
+the `best.jsonl` symlink → a **dangling** link. `enrich_query` then logs *"No
+doc enrichments found, using base index"* and retrieval runs on the bare index
+(the enrichment work is on disk but unused). Reconstruct the promoted file from
+the run's cached enrichments:
+
+```bash
+python -m sandbox.sira_incremental promote --dataset "$DS" --run-name $RUN
+# then re-run only the downstream stages (no LLM enrichment needed):
+cd sandbox/sira
+python scripts/run_pipeline.py data=nora enrich=nora rerank=nora \
+    db_root="$DSP" sglang.port=8030 +run_name=$RUN stages='[enrich_query,rerank]'
+```
+
+### Verifying enrichment completeness across granularities
+
+The adapter emits multi-granularity rows: `doc:<plan>` (plan-level), `section:…`
+(section-level), and per-requirement rows. After a run, confirm each granularity
+was enriched (and that nothing was left unprocessed by an interrupted loop):
+
+```bash
+# Rows that ended up with kept phrases (in best.jsonl):
+grep -c '"doc_id": "doc:'     "$DS/enrichments/doc/best.jsonl"   # plan-level
+grep -c '"doc_id": "section:' "$DS/enrichments/doc/best.jsonl"   # section-level
+wc -l                          "$DS/enrichments/doc/best.jsonl"   # total enriched
+
+# A row is "completed" if its doc_id is in trace.kept ∪ trace.failed. A row in
+# trace.failed (status all_filtered) WAS processed — the LLM ran but every
+# proposed phrase exceeded the DF cap. Only a doc_id in NEITHER trace was
+# skipped. Compare these against the corpus counts:
+grep -c '"_id": "doc:'     "$DS/raw/corpus.jsonl"
+grep -c '"_id": "section:' "$DS/raw/corpus.jsonl"
+```
+
+Broad rows (especially `doc:`) commonly land in `all_filtered` because their
+aggregated text yields only high-DF phrases — that's expected, not a gap. Those
+rows still retrieve on their own title/text and fan out to the underlying
+`req_id`s at query time.
+
 ## Network access — what gets downloaded
 
 If your work PC blocks HF or has restricted outbound HTTPS, here's the exhaustive list of what SIRA reaches for:
@@ -445,6 +566,9 @@ Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 | `hydra.errors.ConfigCompositionException: Could not override 'server.auto_start'` | Stale instruction — the flag doesn't exist in SIRA's config | Drop the `server.auto_start=false` argument entirely; detection is automatic (see "Critical flags" note above) |
 | `hydra.errors.ConfigCompositionException: Could not override 'enrich.concurrency'` (or `rerank.top_n`, etc.) | The selected config (`enrich=nora` / `rerank=nora`) doesn't extend `default.yaml`, so the field doesn't exist in the merged config | Our YAMLs must declare `defaults: [default, _self_]` at the top — fixed in commit 47c5e3a (or later). After `git pull`, **re-run `bash sandbox/install_configs.sh`** to copy the updated YAMLs into the SIRA clone. As a one-shot workaround on the CLI: `+enrich.concurrency=8` (the `+` prefix appends rather than overrides) |
 | `RuntimeError: sglang server process died during startup` (shim is up + reachable via curl) | SIRA's auto-detect probe (`urllib.request.urlopen('http://127.0.0.1:{port}/v1/models')`) is going through `HTTP_PROXY`. urllib honors NO_PROXY but doesn't auto-bypass localhost like curl does. The probe times out, SIRA falls through to spawning sglang locally, sglang can't start (no GPU stack on the trimmed install) → that error. | `source sandbox/activate.sh` (which now auto-adds `127.0.0.1,localhost,::1` to NO_PROXY since fix-commit), OR strip proxy vars from the pipeline terminal: `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy python scripts/run_pipeline.py …`. Confirm with the SIRA log line: should see `Using existing LLM server on port 8030` (not `Starting sglang server...`). |
+| `enrich_corpus` panics: `pyo3_runtime.PanicException: doc_id N out of range (num_docs=N)` at `bm25.enrich_batch` | Stale BM25 index: it was built from a smaller corpus than the one `enrich_corpus` is iterating (you grew `corpus.jsonl` but reused the old `index/`) | Re-run the adapter with `--wipe-stale-index` (incremental) or `--wipe-all-derived` (full), then rebuild the index with `eval_bm25.py` before re-running the pipeline. See "Re-ingesting after corpus growth". |
+| index build fails: `FileNotFoundError: ... 'bm25-n12-unicode_stem' -> '.../index/best'` | A cached `eval/baseline/*.json` survived an `index/`-only wipe. The `bm25` stage short-circuits on cached eval and skips rebuilding the index dir, so the `index/best` symlink has no parent to live in | Clear the stale caches too: `rm -rf "$DS/eval" "$DS/retrieval"` then re-run `eval_bm25.py`. The adapter's `--wipe-stale-index` / `--wipe-all-derived` now clear `eval/` + `retrieval/` automatically, so prefer re-running the adapter. |
+| `enrich_query` logs "No doc enrichments found, using base index" | Full resume (`enriched_count == 0`): `enrich_corpus` skipped its apply block, so `enrichments/doc/<run>.jsonl` was never written and `best.jsonl` is a dangling symlink | `python -m sandbox.sira_incremental promote --dataset "$DS" --run-name $RUN`, then re-run `stages='[enrich_query,rerank]'`. See "Recovering a resume that says No doc enrichments found". |
 | eval numbers look wrong (e.g. 0% recall) | Adapter wrote `_id` field that doesn't match qrels `corpus-id` | Spot-check: `head -1 corpus.jsonl` and one qrel row — `_id` must equal `corpus-id` |
 | Adapter skips most reqs as "no-id" | Source `_tree.json` has empty `req_id` fields | Re-run NORA parse stage; if the source corpus genuinely lacks req_ids, this strand's approach doesn't apply |
 | `Illegal instruction (core dumped)` + polars warning about "avx2, fma, bmi1, bmi2, lzcnt, movbe" | CPU lacks AVX2 (older / virtualized x86_64) and you installed plain `polars` | `uv pip install --reinstall --system-certs 'polars[rtcompat]'`. Alternative spelling if the extra doesn't resolve: `uv pip install --system-certs polars-lts-cpu` (after `uv pip uninstall polars`). |
