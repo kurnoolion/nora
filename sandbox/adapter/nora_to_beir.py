@@ -383,6 +383,55 @@ def _emit_corpus(
     return written, n_doc, n_section
 
 
+def _check_stale_downstream(out_dir: Path, wipe: bool) -> None:
+    """Detect (and optionally wipe) SIRA-derived artifacts that are now
+    stale because the corpus just changed.
+
+    When the corpus row-count changes (e.g., this adapter adds doc/
+    section rows), any pre-existing BM25 index + enrichment outputs no
+    longer match. SIRA's pipeline does NOT detect this — it reuses the
+    cached `index/` and then panics in `enrich_corpus` with
+    "doc_id N out of range (num_docs=N)" when the new corpus has more
+    rows than the stale index.
+
+    `index/`, `enrichments/`, `runs/` are all corpus-shape-dependent
+    and must be rebuilt. `raw/` (corpus + queries + qrels + metadata,
+    which this adapter just wrote) is kept.
+
+    wipe=False → warn loudly and leave the dirs in place.
+    wipe=True  → remove them so the next SIRA pipeline run rebuilds
+                 from scratch.
+    """
+    import shutil
+
+    stale = [d for d in ("index", "enrichments", "runs")
+             if (out_dir / d).is_dir()]
+    if not stale:
+        return
+
+    if wipe:
+        for d in stale:
+            shutil.rmtree(out_dir / d)
+        print()
+        print(f"  wiped stale SIRA-derived dirs (corpus changed): "
+              f"{', '.join(stale)}")
+        print(f"  → next SIRA pipeline run rebuilds the index from the "
+              f"new corpus.")
+    else:
+        print()
+        print("  " + "!" * 68)
+        print(f"  WARNING: stale SIRA-derived dirs present: {', '.join(stale)}")
+        print(f"  The corpus row-count just changed. SIRA will reuse the "
+              f"cached")
+        print(f"  index/ and then PANIC in enrich_corpus with 'doc_id N out "
+              f"of range'.")
+        print(f"  Before re-running the SIRA pipeline, either:")
+        for d in stale:
+            print(f"    rm -rf {out_dir / d}")
+        print(f"  or re-run this adapter with --wipe-stale-index.")
+        print("  " + "!" * 68)
+
+
 def _emit_queries_and_qrels(
     raw_dir: Path, split: str = "test",
 ) -> tuple[int, int, int]:
@@ -472,6 +521,15 @@ def main() -> int:
                        "and `section:<plan>:5.1` but not `5.1.1`. Default "
                        "2 (matches plan-aware-sira D-DRAFT-10 default)."
                    ))
+    p.add_argument("--wipe-stale-index", action="store_true",
+                   help=(
+                       "After writing the corpus, remove SIRA-derived dirs "
+                       "(index/, enrichments/, runs/) under --output that "
+                       "are now stale because the corpus row-count changed. "
+                       "Without this flag the adapter only warns. Prevents "
+                       "the 'doc_id N out of range' panic SIRA hits when it "
+                       "reuses a cached index against a grown corpus."
+                   ))
     args = p.parse_args()
     if args.name is None:
         args.name = args.output.name
@@ -503,6 +561,10 @@ def main() -> int:
     print("emitting raw/metadata.json ...")
     _emit_metadata(raw_dir, name=args.name, num_corpus=num_corpus,
                    n_queries=n_queries, n_qrels=n_qrels)
+    print()
+    # Staleness guard — the corpus just changed; any pre-existing
+    # index/ + enrichments/ + runs/ no longer match it.
+    _check_stale_downstream(out_dir, wipe=args.wipe_stale_index)
     print()
     print(f"done — point SIRA at db_root={out_dir.parent}, data.name={args.name}")
     return 0
