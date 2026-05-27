@@ -379,9 +379,20 @@ For a quick first-look at SIRA's retrieval shape, drop `NORA_SIRA_RERANK_TOP_N=1
 
 | Setting | Default | Effect |
 |---|---|---|
-| `NORA_SIRA_QUERY_ENRICH_TEMPERATURE` | `0.0` | Sampling temperature for the query-expansion LLM call. `0.0` = greedy/deterministic → same query gives the same expansion (and, with rerank off, the same retrieval) every run. Was hardcoded `0.4`, which made identical queries return wildly different results run-to-run. |
+| `NORA_SIRA_QUERY_ENRICH_ENABLED` | `true` | Master switch for the live query-expansion LLM call. `false` skips it entirely → **raw-query BM25 only → fully deterministic retrieval.** Use this (not weight 0) when you need reproducibility on a non-deterministic backend. |
+| `NORA_SIRA_QUERY_ENRICH_TEMPERATURE` | `0.0` | Sampling temperature for the query-expansion call (when enabled). `0.0` = greedy. Was hardcoded `0.4`. |
 
-Keep this at `0.0` while tuning the other knobs — you can't tell whether a change to `NORA_SIRA_EXPANSION_WEIGHT` / `NORA_SIRA_MAX_DF_RATIO` / `NORA_SIRA_FANOUT_ENABLED` helped if the expansion is itself random each call. Set it `>0` only if you deliberately want expansion diversity. Confirm the active value via `/healthz` (`query_enrich_temperature`). Note: some serving backends are non-deterministic even at `0.0` (batching / MoE routing / FP) — if residual variance remains, that's the endpoint, not this knob.
+**Reproducibility note (MoE backends).** On a non-deterministic endpoint (MoE
+routing / batching / FP), the query-expansion call returns different phrases
+each run even at temperature `0.0`. Worse, `NORA_SIRA_EXPANSION_WEIGHT=0` does
+**not** fix this: `search_with_expansion` still feeds the expansion terms into
+BM25 *candidate selection* (zero score, but they reorder tied candidates), so
+retrieval stays stochastic. The genuinely-relevant chunks score uniquely high
+and stay present; the tied tail shuffles. For **deterministic** retrieval, set
+`NORA_SIRA_QUERY_ENRICH_ENABLED=false` — that removes the LLM from the ranking
+path entirely. Confirm via `/healthz` (`query_enrich_enabled`,
+`query_enrich_temperature`). Keep enrichment off while tuning the other knobs
+(`NORA_SIRA_FANOUT_ENABLED`, `top_k`) so each change is attributable.
 
 **Synthesizer chunk filter (set on the NORA web side, not the SIRA service):**
 

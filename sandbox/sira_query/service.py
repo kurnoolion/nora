@@ -140,6 +140,16 @@ _RERANK_TOP_N = int(os.getenv("NORA_SIRA_RERANK_TOP_N", "20"))
 _QUERY_ENRICH_TEMPERATURE = float(
     os.getenv("NORA_SIRA_QUERY_ENRICH_TEMPERATURE", "0.0")
 )
+# Master switch for the live query-enrichment LLM call. Even at
+# EXPANSION_WEIGHT=0 the expansion terms still enter BM25 candidate
+# selection (zero score, but they reorder tied candidates), so on a
+# non-deterministic backend retrieval stays stochastic. Set false to skip
+# the call entirely → raw-query BM25 only → fully deterministic retrieval.
+# Default true (preserve historical behavior); flip false for reproducible
+# retrieval on an MoE/non-deterministic endpoint.
+_QUERY_ENRICH_ENABLED = os.getenv(
+    "NORA_SIRA_QUERY_ENRICH_ENABLED", "true"
+).lower() in {"1", "true", "yes", "on"}
 
 # Quick-disable for the LLM-as-judge rerank stage. The reranker makes
 # one LLM call per candidate via the shim; at proxy-throttled
@@ -415,6 +425,7 @@ def healthz() -> dict[str, Any]:
         "max_df_ratio": _MAX_DF_RATIO,
         "max_df_absolute": _max_df_absolute,
         "expansion_weight": _EXPANSION_WEIGHT,
+        "query_enrich_enabled": _QUERY_ENRICH_ENABLED,
         "query_enrich_temperature": _QUERY_ENRICH_TEMPERATURE,
         "default_top_k": _DEFAULT_TOP_K,
         "rerank_top_n": _RERANK_TOP_N,
@@ -722,7 +733,7 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         t0 = time.time()
         kept_phrases: list[str] = []
         expansion_terms = ""
-        if _query_prompt_template:
+        if _QUERY_ENRICH_ENABLED and _query_prompt_template:
             try:
                 prompt = _query_prompt_template.format(doc_text=req.query, max_n=4)
                 raw = await _llm_call(
@@ -740,6 +751,11 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
                 expansion_terms = " ".join(kept_stems) if kept_stems else ""
             except Exception as exc:
                 notes.append(f"query-enrich failed (continuing without expansion): {exc}")
+        elif not _QUERY_ENRICH_ENABLED:
+            notes.append(
+                "query enrichment disabled via NORA_SIRA_QUERY_ENRICH_ENABLED=false "
+                "— raw-query BM25 only (deterministic retrieval)"
+            )
         else:
             notes.append("query enrichment prompt missing — search runs without expansion")
         timings["expand_ms"] = int((time.time() - t0) * 1000)
