@@ -35,6 +35,22 @@ stay in sync with req rows — a req_id present in the pointer list but absent
 from the corpus is silently dropped by fan-out. See [[D-DRAFT-4]] for why
 fan-out must eventually be plan-scoped rather than unconditional.
 
+**Note (2026-05-27): pointer rows + fan-out are coupled, and the right setting
+is query-type dependent.**
+- Fan-out ON expands pointer rows into req-level content — correct for
+  plan-summarize ("Summarize PLAN_X"), but over-broadens feature/concept queries
+  ("Summarize ADD flow") by exploding every matching plan's pointer rows.
+- Fan-out OFF is correct for feature queries, but then pointer rows are dead
+  weight in the index: if one ranks into top_k it returns a useless id-list
+  chunk. (Confirmed they don't rank for feature queries, but they would on a
+  strong plan-name match.)
+- These are two coherent end-states — *plan-aware mode* (pointer rows + fan-out,
+  ideally with pointer rows ranking) vs *vanilla mode* (pointer rows excluded
+  from retrieval + fan-out off) — controlled today by one global
+  `NORA_SIRA_FANOUT_ENABLED` flag. **Query-type routing** (detect a named-plan
+  target → plan-aware; else → vanilla) is the required next step, not a global
+  switch.
+
 ---
 
 ## D-DRAFT-2 — Incremental enrichment (content-hash resume + drift guard)
@@ -112,6 +128,22 @@ to the BM25 index, not live query-side LLM calls.
 noisy. Open: decide between off / cached / seeded (tracked in the journal Next).
 The query-enrich temperature knob ([[D-DRAFT-5]]) reduces but does not eliminate
 this — it's a serving-layer property.
+
+**Amendment (2026-05-27, validated empirically):**
+- **Rerank is the *primary* in-path non-deterministic LLM; query enrichment is
+  secondary.** Rerank re-scores and re-sorts every candidate, so its variance
+  dominates the final ranking (and, via the NORA pin-score threshold, drives the
+  earlier good/no-answer/broad split). Query enrichment only nudges candidate
+  selection.
+- **`EXPANSION_WEIGHT=0` is insufficient** — `search_with_expansion` still feeds
+  expansion terms into candidate selection (zero score, but they reorder tied
+  candidates). The real levers are the `_ENABLED=false` flags:
+  `NORA_SIRA_RERANK_ENABLED=false` + `NORA_SIRA_QUERY_ENRICH_ENABLED=false`.
+- **Validated deterministic posture:** raw-query BM25 against the offline-
+  doc-enriched index (no rerank, no live query enrichment) is reproducible AND
+  surfaces correct chunks top-ranked. The deterministic value SIRA contributes
+  is the *offline* enrichment baked into the index at load, not any live LLM
+  call.
 
 ---
 
