@@ -68,6 +68,111 @@ _PIN_MIN_SCORE = float(os.getenv("NORA_SIRA_PIN_MIN_SCORE", "30"))
 _PIN_REL_THRESHOLD = float(os.getenv("NORA_SIRA_PIN_REL_THRESHOLD", "0.5"))
 
 
+# ── merged-tab helpers (team-eval-pilot) ──────────────────────────────
+#
+# Three small helpers feeding the per-(question x lane) row that the
+# merged tab writes to test_feedback: cited_ids (from the synthesizer's
+# explicit citations) + lane_config snapshot (NORA env-flags / SIRA
+# /healthz). Kept inline here for now; if the snapshot logic grows, factor
+# to playground/snapshot.py per the strand's deferred items.
+
+# Subset of /healthz fields stored as the SIRA lane_config snapshot. Keys
+# absent from the response are skipped (the snapshot grows as the service
+# adds knobs). The pin filters (PIN_MIN_SCORE / PIN_REL_THRESHOLD) are
+# NORA-side, so they live in NORA's snapshot, not here.
+_SIRA_HEALTHZ_SNAPSHOT_KEYS: tuple[str, ...] = (
+    "corpus_size",
+    "rerank_enabled",
+    "query_enrich_enabled",
+    "query_enrich_temperature",
+    "fanout_enabled",
+    "fanout_per_hit",
+    "expansion_weight",
+    "max_df_ratio",
+    "default_top_k",
+    "doc_enrich_run_pinned",
+    "query_enrich_run_pinned",
+    "rerank_run_pinned",
+)
+
+
+def _flatten_cited_ids(citations: list[Any] | None) -> list[str]:
+    """Extract req_ids from a synthesizer citation list (the *explicit*
+    LLM-cited subset, not the fallback combined list). Deduped + sorted
+    so analysis SQL can treat `cited_ids` as a stable set.
+
+    Tolerant of None / non-dict items / missing `req_id` keys — a
+    malformed citation drops out rather than blowing up the Ask.
+    """
+    if not citations:
+        return []
+    seen: set[str] = set()
+    for c in citations:
+        if not isinstance(c, dict):
+            continue
+        rid = c.get("req_id")
+        if rid and isinstance(rid, str):
+            seen.add(rid)
+    return sorted(seen)
+
+
+def _pick_sira_snapshot(healthz_body: dict[str, Any]) -> dict[str, Any]:
+    """Subset a /healthz response to the keys that affect retrieval
+    reproducibility for the lane_config snapshot. Pure / network-free
+    so it's directly unit-testable."""
+    return {
+        k: healthz_body[k]
+        for k in _SIRA_HEALTHZ_SNAPSHOT_KEYS
+        if k in healthz_body
+    }
+
+
+async def _snapshot_sira_lane_config() -> dict[str, Any]:
+    """Fetch the per-query SIRA service's /healthz and apply
+    `_pick_sira_snapshot`. Best-effort: returns `{"_error": "..."}` on
+    network/parse failure so a snapshot hiccup never blocks the Ask
+    flow (the row still gets written; analysis can spot the error
+    later)."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{_SIRA_QUERY_URL}/healthz")
+    except Exception as exc:
+        return {"_error": f"healthz fetch failed: {exc}"[:200]}
+    if resp.status_code != 200:
+        return {"_error": f"healthz status {resp.status_code}"}
+    try:
+        return _pick_sira_snapshot(resp.json())
+    except Exception as exc:
+        return {"_error": f"healthz parse failed: {exc}"[:200]}
+
+
+def _snapshot_nora_lane_config(result: dict[str, Any]) -> dict[str, Any]:
+    """Compose NORA's lane_config snapshot from what the query pipeline
+    returned for this request plus the few env knobs that shape it.
+    Pure / synchronous; takes the result dict produced by
+    `_run_query_for_test` so callers don't re-run the pipeline.
+
+    Intentionally minimal for the pilot — extend as analyses identify
+    which knobs are worth tracking on which questions.
+    """
+    snap: dict[str, Any] = {
+        "llm_model": result.get("llm_model"),
+        "query_intent": result.get("query_intent"),
+        "candidate_count": result.get("candidate_count"),
+    }
+    for env in (
+        "NORA_LLM_MODEL",
+        "NORA_QUERY_RERANK_ENABLED",
+        "NORA_QUERY_BROAD_TOP_K",
+        "NORA_QUERY_NARROW_TOP_K",
+        "NORA_INCLUDE_PARENT_BODY",
+    ):
+        v = os.getenv(env)
+        if v is not None:
+            snap[env] = v
+    return snap
+
+
 def _select_pinned_chunks(
     sira_results: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
