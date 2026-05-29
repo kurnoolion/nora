@@ -7,119 +7,128 @@
 <div class="container-fluid py-3">
   <h1 class="mb-2">Test</h1>
   <p class="text-muted">
-    Free-form playground for ad-hoc testing of the requirement bot
-    and (later) other workflows. Each question and the user's
-    thumbs-up/down + comments are persisted for offline review.
+    Free-form playground for ad-hoc testing. Ask a question and the
+    response runs through both retrieval lanes (NORA's hybrid path and
+    SIRA's BM25 + LLM-rerank path) so you can compare side-by-side.
+    Each question, the chunks returned, and your feedback (0–9 score
+    + categories + comment) are persisted to <code>nora_test_feedback.db</code>
+    for offline review.
   </p>
 
-  <!-- Section tabs -->
-  <ul class="nav nav-tabs mb-3" role="tablist">
-    {% for section in sections %}
-      <li class="nav-item" role="presentation">
-        <a class="nav-link {% if section.id == active_section %}active{% endif %}
-                          {% if not section.enabled %}disabled{% endif %}"
-           {% if section.enabled %}
-             href="{{ root_path }}/test?section={{ section.id }}"
-           {% else %}
-             href="#" tabindex="-1" aria-disabled="true"
-             title="Coming soon"
-           {% endif %}>
-          {{ section.label }}
-          {% if not section.enabled %}
-            <small class="text-muted ms-1">(soon)</small>
-          {% endif %}
-        </a>
-      </li>
-    {% endfor %}
-  </ul>
+  <div class="card">
+    <div class="card-body">
 
-  <!-- Active section body -->
-  {% for section in sections %}
-    {% if section.id == active_section %}
-      <div class="card">
-        <div class="card-body">
-          {% if section.enabled %}
+      <form
+          hx-post="{{ root_path }}/api/test/ask"
+          hx-target="#test-answer"
+          hx-swap="innerHTML"
+          hx-indicator="#test-loading-block, #test-spinner"
+          hx-disabled-elt="find button"
+      >
+        <input type="hidden" name="section" value="merged">
 
-            <p class="text-muted small mb-3">{{ section.blurb }}</p>
+        <div class="mb-3">
+          <label for="test-question" class="form-label">
+            <strong>Question</strong>
+          </label>
+          <textarea
+              id="test-question"
+              name="question"
+              rows="3"
+              class="form-control"
+              placeholder="e.g. What are the IMS registration retry rules in VZW?"
+              required></textarea>
+        </div>
 
-            <!-- Question form -->
-            <form
-              hx-post="{{ root_path }}/api/test/ask"
-              hx-target="#test-answer"
-              hx-swap="innerHTML"
-              hx-indicator="#test-loading-block, #test-spinner"
-              hx-disabled-elt="find button"
-            >
-              <input type="hidden" name="section" value="{{ section.id }}">
-              <div class="mb-3">
-                <label for="test-question" class="form-label">
-                  <strong>Question</strong>
-                </label>
-                <textarea
-                  id="test-question"
-                  name="question"
-                  rows="3"
-                  class="form-control"
-                  placeholder="e.g. What are the IMS registration retry rules in VZW?"
-                  required></textarea>
-              </div>
-              <button class="btn btn-primary" type="submit">
-                <span class="htmx-indicator-fallback">Ask</span>
-                <span id="test-spinner" class="htmx-indicator">
-                  <span class="spinner-border spinner-border-sm me-1"></span>
-                  Querying…
-                </span>
-              </button>
-            </form>
+        <div class="mb-3">
+          <div class="form-label"><strong>Retrieval lanes</strong></div>
+          <div class="form-check form-check-inline">
+            <input
+                type="checkbox"
+                class="form-check-input"
+                id="lane-nora"
+                name="lanes"
+                value="nora"
+                checked>
+            <label class="form-check-label" for="lane-nora">
+              <span class="badge bg-success">NORA</span> hybrid (KG + RAG)
+            </label>
+          </div>
+          <div class="form-check form-check-inline">
+            <input
+                type="checkbox"
+                class="form-check-input"
+                id="lane-sira"
+                name="lanes"
+                value="sira"
+                checked>
+            <label class="form-check-label" for="lane-sira">
+              <span class="badge bg-primary">SIRA</span> BM25 + LLM rerank
+            </label>
+          </div>
+          <div class="form-text">
+            Both checked → side-by-side compare. One checked → single-lane
+            full-width.
+          </div>
+        </div>
 
-            <!-- Prominent loading block — visible during htmx-request,
-                 sits between the form and the answer area. SIRA queries
-                 in particular can take 30s-12min so a small button
-                 spinner isn't enough feedback. -->
-            <div id="test-loading-block" class="htmx-indicator-block mt-4">
-              <div class="card border-primary">
-                <div class="card-body py-3">
-                  <div class="d-flex align-items-center gap-3">
-                    <div class="spinner-border text-primary" role="status"></div>
-                    <div>
-                      <div class="fw-semibold">Running query…</div>
-                      <div class="text-muted small">
-                        {% if active_section == "sira_retrieval" %}
-                          SIRA queries run BM25 → LLM rerank → NORA synthesizer.
-                          At <code>concurrency=1</code> the rerank stage can take 30s–12min
-                          depending on <code>NORA_SIRA_RERANK_TOP_N</code>; then the
-                          synthesizer adds ~5–30s. Page won't update until results return.
-                        {% else %}
-                          Retrieval + synthesis usually takes 5–30 seconds.
-                        {% endif %}
-                      </div>
-                    </div>
-                  </div>
+        <div class="mb-3">
+          <label for="user-name" class="form-label">
+            <strong>Your name</strong>
+            <span class="text-muted small">(optional — for crediting feedback)</span>
+          </label>
+          <input
+              type="text"
+              id="user-name"
+              name="user_name"
+              class="form-control form-control-sm"
+              placeholder="anonymous"
+              maxlength="80">
+        </div>
+
+        <button class="btn btn-primary" type="submit">
+          <span class="htmx-indicator-fallback">Ask</span>
+          <span id="test-spinner" class="htmx-indicator">
+            <span class="spinner-border spinner-border-sm me-1"></span>
+            Querying…
+          </span>
+        </button>
+      </form>
+
+      {# Prominent loading block — visible during htmx-request. SIRA's
+         path can take 30s–12min on a slow proprietary LLM; NORA runs
+         in parallel and may finish first. Both must complete before
+         the merged response renders. #}
+      <div id="test-loading-block" class="htmx-indicator-block mt-4">
+        <div class="card border-primary">
+          <div class="card-body py-3">
+            <div class="d-flex align-items-center gap-3">
+              <div class="spinner-border text-primary" role="status"></div>
+              <div>
+                <div class="fw-semibold">Running query…</div>
+                <div class="text-muted small">
+                  Lanes run in parallel. NORA's hybrid path: usually 5–30s.
+                  SIRA's BM25 + LLM rerank: 30s–12min depending on
+                  <code>NORA_SIRA_RERANK_TOP_N</code> + rerank state. Page
+                  won't update until the slowest lane returns.
                 </div>
               </div>
             </div>
-
-            <!-- Answer + feedback area (HTMX swaps into this) -->
-            <div id="test-answer" class="mt-4"></div>
-
-          {% else %}
-            <p class="text-muted">
-              <i class="bi bi-tools"></i>
-              This section isn't implemented yet. The Requirement Bot
-              tab is the only functional section in this build.
-            </p>
-          {% endif %}
+          </div>
         </div>
       </div>
-    {% endif %}
-  {% endfor %}
+
+      <!-- Answer + feedback area (HTMX swaps into this) -->
+      <div id="test-answer" class="mt-4"></div>
+
+    </div>
+  </div>
 </div>
 
 <style>
-  /* Match the existing UI's pattern: HTMX swaps the indicator
-     in by toggling display. Two flavors:
-       - .htmx-indicator       inline (used by the button label)
-       - .htmx-indicator-block block-level (used by the loading card) */
+  /* Same HTMX-indicator pattern as before:
+       - .htmx-indicator       inline (button label)
+       - .htmx-indicator-block block-level (the loading card) */
   .htmx-indicator,
   .htmx-indicator-block { display: none; }
   .htmx-request .htmx-indicator { display: inline-block; }

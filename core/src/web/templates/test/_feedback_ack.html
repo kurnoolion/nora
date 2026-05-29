@@ -3,6 +3,6 @@
 {% else %}
   <span class="text-success">
     <i class="bi bi-check-circle"></i>
-    Thanks — feedback saved (row #{{ row_id }}{% if vote %}, vote: {{ vote }}{% endif %}).
+    Thanks — feedback saved (row #{{ row_id }}{% if merged and user_score is defined %}, score: {{ user_score }}{% elif vote %}, vote: {{ vote }}{% endif %}). Re-submit anytime to overwrite.
   </span>
 {% endif %}

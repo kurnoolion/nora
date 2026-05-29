@@ -464,40 +464,13 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
     </div>
   </div>
 
-  <!-- Feedback widget -->
-  <form
-    hx-post="{{ root_path }}/api/test/feedback"
-    hx-target="#test-feedback-ack"
-    hx-swap="innerHTML"
-    hx-disabled-elt="find button"
-  >
-    <input type="hidden" name="row_id" value="{{ row_id }}">
-    <div class="mb-2">
-      <strong>Was this helpful?</strong>
-    </div>
-    <div class="btn-group mb-2" role="group">
-      <input type="radio" class="btn-check" name="vote" id="vote-up-{{ row_id }}" value="up">
-      <label class="btn btn-outline-success" for="vote-up-{{ row_id }}">
-        <i class="bi bi-hand-thumbs-up"></i> Helpful
-      </label>
-
-      <input type="radio" class="btn-check" name="vote" id="vote-down-{{ row_id }}" value="down">
-      <label class="btn btn-outline-danger" for="vote-down-{{ row_id }}">
-        <i class="bi bi-hand-thumbs-down"></i> Not helpful
-      </label>
-    </div>
-    <div class="mb-2">
-      <label for="ff-{{ row_id }}" class="form-label small text-muted">
-        Optional comment (specific issue, missing info, wrong citation, etc.)
-      </label>
-      <textarea
-        id="ff-{{ row_id }}"
-        name="free_form_feedback"
-        rows="2"
-        class="form-control form-control-sm"
-        placeholder=""></textarea>
-    </div>
-    <button class="btn btn-primary btn-sm" type="submit">Submit feedback</button>
-    <span id="test-feedback-ack" class="ms-2 small"></span>
-  </form>
+  {# Feedback widget — legacy (vote up/down) or merged-tab (score +
+     categories + comment) depending on `feedback_mode` in context.
+     Both forms POST to /api/test/feedback; playground_feedback
+     dispatches on which fields are present. #}
+  {% if feedback_mode == 'merged' %}
+    {% include "test/_feedback_merged.html" %}
+  {% else %}
+    {% include "test/_feedback_legacy.html" %}
+  {% endif %}
 {% endif %}

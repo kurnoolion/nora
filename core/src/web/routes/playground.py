@@ -27,6 +27,8 @@ import httpx
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from core.src.web.feedback_db import CATEGORIES
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -171,6 +173,117 @@ def _snapshot_nora_lane_config(result: dict[str, Any]) -> dict[str, Any]:
         if v is not None:
             snap[env] = v
     return snap
+
+
+def _render_template_to_string(
+    request: Request, name: str, context: dict[str, Any],
+) -> str:
+    """Render a Jinja template to a string (not a Response). Used to
+    pre-render each lane's `_answer.html` fragment for the merged tab
+    so both lanes compose into one response. Mirrors `_template_response`'s
+    `root_path` injection so per-lane fragments and the outer container
+    render identical URLs."""
+    from core.src.web.app import config, templates
+    ctx: dict[str, Any] = {"request": request, "root_path": config.root_path}
+    ctx.update(context)
+    return templates.get_template(name).render(ctx)
+
+
+async def _run_nora_lane_for_merged(
+    question: str, request: Request,
+) -> dict[str, Any]:
+    """Run NORA's hybrid pipeline for the merged tab. Returns a
+    standardized dict the merged branch consumes:
+
+      {"error": "..."}                       — on failure
+      {"result": ..., "elapsed_ms": ...,     — on success
+       "retrieved_ids": [...], "reranked_ids": None,
+       "cited_ids": [...], "lane_config": {...}}
+
+    `reranked_ids` is always None for NORA — the hybrid pipeline doesn't
+    expose a separate rerank step at this granularity."""
+    start = time.time()
+    try:
+        result = await asyncio.to_thread(_run_query_for_test, question, request.app)
+    except Exception as exc:
+        logger.exception("NORA lane failed in merged tab")
+        return {"error": f"NORA query failed: {exc}"}
+    elapsed_ms = int((time.time() - start) * 1000)
+    if "error" in result:
+        return {"error": result["error"], "elapsed_ms": elapsed_ms}
+
+    rag_chunks = result.get("rag_chunks") or []
+    retrieved_ids = sorted({
+        c.get("req_id") for c in rag_chunks if c.get("req_id")
+    })
+    return {
+        "result": result,
+        "elapsed_ms": elapsed_ms,
+        "retrieved_ids": list(retrieved_ids),
+        "reranked_ids": None,
+        "cited_ids": _flatten_cited_ids(result.get("llm_citations") or []),
+        "lane_config": _snapshot_nora_lane_config(result),
+    }
+
+
+async def _run_sira_lane_for_merged(
+    question: str, request: Request,
+) -> dict[str, Any]:
+    """Run SIRA's BM25→rerank pipeline + NORA's synthesizer pinned to
+    the SIRA top results, for the merged tab. Returns a standardized
+    dict — same error shape as the NORA runner, plus SIRA-specific
+    extras (sira_results, max_rerank_score, …) the template's SIRA
+    preamble in `_answer.html` needs."""
+    start = time.time()
+    try:
+        sira_result = await _call_sira_query(question)
+    except Exception as exc:
+        logger.exception("SIRA service call failed in merged tab")
+        return {"error": f"SIRA service call failed: {exc}"}
+
+    sira_results = sira_result.get("results", []) or []
+    pinned_results, max_rerank_score = _select_pinned_chunks(sira_results)
+    pinned_req_ids = {r["req_id"] for r in pinned_results if r.get("req_id")}
+    for r in sira_results:
+        r["pinned"] = r.get("req_id") in pinned_req_ids
+    pinned_chunk_ids = [f"req:{rid}" for rid in pinned_req_ids]
+
+    synth_result: dict[str, Any] = {}
+    synth_error: str | None = None
+    if pinned_chunk_ids:
+        try:
+            synth_result = await asyncio.to_thread(
+                _run_query_for_test, question, request.app, pinned_chunk_ids,
+            )
+            if "error" in synth_result:
+                synth_error = synth_result["error"]
+        except Exception as exc:
+            logger.exception("SIRA-driven synthesizer call failed in merged tab")
+            synth_error = f"Synthesizer failed: {exc}"
+    elapsed_ms = int((time.time() - start) * 1000)
+
+    retrieved_ids = [r["req_id"] for r in sira_results if r.get("req_id")]
+    lane_config = await _snapshot_sira_lane_config()
+    # SIRA's `results` are already in rerank-score order when rerank is on
+    # (per service.py:832). When rerank is off they're in BM25 order and
+    # there's no separate reranked view, so log None.
+    reranked_ids = retrieved_ids if lane_config.get("rerank_enabled") else None
+
+    return {
+        "result": synth_result,
+        "sira_result": sira_result,
+        "sira_results": sira_results,
+        "max_rerank_score": max_rerank_score,
+        "pinned_count": len(pinned_req_ids),
+        "synth_error": synth_error,
+        "elapsed_ms": elapsed_ms,
+        "retrieved_ids": retrieved_ids,
+        "reranked_ids": reranked_ids,
+        "cited_ids": _flatten_cited_ids(
+            (synth_result.get("llm_citations") or []) if synth_result else []
+        ),
+        "lane_config": lane_config,
+    }
 
 
 def _select_pinned_chunks(
@@ -350,6 +463,120 @@ async def playground_ask(request: Request):
     if not question:
         return _template_response(request, "test/_answer.html", {
             "error": "Question is required.",
+        })
+
+    # ── Merged tab (team-eval-pilot) ─────────────────────────────────
+    # New default UX: one form, two lane checkboxes (NORA + SIRA), one
+    # row per (question x lane) inserted into test_feedback, two-column
+    # side-by-side response. Legacy section-tab paths (requirement_bot /
+    # sira_retrieval) are kept below for back-compat and direct POSTs.
+    if section == "merged":
+        lanes_checked = [l for l in form.getlist("lanes") if l in ("nora", "sira")]
+        user_name = (form.get("user_name") or "").strip() or None
+        if not lanes_checked:
+            return _template_response(request, "test/_answer.html", {
+                "error": "Please select at least one retrieval lane (NORA or SIRA).",
+            })
+
+        # Run enabled lanes in parallel. Each runner is fault-isolated;
+        # one lane failing does not block the other from rendering.
+        runners: dict[str, Any] = {}
+        if "nora" in lanes_checked:
+            runners["nora"] = _run_nora_lane_for_merged(question, request)
+        if "sira" in lanes_checked:
+            runners["sira"] = _run_sira_lane_for_merged(question, request)
+        outputs = dict(zip(runners.keys(),
+                           await asyncio.gather(*runners.values(),
+                                                return_exceptions=False)))
+
+        feedback_store = request.app.state.feedback_store
+        lanes_html: dict[str, str] = {}
+
+        for lane, out in outputs.items():
+            if "error" in out:
+                lanes_html[lane] = (
+                    f'<div class="alert alert-danger mb-0">'
+                    f'<strong>{lane.upper()} error:</strong> {out["error"]}'
+                    f'</div>'
+                )
+                continue
+
+            result = out["result"] or {}
+            answer_text = result.get("answer", "")
+
+            row_id = None
+            try:
+                row_id = await feedback_store.record_qa(
+                    section="merged",
+                    question=question,
+                    answer=answer_text,
+                    citations=result.get("citations", []),
+                    query_elapsed_ms=out["elapsed_ms"],
+                    llm_model=result.get("llm_model"),
+                    metadata={},
+                    lane=lane,
+                    user_name=user_name,
+                    retrieved_ids=out["retrieved_ids"],
+                    reranked_ids=out["reranked_ids"],
+                    cited_ids=out["cited_ids"],
+                    lane_config=out["lane_config"],
+                )
+            except Exception as exc:
+                logger.warning(
+                    "FeedbackStore.record_qa failed for %s row: %s", lane, exc,
+                )
+
+            # Build the per-lane render context for _answer.html. Mirrors
+            # the legacy NORA/SIRA branches' template kwargs so display
+            # fidelity is preserved.
+            ctx: dict[str, Any] = {
+                "row_id": row_id,
+                "question": question,
+                "lane": lane,
+                "feedback_mode": "merged",
+                "user_name": user_name,
+                "categories": CATEGORIES,
+                "answer": answer_text,
+                "citations": result.get("citations", []),
+                "llm_citations": result.get("llm_citations", []),
+                "rag_chunks": result.get("rag_chunks", []),
+                "rag_chunk_count": result.get("rag_chunk_count", 0),
+                "candidate_count": result.get("candidate_count"),
+                "llm_model": result.get("llm_model"),
+                "elapsed_ms": out["elapsed_ms"],
+                "citation_audit": result.get("citation_audit"),
+                "llm_system_prompt": result.get("llm_system_prompt", ""),
+                "llm_context_text": result.get("llm_context_text", ""),
+                "query_intent": result.get("query_intent"),
+                "graph_candidates": result.get("graph_candidates"),
+            }
+            if lane == "sira":
+                ctx.update({
+                    "sira_results": out["sira_results"],
+                    "sira_candidates_reranked": out["sira_result"].get("candidates_reranked", 0),
+                    "sira_top_k": out["sira_result"].get("top_k", 0),
+                    "sira_pinned_count": out["pinned_count"],
+                    "sira_max_rerank_score": out["max_rerank_score"],
+                    "sira_pin_min_score": _PIN_MIN_SCORE,
+                    "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
+                    "sira_timings_ms": out["sira_result"].get("timings_ms"),
+                    "sira_rerank_call_stats": out["sira_result"].get("rerank_call_stats"),
+                    "sira_notes": out["sira_result"].get("notes", []),
+                    "synth_error": out["synth_error"],
+                    # Suppress the legacy "candidates from graph" footer
+                    # on the SIRA side (mirrors the existing sira_retrieval
+                    # branch's choice).
+                    "candidate_count": 0,
+                })
+
+            lanes_html[lane] = _render_template_to_string(
+                request, "test/_answer.html", ctx,
+            )
+
+        return _template_response(request, "test/_merged_answer.html", {
+            "question": question,
+            "user_name": user_name,
+            "lanes_html": lanes_html,
         })
 
     # Hand off to the section's runner. requirement_bot → NORA's full
@@ -616,20 +843,64 @@ async def playground_synthesize_group(request: Request):
 async def playground_feedback(
     request: Request,
     row_id: int = Form(...),
+    # Legacy vote path fields
     vote: str = Form(""),
     free_form_feedback: str = Form(""),
+    # Merged-tab fields — all optional, presence of user_score
+    # dispatches to the merged-tab record_user_feedback path.
+    user_score: str = Form(""),
+    user_categories: list[str] = Form([]),
+    comment: str = Form(""),
+    user_name: str = Form(""),
 ):
-    """Update an existing Q&A row with the user's vote / comment.
+    """Update an existing Q&A row with the user's feedback. Dispatches on
+    which fields are present:
+      - `user_score` set → merged-tab path (`record_user_feedback`)
+      - otherwise        → legacy vote path (`record_feedback`)
+
     Returns a small confirmation HTML fragment for HTMX swap."""
     from core.src.web.app import _template_response
+    feedback_store = request.app.state.feedback_store
 
+    # ── Merged-tab dispatch ───────────────────────────────────────
+    if user_score:
+        try:
+            score_i = int(user_score)
+        except ValueError:
+            return _template_response(request, "test/_feedback_ack.html", {
+                "error": f"Invalid score: {user_score!r}", "row_id": row_id,
+            })
+        try:
+            ok = await feedback_store.record_user_feedback(
+                row_id=row_id,
+                user_score=score_i,
+                user_categories=user_categories or [],
+                comment=(comment or "").strip() or None,
+                user_name=(user_name or "").strip() or None,
+            )
+        except ValueError as exc:
+            return _template_response(request, "test/_feedback_ack.html", {
+                "error": str(exc), "row_id": row_id,
+            })
+        except Exception as exc:
+            logger.exception("Merged-tab feedback persist failed")
+            return _template_response(request, "test/_feedback_ack.html", {
+                "error": f"Could not save feedback: {exc}", "row_id": row_id,
+            })
+        if not ok:
+            return _template_response(request, "test/_feedback_ack.html", {
+                "error": f"No feedback row with id={row_id}", "row_id": row_id,
+            })
+        return _template_response(request, "test/_feedback_ack.html", {
+            "row_id": row_id, "user_score": score_i, "merged": True,
+        })
+
+    # ── Legacy vote path (unchanged behavior) ─────────────────────
     vote_clean = vote.strip().lower() or None
     if vote_clean not in ("up", "down", None):
         return _template_response(request, "test/_feedback_ack.html", {
             "error": f"Invalid vote: {vote!r}",
         })
-
-    feedback_store = request.app.state.feedback_store
     try:
         ok = await feedback_store.record_feedback(
             row_id=row_id,
@@ -641,12 +912,10 @@ async def playground_feedback(
         return _template_response(request, "test/_feedback_ack.html", {
             "error": f"Could not save feedback: {e}",
         })
-
     if not ok:
         return _template_response(request, "test/_feedback_ack.html", {
             "error": f"No feedback row with id={row_id}",
         })
-
     return _template_response(request, "test/_feedback_ack.html", {
         "row_id": row_id,
         "vote": vote_clean,

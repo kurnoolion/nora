@@ -1,0 +1,73 @@
+{# Merged-tab feedback widget — 0..9 score + multi-select category
+   checkboxes + free-form comment + optional user_name. Posts to
+   /api/test/feedback; FeedbackStore.record_user_feedback handles it.
+
+   Context (required):
+     row_id        — the test_feedback row this feedback updates
+     lane          — 'nora' | 'sira' (for the heading + scoped element ids)
+     categories    — the CATEGORIES dict from feedback_db (key → label)
+     user_name     — pre-filled name (may be empty)
+#}
+<form
+    hx-post="{{ root_path }}/api/test/feedback"
+    hx-target="#feedback-ack-{{ row_id }}"
+    hx-swap="innerHTML"
+    hx-disabled-elt="find button"
+>
+    <input type="hidden" name="row_id" value="{{ row_id }}">
+    <input type="hidden" name="user_name" value="{{ user_name or '' }}">
+
+    <div class="mb-2">
+      <strong>Feedback — {{ lane|upper }}</strong>
+    </div>
+
+    <div class="row g-2 mb-2 align-items-end">
+      <div class="col-auto">
+        <label for="score-{{ row_id }}" class="form-label small text-muted mb-1">
+          Score (0–9)
+        </label>
+        <select
+            id="score-{{ row_id }}"
+            name="user_score"
+            class="form-select form-select-sm"
+            required>
+          <option value="" disabled selected>Pick</option>
+          {% for n in range(10) %}
+            <option value="{{ n }}">{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="mb-2">
+      <div class="small text-muted mb-1">Category (check all that apply)</div>
+      {% for key, label in categories.items() %}
+        <div class="form-check">
+          <input
+              type="checkbox"
+              class="form-check-input"
+              id="cat-{{ key }}-{{ row_id }}"
+              name="user_categories"
+              value="{{ key }}">
+          <label class="form-check-label small" for="cat-{{ key }}-{{ row_id }}">
+            {{ label }}
+          </label>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="mb-2">
+      <label for="comment-{{ row_id }}" class="form-label small text-muted">
+        Comment (optional)
+      </label>
+      <textarea
+          id="comment-{{ row_id }}"
+          name="comment"
+          rows="2"
+          class="form-control form-control-sm"
+          placeholder="Anything else? Specific issue, missing info, why you picked this score..."></textarea>
+    </div>
+
+    <button class="btn btn-primary btn-sm" type="submit">Submit feedback</button>
+    <span id="feedback-ack-{{ row_id }}" class="ms-2 small"></span>
+</form>

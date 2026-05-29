@@ -1,0 +1,46 @@
+{# Merged-tab answer container — two-column responsive layout
+   comparing NORA and SIRA side-by-side. Each enabled lane gets a
+   col-md-6 (when both checked) or col-md-12 (single lane). The
+   per-lane content is pre-rendered to a string by playground_ask
+   and passed in `lanes_html: dict[str, str]`, so this template
+   just assembles the columns.
+
+   Context:
+     question      — the question the user asked (shown once, above)
+     user_name     — optional asker name (small annotation in header)
+     lanes_html    — dict[lane_name -> rendered _answer.html string]
+                     keys present iff that lane was checked
+#}
+<div class="border rounded p-3 mb-3 bg-light">
+  <div class="text-muted small mb-2 d-flex justify-content-between align-items-center flex-wrap">
+    <span>
+      <strong>Q:</strong> {{ question }}
+    </span>
+    {% if user_name %}
+      <span class="small text-muted">asked by <strong>{{ user_name }}</strong></span>
+    {% endif %}
+  </div>
+
+  <div class="row g-3">
+    {# Fixed lane order — NORA on the left, SIRA on the right.
+       lanes_html may contain one or both; column width adapts. #}
+    {% set col_size = 6 if lanes_html|length == 2 else 12 %}
+    {% for lane in ['nora', 'sira'] %}
+      {% if lane in lanes_html %}
+        <div class="col-md-{{ col_size }}">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <h5 class="mb-0">
+              {% if lane == 'nora' %}
+                <span class="badge bg-success">NORA</span>
+              {% else %}
+                <span class="badge bg-primary">SIRA</span>
+              {% endif %}
+            </h5>
+            <span class="text-muted small">retrieval lane</span>
+          </div>
+          {{ lanes_html[lane]|safe }}
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
