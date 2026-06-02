@@ -1,8 +1,8 @@
 # sira
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-05-16
-**Landed:**
+**Landed:** 2026-05-28
 **Assignees:** kurnoolion
 **Target modules:** eval
 **Active phase:**
@@ -35,3 +35,5 @@ Decisions locked at strand opening (2026-05-16):
 5. **Corpus scope**: combined `corpus.jsonl` across all parsed plans; the 18-Q eval set spans plans so per-plan corpora would fragment the test.
 
 Next concrete piece of work: clone SIRA + run `scifact` example end-to-end (Phase 0). Once that's green, read the actual prompt files (likely `doc_claim` / `query_claim` / `relevance` variants given paper's task-family menu) to confirm transfer to telecom-requirements shape.
+
+Landed on 2026-05-28 with 9 promoted decisions: D-082, D-083, D-084, D-085, D-086, D-087, D-088, D-089, D-090. D-DRAFT-5 dropped per its own recorded 2026-05-23 instruction (audit trail preserved in this archived `decisions-draft.md`).

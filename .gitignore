@@ -70,4 +70,4 @@ sandbox/sira/
 # per-stage SIRA eval artifacts (eval/baseline/, eval/doc-enrich/, ...).
 # Both can be regenerated from the current env_dir + a re-run, so they
 # don't belong in the repo.
-sandbox/adapter/out/
+sandbox/adapter/out*/
