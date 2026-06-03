@@ -15,6 +15,7 @@ import pytest
 
 from sandbox.sira_incremental import (
     cmd_promote,
+    cmd_retry_failed,
     compute_evictions,
     corpus_hashes,
     growth_assessment,
@@ -22,6 +23,7 @@ from sandbox.sira_incremental import (
     load_meta,
     merge_kept_enrichments,
     prune_run_files,
+    retry_failed_in_run,
     save_hash_store,
     save_meta,
     _combined_text,
@@ -320,6 +322,228 @@ def test_cmd_promote_missing_kept_returns_error(tmp_path):
     (ds / "runs" / "doc-enrich" / "enrich-stable").mkdir(parents=True)
     args = argparse.Namespace(dataset=str(ds), run_name="enrich-stable")
     assert cmd_promote(args) == 1
+
+
+# ── retry-failed: doc-enrich (doc_id-keyed) ─────────────────────────
+
+
+def _write_doc_enrich_failed(run_dir: Path, rows: list[dict]) -> None:
+    """Seed a doc-enrich run's trace.failed.jsonl + trace.kept.jsonl."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with open(run_dir / "trace.failed.jsonl", "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    # Seed kept too with some unrelated docs that should not be touched
+    (run_dir / "trace.kept.jsonl").write_text(
+        json.dumps({"doc_id": "KEEP-1"}) + "\n"
+        + json.dumps({"doc_id": "KEEP-2"}) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "enrichments.kept.jsonl").write_text(
+        json.dumps({"doc_id": "KEEP-1", "phrases": ["x"]}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_retry_doc_enrich_default_skips_all_filtered(tmp_path):
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    _write_doc_enrich_failed(run_dir, [
+        {"doc_id": "FAIL-1", "status": "error"},
+        {"doc_id": "FAIL-2", "status": "error"},
+        {"doc_id": "AF-1",   "status": "all_filtered"},
+        {"doc_id": "AF-2",   "status": "all_filtered"},
+    ])
+    n, counts = retry_failed_in_run(run_dir, "doc-enrich")
+    assert n == 2  # only the two errors
+    assert counts["trace.failed.jsonl"] == 2
+    # KEEP-1/KEEP-2 stay untouched (they weren't in the eviction set)
+    assert counts["trace.kept.jsonl"] == 0
+    assert counts["enrichments.kept.jsonl"] == 0
+    remaining_failed = {
+        json.loads(l)["doc_id"]
+        for l in (run_dir / "trace.failed.jsonl").read_text().splitlines()
+        if l.strip()
+    }
+    assert remaining_failed == {"AF-1", "AF-2"}, (
+        "all_filtered rows must stay in failed trace by default"
+    )
+
+
+def test_retry_doc_enrich_include_all_filtered_evicts_everything(tmp_path):
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    _write_doc_enrich_failed(run_dir, [
+        {"doc_id": "FAIL-1", "status": "error"},
+        {"doc_id": "AF-1",   "status": "all_filtered"},
+    ])
+    n, counts = retry_failed_in_run(
+        run_dir, "doc-enrich", include_all_filtered=True,
+    )
+    assert n == 2
+    assert counts["trace.failed.jsonl"] == 2
+
+
+def test_retry_doc_enrich_also_evicts_if_present_in_kept_or_enrichments(tmp_path):
+    """If a failed doc_id somehow leaked into kept/enrichments (unlikely
+    but defensive), the eviction should clean it up across all three files."""
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    _write_doc_enrich_failed(run_dir, [
+        {"doc_id": "FAIL-1", "status": "error"},
+    ])
+    # Inject FAIL-1 into kept + enrichments as well
+    with open(run_dir / "trace.kept.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"doc_id": "FAIL-1"}) + "\n")
+    with open(run_dir / "enrichments.kept.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"doc_id": "FAIL-1", "phrases": ["leaked"]}) + "\n")
+
+    _, counts = retry_failed_in_run(run_dir, "doc-enrich")
+    assert counts["trace.failed.jsonl"] == 1
+    assert counts["trace.kept.jsonl"] == 1
+    assert counts["enrichments.kept.jsonl"] == 1
+
+
+def test_retry_doc_enrich_missing_failed_file_returns_zero(tmp_path):
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    run_dir.mkdir(parents=True)
+    n, counts = retry_failed_in_run(run_dir, "doc-enrich")
+    assert n == 0
+    assert all(v == 0 for v in counts.values())
+
+
+# ── retry-failed: rerank (pair-keyed: query_id, doc_id) ─────────────
+
+
+def _write_rerank_failed(run_dir: Path, rows: list[dict]) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with open(run_dir / "trace.failed.jsonl", "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+
+def test_retry_rerank_keys_on_pair_not_doc_id(tmp_path):
+    """Rerank's resume keys on (query_id, doc_id). Two failed rows with
+    the SAME doc_id but DIFFERENT query_ids must both be evicted; a kept
+    row with the same doc_id but a third query_id must stay."""
+    run_dir = tmp_path / "ds" / "runs" / "rerank" / "stable"
+    _write_rerank_failed(run_dir, [
+        {"query_id": "Q1", "doc_id": "DOC-X", "status": "error"},
+        {"query_id": "Q2", "doc_id": "DOC-X", "status": "error"},
+    ])
+    # Seed kept with (Q3, DOC-X) which shares doc_id but is a different pair
+    (run_dir / "trace.kept.jsonl").write_text(
+        json.dumps({"query_id": "Q3", "doc_id": "DOC-X", "score": 60}) + "\n"
+        + json.dumps({"query_id": "Q1", "doc_id": "DOC-Y", "score": 80}) + "\n",
+        encoding="utf-8",
+    )
+    n, counts = retry_failed_in_run(run_dir, "rerank")
+    assert n == 2
+    assert counts["trace.failed.jsonl"] == 2
+    assert counts["trace.kept.jsonl"] == 0  # neither kept row matched the failed pairs
+
+    remaining_kept = [
+        json.loads(l) for l in (run_dir / "trace.kept.jsonl").read_text().splitlines()
+        if l.strip()
+    ]
+    pairs_kept = {(r["query_id"], r["doc_id"]) for r in remaining_kept}
+    assert pairs_kept == {("Q3", "DOC-X"), ("Q1", "DOC-Y")}
+
+
+def test_retry_rerank_no_enrichments_file_expected(tmp_path):
+    """Rerank stage files are trace.kept + trace.failed only — no
+    enrichments.kept.jsonl. The counts dict should not include it."""
+    run_dir = tmp_path / "ds" / "runs" / "rerank" / "stable"
+    _write_rerank_failed(run_dir, [
+        {"query_id": "Q1", "doc_id": "DOC-1", "status": "error"},
+    ])
+    _, counts = retry_failed_in_run(run_dir, "rerank")
+    assert set(counts) == {"trace.kept.jsonl", "trace.failed.jsonl"}
+
+
+def test_retry_rerank_skips_row_with_missing_query_id(tmp_path):
+    """Defensive: a rerank failed row missing query_id has no valid resume
+    key — it should be ignored (not evicted), not crash."""
+    run_dir = tmp_path / "ds" / "runs" / "rerank" / "stable"
+    _write_rerank_failed(run_dir, [
+        {"doc_id": "DOC-1", "status": "error"},          # missing query_id
+        {"query_id": "Q1", "doc_id": "DOC-2", "status": "error"},
+    ])
+    n, _ = retry_failed_in_run(run_dir, "rerank")
+    assert n == 1  # only the well-formed pair counted
+
+
+# ── retry-failed: stage routing + CLI ───────────────────────────────
+
+
+def test_retry_unknown_stage_raises():
+    with pytest.raises(ValueError, match="unknown stage"):
+        retry_failed_in_run(Path("/tmp/nowhere"), "bogus")
+
+
+def test_cmd_retry_failed_both_stages(tmp_path, capsys):
+    """End-to-end via the CLI handler: both stages, default scope."""
+    ds = tmp_path / "ds"
+    (ds / "raw").mkdir(parents=True)
+    (ds / "raw" / "corpus.jsonl").write_text("", encoding="utf-8")  # marker
+    _write_doc_enrich_failed(
+        ds / "runs" / "doc-enrich" / "qwen3", [
+            {"doc_id": "FAIL-A", "status": "error"},
+            {"doc_id": "AF-A",   "status": "all_filtered"},
+        ],
+    )
+    _write_rerank_failed(
+        ds / "runs" / "rerank" / "qwen3", [
+            {"query_id": "Q1", "doc_id": "DOC-1", "status": "error"},
+            {"query_id": "Q2", "doc_id": "DOC-2", "status": "error"},
+        ],
+    )
+
+    args = argparse.Namespace(
+        dataset=str(ds), run_name="qwen3",
+        stage="both", include_all_filtered=False,
+    )
+    rc = cmd_retry_failed(args)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "doc-enrich" in out and "rerank" in out
+    # doc-enrich evicts 1 (FAIL-A error; AF-A all_filtered is kept by default).
+    # rerank evicts 2 (both errors; no all_filtered concept for rerank).
+    assert "doc-enrich (qwen3): evicted 1 key" in out
+    assert "rerank (qwen3): evicted 2 key" in out
+
+    # doc-enrich: only FAIL-A evicted from failed; AF-A still there.
+    de_remaining = {
+        json.loads(l)["doc_id"]
+        for l in (ds / "runs" / "doc-enrich" / "qwen3" / "trace.failed.jsonl"
+                  ).read_text().splitlines() if l.strip()
+    }
+    assert de_remaining == {"AF-A"}
+    # rerank: both error pairs evicted.
+    rr_remaining = [
+        l for l in (ds / "runs" / "rerank" / "qwen3" / "trace.failed.jsonl"
+                    ).read_text().splitlines() if l.strip()
+    ]
+    assert rr_remaining == []
+
+
+def test_cmd_retry_failed_missing_run_dir_skips_gracefully(tmp_path, capsys):
+    ds = tmp_path / "ds"
+    (ds / "raw").mkdir(parents=True)
+    (ds / "raw" / "corpus.jsonl").write_text("", encoding="utf-8")
+    # No runs/doc-enrich/qwen3 or runs/rerank/qwen3 — both stages absent
+    args = argparse.Namespace(
+        dataset=str(ds), run_name="qwen3",
+        stage="both", include_all_filtered=False,
+    )
+    assert cmd_retry_failed(args) == 0
+    out = capsys.readouterr().out
+    assert "no run dir" in out
+
+
+def test_cmd_retry_failed_not_a_dataset_dir_errors(tmp_path, capsys):
+    args = argparse.Namespace(
+        dataset=str(tmp_path / "no-such"), run_name="x",
+        stage="both", include_all_filtered=False,
+    )
+    assert cmd_retry_failed(args) == 1
 
 
 # ── end-to-end: a 10x-ish growth cycle ──────────────────────────────

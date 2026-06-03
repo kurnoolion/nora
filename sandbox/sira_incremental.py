@@ -19,19 +19,30 @@ What stays cheap and always runs (corpus-wide, NO LLM):
 What scales with NEW+CHANGED docs only (the expensive LLM part):
   - per-doc enrichment LLM calls
 
-Two sub-commands wrap a SIRA enrich run (pin the run_name across runs
+Four sub-commands wrap a SIRA enrich run (pin the run_name across runs
 so the trace accumulates):
 
-  prune   — BEFORE enrich. Compare current corpus content-hashes to the
-            stored baseline. Evict changed + removed doc_ids from the
-            run's trace.kept / trace.failed / enrichments.kept files so
-            SIRA's resume re-enriches the changed ones (and removed ones
-            drop out, avoiding a KeyError in enrich_batch's
-            doc_id_to_idx lookup). Unchanged docs stay in the trace →
-            skipped → no LLM call.
+  prune         — BEFORE enrich. Compare current corpus content-hashes to
+                  the stored baseline. Evict changed + removed doc_ids
+                  from the run's trace.kept / trace.failed /
+                  enrichments.kept files so SIRA's resume re-enriches the
+                  changed ones (and removed ones drop out, avoiding a
+                  KeyError in enrich_batch's doc_id_to_idx lookup).
+                  Unchanged docs stay in the trace → skipped → no LLM call.
 
-  commit  — AFTER a successful enrich. Record current corpus hashes as
-            the new baseline for the next round.
+  commit        — AFTER a successful enrich. Record current corpus hashes
+                  as the new baseline for the next round.
+
+  promote       — RECOVERY. Reconstruct enrichments/doc/<run>.jsonl and
+                  best.jsonl from the run's enrichments.kept.jsonl when a
+                  full-resume run (enriched_count == 0) leaves best.jsonl
+                  as a dangling symlink.
+
+  retry-failed  — Evict failed entries from a stage's resume trace so the
+                  next pipeline run re-processes them. Default scope:
+                  status != 'all_filtered' (genuine errors only). Pass
+                  --include-all-filtered after a prompt or LLM swap to
+                  also retry the all_filtered rows.
 
 Usage (work-PC flow, run_name pinned):
   RUN=enrich-stable
@@ -205,6 +216,103 @@ def prune_run_files(run_dir: Path, evict_ids: set[str]) -> dict[str, int]:
     for name in ("trace.kept.jsonl", "trace.failed.jsonl", "enrichments.kept.jsonl"):
         counts[name] = _prune_jsonl(run_dir / name, evict_ids)
     return counts
+
+
+# ── retry-failed: per-stage, key-aware eviction ─────────────────────────
+#
+# Doc-enrich resumes by doc_id; rerank resumes by (query_id, doc_id) pair —
+# so eviction needs different key shapes per stage.
+
+_STAGE_FILES: dict[str, tuple[str, ...]] = {
+    "doc-enrich": ("trace.kept.jsonl", "trace.failed.jsonl", "enrichments.kept.jsonl"),
+    "rerank":     ("trace.kept.jsonl", "trace.failed.jsonl"),
+}
+
+_STAGE_KEY_FN = {
+    "doc-enrich": lambda r: r.get("doc_id"),
+    "rerank":     lambda r: (r.get("query_id"), r.get("doc_id")),
+}
+
+
+def _prune_jsonl_by_keys(path: Path, evict_keys: set, key_fn) -> int:
+    """Generalization of _prune_jsonl: drop rows whose key (via key_fn) is
+    in evict_keys. Returns number of lines dropped. No-op if file absent.
+    Defensive — unparseable lines are kept; rows whose key contains a None
+    component (e.g., missing query_id on a rerank row) are kept."""
+    if not path.exists():
+        return 0
+    kept_lines: list[str] = []
+    dropped = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                key = key_fn(json.loads(stripped))
+            except json.JSONDecodeError:
+                kept_lines.append(stripped)
+                continue
+            if key in evict_keys:
+                dropped += 1
+            else:
+                kept_lines.append(stripped)
+    if dropped:
+        with open(path, "w", encoding="utf-8") as f:
+            for ln in kept_lines:
+                f.write(ln + "\n")
+    return dropped
+
+
+def retry_failed_in_run(
+    run_dir: Path,
+    stage: str,
+    *,
+    include_all_filtered: bool = False,
+) -> tuple[int, dict[str, int]]:
+    """Evict failed entries from one SIRA stage's run dir so SIRA's resume
+    reprocesses them next run. Returns (eviction_count, per_file_dropped).
+
+    Default behavior skips `status='all_filtered'` rows — re-running them
+    won't change the outcome unless prompts or LLM changed. Pass
+    `include_all_filtered=True` after a prompt or LLM swap to retry them
+    too. Doc-enrich keys on doc_id; rerank keys on (query_id, doc_id).
+    """
+    if stage not in _STAGE_FILES:
+        raise ValueError(
+            f"unknown stage {stage!r}; expected one of {tuple(_STAGE_FILES)}"
+        )
+    file_names = _STAGE_FILES[stage]
+    key_fn = _STAGE_KEY_FN[stage]
+    failed_path = run_dir / "trace.failed.jsonl"
+
+    if not failed_path.exists():
+        return 0, {name: 0 for name in file_names}
+
+    evict_keys: set = set()
+    with open(failed_path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not include_all_filtered and rec.get("status") == "all_filtered":
+                continue
+            key = key_fn(rec)
+            # Skip keys with any None component — they can't have been
+            # written to the resume trace with a valid lookup shape.
+            if key is None:
+                continue
+            if isinstance(key, tuple) and any(c is None for c in key):
+                continue
+            evict_keys.add(key)
+
+    counts: dict[str, int] = {}
+    for name in file_names:
+        counts[name] = _prune_jsonl_by_keys(run_dir / name, evict_keys, key_fn)
+    return len(evict_keys), counts
 
 
 def merge_kept_enrichments(
@@ -418,6 +526,42 @@ def cmd_promote(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_retry_failed(args: argparse.Namespace) -> int:
+    """Evict failed entries from one or both SIRA stage run dirs so the
+    next pipeline run's resume reprocesses them."""
+    dataset_dir = Path(args.dataset)
+    if not (dataset_dir / "raw" / "corpus.jsonl").exists():
+        print(f"ERROR: not a SIRA dataset dir (raw/corpus.jsonl missing): "
+              f"{dataset_dir}")
+        return 1
+
+    stages: tuple[str, ...]
+    if args.stage == "both":
+        stages = ("doc-enrich", "rerank")
+    else:
+        stages = (args.stage,)
+
+    scope = ("errors + all_filtered" if args.include_all_filtered
+             else "errors only (all_filtered kept)")
+    print(f"retry-failed: scope = {scope}")
+
+    for stage in stages:
+        run_dir = dataset_dir / "runs" / stage / args.run_name
+        if not run_dir.is_dir():
+            print(f"\n{stage}: no run dir at {run_dir} — skipping.")
+            continue
+        evicted, counts = retry_failed_in_run(
+            run_dir, stage, include_all_filtered=args.include_all_filtered,
+        )
+        print(f"\n{stage} ({args.run_name}): evicted {evicted} key(s)")
+        for name, dropped in counts.items():
+            print(f"  {name}: dropped {dropped}")
+
+    print(f"\n→ Re-run the pipeline with `+run_name={args.run_name}` and SIRA's "
+          f"resume will pick the evicted entries.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="sira_incremental",
@@ -435,7 +579,8 @@ def main(argv: list[str] | None = None) -> int:
     pp = sub.add_parser("prune", help="Pre-enrich: evict changed/removed docs from the resume trace.")
     pc = sub.add_parser("commit", help="Post-enrich: record current corpus hashes as the new baseline.")
     pr = sub.add_parser("promote", help="Reconstruct enrichments/doc/<run>.jsonl + best.jsonl from a full-resume run.")
-    for parser in (pp, pc, pr):
+    rf = sub.add_parser("retry-failed", help="Evict failed entries from a stage's resume trace so the next run reprocesses them.")
+    for parser in (pp, pc, pr, rf):
         for a, kw in common_args:
             parser.add_argument(*a, **kw)
 
@@ -463,11 +608,27 @@ def main(argv: list[str] | None = None) -> int:
                         "ordinary incremental commits."
                     ))
 
+    rf.add_argument("--stage", choices=["doc-enrich", "rerank", "both"],
+                    default="both",
+                    help=(
+                        "Which SIRA stage's failed entries to retry. Default "
+                        "'both' processes doc-enrich + rerank in one command."
+                    ))
+    rf.add_argument("--include-all-filtered", action="store_true",
+                    help=(
+                        "Also evict rows with status='all_filtered'. Default "
+                        "skips them — re-running them won't change the outcome "
+                        "unless prompts or LLM changed. Set this flag after a "
+                        "prompt-version bump or LLM swap so the new setup gets "
+                        "a clean shot at those docs."
+                    ))
+
     args = p.parse_args(argv)
     return {
         "prune": cmd_prune,
         "commit": cmd_commit,
         "promote": cmd_promote,
+        "retry-failed": cmd_retry_failed,
     }[args.cmd](args)
 
 
