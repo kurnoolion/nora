@@ -18,13 +18,7 @@
   <div class="card">
     <div class="card-body">
 
-      <form
-          hx-post="{{ root_path }}/api/test/ask"
-          hx-target="#test-answer"
-          hx-swap="innerHTML"
-          hx-indicator="#test-loading-block, #test-spinner"
-          hx-disabled-elt="find button"
-      >
+      <form id="ask-form" data-stream-url="{{ root_path }}/api/test/ask-stream">
         <input type="hidden" name="section" value="merged">
 
         <div class="mb-3">
@@ -86,53 +80,187 @@
               maxlength="80">
         </div>
 
-        <button class="btn btn-primary" type="submit">
-          <span class="htmx-indicator-fallback">Ask</span>
-          <span id="test-spinner" class="htmx-indicator">
+        <button id="ask-submit" class="btn btn-primary" type="submit">
+          <span id="ask-submit-label">Ask</span>
+          <span id="ask-submit-busy" style="display:none;">
             <span class="spinner-border spinner-border-sm me-1"></span>
             Querying…
           </span>
         </button>
       </form>
 
-      {# Prominent loading block — visible during htmx-request. SIRA's
-         path can take 30s–12min on a slow proprietary LLM; NORA runs
-         in parallel and may finish first. Both must complete before
-         the merged response renders. #}
-      <div id="test-loading-block" class="htmx-indicator-block mt-4">
+      {# Per-lane progress display — fed by SSE events from
+         /api/test/ask-stream. Each row shows a Bootstrap spinner +
+         lane badge + the most recent progress message for that lane.
+         Hidden until a query is submitted, hidden again when the
+         'done' event lands. #}
+      <div id="progress-display" class="mt-4" style="display:none;">
         <div class="card border-primary">
           <div class="card-body py-3">
-            <div class="d-flex align-items-center gap-3">
-              <div class="spinner-border text-primary" role="status"></div>
-              <div>
-                <div class="fw-semibold">Running query…</div>
-                <div class="text-muted small">
-                  Lanes run in parallel. NORA's hybrid path: usually 5–30s.
-                  SIRA's BM25 + LLM rerank: 30s–12min depending on
-                  <code>NORA_SIRA_RERANK_TOP_N</code> + rerank state. Page
-                  won't update until the slowest lane returns.
-                </div>
-              </div>
+            <div class="fw-semibold mb-2">Running query…</div>
+            <div id="progress-row-nora" class="d-flex align-items-center gap-2 mb-1" style="display:none;">
+              <div class="spinner-border spinner-border-sm text-success" role="status"></div>
+              <span class="badge bg-success">NORA</span>
+              <span id="progress-text-nora" class="small text-muted">waiting…</span>
+            </div>
+            <div id="progress-row-sira" class="d-flex align-items-center gap-2" style="display:none;">
+              <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+              <span class="badge bg-primary">SIRA</span>
+              <span id="progress-text-sira" class="small text-muted">waiting…</span>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Answer + feedback area (HTMX swaps into this) -->
+      <!-- Answer + feedback area (JS swaps into this on SSE 'done') -->
       <div id="test-answer" class="mt-4"></div>
 
     </div>
   </div>
 </div>
 
-<style>
-  /* Same HTMX-indicator pattern as before:
-       - .htmx-indicator       inline (button label)
-       - .htmx-indicator-block block-level (the loading card) */
-  .htmx-indicator,
-  .htmx-indicator-block { display: none; }
-  .htmx-request .htmx-indicator { display: inline-block; }
-  .htmx-request .htmx-indicator-block { display: block; }
-  .htmx-request .htmx-indicator-fallback { display: none; }
-</style>
+<script>
+/*
+ * Merged-tab streaming submit handler.
+ *
+ * Replaces the form's previous hx-post with a JS-driven submit that
+ * POSTs to /api/test/ask-stream and consumes the SSE stream over
+ * fetch + ReadableStream (EventSource is GET-only and we have form
+ * data to send).
+ *
+ * SSE events:
+ *   - "progress" with {lane, message} → update per-lane spinner row.
+ *   - heartbeat (lines starting with ":") → ignored, keeps connection
+ *     alive through quiet stretches.
+ *   - "done" with {html} → swap into #test-answer, hide progress.
+ *
+ * Failure surfaces a bootstrap alert inside #test-answer and re-enables
+ * the form. Doesn't try to recover the stream — the user can re-Ask.
+ */
+(function () {
+  const form = document.getElementById("ask-form");
+  if (!form) return;
+
+  const submitBtn   = document.getElementById("ask-submit");
+  const submitLabel = document.getElementById("ask-submit-label");
+  const submitBusy  = document.getElementById("ask-submit-busy");
+  const progressDisplay = document.getElementById("progress-display");
+  const progressRowNora = document.getElementById("progress-row-nora");
+  const progressRowSira = document.getElementById("progress-row-sira");
+  const progressTextNora = document.getElementById("progress-text-nora");
+  const progressTextSira = document.getElementById("progress-text-sira");
+  const answerEl = document.getElementById("test-answer");
+
+  function setBusy(busy) {
+    submitBtn.disabled = busy;
+    submitLabel.style.display = busy ? "none" : "";
+    submitBusy.style.display  = busy ? "" : "none";
+  }
+
+  function showProgressFor(lanes) {
+    progressDisplay.style.display = "block";
+    progressRowNora.style.display = lanes.includes("nora") ? "flex" : "none";
+    progressRowSira.style.display = lanes.includes("sira") ? "flex" : "none";
+    if (lanes.includes("nora")) progressTextNora.textContent = "waiting…";
+    if (lanes.includes("sira")) progressTextSira.textContent = "waiting…";
+  }
+
+  function hideProgress() {
+    progressDisplay.style.display = "none";
+  }
+
+  function applyProgressEvent(data) {
+    if (data.lane === "nora") progressTextNora.textContent = data.message;
+    if (data.lane === "sira") progressTextSira.textContent = data.message;
+  }
+
+  // Parse one SSE event block (lines until blank line) into {event, data}.
+  function parseSSEBlock(block) {
+    let eventName = "message";
+    let dataLines = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith(":")) continue;          // heartbeat / comment
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    }
+    if (dataLines.length === 0) return null;
+    let parsed;
+    try { parsed = JSON.parse(dataLines.join("\n")); } catch (e) { return null; }
+    return { event: eventName, data: parsed };
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const lanes = fd.getAll("lanes");
+    if (!fd.get("question").toString().trim()) return;
+    if (lanes.length === 0) {
+      answerEl.innerHTML = '<div class="alert alert-warning mb-0">'
+        + 'Please select at least one retrieval lane (NORA or SIRA).</div>';
+      return;
+    }
+
+    setBusy(true);
+    answerEl.innerHTML = "";
+    showProgressFor(lanes);
+
+    let response;
+    try {
+      response = await fetch(form.dataset.streamUrl, {
+        method: "POST",
+        body: fd,
+      });
+    } catch (err) {
+      answerEl.innerHTML = '<div class="alert alert-danger mb-0">'
+        + 'Stream connection failed: ' + (err.message || err) + '</div>';
+      hideProgress();
+      setBusy(false);
+      return;
+    }
+
+    if (!response.ok) {
+      let detail = "";
+      try { detail = (await response.json()).error || ""; } catch (e) {}
+      answerEl.innerHTML = '<div class="alert alert-danger mb-0">'
+        + 'HTTP ' + response.status + (detail ? ' — ' + detail : '') + '</div>';
+      hideProgress();
+      setBusy(false);
+      return;
+    }
+
+    // Stream the SSE body. Lines accumulate in `buf` until a blank-line
+    // separator (\n\n) marks the end of an event block.
+    const reader  = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buf.indexOf("\n\n")) !== -1) {
+          const block = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          const parsed = parseSSEBlock(block);
+          if (!parsed) continue;
+          if (parsed.event === "progress") {
+            applyProgressEvent(parsed.data);
+          } else if (parsed.event === "done") {
+            answerEl.innerHTML = parsed.data.html || "";
+            hideProgress();
+          }
+        }
+      }
+    } catch (err) {
+      answerEl.innerHTML = '<div class="alert alert-danger mb-0">'
+        + 'Stream interrupted: ' + (err.message || err) + '</div>';
+      hideProgress();
+    } finally {
+      setBusy(false);
+    }
+  });
+})();
+</script>
 {% endblock %}

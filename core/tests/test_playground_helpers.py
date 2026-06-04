@@ -152,3 +152,155 @@ def test_nora_snapshot_missing_result_fields_are_none(monkeypatch):
     assert snap["llm_model"] is None
     assert snap["query_intent"] is None
     assert snap["candidate_count"] is None
+
+
+# ── lane runner progress callbacks (SSE streaming endpoint feeds these) ──
+
+# Both lane runners are async; tests use asyncio.run via a small helper
+# so we don't pull in pytest-asyncio just for these few cases.
+
+
+import asyncio
+from unittest.mock import MagicMock, patch
+
+
+def _run(coro):
+    return asyncio.get_event_loop().run_until_complete(coro)
+
+
+def _make_fake_request():
+    """Build a minimal Request stand-in that has .app + .app.state.
+    The lane runners only reach into request.app.state through the
+    inner pipeline calls (which we mock), so this is enough."""
+    req = MagicMock()
+    req.app = MagicMock()
+    return req
+
+
+def test_nora_lane_runner_emits_progress_on_start_and_done():
+    from core.src.web.routes import playground as pg
+    msgs: list[str] = []
+
+    async def emit(m: str) -> None:
+        msgs.append(m)
+
+    # Stub _run_query_for_test to return a successful, well-shaped result.
+    def _fake_run(q, app, pinned_chunk_ids=None):
+        return {
+            "answer": "OK",
+            "rag_chunks": [{"req_id": "R-1"}, {"req_id": "R-2"}],
+            "llm_citations": [{"req_id": "R-1"}],
+            "candidate_count": 5,
+            "llm_model": "m",
+        }
+
+    with patch.object(pg, "_run_query_for_test", _fake_run):
+        out = _run(pg._run_nora_lane_for_merged(
+            "q", _make_fake_request(), emit_progress=emit,
+        ))
+
+    # Start + done — two events on the happy path.
+    assert len(msgs) == 2
+    assert msgs[0].startswith("Running NORA hybrid pipeline")
+    assert "NORA: 2 chunks retrieved" in msgs[1]
+    # The output dict is still well-formed for downstream consumers.
+    assert "result" in out
+    assert out["retrieved_ids"] == ["R-1", "R-2"]
+
+
+def test_nora_lane_runner_emits_progress_on_error():
+    from core.src.web.routes import playground as pg
+    msgs: list[str] = []
+
+    async def emit(m: str) -> None:
+        msgs.append(m)
+
+    def _fake_run(q, app, pinned_chunk_ids=None):
+        raise RuntimeError("boom")
+
+    with patch.object(pg, "_run_query_for_test", _fake_run):
+        out = _run(pg._run_nora_lane_for_merged(
+            "q", _make_fake_request(), emit_progress=emit,
+        ))
+
+    # First event is the start, second names the error.
+    assert len(msgs) == 2
+    assert "NORA error" in msgs[1]
+    assert "boom" in msgs[1]
+    assert "error" in out
+
+
+def test_nora_lane_runner_works_without_callback():
+    """emit_progress is optional — runners must work when it's None."""
+    from core.src.web.routes import playground as pg
+
+    def _fake_run(q, app, pinned_chunk_ids=None):
+        return {"answer": "OK", "rag_chunks": [], "llm_citations": []}
+
+    with patch.object(pg, "_run_query_for_test", _fake_run):
+        out = _run(pg._run_nora_lane_for_merged("q", _make_fake_request()))
+    assert "result" in out
+
+
+def test_sira_lane_runner_emits_progress_at_stage_boundaries():
+    from core.src.web.routes import playground as pg
+    msgs: list[str] = []
+
+    async def emit(m: str) -> None:
+        msgs.append(m)
+
+    async def _fake_sira_call(question, top_k=None):
+        return {
+            "results": [
+                {"req_id": "R-1", "rerank_score": 90, "bm25_score": 0.5},
+                {"req_id": "R-2", "rerank_score": 60, "bm25_score": 0.4},
+            ],
+            "candidates_reranked": 2,
+            "top_k": 2,
+            "timings_ms": {"search_ms": 5},
+            "rerank_call_stats": {},
+            "notes": [],
+        }
+
+    def _fake_run_query(q, app, pinned_chunk_ids=None):
+        return {"answer": "ok", "rag_chunks": [], "llm_citations": []}
+
+    async def _fake_snapshot():
+        return {"rerank_enabled": True}
+
+    with patch.object(pg, "_call_sira_query", _fake_sira_call), \
+         patch.object(pg, "_run_query_for_test", _fake_run_query), \
+         patch.object(pg, "_snapshot_sira_lane_config", _fake_snapshot):
+        out = _run(pg._run_sira_lane_for_merged(
+            "q", _make_fake_request(), emit_progress=emit,
+        ))
+
+    # Expect: call SIRA → candidates reranked → running synth → done.
+    # The exact count is 4 in the happy path.
+    assert len(msgs) == 4
+    assert msgs[0].startswith("Calling SIRA service")
+    assert "candidates reranked" in msgs[1]
+    assert msgs[2].startswith("Running NORA synthesizer")
+    assert "SIRA: answer ready" in msgs[3]
+    assert "result" in out
+
+
+def test_sira_lane_runner_emits_progress_on_service_failure():
+    from core.src.web.routes import playground as pg
+    msgs: list[str] = []
+
+    async def emit(m: str) -> None:
+        msgs.append(m)
+
+    async def _fail_sira(question, top_k=None):
+        raise RuntimeError("SIRA down")
+
+    with patch.object(pg, "_call_sira_query", _fail_sira):
+        out = _run(pg._run_sira_lane_for_merged(
+            "q", _make_fake_request(), emit_progress=emit,
+        ))
+
+    # Start event + error event = 2 messages on this path.
+    assert len(msgs) == 2
+    assert "SIRA service error" in msgs[1]
+    assert "error" in out

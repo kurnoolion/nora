@@ -18,14 +18,15 @@ which is the expected UX for a "ask + read + vote" interaction.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from core.src.web.feedback_db import CATEGORIES
 
@@ -191,6 +192,8 @@ def _render_template_to_string(
 
 async def _run_nora_lane_for_merged(
     question: str, request: Request,
+    *,
+    emit_progress: "Callable[[str], Awaitable[None]] | None" = None,
 ) -> dict[str, Any]:
     """Run NORA's hybrid pipeline for the merged tab. Returns a
     standardized dict the merged branch consumes:
@@ -201,21 +204,38 @@ async def _run_nora_lane_for_merged(
        "cited_ids": [...], "lane_config": {...}}
 
     `reranked_ids` is always None for NORA — the hybrid pipeline doesn't
-    expose a separate rerank step at this granularity."""
+    expose a separate rerank step at this granularity.
+
+    `emit_progress` is an optional async callback for streaming progress
+    updates to the SSE endpoint. NORA's inner pipeline runs as a single
+    `_run_query_for_test` blocking call — meaningful granularity below
+    "start / done" requires restructuring QueryPipeline.query() to yield
+    stage events, which is out of scope here.
+    """
+    async def _say(msg: str) -> None:
+        if emit_progress is not None:
+            await emit_progress(msg)
+
+    await _say("Running NORA hybrid pipeline (retrieve + rerank + synthesize)…")
     start = time.time()
     try:
         result = await asyncio.to_thread(_run_query_for_test, question, request.app)
     except Exception as exc:
         logger.exception("NORA lane failed in merged tab")
+        await _say(f"NORA error: {exc}")
         return {"error": f"NORA query failed: {exc}"}
     elapsed_ms = int((time.time() - start) * 1000)
     if "error" in result:
+        await _say(f"NORA error: {result['error']}")
         return {"error": result["error"], "elapsed_ms": elapsed_ms}
 
     rag_chunks = result.get("rag_chunks") or []
     retrieved_ids = sorted({
         c.get("req_id") for c in rag_chunks if c.get("req_id")
     })
+    await _say(
+        f"NORA: {len(retrieved_ids)} chunks retrieved, answer ready ({elapsed_ms} ms)"
+    )
     return {
         "result": result,
         "elapsed_ms": elapsed_ms,
@@ -228,17 +248,30 @@ async def _run_nora_lane_for_merged(
 
 async def _run_sira_lane_for_merged(
     question: str, request: Request,
+    *,
+    emit_progress: "Callable[[str], Awaitable[None]] | None" = None,
 ) -> dict[str, Any]:
     """Run SIRA's BM25→rerank pipeline + NORA's synthesizer pinned to
     the SIRA top results, for the merged tab. Returns a standardized
     dict — same error shape as the NORA runner, plus SIRA-specific
     extras (sira_results, max_rerank_score, …) the template's SIRA
-    preamble in `_answer.html` needs."""
+    preamble in `_answer.html` needs.
+
+    `emit_progress` is an optional async callback for streaming progress
+    updates. Multi-step shape — SIRA call → pin filter → synthesizer —
+    gives several natural boundaries to surface live.
+    """
+    async def _say(msg: str) -> None:
+        if emit_progress is not None:
+            await emit_progress(msg)
+
+    await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     start = time.time()
     try:
         sira_result = await _call_sira_query(question)
     except Exception as exc:
         logger.exception("SIRA service call failed in merged tab")
+        await _say(f"SIRA service error: {exc}")
         return {"error": f"SIRA service call failed: {exc}"}
 
     sira_results = sira_result.get("results", []) or []
@@ -247,20 +280,34 @@ async def _run_sira_lane_for_merged(
     for r in sira_results:
         r["pinned"] = r.get("req_id") in pinned_req_ids
     pinned_chunk_ids = [f"req:{rid}" for rid in pinned_req_ids]
+    await _say(
+        f"SIRA: {len(sira_results)} candidates reranked, "
+        f"{len(pinned_chunk_ids)} pinned to synthesizer"
+    )
 
     synth_result: dict[str, Any] = {}
     synth_error: str | None = None
     if pinned_chunk_ids:
+        await _say(
+            f"Running NORA synthesizer on {len(pinned_chunk_ids)} "
+            f"SIRA-pinned chunks…"
+        )
         try:
             synth_result = await asyncio.to_thread(
                 _run_query_for_test, question, request.app, pinned_chunk_ids,
             )
             if "error" in synth_result:
                 synth_error = synth_result["error"]
+                await _say(f"SIRA synthesizer error: {synth_error}")
         except Exception as exc:
             logger.exception("SIRA-driven synthesizer call failed in merged tab")
             synth_error = f"Synthesizer failed: {exc}"
+            await _say(f"SIRA synthesizer error: {exc}")
+    else:
+        await _say("SIRA: no chunks passed the pin filter — skipping synthesis")
     elapsed_ms = int((time.time() - start) * 1000)
+    if not synth_error and pinned_chunk_ids:
+        await _say(f"SIRA: answer ready ({elapsed_ms} ms)")
 
     retrieved_ids = [r["req_id"] for r in sira_results if r.get("req_id")]
     lane_config = await _snapshot_sira_lane_config()
@@ -284,6 +331,104 @@ async def _run_sira_lane_for_merged(
         ),
         "lane_config": lane_config,
     }
+
+
+async def _build_merged_response_html(
+    request: Request,
+    question: str,
+    user_name: str | None,
+    outputs: dict[str, dict[str, Any]],
+) -> str:
+    """Post-process lane outputs and render the merged container to a
+    string. Shared between `/api/test/ask` (HTML response) and
+    `/api/test/ask-stream` (final SSE event payload). Handles per-lane
+    `test_feedback` row insertion, per-lane context building, per-lane
+    `_answer.html` pre-rendering, and the outer two-column container."""
+    feedback_store = request.app.state.feedback_store
+    lanes_html: dict[str, str] = {}
+
+    for lane, out in outputs.items():
+        if "error" in out:
+            lanes_html[lane] = (
+                f'<div class="alert alert-danger mb-0">'
+                f'<strong>{lane.upper()} error:</strong> {out["error"]}'
+                f'</div>'
+            )
+            continue
+
+        result = out["result"] or {}
+        answer_text = result.get("answer", "")
+
+        row_id = None
+        try:
+            row_id = await feedback_store.record_qa(
+                section="merged",
+                question=question,
+                answer=answer_text,
+                citations=result.get("citations", []),
+                query_elapsed_ms=out["elapsed_ms"],
+                llm_model=result.get("llm_model"),
+                metadata={},
+                lane=lane,
+                user_name=user_name,
+                retrieved_ids=out["retrieved_ids"],
+                reranked_ids=out["reranked_ids"],
+                cited_ids=out["cited_ids"],
+                lane_config=out["lane_config"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "FeedbackStore.record_qa failed for %s row: %s", lane, exc,
+            )
+
+        ctx: dict[str, Any] = {
+            "row_id": row_id,
+            "question": question,
+            "lane": lane,
+            "feedback_mode": "merged",
+            "user_name": user_name,
+            "categories": CATEGORIES,
+            "answer": answer_text,
+            "citations": result.get("citations", []),
+            "llm_citations": result.get("llm_citations", []),
+            "rag_chunks": result.get("rag_chunks", []),
+            "rag_chunk_count": result.get("rag_chunk_count", 0),
+            "candidate_count": result.get("candidate_count"),
+            "llm_model": result.get("llm_model"),
+            "elapsed_ms": out["elapsed_ms"],
+            "citation_audit": result.get("citation_audit"),
+            "llm_system_prompt": result.get("llm_system_prompt", ""),
+            "llm_context_text": result.get("llm_context_text", ""),
+            "query_intent": result.get("query_intent"),
+            "graph_candidates": result.get("graph_candidates"),
+        }
+        if lane == "sira":
+            ctx.update({
+                "sira_results": out["sira_results"],
+                "sira_candidates_reranked": out["sira_result"].get("candidates_reranked", 0),
+                "sira_top_k": out["sira_result"].get("top_k", 0),
+                "sira_pinned_count": out["pinned_count"],
+                "sira_max_rerank_score": out["max_rerank_score"],
+                "sira_pin_min_score": _PIN_MIN_SCORE,
+                "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
+                "sira_timings_ms": out["sira_result"].get("timings_ms"),
+                "sira_rerank_call_stats": out["sira_result"].get("rerank_call_stats"),
+                "sira_notes": out["sira_result"].get("notes", []),
+                "synth_error": out["synth_error"],
+                "candidate_count": 0,
+            })
+
+        lanes_html[lane] = _render_template_to_string(
+            request, "test/_answer.html", ctx,
+        )
+
+    return _render_template_to_string(
+        request, "test/_merged_answer.html", {
+            "question": question,
+            "user_name": user_name,
+            "lanes_html": lanes_html,
+        },
+    )
 
 
 def _select_pinned_chunks(
@@ -488,96 +633,10 @@ async def playground_ask(request: Request):
         outputs = dict(zip(runners.keys(),
                            await asyncio.gather(*runners.values(),
                                                 return_exceptions=False)))
-
-        feedback_store = request.app.state.feedback_store
-        lanes_html: dict[str, str] = {}
-
-        for lane, out in outputs.items():
-            if "error" in out:
-                lanes_html[lane] = (
-                    f'<div class="alert alert-danger mb-0">'
-                    f'<strong>{lane.upper()} error:</strong> {out["error"]}'
-                    f'</div>'
-                )
-                continue
-
-            result = out["result"] or {}
-            answer_text = result.get("answer", "")
-
-            row_id = None
-            try:
-                row_id = await feedback_store.record_qa(
-                    section="merged",
-                    question=question,
-                    answer=answer_text,
-                    citations=result.get("citations", []),
-                    query_elapsed_ms=out["elapsed_ms"],
-                    llm_model=result.get("llm_model"),
-                    metadata={},
-                    lane=lane,
-                    user_name=user_name,
-                    retrieved_ids=out["retrieved_ids"],
-                    reranked_ids=out["reranked_ids"],
-                    cited_ids=out["cited_ids"],
-                    lane_config=out["lane_config"],
-                )
-            except Exception as exc:
-                logger.warning(
-                    "FeedbackStore.record_qa failed for %s row: %s", lane, exc,
-                )
-
-            # Build the per-lane render context for _answer.html. Mirrors
-            # the legacy NORA/SIRA branches' template kwargs so display
-            # fidelity is preserved.
-            ctx: dict[str, Any] = {
-                "row_id": row_id,
-                "question": question,
-                "lane": lane,
-                "feedback_mode": "merged",
-                "user_name": user_name,
-                "categories": CATEGORIES,
-                "answer": answer_text,
-                "citations": result.get("citations", []),
-                "llm_citations": result.get("llm_citations", []),
-                "rag_chunks": result.get("rag_chunks", []),
-                "rag_chunk_count": result.get("rag_chunk_count", 0),
-                "candidate_count": result.get("candidate_count"),
-                "llm_model": result.get("llm_model"),
-                "elapsed_ms": out["elapsed_ms"],
-                "citation_audit": result.get("citation_audit"),
-                "llm_system_prompt": result.get("llm_system_prompt", ""),
-                "llm_context_text": result.get("llm_context_text", ""),
-                "query_intent": result.get("query_intent"),
-                "graph_candidates": result.get("graph_candidates"),
-            }
-            if lane == "sira":
-                ctx.update({
-                    "sira_results": out["sira_results"],
-                    "sira_candidates_reranked": out["sira_result"].get("candidates_reranked", 0),
-                    "sira_top_k": out["sira_result"].get("top_k", 0),
-                    "sira_pinned_count": out["pinned_count"],
-                    "sira_max_rerank_score": out["max_rerank_score"],
-                    "sira_pin_min_score": _PIN_MIN_SCORE,
-                    "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
-                    "sira_timings_ms": out["sira_result"].get("timings_ms"),
-                    "sira_rerank_call_stats": out["sira_result"].get("rerank_call_stats"),
-                    "sira_notes": out["sira_result"].get("notes", []),
-                    "synth_error": out["synth_error"],
-                    # Suppress the legacy "candidates from graph" footer
-                    # on the SIRA side (mirrors the existing sira_retrieval
-                    # branch's choice).
-                    "candidate_count": 0,
-                })
-
-            lanes_html[lane] = _render_template_to_string(
-                request, "test/_answer.html", ctx,
-            )
-
-        return _template_response(request, "test/_merged_answer.html", {
-            "question": question,
-            "user_name": user_name,
-            "lanes_html": lanes_html,
-        })
+        html = await _build_merged_response_html(
+            request, question, user_name, outputs,
+        )
+        return HTMLResponse(content=html)
 
     # Hand off to the section's runner. requirement_bot → NORA's full
     # pipeline; sira_retrieval → SIRA service via HTTP proxy. The other
@@ -749,6 +808,117 @@ async def playground_ask(request: Request):
         "query_intent": result.get("query_intent"),
         "graph_candidates": result.get("graph_candidates"),
     })
+
+
+@router.post("/api/test/ask-stream")
+async def playground_ask_stream(request: Request):
+    """SSE streaming variant of /api/test/ask for the merged tab.
+
+    Form fields: same as /api/test/ask (question, section='merged',
+    lanes[], user_name).
+
+    Yields three event types:
+      - `event: progress` with `{lane, message}` — fired as each lane
+        runner crosses a stage boundary (call SIRA / pin / synth / done).
+        Used to update the per-lane spinner+label on the frontend.
+      - heartbeat lines (`: heartbeat`) every ~2s when no progress event
+        is pending, so proxies don't time out the streamed connection.
+      - `event: done` with `{html}` — final payload carrying the
+        rendered _merged_answer.html string. Frontend swaps it into
+        #test-answer and hides the progress display.
+
+    Only supports `section=merged`. Legacy section URLs continue to use
+    /api/test/ask (no streaming).
+    """
+    form = await request.form()
+    question = (form.get("question") or "").strip()
+    section = (form.get("section") or "merged").strip()
+    lanes_checked = [l for l in form.getlist("lanes") if l in ("nora", "sira")]
+    user_name = (form.get("user_name") or "").strip() or None
+
+    if section != "merged":
+        return JSONResponse(
+            {"error": "ask-stream only supports section=merged; "
+                      "legacy tabs use /api/test/ask"},
+            status_code=400,
+        )
+    if not question:
+        return JSONResponse(
+            {"error": "Question is required."}, status_code=400,
+        )
+    if not lanes_checked:
+        return JSONResponse(
+            {"error": "Please select at least one retrieval lane "
+                      "(NORA or SIRA)."},
+            status_code=400,
+        )
+
+    progress_q: asyncio.Queue = asyncio.Queue()
+
+    def _make_emitter(lane: str) -> Callable[[str], Awaitable[None]]:
+        async def _emit(msg: str) -> None:
+            await progress_q.put(
+                {"type": "progress", "lane": lane, "message": msg}
+            )
+        return _emit
+
+    runners: dict[str, Any] = {}
+    if "nora" in lanes_checked:
+        runners["nora"] = _run_nora_lane_for_merged(
+            question, request, emit_progress=_make_emitter("nora"),
+        )
+    if "sira" in lanes_checked:
+        runners["sira"] = _run_sira_lane_for_merged(
+            question, request, emit_progress=_make_emitter("sira"),
+        )
+
+    async def event_stream():
+        tasks = {
+            lane: asyncio.create_task(coro)
+            for lane, coro in runners.items()
+        }
+
+        # Drain progress queue + check for task completion. Heartbeats
+        # at the queue's get-timeout keep proxies from closing the
+        # connection during quiet stretches (NORA's blocking call can
+        # last seconds without emitting anything).
+        while not all(t.done() for t in tasks.values()):
+            try:
+                msg = await asyncio.wait_for(progress_q.get(), timeout=2.0)
+                yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+
+        # Drain any final progress events that may have been pushed
+        # between the last loop iteration and task completion.
+        while not progress_q.empty():
+            msg = progress_q.get_nowait()
+            yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+
+        # All tasks done — collect results, build final HTML, emit done.
+        outputs = {lane: t.result() for lane, t in tasks.items()}
+        try:
+            html = await _build_merged_response_html(
+                request, question, user_name, outputs,
+            )
+        except Exception as exc:
+            logger.exception("merged HTML rendering failed in stream endpoint")
+            html = (
+                f'<div class="alert alert-danger">'
+                f'<strong>Render error:</strong> {exc}</div>'
+            )
+        yield f"event: done\ndata: {json.dumps({'html': html})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Disable response buffering on nginx if present; SSE needs
+            # the bytes to reach the client as they're yielded.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/api/test/synthesize-group", response_class=HTMLResponse)
