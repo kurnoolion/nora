@@ -565,12 +565,18 @@ class OpenAIRerankChat:
         *,
         timeout_s: float = 60.0,
         max_chunk_chars: int = 4000,
+        batch_size: int = 1,
     ) -> None:
         self._model_name = model_name
         self._base_url = (base_url or "").rstrip("/")
         self._api_key = api_key or ""
         self._timeout_s = timeout_s
         self._max_chunk_chars = max_chunk_chars
+        # batch_size <= 1 means per-call (one HTTP request per chunk).
+        # batch_size > 1 packs N (query, document) pairs into one call
+        # with a JSON-array response. See _format_batch_prompt and
+        # D-089 (mirrors SIRA's per-query service batch pattern).
+        self._batch_size = max(1, batch_size)
         self.available = True
         if not self._base_url:
             logger.warning(
@@ -580,8 +586,11 @@ class OpenAIRerankChat:
             self.available = False
             return
         logger.info(
-            "OpenAIRerankChat ready: model=%s, base_url=%s, timeout=%ds",
+            "OpenAIRerankChat ready: model=%s, base_url=%s, timeout=%ds, "
+            "batch_size=%d (%s mode)",
             model_name, self._base_url, int(timeout_s),
+            self._batch_size,
+            "batched" if self._batch_size > 1 else "per-call",
         )
 
     def _score_one(self, query: str, doc_text: str) -> int:
@@ -632,19 +641,155 @@ class OpenAIRerankChat:
             return 0
         return max(0, min(100, score))
 
+    _BATCH_PROMPT_HEADER = (
+        "You are scoring documents for relevance to a query. For each "
+        "document, output an integer 0-100 score.\n\n"
+        "Scoring rubric:\n"
+        "- 0: completely unrelated topic\n"
+        "- 1-20: tangentially related but no answer\n"
+        "- 21-40: discusses related concepts, no direct answer\n"
+        "- 41-70: partial answer or strongly related\n"
+        "- 71-100: directly answers the query\n\n"
+        "Output ONLY a JSON array of objects in document order:\n"
+        '[{"id": 0, "score": N}, {"id": 1, "score": N}, ...]\n'
+        "No commentary, no thinking, no markdown — just the JSON.\n\n"
+    )
+
+    def _format_batch_prompt(
+        self, query: str, docs: list[tuple[int, str]],
+    ) -> str:
+        """Build a batch-scoring prompt for ``docs=[(local_id, text), ...]``.
+        Mirrors the shape SIRA's per-query service uses (D-089) so the
+        same prompt-rubric calibration applies."""
+        docs_block = "\n\n".join(
+            f"[{lid}] {self._truncate(text)}" for lid, text in docs
+        )
+        return (
+            self._BATCH_PROMPT_HEADER
+            + f"Query: {query}\n\n"
+            + f"Documents:\n{docs_block}\n\n"
+            + "Scores:"
+        )
+
+    @staticmethod
+    def _parse_batch_response(
+        raw: str, expected_ids: list[int],
+    ) -> dict[int, int]:
+        """Extract ``{id: score}`` from a batch rerank response. Missing /
+        unparseable ids default to 0 (matches per-call failure semantics).
+        Tolerant of CoT preambles before the JSON, trailing commentary
+        after, and per-object parse failures within the array."""
+        import json as _json
+        import re
+        out: dict[int, int] = {i: 0 for i in expected_ids}
+        # First-pass: find the JSON array bracket range and parse.
+        lb = raw.find("[")
+        rb = raw.rfind("]")
+        if lb != -1 and rb > lb:
+            try:
+                arr = _json.loads(raw[lb : rb + 1])
+                if isinstance(arr, list):
+                    for item in arr:
+                        if not isinstance(item, dict):
+                            continue
+                        try:
+                            i = int(item.get("id"))
+                            s = int(item.get("score", 0))
+                        except (TypeError, ValueError):
+                            continue
+                        if i in out:
+                            out[i] = max(0, min(100, s))
+                    return out
+            except _json.JSONDecodeError:
+                pass
+        # Fallback: regex-scan for individual {"id":N,"score":M} objects.
+        for m in re.finditer(
+            r'\{\s*"id"\s*:\s*(-?\d+)\s*,\s*"score"\s*:\s*(-?\d+)\s*\}',
+            raw,
+        ):
+            i, s = int(m.group(1)), int(m.group(2))
+            if i in out:
+                out[i] = max(0, min(100, s))
+        return out
+
+    def _score_batch(
+        self, query: str, batch: list[tuple[int, str]],
+    ) -> dict[int, int]:
+        """Score one batch in a single HTTP call. Returns {local_id: score};
+        missing ids default to 0. Whole-batch failure (transport or
+        protocol-level) returns 0 for every id in the batch."""
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        prompt = self._format_batch_prompt(query, batch)
+        # Generous max_tokens — batch responses can be larger.
+        # 32 tokens per item + 64 base accommodates 25-chunk batches.
+        max_tokens = 64 + 32 * len(batch)
+        payload = {
+            "model": self._model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+        }
+        body = _json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        req = urllib.request.Request(
+            f"{self._base_url}/v1/chat/completions",
+            data=body, headers=headers, method="POST",
+        )
+        expected = [lid for lid, _ in batch]
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, _json.JSONDecodeError):
+            return {i: 0 for i in expected}
+        try:
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+        except (AttributeError, IndexError, TypeError):
+            return {i: 0 for i in expected}
+        return self._parse_batch_response(content or "", expected)
+
     def rerank(
         self, query: str, chunks: list[RetrievedChunk],
     ) -> list[RetrievedChunk]:
         if not self.available or not chunks:
             return list(chunks)
-        scored: list[tuple[int, int, RetrievedChunk]] = []
-        for i, c in enumerate(chunks):
-            score = self._score_one(query, c.text or "")
-            # Stable tiebreak by input order so a uniformly-scored batch
-            # comes back in retrieval order rather than randomly.
-            scored.append((-score, i, c))
-        scored.sort()
-        return [c for _, _, c in scored]
+
+        # Per-call mode: one HTTP request per chunk (simple, robust).
+        if self._batch_size <= 1:
+            scored: list[tuple[int, int, RetrievedChunk]] = []
+            for i, c in enumerate(chunks):
+                score = self._score_one(query, c.text or "")
+                scored.append((-score, i, c))
+            scored.sort()
+            return [c for _, _, c in scored]
+
+        # Batched mode: pack `batch_size` chunks per HTTP request.
+        # Local ids are batch-local (0..len(batch)-1), so the LLM gets
+        # short integer ids regardless of original chunk index.
+        scored2: list[tuple[int, int, RetrievedChunk]] = []
+        for batch_start in range(0, len(chunks), self._batch_size):
+            batch_chunks = chunks[batch_start : batch_start + self._batch_size]
+            batch = [
+                (local_id, c.text or "")
+                for local_id, c in enumerate(batch_chunks)
+            ]
+            scores = self._score_batch(query, batch)
+            for local_id, c in enumerate(batch_chunks):
+                score = scores.get(local_id, 0)
+                # Global tiebreak preserves input order across batches
+                # AND within a batch when the model returns equal scores.
+                global_index = batch_start + local_id
+                scored2.append((-score, global_index, c))
+        scored2.sort()
+        return [c for _, _, c in scored2]
 
     def _truncate(self, text: str) -> str:
         if not text:

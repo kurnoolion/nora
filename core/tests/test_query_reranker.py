@@ -734,3 +734,223 @@ def test_resolve_reranker_provider_rejects_unknown_value(monkeypatch):
     monkeypatch.setenv(RERANKER_PROVIDER_ENV_VAR, "bogus-provider")
     assert resolve_reranker_provider() == DEFAULT_RERANKER_PROVIDER
     monkeypatch.delenv(RERANKER_PROVIDER_ENV_VAR, raising=False)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# OpenAIRerankChat batch mode + batch-size resolution
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _batch_response(*id_score_pairs: tuple[int, int]) -> tuple[int, str]:
+    """A 200 response whose chat content is the batch JSON array."""
+    import json
+    arr = [{"id": i, "score": s} for i, s in id_score_pairs]
+    return (200, json.dumps({
+        "choices": [{"message": {"content": json.dumps(arr)}}],
+    }))
+
+
+def test_openai_rerank_chat_batch_mode_uses_single_call_per_batch(monkeypatch):
+    """batch_size=N collapses N chunks into ONE HTTP request."""
+    from core.src.query.reranker import OpenAIRerankChat
+    r = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=3,
+    )
+    sent = _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _batch_response((0, 30), (1, 90), (2, 60)),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    # Three chunks, batch_size=3 → exactly one HTTP call.
+    assert len(sent) == 1
+    # Sorted by score desc: b (90) > c (60) > a (30).
+    assert [c.chunk_id for c in out] == ["req:b", "req:c", "req:a"]
+
+
+def test_openai_rerank_chat_batch_mode_packs_multiple_batches(monkeypatch):
+    """batch_size=2 over 5 chunks → 3 batches (2+2+1)."""
+    from core.src.query.reranker import OpenAIRerankChat
+    r = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=2,
+    )
+    sent = _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _batch_response((0, 20), (1, 80)),  # batch 1: a, b
+        _batch_response((0, 60), (1, 40)),  # batch 2: c, d
+        _batch_response((0, 90)),           # batch 3: e
+    ])
+    chunks = [_chunk(f"req:{x}") for x in "abcde"]
+    out = r.rerank("q", chunks)
+    assert len(sent) == 3
+    # Scores: a=20, b=80, c=60, d=40, e=90. Sorted desc: e, b, c, d, a.
+    assert [c.chunk_id for c in out] == ["req:e", "req:b", "req:c", "req:d", "req:a"]
+
+
+def test_openai_rerank_chat_batch_failure_zeros_whole_batch(monkeypatch):
+    """One bad LLM call zeros every chunk in that batch (D-089 invariant).
+    Other batches are unaffected."""
+    from core.src.query.reranker import OpenAIRerankChat
+    import urllib.error
+    r = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=2,
+    )
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _batch_response((0, 70), (1, 50)),                    # ok: a=70, b=50
+        urllib.error.URLError("connection refused"),          # batch failure: c=0, d=0
+        _batch_response((0, 90)),                             # ok: e=90
+    ])
+    chunks = [_chunk(f"req:{x}") for x in "abcde"]
+    out = r.rerank("q", chunks)
+    # Scores: a=70, b=50, c=0, d=0, e=90.
+    # Sorted: e(90) > a(70) > b(50) > c(0)=d(0) → tiebreak by input order.
+    assert [c.chunk_id for c in out] == ["req:e", "req:a", "req:b", "req:c", "req:d"]
+
+
+def test_openai_rerank_chat_batch_size_larger_than_n_collapses_to_one(monkeypatch):
+    """batch_size=100 with 3 chunks → still just one HTTP call."""
+    from core.src.query.reranker import OpenAIRerankChat
+    r = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=100,
+    )
+    sent = _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _batch_response((0, 40), (1, 60), (2, 50)),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    assert len(sent) == 1
+    assert [c.chunk_id for c in out] == ["req:b", "req:c", "req:a"]
+
+
+def test_openai_rerank_chat_batch_parse_tolerates_cot_preamble(monkeypatch):
+    """Reasoning models often emit '<think>...</think>' or 'Let me think...'
+    before the JSON array — parser must scan past it."""
+    from core.src.query.reranker import OpenAIRerankChat
+    import json
+    r = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=2,
+    )
+    noisy = (
+        "Let me think about each document...\n"
+        "Document 0 talks about something else.\n"
+        "Document 1 looks more relevant.\n"
+        "Here's the JSON:\n"
+        + json.dumps([{"id": 0, "score": 10}, {"id": 1, "score": 85}])
+        + "\nDone."
+    )
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, json.dumps({"choices": [{"message": {"content": noisy}}]})),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:b", "req:a"]
+
+
+def test_openai_rerank_chat_batch_size_1_uses_per_call_path(monkeypatch):
+    """batch_size=1 must NOT enter batch mode — must keep per-call
+    semantics (1 HTTP request per chunk)."""
+    from core.src.query.reranker import OpenAIRerankChat
+    r = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=1,
+    )
+    sent = _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _ok(60),  # per-call response shape (not batch JSON)
+        _ok(80),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    # 2 chunks, batch_size=1 → 2 HTTP calls (per-call path).
+    assert len(sent) == 2
+    assert [c.chunk_id for c in out] == ["req:b", "req:a"]
+
+
+def test_openai_rerank_chat_batch_size_zero_or_negative_clamped_to_one():
+    """batch_size <= 1 always means per-call. Pinned so an env-var typo
+    or config bug can't blow up."""
+    from core.src.query.reranker import OpenAIRerankChat
+    r0 = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=0,
+    )
+    assert r0._batch_size == 1
+    rneg = OpenAIRerankChat(
+        model_name="m", base_url="http://h", batch_size=-5,
+    )
+    assert rneg._batch_size == 1
+
+
+# ─────────────────────────────────────────────────────────────────────
+# resolve_reranker_batch_size + env back-compat
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_resolve_reranker_batch_size_default_is_one(monkeypatch):
+    from core.src.env.config import (
+        RERANKER_BATCH_SIZE_ENV_VAR,
+        RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED,
+        resolve_reranker_batch_size,
+        DEFAULT_RERANKER_BATCH_SIZE,
+    )
+    monkeypatch.delenv(RERANKER_BATCH_SIZE_ENV_VAR, raising=False)
+    monkeypatch.delenv(RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED, raising=False)
+    assert resolve_reranker_batch_size() == DEFAULT_RERANKER_BATCH_SIZE
+    assert DEFAULT_RERANKER_BATCH_SIZE == 1
+
+
+def test_resolve_reranker_batch_size_prefers_new_env_over_deprecated(monkeypatch):
+    """When both NORA_RERANK_BATCH_SIZE and the deprecated alias are
+    set, the new name wins."""
+    from core.src.env.config import (
+        RERANKER_BATCH_SIZE_ENV_VAR,
+        RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED,
+        resolve_reranker_batch_size,
+    )
+    monkeypatch.setenv(RERANKER_BATCH_SIZE_ENV_VAR, "10")
+    monkeypatch.setenv(RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED, "25")
+    assert resolve_reranker_batch_size() == 10
+
+
+def test_resolve_reranker_batch_size_honors_deprecated_with_warning(monkeypatch, caplog):
+    """If only the deprecated env var is set, it's honored AND a
+    deprecation warning is logged."""
+    from core.src.env.config import (
+        RERANKER_BATCH_SIZE_ENV_VAR,
+        RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED,
+        resolve_reranker_batch_size,
+    )
+    monkeypatch.delenv(RERANKER_BATCH_SIZE_ENV_VAR, raising=False)
+    monkeypatch.setenv(RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED, "8")
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING):
+        assert resolve_reranker_batch_size() == 8
+    assert any(
+        "NORA_SIRA_RERANK_BATCH_SIZE is deprecated" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_resolve_reranker_batch_size_clamps_below_one(monkeypatch):
+    """Zero and negative values collapse to 1 (per-call). Bad env input
+    falls through to the next source rather than crashing."""
+    from core.src.env.config import (
+        RERANKER_BATCH_SIZE_ENV_VAR,
+        RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED,
+        resolve_reranker_batch_size,
+    )
+    monkeypatch.delenv(RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED, raising=False)
+    monkeypatch.setenv(RERANKER_BATCH_SIZE_ENV_VAR, "0")
+    assert resolve_reranker_batch_size() == 1
+    monkeypatch.setenv(RERANKER_BATCH_SIZE_ENV_VAR, "-5")
+    assert resolve_reranker_batch_size() == 1
+    monkeypatch.setenv(RERANKER_BATCH_SIZE_ENV_VAR, "not-a-number")
+    # bad env → fall through to default
+    assert resolve_reranker_batch_size() == 1
+
+
+def test_resolve_reranker_batch_size_db_then_default(monkeypatch):
+    from core.src.env.config import (
+        RERANKER_BATCH_SIZE_ENV_VAR,
+        RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED,
+        resolve_reranker_batch_size,
+    )
+    monkeypatch.delenv(RERANKER_BATCH_SIZE_ENV_VAR, raising=False)
+    monkeypatch.delenv(RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED, raising=False)
+    assert resolve_reranker_batch_size(config_store_value="7") == 7
+    assert resolve_reranker_batch_size(config_store_value="bogus") == 1

@@ -212,6 +212,24 @@ _LLM_FIELDS: list[ConfigField] = [
             "endpoints that don't require auth (e.g. local vLLM)."
         ),
     ),
+    ConfigField(
+        module="llm", key="reranker_batch_size",
+        label="Reranker Batch Size", kind="int", category="tunable",
+        help=(
+            "Number of (query, document) pairs to score per LLM API "
+            "call when provider='openai-rerank-chat' (and the SIRA "
+            "per-query rerank stage, which honors the same knob). "
+            "Default 1 = per-call mode (one HTTP request per chunk; "
+            "robust, slow). N > 1 = batch mode (pack N chunks into "
+            "one request, model returns a JSON array of scores; "
+            "fast, slightly less robust — a single bad LLM call "
+            "zeros the whole batch). Empirically 5–10 is the "
+            "practical sweet spot on long-context LLMs; smaller is "
+            "safer on output-token-limited models. Ignored for "
+            "huggingface / ollama / openai-rerank-dedicated "
+            "providers (those have their own batching)."
+        ),
+    ),
 ]
 
 

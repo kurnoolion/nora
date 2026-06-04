@@ -121,6 +121,7 @@ def _resolve_reranker():
     from core.src.env.config import (
         resolve_reranker_api_key,
         resolve_reranker_base_url,
+        resolve_reranker_batch_size,
         resolve_reranker_enabled,
         resolve_reranker_model,
         resolve_reranker_ollama_url,
@@ -159,8 +160,13 @@ def _resolve_reranker():
             base_url = resolve_reranker_base_url(config_store_value=db_url)
             db_key = _config_store_get("llm", "reranker_api_key")
             api_key = resolve_reranker_api_key(config_store_value=db_key)
+            db_batch = _config_store_get("llm", "reranker_batch_size")
+            batch_size = resolve_reranker_batch_size(
+                config_store_value=db_batch,
+            )
             reranker = OpenAIRerankChat(
                 model_name=model_name, base_url=base_url, api_key=api_key,
+                batch_size=batch_size,
             )
         elif provider == "openai-rerank-dedicated":
             from core.src.query.reranker import OpenAIRerankDedicated

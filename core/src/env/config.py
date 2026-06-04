@@ -76,6 +76,7 @@ class LLMConfigFile:
     reranker_ollama_url: str = ""
     reranker_base_url: str = ""
     reranker_api_key: str = ""
+    reranker_batch_size: int = 1
 
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
@@ -109,6 +110,7 @@ class LLMConfigFile:
             reranker_ollama_url=str(data.get("reranker_ollama_url", "") or "").strip(),
             reranker_base_url=str(data.get("reranker_base_url", "") or "").strip(),
             reranker_api_key=str(data.get("reranker_api_key", "") or "").strip(),
+            reranker_batch_size=int(data.get("reranker_batch_size", 1) or 1),
         )
 
 
@@ -695,6 +697,12 @@ RERANKER_PROVIDER_ENV_VAR: str = "NORA_RERANKER_PROVIDER"
 RERANKER_OLLAMA_URL_ENV_VAR: str = "NORA_RERANKER_OLLAMA_URL"
 RERANKER_BASE_URL_ENV_VAR: str = "NORA_RERANKER_BASE_URL"
 RERANKER_API_KEY_ENV_VAR: str = "NORA_RERANKER_API_KEY"
+RERANKER_BATCH_SIZE_ENV_VAR: str = "NORA_RERANK_BATCH_SIZE"
+# Deprecated — kept for back-compat with shells/runbooks set before
+# the env var was generalized beyond the SIRA per-query service. The
+# SIRA service still reads it as a fallback for one release. See
+# resolve_reranker_batch_size().
+RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED: str = "NORA_SIRA_RERANK_BATCH_SIZE"
 RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
 
 DEFAULT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
@@ -951,6 +959,58 @@ def resolve_reranker_base_url(
     if getattr(cfg, "reranker_base_url", ""):
         return cfg.reranker_base_url
     return ""
+
+
+DEFAULT_RERANKER_BATCH_SIZE: int = 1
+"""Per-call mode. N > 1 packs N (query, document) pairs into one LLM
+API call. Empirically 5–10 is the practical sweet spot on long-context
+LLMs (gemma3:12b couldn't fit 25-chunk JSON in 4096 output tokens;
+proprietary LLM worked at batch 25 but triggered aggressive pin
+filtering downstream — see D-089)."""
+
+
+def resolve_reranker_batch_size(
+    config_store_value: str | None = None,
+) -> int:
+    """Resolve the reranker batch size.
+
+    Precedence: NORA_RERANK_BATCH_SIZE env var > deprecated
+    NORA_SIRA_RERANK_BATCH_SIZE env var (with a one-time warning) >
+    Config-page DB (``llm.reranker_batch_size``) > config/llm.json
+    ``reranker_batch_size`` > built-in ``DEFAULT_RERANKER_BATCH_SIZE`` (1).
+
+    Returns max(1, value) — batch size 0 or negative is invalid and
+    collapses to per-call mode."""
+    import logging
+    raw_env = (os.environ.get(RERANKER_BATCH_SIZE_ENV_VAR) or "").strip()
+    if not raw_env:
+        deprecated_env = (
+            os.environ.get(RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED) or ""
+        ).strip()
+        if deprecated_env:
+            logging.getLogger(__name__).warning(
+                "%s is deprecated; use %s instead. Reading deprecated "
+                "value=%s for this run.",
+                RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED,
+                RERANKER_BATCH_SIZE_ENV_VAR,
+                deprecated_env,
+            )
+            raw_env = deprecated_env
+    if raw_env:
+        try:
+            return max(1, int(raw_env))
+        except ValueError:
+            pass  # fall through to next source
+    if config_store_value is not None and str(config_store_value).strip():
+        try:
+            return max(1, int(str(config_store_value).strip()))
+        except ValueError:
+            pass
+    cfg = _llm_config()
+    cfg_val = getattr(cfg, "reranker_batch_size", 0)
+    if cfg_val:
+        return max(1, int(cfg_val))
+    return DEFAULT_RERANKER_BATCH_SIZE
 
 
 def resolve_reranker_api_key(

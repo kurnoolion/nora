@@ -84,7 +84,27 @@ _RERANK_MAX_TOKENS = int(os.getenv("NORA_SIRA_RERANK_MAX_TOKENS", "256"))
 # Failure-mode tradeoff: per-call degrades gracefully (one bad call =
 # one zero score). Batch fails atomically (one bad call = N zero
 # scores for that batch). Worth testing on your model before committing.
-_RERANK_BATCH_SIZE = int(os.getenv("NORA_SIRA_RERANK_BATCH_SIZE", "0"))
+# Honor the unified NORA_RERANK_BATCH_SIZE first (D-089's env var
+# generalized when NORA's reranker grew batch mode too). Fall back to
+# the original NORA_SIRA_RERANK_BATCH_SIZE for back-compat with shells
+# / runbooks set before the rename — logged so the deprecation is
+# discoverable. Note this service treats 0 as per-call (legacy behavior)
+# while NORA's resolver treats <1 as 1; both produce the same behavior
+# (no batching) but the env-var floor differs to preserve back-compat.
+_RERANK_BATCH_SIZE_RAW = os.getenv("NORA_RERANK_BATCH_SIZE", "").strip()
+if not _RERANK_BATCH_SIZE_RAW:
+    _RERANK_BATCH_SIZE_RAW = os.getenv("NORA_SIRA_RERANK_BATCH_SIZE", "").strip()
+    if _RERANK_BATCH_SIZE_RAW:
+        logger.warning(
+            "NORA_SIRA_RERANK_BATCH_SIZE is deprecated; use "
+            "NORA_RERANK_BATCH_SIZE instead. Honoring deprecated value=%s "
+            "for this run.",
+            _RERANK_BATCH_SIZE_RAW,
+        )
+try:
+    _RERANK_BATCH_SIZE = int(_RERANK_BATCH_SIZE_RAW or "0")
+except ValueError:
+    _RERANK_BATCH_SIZE = 0
 
 # Output budget when batching. Each chunk needs ~10-15 tokens in the
 # JSON output ({"id": N, "score": NN}, plus formatting). 4096 covers
