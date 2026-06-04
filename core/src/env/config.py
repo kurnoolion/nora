@@ -74,6 +74,8 @@ class LLMConfigFile:
     reranker_model: str = ""
     reranker_provider: str = ""
     reranker_ollama_url: str = ""
+    reranker_base_url: str = ""
+    reranker_api_key: str = ""
 
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
@@ -105,6 +107,8 @@ class LLMConfigFile:
             reranker_model=str(data.get("reranker_model", "") or "").strip(),
             reranker_provider=str(data.get("reranker_provider", "") or "").strip(),
             reranker_ollama_url=str(data.get("reranker_ollama_url", "") or "").strip(),
+            reranker_base_url=str(data.get("reranker_base_url", "") or "").strip(),
+            reranker_api_key=str(data.get("reranker_api_key", "") or "").strip(),
         )
 
 
@@ -689,6 +693,8 @@ RERANKER_ENABLED_ENV_VAR: str = "NORA_RERANKER_ENABLED"
 RERANKER_MODEL_ENV_VAR: str = "NORA_RERANKER_MODEL"
 RERANKER_PROVIDER_ENV_VAR: str = "NORA_RERANKER_PROVIDER"
 RERANKER_OLLAMA_URL_ENV_VAR: str = "NORA_RERANKER_OLLAMA_URL"
+RERANKER_BASE_URL_ENV_VAR: str = "NORA_RERANKER_BASE_URL"
+RERANKER_API_KEY_ENV_VAR: str = "NORA_RERANKER_API_KEY"
 RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
 
 DEFAULT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
@@ -880,26 +886,28 @@ def resolve_reranker_model(
 def resolve_reranker_provider(
     config_store_value: str | None = None,
 ) -> str:
-    """Resolve the reranker backend: "huggingface" or "ollama".
+    """Resolve the reranker backend.
+
+    Accepted: "huggingface" | "ollama" | "openai-rerank-chat" |
+    "openai-rerank-dedicated".
 
     Precedence: NORA_RERANKER_PROVIDER env var > Config-page DB
     (``llm.reranker_provider``) > config/llm.json ``reranker_provider``
     > built-in ``DEFAULT_RERANKER_PROVIDER`` ("huggingface").
 
-    Unknown values fall back to the default with a warning. Lets
-    deployments on proxy-restricted machines without HF access use
-    a locally-pulled Ollama model (e.g. ``bbjson/bge-reranker-base``)
-    via the OllamaReranker backend instead of sentence_transformers
-    + HF cache."""
+    Unknown values fall back to the default. Lets deployments on
+    proxy-restricted machines without HF access use a locally-pulled
+    Ollama model OR a vLLM/SGLang-served reranker via the
+    OpenAI-compatible variants."""
     raw_env = (os.environ.get(RERANKER_PROVIDER_ENV_VAR) or "").strip().lower()
-    if raw_env in {"huggingface", "ollama"}:
+    if raw_env in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated"}:
         return raw_env
     if config_store_value:
         v = str(config_store_value).strip().lower()
-        if v in {"huggingface", "ollama"}:
+        if v in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated"}:
             return v
     cfg = _llm_config()
-    if getattr(cfg, "reranker_provider", "") in {"huggingface", "ollama"}:
+    if getattr(cfg, "reranker_provider", "") in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated"}:
         return cfg.reranker_provider
     return DEFAULT_RERANKER_PROVIDER
 
@@ -921,6 +929,49 @@ def resolve_reranker_ollama_url(
     if getattr(cfg, "reranker_ollama_url", ""):
         return cfg.reranker_ollama_url
     return DEFAULT_RERANKER_OLLAMA_URL
+
+
+def resolve_reranker_base_url(
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve the reranker endpoint base URL for OpenAI-compatible
+    providers (``openai-rerank-chat`` / ``openai-rerank-dedicated``).
+
+    Precedence: NORA_RERANKER_BASE_URL env var > Config-page DB
+    (``llm.reranker_base_url``) > config/llm.json ``reranker_base_url``
+    > empty string (caller treats as missing and falls back to
+    passthrough). No built-in default — these endpoints are
+    deployment-specific."""
+    raw_env = (os.environ.get(RERANKER_BASE_URL_ENV_VAR) or "").strip()
+    if raw_env:
+        return raw_env
+    if config_store_value:
+        return str(config_store_value).strip()
+    cfg = _llm_config()
+    if getattr(cfg, "reranker_base_url", ""):
+        return cfg.reranker_base_url
+    return ""
+
+
+def resolve_reranker_api_key(
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve the reranker endpoint API key (bearer token) for
+    OpenAI-compatible providers.
+
+    Precedence: NORA_RERANKER_API_KEY env var > Config-page DB
+    (``llm.reranker_api_key``) > config/llm.json ``reranker_api_key``
+    > empty string. Empty is valid — local vLLM and other unauthenticated
+    servers don't need a key."""
+    raw_env = (os.environ.get(RERANKER_API_KEY_ENV_VAR) or "").strip()
+    if raw_env:
+        return raw_env
+    if config_store_value:
+        return str(config_store_value).strip()
+    cfg = _llm_config()
+    if getattr(cfg, "reranker_api_key", ""):
+        return cfg.reranker_api_key
+    return ""
 
 
 # ---------------------------------------------------------------------------

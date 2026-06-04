@@ -429,3 +429,308 @@ def test_ollama_reranker_cosine_helper():
     assert cos([], [1.0]) == 0.0
     assert cos([0.0, 0.0], [1.0, 0.0]) == 0.0
     assert cos([1.0, 0.0], [1.0]) == 0.0  # mismatched dims
+
+
+# ─────────────────────────────────────────────────────────────────────
+# OpenAIRerankChat — per-pair chat-completions scoring
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _stub_urlopen(monkeypatch, target_module, responses):
+    """Patch urllib.request.urlopen inside the given module's namespace
+    so each call returns the next response in `responses` (an iterable
+    of (status, body_str) or Exception).
+
+    Returns the list of captured request payloads (one dict per call)
+    so tests can assert on what was sent.
+    """
+    import io
+    import json
+    import urllib.request
+    sent = []
+    it = iter(responses)
+
+    class _FakeResp:
+        def __init__(self, status, body):
+            self.status = status
+            self._body = body
+        def read(self):
+            return self._body.encode("utf-8")
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _fake_urlopen(req, timeout=None):
+        sent.append(json.loads(req.data.decode("utf-8")))
+        try:
+            r = next(it)
+        except StopIteration:
+            r = (200, '{"choices":[{"message":{"content":"0"}}]}')
+        if isinstance(r, Exception):
+            raise r
+        status, body = r
+        return _FakeResp(status, body)
+
+    # The reranker classes do `import urllib.request` inside their
+    # methods, so patching the global `urllib.request.urlopen` is what
+    # actually intercepts the call. `target_module` is kept in the
+    # signature for symmetry with future tests that need to patch
+    # something module-scoped, but isn't used here.
+    del target_module
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    return sent
+
+
+def _ok(score: int) -> tuple[int, str]:
+    """A 200 response carrying a chat-completion that says the integer."""
+    import json
+    return (200, json.dumps({
+        "choices": [{"message": {"content": str(score)}}],
+    }))
+
+
+def test_openai_rerank_chat_unavailable_on_empty_base_url():
+    from core.src.query.reranker import OpenAIRerankChat
+    r = OpenAIRerankChat(model_name="m", base_url="")
+    assert r.available is False
+    chunks = [_chunk("req:1"), _chunk("req:2")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:1", "req:2"]
+
+
+def test_openai_rerank_chat_sorts_descending_by_score(monkeypatch):
+    from core.src.query.reranker import OpenAIRerankChat
+    r = OpenAIRerankChat(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _ok(20),  # for req:a
+        _ok(80),  # for req:b
+        _ok(50),  # for req:c
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:b", "req:c", "req:a"]
+
+
+def test_openai_rerank_chat_parses_score_from_surrounding_text(monkeypatch):
+    """Models often emit 'Score: 42' or 'The score is 42.' — the parser
+    must extract the first integer."""
+    from core.src.query.reranker import OpenAIRerankChat
+    import json
+    r = OpenAIRerankChat(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, json.dumps({"choices": [{"message": {"content": "Score: 95"}}]})),
+        (200, json.dumps({"choices": [{"message": {"content": "I'd say about 30 out of 100."}}]})),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:a", "req:b"]
+
+
+def test_openai_rerank_chat_clamps_out_of_range_scores(monkeypatch):
+    from core.src.query.reranker import OpenAIRerankChat
+    r = OpenAIRerankChat(model_name="m", base_url="http://h")
+    # Model returns 150 (clamped to 100) and -20 (clamped to 0).
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _ok(150),
+        _ok(-20),
+    ])
+    chunks = [_chunk("req:high"), _chunk("req:low")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:high", "req:low"]
+
+
+def test_openai_rerank_chat_per_call_failure_scores_zero(monkeypatch):
+    """A single failed call must not sink the whole rerank — that chunk
+    just sinks to the bottom with score 0."""
+    from core.src.query.reranker import OpenAIRerankChat
+    import urllib.error
+    r = OpenAIRerankChat(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        _ok(40),                                       # req:a
+        urllib.error.URLError("connection refused"),   # req:b → score 0
+        _ok(70),                                       # req:c
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:c", "req:a", "req:b"]
+
+
+def test_openai_rerank_chat_sends_bearer_token_when_set(monkeypatch):
+    from core.src.query.reranker import OpenAIRerankChat
+    import urllib.request
+    captured: dict = {}
+
+    class _FakeResp:
+        status = 200
+        def read(self): return b'{"choices":[{"message":{"content":"50"}}]}'
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _grab(req, timeout=None):
+        captured.update(req.headers)
+        return _FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", _grab)
+
+    r = OpenAIRerankChat(model_name="m", base_url="http://h", api_key="sk-xyz")
+    r.rerank("q", [_chunk("req:a")])
+    # urllib lowercases the keys — check via case-insensitive lookup
+    auth = next((v for k, v in captured.items() if k.lower() == "authorization"), None)
+    assert auth == "Bearer sk-xyz"
+
+
+def test_openai_rerank_chat_satisfies_reranker_protocol():
+    from core.src.query.reranker import OpenAIRerankChat, Reranker
+    assert isinstance(
+        OpenAIRerankChat(model_name="m", base_url="http://h"), Reranker,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# OpenAIRerankDedicated — batched /v1/rerank
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _rerank_body(*idx_score_pairs: tuple[int, float]) -> str:
+    """JSON body shaped like vLLM's /v1/rerank response."""
+    import json
+    return json.dumps({
+        "results": [
+            {"index": i, "relevance_score": s} for i, s in idx_score_pairs
+        ],
+    })
+
+
+def test_openai_rerank_dedicated_unavailable_on_empty_base_url():
+    from core.src.query.reranker import OpenAIRerankDedicated
+    r = OpenAIRerankDedicated(model_name="m", base_url="")
+    assert r.available is False
+    chunks = [_chunk("req:1"), _chunk("req:2")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:1", "req:2"]
+
+
+def test_openai_rerank_dedicated_reorders_by_server_ranking(monkeypatch):
+    from core.src.query.reranker import OpenAIRerankDedicated
+    r = OpenAIRerankDedicated(model_name="m", base_url="http://h")
+    # Server returns: doc at index 2 wins, then 0, then 1.
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _rerank_body((2, 0.9), (0, 0.6), (1, 0.2))),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:c", "req:a", "req:b"]
+
+
+def test_openai_rerank_dedicated_appends_unranked_chunks(monkeypatch):
+    """If the server returns fewer than N results, the unranked chunks
+    must still appear at the tail (size invariant)."""
+    from core.src.query.reranker import OpenAIRerankDedicated
+    r = OpenAIRerankDedicated(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _rerank_body((1, 0.9))),  # only ranked one out of three
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    assert out[0].chunk_id == "req:b"  # the ranked one wins
+    assert set(c.chunk_id for c in out) == {"req:a", "req:b", "req:c"}
+    assert len(out) == 3
+
+
+def test_openai_rerank_dedicated_passthrough_on_http_failure(monkeypatch):
+    from core.src.query.reranker import OpenAIRerankDedicated
+    import urllib.error
+    r = OpenAIRerankDedicated(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        urllib.error.URLError("connection refused"),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:a", "req:b"]
+
+
+def test_openai_rerank_dedicated_passthrough_on_malformed_response(monkeypatch):
+    from core.src.query.reranker import OpenAIRerankDedicated
+    r = OpenAIRerankDedicated(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, '{"results": "not a list"}'),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:a", "req:b"]
+
+
+def test_openai_rerank_dedicated_drops_out_of_range_indices(monkeypatch):
+    """Defensive: if the server returns an index outside [0, N) the
+    reranker must ignore it rather than IndexError."""
+    from core.src.query.reranker import OpenAIRerankDedicated
+    r = OpenAIRerankDedicated(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _rerank_body((99, 0.9), (1, 0.7), (-1, 0.5))),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    # only idx=1 is valid; req:a appended after as unranked
+    assert [c.chunk_id for c in out] == ["req:b", "req:a"]
+
+
+def test_openai_rerank_dedicated_satisfies_reranker_protocol():
+    from core.src.query.reranker import OpenAIRerankDedicated, Reranker
+    assert isinstance(
+        OpenAIRerankDedicated(model_name="m", base_url="http://h"), Reranker,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# env resolvers + _resolve_reranker dispatch
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_resolve_reranker_base_url_precedence(monkeypatch):
+    from core.src.env.config import (
+        RERANKER_BASE_URL_ENV_VAR, resolve_reranker_base_url,
+    )
+    # env var wins over config_store_value
+    monkeypatch.setenv(RERANKER_BASE_URL_ENV_VAR, "http://from-env:8000")
+    assert resolve_reranker_base_url(config_store_value="http://from-db") == \
+        "http://from-env:8000"
+    monkeypatch.delenv(RERANKER_BASE_URL_ENV_VAR, raising=False)
+    # config_store_value second
+    assert resolve_reranker_base_url(config_store_value="http://from-db") == \
+        "http://from-db"
+    # default empty
+    assert resolve_reranker_base_url(config_store_value=None) == ""
+
+
+def test_resolve_reranker_api_key_precedence(monkeypatch):
+    from core.src.env.config import (
+        RERANKER_API_KEY_ENV_VAR, resolve_reranker_api_key,
+    )
+    monkeypatch.setenv(RERANKER_API_KEY_ENV_VAR, "sk-from-env")
+    assert resolve_reranker_api_key(config_store_value="sk-from-db") == \
+        "sk-from-env"
+    monkeypatch.delenv(RERANKER_API_KEY_ENV_VAR, raising=False)
+    assert resolve_reranker_api_key(config_store_value="sk-from-db") == \
+        "sk-from-db"
+    assert resolve_reranker_api_key(config_store_value=None) == ""
+
+
+def test_resolve_reranker_provider_accepts_new_options(monkeypatch):
+    from core.src.env.config import (
+        RERANKER_PROVIDER_ENV_VAR, resolve_reranker_provider,
+    )
+    for value in ("openai-rerank-chat", "openai-rerank-dedicated"):
+        monkeypatch.setenv(RERANKER_PROVIDER_ENV_VAR, value)
+        assert resolve_reranker_provider() == value
+    monkeypatch.delenv(RERANKER_PROVIDER_ENV_VAR, raising=False)
+
+
+def test_resolve_reranker_provider_rejects_unknown_value(monkeypatch):
+    """Unknown providers fall through to the default — must not return
+    a string the dispatcher doesn't know what to do with."""
+    from core.src.env.config import (
+        RERANKER_PROVIDER_ENV_VAR, resolve_reranker_provider,
+        DEFAULT_RERANKER_PROVIDER,
+    )
+    monkeypatch.setenv(RERANKER_PROVIDER_ENV_VAR, "bogus-provider")
+    assert resolve_reranker_provider() == DEFAULT_RERANKER_PROVIDER
+    monkeypatch.delenv(RERANKER_PROVIDER_ENV_VAR, raising=False)

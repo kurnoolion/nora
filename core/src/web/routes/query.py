@@ -119,6 +119,8 @@ def _resolve_reranker():
     passthrough. Same graceful-degradation contract regardless of
     provider."""
     from core.src.env.config import (
+        resolve_reranker_api_key,
+        resolve_reranker_base_url,
         resolve_reranker_enabled,
         resolve_reranker_model,
         resolve_reranker_ollama_url,
@@ -150,6 +152,24 @@ def _resolve_reranker():
             base_url = resolve_reranker_ollama_url(config_store_value=db_url)
             reranker = OllamaReranker(
                 model_name=model_name, base_url=base_url,
+            )
+        elif provider == "openai-rerank-chat":
+            from core.src.query.reranker import OpenAIRerankChat
+            db_url = _config_store_get("llm", "reranker_base_url")
+            base_url = resolve_reranker_base_url(config_store_value=db_url)
+            db_key = _config_store_get("llm", "reranker_api_key")
+            api_key = resolve_reranker_api_key(config_store_value=db_key)
+            reranker = OpenAIRerankChat(
+                model_name=model_name, base_url=base_url, api_key=api_key,
+            )
+        elif provider == "openai-rerank-dedicated":
+            from core.src.query.reranker import OpenAIRerankDedicated
+            db_url = _config_store_get("llm", "reranker_base_url")
+            base_url = resolve_reranker_base_url(config_store_value=db_url)
+            db_key = _config_store_get("llm", "reranker_api_key")
+            api_key = resolve_reranker_api_key(config_store_value=db_key)
+            reranker = OpenAIRerankDedicated(
+                model_name=model_name, base_url=base_url, api_key=api_key,
             )
         else:
             from core.src.query.reranker import CrossEncoderReranker

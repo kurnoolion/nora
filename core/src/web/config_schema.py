@@ -153,15 +153,27 @@ _LLM_FIELDS: list[ConfigField] = [
     ),
     ConfigField(
         module="llm", key="reranker_provider",
-        label="Reranker Provider", kind="string", category="value",
+        label="Reranker Provider", kind="enum", category="value",
+        choices=[
+            "huggingface", "ollama",
+            "openai-rerank-chat", "openai-rerank-dedicated",
+        ],
         help=(
             "Backend to instantiate when the reranker is enabled. "
             "'huggingface' loads via sentence_transformers from HF "
             "cache (requires the model files locally OR HF Hub "
             "access at startup). 'ollama' calls a local Ollama "
             "server — use this on proxy-restricted machines that "
-            "have Ollama running but no HF access. Empty = default "
-            "'huggingface'."
+            "have Ollama running but no HF access. "
+            "'openai-rerank-chat' calls an OpenAI-compatible "
+            "/v1/chat/completions endpoint (e.g. vLLM) with a "
+            "per-pair scoring prompt — works with any instruct "
+            "model; slower (one call per chunk). "
+            "'openai-rerank-dedicated' calls an OpenAI-compatible "
+            "/v1/rerank endpoint (vLLM's dedicated reranker route) "
+            "for batch ranking — requires the server to expose "
+            "/v1/rerank with a cross-encoder model loaded; fast "
+            "(one batched call). Empty = default 'huggingface'."
         ),
     ),
     ConfigField(
@@ -170,7 +182,34 @@ _LLM_FIELDS: list[ConfigField] = [
         help=(
             "Base URL of the local Ollama server for "
             "provider=ollama. Defaults to http://localhost:11434 "
-            "when blank. Ignored when provider=huggingface."
+            "when blank. Ignored for huggingface / openai-rerank-* "
+            "providers (see Reranker Base URL below for the "
+            "OpenAI-compatible variants)."
+        ),
+    ),
+    ConfigField(
+        module="llm", key="reranker_base_url",
+        label="Reranker Base URL", kind="string", category="value",
+        help=(
+            "Base URL of the reranker endpoint when "
+            "provider='openai-rerank-chat' or "
+            "'openai-rerank-dedicated'. Same shape as the LLM Base "
+            "URL — point at vLLM, SGLang, or any OpenAI-"
+            "compatible server. The /v1 prefix is appended by the "
+            "reranker code, so set this to the server root (e.g. "
+            "http://<dgx-spark>:8000). Ignored for huggingface / "
+            "ollama providers."
+        ),
+    ),
+    ConfigField(
+        module="llm", key="reranker_api_key",
+        label="Reranker API Key", kind="password", category="value",
+        help=(
+            "Bearer token for the reranker endpoint when "
+            "provider='openai-rerank-chat' or "
+            "'openai-rerank-dedicated'. Sent as "
+            "'Authorization: Bearer <key>'. Leave blank for "
+            "endpoints that don't require auth (e.g. local vLLM)."
         ),
     ),
 ]

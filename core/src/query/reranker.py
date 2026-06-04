@@ -509,3 +509,264 @@ class OllamaReranker:
         if len(text) <= self._max_chunk_chars:
             return text
         return text[: self._max_chunk_chars]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# OpenAI-compatible rerankers — chat-completions and dedicated /v1/rerank
+# ─────────────────────────────────────────────────────────────────────
+
+
+class OpenAIRerankChat:
+    """Reranker that scores (query, document) pairs via an OpenAI-
+    compatible ``/v1/chat/completions`` endpoint with a per-pair scoring
+    prompt. Works against any LLM-serving stack (vLLM, SGLang, the
+    proprietary shim, etc.) — no dedicated reranker model required.
+
+    Per-call wire shape:
+        POST {base_url}/v1/chat/completions
+        body: {"model": ..., "messages": [{"role":"user","content": <prompt>}],
+               "temperature": 0.0, "max_tokens": <small>}
+
+    The model returns a free-form text completion; we extract the first
+    integer in 0..100 as the relevance score. Robust to a bit of
+    surrounding text — many models emit ``Score: 42`` or similar.
+
+    Slower than a true cross-encoder: one HTTP call per chunk (no
+    batching unless the chat endpoint natively batches). On a small
+    top-K (10–25 chunks), latency dominates per-call rather than
+    throughput.
+
+    Graceful degradation: per-call failures score 0 (chunk drops to
+    the tail rather than aborting the rerank). Construction-time
+    failure (empty base_url, transport init error) sets
+    ``available=False`` and ``rerank()`` becomes a passthrough.
+
+    Satisfies the ``Reranker`` Protocol.
+    """
+
+    # Default scoring prompt. Intentionally short so even small/cheap
+    # instruct models can follow it. The system asks for a bare integer
+    # so parsing is robust.
+    _SCORING_PROMPT_TEMPLATE = (
+        "You are a relevance judge. On a 0-100 integer scale, score how "
+        "relevant the document is to the query. 0 = unrelated, 50 = "
+        "partially related, 100 = directly answers the query. Output "
+        "ONLY the integer score with no explanation.\n\n"
+        "Query: {query}\n\n"
+        "Document: {document}\n\n"
+        "Score:"
+    )
+
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str,
+        api_key: str = "",
+        *,
+        timeout_s: float = 60.0,
+        max_chunk_chars: int = 4000,
+    ) -> None:
+        self._model_name = model_name
+        self._base_url = (base_url or "").rstrip("/")
+        self._api_key = api_key or ""
+        self._timeout_s = timeout_s
+        self._max_chunk_chars = max_chunk_chars
+        self.available = True
+        if not self._base_url:
+            logger.warning(
+                "OpenAIRerankChat: empty base_url — falling back to "
+                "MockReranker passthrough.",
+            )
+            self.available = False
+            return
+        logger.info(
+            "OpenAIRerankChat ready: model=%s, base_url=%s, timeout=%ds",
+            model_name, self._base_url, int(timeout_s),
+        )
+
+    def _score_one(self, query: str, doc_text: str) -> int:
+        """Score one (query, doc) pair. Returns 0 on any failure so
+        a single bad call doesn't sink the whole rerank."""
+        import json as _json
+        import re
+        import urllib.error
+        import urllib.request
+
+        prompt = self._SCORING_PROMPT_TEMPLATE.format(
+            query=query,
+            document=self._truncate(doc_text),
+        )
+        payload = {
+            "model": self._model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": 16,
+        }
+        body = _json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        req = urllib.request.Request(
+            f"{self._base_url}/v1/chat/completions",
+            data=body, headers=headers, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, _json.JSONDecodeError):
+            return 0
+        try:
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+        except (AttributeError, IndexError, TypeError):
+            return 0
+        m = re.search(r"-?\d+", content or "")
+        if not m:
+            return 0
+        try:
+            score = int(m.group(0))
+        except ValueError:
+            return 0
+        return max(0, min(100, score))
+
+    def rerank(
+        self, query: str, chunks: list[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        if not self.available or not chunks:
+            return list(chunks)
+        scored: list[tuple[int, int, RetrievedChunk]] = []
+        for i, c in enumerate(chunks):
+            score = self._score_one(query, c.text or "")
+            # Stable tiebreak by input order so a uniformly-scored batch
+            # comes back in retrieval order rather than randomly.
+            scored.append((-score, i, c))
+        scored.sort()
+        return [c for _, _, c in scored]
+
+    def _truncate(self, text: str) -> str:
+        if not text:
+            return ""
+        if len(text) <= self._max_chunk_chars:
+            return text
+        return text[: self._max_chunk_chars]
+
+
+class OpenAIRerankDedicated:
+    """Reranker that calls an OpenAI-compatible ``/v1/rerank`` endpoint
+    in a single batched HTTP call. The server must expose this route
+    with a cross-encoder reranker model loaded (vLLM does, when started
+    with a reranker model).
+
+    Wire shape (vLLM / cohere-style convention):
+        POST {base_url}/v1/rerank
+        body: {"model": <name>, "query": <str>, "documents": [<str>, ...]}
+        response: {"results": [
+            {"index": int, "relevance_score": float}, ...
+        ]}
+
+    Single round trip regardless of top-K size, so latency scales with
+    server batching rather than per-pair RTT — typically 10–100× faster
+    than the chat-completions variant for the same top-K.
+
+    Graceful degradation: a non-200 response, transport error, or
+    malformed body returns the input chunks unchanged. Construction-
+    time failure (empty base_url) sets ``available=False`` and
+    ``rerank()`` becomes a passthrough.
+
+    Satisfies the ``Reranker`` Protocol.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str,
+        api_key: str = "",
+        *,
+        timeout_s: float = 60.0,
+        max_chunk_chars: int = 4000,
+    ) -> None:
+        self._model_name = model_name
+        self._base_url = (base_url or "").rstrip("/")
+        self._api_key = api_key or ""
+        self._timeout_s = timeout_s
+        self._max_chunk_chars = max_chunk_chars
+        self.available = True
+        if not self._base_url:
+            logger.warning(
+                "OpenAIRerankDedicated: empty base_url — falling back "
+                "to MockReranker passthrough.",
+            )
+            self.available = False
+            return
+        logger.info(
+            "OpenAIRerankDedicated ready: model=%s, base_url=%s, timeout=%ds",
+            model_name, self._base_url, int(timeout_s),
+        )
+
+    def rerank(
+        self, query: str, chunks: list[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        if not self.available or not chunks:
+            return list(chunks)
+
+        docs = [self._truncate(c.text or "") for c in chunks]
+        payload = {
+            "model": self._model_name,
+            "query": query,
+            "documents": docs,
+        }
+        body = _json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        req = urllib.request.Request(
+            f"{self._base_url}/v1/rerank",
+            data=body, headers=headers, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, _json.JSONDecodeError) as exc:
+            logger.warning(
+                "OpenAIRerankDedicated: call failed (%r) — returning "
+                "input order unchanged for this query.",
+                exc,
+            )
+            return list(chunks)
+
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list):
+            return list(chunks)
+
+        # Parse + dedup ranked indices. Defensive: keep only valid
+        # in-range integers; any chunks the server didn't rank get
+        # appended in input order so the size invariant holds.
+        seen: set[int] = set()
+        ranked: list[RetrievedChunk] = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            idx = r.get("index")
+            if not isinstance(idx, int) or idx in seen:
+                continue
+            if 0 <= idx < len(chunks):
+                ranked.append(chunks[idx])
+                seen.add(idx)
+        for i, c in enumerate(chunks):
+            if i not in seen:
+                ranked.append(c)
+        return ranked
+
+    def _truncate(self, text: str) -> str:
+        if not text:
+            return ""
+        if len(text) <= self._max_chunk_chars:
+            return text
+        return text[: self._max_chunk_chars]
