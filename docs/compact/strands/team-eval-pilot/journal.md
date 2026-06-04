@@ -57,3 +57,76 @@
   the new `feedback_db.py` additions (`CATEGORIES`, `record_user_feedback`,
   `_MERGED_TAB_COLUMNS`). Deferred to a future `/drift-check dev-module web`
   pass rather than fixing inline this session.
+
+## 2026-06-01 — TODO: rule-based eval KPI tracking (parked, pick up later)
+
+### Context
+
+Mid-pilot strategy discussion on whether to adopt RAGAS for systematic
+iteration + KPI tracking. Conclusion: **build rule-based deterministic
+metrics that plug into `core/src/eval/`** rather than RAGAS, to preserve
+the D-015 offline-deterministic posture and avoid LLM-judge variance
+amplifying the MoE non-determinism already pinned in D-DRAFT-4 of
+plan-aware-sira. RAGAS as a monthly spot-check is fine; not as the
+inner-loop KPI surface.
+
+### Two KPIs to implement
+
+**Faithfulness** = mean of three sub-signals (or weighted; see open
+question 1):
+- `citation_grounding` — every `[req_id]` citation in the answer points
+  to a req_id that's in `retrieved_ids`. Catches phantom citations.
+- `numeric_grounding` — numeric tokens in the answer (timer values,
+  `3GPP TS 24.301` version strings, etc.) appear verbatim in the cited
+  chunks' text. Catches hallucinated numbers.
+- `entity_grounding` — telecom acronyms / CAPS-pattern entities in the
+  answer appear in cited chunks. Catches made-up acronyms.
+
+**Answer completeness** = mean of two sub-signals:
+- `req_id_coverage` — `|cited_ids ∩ expected_req_ids| / |expected_req_ids|`.
+  Likely already partly computed under a different name in
+  `core/src/eval/metrics.py` — confirm before duplicating.
+- `keyword_coverage` — `|answer_tokens ∩ expected_keywords| / |expected_keywords|`.
+  Requires `expected_keywords` on the EvalQuestion schema (likely
+  doesn't exist yet — open question 2).
+
+### Open questions to resolve before coding
+
+1. **Weighting of faithfulness sub-signals** — equal mean, or weighted
+   toward `citation_grounding` (phantom req_id is a more serious
+   hallucination than a wrong number)?
+2. **Does `EvalQuestion` schema already carry `expected_keywords`?**
+   Check `core/src/eval/questions.py`. If absent, requires curating 5–10
+   keywords per question × 18 questions before any of this is testable.
+3. **Storage shape**: separate new `<env_dir>/eval/kpi_history.sqlite`
+   (clean audit trail, separate from team_pilot's
+   `nora_test_feedback.db`) OR extend `feedback_db.py` (one less file,
+   but couples two strands). Leaning separate file — different audit
+   purposes (automated vs. human).
+
+### Implementation surface
+
+- `core/src/eval/metrics.py` — add `score_faithfulness(question,
+  response)` and `score_answer_completeness(question, response)`,
+  returning 0–1 floats with a per-sub-signal breakdown dict for
+  diagnostics.
+- `core/src/eval/runner.py` — include the new metrics in `EvalReport`'s
+  per-question + aggregate output.
+- New `core/src/eval/kpi_history.py` — SQLite persistence layer.
+  Two-table schema discussed in the session: `kpi_runs` (run_id +
+  timestamp + commit_sha + config_snapshot + question_count + llm_model)
+  and `kpi_scores` (run_id + question_id + metric + value, PK on the
+  triple). Mirrors the team_pilot pattern.
+- `core/src/eval/eval_cli.py` — `--write-kpi-history` flag to opt in.
+- Tests: deterministic by construction — pin expected scores on
+  hand-crafted (answer, ground-truth) pairs.
+
+### Two queries the storage layer should make trivial
+
+- Trend per metric across commits: `SELECT commit_sha, AVG(value) FROM
+  kpi_scores JOIN kpi_runs USING(run_id) WHERE metric=? GROUP BY
+  commit_sha ORDER BY timestamp`.
+- Regression hunt between two runs: per-question delta with `JOIN
+  USING (question_id, metric)` filtered to the two run_ids.
+
+Reference: this conversation on 2026-06-01.
