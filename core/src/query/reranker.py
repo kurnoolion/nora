@@ -880,6 +880,8 @@ class TEIReranker:
     def rerank(
         self, query: str, chunks: list[RetrievedChunk],
     ) -> list[RetrievedChunk]:
+        import time as _time
+
         if not self.available or not chunks:
             return list(chunks)
 
@@ -890,15 +892,37 @@ class TEIReranker:
         # A batch that fails (transport, HTTP 4xx/5xx, malformed response)
         # contributes no scores — its chunks fall through to the unranked
         # tail in input order, matching the size-invariant contract.
+        #
+        # Per-batch wall-clock is logged at INFO so the NORA log can be
+        # cross-referenced against TEI's access log to localize any
+        # latency bug (server-side vs. NORA-side vs. transport).
         score_by_idx: dict[int, float] = {}
         bs = self._max_batch_size
-        for batch_start in range(0, len(chunks), bs):
+        n_batches = (len(chunks) + bs - 1) // bs
+        logger.info(
+            "TEIReranker: rerank start — %d chunks, %d batch(es) of up to %d",
+            len(chunks), n_batches, bs,
+        )
+        t0_total = _time.perf_counter()
+        for batch_i, batch_start in enumerate(range(0, len(chunks), bs)):
             batch_chunks = chunks[batch_start : batch_start + bs]
+            t0 = _time.perf_counter()
             scores = self._score_batch(query, batch_chunks)
+            dt = _time.perf_counter() - t0
+            logger.info(
+                "TEIReranker: batch %d/%d — %d chunks — %.2fs (%s)",
+                batch_i + 1, n_batches, len(batch_chunks), dt,
+                "ok" if scores is not None else "FAILED",
+            )
             if scores is None:
                 continue
             for local_idx, score in scores.items():
                 score_by_idx[batch_start + local_idx] = score
+        logger.info(
+            "TEIReranker: rerank done — %d/%d chunks scored in %.2fs total",
+            len(score_by_idx), len(chunks),
+            _time.perf_counter() - t0_total,
+        )
 
         # Sort scored chunks by score descending (stable on ties via index);
         # append unscored chunks in input order at the tail.
