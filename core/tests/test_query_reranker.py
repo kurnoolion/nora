@@ -855,6 +855,81 @@ def test_tei_reranker_sends_bearer_token_when_set(monkeypatch):
     assert auth == "Bearer sk-xyz"
 
 
+def test_tei_reranker_default_max_batch_size_matches_tei_server_default():
+    """TEI's --max-client-batch-size defaults to 32; our default must match
+    so out-of-the-box deploys don't 422 on the first oversized request."""
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="m", base_url="http://h")
+    assert r._max_batch_size == 32
+
+
+def test_tei_reranker_splits_oversized_input_into_batches(monkeypatch):
+    """5 chunks with max_batch_size=2 → exactly 3 HTTP calls with the
+    correct text slices in each. The split itself is what protects
+    against TEI's per-request cap."""
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="m", base_url="http://h", max_batch_size=2)
+    # Each call needs its own response; identity scores so we can verify
+    # batching without coupling to score-merge logic.
+    sent = _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _tei_body((0, 0.1), (1, 0.2))),  # batch 0 — chunks 0,1
+        (200, _tei_body((0, 0.3), (1, 0.4))),  # batch 1 — chunks 2,3
+        (200, _tei_body((0, 0.5))),            # batch 2 — chunk 4
+    ])
+    chunks = [_chunk(f"req:{i}", text=f"text-{i}") for i in range(5)]
+    r.rerank("q", chunks)
+    assert len(sent) == 3
+    assert sent[0]["texts"] == ["text-0", "text-1"]
+    assert sent[1]["texts"] == ["text-2", "text-3"]
+    assert sent[2]["texts"] == ["text-4"]
+    # truncate flag survives the split — every batch must carry it.
+    assert all(s.get("truncate") is True for s in sent)
+
+
+def test_tei_reranker_merges_batched_scores_into_global_ranking(monkeypatch):
+    """Cross-encoders score (query, doc) pairs independently — scores from
+    different batches are comparable, so the global ranking should be
+    sort-by-score across all batches, NOT batch-1-then-batch-2."""
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="m", base_url="http://h", max_batch_size=2)
+    # 4 chunks split into two batches.
+    # Batch 1 (chunks 0,1): local idx 1 scores 0.9, local idx 0 scores 0.3
+    # Batch 2 (chunks 2,3): local idx 0 scores 0.95, local idx 1 scores 0.5
+    #   → global scores: {0: 0.3, 1: 0.9, 2: 0.95, 3: 0.5}
+    #   → expected order by score desc: req:c (0.95), req:b (0.9), req:d (0.5), req:a (0.3)
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _tei_body((1, 0.9), (0, 0.3))),
+        (200, _tei_body((0, 0.95), (1, 0.5))),
+    ])
+    chunks = [_chunk(cid) for cid in ("req:a", "req:b", "req:c", "req:d")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:c", "req:b", "req:d", "req:a"]
+
+
+def test_tei_reranker_partial_batch_failure_appends_failed_chunks_unranked(monkeypatch):
+    """If one batch fails (HTTP 5xx, transport, etc.), its chunks get NO
+    score. Scored chunks rank by score; unscored chunks fall through to
+    the tail in input order. Size invariant: output length == input length."""
+    from core.src.query.reranker import TEIReranker
+    import io
+    import urllib.error
+    r = TEIReranker(model_name="m", base_url="http://h", max_batch_size=2)
+    # Batch 1 succeeds; batch 2 raises HTTPError 500.
+    err = urllib.error.HTTPError(
+        url="http://h/rerank", code=500, msg="server error",
+        hdrs=None, fp=io.BytesIO(b'"upstream timeout"'),
+    )
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _tei_body((1, 0.9), (0, 0.5))),  # batch 1: chunks 0,1 scored
+        err,                                    # batch 2: chunks 2,3 fail
+    ])
+    chunks = [_chunk(cid) for cid in ("req:a", "req:b", "req:c", "req:d")]
+    out = r.rerank("q", chunks)
+    # req:b (0.9) > req:a (0.5), then failed-batch chunks in input order
+    assert [c.chunk_id for c in out] == ["req:b", "req:a", "req:c", "req:d"]
+    assert len(out) == len(chunks)  # size invariant
+
+
 def test_tei_reranker_satisfies_reranker_protocol():
     from core.src.query.reranker import TEIReranker, Reranker
     assert isinstance(

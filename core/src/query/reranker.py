@@ -811,11 +811,21 @@ class TEIReranker:
         body: {"query": <str>, "texts": [<str>, ...]}
         response: [{"index": <int>, "score": <float>}, ...]
 
-    Single round trip regardless of top-K size. Latency scales with
-    TEI's internal batching — the CPU/arm64 ORT backend caps the
-    internal forward-pass batch at 8, so a 25-pair request runs as 4
-    sub-batches (~3-4× the latency of an 8-pair request, not 1×). For
-    higher throughput, fire smaller-batch requests concurrently.
+    Auto-batches inputs larger than ``max_batch_size`` (default 32, the
+    same value TEI's ``--max-client-batch-size`` defaults to) — TEI
+    rejects oversize requests with 422 rather than truncating, so the
+    client must split. Cross-encoders score (query, doc) pairs
+    independently, so scores from different batches are directly
+    comparable; the class merges per-batch scores into one global
+    sort-by-score ranking. A batch that fails (transport, HTTP error,
+    malformed response) contributes no scores — its chunks fall through
+    to the unranked tail in input order, preserving the size invariant.
+
+    Latency scales with TEI's internal batching — the CPU/arm64 ORT
+    backend caps the internal forward-pass batch at 8, so a 25-pair
+    request runs as 4 sub-batches (~3-4× the latency of an 8-pair
+    request, not 1×). For higher throughput, fire smaller-batch
+    requests concurrently.
 
     Differences from ``OpenAIRerankDedicated`` (vLLM-style ``/v1/rerank``):
       - URL is ``{base_url}/rerank`` (not ``/v1/rerank``).
@@ -842,12 +852,17 @@ class TEIReranker:
         *,
         timeout_s: float = 60.0,
         max_chunk_chars: int = 4000,
+        max_batch_size: int = 32,
     ) -> None:
         self._model_name = model_name
         self._base_url = (base_url or "").rstrip("/")
         self._api_key = api_key or ""
         self._timeout_s = timeout_s
         self._max_chunk_chars = max_chunk_chars
+        # TEI's --max-client-batch-size defaults to 32; requests over that
+        # get 422. Default here matches so out-of-the-box deploys work. If
+        # the server is raised, callers can override.
+        self._max_batch_size = max(1, max_batch_size)
         self.available = True
         if not self._base_url:
             logger.warning(
@@ -857,21 +872,57 @@ class TEIReranker:
             self.available = False
             return
         logger.info(
-            "TEIReranker ready: model=%s, base_url=%s, timeout=%ds",
-            model_name, self._base_url, int(timeout_s),
+            "TEIReranker ready: model=%s, base_url=%s, timeout=%ds, "
+            "max_batch_size=%d",
+            model_name, self._base_url, int(timeout_s), self._max_batch_size,
         )
 
     def rerank(
         self, query: str, chunks: list[RetrievedChunk],
     ) -> list[RetrievedChunk]:
+        if not self.available or not chunks:
+            return list(chunks)
+
+        # Split the input into TEI-sized batches; score each via one HTTP
+        # call. Scores are independent per (query, doc) pair (cross-encoders
+        # don't normalize across the batch), so concatenating scores from
+        # multiple batches and sorting globally preserves correct ordering.
+        # A batch that fails (transport, HTTP 4xx/5xx, malformed response)
+        # contributes no scores — its chunks fall through to the unranked
+        # tail in input order, matching the size-invariant contract.
+        score_by_idx: dict[int, float] = {}
+        bs = self._max_batch_size
+        for batch_start in range(0, len(chunks), bs):
+            batch_chunks = chunks[batch_start : batch_start + bs]
+            scores = self._score_batch(query, batch_chunks)
+            if scores is None:
+                continue
+            for local_idx, score in scores.items():
+                score_by_idx[batch_start + local_idx] = score
+
+        # Sort scored chunks by score descending (stable on ties via index);
+        # append unscored chunks in input order at the tail.
+        ranked_idx = sorted(
+            score_by_idx.keys(),
+            key=lambda i: (-score_by_idx[i], i),
+        )
+        seen = set(ranked_idx)
+        ranked: list[RetrievedChunk] = [chunks[i] for i in ranked_idx]
+        for i, c in enumerate(chunks):
+            if i not in seen:
+                ranked.append(c)
+        return ranked
+
+    def _score_batch(
+        self, query: str, batch_chunks: list[RetrievedChunk],
+    ) -> dict[int, float] | None:
+        """One /rerank call. Returns {local_idx: score} on success, ``None``
+        on any failure (caller treats unscored chunks as unranked tail)."""
         import json as _json
         import urllib.error
         import urllib.request
 
-        if not self.available or not chunks:
-            return list(chunks)
-
-        texts = [self._truncate(c.text or "") for c in chunks]
+        texts = [self._truncate(c.text or "") for c in batch_chunks]
         # truncate=True: TEI silently truncates inputs exceeding the model's
         # max sequence length (e.g. 512 tokens for bge-reranker-large) instead
         # of returning 422. Our char-level _truncate is a wire-size safety net,
@@ -894,16 +945,16 @@ class TEIReranker:
             except Exception:
                 err_body = "<unreadable>"
             logger.warning(
-                "TEIReranker: HTTP %s from server — body: %s — returning "
-                "input order unchanged for this query.", exc.code, err_body,
+                "TEIReranker: HTTP %s from server — body: %s — skipping "
+                "this batch (chunks fall through to unranked tail).",
+                exc.code, err_body,
             )
-            return list(chunks)
+            return None
         except (urllib.error.URLError, TimeoutError, _json.JSONDecodeError) as exc:
             logger.warning(
-                "TEIReranker: call failed (%r) — returning input order "
-                "unchanged for this query.", exc,
+                "TEIReranker: call failed (%r) — skipping this batch.", exc,
             )
-            return list(chunks)
+            return None
 
         # Native TEI returns a flat array; some forks wrap it as
         # {"results": [...]}. Accept either.
@@ -913,28 +964,24 @@ class TEIReranker:
             results = data["results"]
         else:
             logger.warning(
-                "TEIReranker: unexpected response shape (%s) — "
-                "returning input order unchanged.", type(data).__name__,
+                "TEIReranker: unexpected response shape (%s) — skipping "
+                "this batch.", type(data).__name__,
             )
-            return list(chunks)
+            return None
 
-        # Parse ranked indices, dedup; unranked chunks appended in input
-        # order so the size invariant holds (matches OpenAIRerankDedicated).
-        seen: set[int] = set()
-        ranked: list[RetrievedChunk] = []
+        out: dict[int, float] = {}
         for r in results:
             if not isinstance(r, dict):
                 continue
             idx = r.get("index")
-            if not isinstance(idx, int) or idx in seen:
+            score = r.get("score")
+            if not isinstance(idx, int) or idx in out:
                 continue
-            if 0 <= idx < len(chunks):
-                ranked.append(chunks[idx])
-                seen.add(idx)
-        for i, c in enumerate(chunks):
-            if i not in seen:
-                ranked.append(c)
-        return ranked
+            if not isinstance(score, (int, float)):
+                continue
+            if 0 <= idx < len(batch_chunks):
+                out[idx] = float(score)
+        return out
 
     def _truncate(self, text: str) -> str:
         if not text:
