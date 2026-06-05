@@ -765,6 +765,28 @@ def test_tei_reranker_passthrough_on_http_failure(monkeypatch):
     assert [c.chunk_id for c in out] == ["req:a", "req:b"]
 
 
+def test_tei_reranker_passthrough_on_http_4xx_logs_body(monkeypatch, caplog):
+    """4xx from TEI (e.g. 422 token-overflow) → passthrough, with the
+    server's response body captured in the log so the next mystery
+    failure has a real error message instead of '<HTTPError 422>'."""
+    from core.src.query.reranker import TEIReranker
+    import io
+    import urllib.error
+    r = TEIReranker(model_name="m", base_url="http://h")
+    err = urllib.error.HTTPError(
+        url="http://h/rerank", code=422, msg="Unprocessable Entity",
+        hdrs=None, fp=io.BytesIO(b'{"error":"input too long","error_type":"Validation"}'),
+    )
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [err])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    with caplog.at_level("WARNING", logger="core.src.query.reranker"):
+        out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:a", "req:b"]
+    joined = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "422" in joined
+    assert "input too long" in joined
+
+
 def test_tei_reranker_passthrough_on_malformed_response(monkeypatch):
     """Unexpected shapes (neither flat array nor {results: list}) =
     passthrough rather than crash."""
@@ -792,7 +814,9 @@ def test_tei_reranker_drops_out_of_range_indices(monkeypatch):
 
 def test_tei_reranker_sends_query_and_texts_payload_shape(monkeypatch):
     """Pin the TEI wire shape: body uses `query` + `texts` (not
-    `documents`/`messages`); URL is `/rerank` (no `/v1` prefix)."""
+    `documents`/`messages`); URL is `/rerank` (no `/v1` prefix);
+    truncate=True is set so TEI handles oversize chunks server-side
+    rather than returning 422."""
     from core.src.query.reranker import TEIReranker
     import json
     r = TEIReranker(model_name="m", base_url="http://h")
@@ -804,6 +828,7 @@ def test_tei_reranker_sends_query_and_texts_payload_shape(monkeypatch):
     body = sent[0]
     assert body["query"] == "what is X"
     assert body["texts"] == ["Doc A", "Doc B"]
+    assert body["truncate"] is True  # server-side token-aware truncation
     assert "documents" not in body  # explicitly NOT the openai-rerank-dedicated shape
     assert "model" not in body      # TEI doesn't accept a model field per request
 

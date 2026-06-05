@@ -872,7 +872,11 @@ class TEIReranker:
             return list(chunks)
 
         texts = [self._truncate(c.text or "") for c in chunks]
-        payload = {"query": query, "texts": texts}
+        # truncate=True: TEI silently truncates inputs exceeding the model's
+        # max sequence length (e.g. 512 tokens for bge-reranker-large) instead
+        # of returning 422. Our char-level _truncate is a wire-size safety net,
+        # not a token-aware cap — server-side truncation handles the rest.
+        payload = {"query": query, "texts": texts, "truncate": True}
         body = _json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self._api_key:
@@ -884,6 +888,16 @@ class TEIReranker:
         try:
             with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                err_body = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                err_body = "<unreadable>"
+            logger.warning(
+                "TEIReranker: HTTP %s from server — body: %s — returning "
+                "input order unchanged for this query.", exc.code, err_body,
+            )
+            return list(chunks)
         except (urllib.error.URLError, TimeoutError, _json.JSONDecodeError) as exc:
             logger.warning(
                 "TEIReranker: call failed (%r) — returning input order "
