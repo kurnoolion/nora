@@ -681,6 +681,163 @@ def test_openai_rerank_dedicated_satisfies_reranker_protocol():
 
 
 # ─────────────────────────────────────────────────────────────────────
+# TEIReranker — Cohere-shape /rerank (no /v1 prefix, flat array body)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _tei_body(*idx_score_pairs: tuple[int, float]) -> str:
+    """JSON body shaped like TEI's /rerank response — flat array,
+    `score` field (not `relevance_score`), no `results` wrapper."""
+    import json
+    return json.dumps([
+        {"index": i, "score": s} for i, s in idx_score_pairs
+    ])
+
+
+def test_tei_reranker_unavailable_on_empty_base_url():
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="bge-reranker-large", base_url="")
+    assert r.available is False
+    chunks = [_chunk("req:1"), _chunk("req:2")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:1", "req:2"]
+
+
+def test_tei_reranker_reorders_by_server_ranking(monkeypatch):
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="bge-reranker-large", base_url="http://h")
+    # Server ranks index 2 first, then 0, then 1.
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _tei_body((2, 0.92), (0, 0.61), (1, 0.18))),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:c", "req:a", "req:b"]
+
+
+def test_tei_reranker_appends_unranked_chunks(monkeypatch):
+    """If TEI returns fewer rows than chunks (shouldn't happen but be
+    defensive), missing chunks land at the tail in input order."""
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _tei_body((1, 0.9))),  # only ranks one of three
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b"), _chunk("req:c")]
+    out = r.rerank("q", chunks)
+    assert out[0].chunk_id == "req:b"
+    assert set(c.chunk_id for c in out) == {"req:a", "req:b", "req:c"}
+    assert len(out) == 3
+
+
+def test_tei_reranker_accepts_legacy_results_wrapper(monkeypatch):
+    """The class accepts either a flat array (native TEI) or a
+    `{"results": [...]}` wrapper (some forks/proxies). The docstring
+    documents both — pin the wrapped case here so a future cleanup
+    doesn't accidentally drop the compatibility branch."""
+    from core.src.query.reranker import TEIReranker
+    import json
+    r = TEIReranker(model_name="m", base_url="http://h")
+    # Server returns results in ranked order — index 1 first means
+    # "req:b ranks first." Same convention as the flat-array case +
+    # OpenAIRerankDedicated; the score field is informational.
+    wrapped = json.dumps({
+        "results": [
+            {"index": 1, "score": 0.9},
+            {"index": 0, "score": 0.4},
+        ],
+    })
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [(200, wrapped)])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:b", "req:a"]
+
+
+def test_tei_reranker_passthrough_on_http_failure(monkeypatch):
+    from core.src.query.reranker import TEIReranker
+    import urllib.error
+    r = TEIReranker(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        urllib.error.URLError("connection refused"),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:a", "req:b"]
+
+
+def test_tei_reranker_passthrough_on_malformed_response(monkeypatch):
+    """Unexpected shapes (neither flat array nor {results: list}) =
+    passthrough rather than crash."""
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, '{"unexpected": "shape"}'),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    assert [c.chunk_id for c in out] == ["req:a", "req:b"]
+
+
+def test_tei_reranker_drops_out_of_range_indices(monkeypatch):
+    from core.src.query.reranker import TEIReranker
+    r = TEIReranker(model_name="m", base_url="http://h")
+    _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _tei_body((99, 0.9), (1, 0.7), (-1, 0.5))),
+    ])
+    chunks = [_chunk("req:a"), _chunk("req:b")]
+    out = r.rerank("q", chunks)
+    # only idx=1 is valid; req:a appended after as unranked
+    assert [c.chunk_id for c in out] == ["req:b", "req:a"]
+
+
+def test_tei_reranker_sends_query_and_texts_payload_shape(monkeypatch):
+    """Pin the TEI wire shape: body uses `query` + `texts` (not
+    `documents`/`messages`); URL is `/rerank` (no `/v1` prefix)."""
+    from core.src.query.reranker import TEIReranker
+    import json
+    r = TEIReranker(model_name="m", base_url="http://h")
+    sent = _stub_urlopen(monkeypatch, "core.src.query.reranker", [
+        (200, _tei_body((0, 0.5))),
+    ])
+    r.rerank("what is X", [_chunk("req:1", text="Doc A"), _chunk("req:2", text="Doc B")])
+    assert len(sent) == 1
+    body = sent[0]
+    assert body["query"] == "what is X"
+    assert body["texts"] == ["Doc A", "Doc B"]
+    assert "documents" not in body  # explicitly NOT the openai-rerank-dedicated shape
+    assert "model" not in body      # TEI doesn't accept a model field per request
+
+
+def test_tei_reranker_sends_bearer_token_when_set(monkeypatch):
+    from core.src.query.reranker import TEIReranker
+    captured: dict = {}
+
+    class _FakeResp:
+        status = 200
+        def read(self): return b'[{"index": 0, "score": 0.5}]'
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _grab(req, timeout=None):
+        captured.update(req.headers)
+        return _FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", _grab)
+
+    r = TEIReranker(model_name="m", base_url="http://h", api_key="sk-xyz")
+    r.rerank("q", [_chunk("req:a")])
+    auth = next((v for k, v in captured.items() if k.lower() == "authorization"), None)
+    assert auth == "Bearer sk-xyz"
+
+
+def test_tei_reranker_satisfies_reranker_protocol():
+    from core.src.query.reranker import TEIReranker, Reranker
+    assert isinstance(
+        TEIReranker(model_name="m", base_url="http://h"), Reranker,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
 # env resolvers + _resolve_reranker dispatch
 # ─────────────────────────────────────────────────────────────────────
 
@@ -718,7 +875,7 @@ def test_resolve_reranker_provider_accepts_new_options(monkeypatch):
     from core.src.env.config import (
         RERANKER_PROVIDER_ENV_VAR, resolve_reranker_provider,
     )
-    for value in ("openai-rerank-chat", "openai-rerank-dedicated"):
+    for value in ("openai-rerank-chat", "openai-rerank-dedicated", "tei"):
         monkeypatch.setenv(RERANKER_PROVIDER_ENV_VAR, value)
         assert resolve_reranker_provider() == value
     monkeypatch.delenv(RERANKER_PROVIDER_ENV_VAR, raising=False)

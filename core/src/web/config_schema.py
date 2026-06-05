@@ -156,7 +156,7 @@ _LLM_FIELDS: list[ConfigField] = [
         label="Reranker Provider", kind="enum", category="value",
         choices=[
             "huggingface", "ollama",
-            "openai-rerank-chat", "openai-rerank-dedicated",
+            "openai-rerank-chat", "openai-rerank-dedicated", "tei",
         ],
         help=(
             "Backend to instantiate when the reranker is enabled. "
@@ -173,7 +173,12 @@ _LLM_FIELDS: list[ConfigField] = [
             "/v1/rerank endpoint (vLLM's dedicated reranker route) "
             "for batch ranking — requires the server to expose "
             "/v1/rerank with a cross-encoder model loaded; fast "
-            "(one batched call). Empty = default 'huggingface'."
+            "(one batched call). "
+            "'tei' calls a HuggingFace TEI (Text Embeddings "
+            "Inference) /rerank endpoint (Cohere-style: body uses "
+            "'texts', response is a flat array) — for the standalone "
+            "tei-reranker service in the dgx-spark-srv stack. "
+            "Empty = default 'huggingface'."
         ),
     ),
     ConfigField(

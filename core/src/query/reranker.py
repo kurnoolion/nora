@@ -799,6 +799,137 @@ class OpenAIRerankChat:
         return text[: self._max_chunk_chars]
 
 
+class TEIReranker:
+    """Reranker that calls a HuggingFace TEI (Text Embeddings Inference)
+    ``/rerank`` endpoint in a single batched HTTP call. TEI is a Rust
+    server that auto-detects cross-encoder models from ``config.json``
+    and exposes the Cohere-style ``/rerank`` route — no ``/v1`` prefix,
+    no ``model`` field (one TEI instance serves one model).
+
+    Wire shape (Cohere-native, as TEI implements it):
+        POST {base_url}/rerank
+        body: {"query": <str>, "texts": [<str>, ...]}
+        response: [{"index": <int>, "score": <float>}, ...]
+
+    Single round trip regardless of top-K size. Latency scales with
+    TEI's internal batching — the CPU/arm64 ORT backend caps the
+    internal forward-pass batch at 8, so a 25-pair request runs as 4
+    sub-batches (~3-4× the latency of an 8-pair request, not 1×). For
+    higher throughput, fire smaller-batch requests concurrently.
+
+    Differences from ``OpenAIRerankDedicated`` (vLLM-style ``/v1/rerank``):
+      - URL is ``{base_url}/rerank`` (not ``/v1/rerank``).
+      - Request field is ``texts`` (not ``documents``).
+      - Response is a flat array (not wrapped in ``{"results": [...]}``).
+      - Score field is ``score`` (not ``relevance_score``).
+      - ``model_name`` is informational only (TEI is single-model per
+        instance); logged at startup, not sent in the request body.
+
+    Graceful degradation matches the rest of the reranker family —
+    empty base_url at construction sets ``available=False``; transport
+    errors, malformed bodies, or unexpected shapes during ``rerank()``
+    return the input chunks unchanged so the pipeline keeps working
+    with pre-rerank ordering.
+
+    Satisfies the ``Reranker`` Protocol.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str,
+        api_key: str = "",
+        *,
+        timeout_s: float = 60.0,
+        max_chunk_chars: int = 4000,
+    ) -> None:
+        self._model_name = model_name
+        self._base_url = (base_url or "").rstrip("/")
+        self._api_key = api_key or ""
+        self._timeout_s = timeout_s
+        self._max_chunk_chars = max_chunk_chars
+        self.available = True
+        if not self._base_url:
+            logger.warning(
+                "TEIReranker: empty base_url — falling back to "
+                "MockReranker passthrough.",
+            )
+            self.available = False
+            return
+        logger.info(
+            "TEIReranker ready: model=%s, base_url=%s, timeout=%ds",
+            model_name, self._base_url, int(timeout_s),
+        )
+
+    def rerank(
+        self, query: str, chunks: list[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        if not self.available or not chunks:
+            return list(chunks)
+
+        texts = [self._truncate(c.text or "") for c in chunks]
+        payload = {"query": query, "texts": texts}
+        body = _json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        req = urllib.request.Request(
+            f"{self._base_url}/rerank",
+            data=body, headers=headers, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, _json.JSONDecodeError) as exc:
+            logger.warning(
+                "TEIReranker: call failed (%r) — returning input order "
+                "unchanged for this query.", exc,
+            )
+            return list(chunks)
+
+        # Native TEI returns a flat array; some forks wrap it as
+        # {"results": [...]}. Accept either.
+        if isinstance(data, list):
+            results = data
+        elif isinstance(data, dict) and isinstance(data.get("results"), list):
+            results = data["results"]
+        else:
+            logger.warning(
+                "TEIReranker: unexpected response shape (%s) — "
+                "returning input order unchanged.", type(data).__name__,
+            )
+            return list(chunks)
+
+        # Parse ranked indices, dedup; unranked chunks appended in input
+        # order so the size invariant holds (matches OpenAIRerankDedicated).
+        seen: set[int] = set()
+        ranked: list[RetrievedChunk] = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            idx = r.get("index")
+            if not isinstance(idx, int) or idx in seen:
+                continue
+            if 0 <= idx < len(chunks):
+                ranked.append(chunks[idx])
+                seen.add(idx)
+        for i, c in enumerate(chunks):
+            if i not in seen:
+                ranked.append(c)
+        return ranked
+
+    def _truncate(self, text: str) -> str:
+        if not text:
+            return ""
+        if len(text) <= self._max_chunk_chars:
+            return text
+        return text[: self._max_chunk_chars]
+
+
 class OpenAIRerankDedicated:
     """Reranker that calls an OpenAI-compatible ``/v1/rerank`` endpoint
     in a single batched HTTP call. The server must expose this route

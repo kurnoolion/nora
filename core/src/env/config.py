@@ -897,7 +897,7 @@ def resolve_reranker_provider(
     """Resolve the reranker backend.
 
     Accepted: "huggingface" | "ollama" | "openai-rerank-chat" |
-    "openai-rerank-dedicated".
+    "openai-rerank-dedicated" | "tei".
 
     Precedence: NORA_RERANKER_PROVIDER env var > Config-page DB
     (``llm.reranker_provider``) > config/llm.json ``reranker_provider``
@@ -908,14 +908,14 @@ def resolve_reranker_provider(
     Ollama model OR a vLLM/SGLang-served reranker via the
     OpenAI-compatible variants."""
     raw_env = (os.environ.get(RERANKER_PROVIDER_ENV_VAR) or "").strip().lower()
-    if raw_env in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated"}:
+    if raw_env in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated", "tei"}:
         return raw_env
     if config_store_value:
         v = str(config_store_value).strip().lower()
-        if v in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated"}:
+        if v in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated", "tei"}:
             return v
     cfg = _llm_config()
-    if getattr(cfg, "reranker_provider", "") in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated"}:
+    if getattr(cfg, "reranker_provider", "") in {"huggingface", "ollama", "openai-rerank-chat", "openai-rerank-dedicated", "tei"}:
         return cfg.reranker_provider
     return DEFAULT_RERANKER_PROVIDER
 

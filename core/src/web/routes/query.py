@@ -177,6 +177,15 @@ def _resolve_reranker():
             reranker = OpenAIRerankDedicated(
                 model_name=model_name, base_url=base_url, api_key=api_key,
             )
+        elif provider == "tei":
+            from core.src.query.reranker import TEIReranker
+            db_url = _config_store_get("llm", "reranker_base_url")
+            base_url = resolve_reranker_base_url(config_store_value=db_url)
+            db_key = _config_store_get("llm", "reranker_api_key")
+            api_key = resolve_reranker_api_key(config_store_value=db_key)
+            reranker = TEIReranker(
+                model_name=model_name, base_url=base_url, api_key=api_key,
+            )
         else:
             from core.src.query.reranker import CrossEncoderReranker
             reranker = CrossEncoderReranker(model_name=model_name)
