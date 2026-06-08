@@ -130,3 +130,111 @@ question 1):
   USING (question_id, metric)` filtered to the two run_ids.
 
 Reference: this conversation on 2026-06-01.
+
+## 2026-06-08 — Rerank infra expansion + TEI integration end-to-end
+
+This is a catch-up close-session — work accumulated across multiple
+sessions since the 2026-05-28 build-phase entry. Two waves:
+
+### Done this session
+
+**Wave 1 — Rerank provider expansion (commits 16088d3, ee8b477, 66fdf79, 03bd401)**
+
+- `sandbox/sira_incremental.py retry-failed` subcommand
+  (`--stage doc-enrich|rerank|both`, `--include-all-filtered`) — evict
+  `trace.failed` entries to re-process the failing subset without a
+  full re-run.
+- Two new reranker providers in `core/src/query/reranker.py`:
+  - `OpenAIRerankChat` — vLLM-served chat-completion scoring; works
+    against any OpenAI-compatible chat endpoint.
+  - `OpenAIRerankDedicated` — vLLM's `/v1/rerank` route, available
+    when vLLM is started with `--task=reranker`.
+  - Dispatch wired in `core/src/web/routes/query.py`.
+- Unified batch-size knob: `NORA_RERANK_BATCH_SIZE` env var with the
+  4-tier precedence standard for LLM config (env > config-page DB >
+  config/llm.json > built-in default). Deprecated
+  `NORA_SIRA_RERANK_BATCH_SIZE` accepted as alias with warning.
+- SSE-streamed per-lane progress on the merged /test tab — form's
+  `hx-post` replaced with a JS submit handler using `fetch` +
+  `ReadableStream` (EventSource is GET-only; SSE-over-POST keeps it
+  one request). New `#progress-display` card with per-lane rows.
+
+**Wave 2 — TEI reranker provider, fifth backend (commits f74b891, a4b0e7b, 65d63ad, 8fa9309)**
+
+- New `TEIReranker` class — HuggingFace TEI's Cohere-shape `/rerank`
+  endpoint (body: `{query, texts}`; response: flat `[{index, score}]`).
+  Mirrors graceful-passthrough contract of the rest of the family.
+- Three follow-up operational fixes from first end-to-end test on
+  dgx-spark-srv:
+  1. `truncate=True` on the payload — TEI returns 422 (not silent
+     truncation) when chunks exceed model max sequence length (512
+     for bge-reranker-large). Char-level `_truncate` retained as
+     wire-size safety net.
+  2. Client-side auto-batching — TEI's `--max-client-batch-size`
+     defaults to 32; pipeline hands reranker 50+ chunks. Split into
+     ≤32-chunk batches, score each, merge globally by score
+     (cross-encoder scores are batch-independent → global sort
+     correct).
+  3. HTTPError body capture in error logs — `urllib.error.HTTPError`
+     into its own except branch, read `exc.read()` into the log.
+     Bare `<HTTPError 422>` was uninformative; now the server's
+     actual validation message surfaces.
+- Per-batch wall-clock instrumentation in `TEIReranker.rerank()` —
+  rerank start/done with chunk + batch counts, per-batch wall-clock +
+  ok/FAILED status. Designed to cross-reference against TEI's access
+  log to localize any latency bug.
+- Config schema: `reranker_provider` accepts `"tei"` at all three
+  guard sites in `core/src/env/config.py`; `core/src/web/config_schema.py`
+  adds `"tei"` to dropdown + help text mentions Cohere-shape.
+
+### Operational findings worth journaling
+
+- **Caddy `handle_path` strip semantics for TEI deployment.** When
+  Caddy is configured `handle_path /rerank/* { reverse_proxy
+  tei-reranker:80 }`, it strips the matched prefix before forwarding.
+  Since TEIReranker appends `/rerank` to base_url, the route only
+  matches if base_url itself ends with `/rerank` — request becomes
+  `/rerank/rerank`, Caddy strips one, TEI sees `/rerank`. Setting
+  base_url to server root (without `/rerank`) → 308 redirect to HTTPS
+  → silent passthrough. Captured in TEIReranker docstring; logged
+  here because the original instructions had it wrong and required a
+  cross-chat correction from the dgx-spark-srv side to catch.
+
+- **TEI on CPU/arm64 ORT observed at ~150s for 50 chunks vs RUNBOOK
+  baseline of 300-900ms per 32-chunk batch** — ~100× over expected.
+  Two hypotheses surfaced (dgx-spark chat): inside-TEI contention
+  with vLLM during synthesis, or transport-side overhead between
+  NORA host and spark. Resolution pending the new instrumentation's
+  first slow-query logs.
+
+- **Cross-chat coordination pattern.** dgx-spark-srv changes and
+  NORA-side changes were driven by two separate Claude sessions, with
+  the user shuttling responses via `~/work/scan/reranker-instructions-*.txt`
+  files. Worked well — the dgx-spark chat caught two factual errors
+  in NORA-side recommendations that this chat couldn't have
+  identified from its side (Caddy strip semantics + TEI RUNBOOK
+  baseline numbers).
+
+### In progress
+
+- **TEI rerank latency investigation.** Awaiting next slow-query's
+  logs from both sides (TEI access log via `docker compose logs
+  tei-reranker`; NORA per-batch instrumentation just landed).
+  Three-way diagnosis table: server-side / transport-side /
+  NORA-side overhead.
+
+### Next
+
+- Run a slow query with both logs captured; diagnose the 100× gap.
+- A/B verify TEI rerank actually reorders top-K (vs
+  `NORA_RERANKER_ENABLED=false`) once latency is workable.
+- Eval KPI work (2026-06-01 parked TODO) — three open questions to
+  resolve before code (faithfulness weighting; `expected_keywords`
+  schema; storage location).
+
+### Flags
+
+- Latency investigation is the active gate on declaring TEI
+  integration fully ready for pilot use. Operational but too slow
+  for interactive queries at the observed rate.
+- 2026-06-01 eval-KPI TODO remains parked.
