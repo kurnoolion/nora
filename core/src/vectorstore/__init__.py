@@ -25,6 +25,8 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
       - "sentence-transformers" (default) — local HF-cached model, fast batch encoding
       - "ollama" — Ollama's /api/embeddings; same offline distribution as the
         Ollama LLM (no separate HuggingFace cache needed)
+      - "tei" — TEI's native /embed; single-model-per-instance server,
+        client-side batched to match server's --max-client-batch-size
 
     Provider-specific config:
       - sentence-transformers: `embedding_model`, `embedding_device`,
@@ -32,6 +34,13 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
       - ollama: `embedding_model` (Ollama model name like "nomic-embed-text"),
         `normalize_embeddings`, plus optional `extra["ollama_url"]`
         (defaults to http://localhost:11434) and `extra["ollama_timeout_s"]`.
+      - tei: `embedding_model` (informational — TEI is single-model per
+        instance), `normalize_embeddings`, plus required base URL from
+        `NORA_EMBEDDING_BASE_URL` env var or `extra["tei_base_url"]`
+        (env var wins). Optional bearer token from `NORA_EMBEDDING_API_KEY`
+        or `extra["tei_api_key"]`. Optional `extra["tei_timeout_s"]`,
+        `extra["tei_max_batch_size"]` (default 32), and
+        `extra["tei_max_input_chars"]` (default 8000).
     """
     provider = (config.embedding_provider or "").strip().lower()
 
@@ -70,9 +79,47 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
             max_input_chars=max_chars,
         )
 
+    if provider == "tei":
+        from core.src.env.config import (
+            resolve_embedding_api_key,
+            resolve_embedding_base_url,
+        )
+        from core.src.vectorstore.embedding_tei import (
+            _DEFAULT_MAX_INPUT_CHARS,
+            TEIEmbedder,
+        )
+        # Env var wins; fall back to extras so callers can wire via
+        # EnvironmentConfig JSON without setting a shell var.
+        base_url = resolve_embedding_base_url(
+            config_store_value=config.extra.get("tei_base_url"),
+        )
+        if not base_url:
+            raise ValueError(
+                "tei embedding provider requires a base URL — set "
+                "NORA_EMBEDDING_BASE_URL or VectorStoreConfig.extra['tei_base_url']."
+            )
+        api_key = resolve_embedding_api_key(
+            config_store_value=config.extra.get("tei_api_key"),
+        )
+        timeout = int(config.extra.get("tei_timeout_s", 60))
+        max_batch = int(config.extra.get("tei_max_batch_size", 32))
+        max_chars = int(
+            config.extra.get("tei_max_input_chars", _DEFAULT_MAX_INPUT_CHARS)
+        )
+        return TEIEmbedder(
+            model_name=config.embedding_model,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            normalize=config.normalize_embeddings,
+            max_input_chars=max_chars,
+            max_batch_size=max_batch,
+        )
+
     raise ValueError(
         f"Unknown embedding_provider {config.embedding_provider!r}. "
-        f"Supported: 'sentence-transformers' (aliases: 'huggingface', 'hf', 'st'), 'ollama'."
+        f"Supported: 'sentence-transformers' (aliases: 'huggingface', 'hf', 'st'), "
+        f"'ollama', 'tei'."
     )
 
 

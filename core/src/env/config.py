@@ -627,11 +627,13 @@ def resolve_llm_api_key(
 # Embedding provider / model selection — see core/src/vectorstore
 # ---------------------------------------------------------------------------
 
-EMBEDDING_PROVIDERS: tuple[str, ...] = ("sentence-transformers", "huggingface", "ollama")
+EMBEDDING_PROVIDERS: tuple[str, ...] = ("sentence-transformers", "huggingface", "ollama", "tei")
 DEFAULT_EMBEDDING_PROVIDER: str = "sentence-transformers"
 DEFAULT_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 EMBEDDING_PROVIDER_ENV_VAR: str = "NORA_EMBEDDING_PROVIDER"
 EMBEDDING_MODEL_ENV_VAR: str = "NORA_EMBEDDING_MODEL"
+EMBEDDING_BASE_URL_ENV_VAR: str = "NORA_EMBEDDING_BASE_URL"
+EMBEDDING_API_KEY_ENV_VAR: str = "NORA_EMBEDDING_API_KEY"
 
 
 def resolve_embedding_provider(
@@ -681,6 +683,51 @@ def resolve_embedding_model(
         if value:
             return value
     return DEFAULT_EMBEDDING_MODEL
+
+
+def resolve_embedding_base_url(
+    cli_value: str | None = None,
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve the effective embedding base URL (for HTTP-API embedders).
+
+    Used by the ``tei`` embedding provider. Precedence: CLI flag >
+    NORA_EMBEDDING_BASE_URL env var > config-page DB > config/llm.json
+    ``embedding_base_url`` > empty string (caller responsibility to
+    validate). No default — the URL is deployment-specific.
+    """
+    for value in (
+        cli_value,
+        os.environ.get(EMBEDDING_BASE_URL_ENV_VAR),
+        config_store_value,
+        _llm_config().embedding_base_url if hasattr(
+            _llm_config(), "embedding_base_url"
+        ) else None,
+    ):
+        if value:
+            return value
+    return ""
+
+
+def resolve_embedding_api_key(
+    cli_value: str | None = None,
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve the effective embedding API key (Bearer token for
+    HTTP-API embedders). Precedence: CLI flag > NORA_EMBEDDING_API_KEY
+    env var > config-page DB > config/llm.json ``embedding_api_key`` >
+    empty string."""
+    for value in (
+        cli_value,
+        os.environ.get(EMBEDDING_API_KEY_ENV_VAR),
+        config_store_value,
+        _llm_config().embedding_api_key if hasattr(
+            _llm_config(), "embedding_api_key"
+        ) else None,
+    ):
+        if value:
+            return value
+    return ""
 
 
 # ---------------------------------------------------------------------------
