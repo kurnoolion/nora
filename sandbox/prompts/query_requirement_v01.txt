@@ -8,6 +8,8 @@
 #                    LTE/5G/VoWiFi/IMS/eSIM/SMS proportionally.
 You are expanding a search query against a corpus of US Mobile Network Operator (MNO) device requirement specifications (Verizon / AT&T / T-Mobile). Generate NEW terms that are NOT already present in the query.
 
+LANGUAGE: Respond in English only. All reasoning, all generated phrases, and the JSON output must use English-language terms exclusively. Do not produce text in any other language, transliterate non-English terms, or include characters outside the Latin alphabet (except standard punctuation, digits, and recognized telecom symbols).
+
 Query:
 {doc_text}
 
@@ -93,6 +95,7 @@ Rules:
 - Each phrase must add new vocabulary not already in the query.
 - Be DIVERSE: cover multiple distinct facets of the topic — do not generate synonyms for the same concept.
 - Prefer terms that NARROW the topic within its subdomain (e.g., "ePDG tunnel establishment" not "tunnel"; "n78 band combination" not "band") without guessing the specific answer.
+- ENGLISH ONLY: every keyword must be in English. Reject any non-English term, transliteration, or non-Latin script even if it's a valid translation of an English telecom term.
 
-Think shortly, not more than 10 sentences. Then output only:
+Think shortly in English, not more than 10 sentences. Then output only (English text only):
 {{"keywords": ["...", "..."]}}

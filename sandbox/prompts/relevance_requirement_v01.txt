@@ -7,6 +7,8 @@
 #   v01 (current)  — examples span LTE, 5G, VoWiFi, IMS, eSIM, SMS.
 Given a query and a device requirement, rate how useful the requirement is for answering the query.
 
+LANGUAGE: Respond in English only. All reasoning and the JSON output must be in English. Use only the JSON key "score" (English) — do not translate, rename, or substitute keys with non-English equivalents. Do not include non-Latin characters in any part of the response.
+
 Query: {query}
 
 Requirement: {document}
@@ -34,4 +36,4 @@ IMPORTANT: A score of 0 means the requirement has NOTHING to do with the query �
 
 IMPORTANT (cross-subdomain): If the query is about VoWiFi / 5G / eSIM / SMS but the requirement is purely about LTE EMM (or vice versa), score it 0-10. Same rule applies across the standards-body ↔ platform/app/UX boundary: if the query asks about an Android API surface and the requirement is a 3GPP-protocol behavior with no API-surface or UI mention (or vice versa — query asks about a dialer UI flow but the requirement is purely 3GPP-network signaling), score 0-10. Do not give credit just because both are "telecom" or share the word "device" — subdomain mismatch should suppress the score even if surface keywords overlap.
 
-Output only: {{"score": <integer>}}
+Reason in English. Output only (English text, with the literal key "score"): {{"score": <integer>}}

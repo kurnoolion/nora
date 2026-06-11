@@ -11,6 +11,8 @@
 #                     eSIM, SMS, device management, voice continuity.
 You are improving a search index over US Mobile Network Operator (MNO) device requirement specifications (Verizon / AT&T / T-Mobile). Given a single requirement, generate NEW search terms that are NOT already present in the requirement text.
 
+LANGUAGE: Respond in English only. All reasoning, all generated phrases, and the JSON output must use English-language terms exclusively. Do not produce text in any other language, transliterate non-English terms, or include characters outside the Latin alphabet (except standard punctuation, digits, and recognized telecom symbols like "+" in "AT+CSQ").
+
 Requirement:
 {doc_text}
 
@@ -91,6 +93,7 @@ Rules:
 - Be SPECIFIC: prefer "ePDG tunnel establishment" over "tunnel", prefer "5G NAS registration" over "registration".
 - Do NOT generate broad telecom topic words that thousands of requirements share (e.g., "wireless", "mobile", "cellular", "device", "specification", "requirement").
 - Stay within real, established terminology from EITHER family — 3GPP / GSMA / IETF / IEEE / OMA / SGP / FCC for standards-body subdomains, OR Android (AOSP / CDD / CTS / public-SDK class names) / OEM-chipset vendor docs / RCS UP for platform-app-UX subdomains. Do not invent identifiers, API class names, settings keys, or spec sections that don't exist.
+- ENGLISH ONLY: every keyword must be in English. Reject any non-English term, transliteration, or non-Latin script even if it's a valid translation of an English telecom term.
 
-Think shortly, not more than 10 sentences. Then output only:
+Think shortly in English, not more than 10 sentences. Then output only (English text only):
 {{"keywords": ["...", "..."]}}
