@@ -32,12 +32,14 @@ defaults:
 #                            the discriminative-term invariant from D-DRAFT-1).
 #   tokenizer: unicode_stem
 #
-# Default to strict serial. The corporate proxy between the work PC
-# and the proprietary LLM endpoint throttles parallel requests; the
-# upstream default of 4096 saturates the throttle and gets 5xx
-# responses. Override on CLI for unthrottled environments (DGX Spark
-# with local sglang, etc.): `enrich.concurrency=16`.
-concurrency: 1
+# Default to modest parallelism. With the shim routing to the
+# unthrottled local LLM endpoint, 4 in-flight requests are comfortable
+# without saturating the backend. The corporate-proxy path that
+# previously forced strict serial (=1) is now bypassed. Raise further
+# on bigger backends. Note: this YAML override is applied AFTER
+# Hydra CLI overrides, so editing here is the right place to tune —
+# CLI `++enrich.concurrency=N` is silently re-stomped by this file.
+concurrency: 4
 
 doc_prompt_file: configs/enrich/prompts/doc_requirement_v01.txt
 query_prompt_file: configs/enrich/prompts/query_requirement_v01.txt

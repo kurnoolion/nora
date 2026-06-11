@@ -27,10 +27,11 @@ defaults:
 #   temperature: 0.0      — reranker is greedy / deterministic by design.
 #   seed: 42
 
-# Default to strict serial — same proxy-throttling reason as enrich/nora.yaml.
-# Reranker calls are fast (just `{"score": N}` returns), so serial isn't as
-# painful here as for corpus enrichment. Override on CLI for unthrottled
-# environments: `rerank.concurrency=8`.
-concurrency: 1
+# Default to modest parallelism — same reasoning as enrich/nora.yaml.
+# Reranker calls are fast (just `{"score": N}` returns), so 4 in-flight
+# barely registers on the backend. Raise on bigger backends.
+# Note: this YAML is applied AFTER Hydra CLI overrides, so CLI
+# `++rerank.concurrency=N` is silently re-stomped by the value here.
+concurrency: 4
 
 prompt_file: configs/rerank/prompts/relevance_requirement_v01.txt
