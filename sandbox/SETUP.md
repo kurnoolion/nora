@@ -168,13 +168,39 @@ scripts read these env vars; when set, they override SIRA's hardcoded
 # Enrichment stages (corpus + query) — share the same env vars
 export NORA_SIRA_ENRICH_LLM_URL=http://<your-llm-host>:<port>/v1
 export NORA_SIRA_ENRICH_LLM_MODEL=<your-model-name>
+export NORA_SIRA_ENRICH_LLM_TIMEOUT=300       # default 300; bump for slow LLMs (see below)
 
 # Rerank stage — can point at the same OR a different (typically faster)
 # endpoint. The split-deployment use case: high-quality LLM for the 1 call
 # per query (enrichment), fast local LLM for the 50 calls per query (rerank).
 export NORA_SIRA_RERANK_LLM_URL=http://<your-llm-host>:<port>/v1
 export NORA_SIRA_RERANK_LLM_MODEL=<your-model-name>
+export NORA_SIRA_RERANK_LLM_TIMEOUT=300       # default 300; bump for slow LLMs (see below)
 ```
+
+**Timeout sizing.** SIRA's pre-patch defaults were `total=300s`,
+`sock_read=60s` — the 60s `sock_read` is the killer when an LLM is
+slow to start streaming (a request that takes >60s from POST to first
+byte gets cut). The patch collapses these into a single env var per
+stage that sets both `total` and `sock_read` to the same value. Use
+**≥3× your endpoint's measured per-request latency**. For an LLM that
+takes ~60s per call (curl test recommended below), set 180-300; for
+~120s set 360-600. Each stage logs the resolved value at startup:
+`LLM timeout: total=Xs sock_read=Xs`. To measure realistic per-call
+latency before setting:
+
+```bash
+time curl -m 600 -X POST $NORA_SIRA_ENRICH_LLM_URL/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "'$NORA_SIRA_ENRICH_LLM_MODEL'",
+    "messages": [{"role":"user","content":"Generate 10 telecom phrases for: GPRS attach procedure"}],
+    "max_tokens": 2048
+  }' >/dev/null
+```
+
+The wall-clock from `time` is your per-call baseline. Triple it for
+the env var.
 
 Sanity-check both endpoints before running the pipeline:
 
@@ -671,6 +697,9 @@ Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 | Probe `SPK ...: FAIL status=4xx` with `body=...model...` | Wrong `_MODEL` value for that endpoint | Check what the endpoint accepts (e.g. `curl <url>/models` if exposed) and update `NORA_SIRA_*_LLM_MODEL`. |
 | Probe `SPK ...: FAIL status=4xx` with `body=...token/auth...` | Endpoint requires `Authorization: Bearer ...` header; per-stage routing doesn't support it | Switch to shim path 5a (which injects headers) for that stage. |
 | `bash sandbox/install_configs.sh` says `error per-stage-routing: patch does not apply cleanly` | The SIRA clone's `scripts/` files were edited by hand or a stale partial patch is in the way | `cd sandbox/sira && git checkout -- scripts/` then re-run `install_configs.sh`. |
+| `bash sandbox/install_configs.sh` says `skip per-stage-routing: already applied` but you wanted the **extended** patch (with timeout knobs) | Old patch already in place from a previous pull; sentinel grep finds `NORA_SIRA_ENRICH_LLM_URL` and skips, missing the new timeout lines | `cd sandbox/sira && git checkout -- scripts/` to wipe the old patch, then `bash sandbox/install_configs.sh` from repo root applies the current extended patch. Verify both env vars landed: `grep -c NORA_SIRA_.*_LLM_TIMEOUT sandbox/sira/scripts/*.py` — expect 1 per file. |
+| Pipeline log shows `LLM timeout: total=300s sock_read=300s` (or whatever value you set) but LLM calls still time out with `TimeoutError` / `ServerDisconnectedError` | Backend per-call latency exceeds the configured timeout, OR the proxy / load balancer between NORA and the backend has its own shorter timeout | Run the `curl -m 600 ... -d '{...}'` test from section 5.0 to measure actual per-call wall-clock. Set `NORA_SIRA_*_LLM_TIMEOUT` to ≥3× that. If `curl` succeeds quickly but Python still times out, an intermediate proxy is dropping long-lived connections — check `HTTPS_PROXY` settings and consider bypassing per `NO_PROXY`. |
+| Pipeline log shows `LLM timeout: total=300s` but you set `NORA_SIRA_ENRICH_LLM_TIMEOUT=600` | Env var not exported in the shell that launched the pipeline | `env \| grep NORA_SIRA_` in the pipeline's shell to confirm. If using `nohup`, double-check the env var was exported BEFORE the `nohup python ...` command. |
 
 ### Shim path (path 5a/5b / D.2)
 
