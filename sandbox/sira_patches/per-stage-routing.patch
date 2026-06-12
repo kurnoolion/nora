@@ -1,0 +1,126 @@
+diff --git a/scripts/add_doc_index_adapter.py b/scripts/add_doc_index_adapter.py
+index 0400b66..ff8df1e 100644
+--- a/scripts/add_doc_index_adapter.py
++++ b/scripts/add_doc_index_adapter.py
+@@ -116,8 +116,20 @@ async def enrich_corpus(cfg: DictConfig) -> None:
+         chat_template_kwargs = OmegaConf.to_container(sglang_cfg.chat_template_kwargs)
+         logger.info("chat_template_kwargs: %s", chat_template_kwargs)
+ 
+-    llm_url = f"http://127.0.0.1:{sglang_cfg.port}/v1/chat/completions"
+-    model = sglang_cfg.model
++    # NORA per-stage routing — env vars override the URL/model so the
++    # enrichment stage can target a different LLM endpoint than the
++    # rerank stage without running a shim. See sandbox/sira_patches/
++    # per-stage-routing.patch.
++    _stage_url = os.getenv("NORA_SIRA_ENRICH_LLM_URL", "").rstrip("/")
++    _stage_model = os.getenv("NORA_SIRA_ENRICH_LLM_MODEL", "")
++    if _stage_url:
++        llm_url = f"{_stage_url}/chat/completions"
++        model = _stage_model or sglang_cfg.model
++        logger.info("LLM URL: %s (env-routed via NORA_SIRA_ENRICH_LLM_URL)", llm_url)
++    else:
++        llm_url = f"http://127.0.0.1:{sglang_cfg.port}/v1/chat/completions"
++        model = sglang_cfg.model
++        logger.info("LLM URL: %s (sglang config)", llm_url)
+ 
+     # Load BM25 index
+     index_dir = ds.bm25_index_best
+diff --git a/scripts/enrich_query_and_retrieve.py b/scripts/enrich_query_and_retrieve.py
+index c764c4c..906c006 100644
+--- a/scripts/enrich_query_and_retrieve.py
++++ b/scripts/enrich_query_and_retrieve.py
+@@ -103,8 +103,20 @@ async def run(cfg: DictConfig) -> None:
+     if getattr(sglang_cfg, "chat_template_kwargs", None):
+         chat_template_kwargs = OmegaConf.to_container(sglang_cfg.chat_template_kwargs)
+ 
+-    llm_url = f"http://127.0.0.1:{sglang_cfg.port}/v1/chat/completions"
+-    model = sglang_cfg.model
++    # NORA per-stage routing — env vars override the URL/model so the
++    # enrichment stage can target a different LLM endpoint than the
++    # rerank stage without running a shim. See sandbox/sira_patches/
++    # per-stage-routing.patch.
++    _stage_url = os.getenv("NORA_SIRA_ENRICH_LLM_URL", "").rstrip("/")
++    _stage_model = os.getenv("NORA_SIRA_ENRICH_LLM_MODEL", "")
++    if _stage_url:
++        llm_url = f"{_stage_url}/chat/completions"
++        model = _stage_model or sglang_cfg.model
++        logger.info("LLM URL: %s (env-routed via NORA_SIRA_ENRICH_LLM_URL)", llm_url)
++    else:
++        llm_url = f"http://127.0.0.1:{sglang_cfg.port}/v1/chat/completions"
++        model = sglang_cfg.model
++        logger.info("LLM URL: %s (sglang config)", llm_url)
+ 
+     # Load BM25 index + apply doc enrichments
+     index_dir = ds.bm25_index_best
+diff --git a/scripts/llm_reranking.py b/scripts/llm_reranking.py
+index 82bc9c6..ffe0c14 100644
+--- a/scripts/llm_reranking.py
++++ b/scripts/llm_reranking.py
+@@ -89,8 +89,20 @@ async def run(cfg: DictConfig) -> None:
+     if getattr(sglang_cfg, "chat_template_kwargs", None):
+         chat_template_kwargs = OmegaConf.to_container(sglang_cfg.chat_template_kwargs)
+ 
+-    llm_url = f"http://127.0.0.1:{sglang_cfg.port}/v1/chat/completions"
+-    model = sglang_cfg.model
++    # NORA per-stage routing — env vars override the URL/model so the
++    # rerank stage can target a different (faster, cheaper) LLM than the
++    # enrichment stages without running a shim. See sandbox/sira_patches/
++    # per-stage-routing.patch.
++    _stage_url = os.getenv("NORA_SIRA_RERANK_LLM_URL", "").rstrip("/")
++    _stage_model = os.getenv("NORA_SIRA_RERANK_LLM_MODEL", "")
++    if _stage_url:
++        llm_url = f"{_stage_url}/chat/completions"
++        model = _stage_model or sglang_cfg.model
++        logger.info("LLM URL: %s (env-routed via NORA_SIRA_RERANK_LLM_URL)", llm_url)
++    else:
++        llm_url = f"http://127.0.0.1:{sglang_cfg.port}/v1/chat/completions"
++        model = sglang_cfg.model
++        logger.info("LLM URL: %s (sglang config)", llm_url)
+ 
+     # Load retrieval candidates
+     retrieval_path = ds.retrieval_best("query-enrich")
+diff --git a/scripts/run_pipeline.py b/scripts/run_pipeline.py
+index 18a4c19..08a4ac7 100644
+--- a/scripts/run_pipeline.py
++++ b/scripts/run_pipeline.py
+@@ -378,16 +378,31 @@ def main(cfg: DictConfig) -> None:
+     server_proc = None
+     gpus = _gpu_info()
+     if all_stages & LLM_STAGES:
++        # NORA per-stage routing — if env vars route enrich + rerank LLM
++        # calls to non-local endpoints, SIRA's localhost sglang server
++        # is unwanted. Skip reachability check and spawn entirely. See
++        # sandbox/sira_patches/per-stage-routing.patch.
++        _env_routed = bool(
++            os.environ.get("NORA_SIRA_ENRICH_LLM_URL")
++            or os.environ.get("NORA_SIRA_RERANK_LLM_URL")
++        )
+         port = cfg.sglang.port
+-        server_running = False
+-        for url in [f"http://127.0.0.1:{port}/v1/models", f"http://[::1]:{port}/v1/models"]:
+-            try:
+-                urllib.request.urlopen(url, timeout=2)
+-                server_running = True
+-                logger.info("Using existing LLM server on port %d", port)
+-                break
+-            except Exception:
+-                pass
++        if _env_routed:
++            server_running = True
++            logger.info(
++                "SIRA LLM stages routed via NORA_SIRA_*_LLM_URL env vars "
++                "— skipping localhost sglang reachability check and spawn."
++            )
++        else:
++            server_running = False
++            for url in [f"http://127.0.0.1:{port}/v1/models", f"http://[::1]:{port}/v1/models"]:
++                try:
++                    urllib.request.urlopen(url, timeout=2)
++                    server_running = True
++                    logger.info("Using existing LLM server on port %d", port)
++                    break
++                except Exception:
++                    pass
+         if not server_running:
+             server_proc = _start_server(cfg)
+             if not gpus:
