@@ -6,7 +6,7 @@ Step-by-step to stand up the `sira` strand's sandbox end-to-end. Layout / file r
 
 | | What | Notes |
 |---|---|---|
-| **Hardware** | NVIDIA GPU (Ampere or newer, ≥16 GB VRAM) | Required only if you run sglang locally. Our default path bypasses sglang via the FastAPI shim → proprietary LLM, so a CPU-only box **can** run BM25 + drive the LLM stages through the shim. The hard requirement is reduced to "whatever your proprietary LLM endpoint needs." |
+| **Hardware** | NVIDIA GPU (Ampere or newer, ≥16 GB VRAM) | Required only if you run sglang locally. Our default path bypasses sglang entirely — SIRA routes via env vars (per-stage routing, recommended) or via the FastAPI shim (header-injection / model-rewrite fallback) → your LLM endpoint. So a CPU-only box **can** run BM25 + drive the LLM stages remotely. The hard requirement is reduced to "whatever your LLM endpoint needs." |
 | **OS** | Linux | SIRA's `pyproject.toml` pins `sys_platform == 'linux'`. WSL2 works. |
 | **Python** | 3.12 | hard pin per SIRA's `requires-python` |
 | **Rust toolchain** | `cargo`, `rustc` (stable) | Required to build the `bm25x` Rust extension. Install via `rustup`. |
@@ -149,11 +149,80 @@ Idempotent. Re-run after editing any of:
 - `sandbox/sira_configs/{data,enrich,rerank}/nora.yaml`
 - `sandbox/prompts/{doc,query,relevance}_requirement_v01.txt`
 
-### 5. Point the shim at your LLM
+### 5. Configure SIRA's LLM endpoints
 
-The shim runs in one of two modes; pick the one that matches your deployment.
+Three deployment paths, listed in order of preference. **Path 5.0 (per-stage
+routing via env vars) is the recommended path** — no shim required, no
+header juggling, eliminates a process you'd otherwise need to run. The shim
+remains the right answer when you genuinely need header injection,
+model-name rewriting, or non-OpenAI adapter mode.
 
-#### 5a. Pass-through mode — your proprietary LLM exposes OpenAI Chat Completions
+#### 5.0. Per-stage routing — recommended (no shim)
+
+Applies the `sira_patches/per-stage-routing.patch` (already done by
+`install_configs.sh` in step 4). After the patch, SIRA's four LLM-calling
+scripts read these env vars; when set, they override SIRA's hardcoded
+`http://127.0.0.1:{port}/v1/chat/completions`:
+
+```bash
+# Enrichment stages (corpus + query) — share the same env vars
+export NORA_SIRA_ENRICH_LLM_URL=http://<your-llm-host>:<port>/v1
+export NORA_SIRA_ENRICH_LLM_MODEL=<your-model-name>
+
+# Rerank stage — can point at the same OR a different (typically faster)
+# endpoint. The split-deployment use case: high-quality LLM for the 1 call
+# per query (enrichment), fast local LLM for the 50 calls per query (rerank).
+export NORA_SIRA_RERANK_LLM_URL=http://<your-llm-host>:<port>/v1
+export NORA_SIRA_RERANK_LLM_MODEL=<your-model-name>
+```
+
+Sanity-check both endpoints before running the pipeline:
+
+```bash
+python -m sandbox.sira_patches.test.probe_per_stage_endpoints
+# Expect:
+#   SPK enrich: OK status=200 elapsed=Xms model_echoed=yes content_len=N
+#   SPK rerank: OK status=200 elapsed=Xms model_echoed=yes content_len=N
+```
+
+Then launch the pipeline — `sglang.port` is irrelevant when env-routed,
+but harmless to leave at its default:
+
+```bash
+cd $REPO_ROOT && source sandbox/activate.sh
+cd sandbox/sira
+python scripts/run_pipeline.py \
+    data=nora enrich=nora rerank=nora \
+    db_root=$(realpath ../adapter/out)
+```
+
+Runtime confirmation — every stage logs which URL it resolved:
+
+```
+LLM URL: http://your-host:port/v1/chat/completions (env-routed via NORA_SIRA_ENRICH_LLM_URL)
+LLM URL: http://your-host:port/v1/chat/completions (env-routed via NORA_SIRA_RERANK_LLM_URL)
+SIRA LLM stages routed via NORA_SIRA_*_LLM_URL env vars — skipping localhost sglang reachability check and spawn.
+```
+
+If you see `(sglang config)` instead, the patch wasn't applied. Re-run
+`bash sandbox/install_configs.sh` and check for `applied per-stage-routing`
+in its output.
+
+**Three sample backends** (see `sandbox/sira_patches/README.md` for env
+var reference and per-backend tuning notes):
+
+- Your existing OpenAI-compatible LLM gateway — both `ENRICH` and `RERANK`
+  point at it.
+- Ollama — `NORA_SIRA_RERANK_LLM_URL=http://localhost:11434/v1`. Pull a
+  small model first (`ollama pull <model>`), name it in `_MODEL`.
+- vLLM — same shape, point at your vLLM's `/v1` base.
+
+If your endpoint requires custom auth headers OR you need to rewrite
+the model name on every request, use **5a** below (shim pass-through).
+If your provider isn't OpenAI-compatible at all, use **5b** (shim
+adapter mode).
+
+#### 5a. Pass-through mode — your proprietary LLM exposes OpenAI Chat Completions, but needs header injection or model rewriting
 
 If `https://your-llm/v1/chat/completions` already accepts the OpenAI request shape, the shim becomes a thin proxy: receives SIRA's request, forwards verbatim, returns the response. **No code to write** — `customizations/llm/proprietary_provider.py` is bypassed entirely.
 
@@ -261,7 +330,30 @@ Runs the **prepare → bm25** stages only. Reads our adapter output, builds the 
 
 If this step works, the data pipeline is sound — every LLM-touching stage downstream just adds enrichment on top of this baseline.
 
-### D. Full pipeline against the shim
+### D. Full pipeline
+
+Two paths — pick whichever matches your step-5 choice.
+
+**D.1 Env-routed (recommended, no shim)** — assumes the per-stage env vars from step 5.0 are exported in this shell:
+
+```bash
+cd $REPO_ROOT
+source sandbox/activate.sh
+cd sandbox/sira
+python scripts/run_pipeline.py \
+    data=nora \
+    enrich=nora \
+    rerank=nora \
+    db_root=$(realpath ../adapter/out)
+```
+
+`sglang.port` is irrelevant when env vars route — the patched
+`run_pipeline.py` skips the localhost reachability check. Confirm via
+the log line `SIRA LLM stages routed via NORA_SIRA_*_LLM_URL env vars
+— skipping localhost sglang reachability check and spawn.`
+
+**D.2 Shim path (fallback)** — for header-injection / model-rewrite
+cases configured in step 5a or 5b:
 
 ```bash
 # Terminal 1 — shim
@@ -279,7 +371,7 @@ python scripts/run_pipeline.py \
     sglang.port=8030
 ```
 
-Critical flags:
+Critical flag for the shim path:
 - `sglang.port=8030` — SIRA's hardcoded `http://127.0.0.1:{port}/v1/chat/completions` resolves to our shim.
 
 **Concurrency**: `enrich/nora.yaml` and `rerank/nora.yaml` pin `concurrency: 1` (strict serial) because the work-PC corporate proxy throttles parallel requests — bursting hits 5xx and SIRA's retry backoff *increases* wall-clock. For unthrottled environments (DGX Spark with local sglang, or a workstation that hits the LLM endpoint directly without a corporate proxy), override on CLI: `enrich.concurrency=16 rerank.concurrency=8`. SIRA's upstream defaults are 4096 / 2048, calibrated for a local H100 sglang.
@@ -568,6 +660,19 @@ export HF_DATASETS_OFFLINE=1
 Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 
 ## Troubleshooting
+
+### Per-stage routing (path 5.0 / D.1)
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Pipeline log says `LLM URL: ... (sglang config)` instead of `(env-routed via NORA_SIRA_*_LLM_URL)` | Patch not applied in the SIRA clone | Re-run `bash sandbox/install_configs.sh`. Look for `applied per-stage-routing` in its output. If you see `skip per-stage-routing: already applied`, the sentinel grep found the marker but check that env vars are actually exported in this shell (`env \| grep NORA_SIRA_`). |
+| `python scripts/run_pipeline.py` says `Starting sglang server...` (we don't want this) | Neither `NORA_SIRA_ENRICH_LLM_URL` nor `NORA_SIRA_RERANK_LLM_URL` was set when the script ran | Export the env vars before invoking the script. The skip-spawn guard is OR-based — setting either one trips it. |
+| Probe `SPK ...: FAIL status=0` for one stage | Endpoint unreachable from your shell — DNS, host down, port closed, or HTTPS_PROXY routing the request somewhere wrong | `curl -v <url>/chat/completions -d '{...}'` to isolate. If `curl` works but Python doesn't, check `NO_PROXY` env var includes the host. |
+| Probe `SPK ...: FAIL status=4xx` with `body=...model...` | Wrong `_MODEL` value for that endpoint | Check what the endpoint accepts (e.g. `curl <url>/models` if exposed) and update `NORA_SIRA_*_LLM_MODEL`. |
+| Probe `SPK ...: FAIL status=4xx` with `body=...token/auth...` | Endpoint requires `Authorization: Bearer ...` header; per-stage routing doesn't support it | Switch to shim path 5a (which injects headers) for that stage. |
+| `bash sandbox/install_configs.sh` says `error per-stage-routing: patch does not apply cleanly` | The SIRA clone's `scripts/` files were edited by hand or a stale partial patch is in the way | `cd sandbox/sira && git checkout -- scripts/` then re-run `install_configs.sh`. |
+
+### Shim path (path 5a/5b / D.2)
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
