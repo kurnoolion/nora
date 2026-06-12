@@ -126,3 +126,76 @@ git checkout -- scripts/
 
 Then re-run `bash sandbox/install_configs.sh` only if you also want the
 hydra configs + prompts copied back in.
+
+## TODO — Future patches
+
+### Support a dedicated `/rerank` endpoint for SIRA's rerank stage
+
+**Status:** parked. Add when the per-stage routing has run long enough
+in production to justify the latency-vs-flexibility tradeoff.
+
+**Motivation.** SIRA's `llm_reranking.py` is LLM-as-judge — one chat
+completion per (query, doc) pair, ~1-5s/call × 50-200 candidates per
+query = 1-15 min/query just for rerank. A dedicated cross-encoder
+reranker (TEI's `/rerank`, vLLM's `/v1/rerank`, or NORA's existing
+`Reranker` Protocol implementations) bulk-scores N pairs in one HTTP
+call at ~10-50ms per pair total — a 10-100× speedup.
+
+**What this patch would do.** Add a new env var (e.g.
+`NORA_SIRA_RERANK_BACKEND=chat|tei|openai-dedicated`, default `chat`
+for backwards compatibility) and a corresponding code branch in
+`llm_reranking.py` that:
+
+1. **`backend=chat`** (current behavior, preserves the
+   `NORA_SIRA_RERANK_LLM_URL` env-routed chat path).
+2. **`backend=tei`** — POSTs to `{NORA_SIRA_RERANK_LLM_URL}/rerank`
+   in Cohere shape (`{"query", "texts"}` → flat `[{"index", "score"}]`).
+   Mirrors NORA's `TEIReranker` wire shape from
+   `core/src/query/reranker.py`. Bulk-batched server-side; client-side
+   chunking at `--max-client-batch-size` (default 32) per the same
+   pattern as NORA.
+3. **`backend=openai-dedicated`** — POSTs to
+   `{NORA_SIRA_RERANK_LLM_URL}/rerank` in vLLM's OpenAI-style rerank
+   shape (`{"query", "documents"}` → wrapped `{"results": [...]}`).
+   Mirrors NORA's `OpenAIRerankDedicated`.
+
+Each backend skips the per-pair fanout entirely — one bulk call replaces
+the N chat-completion calls. The `relevance_requirement_v01.txt` prompt
+becomes unused for non-chat backends (cross-encoders don't take prompts,
+just scoring inputs).
+
+**Design considerations to resolve before coding:**
+
+- **Score scale alignment.** SIRA's LLM-as-judge prompt asks for 0-100
+  scoring with a normative interpretation (the 5-band rubric in
+  `relevance_requirement_v01.txt`). Cross-encoder rerankers emit raw
+  similarity scores in arbitrary ranges (often negative for
+  unrelated). Downstream stages (`NORA_SIRA_PIN_MIN_SCORE` default 30,
+  `NORA_SIRA_PIN_REL_THRESHOLD` 0.5) are tuned to the 0-100 scale; a
+  cross-encoder backend either needs the threshold knobs retuned per
+  backend, or the scores normalized to 0-100 at the boundary. Decide
+  before shipping.
+- **Resume semantics.** Current rerank writes per-pair trace
+  (`trace.kept.jsonl` / `trace.failed.jsonl`) keyed on `(query_id,
+  doc_id)`. Bulk-call backends would need either per-call resume (one
+  trace row per HTTP call, less granular) or per-pair resume after
+  call success (more bookkeeping but matches current semantics).
+- **Failure mode.** LLM-as-judge degrades gracefully (one bad call =
+  one zero score). Bulk-call backends fail atomically (one bad call =
+  N missing scores for the batch). Partial-batch-failure handling
+  needs the same "score=None → fall through to unranked tail in input
+  order" contract NORA's `TEIReranker` already implements.
+- **Prompt retirement.** If non-chat backends are the default in a
+  future iteration, `relevance_requirement_v01.txt` becomes
+  chat-backend-specific. Document this rather than letting it confuse
+  future readers.
+
+**Scope estimate.** ~150-250 lines of code change in `llm_reranking.py`
++ ~50-100 lines of tests for each new backend's response-shape parsing
++ docs update in this README. The hardest part is score normalization
++ retuning `NORA_SIRA_PIN_*` thresholds against the new score range.
+
+**Trigger to land.** When SIRA rerank latency becomes the dominant
+contributor to eval-pass wall-clock AND the eval-pilot strand has
+enough ground-truth scoring data to retune `NORA_SIRA_PIN_*` against
+the new score distribution.
