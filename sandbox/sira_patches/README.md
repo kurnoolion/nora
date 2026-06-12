@@ -30,11 +30,22 @@ When the relevant env var is unset, behavior is unchanged — SIRA hits
 |---|---|---|
 | `NORA_SIRA_ENRICH_LLM_URL` | Base URL for corpus + query enrichment (e.g. `http://your-host:port/v1`) | Falls back to `sglang.port` localhost |
 | `NORA_SIRA_ENRICH_LLM_MODEL` | Model name for enrichment payload | Falls back to `sglang.model` |
+| `NORA_SIRA_ENRICH_LLM_TIMEOUT` | Per-request timeout in seconds for enrichment (sets both `total` and `sock_read`) | 300 — matches SIRA's pre-patch behavior |
 | `NORA_SIRA_RERANK_LLM_URL` | Base URL for reranking | Falls back to `sglang.port` localhost |
 | `NORA_SIRA_RERANK_LLM_MODEL` | Model name for rerank payload | Falls back to `sglang.model` |
+| `NORA_SIRA_RERANK_LLM_TIMEOUT` | Per-request timeout in seconds for reranking (sets both `total` and `sock_read`) | 300 — matches SIRA's pre-patch behavior |
 
 All values are optional. The URL is the OpenAI-style `/v1` base; the
 patched code appends `/chat/completions` itself.
+
+**On timeout choice.** SIRA's upstream default is
+`ClientTimeout(total=300.0, sock_read=60.0)`. The 60s `sock_read` is
+the killer when LLMs are slow to start streaming tokens — a request
+that takes 70s from POST to first byte gets cut. Set the env var to
+**≥3× your endpoint's measured per-request latency** for headroom; the
+patch applies the same value to both `total` and `sock_read` (single
+knob, fewer surprises). Confirm at startup via the log line
+`LLM timeout: total=Xs sock_read=Xs`.
 
 ### Usage examples
 
@@ -47,8 +58,10 @@ proprietary LLM gateway):
 ```bash
 export NORA_SIRA_ENRICH_LLM_URL=http://<your-llm-host>:<port>/v1
 export NORA_SIRA_ENRICH_LLM_MODEL=<your-model-name>
+export NORA_SIRA_ENRICH_LLM_TIMEOUT=600   # bump if your endpoint is slow per call
 export NORA_SIRA_RERANK_LLM_URL=http://<your-llm-host>:<port>/v1
 export NORA_SIRA_RERANK_LLM_MODEL=<your-model-name>
+export NORA_SIRA_RERANK_LLM_TIMEOUT=600
 python scripts/run_pipeline.py data=nora db_root=...
 ```
 
@@ -59,8 +72,10 @@ small LLM is fast for the 50× rerank calls per query):
 ```bash
 export NORA_SIRA_ENRICH_LLM_URL=http://<proprietary-host>:<port>/v1
 export NORA_SIRA_ENRICH_LLM_MODEL=<large-model>
+export NORA_SIRA_ENRICH_LLM_TIMEOUT=600   # generous — proprietary is slow per call
 export NORA_SIRA_RERANK_LLM_URL=http://localhost:11434/v1   # Ollama
 export NORA_SIRA_RERANK_LLM_MODEL=<small-fast-model>
+# Leave NORA_SIRA_RERANK_LLM_TIMEOUT at 300 default — local LLM is fast
 python scripts/run_pipeline.py data=nora db_root=...
 ```
 

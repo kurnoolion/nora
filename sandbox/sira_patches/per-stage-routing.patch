@@ -1,5 +1,5 @@
 diff --git a/scripts/add_doc_index_adapter.py b/scripts/add_doc_index_adapter.py
-index 0400b66..ff8df1e 100644
+index 0400b66..79ef03b 100644
 --- a/scripts/add_doc_index_adapter.py
 +++ b/scripts/add_doc_index_adapter.py
 @@ -116,8 +116,20 @@ async def enrich_corpus(cfg: DictConfig) -> None:
@@ -25,8 +25,22 @@ index 0400b66..ff8df1e 100644
  
      # Load BM25 index
      index_dir = ds.bm25_index_best
+@@ -208,7 +220,12 @@ async def enrich_corpus(cfg: DictConfig) -> None:
+         )
+ 
+     connector = aiohttp.TCPConnector(limit=enrich_cfg.concurrency)
+-    timeout = aiohttp.ClientTimeout(total=300.0, sock_read=60.0)
++    # NORA per-stage timeout — env var overrides both `total` and
++    # `sock_read` (single knob; most users want them equal). Default
++    # 300s matches SIRA's pre-patch behavior. Tune up for slow LLMs.
++    _timeout_s = float(os.getenv("NORA_SIRA_ENRICH_LLM_TIMEOUT", "300"))
++    timeout = aiohttp.ClientTimeout(total=_timeout_s, sock_read=_timeout_s)
++    logger.info("LLM timeout: total=%.0fs sock_read=%.0fs", _timeout_s, _timeout_s)
+     sem = asyncio.Semaphore(enrich_cfg.concurrency)
+ 
+     stats = {"proposed": 0, "kept": 0, "filtered": 0, "errors": 0}
 diff --git a/scripts/enrich_query_and_retrieve.py b/scripts/enrich_query_and_retrieve.py
-index c764c4c..906c006 100644
+index c764c4c..495c60c 100644
 --- a/scripts/enrich_query_and_retrieve.py
 +++ b/scripts/enrich_query_and_retrieve.py
 @@ -103,8 +103,20 @@ async def run(cfg: DictConfig) -> None:
@@ -52,8 +66,22 @@ index c764c4c..906c006 100644
  
      # Load BM25 index + apply doc enrichments
      index_dir = ds.bm25_index_best
+@@ -197,7 +209,12 @@ async def run(cfg: DictConfig) -> None:
+ 
+     # Expand queries
+     connector = aiohttp.TCPConnector(limit=enrich_cfg.concurrency)
+-    timeout = aiohttp.ClientTimeout(total=300.0, sock_read=60.0)
++    # NORA per-stage timeout — env var overrides both `total` and
++    # `sock_read` (single knob; most users want them equal). Default
++    # 300s matches SIRA's pre-patch behavior. Tune up for slow LLMs.
++    _timeout_s = float(os.getenv("NORA_SIRA_ENRICH_LLM_TIMEOUT", "300"))
++    timeout = aiohttp.ClientTimeout(total=_timeout_s, sock_read=_timeout_s)
++    logger.info("LLM timeout: total=%.0fs sock_read=%.0fs", _timeout_s, _timeout_s)
+     sem = asyncio.Semaphore(enrich_cfg.concurrency)
+ 
+     expansion_terms: list[str] = [""] * len(query_ids)
 diff --git a/scripts/llm_reranking.py b/scripts/llm_reranking.py
-index 82bc9c6..ffe0c14 100644
+index 82bc9c6..38a6084 100644
 --- a/scripts/llm_reranking.py
 +++ b/scripts/llm_reranking.py
 @@ -89,8 +89,20 @@ async def run(cfg: DictConfig) -> None:
@@ -79,6 +107,20 @@ index 82bc9c6..ffe0c14 100644
  
      # Load retrieval candidates
      retrieval_path = ds.retrieval_best("query-enrich")
+@@ -174,7 +186,12 @@ async def run(cfg: DictConfig) -> None:
+ 
+     # Score all (query, doc) pairs
+     connector = aiohttp.TCPConnector(limit=rerank_cfg.concurrency)
+-    timeout = aiohttp.ClientTimeout(total=300.0, sock_read=60.0)
++    # NORA per-stage timeout — env var overrides both `total` and
++    # `sock_read` (single knob; most users want them equal). Default
++    # 300s matches SIRA's pre-patch behavior. Tune up for slow LLMs.
++    _timeout_s = float(os.getenv("NORA_SIRA_RERANK_LLM_TIMEOUT", "300"))
++    timeout = aiohttp.ClientTimeout(total=_timeout_s, sock_read=_timeout_s)
++    logger.info("LLM timeout: total=%.0fs sock_read=%.0fs", _timeout_s, _timeout_s)
+     sem = asyncio.Semaphore(rerank_cfg.concurrency)
+ 
+     total_pairs = sum(len(cands) for cands in candidates_by_query.values())
 diff --git a/scripts/run_pipeline.py b/scripts/run_pipeline.py
 index 18a4c19..08a4ac7 100644
 --- a/scripts/run_pipeline.py
