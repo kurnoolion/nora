@@ -282,3 +282,117 @@ under the **TODO — Future patches** section. Headlines:
 This entry is just a pointer — the patches README is the source of
 truth. Maintained there because the design is patch-adjacent and the
 team-eval-pilot strand's data is the trigger, not the work itself.
+
+## 2026-06-12 — Close session: SIRA per-stage routing + TEI embedding + ops tuning
+
+Two distinct waves landed today plus the morning's TODO pointer:
+
+### Done this session
+
+**TEI embedding integration (commits 8cb8e91, 96ad0c7).**
+
+- `probe_tei` stdlib diagnostic — `python -m core.src.vectorstore.probe_tei
+  --embed-base ... --rerank-base ...` POSTs to candidate TEI endpoints and
+  reports compact `SPK` lines for OpenAI-compat embedding, TEI native
+  embedding, and TEI Cohere-style rerank. Confirms wire shape + dimension
+  before NORA wires the provider in.
+- `TEIEmbedder` provider in `core/src/vectorstore/embedding_tei.py` —
+  fifth member of the EmbeddingProvider family. Probe results drove the
+  decision to use TEI's native `/embed` shape over OpenAI-compat: both
+  worked on the operator's deployment but native ran ~8× faster (6ms vs
+  51ms for dim=1024). Mirrors `TEIReranker` from the prior session:
+  client-side auto-batching at `max_batch_size=32` (matches TEI's
+  `--max-client-batch-size` default), `truncate=True` server-side,
+  reachability check at init via one small embed call.
+- Env var resolvers added: `NORA_EMBEDDING_BASE_URL`,
+  `NORA_EMBEDDING_API_KEY`, symmetric with the rerank-side `NORA_RERANKER_*`
+  pattern landed earlier. 21 new tests, 125 + 7 skipped pass across
+  regression set.
+
+**SIRA pipeline operational tuning (commits b3ebf80, 0cca2b2).**
+
+- Enrich + rerank concurrency 1 → 4 in `sandbox/sira_configs/{enrich,rerank}/nora.yaml`.
+  The strict-serial default was set for a corporate-proxy environment that
+  no longer applies; bumped after diagnosing why `++enrich.concurrency=N`
+  on the CLI was silently re-stomped (dataset YAML loads AFTER Hydra
+  config resolution — last writer wins). Comment block in each YAML now
+  carries that footgun warning explicitly so the next person to tune
+  concurrency finds it documented at the source.
+- English-only directives in all three SIRA prompts
+  (`sandbox/prompts/{doc,query,relevance}_requirement_v01.txt`). Internal
+  OpenAI-compat LLM was returning non-English keywords, breaking the JSON
+  parser (which expects English keys `keywords` / `score`). Two-position
+  directives: `LANGUAGE:` block at top (first instruction the model
+  reads) + `ENGLISH ONLY:` in the existing Rules block (recency anchor
+  just before generation).
+
+**SIRA per-stage LLM routing — the big shift (commits 004e86b, bebd7c0, be94b84, 9f9e916, ce65cf3, 2aed460).**
+
+- New `sandbox/sira_patches/` directory: `per-stage-routing.patch`
+  (unified diff against the gitignored SIRA clone), `README.md` (env-var
+  reference + usage examples), `test/probe_per_stage_endpoints.py`
+  (stdlib SPK-format probe per stage).
+- Six env vars exposed across SIRA's four LLM-calling scripts:
+  `NORA_SIRA_{ENRICH,RERANK}_LLM_{URL,MODEL,TIMEOUT}`. When unset,
+  behavior is identical to pre-patch (sglang config from Hydra). When
+  set, that stage routes to the configured endpoint with the configured
+  model and timeout — and `run_pipeline.py`'s localhost-sglang
+  reachability check + fallback spawn skip entirely.
+- `sandbox/install_configs.sh` now applies the patch idempotently —
+  sentinel-grep on `NORA_SIRA_ENRICH_LLM_URL` in the patched file detects
+  already-applied state and skips silently; otherwise `git -C $SIRA_CLONE
+  apply` runs cleanly with bail-out + reset instructions if the SIRA
+  clone was hand-edited.
+- Timeout knobs added as patch extension (sets both aiohttp `total` and
+  `sock_read` to the same value). Diagnosed via the operator running an
+  internal LLM ~1min per call against SIRA's hardcoded `sock_read=60s`
+  cut-off. Logged at runtime as `LLM timeout: total=Xs sock_read=Xs`.
+- Documentation in lockstep: `sandbox/README.md` Layout table updated
+  with `sira_patches/` rows + shim demoted to "optional fallback for
+  header-injection / model-rewrite / non-OpenAI adapter mode";
+  `sandbox/SETUP.md` got new section 5.0 "Per-stage routing —
+  recommended" preceding the existing 5a (pass-through) and 5b (adapter
+  mode) shim sections, plus D.1/D.2 split in the full-pipeline section,
+  plus a fresh troubleshooting subsection covering the new failure
+  modes (patch not applied, probe failures, skip-spawn guard not
+  tripping, install_configs.sh sentinel-skip-on-old-patch trap).
+
+### In progress
+
+- Operator pulling the extended patch + timeout knobs on the work PC.
+  Critical step they need: `cd sandbox/sira && git checkout -- scripts/`
+  BEFORE re-running `install_configs.sh`, because the sentinel grep
+  would otherwise find the old patch's marker and skip applying the
+  extended version.
+- Eval-pilot ground-truth collection (the strand's core mission) —
+  unchanged from prior sessions; the routing/timeout/concurrency work
+  today is infrastructure to make those eval passes complete in tractable
+  wall-clock time, not pilot work directly.
+
+### Next
+
+- Confirm timeout env vars take effect on the operator's work PC and the
+  internal LLM no longer cuts off mid-stream. Look for runtime log
+  `LLM timeout: total=600s sock_read=600s` (or whatever value is set).
+- If the proprietary LLM is now responsive within the configured
+  timeout, run the full pipeline end-to-end (corpus enrichment + query
+  enrichment + LLM rerank) against the unthrottled shim path with
+  concurrency=4 + timeout-tuned values. Compare eval recall against
+  the A4 baseline.
+- Continue eval-pilot feedback collection through the merged /test tab
+  (the strand's actual mission — independent of today's infrastructure
+  work).
+
+### Flags
+
+- Two earlier parked TODOs unchanged: 2026-06-01 eval-KPI tracking,
+  2026-06-12 SIRA dedicated `/rerank` backend (the one pointed at this
+  morning).
+- `openai_shim` not yet retired — still load-bearing for any deployment
+  that needs header injection or model-name rewriting. The path is now
+  optional rather than required for the per-stage-routing-compatible
+  setups.
+- The extended-patch upgrade path on existing pulls requires the SIRA
+  clone reset (`git checkout -- scripts/`) before `install_configs.sh`
+  re-applies. Documented in SETUP.md troubleshooting. Worth flagging
+  again if anyone else pulls and hits the skip-on-sentinel surprise.

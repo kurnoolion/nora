@@ -453,3 +453,201 @@ must do so *before* invoking the subcommand. The `_STAGE_FILES` +
 `_STAGE_KEY_FN` tables are the new authority for "which file holds which
 stage's state and what's its primary key"; future stages must register
 there.
+
+---
+
+## D-DRAFT-13 — `TEIEmbedder` uses TEI's native `/embed` shape over the OpenAI-compatible `/v1/embeddings`
+
+**Context:** TEI ≥1.5 exposes two embedding routes — its native
+`POST /embed` with `{"inputs": [...]}` returning array-of-arrays, and an
+OpenAI-shape `POST /v1/embeddings` with `{"input", "model"}` returning
+`{"data": [{"embedding": [...]}]}`. The operator's probe
+(`probe_tei`) confirmed both worked on their deployment:
+`openai-embedding: dim=1024, 51ms`; `tei-embedding: dim=1024, 6ms`.
+Roughly 8× faster on the native shape.
+
+**Decision:** `TEIEmbedder` posts to `{base_url}/embed` in TEI's
+native shape; OpenAI-compat path is documented in `probe_tei.py` as
+available but not used. If a future deployment needs OpenAI-compat
+(TEI version too old, or pointing at a non-TEI server), a separate
+`OpenAIEmbedding` provider can land then — same precedent set by the
+rerank providers (separate `openai-rerank-*` classes alongside `tei`).
+
+**Why:** ~8× per-call latency win matters at embedding volumes
+(whole-corpus ingestion at thousands of chunks; per-query embedding
+at runtime). Smaller request/response payload (no `model` field, no
+wrapper). Symmetric with `TEIReranker` from the prior session, which
+used the same reasoning to land as a distinct class. Alternative
+considered: OpenAI-compat as the "portable" shape that also works
+against vLLM-embedding endpoints — rejected because (a) NORA doesn't
+currently target vLLM embedding, (b) when it does, an
+`OpenAIEmbedding` class can be added in parallel rather than
+retrofitted on top of `TEIEmbedder`'s native-shape internals.
+
+**Consequences:** `TEIEmbedder` only works against TEI servers; not
+portable to other OpenAI-compat embedding endpoints. If TEI changes
+its native wire shape in a future major version, the class needs
+updating (the OpenAI-compat path would not). The provider family now
+has two native-shape members (`TEIEmbedder`, `TEIReranker`) and three
+OpenAI-style members (`OpenAIRerankChat`, `OpenAIRerankDedicated`,
+`ollama` reranker) — the asymmetry is real and documented in the
+class docstrings.
+
+---
+
+## D-DRAFT-14 — SIRA per-stage routing maintained as patch files under `sandbox/sira_patches/`, not a NORA-owned SIRA fork
+
+**Context:** SIRA is cloned to `sandbox/sira/` and gitignored —
+committing into the clone is not an option without forking upstream.
+The per-stage routing change touches four upstream scripts
+(`scripts/{add_doc_index_adapter,enrich_query_and_retrieve,llm_reranking,run_pipeline}.py`).
+Two persistent paths: maintain a NORA-owned SIRA fork (gives full
+version control, costs ongoing upstream-sync work), or carry patches
+in NORA and apply on demand.
+
+**Decision:** Patches live as unified diffs under
+`sandbox/sira_patches/*.patch` and apply via
+`sandbox/install_configs.sh` against the local SIRA clone.
+Idempotency via sentinel-grep on a unique string from the patch
+(currently `NORA_SIRA_ENRICH_LLM_URL`). The clone itself stays
+gitignored and upstream-trackable via plain `git -C sandbox/sira
+pull`.
+
+**Why:** No upstream-divergence maintenance burden — pulling fresh
+SIRA + re-running `install_configs.sh` is the upgrade path. The
+clone stays a clean snapshot of the upstream HEAD the operator
+chose, making it easy to bisect against upstream when an upstream
+regression bites. Alternative considered: a NORA-owned fork →
+rejected because the SIRA strand is treated as integration code,
+not as upstream we want to evolve. We need flexibility to add
+NORA-specific behavior without committing to long-term upstream-sync
+work.
+
+**Consequences:** Patches must be manually re-conflict-resolved when
+upstream SIRA changes the patched call sites; the `git apply
+--check` bail-out in `install_configs.sh` is the operator's only
+line of defense. Sentinel-grep idempotency is fragile when patches
+evolve (the documented operational footgun: an old patch's sentinel
+hides the extended patch's new content from being applied — operator
+must `git checkout -- scripts/` first). The clone's gitignored
+status means changes there don't show in `git status` from NORA's
+root — operators can't see at a glance whether a stale patched
+state is sitting in the clone.
+
+---
+
+## D-DRAFT-15 — Single-knob `NORA_SIRA_*_LLM_TIMEOUT` collapses aiohttp `total` + `sock_read`
+
+**Context:** SIRA's pre-patch `ClientTimeout(total=300.0,
+sock_read=60.0)` has two independent timeout values. The 60s
+`sock_read` was the actual cut-off surprise for slow LLMs (a request
+that takes >60s before the first byte arrives gets dropped, even
+though `total=300` would otherwise let it run). Adding env-var
+control could expose one knob, two knobs, or four knobs (per-stage ×
+per-axis).
+
+**Decision:** One env var per stage
+(`NORA_SIRA_ENRICH_LLM_TIMEOUT`, `NORA_SIRA_RERANK_LLM_TIMEOUT`);
+its value is applied to **both** `total` and `sock_read`. Defaults
+to 300s to match SIRA's pre-patch `total`. Each stage logs the
+resolved value at startup as `LLM timeout: total=Xs sock_read=Xs`.
+
+**Why:** Most users want the two values equal — the slow-LLM use
+case is "give the request a long time," not "let the connection sit
+idle for X but kill it overall after Y." Two separate knobs would
+be more API surface for little operational benefit. Default of 300
+(not 60) was chosen because it's the more permissive number of
+SIRA's defaults and users tuning concurrency / timeouts should not
+be silently downgrading to 60s. Alternative considered: separate
+`*_TIMEOUT_TOTAL` and `*_TIMEOUT_READ` env vars → rejected as
+needless surface area; the asymmetric default (`total=300`,
+`sock_read=60`) in SIRA's upstream was likely an oversight, not a
+deliberate design.
+
+**Consequences:** Cannot independently tune `total` vs `sock_read`
+without a follow-up patch. If a future use case needs that (e.g.
+fast-establishing connection that streams slowly), the env var pair
+would split into two — keeping back-compat would require the
+single-knob name to mean "both," and new `_TOTAL` / `_READ` knobs
+to override. Patching `llm.py`'s `post_chat` to also become
+env-var-aware could provide finer-grained per-call control, but is
+out of scope for this patch.
+
+---
+
+## D-DRAFT-16 — `NORA_SIRA_RERANK_LLM_*` env-var family shared between batch pipeline and runtime service
+
+**Context:** Earlier this strand-series, `sandbox/sira_query/service.py`
+(NORA's runtime SIRA query service) defined `NORA_SIRA_RERANK_LLM_URL
+/ _MODEL / _API_KEY` to route the runtime rerank stage to a faster
+LLM than the proprietary one used for enrichment. The new
+batch-pipeline routing patch needed env vars for the same purpose —
+rerank to a different endpoint than enrichment. Two options: pick
+fresh names (e.g. `NORA_SIRA_BATCH_RERANK_LLM_*`) to keep batch and
+runtime decoupled, or reuse the existing names.
+
+**Decision:** Reuse the same `NORA_SIRA_RERANK_LLM_URL / _MODEL`
+names. Both the batch-pipeline scripts (via the patch) and the
+runtime service (`sandbox/sira_query/service.py:64-66`) read from
+the same env vars. Setting the env var routes both code paths
+consistently.
+
+**Why:** Operators don't think in "batch vs runtime" boundaries —
+they think in "where do I want SIRA's rerank LLM to live?" One env
+var pair answers that question for both contexts.
+Single-source-of-truth: if you set
+`NORA_SIRA_RERANK_LLM_URL=http://localhost:11434/v1` in your shell,
+both the batch eval pass and the runtime query service hit Ollama.
+No drift possible between the two. Alternative considered: separate
+prefixes → rejected because no scenario was found where you'd
+actually want them to differ; if one does emerge, splitting later
+is cheap (env var = config field, easy refactor).
+
+**Consequences:** Cannot route batch and runtime rerank to different
+LLMs via env vars alone — they share. If a future need emerges
+(e.g. batch evaluates against the same LLM as production but
+runtime A/B-tests a candidate replacement), the env vars need a
+per-context override pattern. The decision presumes operators want
+consistency over flexibility, which has held so far in this
+strand's deployments. The batch pipeline does NOT yet have a
+`NORA_SIRA_RERANK_LLM_API_KEY` reader (the runtime service does);
+pure oversight — header injection isn't currently needed for this
+strand but should land if it ever does.
+
+---
+
+## D-DRAFT-17 — Patch SIRA's hardcoded `127.0.0.1` at the per-call site, not by adding a `sglang.host` config field
+
+**Context:** SIRA hardcodes `127.0.0.1` in four places —
+`scripts/run_pipeline.py:261, 387` (reachability check / spawn) and
+`scripts/{add_doc_index_adapter,enrich_query_and_retrieve,llm_reranking}.py`
+(URL construction). Removing the localhost constraint could be done
+two ways: (a) add a config field `sglang.host` defaulting to
+`127.0.0.1`, all call sites read `cfg.sglang.host`; (b) introduce
+env-var-driven URL overrides per stage, leaving the localhost
+default in place when env vars are unset.
+
+**Decision:** Option (b) — env-var-driven per-stage URL overrides.
+The `127.0.0.1` literal stays in the code as the fallback; env vars
+route around it when set. No new Hydra config field added.
+
+**Why:** Per-stage routing is the real operator need — enrichment
+to one LLM, rerank to a different (typically faster) one. A single
+`sglang.host` knob couldn't express that. Adding both (a
+`sglang.host` knob AND per-stage env vars) is more total surface
+area than needed. The env-var approach also makes the
+`run_pipeline.py` precheck/spawn skip clean: if either env var is
+set, SIRA's own sglang spawn is unwanted; the guard reads the env
+vars directly without touching Hydra config. Alternative
+considered: add `sglang.host` AND `sglang.{enrich,rerank}_host`
+per-stage overrides — rejected as Hydra-config gymnastics for what
+env vars handle in 8 lines per call site.
+
+**Consequences:** The four patched call sites must stay in sync as
+patches evolve — if SIRA upstream renames a script or refactors the
+URL construction, the patch needs updating in four places. The
+`127.0.0.1` literal becomes dead code in env-routed setups (still
+present, never reached). Operators who want to point SIRA at a
+non-localhost endpoint without per-stage routing now have no path
+other than setting both env vars to the same URL — which works
+fine but is mildly awkward.
