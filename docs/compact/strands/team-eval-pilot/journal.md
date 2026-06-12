@@ -238,3 +238,47 @@ sessions since the 2026-05-28 build-phase entry. Two waves:
   integration fully ready for pilot use. Operational but too slow
   for interactive queries at the observed rate.
 - 2026-06-01 eval-KPI TODO remains parked.
+
+## 2026-06-12 — TODO pointer: SIRA dedicated /rerank backend (parked)
+
+### Context
+
+Mid-session pivot on SIRA's LLM-routing architecture. We landed
+per-stage env-var routing (commit `004e86b`) so SIRA can talk directly
+to OpenAI-compat LLM endpoints without `openai_shim`. While walking
+through which backends `NORA_SIRA_RERANK_LLM_URL` accepts, the question
+came up: can SIRA use TEI's `/rerank` (or vLLM's `/v1/rerank`) instead
+of the current LLM-as-judge chat-completion path? Answer: not today —
+SIRA's `llm_reranking.py` hardcodes the chat-completions shape with one
+LLM call per (query, doc) pair, prompted via `relevance_requirement_v01.txt`
+to emit `{"score": <0-100>}`.
+
+### Why this matters for the eval-pilot strand
+
+LLM-as-judge per-pair latency dominates SIRA rerank wall-clock: ~1-5s
+per call × 50-200 candidates per query = 1-15 min/query just on rerank.
+At the 18-Q × N-iteration eval cadence the team-eval-pilot strand is
+building toward, that's a real bottleneck. A bulk cross-encoder rerank
+(TEI / vLLM) is 10-100× faster — single HTTP call per query, bulk-scored.
+
+### Where the TODO lives
+
+Full design + four open questions parked at
+[`sandbox/sira_patches/README.md`](../../../../sandbox/sira_patches/README.md)
+under the **TODO — Future patches** section. Headlines:
+
+1. New env var `NORA_SIRA_RERANK_BACKEND={chat,tei,openai-dedicated}`,
+   default `chat` for backwards compatibility.
+2. Per-backend code branch in SIRA's `llm_reranking.py` patch file.
+3. **Score-scale alignment** — SIRA's 0-100 normative rubric vs.
+   cross-encoder raw similarity scores; `NORA_SIRA_PIN_*` thresholds
+   are tuned to 0-100 today.
+4. **Trigger to land**: when eval-pilot ground-truth has enough density
+   to retune `NORA_SIRA_PIN_*` against the new score distribution AND
+   rerank latency is the dominant cost.
+
+### Cross-link
+
+This entry is just a pointer — the patches README is the source of
+truth. Maintained there because the design is patch-adjacent and the
+team-eval-pilot strand's data is the trigger, not the work itself.
