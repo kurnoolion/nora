@@ -4,8 +4,8 @@
 **Opened:** 2026-06-13
 **Landed:**
 **Assignees:** kurnoolion
-**Target modules:** sandbox/adapter, sandbox/sira_configs, web
-**Active phase:**
+**Target modules:** sandbox/adapter, sandbox/sira_configs, sandbox/sira_query, web
+**Active phase:** requirements
 
 ## Summary
 
