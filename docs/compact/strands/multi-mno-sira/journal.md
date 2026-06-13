@@ -94,3 +94,110 @@ bound, phase set to requirements.
   remain mid-flight at various phases. If that's surprising, the
   per-strand Active-phase field (in each STRAND.md) is the binding-aware
   record.
+
+## 2026-06-13 — Architecture spike: cell identity model (granularity + provenance + ordering + layout)
+
+Second session same day — architecture phase, pure design, no code. Picked
+up from the requirements close (design C + release resolution already
+decided). Grounded the design in the real code shapes before deciding.
+
+### Done this session
+
+- Switched to architecture phase. Of the 4 target modules, only `web` has a
+  MODULE.md — the three sandbox modules (adapter, sira_configs, sira_query)
+  have none by design (structure-conventions only covers core/src +
+  customizations). **Reconciliation: Option 1** — keep sandbox informal,
+  capture design in journal/decisions-draft; revisit Option 2 (promote SIRA
+  sandbox modules to first-class with MODULE.md contracts) when multi-MNO
+  proves durable. Forcing MODULE.md rigor onto a still-moving sandbox design
+  is premature.
+- **Granularity → per-(MNO, release) cell** (D-DRAFT-3). Not just "finer is
+  safer": FR-9's release-diff query type ("how did A's VoWiFi change R2→R3?")
+  *requires* per-release isolation — same isolate-then-fuse logic as design C
+  applied to the release axis. Per-MNO indexing would mix releases, burying
+  the diff signal under near-duplicate R2/R3 content. Synergy: incremental
+  enrichment (content-hash resume) means per-release cells cost "enrich the
+  delta," not full re-enrich per release.
+- **Grounded in real code before deciding:**
+  - Parse tree already carries `mno`, `release`, `release_date`
+    (`VZW`/`OA-baseline`/`"February 2026"`).
+  - `infer_metadata_from_path` (pipeline/stages.py:79) derives mno+release
+    from the input PATH, not document content — so release identity already
+    flows from the input directory structure.
+  - Service is single-`_bm25`-global; corpus rows are `{_id,title,text}`
+    with no metadata field (BM25 doesn't read metadata anyway).
+- **Provenance / identity (design B, D-DRAFT-4):** `(MNO, release, doc_id)`
+  is the cross-cell chunk identity. The same req_id can exist in two cells
+  (VZW R2 and R3 both have `req:LTEAT:5.1` — same spec evolving), so merging
+  on `doc_id` alone would collapse distinct chunks and break release-diff at
+  the identity layer. Provenance is structural (a chunk's origin cell IS its
+  provenance, attached at retrieval) — no doc_id prefixing. Within a cell,
+  doc_ids stay as-is; the existing doc:/section: fan-out composes (pointers
+  are cell-local, fan-out within-cell, fanned chunks inherit cell provenance).
+- **Release ordering (design C, D-DRAFT-5):** evolved through three forms.
+  Rejected "parse release_date → ISO" once grounding showed release_date is a
+  free-form profile-regex capture of whatever the document author typed
+  (unbounded format set — can't enumerate). Rejected "explicit profile order
+  key" once the user specified the cleaner source: **the input directory name
+  convention `<env_dir>/input/<MNO>/<MMMYYYY>/`** (MMM = 3-letter title-case
+  month, YYYY = 4-digit year, e.g. Feb2026). The directory name IS the
+  release identity AND the sort key by construction — `Feb2026` → `(2026,02)`.
+  No profile change, no free-form parsing, validated at the filesystem
+  boundary (fail-loud on non-matching dirs). `release_date` document field
+  demoted to display-only (FR-multi-5 human label), fully decoupled from
+  ordering. This resolves the open consequence left in D-DRAFT-2 ("release
+  must be orderable, not free-form").
+- **Layout / orchestration (design A, D-DRAFT-6 + D-DRAFT-7):**
+  - Per-cell BEIR datasets at `<db_root>/<mno>__<release>/` (double-underscore
+    separator, source-case preserved — VZW__Feb2026 — to round-trip cleanly
+    against infer_metadata_from_path). Adapter partitions trees by
+    `(mno, release)`, one cell per partition; new `--multi-cell` mode so
+    single-dataset behavior stays intact.
+  - One reused `data/nora.yaml` config with `data.name=<cell>` override per
+    cell — no per-cell config files (cells differ only in name).
+  - Batch: NORA-side cell-loop orchestrator invokes run_pipeline.py per cell
+    (SIRA unchanged — consistent with patch-don't-fork). Runtime: service
+    `_bm25` global → `dict[cell_key → CellState]`, enumerates cells from
+    db_root at startup.
+  - **Multi-cell adapter emits corpus-only for now** — the runtime service
+    path (FR-multi-5) needs only per-cell corpus + BM25 index + doc
+    enrichments; queries/qrels are eval-time and deferred with OQ-2.
+
+### In progress
+
+- Architecture spike on the identity/layout model converged. Five draft
+  decisions staged (D-DRAFT-3..7). The cell `(MNO, MMMYYYY)` is now the
+  consistent unit of layout, indexing, enrichment, ordering, provenance, and
+  citation.
+
+### Next
+
+- Remaining architecture design questions (next session's material):
+  - **Query-scope extraction** — does SIRA's query service reuse NORA's query
+    analyzer (FR-9/FR-10 classify query type + extract MNO/release scope), or
+    get a SIRA-local scope parser? This is the front of the
+    retrieve→merge→rerank flow.
+  - **Concrete fusion code** in `sandbox/sira_query` — the retrieve-per-cell
+    → tag → merge → rerank implementation shape, and whether it leans on the
+    dedicated-/rerank backend TODO.
+  - Adapter `--multi-cell` implementation + the cell-loop orchestrator.
+- Then `/switch-phase development` to implement, starting with the adapter
+  (it's the upstream of everything — cells don't exist until it partitions).
+
+### Flags
+
+- **`release_date` document field is now display-only** — any future code
+  must NOT use it for ordering/resolution. Ordering is strictly from the
+  `MMMYYYY` directory name. A subtle trap: the tree carries both, and the
+  free-form one is the tempting-but-wrong sort key.
+- **Migration is a work-PC operator step**, not design work: existing
+  `input/VZW/OA-baseline/` must be renamed to `input/VZW/Feb2026/` and
+  re-extracted on the work PC for it to become a valid cell. Nothing to do on
+  this dev PC (no corpora here).
+- Option 2 (promote sandbox SIRA modules to first-class MODULE.md contracts)
+  remains the eventual graduation step once multi-MNO/multi-release ships and
+  proves durable. Tracked here so it's not forgotten.
+- Design C makes the LLM reranker load-bearing for cross-cell queries
+  (carried from the requirements session) — and per-(MNO,release) granularity
+  *increases* the cross-cell query surface (release-diff is now also a
+  fusion query), further raising the dedicated-/rerank backend TODO priority.
