@@ -685,6 +685,102 @@ export HF_DATASETS_OFFLINE=1
 
 Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 
+## Multi-MNO / multi-release (multi-cell) runbook
+
+The multi-mno-sira strand adds a multi-cell mode: each `(MNO, release)`
+pair becomes its own BM25 index ("cell"), and queries resolve scope ->
+retrieve per cell -> fuse at the LLM reranker. This runbook is the
+exact end-to-end procedure. (Design: `docs/compact/strands/multi-mno-sira/`.)
+
+### Prerequisites
+
+- **SIRA venv with bm25x built** (the trimmed or full install above). The
+  orchestrator and the query service both need bm25x.
+- **LLM endpoint configured** for the enrichment stage — either the
+  per-stage-routing env vars (`NORA_SIRA_ENRICH_LLM_URL` / `_MODEL`, see
+  `sandbox/sira_patches/README.md`) or the shim on localhost. Same as any
+  SIRA enrich run.
+- **Input laid out as `<env_dir>/input/<MNO>/<MMMYYYY>/`** — MMM is a
+  3-letter title-case month, YYYY a 4-digit year (e.g. `Feb2026`). This
+  directory name IS the release identity. The free-form "Release Date:"
+  inside the documents is display-only and is NOT used.
+
+### The one gotcha: which Python runs what
+
+- `sira_preflight`, `nora_to_beir`, `sira_multi` are NORA-side modules, BUT
+  `sira_multi` shells out to SIRA's `run_pipeline.py`, which needs bm25x.
+  **Run `sira_multi` under the SIRA venv** so the subprocess inherits it:
+  ```bash
+  source sandbox/sira/.venv/bin/activate     # the venv that has bm25x
+  cd $REPO_ROOT                              # so `python -m sandbox.*` resolves
+  ```
+- The **query service** also needs bm25x — launch it under the same venv.
+
+### Step-by-step
+
+```bash
+cd $REPO_ROOT
+source sandbox/sira/.venv/bin/activate       # bm25x venv (see gotcha above)
+
+# 0. (one-time after pull) install configs + the SIRA patches
+bash sandbox/install_configs.sh
+
+# 1. Migrate any legacy release dir to the MMMYYYY convention, then
+#    re-run extract -> parse so the trees carry the new release.
+#    e.g. mv <env_dir>/input/VZW/OA-baseline <env_dir>/input/VZW/Feb2026
+#    (then run the NORA extract + parse stages for <env_dir>)
+
+# 2. Pre-flight: fail loud on any non-MMMYYYY release dir BEFORE extraction.
+python -m sandbox.sira_preflight --env-dir <env_dir>
+
+# 3. Adapter: partition parse output into per-cell BEIR datasets.
+#    --output is the db_root (parent of all <mno>__<release>/ cells).
+python -m sandbox.adapter.nora_to_beir \
+    --env-dir <env_dir> --output <db_root> --multi-cell
+
+# 4. Build + enrich each cell. --dry-run FIRST to eyeball the commands.
+python -m sandbox.sira_multi --db-root <db_root> --sira-clone sandbox/sira --dry-run
+python -m sandbox.sira_multi --db-root <db_root> --sira-clone sandbox/sira
+#    Default stages = prepare,bm25,enrich_corpus (corpus-only; the cells
+#    have no real queries, so enrich_query/rerank/eval are skipped — the
+#    service does query enrichment + rerank live). --only VZW__Feb2026,…
+#    to run a subset.
+
+# 5. Launch the query service pointed at the cell db_root.
+export NORA_SIRA_DB_ROOT=<db_root>
+uvicorn sandbox.sira_query.service:app --port 8040
+#    On first query the service enumerates <mno>__<MMMYYYY>/ cells and
+#    routes through the multi-cell path. /healthz / startup logs show
+#    "Multi-cell mode: loaded N cell(s): ...".
+
+# 6. Query via NORA's /test SIRA lane (NORA web app, separate terminal).
+#    Cross-MNO: "compare VoWiFi of VZW and TMO"
+#    Release-diff: "how did VZW eSIM change from Oct 2025 to Feb 2026"
+#    The lane shows the resolved (mno, release) cells + any requested-but-
+#    unavailable scope + a source-cell badge per result.
+```
+
+### What each likely failure looks like
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `sira_preflight` exits 1 naming a dir | a release dir isn't MMMYYYY | rename it (e.g. `OA-baseline` -> `Feb2026`), re-extract+parse |
+| `nora_to_beir --multi-cell` raises "non-MMMYYYY release" | a parsed tree's release isn't MMMYYYY (input dir wasn't renamed before parse) | rename input dir + re-parse; the adapter reads `tree.release` |
+| `sira_multi`: `ModuleNotFoundError: bm25x` (or hydra) in the subprocess | `sira_multi` run under the wrong Python | activate the SIRA venv first (the gotcha above) |
+| `run_pipeline.py`: `Could not override 'data.name'` | SIRA's Hydra config doesn't accept the `data.name` override (D-DRAFT-6 assumption) | the one unverified spot — likely a small config-syntax tweak in `scripts/configs/data/nora.yaml` (or pass `+data.name=`); inspect the `--dry-run` command |
+| bm25 stage: `index/best` FileNotFoundError | eval+pick-best produced no best index | confirmed-mitigated: the adapter emits a dummy index-build query/qrel; if it recurs, check the cell's `raw/queries-test.jsonl` has the `_idxbuild_0` row |
+| service `/healthz` shows no cells / legacy mode | `NORA_SIRA_DB_ROOT` not pointed at the cell db_root, or cells lack `raw/metadata.json` | confirm `<db_root>/<mno>__<release>/raw/metadata.json` exists; re-run the adapter |
+| service `ModuleNotFoundError: bm25x` at query time | service launched under the wrong Python | launch uvicorn under the SIRA venv |
+
+### Notes
+
+- **Memory** grows with total cell count (all cells' indexes are loaded
+  into RAM at startup). Fine for dozens of cells; lazy-load + LRU-evict is
+  the deferred mitigation (see the strand journal) once it bites.
+- **Eval is deferred** (OQ-2): the dummy index-build query is meaningless;
+  real multi-MNO/release qrels are authored on-prem later. So multi-cell
+  retrieval ships measured only at the corpus/retrieval level initially.
+
 ## Troubleshooting
 
 ### Per-stage routing (path 5.0 / D.1)
