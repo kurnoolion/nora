@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** sandbox/adapter, sandbox/sira_configs, sandbox/sira_query, web
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 

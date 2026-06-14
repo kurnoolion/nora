@@ -6,7 +6,7 @@ Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language q
 **Public surface**
 - Entry point: `QueryPipeline(graph, embedder, store, analyzer=None, synthesizer=None, rewriter=None, reranker=None, top_k=10, max_depth=None, max_context_chars=30000, enable_bm25=True, max_distance_threshold=None, enable_grouping=False, top_k_cap=None)` (pipeline.py) — `query(query_text, verbose=False, pinned_chunk_ids=None) -> QueryResponse`. Constructor knobs added since the original 6-stage shape: `max_distance_threshold` [D-047], `enable_grouping` [D-049], `top_k_cap` (hard ceiling applied AFTER per-type widening). The `pinned_chunk_ids` parameter on `query()` skips Stages 2–4.7 and synthesizes only from the named chunks — used by the disambiguation user-pick UX (D-049 Step 3c).
 - Stages (each replaceable by injection):
-  - `LLMQueryAnalyzer`, `MockQueryAnalyzer` (analyzer.py) — Stage 1
+  - `LLMQueryAnalyzer`, `MockQueryAnalyzer` (analyzer.py) — Stage 1. `make_query_analyzer(llm_provider=None)` selects `LLMQueryAnalyzer` when a provider is supplied, else `MockQueryAnalyzer` — NORA's standard configured-LLM-or-mock posture for query analysis (multi-mno-sira D-DRAFT-9). `MockQueryAnalyzer._extract_releases` captures all named releases (multi-release release-diff support), not just the first.
   - `MNOReleaseResolver` (resolver.py) — Stage 2
   - `GraphScoper` (graph_scope.py) — Stage 3
   - `QueryRewriter` Protocol (rewriter.py) — `rewrite(query) -> list[str]`. Implementations: `LLMQueryRewriter`, `MockQueryRewriter`. Stage 3.5 (optional pre-retrieval expansion; per-type gate via `_TYPE_REWRITE_ENABLED`). `expand_query(original, rewrites) -> str` concatenates the original + paraphrases for the embedder/BM25.

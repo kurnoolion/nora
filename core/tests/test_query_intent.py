@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import networkx as nx
 
-from core.src.query.analyzer import MockQueryAnalyzer
+from core.src.query.analyzer import (
+    LLMQueryAnalyzer,
+    MockQueryAnalyzer,
+    make_query_analyzer,
+)
 from core.src.query.context_builder import _SYSTEM_PROMPTS
 from core.src.env.config import resolve_top_k
 from core.src.query.pipeline import (
@@ -292,3 +296,52 @@ class TestSummarizeBypassesGrouping:
         # Lookup-shaped query — SINGLE_DOC or GENERAL
         resp = p.query("What is the T3402 setting in DOC_A")
         assert resp.disambiguation_required is True
+
+
+# ── Multi-release extraction + analyzer factory (multi-mno-sira D-DRAFT-9) ──
+
+
+class TestMultiReleaseExtraction:
+    """_extract_releases captures ALL named releases (release-diff), not
+    just the first — the .finditer fix."""
+    a = MockQueryAnalyzer()
+
+    def test_two_releases_both_captured(self):
+        rels = self.a._extract_releases(
+            "how did VZW eSIM change from Oct 2025 to Feb 2026?")
+        assert rels == ["Oct 2025", "Feb 2026"]
+
+    def test_single_release_still_works(self):
+        assert self.a._extract_releases("5G bands in Feb 2026") == ["Feb 2026"]
+
+    def test_no_release_returns_empty(self):
+        assert self.a._extract_releases("what 5G bands are supported?") == []
+
+    def test_latest_keyword_captured(self):
+        assert self.a._extract_releases("the latest VZW release") == ["latest"]
+
+    def test_order_preserving_dedup(self):
+        # same release named twice → kept once, order preserved
+        rels = self.a._extract_releases("compare Feb 2026 against Feb 2026")
+        assert rels == ["Feb 2026"]
+
+    def test_release_list_reaches_query_intent(self):
+        intent = self.a.analyze(
+            "how did VZW eSIM change from Oct 2025 to Feb 2026?")
+        assert intent.releases == ["Oct 2025", "Feb 2026"]
+
+
+class TestMakeQueryAnalyzer:
+    """make_query_analyzer selects LLM-or-Mock by provider presence."""
+
+    def test_none_returns_mock(self):
+        assert isinstance(make_query_analyzer(None), MockQueryAnalyzer)
+
+    def test_default_arg_returns_mock(self):
+        assert isinstance(make_query_analyzer(), MockQueryAnalyzer)
+
+    def test_provider_returns_llm_analyzer(self):
+        class _StubProvider:
+            def complete(self, *a, **k): return "{}"
+        analyzer = make_query_analyzer(_StubProvider())
+        assert isinstance(analyzer, LLMQueryAnalyzer)

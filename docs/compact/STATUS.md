@@ -2,7 +2,7 @@
 
 > **Strands active from 2026-05-16.** Mid-session journal entries land in `docs/compact/strands/<name>/journal.md`. Content below this line is historical and is no longer updated by `close-session` when a strand is bound. Architect-only writes (project-wide status, decisions promoted via `/land-strand`) continue to land here.
 
-**Active phase**: architecture
+**Active phase**: development
 **Last updated**: 2026-06-13
 **Last drift-check**: 2026-05-14 — mode: dev-full — 4 drift(s) resolved (all direction [a]: MODULE.md → match code across models / extraction / parser / profiler), 0 deferred surfaced
 

@@ -75,6 +75,68 @@ def _load_trees(env_dir: Path) -> list[dict[str, Any]]:
     return trees
 
 
+# ── Multi-cell partitioning (multi-mno-sira) ───────────────────────
+#
+# The (MNO, release) cell is the unit of layout/indexing/identity for
+# multi-MNO SIRA. Release identity + ordering come from the input
+# directory name convention <env_dir>/input/<MNO>/<MMMYYYY>/ — the
+# release is MMM (3-letter title-case month) + YYYY, e.g. "Feb2026".
+# The free-form document `release_date` ("February 2026") is NOT used
+# here — it's display-only. See multi-mno-sira D-DRAFT-3/5/6.
+
+_MONTHS_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_RELEASE_RE = re.compile(r"^(?:" + "|".join(_MONTHS_ABBR) + r")\d{4}$")
+
+
+def _cell_dirname(cell_key: tuple[str, str]) -> str:
+    """`<mno>__<release>`, source-case preserved (e.g. 'VZW__Feb2026').
+
+    Double-underscore separator avoids collision with single-token
+    names; case is preserved to round-trip exactly against the
+    `infer_metadata_from_path`-derived (mno, release). See D-DRAFT-6.
+    """
+    mno, release = cell_key
+    return f"{mno}__{release}"
+
+
+def _partition_trees_by_cell(
+    trees: list[dict[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Group trees by their (mno, release) cell key.
+
+    Fail-loud (D-DRAFT-5): every tree's `release` must match the
+    MMMYYYY convention. All violations are collected and reported
+    together so the operator can fix every offending input dir in one
+    pass, rather than discovering them one re-run at a time.
+
+    Raises ValueError if any tree has a missing `mno` or a
+    non-conforming `release`.
+    """
+    cells: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    violations: list[tuple[str, str, str]] = []
+    for tree in trees:
+        mno = (tree.get("mno") or "").strip()
+        release = (tree.get("release") or "").strip()
+        if not mno or not _RELEASE_RE.match(release):
+            violations.append((mno, release, str(tree.get("plan_id") or "?")))
+            continue
+        cells.setdefault((mno, release), []).append(tree)
+    if violations:
+        lines = "\n".join(
+            f"  - mno={m!r} release={r!r} plan_id={p!r}"
+            for m, r, p in violations
+        )
+        raise ValueError(
+            f"{len(violations)} tree(s) have a missing MNO or non-MMMYYYY "
+            f"release (expected e.g. 'Feb2026'):\n{lines}\n"
+            f"Release identity comes from the input directory name "
+            f"<env_dir>/input/<MNO>/<MMMYYYY>/ (D-DRAFT-5) — rename the "
+            f"offending input dir(s) and re-run extract -> parse."
+        )
+    return cells
+
+
 def _hierarchy_path(req: dict[str, Any]) -> str:
     # Tree stores `hierarchy_path` as a list of strings (e.g. ["LTE OTA",
     # "Idle Mode", "T3402 timer"]). Joined with " > " for prose
@@ -526,6 +588,53 @@ def _emit_metadata(raw_dir: Path, name: str, num_corpus: int,
         json.dump(metadata, f, indent=2)
 
 
+def _emit_multi_cell(
+    trees: list[dict[str, Any]],
+    db_root: Path,
+    section_max_depth: int,
+    wipe_index: bool,
+    wipe_all: bool,
+) -> list[str]:
+    """Multi-MNO mode: partition trees into (mno, release) cells and emit
+    one corpus-only BEIR dataset per cell at `<db_root>/<mno>__<release>/raw/`.
+
+    Returns the list of cell dir names (usable as SIRA `data.name`).
+
+    Corpus-only (OQ-2): each cell gets corpus.jsonl + metadata.json, plus
+    empty queries-test.jsonl / qrels-test.jsonl so SIRA's split-aware
+    file-existence checks don't trip. Real eval data lands when on-prem
+    qrels exist. The runtime service (the actual consumer) reads only
+    corpus + index + enrichments. See multi-mno-sira D-DRAFT-6.
+    """
+    cells = _partition_trees_by_cell(trees)
+    print(f"multi-cell mode: {len(cells)} cell(s) from {len(trees)} tree(s)")
+    print()
+    names: list[str] = []
+    for cell_key in sorted(cells):
+        dirname = _cell_dirname(cell_key)
+        raw = db_root / dirname / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        print(f"cell {dirname}: emitting raw/corpus.jsonl ...")
+        n_req, n_doc, n_section = _emit_corpus(
+            cells[cell_key], raw / "corpus.jsonl",
+            section_max_depth=section_max_depth,
+        )
+        num_corpus = n_req + n_doc + n_section
+        # Empty eval scaffolding — present-but-empty so file-existence
+        # checks pass; intentionally NOT the single-MNO 18-Q set.
+        (raw / "queries-test.jsonl").write_text("", encoding="utf-8")
+        (raw / "qrels-test.jsonl").write_text("", encoding="utf-8")
+        _emit_metadata(raw, name=dirname, num_corpus=num_corpus,
+                       n_queries=0, n_qrels=0)
+        _check_stale_downstream(
+            db_root / dirname, wipe_index=wipe_index, wipe_all=wipe_all,
+        )
+        names.append(dirname)
+        print(f"  -> {num_corpus} corpus rows; data.name={dirname}")
+        print()
+    return names
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         prog="nora_to_beir",
@@ -547,7 +656,20 @@ def main() -> int:
                    ))
     p.add_argument("--name", default=None,
                    help="Dataset name in metadata.json. Defaults to "
-                        "the basename of --output.")
+                        "the basename of --output. Ignored in "
+                        "--multi-cell mode (each cell's name is its "
+                        "<mno>__<release> dir).")
+    p.add_argument("--multi-cell", action="store_true",
+                   help=(
+                       "Multi-MNO mode (multi-mno-sira). Partition trees "
+                       "by (mno, release) and emit one corpus-only BEIR "
+                       "dataset per cell at <output>/<mno>__<release>/raw/. "
+                       "In this mode --output is the db_root (parent of "
+                       "all cells), not a single dataset dir. Release must "
+                       "match the MMMYYYY convention (e.g. Feb2026) or the "
+                       "run fails loud. queries/qrels are NOT emitted "
+                       "(eval ground truth deferred — OQ-2)."
+                   ))
     p.add_argument("--section-max-depth", type=int, default=2,
                    help=(
                        "Max section-prefix depth for section-level "
@@ -588,6 +710,18 @@ def main() -> int:
     trees = _load_trees(env_dir)
     print(f"loaded {len(trees)} _tree.json file(s) from out/parse/")
     print()
+
+    if args.multi_cell:
+        # --output is the db_root (parent of all cells), not a dataset dir.
+        names = _emit_multi_cell(
+            trees, out_dir,
+            section_max_depth=args.section_max_depth,
+            wipe_index=args.wipe_stale_index,
+            wipe_all=args.wipe_all_derived,
+        )
+        print(f"done — point SIRA at db_root={out_dir}")
+        print(f"       cells (use as data.name): {', '.join(names)}")
+        return 0
 
     raw_dir.mkdir(parents=True, exist_ok=True)
     print("emitting raw/corpus.jsonl ...")

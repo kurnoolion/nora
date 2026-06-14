@@ -183,15 +183,21 @@ class MockQueryAnalyzer:
         return mnos
 
     def _extract_releases(self, query: str) -> list[str]:
-        """Extract release references."""
-        releases = []
+        """Extract release references.
+
+        Uses ``finditer`` (not ``search``) so a release-diff query that
+        names two releases — e.g. "how did VZW eSIM change from Oct 2025
+        to Feb 2026?" — captures BOTH, not just the first. Matches are
+        order-preserving and deduplicated. The LLM analyzer handles
+        multi-release natively; this keeps the keyword fallback
+        consistent (multi-mno-sira D-DRAFT-9).
+        """
+        releases: list[str] = []
         for pattern, fixed in _RELEASE_PATTERNS:
-            m = pattern.search(query)
-            if m:
-                if fixed:
-                    releases.append(fixed)
-                else:
-                    releases.append(m.group(0).strip())
+            for m in pattern.finditer(query):
+                val = fixed if fixed else m.group(0).strip()
+                if val not in releases:
+                    releases.append(val)
         return releases
 
     def _extract_standards(self, query: str) -> list[str]:
@@ -392,3 +398,28 @@ Return ONLY valid JSON, no other text."""
         except (json.JSONDecodeError, ValueError, KeyError) as e:
             logger.warning(f"LLM analysis failed ({e}) — falling back to keyword analysis")
             return self._fallback.analyze(query)
+
+
+def make_query_analyzer(llm_provider=None):
+    """Select the query analyzer by NORA's standard rule.
+
+    LLM provider supplied → ``LLMQueryAnalyzer`` (more accurate
+    extraction; handles oblique MNO references and multi-release
+    release-diff queries, and self-falls-back to keyword analysis on a
+    parse failure). ``None`` → ``MockQueryAnalyzer`` (keyword fallback,
+    no LLM).
+
+    This makes query analysis follow the same configured-LLM-or-mock
+    posture as the rest of NORA rather than defaulting to keyword
+    analysis even when an LLM is available (multi-mno-sira D-DRAFT-9).
+
+    Args:
+        llm_provider: An object satisfying the ``LLMProvider`` Protocol
+            (has ``complete()``), or ``None``.
+
+    Returns:
+        A query analyzer with an ``analyze(query) -> QueryIntent`` method.
+    """
+    if llm_provider is not None:
+        return LLMQueryAnalyzer(llm_provider)
+    return MockQueryAnalyzer()
