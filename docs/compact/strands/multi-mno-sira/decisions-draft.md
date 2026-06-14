@@ -469,3 +469,77 @@ errors only if `resolved` is empty. It lives in `sandbox/sira_query`
 - Results carry `(mno, release, doc_id)` provenance for citation +
   FR-multi-5 UI surfacing; `_resolve_cells`'s `unresolved` list feeds the
   symmetric "requested but unavailable" surfacing.
+
+---
+
+## D-DRAFT-11 — Multi-cell query routing: preserve the legacy single-dataset handler, add multi-cell as a separate path
+
+**Context:** D-DRAFT-7 specified the runtime `_bm25` global ->
+`dict[cell_key -> CellState]`. Implementation faced a choice: rewrite the
+235-line `/sira-query` handler so single-cell is just N=1 of the fusion
+path (the design's "single-cell = N=1" principle), or keep the existing
+single-dataset handler and add the multi-cell path beside it. The
+existing `nora` dataset has no valid `(mno, release)` — its release is
+the free-form `OA-baseline` — so it cannot be expressed as a cell, and
+the handler couldn't be exercised against real bm25x on this machine.
+
+**Decision:** Keep the legacy single-dataset handler **unchanged**; route
+to a new `_multi_cell_query` path only when `<db_root>` contains
+`<mno>__<MMMYYYY>` cells (`if _cells:`). The two paths coexist; a dataset
+without a valid cell key stays on the legacy path.
+
+**Why:** Zero regression risk for the current single-MNO setup — the
+working handler (with its fan-out, instrumentation, pinned-chunks logic)
+is untouched. A blind unified rewrite of a critical async handler that
+couldn't be run here (no bm25x) was exactly the "large untestable block"
+the dev persona warns against. The new path is built on the
+standalone-tested `resolve_cells`/`fuse` and exercised via FastAPI
+TestClient with fakes. The legacy dataset genuinely can't join the cell
+model (no MMMYYYY release), so a unified path would have needed a
+synthetic-cell-key hack for it anyway.
+
+**Consequences:** Two retrieval code paths coexist — the multi-cell path
+duplicates the retrieve/rerank shape rather than reusing the legacy
+inline logic, and the legacy path lacks the multi-cell follow-ups (it has
+fan-out; the multi-cell path doesn't yet — Follow-up 2). When the legacy
+single-MNO `nora` dataset is retired (everything migrated to cells), the
+legacy path becomes dead code and can be removed, leaving the unified
+N=1 path as the design intended. Until then, both must be maintained.
+
+---
+
+## D-DRAFT-12 — MMMYYYY input validation lives sandbox-side (sira_preflight), not in core's infer_metadata_from_path
+
+**Context:** D-DRAFT-5 stated the MMMYYYY release-dir validation should be
+"fail-loud at ingest (in/beside `infer_metadata_from_path`)."
+Implementation found that location wrong on two counts: (a)
+`infer_metadata_from_path` is **core** (`core/src/extraction/registry.py`)
+and serves the legacy NORA pipeline, where free-form releases like
+`OA-baseline` are perfectly valid — enforcing MMMYYYY there would break
+the single-MNO NORA flow; (b) core must not import `sandbox/sira_cells`
+(the module boundary runs sandbox -> core only). MMMYYYY is a
+multi-MNO-SIRA convention, not a core concern.
+
+**Decision:** The early validation lives **sandbox-side** as an opt-in
+pre-flight (`sandbox/sira_preflight.py`) the operator runs against
+`<env_dir>/input/` before the multi-cell pipeline. The adapter's
+`--multi-cell` partitioning (`_partition_trees_by_cell`) remains the
+backstop fail-loud. Core's `infer_metadata_from_path` is unchanged.
+
+**Why:** Keeps the MMMYYYY convention scoped to the multi-MNO flow that
+needs it, without breaking the legacy pipeline or inverting the module
+boundary. The pre-flight still achieves D-DRAFT-5's intent — fail-loud at
+the earliest point, before extraction wastes time — just at the correct
+location. This corrects D-DRAFT-5's stated implementation site (the
+*intent* and *convention* in D-DRAFT-5 stand; only the "in
+`infer_metadata_from_path`" detail was wrong).
+
+**Consequences:** Validation is opt-in (the operator must run the
+pre-flight) rather than automatic at extract time — a misnamed dir not
+caught by the pre-flight is still caught later by the adapter, just less
+early. If the multi-MNO SIRA work ever graduates to first-class (Option
+2, D-DRAFT-8), a core-level convention hook could be revisited, but that
+would need a way to scope it to multi-MNO runs without affecting the
+legacy path. Supersedes the "in/beside `infer_metadata_from_path`"
+phrasing in D-DRAFT-5's Decision; D-DRAFT-5's convention + ordering
+semantics are unchanged.

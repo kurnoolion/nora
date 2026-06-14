@@ -303,3 +303,106 @@ now design-complete enough to start development.
   a `make_query_analyzer` selection helper that fixes this for the SIRA path;
   flagging that NORA's own pipeline should adopt the same selector separately
   (kept as an observation per the user, not changed in multi-mno-sira).
+
+## 2026-06-13 — Development: full multi-MNO SIRA build (tasks 1–6)
+
+Development phase — implemented the entire 6-task build from the
+architecture-complete design (D-DRAFT-1..10). Pure code, no canonical-doc
+edits. 7 commits, ~115 new tests, all green. Functional end-to-end with
+synthetic data despite bm25x being work-PC-only.
+
+### Done this session
+
+- **Task 1 — adapter `--multi-cell`** (bd1b9fc). Partition parse trees by
+  (mno, release) into per-cell BEIR datasets at <db_root>/<mno>__<release>/;
+  MMMYYYY fail-loud (collects all violations); source-case-preserved names;
+  corpus-only emission (eval deferred, OQ-2). Legacy single-dataset path
+  untouched. 21 tests incl. same-req_id-across-cells isolation.
+- **Task 2 — analyzer** (bd1b9fc). make_query_analyzer(llm_provider) selects
+  LLMQueryAnalyzer-or-Mock (D-DRAFT-9); _extract_releases -> finditer so
+  release-diff captures both releases. core/src/query/MODULE.md Public
+  surface updated (additive). 9 tests.
+- **Task 3 — cell primitives + batch orchestrator** (2dccc0c).
+  sandbox/sira_cells.py: the single home for cell identity/ordering/
+  enumeration (RELEASE_RE, cell_dirname/parse, order_key/latest_release,
+  enumerate_cells) — 32 tests. sandbox/sira_multi.py: enumerate cells +
+  run SIRA's run_pipeline.py per cell (data.name override; SIRA unchanged);
+  continue-on-error; --only/--dry-run; 10 tests. Adapter refactored to
+  import the primitives (DRY).
+- **Task 4 — scope + fusion + service** (ae1cd26 / 601ab4f / b93d6da).
+  - scope.py: normalize_release (human phrasing -> cell label) + resolve_cells
+    (FR-multi-6 cross-product, returns (resolved, unresolved)). 24 tests.
+  - fusion.py: Candidate (comp_id = (mno,release,doc_id)) + merge_candidates /
+    rank_candidates / fuse. 11 tests. All five D-DRAFT-10 calls verified.
+  - service.py: CellState + _load_cells (enumerate + per-cell BM25/corpus/
+    enrich) + _multi_cell_query (analyze -> resolve -> merge -> async rerank
+    -> rank, with provenance + unresolved surfacing); routes multi-cell when
+    cells present, legacy path preserved. 6 FastAPI TestClient tests with
+    fake BM25 + fake LLM.
+- **Task 5 — input pre-flight** (85735a1). sandbox/sira_preflight.py validates
+  <env_dir>/input/<MNO>/<release>/ dirs are MMMYYYY before extract->parse;
+  fail-loud with rename instruction. 8 tests.
+- **Task 6 — web FR-multi-5 surfacing** (2574a73). /test SIRA lane shows
+  resolved (mno,release) cell badges + requested-but-unavailable (unresolved)
+  badges + per-result source-cell badge. playground.py threads the service's
+  mode/resolved_cells/unresolved into the template; _answer.html guards
+  rerank_score None.
+
+### Problems / decisions resolved mid-session
+
+- **Task 5 design correction.** The original framing (validate in core's
+  infer_metadata_from_path) was wrong: core serves the legacy NORA pipeline
+  where free-form releases (OA-baseline) are valid, and core must not import
+  sandbox. Re-scoped to a sandbox-side opt-in pre-flight. (dev-persona flag
+  honored, not absorbed.)
+- **fuse async mismatch.** fuse was sync but the real reranker is async
+  (httpx). Split into merge_candidates (sync) + rank_candidates (sync) so
+  the async LLM rerank slots between them in the handler; fuse kept as the
+  tested sync wrapper.
+- **Test caught a real bug.** resolve_cells: a named-but-absent MNO must
+  resolve to nothing-but-surfaced, not silently expand to ALL MNOs. Fixed
+  (the "all" fallback fires only on empty intent.mnos).
+- **bm25x is work-PC-only** (Rust crate, not built here). Drove the
+  decouple-and-inject architecture: scope.py + fusion.py are standalone-
+  testable; the service wiring is exercised via FastAPI TestClient with a
+  fake BM25 + fake LLM. Maximized testable surface; the only untested-here
+  surface is real bm25x behavior.
+
+### In progress
+
+- Multi-MNO SIRA is implemented end-to-end and unit-tested. Real-corpus
+  validation (actual bm25x indexes, real LLM) is pending the work PC:
+  pull -> bash sandbox/install_configs.sh -> python -m sandbox.sira_preflight
+  -> nora_to_beir --multi-cell -> sira_multi -> point the service at the
+  cell db_root -> query the /test SIRA lane.
+
+### Next
+
+- Work-PC end-to-end run on real multi-MNO corpora (no Claude there).
+- The four follow-ups in Flags below.
+- Eventually /land-strand once real-corpus validation confirms the design
+  (10 draft decisions to promote; multi-mno-sira not landable until the
+  code is proven against real data).
+
+### Flags
+
+- **Follow-up 1 — LLM analyzer wiring.** _multi_cell_query uses the keyword
+  MockQueryAnalyzer (make_query_analyzer(None)) for scope. Wiring an
+  LLMProvider around the service's httpx LLM for LLMQueryAnalyzer (D-DRAFT-9's
+  configured-LLM path) is unfinished — the service uses raw httpx, not the
+  Protocol.
+- **Follow-up 2 — fan-out not in multi-cell path.** Doc/section ->
+  req-level fan-out (plan-aware-sira) is still legacy-handler-only; the
+  multi-cell path doesn't fan out yet.
+- **Follow-up 3 — pin-filter keys on req_id alone.** The merged-tab pin
+  filter (_select_pinned_chunks) dedups on req_id, so for release-diff the
+  same req_id in two cells gets pinned/unpinned together. Should key on
+  (mno, release, req_id).
+- **Follow-up 4 — cross-system synthesizer boundary.** The merged tab pins
+  SIRA's multi-cell chunks to NORA's SINGLE-corpus synthesizer (current
+  env's vectorstore). A multi-MNO answer needs the synthesizer to resolve
+  chunks across cells — a deeper integration question, not solved here.
+- `.finditer` fix on _extract_releases is now fallback-only urgency
+  (LLMQueryAnalyzer handles multi-release natively) — carried from prior.
+- NORA pipeline.py still defaults to Mock even with an LLM configured —
+  NORA-side observation, not this strand's fix (carried).
