@@ -406,3 +406,46 @@ synthetic data despite bm25x being work-PC-only.
   (LLMQueryAnalyzer handles multi-release natively) — carried from prior.
 - NORA pipeline.py still defaults to Mock even with an LLM configured —
   NORA-side observation, not this strand's fix (carried).
+
+## 2026-06-13 — Scaling note: cell-index memory + deferred mitigations
+
+Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
+
+### Findings
+
+- Cell count grows on ONE axis: releases (linear in time, ~4/MNO/year).
+  MNOs are ~constant (~3-5). So ~dozens of cells over years (3 MNOs x 4
+  quarters x 5 yrs ~= 60; a decade ~= 120). Modest in absolute terms.
+- What scales with cell count, and whether it bites:
+  - Disk (BM25 index + enrichment JSONL per cell): linear, small
+    (~tens of MB/index) -> fine for years.
+  - Enrichment compute: scales with CHANGED docs, not cells (incremental
+    resume reuses the prior release's enrichment) -> doesn't proliferate.
+  - Query latency: scales with the RESOLVED cell set per query (1-2 for a
+    comparison; N_MNO for latest-each), NOT total cells -> doesn't
+    proliferate.
+  - **Runtime memory: scales with TOTAL cells, loaded eagerly** — THE
+    pressure point. `_load_cells()` (service.py:542-545) loops every cell
+    and `_load_one_cell` does `BM25.load` + builds `corpus_by_id`, so all
+    cells' index + corpus are resident in RAM at once, including cold
+    (rarely-queried old-release) cells. Confirmed in code.
+
+### Flags (deferred mitigations, per user)
+
+- **Lazy-load + LRU-evict — add AFTER work-PC multi-MNO/multi-release
+  verification.** Load a cell's index on the first query that resolves to
+  it; keep an LRU cache of the hottest cells; evict cold ones. Queries
+  cluster on recent releases (latest-per-MNO default), so the working set
+  stays small regardless of history depth. Localized to
+  `_load_cells`/`_cells` — resolve_cells + fusion already operate on a
+  target subset, so they're unaffected. (Already noted in D-DRAFT-7
+  consequences; this fixes the trigger + sequencing: do it once real-corpus
+  behavior is verified, not before.)
+- **Release-retention policy — eventually.** If use cases only need
+  "current vs N-back" comparisons, keep only the last K releases per MNO
+  as live cells (archive older offline), bounding cell count to
+  K x N_MNO regardless of time. Lower priority than lazy-load; revisit
+  when cell count / memory actually grows.
+- Neither touches cell-identity or fusion logic — both are loading-strategy
+  changes. The architecture front-loaded the isolation so scaling is a
+  loading fix, not a redesign.
