@@ -266,3 +266,35 @@
   Public-surface `plan_id`, detection-mode) pending close-session audit — all
   decision-backed.
 - MNO-B profile still the next step; needs the real document (work PC).
+
+## 2026-06-14 — Work committed (a56cc8e); MNO-name redaction convention applied
+
+### Done this session
+- Committed D-DRAFT-1 + D-DRAFT-2 implementation as `a56cc8e`
+  (feat(parser): multi-plan documents — per-req plan_id + leading-id detection mode).
+- Applied MNO-name redaction across docs + code comments + both TDD copies:
+  - Mapping: MNO-A = Verizon, MNO-B = AT&T, MNO-C = T-Mobile.
+  - Rule: actual names allowed in *general* context; templatized (MNO-A/B/C) in
+    *requirement-structure / content* contexts; Verizon name only in
+    open-access (OA) corpus context (public), else MNO-A.
+  - Functional code identifiers (VZW/TMO/ATT mno-field values, cell dirnames,
+    query-analyzer aliases, redaction-test inputs, `<MNO0_NAME>` substitution
+    examples) left intact — renaming breaks code/tests or the redaction layer.
+  - Captured as a user-memory feedback rule.
+
+### Next
+- Author the MNO-B profile (detection_mode=leading_id_body) against the real
+  document (work PC): literal req_id prefix, components (`-` / pos 1),
+  section-number/heading styles.
+- Work-PC validation of the multi-plan / leading-id path on real corpora.
+
+### Flags
+- D-DRAFT-1 / D-DRAFT-2 remain unlanded strand drafts; `parser/MODULE.md`
+  curated edits (committed in a56cc8e) are backed by them — promote at /land-strand.
+- Both TDD copies still contain VZW/TMO/ATT *code* references in
+  requirement-content examples — left per codes-are-functional, but they're
+  transparently the three MNOs; scrubbing them is a separate decision (would
+  diverge schema examples from real mno-field values).
+- MODULE.md Structure sections are stale (new `_create_leading_id_req`,
+  `_ensure_plan_node`, `plan_id`/`detection_mode` not listed) — regen-map not
+  auto-triggered (no module-level structural change), run if desired.
