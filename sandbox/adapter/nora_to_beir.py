@@ -77,27 +77,16 @@ def _load_trees(env_dir: Path) -> list[dict[str, Any]]:
 
 # ── Multi-cell partitioning (multi-mno-sira) ───────────────────────
 #
-# The (MNO, release) cell is the unit of layout/indexing/identity for
-# multi-MNO SIRA. Release identity + ordering come from the input
-# directory name convention <env_dir>/input/<MNO>/<MMMYYYY>/ — the
-# release is MMM (3-letter title-case month) + YYYY, e.g. "Feb2026".
-# The free-form document `release_date` ("February 2026") is NOT used
-# here — it's display-only. See multi-mno-sira D-DRAFT-3/5/6.
+# Cell identity / naming / ordering live in `sandbox.sira_cells` — the
+# single home shared by this adapter, the batch orchestrator, and the
+# runtime query service. See multi-mno-sira D-DRAFT-3/5/6. Aliases kept
+# for back-compat of this module's callers/tests.
 
-_MONTHS_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-_RELEASE_RE = re.compile(r"^(?:" + "|".join(_MONTHS_ABBR) + r")\d{4}$")
-
-
-def _cell_dirname(cell_key: tuple[str, str]) -> str:
-    """`<mno>__<release>`, source-case preserved (e.g. 'VZW__Feb2026').
-
-    Double-underscore separator avoids collision with single-token
-    names; case is preserved to round-trip exactly against the
-    `infer_metadata_from_path`-derived (mno, release). See D-DRAFT-6.
-    """
-    mno, release = cell_key
-    return f"{mno}__{release}"
+from sandbox.sira_cells import (  # noqa: E402
+    RELEASE_RE as _RELEASE_RE,
+    cell_dirname as _cell_dirname,
+    is_valid_release as _is_valid_release,
+)
 
 
 def _partition_trees_by_cell(
@@ -118,7 +107,7 @@ def _partition_trees_by_cell(
     for tree in trees:
         mno = (tree.get("mno") or "").strip()
         release = (tree.get("release") or "").strip()
-        if not mno or not _RELEASE_RE.match(release):
+        if not mno or not _is_valid_release(release):
             violations.append((mno, release, str(tree.get("plan_id") or "?")))
             continue
         cells.setdefault((mno, release), []).append(tree)
