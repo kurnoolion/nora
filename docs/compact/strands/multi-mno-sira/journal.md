@@ -201,3 +201,105 @@ decided). Grounded the design in the real code shapes before deciding.
   (carried from the requirements session) — and per-(MNO,release) granularity
   *increases* the cross-cell query surface (release-diff is now also a
   fusion query), further raising the dedicated-/rerank backend TODO priority.
+
+## 2026-06-13 — Architecture: resolved query-scope extraction + fusion code shape
+
+Third 2026-06-13 session — architecture phase, design only, no code. Closed
+the two open architecture questions from the prior close, so the strand is
+now design-complete enough to start development.
+
+### Done this session
+
+- **Query-scope extraction → reuse NORA's `MockQueryAnalyzer`** (D-DRAFT-9),
+  not a SIRA-local parser. Grounding showed the analyzer already extracts
+  canonical MNO (`_MNO_ALIASES`: verizon/vzw/vz→VZW, etc. — matches our cell
+  MNO identity exactly), release (month-year + latest/current patterns), and
+  query type (FR-9's 8 types), and is LLM-optional (keyword `MockQueryAnalyzer`
+  default; `LLMQueryAnalyzer` a drop-in upgrade). Reuse wins on: already does
+  FR-9/FR-10, single source of truth (4th MNO = one alias-map edit), keep the
+  LLM out of the scope front (it's already load-bearing for rerank). Two gaps:
+  (a) the "Feb 2026"→"Feb2026" normalization seam (resolver-local); (b)
+  `_extract_releases` uses `.search` (first-match-only) → a release-diff query
+  naming two releases ("Oct 2025 to Feb 2026", literally in PROJECT.md's
+  problem statement) captures only one. Fix = `.finditer`, in
+  `core/src/query/analyzer.py` — a CURATED-MODULE change, crossing out of this
+  strand's sandbox-informal scope (D-DRAFT-8); helps NORA's own multi-release
+  future too, so treat with normal module rigor.
+- **Fusion code shape** (D-DRAFT-10). Grounded in the real `/sira-query` flow
+  (expand → `_bm25.search_with_expansion` → `hits[(idx, bm25)]` → LLM rerank →
+  sort → top_k). Fusion = generalize that single-index flow to a cell loop
+  with `(cell_key, idx)` composite identity threaded through; **single-cell is
+  N=1** — no separate cross-cell branch, the fusion path IS the general path,
+  and the three query shapes (scoped / cross-MNO / release-diff) collapse to
+  one code path differing only in what `_resolve_cells` returns. Five embedded
+  design calls:
+  1. Fusion method = sort by rerank score, NOT RRF — valid only because
+     LLM-as-judge emits absolute 0-100 (corpus-independent). Swapping to the
+     dedicated cross-encoder /rerank backend later would need score
+     normalization (the method is coupled to the rerank backend's score
+     semantics).
+  2. Balanced retrieval = `per_cell_top_n` per cell, rerank the union
+     (FR-multi-3) → cost = N_cells × per_cell_top_n rerank calls. The cost
+     pressure that keeps raising the /rerank TODO; make per_cell_top_n a knob.
+  3. NO cross-cell dedup — same req_id in two cells (release-diff: R2's vs R3's
+     req:LTEAT:5.1) must both survive to top_k. Composite (cell_key, doc_id)
+     keeps them distinct; a naive doc_id dedup would silently break
+     release-diff. Dedup only within a cell (fan-out handles it).
+  4. Expand once (query-level LLM), DF-filter per cell (corpus-stat-dependent,
+     nearly free).
+  5. `_rerank_pool` reuses the existing batch/per-call rerank verbatim, re-keyed
+     on the Candidate (carrying cell_key) instead of a bare idx. The reranker
+     never knows about cells.
+- **Grounded `_resolve_cells`** (part of D-DRAFT-10). FR-multi-6 cross-product:
+  target MNOs (named → those; none → ALL, per FR-10) × requested releases
+  (named → those; none → latest-per-MNO via `_order_key` max on the CELL LABEL,
+  never release_date). Three helpers: `_order_key` ("Feb2026"→(2026,2)),
+  `_normalize_release` (human phrasing → cell label; unparseable → miss),
+  `_latest_release` (max by order key). Returns `(resolved, unresolved)` —
+  missing cells are surfaced (fail-VISIBLE at query, mirror of D-DRAFT-5's
+  fail-LOUD at ingest), so FR-multi-5 can show "Mar2026: not available" rather
+  than silently shrinking the query. Caller errors only if resolved is empty.
+  Lives in sandbox/sira_query (cell concept is SIRA's); consumes the
+  reused-from-core QueryIntent — clean D-DRAFT-8/9 boundary.
+
+### In progress
+
+- Architecture design is complete end-to-end. The identity model runs with no
+  hand-waving: infer_metadata_from_path → cell label → _order_key/_latest_release
+  → _resolve_cells → fusion loop → (mno, release, doc_id) results. Ten draft
+  decisions staged (D-DRAFT-1..10).
+
+### Next
+
+- `/switch-phase development` — implement, in dependency order:
+  1. **Adapter `--multi-cell`** (upstream of everything — cells don't exist
+     until it partitions trees by (mno, release) into <db_root>/<mno>__<rel>/).
+  2. **`_extract_releases` .finditer fix** in core/src/query/analyzer.py (the
+     one curated-module change; release-diff depends on it).
+  3. **Cell-loop orchestrator** (batch) + service `_bm25`→cell-dict (runtime).
+  4. **`_resolve_cells` + fusion loop** in sandbox/sira_query.
+  5. **MMMYYYY ingest validation** in/beside infer_metadata_from_path
+     (fail-loud on non-matching dirs).
+- web-side FR-multi-5 surfacing (resolved + unresolved (mno, release) per lane)
+  comes after the service returns the provenance.
+
+### Flags
+
+- **`_extract_releases` .finditer fix is a core-module change** — the only
+  piece of this strand that touches a curated MODULE.md module
+  (core/src/query). Needs normal module rigor + arguably its own
+  requirements-traceability note; it improves NORA's native query path too,
+  not just SIRA.
+- **Rerank cost compounds** — per-(MNO,release) cells + balanced per-cell
+  retrieval means cross-cell queries rerank N_cells × per_cell_top_n
+  candidates. Carried + amplified from prior sessions; the dedicated-/rerank
+  backend TODO is now the highest-leverage perf item for this strand.
+- **release_date trap, restated** — _resolve_cells / _order_key sort strictly
+  on the cell label (MMMYYYY). Any implementer reaching for the tree's
+  free-form release_date for ordering is wrong (D-DRAFT-5).
+- **NORA-side observation (not this strand's fix):** `core/src/query/pipeline.py`
+  defaults to `MockQueryAnalyzer()` even when an LLM is configured — NORA's
+  native query path doesn't auto-upgrade to `LLMQueryAnalyzer`. D-DRAFT-9 adds
+  a `make_query_analyzer` selection helper that fixes this for the SIRA path;
+  flagging that NORA's own pipeline should adopt the same selector separately
+  (kept as an observation per the user, not changed in multi-mno-sira).

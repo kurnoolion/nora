@@ -354,3 +354,118 @@ subsystem is durable, not before.
 - When Option 2 lands, the journal/decisions-draft become the source material
   for the new MODULE.md contracts — so capturing them richly now pays off
   later.
+
+---
+
+## D-DRAFT-9 — Query-scope extraction: reuse NORA's analyzer with standard LLM-or-fallback selection
+
+**Context:** Multi-MNO SIRA needs to extract MNO + release scope + query type
+from the natural-language query (FR-9/FR-10) to drive cell resolution. NORA's
+`core/src/query/analyzer.py` already does this in two forms —
+`LLMQueryAnalyzer` (prompts an LLM, returns `mnos`/`releases` lists +
+`query_type` incl. `release_diff`, self-falls-back to Mock on parse failure,
+more accurate) and `MockQueryAnalyzer` (keyword/regex, no LLM; `_MNO_ALIASES`
+maps verizon/vzw/vz→VZW etc., matching our cell MNO identity). The SIRA query
+service currently has no NORA `LLMProvider` (rerank goes via raw httpx), and
+there is no central selector — `pipeline.py` defaults to `MockQueryAnalyzer()`
+and accepts injection.
+
+**Decision:** Reuse NORA's analyzer rather than building a SIRA-local parser,
+and select it by the standard rule: **LLM configured → `LLMQueryAnalyzer`;
+not configured → `MockQueryAnalyzer` fallback** — the same configured-LLM-or-
+mock posture as the rest of NORA, not a rule-based carve-out for query
+analysis. This requires (a) a small selection helper
+(`make_query_analyzer(llm_provider | None)`) in `core/src/query` — none exists
+today; (b) the SIRA service constructing a NORA `LLMProvider` from its
+**primary** LLM config (the shim / `NORA_LLM_*` endpoint used for enrichment,
+NOT the rerank-override LLM) to feed `LLMQueryAnalyzer`. Cell *resolution*
+(`_resolve_cells`, D-DRAFT-10) stays SIRA-local; only *extraction* is reused.
+
+**Why:** Single source of truth (the canonical MNO alias map → VZW/TMO/ATT
+matches cell identity; a 4th MNO is one edit benefiting both NORA and SIRA).
+Consistency + accuracy: when an LLM is available it should do analysis (the
+user's standing rule), and `LLMQueryAnalyzer` handles oblique MNO references
+and multi-release release-diff queries ("Oct 2025 to Feb 2026") that the Mock
+regex cannot. The earlier "keep the LLM out of the scope front to save
+latency" rationale was explicitly rejected by the user — analysis is one cheap
+call on the primary (enrich-quality) LLM, not the high-volume rerank path, so
+quality/consistency outweighs the saved call. A SIRA-local parser was rejected
+as duplicate-and-drift.
+
+**Consequences:**
+- New selection helper in `core/src/query` (a curated MODULE.md module) —
+  small, and benefits NORA's native path too (which currently defaults to Mock
+  even when an LLM is configured — a latent NORA gap this surfaces; flagged for
+  the NORA side to address separately, not fixed in this strand).
+- The SIRA service now uses **both** abstractions: NORA's `LLMProvider`
+  Protocol (analysis) and raw httpx (rerank). Minor inconsistency; a future
+  cleanup could route rerank through the Protocol, but out of scope here.
+- `.finditer` fix on `_extract_releases` is now **fallback-only** (Mock path),
+  no longer release-diff-blocking when an LLM is configured — lower urgency,
+  still a core change for fallback consistency.
+- Analysis quality now depends on the configured LLM's extraction reliability;
+  `LLMQueryAnalyzer`'s built-in Mock fallback on parse failure means a bad LLM
+  response degrades rather than breaks.
+
+---
+
+## D-DRAFT-10 — Fusion code shape: cell-loop generalization with `(cell_key, idx)` identity + `_resolve_cells`
+
+**Context:** With per-(MNO, release) cells (D-DRAFT-3) each holding its own
+BM25 index, a cross-cell query (cross-MNO comparison, release-diff) must
+retrieve from multiple cells and combine the results into one ranking
+("fusion"). The current `/sira-query` flow is single-index: expand →
+`_bm25.search_with_expansion` → `hits[(idx, bm25)]` → LLM rerank → sort by
+rerank score → top_k, where `idx` is a corpus index into the one `_bm25`.
+BM25 scores from different cells aren't comparable (per-corpus IDF scales).
+
+**Decision:** Fusion is the **generalization of the single-index flow to a
+cell loop**, with the composite `(cell_key, idx)` threaded through as identity
+(D-DRAFT-4). `_resolve_cells(intent, available)` (FR-multi-6 cross-product)
+produces the target cell set; the handler retrieves per cell, tags each
+candidate with its `cell_key`, merges into one pool, LLM-reranks the pool, and
+sorts by rerank score. **Single-cell is N=1** — no separate cross-cell branch;
+the three query shapes (scoped / cross-MNO / release-diff) collapse to one code
+path differing only in what `_resolve_cells` returns. `_resolve_cells` returns
+`(resolved, unresolved)` so requested-but-unavailable cells are surfaced
+(fail-VISIBLE at query, mirroring D-DRAFT-5's fail-LOUD at ingest); the caller
+errors only if `resolved` is empty. It lives in `sandbox/sira_query`
+(cell concept is SIRA's), consuming the reused-from-core `QueryIntent`.
+
+**Why (five embedded calls):**
+1. **Fusion method = sort by rerank score, not RRF** — valid only because the
+   LLM-as-judge reranker emits absolute 0-100 relevance (corpus-independent).
+   RRF (rank-position fusion) was the obvious score-free alternative; rejected
+   because the reranker's absolute scores are higher-quality for comparison.
+   Coupling note: swapping to the dedicated cross-encoder `/rerank` backend
+   would require score normalization (those scores aren't 0-100 absolute).
+2. **Balanced retrieval = `per_cell_top_n` per cell, rerank the union**
+   (FR-multi-3) — each cell gets full representation so neither MNO is starved
+   by vocabulary skew. Cost: N_cells × per_cell_top_n rerank calls; make
+   `per_cell_top_n` a knob for latency tuning.
+3. **No cross-cell dedup** — the same `req_id` legitimately exists in two cells
+   (release-diff: R2's vs R3's `req:LTEAT:5.1`) and BOTH must reach top_k. The
+   composite `(cell_key, doc_id)` keeps them distinct; a naive doc_id dedup
+   would silently break release-diff. Dedup only within a cell (fan-out
+   handles it).
+4. **Expand once, DF-filter per cell** — query enrichment is one query-level
+   LLM call; the DF-filter of those phrases uses per-cell corpus statistics
+   (a phrase discriminative in VZW may be common in TMO), so filtering runs
+   per cell (cheap DF lookup, no extra LLM call).
+5. **`_rerank_pool` reuses the existing batch/per-call rerank verbatim,
+   re-keyed** on the `Candidate` (carrying `cell_key`) instead of a bare `idx`.
+   The reranker never knows about cells — it scores `(query, text)` pairs and
+   the pool threads provenance around it.
+
+**Consequences:**
+- The service's `_bm25` global becomes `dict[cell_key → CellState]`
+  (D-DRAFT-7); retrieval, fan-out, rerank, and results all thread the
+  composite identity. A code path that drops the `cell_key` silently corrupts
+  cross-comparison answers (wrong-release citations, collapsed release-diff).
+- Cross-cell rerank cost compounds (per-cell granularity × balanced retrieval)
+  — the highest-leverage perf item is the dedicated-`/rerank` backend TODO.
+- `_resolve_cells` ordering uses `_order_key` on the cell label (`MMMYYYY`),
+  never the tree's free-form `release_date` (D-DRAFT-5 trap).
+- Results carry `(mno, release, doc_id)` provenance for citation +
+  FR-multi-5 UI surfacing; `_resolve_cells`'s `unresolved` list feeds the
+  symmetric "requested but unavailable" surfacing.
