@@ -19,13 +19,19 @@ pip install pytest
 
 ### Source Documents
 
-The following VZW Open Alliance PDFs must be present in the repo root:
+For the simplest single-corpus demo (`--docs .`), the VZW Open Alliance PDFs
+must be present in the repo root:
 
 - `LTESMS.pdf`
 - `LTEAT.pdf`
 - `LTEB13NAC.pdf`
 - `LTEDATARETRY.pdf`
 - `LTEOTADM.pdf`
+
+> For real / multi-MNO / multi-release ingestion, use an **environment** with
+> the `input/<MNO>/<release>/` layout instead of the repo root — see
+> [Environment Management](#environment-management) → "Ingesting multiple MNOs /
+> releases" below.
 
 ### Local LLM (optional, recommended)
 
@@ -230,23 +236,26 @@ Files still editable via JSON if preferred — the UI and CLI workflows read/wri
 Environments define scoped workspaces for team members to run specific pipeline stages against specific documents.
 
 ```bash
-# Create an environment for a team member
+# Create an environment for a team member (subset of stages, one cell)
 python -m core.src.env.env_cli create \
     --name profiler-review \
     --member alice \
-    --doc-root /data/vzw-new-batch \
+    --env-dir /data/vzw-new-batch \
     --stages extract:parse \
     --scope VZW/Feb2026 \
     --objectives "Verify heading detection" "Check table extraction" \
     --created-by mohan
 
-# Create a full-pipeline environment with multiple MNOs
+# Create a full-pipeline environment spanning multiple MNOs AND releases.
+# Each MNO/Release pair is one ingestion "cell"; ALL cells are built in a
+# single run. Use the MMMYYYY release convention (Feb2026, Oct2025) so the
+# output is consumable by the SIRA multi-cell path.
 python -m core.src.env.env_cli create \
-    --name eval-review \
+    --name multi-mno-eval \
     --member bob \
-    --doc-root /data/multi-mno \
+    --env-dir /data/multi-mno \
     --stages 1:9 \
-    --scope VZW/Feb2026 ATT/Oct2025
+    --scope VZW/Feb2026 VZW/Oct2025 ATT/Oct2025
 
 # List all environments
 python -m core.src.env.env_cli list
@@ -254,22 +263,49 @@ python -m core.src.env.env_cli list
 # Show environment details and directory status
 python -m core.src.env.env_cli show profiler-review
 
-# Initialize directory structure at document_root
+# Initialize directory structure at env_dir
 python -m core.src.env.env_cli init profiler-review
 
-# Run the pipeline for an environment
+# Run the pipeline for an environment (ingests every cell under input/)
 python -m core.src.pipeline.run_cli --env profiler-review
 ```
 
-**Document root layout** (created by `init`):
+**Environment directory layout** (`<env_dir>`, created by `init`):
 ```
-<document_root>/
-├── documents/        # Place source documents here (PDF, DOCX, XLS, XLSX)
-├── corrections/      # Place corrected artifacts here (profile.json, taxonomy.json)
-├── eval/             # Place Q&A eval pairs here (*.xlsx)
-├── output/           # Pipeline outputs (auto-generated per stage)
-└── reports/          # Pipeline reports (auto-generated)
+<env_dir>/
+├── input/                # Source documents, organized by MNO and release:
+│   ├── VZW/Feb2026/       #   <MNO>/<release>/*.pdf|docx|xlsx
+│   ├── VZW/Oct2025/       #   each (MNO, release) pair is one ingestion "cell"
+│   └── ATT/Oct2025/       #   add as many cells as you like
+├── corrections/          # Human overrides (profile.json, taxonomy.json) — auto-detected on re-run
+├── eval/                 # Q&A eval pairs (*.xlsx)
+├── out/                  # Pipeline outputs (auto-generated per stage)
+├── reports/              # Pipeline reports (auto-generated)
+└── state/                # Web/runtime DBs (jobs, metrics, feedback)
 ```
+
+### Ingesting multiple MNOs / releases
+
+Drop each corpus under `input/<MNO>/<release>/`. The **extract stage walks
+`input/` recursively**, so a single pipeline run ingests **every `(MNO,
+release)` cell** present — each document's MNO and release are inferred from its
+path. The graph and vector store are unified across all cells (schema is
+multi-MNO × release-aware), so cross-MNO and release-diff queries work out of
+the box once the cells are ingested.
+
+- **Release-folder convention:** name release dirs `MMMYYYY` — 3-letter
+  title-case month + 4-digit year (e.g. `Feb2026`, `Oct2025`). This is the
+  release identity used downstream; the free-form "Release Date:" inside the
+  documents is display-only. The `MMMYYYY` convention is **required** for the
+  SIRA multi-cell retrieval path (see `sandbox/SETUP.md` →
+  "Multi-MNO / multi-release (multi-cell) runbook").
+- **Adding a cell later:** drop the new `input/<MNO>/<release>/` folder and
+  re-run the pipeline; already-built stages are incremental per document.
+- **One profile model fits all cells** — the generic profile-driven parser is
+  configured per document format, not per MNO. A corpus whose requirements are a
+  single PDF with sections-as-plans (one document → many plans) uses
+  `requirement_id.detection_mode = "leading_id_body"`; the default `"heading"`
+  model covers the open-access (one-doc-per-plan) corpora.
 
 **Correction workflow:** Run pipeline → review artifacts → copy generated file to `corrections/` → edit it → re-run pipeline (corrections auto-detected as overrides).
 

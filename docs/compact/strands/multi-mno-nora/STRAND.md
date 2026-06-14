@@ -18,3 +18,7 @@ one-tree-per-document invariant. `graph` is a touched consumer (FR-7 plan
 organization).
 
 ## Notes
+
+**Landing gate (2026-06-14):** do **not** `/land-strand` until multiple MNO
+releases have been ingested and the multi-plan / leading-id path verified on
+real corpora. D-DRAFT-1 / D-DRAFT-2 stay as drafts until then.
