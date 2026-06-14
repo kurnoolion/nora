@@ -110,7 +110,7 @@ Template (keep entries tight — this file is always in context):
 
 ---
 
-## D-013: v1 PoC corpus = single-MNO (Verizon Feb 2026); multi-MNO is post-v1
+## D-013: v1 PoC corpus = single-MNO (MNO-A Feb 2026); multi-MNO is post-v1
 **Status**: Active · **Date**: 2026-04-27
 **Decision**: v1 ships against VZW Feb 2026 only. Cross-MNO and release-diff success criteria are post-v1. Schemas (D-002) stay multi-MNO-ready: every node/chunk carries `mno`/`release`.
 **Why**: NFR-15 (≥90% weighted overall) must be reachable before adding corpus complexity. Multi-MNO needs proprietary-LLM integration that's also out of v1. Validate KG+RAG architecture on a known dataset first.
@@ -1152,7 +1152,7 @@ children. The two effects offset.
 - 8 new tests pin the contract: emit-when-enabled, suppress-when-
   disabled, cap behavior, overflow marker, unresolved-child-id
   defense, body-thinness gate fires correctly on both sides.
-- Future eval re-runs on TMO / AT&T corpora are the right
+- Future eval re-runs on TMO / MNO-B corpora are the right
   trigger to re-evaluate the default. If their parent sections
   carry substantive body content (less heading-only than OA), the
   augmentation tradeoff likely flips positive and the default

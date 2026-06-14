@@ -407,7 +407,7 @@ nora/
 │   │   ├── .gitkeep
 │   │   └── README.md                                  # Per-bootstrap placeholder→real mapping snapshots [D-062].
 │   └── profiles/
-│       ├── bs_d7a2c81f.json                           # Placeholdered profile for Verizon VoWiFi OTADM bootstrap [D-062].
+│       ├── bs_d7a2c81f.json                           # Placeholdered profile for MNO-A VoWiFi OTADM bootstrap [D-062].
 │       └── vzw_oa_profile.json
 ├── docs/
 │   └── compact/

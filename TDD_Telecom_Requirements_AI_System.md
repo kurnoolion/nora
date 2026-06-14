@@ -63,7 +63,7 @@
 
 ## 1. Executive Summary
 
-This document defines the technical design for an AI system that enables intelligent querying, cross-referencing, and compliance analysis of US Mobile Network Operator (MNO) device requirement and test case specifications across **multiple MNOs** (Verizon, AT&T, T-Mobile, etc.) and **multiple quarterly releases**.
+This document defines the technical design for an AI system that enables intelligent querying, cross-referencing, and compliance analysis of US Mobile Network Operator (MNO) device requirement and test case specifications across **multiple MNOs** (MNO-A, AT&T, T-Mobile, etc.) and **multiple quarterly releases**.
 
 The system combines a **unified Knowledge Graph** with **Retrieval-Augmented Generation (RAG)** to overcome the limitations of pure vector-based RAG, which fails to capture the deep inter-dependencies between requirements across documents, MNOs, releases, and referenced telecom standards.
 
@@ -79,14 +79,14 @@ The system will be built incrementally — starting with a Proof of Concept (PoC
 
 ### 2.1 Background
 
-US Mobile Network Operators (e.g., Verizon, AT&T, T-Mobile) release device requirement specifications quarterly. These documents:
+US Mobile Network Operators (e.g., MNO-A, AT&T, T-Mobile) release device requirement specifications quarterly. These documents:
 
 - Are based on telecom standards (3GPP, GSMA, OMA) with MNO-specific customizations
 - Cover functional areas such as LTE data retry, SMS, OTA device management, activation, IMS, carrier aggregation, etc.
 - Contain Android device preload requirements, platform customizations, and MNO service integration specifications
 - Include tables, diagrams, and attachments
 - Are accompanied by corresponding test case documents (with their own document format per MNO)
-- Follow a consistent internal structure per MNO (e.g., all Verizon OA docs share the same format; AT&T and T-Mobile have their own formats)
+- Follow a consistent internal structure per MNO (e.g., all Verizon OA docs share the same format; MNO-B and MNO-C have their own formats)
 - Each MNO release references specific releases of telecom standards (e.g., VZW Feb 2026 may reference 3GPP Release 10, while TMO may reference Release 15)
 - Total several hundred megabytes per quarterly release per MNO
 
@@ -639,7 +639,7 @@ The profile is a JSON file — machine-readable and human-editable:
   ],
 
   "header_footer": {
-    "header_patterns": ["Verizon Wireless.*Confidential", "Open Development"],
+    "header_patterns": ["MNO-A Wireless.*Confidential", "Open Development"],
     "footer_patterns": ["Page\\s+\\d+\\s+of\\s+\\d+"],
     "page_number_pattern": "^\\s*\\d+\\s*$"
   },
@@ -1252,7 +1252,7 @@ Pipeline:
 | **Named entities** | Requirement IDs, plan names, timer names, cause codes, test case IDs | Direct graph lookup |
 | **Telecom concepts** | "Attach Reject", "IMS registration", "VoWiFi", "carrier aggregation" | Feature and concept matching |
 | **Referenced standards** | "3GPP TS 24.301" | Standards node lookup |
-| **MNO(s)** | "Verizon", "VZW", "T-Mobile", "TMO", "AT&T" | MNO scoping |
+| **MNO(s)** | "MNO-A", "VZW", "MNO-C", "TMO", "MNO-B" | MNO scoping |
 | **Release(s)** | "Feb 2026", "Oct 2025", "latest" | Release scoping |
 | **Query type** | single_doc, cross_doc, cross_mno_comparison, release_diff, standards_comparison, traceability, test_case | Determines pipeline behavior |
 | **Doc type scope** | Requirements only, test cases only, or both | Filters retrieval |
@@ -1353,7 +1353,7 @@ Pipeline:
 You are comparing MNO device requirements across operators.
 
 === VZW REQUIREMENT ===
-MNO: Verizon | Release: Feb 2026 | Plan: LTE_IMS (v41)
+MNO: MNO-A | Release: Feb 2026 | Plan: LTE_IMS (v41)
 Hierarchy: IMS REGISTRATION > INITIAL REGISTRATION > ...
 Req ID: VZ_REQ_LTEIMS_1234
 Standards: Constrains 3GPP TS 24.301 section 5.5.1 (Release 10)
@@ -1362,7 +1362,7 @@ Delta from 3GPP: VZW mandates registration within 5s of PDN connectivity
 <requirement text>
 
 === TMO REQUIREMENT ===
-MNO: T-Mobile | Release: Q1 2026 | Plan: TMO_IMS_REQ (v12)
+MNO: MNO-C | Release: Q1 2026 | Plan: TMO_IMS_REQ (v12)
 Hierarchy: IMS > REGISTRATION PROCEDURES > ...
 Req ID: TMO_IMS_REQ_567
 Standards: Overrides 3GPP TS 24.301 section 5.5.1 (Release 15)
@@ -1380,12 +1380,12 @@ Source: 3GPP TS 24.301, Section 5.5.1
 
 ```
 === REQUIREMENT ===
-MNO: Verizon | Release: Feb 2026
+MNO: MNO-A | Release: Feb 2026
 Req ID: VZ_REQ_LTEDATARETRY_7743
 <requirement text>
 
 === TEST CASE ===
-MNO: Verizon | Release: Feb 2026 | Test Plan: LTE_Data_Retry_TC
+MNO: MNO-A | Release: Feb 2026 | Test Plan: LTE_Data_Retry_TC
 Test ID: TC_LTEDATARETRY_001
 Tests Requirement: VZ_REQ_LTEDATARETRY_7743
 Description: <...>
@@ -1436,7 +1436,7 @@ Expected Result: <...>
 
 #### 8.1.3 Cross-MNO Comparison
 
-**Query example:** "Compare IMS registration requirements of Verizon and T-Mobile"
+**Query example:** "Compare IMS registration requirements of MNO-A and MNO-C"
 
 **Pipeline:** Query analysis (detects cross-MNO comparison) → MNO/release resolution (VZW latest, TMO latest) → feature lookup (IMS_REGISTRATION) → graph scoping (follow `maps_to` edges filtered by each MNO) → pull standards references from both → RAG ranking with MNO diversity → context assembly with MNO-labeled sections → synthesis as structured comparison.
 
@@ -1452,7 +1452,7 @@ Expected Result: <...>
 
 #### 8.1.5 Release Diff (Version Comparison)
 
-**Query example:** "What is the delta of Verizon eSIM requirements from Feb 2026 to Oct 2025?"
+**Query example:** "What is the delta of MNO-A eSIM requirements from Feb 2026 to Oct 2025?"
 
 **Pipeline:** Query analysis (detects release diff) → MNO resolution (VZW) → release resolution (2026_Feb, 2025_Oct) → find eSIM plan in both releases → traverse `version_of` edges → classify each requirement as added/modified/removed/unchanged → for modified, compute text diff → context assembly → synthesis as structured diff report.
 

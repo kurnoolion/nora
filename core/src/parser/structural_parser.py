@@ -158,6 +158,15 @@ class CrossReferences:
 @dataclass
 class Requirement:
     req_id: str = ""
+    plan_id: str = ""
+    """D-DRAFT-1: the plan this requirement belongs to, extracted per-req from
+    ``req_id`` via the profile's ``requirement_id.components`` config. A single
+    source document may carry **multiple** plans (e.g. one PDF whose sections
+    each correspond to a plan), so plan is a *within-tree* dimension, not just
+    the tree-level scalar. Falls back to the tree's ``plan_id`` when the req has
+    no extractable plan (e.g. a structural heading node with no ``req_id``, or a
+    profile with no plan component configured). For single-plan documents every
+    requirement's ``plan_id`` equals ``tree.plan_id`` — unchanged behavior."""
     section_number: str = ""
     title: str = ""
     parent_req_id: str = ""
@@ -243,6 +252,16 @@ class RequirementTree:
     plan_name: str = ""
     version: str = ""
     release_date: str = ""
+    detection_mode: str = "heading"
+    """D-DRAFT-1/2: mirrors ``profile.requirement_id.detection_mode``
+    (`"heading"` default | `"leading_id_body"`). Stamped on the tree so
+    downstream consumers (SIRA adapter, graph builder) can distinguish the
+    two document models — a table-anchored requirement (heading model) and a
+    leading-id requirement (leading_id_body model) are otherwise
+    indistinguishable in the serialized tree (both have an empty
+    ``section_number`` and a ``parent_section``). The per-req-plan grouping and
+    parent_section-based section derivation apply only in ``"leading_id_body"``;
+    ``"heading"`` corpora (e.g. MNO-A) keep their original behavior."""
     referenced_standards_releases: dict[str, str] = field(default_factory=dict)
     requirements: list[Requirement] = field(default_factory=list)
     parse_stats: ParseStats = field(default_factory=ParseStats)
@@ -309,6 +328,7 @@ class RequirementTree:
             standards = [StandardsRef(**s) for s in xr.get("standards", [])]
             reqs.append(Requirement(
                 req_id=r.get("req_id", ""),
+                plan_id=r.get("plan_id", ""),
                 section_number=r.get("section_number", ""),
                 title=r.get("title", ""),
                 parent_req_id=r.get("parent_req_id", ""),
@@ -336,6 +356,7 @@ class RequirementTree:
             plan_name=data.get("plan_name", ""),
             version=data.get("version", ""),
             release_date=data.get("release_date", ""),
+            detection_mode=data.get("detection_mode", "heading"),
             referenced_standards_releases=data.get("referenced_standards_releases", {}),
             requirements=reqs,
             parse_stats=ParseStats(
@@ -384,6 +405,20 @@ class GenericStructuralParser:
             re.compile(rf"^\s*(?:{profile.requirement_id.pattern})\s*$")
             if profile.requirement_id.pattern
             else None
+        )
+        # Leading req_id regex (D-DRAFT-2) — same pattern, anchored at the
+        # START of the text but NOT requiring a full match (the requirement
+        # statement follows the id). Used by ``detection_mode ==
+        # "leading_id_body"`` to test whether a body block *opens* with a
+        # req_id (a new requirement) vs merely *mentions* one mid-text (a
+        # cross-reference, which must NOT spawn a phantom requirement).
+        self._req_id_leading_re = (
+            re.compile(rf"^\s*(?:{profile.requirement_id.pattern})")
+            if profile.requirement_id.pattern
+            else None
+        )
+        self._leading_id_mode = (
+            profile.requirement_id.detection_mode == "leading_id_body"
         )
         # Revision/version-history heading detection (FR-34) — compiled
         # once; None if disabled. Drops the matching paragraph and the
@@ -648,6 +683,22 @@ class GenericStructuralParser:
         ) = self._extract_reference_list(sections)
         self._parse_stats.refs_extracted = len(reference_list_map)
 
+        # 8c. Populate per-requirement plan_id (D-DRAFT-1). The plan is encoded
+        #     in the req_id and extracted via the profile's
+        #     ``requirement_id.components`` config (separator + plan_id_position).
+        #     Storing it per-req lets a multi-plan document (one PDF,
+        #     sections-as-plans) be grouped by plan downstream, while the tree
+        #     stays one-per-document. Reqs with no extractable plan (structural
+        #     heading nodes with no req_id, or a profile without a plan
+        #     component) fall back to the tree-level plan. For single-plan
+        #     documents this yields plan_id == tree.plan_id for every req.
+        tree_plan_id = plan_meta.get("plan_id", "")
+        for req in sections:
+            rid_plan = (
+                self._extract_plan_id_from_req(req.req_id) if req.req_id else None
+            )
+            req.plan_id = rid_plan or tree_plan_id
+
         # 9. Build parse transparency log.
         parse_log = self._build_parse_log(
             doc,
@@ -674,6 +725,7 @@ class GenericStructuralParser:
             plan_name=plan_meta.get("plan_name", ""),
             version=plan_meta.get("version", ""),
             release_date=plan_meta.get("release_date", ""),
+            detection_mode=self.profile.requirement_id.detection_mode,
             referenced_standards_releases=std_releases,
             requirements=sections,
             parse_stats=self._parse_stats,
@@ -1088,6 +1140,15 @@ class GenericStructuralParser:
         """Build the flat list of sections with hierarchy info from content blocks."""
         sections: list[Requirement] = []
         current_section: Requirement | None = None
+
+        # D-DRAFT-2: in ``leading_id_body`` detection mode, ``current_section``
+        # remains the enclosing HEADING (structural context / parenting
+        # anchor), while ``current_leading_req`` is the most-recent leading-id
+        # body Requirement — the append target for continuation body blocks
+        # (PyMuPDF often splits one requirement's text across blocks). Reset to
+        # None whenever a fresh heading opens, so a section's pre-requirement
+        # preamble lands on the heading, not the prior section's last req.
+        current_leading_req: Requirement | None = None
 
         # Pending req ID — small font blocks that appear before/after a heading
         pending_req_id: str = ""
@@ -1598,6 +1659,35 @@ class GenericStructuralParser:
                 # Section number duplicate (real, with content) or no match
                 # → fall through to body text path.
 
+                # D-DRAFT-2: leading-id body-block requirement detection.
+                # A body paragraph whose text BEGINS with the req_id pattern
+                # is itself a Requirement (parented to the current heading,
+                # which is non-requirement context); a body block that does
+                # not lead with a req_id continues the most-recent such
+                # Requirement, or — before any requirement in the section —
+                # is preamble on the heading.
+                if self._leading_id_mode:
+                    # A freshly-opened heading resets the requirement cursor.
+                    if previous_block_was_heading:
+                        current_leading_req = None
+                    leads_with_id = bool(
+                        self._req_id_leading_re
+                        and self._req_id_leading_re.match(block.text)
+                    )
+                    if leads_with_id:
+                        new_req = self._create_leading_id_req(
+                            block, current_section, sections
+                        )
+                        if new_req.req_id:
+                            _record_paragraph_anchor(new_req.req_id)
+                        current_leading_req = new_req
+                    else:
+                        target = current_leading_req or current_section
+                        if target is not None:
+                            self._append_text(target, block.text)
+                    previous_block_was_heading = False
+                    continue
+
                 # Body text — append to current section
                 if current_section:
                     self._append_text(current_section, block.text)
@@ -1757,16 +1847,57 @@ class GenericStructuralParser:
         if req_id and req_id not in parent_section.children:
             parent_section.children.append(req_id)
 
+    def _create_leading_id_req(
+        self,
+        block: ContentBlock,
+        parent_section: Requirement | None,
+        sections: list[Requirement],
+    ) -> Requirement:
+        """Append a Requirement anchored by a leading req_id in a body block.
+
+        D-DRAFT-2: in ``requirement_id.detection_mode == "leading_id_body"``
+        corpora, each requirement is a flat body paragraph whose text begins
+        with the req_id; section/subsection headings are non-requirement
+        context. Structurally identical to a table-anchored Requirement — no
+        own ``section_number``, linked to the enclosing heading via
+        ``parent_section`` / ``parent_req_id`` and added to its ``children``;
+        ``hierarchy_path`` is filled by ``_propagate_hierarchy_to_table_reqs``
+        once the paragraph-anchored headings have their paths. The leading
+        req_id is retained in ``text`` (the source statement is preserved
+        verbatim — parser Non-goal: no content rewriting).
+
+        ``parent_section`` may be ``None`` when a requirement precedes any
+        heading; the node is then created with empty parent linkage.
+        """
+        ids = self._find_req_ids(block.text)
+        req_id = ids[0] if ids else ""
+        new_req = Requirement(
+            req_id=req_id,
+            section_number="",   # no own section — anchored by the leading id
+            title="",
+            parent_req_id=parent_section.req_id if parent_section else "",
+            parent_section=parent_section.section_number if parent_section else "",
+            hierarchy_path=[],   # filled in _propagate_hierarchy_to_table_reqs
+            zone_type=parent_section.zone_type if parent_section else "",
+            text=block.text,
+            source_block_idx=block.position.index,
+        )
+        sections.append(new_req)
+        if parent_section is not None and req_id and req_id not in parent_section.children:
+            parent_section.children.append(req_id)
+        return new_req
+
     def _propagate_hierarchy_to_table_reqs(
         self, sections: list[Requirement]
     ) -> None:
-        """Copy parent's hierarchy_path to table-anchored Requirements.
+        """Copy parent's hierarchy_path to section_number-less Requirements.
 
-        _link_parents skips nodes without section_number (table-anchored), so
-        their hierarchy_path stays empty after that pass. Fill it now from the
-        paragraph-anchored parent. `applicability` is propagated by
-        `_apply_applicability` later (it walks document-order so parents
-        resolve before children, including table-anchored ones).
+        Covers both table-anchored (D-027) and leading-id body-block
+        (D-DRAFT-2) Requirements — both have no own ``section_number`` and so
+        are skipped by ``_link_parents``, leaving ``hierarchy_path`` empty
+        after that pass. Fill it now from the paragraph-anchored parent.
+        `applicability` is propagated by `_apply_applicability` later (it
+        walks document-order so parents resolve before children).
         """
         # Lookup paragraph-anchored sections by section_number.
         by_section_num: dict[str, Requirement] = {

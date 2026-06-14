@@ -337,7 +337,7 @@ EDGE_TYPE_DESC = {
 }
 
 NODE_TYPE_DESC = {
-    "MNO": "Mobile Network Operator (e.g., Verizon).",
+    "MNO": "Mobile Network Operator (e.g., MNO-A).",
     "Release": "A dated specification release (e.g., 2026_feb).",
     "Plan": "A requirement plan (one spec document).",
     "Requirement": "A single normative/descriptive requirement section.",

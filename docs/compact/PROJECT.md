@@ -4,9 +4,9 @@
 
 *Draft seeded from `docs/compact/design-inputs/` on retrofit init (2026-04-21). Refine during requirements phase.*
 
-**One-line**: AI system combining a unified Knowledge Graph with targeted RAG to query, cross-reference, and answer compliance-shaped questions over US MNO device requirement specifications. v1 ships against a single-MNO (Verizon Feb 2026) corpus; schema and pipeline are multi-MNO-ready for post-v1 expansion.
+**One-line**: AI system combining a unified Knowledge Graph with targeted RAG to query, cross-reference, and answer compliance-shaped questions over US MNO device requirement specifications. v1 ships against a single-MNO (MNO-A Feb 2026) corpus; schema and pipeline are multi-MNO-ready for post-v1 expansion.
 
-**Problem**: US MNOs (Verizon, AT&T, T-Mobile) publish device requirement specifications quarterly — hundreds of documents per release, totaling GBs, referencing 3GPP/GSMA standards and customizing them with MNO-specific overrides. Device teams need to answer questions like *"how does VZW differ from TMO on IMS registration?"*, *"what changed in VZW eSIM from Oct 2025 to Feb 2026?"*, and *"is this chipset compliant with the VZW Feb 2026 data-retry requirements?"* Pure vector RAG was tried and fails — it cannot follow cross-document dependencies, destroys hierarchical structure, misses standards context, and has no MNO/release awareness. NORA replaces the bespoke per-MNO parser model with a generic profile-driven parser plus a KG routing layer and a targeted RAG ranking layer.
+**Problem**: US MNOs (MNO-A, AT&T, T-Mobile) publish device requirement specifications quarterly — hundreds of documents per release, totaling GBs, referencing 3GPP/GSMA standards and customizing them with MNO-specific overrides. Device teams need to answer questions like *"how does VZW differ from TMO on IMS registration?"*, *"what changed in VZW eSIM from Oct 2025 to Feb 2026?"*, and *"is this chipset compliant with the VZW Feb 2026 data-retry requirements?"* Pure vector RAG was tried and fails — it cannot follow cross-document dependencies, destroys hierarchical structure, misses standards context, and has no MNO/release awareness. NORA replaces the bespoke per-MNO parser model with a generic profile-driven parser plus a KG routing layer and a targeted RAG ranking layer.
 
 **Users**:
 
@@ -32,7 +32,7 @@
 **Out of scope (explicit non-goals)**:
 
 - Compliance agent (post-PoC — covers single-requirement compliance against Excel sheets, cross-doc consistency, auto-fill from chipset docs, delta compliance between releases)
-- Multi-MNO corpus in v1 (graph and vector schema are multi-MNO-ready; ingesting AT&T / T-Mobile proprietary documents on-prem follows v1)
+- Multi-MNO corpus in v1 (graph and vector schema are multi-MNO-ready; ingesting MNO-B / MNO-C proprietary documents on-prem follows v1)
 - Test-case parsing in v1 (Test_Case node type preserved in graph schema per TDD design decision #11; separate parser deferred post-v1)
 - Production deployment on proprietary MNO data
 - Integration with proprietary on-premise LLM (PoC uses Claude / local Ollama)

@@ -98,6 +98,22 @@ class RequirementIdPattern:
         canonical-uppercase elsewhere.
     """
 
+    detection_mode: str = "heading"
+    """Where requirements are detected in the document (D-DRAFT-2):
+      - ``"heading"`` (default): requirements are heading-anchored — every
+        ``Requirement`` is opened by a section heading (or a table-cell
+        anchor). The req_id is attached to the heading via ``anchor`` above.
+        This is the Verizon OA shape and the historical behavior.
+      - ``"leading_id_body"``: requirements are **flat body paragraphs whose
+        text begins with the req_id pattern**; section/subsection headings are
+        non-requirement context. Each qualifying body block becomes a
+        ``Requirement`` parented to the enclosing heading (structurally like a
+        table-anchored req: no own ``section_number``). For corpora whose
+        sections carry no req_ids and whose requirements lead with their id
+        (e.g. ``<PREFIX>-<PLAN>-<DIGITS>``). Pairs with ``anchor`` /
+        ``components`` for plan extraction, unchanged.
+    """
+
 
 @dataclass
 class MetadataField:

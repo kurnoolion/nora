@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (and Cline) when working with code in
 
 ## Project
 
-**NORA** — Network Operator Requirements Analyzer. AI system combining a unified Knowledge Graph with targeted RAG for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications across multiple MNOs (Verizon, AT&T, T-Mobile) and quarterly releases.
+**NORA** — Network Operator Requirements Analyzer. AI system combining a unified Knowledge Graph with targeted RAG for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications across multiple MNOs (MNO-A, AT&T, T-Mobile) and quarterly releases.
 
 See `docs/compact/PROJECT.md` for the 1-page identity and `TDD_Telecom_Requirements_AI_System.md` for the canonical technical design.
 

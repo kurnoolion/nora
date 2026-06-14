@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** parser, profiler, extraction, adapter
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 

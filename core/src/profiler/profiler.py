@@ -633,10 +633,10 @@ class DocumentProfiler:
         the most-frequent phrasing observed (whitespace-tolerant — PDF
         extractors collapse runs of spaces inconsistently). When no
         matches are found, returns the broad default so the parser still
-        catches non-Verizon corpora that profile-time analysis missed.
+        catches non-MNO-A corpora that profile-time analysis missed.
 
         The pattern is a single string (not a list) because the parser
-        compiles it once. MNO-specific override — say, T-Mobile uses
+        compiles it once. MNO-specific override — say, MNO-C uses
         'Revision Log' exclusively — lands via the corrections workflow
         on top of whatever this returns.
         """

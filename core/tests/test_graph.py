@@ -840,3 +840,79 @@ class TestIntegration:
         stats = builder.compute_stats()
         assert stats.total_nodes > 1000
         assert stats.total_edges > 5000
+
+
+# ── D-DRAFT-1: per-requirement plan nodes (multi-plan document) ──────
+
+
+def _multi_plan_tree():
+    """One document (tree) carrying two plans via per-req plan_id —
+    the MNO-B sections-as-plans shape."""
+    def _r(req_id_str, plan, parent_section, hpath):
+        return {
+            "req_id": req_id_str, "plan_id": plan, "section_number": "",
+            "parent_section": parent_section, "parent_req_id": "",
+            "title": "", "text": f"body of {req_id_str}",
+            "hierarchy_path": hpath, "zone_type": "specs",
+            "tables": [], "images": [], "children": [],
+            "cross_references": {"internal": [], "external_plans": [], "standards": []},
+        }
+    return {
+        "mno": "MNOB", "release": "2026_jun", "plan_id": "FOO", "plan_name": "Foo",
+        "detection_mode": "leading_id_body",
+        "requirements": [
+            _r("ABC-FOO-001", "FOO", "1.1", ["General", "Device"]),
+            _r("ABC-FOO-002", "FOO", "1.1", ["General", "Device"]),
+            _r("ABC-BAR-010", "BAR", "1.2", ["General", "Network"]),
+        ],
+    }
+
+
+class TestPerReqPlanNodes:
+    def _build(self, tree):
+        b = KnowledgeGraphBuilder()
+        b._build_requirement_graph([tree])
+        return b.graph
+
+    def test_one_document_creates_two_plan_nodes(self):
+        g = self._build(_multi_plan_tree())
+        plan_nodes = {n for n, d in g.nodes(data=True) if d.get("node_type") == "Plan"}
+        assert plan_nodes == {
+            "plan:MNOB:2026_jun:FOO",
+            "plan:MNOB:2026_jun:BAR",
+        }
+
+    def test_requirements_belong_to_their_own_plan(self):
+        g = self._build(_multi_plan_tree())
+        assert g.has_edge("req:ABC-FOO-001", "plan:MNOB:2026_jun:FOO")
+        assert g.has_edge("req:ABC-BAR-010", "plan:MNOB:2026_jun:BAR")
+        # not cross-attached
+        assert not g.has_edge("req:ABC-BAR-010", "plan:MNOB:2026_jun:FOO")
+
+    def test_requirement_node_carries_its_plan(self):
+        g = self._build(_multi_plan_tree())
+        assert g.nodes["req:ABC-FOO-001"]["plan_id"] == "FOO"
+        assert g.nodes["req:ABC-BAR-010"]["plan_id"] == "BAR"
+
+    def test_both_plans_linked_to_release(self):
+        g = self._build(_multi_plan_tree())
+        assert g.has_edge("release:MNOB:2026_jun", "plan:MNOB:2026_jun:FOO")
+        assert g.has_edge("release:MNOB:2026_jun", "plan:MNOB:2026_jun:BAR")
+
+    def test_primary_plan_keeps_metadata_secondary_empty(self):
+        g = self._build(_multi_plan_tree())
+        assert g.nodes["plan:MNOB:2026_jun:FOO"]["plan_name"] == "Foo"
+        assert g.nodes["plan:MNOB:2026_jun:BAR"]["plan_name"] == ""
+
+    def test_heading_mode_keeps_single_plan_even_with_mixed_req_plans(self):
+        # Gating: a heading-mode (MNO-A) document whose reqs happen to carry
+        # differing plan_ids (e.g. a cross-plan table-anchored ref) must NOT be
+        # split into multiple plan nodes — all attach to the document plan.
+        tree = _multi_plan_tree()
+        tree["detection_mode"] = "heading"   # MNO-A
+        g = self._build(tree)
+        plan_nodes = {n for n, d in g.nodes(data=True) if d.get("node_type") == "Plan"}
+        assert plan_nodes == {"plan:MNOB:2026_jun:FOO"}   # one plan only
+        # every req belongs to the single document plan
+        assert g.has_edge("req:ABC-BAR-010", "plan:MNOB:2026_jun:FOO")
+        assert g.nodes["req:ABC-BAR-010"]["plan_id"] == "FOO"

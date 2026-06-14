@@ -9,8 +9,8 @@ For the rule-derivation playbook see [`cline-playbooks/bootstrap.md`](../../../c
 
 ## Why annotations exist
 
-When a new MNO corpus arrives, every document type — Verizon OA, AT&T DSDS,
-T-Mobile core, the post-2026 vendor specs that don't exist yet — has its own
+When a new MNO corpus arrives, every document type — Verizon OA, MNO-B DSDS,
+MNO-C core, the post-2026 vendor specs that don't exist yet — has its own
 structural quirks: where heading numbers sit, how requirement IDs are spelled,
 whether the bibliography is a paragraph list or a 2-column table, whether
 strikeouts are line-strikes or font flags. The profiler can't guess these from

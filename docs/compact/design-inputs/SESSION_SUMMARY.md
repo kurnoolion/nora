@@ -15,7 +15,7 @@ I'm an AI solution architect with deep telecom domain expertise (3GPP, GSMA, US 
 
 ## What We're Building
 
-**NORA** (Network Operator Requirements Analyzer) — an AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO (Verizon, AT&T, T-Mobile) device requirement specifications.
+**NORA** (Network Operator Requirements Analyzer) — an AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO (MNO-A, AT&T, T-Mobile) device requirement specifications.
 
 **Core architecture:** Knowledge Graph + RAG hybrid
 - Graph scoping identifies WHERE to look (cross-doc, cross-MNO traversal)

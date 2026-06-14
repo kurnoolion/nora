@@ -11,9 +11,12 @@ import pytest
 
 import json
 
+import io
+
 from sandbox.adapter.nora_to_beir import (
     _cell_dirname,
     _emit_multi_cell,
+    _emit_multigranularity_rows,
     _partition_trees_by_cell,
     _RELEASE_RE,
 )
@@ -176,3 +179,127 @@ def test_emit_multi_cell_same_reqid_isolated_across_cells(tmp_path):
     # same req_id present in BOTH cells, independently — not deduped away
     assert "req:FOO:5.1" in oct_ids
     assert "req:FOO:5.1" in feb_ids
+
+
+# ── _emit_multigranularity_rows — per-req plan grouping (D-DRAFT-1) ──
+# and leading-id section derivation (D-DRAFT-2 §4 adapter fix).
+
+
+def _emit_multi(trees, section_max_depth=2):
+    buf = io.StringIO()
+    n_doc, n_section = _emit_multigranularity_rows(trees, buf, section_max_depth)
+    rows = {r["_id"]: r for r in
+            (json.loads(l) for l in buf.getvalue().splitlines() if l.strip())}
+    return rows, n_doc, n_section
+
+
+# A leading-id-shaped tree (D-DRAFT-2): headings carry a section_number but
+# NO req_id; requirements carry a req_id + parent_section + per-req plan_id
+# but no section_number of their own. Two plans (FOO, BAR) in one document.
+def _leading_id_tree():
+    return {
+        "mno": "MNOB", "release": "Jun2026", "plan_id": "", "plan_name": "",
+        "detection_mode": "leading_id_body",
+        "requirements": [
+            {"req_id": "", "section_number": "1", "title": "General",
+             "parent_section": "", "plan_id": ""},
+            {"req_id": "", "section_number": "1.1", "title": "Device",
+             "parent_section": "1", "plan_id": ""},
+            {"req_id": "ABC-FOO-001", "section_number": "", "title": "",
+             "parent_section": "1.1", "hierarchy_path": ["General", "Device"],
+             "plan_id": "FOO"},
+            {"req_id": "ABC-FOO-002", "section_number": "", "title": "",
+             "parent_section": "1.1", "hierarchy_path": ["General", "Device"],
+             "plan_id": "FOO"},
+            {"req_id": "", "section_number": "1.2", "title": "Network",
+             "parent_section": "1", "plan_id": ""},
+            {"req_id": "ABC-BAR-010", "section_number": "", "title": "",
+             "parent_section": "1.2", "hierarchy_path": ["General", "Network"],
+             "plan_id": "BAR"},
+        ],
+    }
+
+
+class TestMultigranularityPerReqPlan:
+    def test_one_document_yields_one_doc_row_per_plan(self):
+        rows, n_doc, _ = _emit_multi([_leading_id_tree()])
+        assert "doc:FOO" in rows and "doc:BAR" in rows
+        assert n_doc == 2
+
+    def test_doc_rows_carry_only_their_plans_reqs(self):
+        rows, _, _ = _emit_multi([_leading_id_tree()])
+        assert "ABC-FOO-001" in rows["doc:FOO"]["text"]
+        assert "ABC-FOO-002" in rows["doc:FOO"]["text"]
+        assert "ABC-BAR-010" not in rows["doc:FOO"]["text"]
+        assert "ABC-BAR-010" in rows["doc:BAR"]["text"]
+        assert "ABC-FOO-001" not in rows["doc:BAR"]["text"]
+
+    def test_section_rows_emitted_for_leading_id_corpus(self):
+        # The §4 gap: previously zero section rows because headings (no
+        # req_id) were skipped. Now reqs map to their parent_section.
+        rows, _, n_section = _emit_multi([_leading_id_tree()])
+        assert "section:FOO:1.1" in rows
+        assert "section:FOO:1" in rows
+        assert "section:BAR:1.2" in rows
+        assert n_section >= 3
+
+    def test_section_titles_come_from_heading_catalog(self):
+        # Heading nodes (id-less) still supply the section title.
+        rows, _, _ = _emit_multi([_leading_id_tree()])
+        assert "Device" in rows["section:FOO:1.1"]["title"]
+        assert "Network" in rows["section:BAR:1.2"]["title"]
+
+    def test_section_descendants_grouped_by_parent_section(self):
+        rows, _, _ = _emit_multi([_leading_id_tree()])
+        assert "ABC-FOO-001" in rows["section:FOO:1.1"]["text"]
+        assert "ABC-FOO-002" in rows["section:FOO:1.1"]["text"]
+        assert "ABC-BAR-010" not in rows["section:FOO:1.1"]["text"]
+
+
+class TestMultigranularitySinglePlanBackCompat:
+    """Heading-anchored single-plan tree (MNO-A shape): one doc row, and
+    section rows keyed off the reqs' own section_numbers — unchanged."""
+
+    def _verizon_tree(self):
+        return {
+            "plan_id": "FOOPLAN", "plan_name": "Foo Plan",
+            "requirements": [
+                {"req_id": "R-1", "section_number": "5", "title": "Sec5",
+                 "parent_section": "", "plan_id": "FOOPLAN"},
+                {"req_id": "R-2", "section_number": "5.1", "title": "Sec51",
+                 "parent_section": "5", "plan_id": "FOOPLAN"},
+            ],
+        }
+
+    def test_single_doc_row(self):
+        rows, n_doc, _ = _emit_multi([self._verizon_tree()])
+        assert n_doc == 1 and "doc:FOOPLAN" in rows
+
+    def test_section_rows_use_own_section_number(self):
+        rows, _, _ = _emit_multi([self._verizon_tree()])
+        assert "section:FOOPLAN:5" in rows
+        assert "section:FOOPLAN:5.1" in rows
+        # Section 5 holds both; 5.1 holds only R-2.
+        assert "R-1" in rows["section:FOOPLAN:5"]["text"]
+        assert "R-2" in rows["section:FOOPLAN:5"]["text"]
+        assert "R-1" not in rows["section:FOOPLAN:5.1"]["text"]
+
+    def test_heading_mode_table_anchored_excluded_and_no_plan_split(self):
+        # Gating: in heading mode (default), a req with no section_number of
+        # its own (MNO-A table-anchored) must NOT enter section rows via
+        # parent_section, and a differing plan_id must NOT spawn a second doc
+        # row — both reqs stay under the single document plan.
+        tree = {
+            "plan_id": "FOOPLAN", "plan_name": "Foo Plan",
+            "requirements": [
+                {"req_id": "R-1", "section_number": "5", "title": "Sec5",
+                 "parent_section": "", "plan_id": "FOOPLAN"},
+                {"req_id": "T-9", "section_number": "", "title": "",
+                 "parent_section": "5", "plan_id": "OTHERPLAN"},  # table-anchored, diff plan
+            ],
+        }
+        rows, n_doc, _ = _emit_multi([tree])
+        assert n_doc == 1 and "doc:FOOPLAN" in rows
+        assert "doc:OTHERPLAN" not in rows               # no plan split
+        assert "T-9" in rows["doc:FOOPLAN"]["text"]      # still a doc-row pointer
+        assert "T-9" not in rows["section:FOOPLAN:5"]["text"]  # excluded from section rows

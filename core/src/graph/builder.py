@@ -181,11 +181,16 @@ class KnowledgeGraphBuilder:
         """Create MNO, Release, Plan, Requirement nodes and hierarchy edges."""
         mnos_seen: set[str] = set()
         releases_seen: set[str] = set()
+        plans_seen: set[str] = set()  # D-DRAFT-1: plan node ids already created
 
         for tree in trees:
             mno = tree["mno"]
             release = tree["release"]
             pid = tree["plan_id"]
+            # Per-req plan nodes apply ONLY to leading-id corpora (D-DRAFT-1/2).
+            # "heading" corpora (MNO-A) keep one plan node per document,
+            # every requirement attached to it — original behavior.
+            leading = (tree.get("detection_mode") or "heading") == "leading_id_body"
 
             # MNO node
             mid = mno_id(mno)
@@ -213,20 +218,15 @@ class KnowledgeGraphBuilder:
                 )
                 releases_seen.add(release_key)
 
-            # Plan node
-            plid = plan_id(mno, release, pid)
-            self.graph.add_node(
-                plid,
-                node_type=NodeType.PLAN.value,
-                plan_id=pid,
-                plan_name=tree.get("plan_name", ""),
-                version=tree.get("version", ""),
-                release_date=tree.get("release_date", ""),
-                mno=mno,
-                release=release,
-            )
-            self.graph.add_edge(
-                rid, plid, edge_type=EdgeType.CONTAINS_PLAN.value
+            # Plan nodes (D-DRAFT-1). A document may carry MULTIPLE plans
+            # (one PDF, sections-as-plans): a Plan node is created per distinct
+            # per-requirement plan, not one per document. The tree's primary
+            # plan (tree["plan_id"]) is always created up front — it carries
+            # the document-level plan_name/version metadata; secondary plans
+            # are created lazily as their requirements appear. For single-plan
+            # documents every req shares the primary plan — unchanged.
+            self._ensure_plan_node(
+                mno, release, rid, pid, tree, primary=True, plans_seen=plans_seen,
             )
 
             # Requirement nodes
@@ -235,12 +235,20 @@ class KnowledgeGraphBuilder:
                 if not r_id:
                     continue
 
+                # Per-req plan (D-DRAFT-1) in leading-id mode; the single
+                # document plan otherwise (MNO-A — unchanged).
+                r_plan = (r.get("plan_id") or pid) if leading else pid
+                plid = self._ensure_plan_node(
+                    mno, release, rid, r_plan, tree,
+                    primary=(r_plan == pid), plans_seen=plans_seen,
+                )
+
                 rid_node = req_id(r_id)
                 self.graph.add_node(
                     rid_node,
                     node_type=NodeType.REQUIREMENT.value,
                     req_id=r_id,
-                    plan_id=pid,
+                    plan_id=r_plan,
                     mno=mno,
                     release=release,
                     section_number=r.get("section_number", ""),
@@ -279,9 +287,48 @@ class KnowledgeGraphBuilder:
         )
         logger.info(
             f"Built requirement graph: {len(mnos_seen)} MNOs, "
-            f"{len(releases_seen)} releases, {len(trees)} plans, "
+            f"{len(releases_seen)} releases, {len(plans_seen)} plans, "
             f"{n_reqs} requirements"
         )
+
+    def _ensure_plan_node(
+        self,
+        mno: str,
+        release: str,
+        release_node: str,
+        plan_code: str,
+        tree: dict,
+        primary: bool,
+        plans_seen: set[str],
+    ) -> str:
+        """Create a Plan node + CONTAINS_PLAN edge once per (mno, release,
+        plan_code); return the plan node id.
+
+        D-DRAFT-1: plans are created per distinct per-requirement plan, so a
+        document carrying multiple plans yields multiple Plan nodes. The
+        *primary* plan (the tree's own ``plan_id``) carries the document-level
+        ``plan_name`` / ``version`` / ``release_date`` metadata; secondary
+        plans get an empty ``plan_name`` (a sections-as-plans document has no
+        per-plan name). First creation wins on metadata across trees that
+        share a plan in the same release.
+        """
+        plid = plan_id(mno, release, plan_code)
+        if plid not in plans_seen:
+            self.graph.add_node(
+                plid,
+                node_type=NodeType.PLAN.value,
+                plan_id=plan_code,
+                plan_name=tree.get("plan_name", "") if primary else "",
+                version=tree.get("version", ""),
+                release_date=tree.get("release_date", ""),
+                mno=mno,
+                release=release,
+            )
+            self.graph.add_edge(
+                release_node, plid, edge_type=EdgeType.CONTAINS_PLAN.value
+            )
+            plans_seen.add(plid)
+        return plid
 
     # ── Step 4: Cross-reference edges ────────────────────────────
 

@@ -170,7 +170,16 @@ def _build_text(req: dict[str, Any], tree: dict[str, Any],
     section_num = req.get("section_number") or ""
     title = req.get("title") or ""
     req_id = req.get("req_id") or ""
-    plan = tree.get("plan_name") or tree.get("plan_id") or ""
+    # In leading-id mode prefer the requirement's own plan (D-DRAFT-1) — a
+    # multi-plan document's reqs each carry their plan. In heading mode
+    # (MNO-A) keep the original tree-level plan display, unchanged.
+    if (tree.get("detection_mode") or "heading") == "leading_id_body":
+        plan = (
+            (req.get("plan_id") or "").strip()
+            or tree.get("plan_name") or tree.get("plan_id") or ""
+        )
+    else:
+        plan = tree.get("plan_name") or tree.get("plan_id") or ""
     hierarchy = _hierarchy_path(req)
     body = req.get("text") or ""
     if defs_re is not None and body:
@@ -310,84 +319,127 @@ def _emit_multigranularity_rows(
       - `doc:<plan_id>`               — one per plan
       - `section:<plan_id>:<prefix>`  — one per (plan, section_prefix)
 
-    Section title for `section:<plan_id>:<num>` uses the title of
-    the exact-match anchor req (i.e., the heading-only req with
-    section_number == num); falls back to "Section <num>" when no
-    anchor exists.
+    Section title for `section:<plan_id>:<num>` comes from the section
+    catalog — any node carrying that `section_number` (a heading-anchored
+    requirement in the MNO-A model, or a structural heading in the
+    leading-id model — D-DRAFT-2); falls back to "Section <num>" when no
+    catalog entry exists.
+
+    Plans are grouped **per requirement** (D-DRAFT-1): a single source
+    document may carry multiple plans (one PDF, sections-as-plans), so each
+    distinct `req.plan_id` yields its own `doc:`/`section:` rows. For
+    single-plan documents every req shares the tree's plan, so this collapses
+    to one `doc:` row per document as before. A requirement's "home" section
+    is its own `section_number` when it has one (heading-anchored), else its
+    `parent_section` (table-anchored or leading-id reqs — which have none).
     """
     n_doc = 0
     n_section = 0
     for tree in trees:
-        plan_id = (tree.get("plan_id") or "").strip()
-        plan_name = (tree.get("plan_name") or "").strip()
-        if not plan_id:
-            continue  # no plan_id → can't construct stable row IDs
+        reqs = tree.get("requirements") or []
+        tree_plan_id = (tree.get("plan_id") or "").strip()
+        tree_plan_name = (tree.get("plan_name") or "").strip()
+        # Per-req plan grouping + parent_section-based section derivation apply
+        # ONLY to leading-id corpora (D-DRAFT-1/2). "heading" corpora (MNO-A)
+        # keep their original behavior: one plan per document, sections keyed
+        # off each req's own section_number.
+        leading = (tree.get("detection_mode") or "heading") == "leading_id_body"
 
-        # First pass: collect req_ids in tree order + (section_number → req_id) anchor map.
-        all_req_ids: list[str] = []
-        section_anchors: dict[str, str] = {}  # section_num → req's title
-        section_to_descendants: dict[str, list[str]] = {}
+        # Section-title catalog: every node carrying a section_number, across
+        # both detection models (MNO-A heading-requirements AND leading-id
+        # structural headings). Independent of req_id so id-less headings
+        # still supply titles.
+        section_title_by_num: dict[str, str] = {}
+        for req in reqs:
+            sec_num = (req.get("section_number") or "").strip()
+            if sec_num:
+                section_title_by_num[sec_num] = (req.get("title") or "").strip()
 
-        for req in tree.get("requirements") or []:
+        # Partition retrievable requirements (those with a req_id) by plan —
+        # per-req plan in leading-id mode, else the single document plan.
+        plan_members: dict[str, list[dict[str, Any]]] = {}
+        for req in reqs:
             rid = (req.get("req_id") or "").strip()
             if not rid:
                 continue
-            all_req_ids.append(rid)
-            sec_num = (req.get("section_number") or "").strip()
-            if sec_num:
-                # Anchor — this req IS the section heading
-                section_anchors[sec_num] = (req.get("title") or "").strip()
-                # Descendant of every ancestor prefix up to max_depth
-                for prefix in _section_prefixes(sec_num, section_max_depth):
+            plan = (
+                ((req.get("plan_id") or "").strip() or tree_plan_id)
+                if leading else tree_plan_id
+            )
+            plan_members.setdefault(plan, []).append(req)
+
+        for plan_id, members in plan_members.items():
+            if not plan_id:
+                continue  # no plan → can't construct stable row IDs
+            # Only the primary plan inherits the tree's plan_name; other
+            # plans in a multi-plan document show just their id.
+            plan_name = tree_plan_name if plan_id == tree_plan_id else ""
+
+            all_req_ids: list[str] = []
+            section_to_descendants: dict[str, list[str]] = {}
+            for req in members:
+                rid = (req.get("req_id") or "").strip()
+                all_req_ids.append(rid)
+                # A requirement's "home" section: its own section_number
+                # (heading-anchored), or — only in leading-id mode — its
+                # parent_section. In heading mode a req without its own
+                # section_number (e.g. MNO-A table-anchored) contributes to
+                # no section row, exactly as before.
+                home = (req.get("section_number") or "").strip()
+                if not home and leading:
+                    home = (req.get("parent_section") or "").strip()
+                for prefix in _section_prefixes(home, section_max_depth):
                     section_to_descendants.setdefault(prefix, []).append(rid)
 
-        if not all_req_ids:
-            continue
+            if not all_req_ids:
+                continue
 
-        # Collect immediate-child sections per parent for the title-
-        # augmentation pass. For the doc-level row, the "parent" is
-        # the plan itself; its children are depth-1 sections (no dots
-        # in section_number). For a section row at "5.1", its
-        # children are "5.1.*" sections at depth +1.
-        depth1_sections: list[tuple[str, str]] = []
-        children_of_section: dict[str, list[tuple[str, str]]] = {}
-        for sec_num, title in section_anchors.items():
-            if "." not in sec_num:
-                depth1_sections.append((sec_num, title))
-            else:
-                parent = sec_num[: sec_num.rfind(".")]
-                children_of_section.setdefault(parent, []).append((sec_num, title))
-        # Stable natural-sort order
-        depth1_sections.sort(key=lambda p: _section_sort_key(p[0]))
-        for k in children_of_section:
-            children_of_section[k].sort(key=lambda p: _section_sort_key(p[0]))
+            # Section anchors restricted to the sections this plan touches.
+            section_anchors: dict[str, str] = {
+                num: section_title_by_num.get(num, "")
+                for num in section_to_descendants
+            }
+            # Collect immediate-child sections per parent for the title-
+            # augmentation pass (depth-1 sections feed the doc-level row;
+            # "5.1.*" feed the "5.1" section row).
+            depth1_sections: list[tuple[str, str]] = []
+            children_of_section: dict[str, list[tuple[str, str]]] = {}
+            for sec_num, title in section_anchors.items():
+                if "." not in sec_num:
+                    depth1_sections.append((sec_num, title))
+                else:
+                    parent = sec_num[: sec_num.rfind(".")]
+                    children_of_section.setdefault(parent, []).append((sec_num, title))
+            depth1_sections.sort(key=lambda p: _section_sort_key(p[0]))
+            for k in children_of_section:
+                children_of_section[k].sort(key=lambda p: _section_sort_key(p[0]))
 
-        # Doc-level row
-        f_out.write(json.dumps({
-            "_id": f"doc:{plan_id}",
-            "title": f"{plan_name or plan_id} plan",
-            "text": _build_doc_row_text(
-                plan_id, plan_name, all_req_ids, depth1_sections,
-            ),
-        }, ensure_ascii=False) + "\n")
-        n_doc += 1
-
-        # Section-level rows
-        for prefix in sorted(
-            section_to_descendants.keys(), key=_section_sort_key,
-        ):
-            descendants = section_to_descendants[prefix]
-            section_title = section_anchors.get(prefix, f"Section {prefix}")
-            subsection_titles = children_of_section.get(prefix, [])
+            # Doc-level row
             f_out.write(json.dumps({
-                "_id": f"section:{plan_id}:{prefix}",
-                "title": f"{prefix} {section_title}".strip(),
-                "text": _build_section_row_text(
-                    plan_id, plan_name, prefix, section_title, descendants,
-                    subsection_titles,
+                "_id": f"doc:{plan_id}",
+                "title": f"{plan_name or plan_id} plan",
+                "text": _build_doc_row_text(
+                    plan_id, plan_name, all_req_ids, depth1_sections,
                 ),
             }, ensure_ascii=False) + "\n")
-            n_section += 1
+            n_doc += 1
+
+            # Section-level rows
+            for prefix in sorted(
+                section_to_descendants.keys(), key=_section_sort_key,
+            ):
+                descendants = section_to_descendants[prefix]
+                section_title = section_anchors.get(prefix) or f"Section {prefix}"
+                subsection_titles = children_of_section.get(prefix, [])
+                f_out.write(json.dumps({
+                    "_id": f"section:{plan_id}:{prefix}",
+                    "title": f"{prefix} {section_title}".strip(),
+                    "text": _build_section_row_text(
+                        plan_id, plan_name, prefix, section_title, descendants,
+                        subsection_titles,
+                    ),
+                }, ensure_ascii=False) + "\n")
+                n_section += 1
 
     return n_doc, n_section
 
@@ -411,6 +463,7 @@ def _emit_corpus(
         for tree in trees:
             definitions_map = tree.get("definitions_map") or {}
             defs_re = _compile_defs(definitions_map) if definitions_map else None
+            leading = (tree.get("detection_mode") or "heading") == "leading_id_body"
             for req in tree.get("requirements") or []:
                 req_id = (req.get("req_id") or "").strip()
                 if not req_id:
@@ -427,6 +480,14 @@ def _emit_corpus(
                     f"{(req.get('section_number') or '').strip()} "
                     f"{(req.get('title') or '').strip()}"
                 ).strip()
+                if not title and leading:
+                    # Leading-id reqs (D-DRAFT-2) carry no section_number/title
+                    # of their own; surface their section context from
+                    # hierarchy_path so the corpus row isn't title-less. Only in
+                    # leading-id mode — heading-mode (MNO-A) rows keep their
+                    # original (possibly empty) title.
+                    hp = req.get("hierarchy_path") or []
+                    title = " > ".join(str(x) for x in hp if x)
                 row = {
                     "_id": req_id,
                     "title": title,

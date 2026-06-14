@@ -19,7 +19,7 @@ See `docs/compact/retrofit-snapshot.md`. Scan detected 16 Python packages under 
 
 ## 1. What we're building
 
-**NORA** (Network Operator Requirements Analyzer) — AI system for intelligent querying, cross-referencing, and compliance analysis of US Mobile Network Operator (Verizon, AT&T, T-Mobile) device requirement and test-case specifications, across multiple MNOs and multiple quarterly releases.
+**NORA** (Network Operator Requirements Analyzer) — AI system for intelligent querying, cross-referencing, and compliance analysis of US Mobile Network Operator (MNO-A, AT&T, T-Mobile) device requirement and test-case specifications, across multiple MNOs and multiple quarterly releases.
 
 Core architecture: **unified Knowledge Graph (routes the question) + targeted vector RAG (ranks within scope) + requirement hierarchy (structural context for LLM synthesis)**. Pure RAG was tried and failed — cannot handle cross-document dependencies, destroys hierarchical structure, misses standards context, no MNO/release awareness.
 

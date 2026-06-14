@@ -1,0 +1,268 @@
+# multi-mno-nora — journal
+
+## 2026-06-14 — Parser detection gap confirmed; D-DRAFT-2 scoped (leading-id body-block mode)
+
+### Done this session
+
+- **Grounding finding — the plan is modeled one-per-document end-to-end** (basis
+  for D-DRAFT-1, locked earlier): `RequirementTree.plan_id`/`plan_name` are
+  scalars; the SIRA adapter groups multi-granularity rows by `tree.plan_id`. But
+  the per-requirement plan is recoverable — req_ids carry a plan prefix and
+  `_extract_plan_id_from_req` (profile `RequirementIdPattern.components`) already
+  derives it transiently. → Option B (promote plan to a per-req attribute) is
+  surgical. See D-DRAFT-1.
+
+- **Detection gap CONFIRMED (not inferred) — the parser emits one `Requirement`
+  per heading, never per body paragraph.** Evidence in
+  `core/src/parser/structural_parser.py`:
+  - A `Requirement` is constructed in exactly one place in the paragraph pass —
+    `:1547`, gated on `_heading_depth(block) is not None` (block is a heading).
+  - The only other source is table-cell anchors (second pass, `:1643`, behind
+    `enable_table_anchored_extraction`).
+  - A flat body paragraph falls through to `:1601-1611`: text is appended to the
+    enclosing heading-section, and any inline req_id is captured only as *that
+    section's* id (first-wins).
+  - **Consequence for MNO-B:** a subsection (heading, no req_id) holding N
+    leading-id body requirements collapses into ONE `Requirement` — first req_id
+    becomes the section id, the other N-1 are buried as body text and lost.
+  - MNO-B's model (sections = non-requirement context; requirements = flat body
+    paragraphs with a leading `<PREFIX>-<PLAN>-<DIGITS>` id) is therefore
+    genuinely unsupported. A profile alone cannot express it — the detection
+    primitive is missing. → D-DRAFT-2.
+
+- **Key reuse insight (drives the small scope):** a leading-id body requirement
+  is structurally identical to a **table-anchored** requirement — a child
+  `Requirement` with no own `section_number`, anchored to a parent heading,
+  `hierarchy_path` filled post-hoc. The existing, tested machinery covers it:
+  - `_create_table_anchored_req` (`:1710`) is the emission template.
+  - `_propagate_hierarchy_to_table_reqs` (`:1760`) already fills `hierarchy_path`
+    for every section_number-less node with a `parent_section` — covers the new
+    reqs unchanged (rename to `_..._child_reqs` for honesty).
+  - `_apply_applicability` (`:1782`) and `_link_parents` (`:2902`) handle them
+    unchanged (document-order + parent_section; skip-on-no-section_number).
+
+- **D-DRAFT-2 drafted** in `decisions-draft.md`: add a generic,
+  profile-selectable `requirement_detection.mode: "heading" | "leading_id_body"`
+  (default `"heading"`, MNO-A byte-for-byte unchanged). Rejected
+  pre-processing into headings (brittle/lossy) and hacking req_ids through the
+  heading path (pollutes hierarchy/zone, collides with heading-continuation
+  defenses). Composes with D-DRAFT-1.
+
+### D-DRAFT-2 implementation scope (for dev phase)
+
+1. **Profile schema** (`profiler/profile_schema.py`, ~10 lines): add
+   `requirement_source`/`requirement_detection.mode` selector, default
+   `"heading"`. Reuses existing `RequirementIdPattern` for matching (no new id
+   config). MNO-B: `anchor="leading_text"`, `components` separator `-` /
+   `plan_id_position: 1` (config-only).
+
+2. **Parser core** (`structural_parser.py` `_build_sections`, ~50-80 lines — the
+   substance):
+   - **Two cursors:** split today's single `current_section` into
+     `current_heading` (parenting/hierarchy) and `current_append_target` (body
+     append; starts at the heading = section preamble, switches to the latest
+     leading-id requirement). Handles PyMuPDF splitting a requirement across
+     multiple PARAGRAPH blocks.
+   - **Predicate:** in `leading_id_body` mode, body block whose `lstrip()`
+     **starts with** the req_id pattern (anchored `re.match`, NOT
+     `_find_req_ids` search — so an inline cross-reference mid-text doesn't open
+     a phantom requirement) → new child requirement; else append to
+     `current_append_target`.
+   - **`_create_leading_id_req(...)`** modeled on `_create_table_anchored_req`:
+     `section_number=""`, parent linkage from `current_heading`, `zone_type`
+     inherited, `hierarchy_path=[]` (filled later), add to `parent.children`,
+     record in `paragraph_req_ids`.
+   - Headings still open sections but carry **no req_id** (structural-only
+     context nodes; stay in `sections`).
+
+3. **Reused as-is:** `_propagate_hierarchy_to_table_reqs` (rename only),
+   `_apply_applicability`, `_link_parents`, D-DRAFT-1 per-req `plan_id`.
+
+4. **Downstream — verify, don't assume:** heading nodes now have empty `req_id`
+   (novel). Check SIRA adapter `_emit_multigranularity_rows` and graph builder
+   (FR-7) tolerate req_id-less structural nodes when partitioning per-req
+   `plan_id`. Likely fine (table-anchored parents can also be req_id-less), but
+   confirm. `graph` not in target modules — STRAND notes it as a touched
+   consumer; widen only if an assertion fails.
+
+5. **Tests** (`core/tests/test_parser.py`): leading_id_body fixture (subsection +
+   multiple leading-id reqs + preamble + inline cross-ref) asserting N reqs (not
+   1), correct parent linkage/hierarchy, no phantom from the cross-ref,
+   continuation block routed to the right req; plus a heading-mode regression
+   (byte-identical to today). Generic ids (`ABC-FOO-001`) — redaction rule.
+
+6. **Estimate:** ~half-day dev-phase, low risk (rides existing child-req
+   infrastructure; default path untouched). Only §4 could widen it.
+
+### Open details (resolve at wiring time — not blockers)
+
+- Final field name/placement (`HeadingDetection.requirement_source` vs a new
+  `RequirementDetection` block).
+- Strip vs retain the leading req_id in requirement `text` (lean retain for
+  fidelity; confirm against the real doc).
+- Heading nodes retained as structural-only (table-anchored precedent says yes)
+  vs elided — recommend retain; gated on §4.
+- Table-anchored second pass interaction: keep the two modes composable, not
+  hard-wired mutually exclusive.
+
+### Next
+
+- Implement D-DRAFT-2 (dev phase): schema field → parser fork + helper + tests →
+  verify §4 consumers.
+- Then author the MNO-B profile (small): select `leading_id_body`, set the
+  req_id pattern + `components` (`-` / position 1), section-numbering for
+  hierarchy context — against the real document's prefix/styles.
+- Carry D-DRAFT-1 wiring (per-req `plan_id` in `Requirement` + adapter/graph
+  grouping) — it composes with and is exercised by the MNO-B path.
+
+### Flags
+
+- D-DRAFT-1 and D-DRAFT-2 are both unlanded drafts in this strand; neither parser
+  nor schema code has been written yet — this session is architecture/scoping
+  only.
+- An MNO-B profile authored before D-DRAFT-2 lands would silently collapse
+  MNO-B's requirements — do not write the profile first.
+
+## 2026-06-14 — D-DRAFT-2 implemented (parser + schema + tests); §4 adapter gap found
+
+### Done this session
+
+- **D-DRAFT-2 implemented** (dev phase, all tests green):
+  - `profiler/profile_schema.py`: added `RequirementIdPattern.detection_mode`
+    (`"heading"` default | `"leading_id_body"`). Back-compat — splat-constructed
+    in `DocumentProfile._from_dict`, missing key → default.
+  - `parser/structural_parser.py`:
+    - `__init__`: `_req_id_leading_re` (`^\s*(?:pattern)`, start-anchored, NOT
+      full-match) + `_leading_id_mode` flag.
+    - `_build_sections`: new `current_leading_req` cursor + a guarded
+      leading-id branch in the body-text path. Heading stays `current_section`
+      (parent/context); the cursor resets on a freshly-opened heading (driven by
+      the existing `previous_block_was_heading`), so section preamble lands on
+      the heading and continuation blocks append to the open requirement. Default
+      `"heading"` path untouched (byte-for-byte).
+    - `_create_leading_id_req`: emits a child Requirement (no `section_number`,
+      parent linkage from the heading, leading id retained in `text`), modeled on
+      `_create_table_anchored_req`. Tolerates `parent_section=None` (req before
+      any heading).
+    - `_propagate_hierarchy_to_table_reqs`: docstring widened (now covers
+      section_number-less leading-id reqs too); name kept to avoid contract churn.
+  - `core/tests/test_structural_parser_leading_id.py`: 10 tests — N reqs per
+    subsection, inline-ref does-not-spawn-phantom, parent/section_number, continuation
+    append, preamble-on-heading, heading-reset reparent, hierarchy_path inherit,
+    headings have empty req_id; + default-mode regression (no standalone reqs;
+    inline id attaches to heading). Generic ids (`ABC-FOO-001`).
+  - Regression: 79 existing parser tests + 61 profiler tests pass.
+  - `parser/MODULE.md`: curated Invariant + Key-choice updated to the **third**
+    anchor source (leading-id body) and the `detection_mode` field, citing
+    D-DRAFT-2. Backed by the draft decision (not silent contract evolution) —
+    flag at close-session audit.
+
+- **§4 downstream verification (SIRA adapter `nora_to_beir.py`) — finding:**
+  - **No crash.** Both `_emit_corpus` (`:416`) and `_emit_multigranularity_rows`
+    (`:333`) guard `if not req_id: continue`, so req_id-less heading nodes are
+    tolerated. Leading-id reqs emit as per-req corpus rows.
+  - **But the section-granularity tier collapses** for leading-id corpora: the
+    adapter treats "a section" as "a requirement with a `section_number`"
+    (`:336-342`). In the leading-id model headings have a section_number but no
+    req_id (skipped), and reqs have a req_id but no section_number → `section_anchors`
+    / `section_to_descendants` stay empty → **zero `section:` rows**; per-req rows
+    also get an empty `title` (no section_number/title on leading-id reqs).
+  - This is **adapter work, bundled with D-DRAFT-1** (which already must move
+    section/plan grouping off the heading-as-requirement assumption). NOT a
+    D-DRAFT-2 blocker — the parser tree is correct; only the SIRA section tier is
+    affected.
+
+### Next
+
+- D-DRAFT-1 implementation (per-req `plan_id` on `Requirement` + adapter/graph
+  per-req grouping) — fold in the §4 fix: derive section structure from reqs'
+  `parent_section` / `hierarchy_path` (populated) instead of req-bearing headings;
+  give leading-id reqs a non-empty corpus-row `title` (e.g. from hierarchy_path).
+- Then author the MNO-B profile (`detection_mode="leading_id_body"`, req_id
+  pattern, `components` `-`/pos 1) against the real document.
+
+### Flags
+
+- `parser/MODULE.md` curated sections edited (Invariant + Key choice) — backed by
+  D-DRAFT-2; surface in close-session MODULE.md audit.
+- SIRA adapter section-tier gap for leading-id corpora (above) is unfixed by
+  design — tracked for the D-DRAFT-1 adapter work.
+
+## 2026-06-14 — D-DRAFT-1 implemented (parser + adapter + graph); §4 fix folded in
+
+### Done this session
+
+- **D-DRAFT-1 implemented across all three layers; 161 tests green** (parser +
+  profiler + graph + adapter), no regressions.
+
+  **Parser** (`structural_parser.py`):
+  - `Requirement.plan_id` field added (+ `load_json` deserialization,
+    `to_dict` automatic via `asdict`).
+  - `parse()` step 8c: populate `req.plan_id = _extract_plan_id_from_req(req_id)
+    or tree_plan_id` for every requirement. Single-plan docs → `req.plan_id ==
+    tree.plan_id` (unchanged). Heading/id-less nodes → tree plan.
+  - **`tree.plan_id` semantics resolved** (the D-DRAFT-1 open detail): it stays
+    the document's *primary* plan from page-1 metadata, **may be empty for a
+    genuinely multi-plan doc** (e.g. MNO-B with no plan-metadata pattern); the
+    per-req `plan_id` is the authority for grouping. No back-compat break — for
+    single-plan docs the two coincide.
+  - Tests: `test_structural_parser_leading_id.py::TestPerRequirementPlanId`
+    (3) — per-req plan FOO/BAR, multi-plan in one doc, id-less heading fallback.
+
+  **Adapter** (`sandbox/adapter/nora_to_beir.py` `_emit_multigranularity_rows`):
+  - Reworked to **group `doc:`/`section:` rows by per-req `plan_id`** instead of
+    `tree.plan_id` — one document now yields one `doc:` row per distinct plan.
+  - **§4 fix folded in:** section structure now derives from a *section-title
+    catalog* (every node with a `section_number`, incl. id-less leading-id
+    headings) + each req's "home" section = `section_number` **or**
+    `parent_section`. Leading-id corpora now get `section:` rows (previously
+    zero). Leading-id corpus rows also get a non-empty `title` from
+    `hierarchy_path`; `_build_text` now shows the req's own plan.
+  - Tests: `test_nora_to_beir.py::TestMultigranularityPerReqPlan` (5) +
+    `TestMultigranularitySinglePlanBackCompat` (3).
+
+  **Graph** (`core/src/graph/builder.py` `_build_requirement_graph`):
+  - New `_ensure_plan_node(...)` (internal) creates a **Plan node per distinct
+    per-req plan**, not one per document; each requirement `BELONGS_TO` its own
+    plan; req node carries its `plan_id`. Primary plan keeps doc-level
+    `plan_name`/`version`; secondary plans get empty `plan_name`
+    (first-creation-wins across trees sharing a plan in a release). Log line
+    fixed (`len(plans_seen)` not `len(trees)`). No curated graph MODULE.md
+    contract affected — public surface unchanged.
+  - Tests: `test_graph.py::TestPerReqPlanNodes` (5).
+
+### Next
+
+- Author the **MNO-B profile** now that the pipeline supports it:
+  `requirement_id.detection_mode = "leading_id_body"`, `pattern` for
+  `<PREFIX>-<PLAN>-<DIGITS>`, `components` `{separator:"-", plan_id_position:1}`,
+  heading_detection for the section hierarchy — against the real document
+  (need the literal PREFIX, section-number format, heading styles).
+- Work-PC: run extract → parse on the real MNO-B PDF; inspect; iterate profile.
+
+### MNO-A-preservation (user requirement: new behavior MNO-B-only)
+
+- A table-anchored req (heading model) and a leading-id req (leading_id_body
+  model) are **indistinguishable in the serialized tree** (both: empty
+  `section_number` + a `parent_section`). So the parser now **stamps
+  `RequirementTree.detection_mode`** (mirrors the profile) and both consumers
+  gate on it:
+  - **Adapter**: per-req-plan grouping + parent_section-based section
+    derivation + hierarchy_path title + per-req plan in body — **only when
+    `detection_mode == "leading_id_body"`**. Heading corpora keep one doc row
+    per tree, sections off own `section_number`, original plan display.
+  - **Graph**: per-req plan nodes only in leading mode; heading mode = one plan
+    per document, every req attached — byte-identical to original (also guards
+    the cross-plan table-anchored-ref scatter case).
+  - `Requirement.plan_id` is still *populated* for all corpora (additive
+    metadata) but only *acted on* in leading mode.
+- Gating tests added: `test_graph.py::...test_heading_mode_keeps_single_plan_
+  even_with_mixed_req_plans`; `test_nora_to_beir.py::...test_heading_mode_table_
+  anchored_excluded_and_no_plan_split`. Total now 163 green.
+
+### Flags
+
+- `parser/MODULE.md` curated edits (D-DRAFT-1 + D-DRAFT-2: new Invariants,
+  Public-surface `plan_id`, detection-mode) pending close-session audit — all
+  decision-backed.
+- MNO-B profile still the next step; needs the real document (work PC).
