@@ -68,6 +68,58 @@ def _round_robin(per_cell: list[list[Candidate]]) -> list[Candidate]:
     return out
 
 
+def merge_candidates(
+    target_cells: set[CellKey],
+    retrieve_fn: RetrieveFn,
+    per_cell_top_n: int,
+) -> list[list[Candidate]]:
+    """Retrieve up to `per_cell_top_n` from each cell and tag with
+    provenance. Returns per-cell candidate lists (cell order = sorted),
+    each in the cell's own BM25 rank order.
+
+    **Balanced retrieval** (FR-multi-3): each cell contributes
+    independently, so no MNO is starved by vocabulary skew. The split
+    is also why there's NO cross-cell dedup — a doc_id appearing in two
+    cells produces two Candidates with distinct comp_id (release-diff).
+    """
+    per_cell: list[list[Candidate]] = []
+    for cell in sorted(target_cells):
+        hits = retrieve_fn(cell, per_cell_top_n)
+        per_cell.append([Candidate(cell, did, score) for did, score in hits])
+    return per_cell
+
+
+def rank_candidates(
+    per_cell: list[list[Candidate]],
+    scores: dict[CompId, float] | None,
+    top_k: int,
+) -> list[Candidate]:
+    """Rank the merged pool and return top_k.
+
+    - With `scores` (rerank done): sort the union by the reranker's
+      absolute 0-100 score (comparable across cells), NOT RRF
+      (D-DRAFT-10 call 1). A candidate absent from `scores` (failed
+      batch) keeps rerank_score None and sorts to the bottom — NOT
+      dropped before top_k.
+    - With `scores=None` (no rerank): round-robin interleave per cell
+      (balanced). BM25 scores aren't comparable across cells, so a
+      global BM25 sort would be meaningless for >1 cell; for one cell
+      it degenerates to the cell's BM25 order.
+    """
+    pool: list[Candidate] = [c for cell_list in per_cell for c in cell_list]
+    if not pool:
+        return []
+    if scores is not None:
+        for c in pool:
+            c.rerank_score = scores.get(c.comp_id)
+        pool.sort(
+            key=lambda c: (c.rerank_score is not None, c.rerank_score or 0.0),
+            reverse=True,
+        )
+        return pool[:top_k]
+    return _round_robin(per_cell)[:top_k]
+
+
 def fuse(
     query: str,
     target_cells: set[CellKey],
@@ -77,48 +129,15 @@ def fuse(
     per_cell_top_n: int,
     top_k: int,
 ) -> list[Candidate]:
-    """Retrieve per cell, merge, rerank the union, return top_k.
+    """Synchronous retrieve -> merge -> rerank -> rank convenience wrapper.
 
-    - **Balanced retrieval** (FR-multi-3): each cell contributes up to
-      `per_cell_top_n` candidates, so neither MNO is starved by
-      vocabulary skew. Cross-cell rerank cost is therefore
-      ~ len(target_cells) * per_cell_top_n.
-    - **Fusion method** (D-DRAFT-10 call 1): when a reranker is given,
-      sort the merged pool by the reranker's absolute 0-100 score
-      (comparable across cells), NOT RRF. A candidate the reranker
-      didn't score (e.g. a failed rerank batch) keeps `rerank_score
-      None` and sorts to the bottom — it is NOT dropped before top_k.
-    - **No-rerank path**: round-robin interleave per cell (balanced).
-      BM25 scores aren't comparable across cells, so a global BM25 sort
-      would be meaningless for >1 cell; round-robin preserves balance.
-      For a single cell it degenerates to the cell's own BM25 order.
-    - **No cross-cell dedup** (D-DRAFT-10 call 3): the same doc_id in
-      two cells (release-diff) yields two Candidates with distinct
-      `comp_id`; both can reach top_k.
-
-    `retrieve_fn(cell, k)` returns that cell's top-k `(doc_id, bm25)`
-    hits (the caller bakes the shared query-expansion into the closure).
-    `rerank_fn(query, candidates)` returns `{comp_id: score}`.
+    Used directly in tests. The async service composes the two halves
+    itself (`merge_candidates`, then await the LLM rerank, then
+    `rank_candidates`) because the real reranker is async. Single-cell
+    is N=1 — no separate cross-cell branch; the three query shapes
+    collapse to this one path.
     """
-    per_cell: list[list[Candidate]] = []
-    for cell in sorted(target_cells):
-        hits = retrieve_fn(cell, per_cell_top_n)
-        per_cell.append([Candidate(cell, did, score) for did, score in hits])
-
-    pool: list[Candidate] = [c for cell_list in per_cell for c in cell_list]
-    if not pool:
-        return []
-
-    if rerank_fn is not None:
-        scores = rerank_fn(query, pool)
-        for c in pool:
-            c.rerank_score = scores.get(c.comp_id)
-        # scored-above-unscored, then by score desc; stable on ties.
-        pool.sort(
-            key=lambda c: (c.rerank_score is not None, c.rerank_score or 0.0),
-            reverse=True,
-        )
-        return pool[:top_k]
-
-    # No reranker: balanced round-robin (BM25 scores not cross-comparable).
-    return _round_robin(per_cell)[:top_k]
+    per_cell = merge_candidates(target_cells, retrieve_fn, per_cell_top_n)
+    pool = [c for cell_list in per_cell for c in cell_list]
+    scores = rerank_fn(query, pool) if (rerank_fn is not None and pool) else None
+    return rank_candidates(per_cell, scores, top_k)

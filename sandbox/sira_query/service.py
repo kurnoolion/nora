@@ -218,6 +218,39 @@ _query_prompt_source: str | None = None
 _rerank_prompt_source: str | None = None
 
 
+# ── Multi-MNO cells (multi-mno-sira) ───────────────────────────────
+#
+# When <db_root> holds <mno>__<MMMYYYY> cell datasets, each loads into a
+# CellState and queries route through resolve_cells + fuse. The legacy
+# single-dataset path (the _bm25 globals above) is preserved unchanged
+# for back-compat — a dataset without a valid (mno, release) can't join
+# the cell model. See D-DRAFT-7/10.
+
+from dataclasses import dataclass  # noqa: E402
+
+from core.src.query.analyzer import make_query_analyzer  # noqa: E402
+from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
+from sandbox.sira_query.fusion import merge_candidates, rank_candidates  # noqa: E402
+from sandbox.sira_query.scope import resolve_cells  # noqa: E402
+
+
+@dataclass
+class CellState:
+    """Per-(MNO, release) cell: its own BM25 index + corpus + DF stats."""
+    cell: CellKey
+    bm25: "Any"
+    doc_ids: list[str]
+    doc_id_to_idx: dict[str, int]
+    corpus_by_id: dict[str, dict[str, str]]
+    max_df: int
+    doc_enrich_source: str | None = None
+    doc_enrich_applied_docs: int = 0
+
+
+_cells: dict[CellKey, CellState] = {}
+_cells_load_error: str | None = None
+
+
 def _resolve_run_dir(stage_dir: Path, pinned_name: str) -> Path | None:
     """Resolve a per-stage run directory.
 
@@ -412,6 +445,260 @@ def _load_state() -> None:
         len(_doc_ids), _max_df_absolute, _EXPANSION_WEIGHT, _RERANK_TOP_N,
         _doc_enrich_applied_docs,
     )
+
+
+# ── Multi-cell loading + fusion query path (multi-mno-sira) ────────
+
+
+def _load_one_cell(base: Path, cell: CellKey) -> CellState:
+    """Load one cell's BM25 index + corpus + doc-enrichment into a
+    CellState. Mirrors the legacy single-dataset load, scoped to one
+    cell dir and returning state instead of mutating globals.
+
+    Raises FileNotFoundError if the cell's corpus or index is missing.
+    """
+    corpus_path = base / "raw" / "corpus.jsonl"
+    index_dir = base / "index" / "best"
+    if not corpus_path.exists():
+        raise FileNotFoundError(f"corpus.jsonl not found at {corpus_path}")
+    if not index_dir.exists():
+        raise FileNotFoundError(f"BM25 index not found at {index_dir}")
+
+    doc_ids: list[str] = []
+    doc_id_to_idx: dict[str, int] = {}
+    corpus_by_id: dict[str, dict[str, str]] = {}
+    with open(corpus_path, encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            rid = obj["_id"]
+            doc_id_to_idx[rid] = len(doc_ids)
+            doc_ids.append(rid)
+            corpus_by_id[rid] = {
+                "title": obj.get("title", ""),
+                "text": obj.get("text", ""),
+            }
+    max_df = max(1, int(len(doc_ids) * _MAX_DF_RATIO))
+
+    from bm25x import BM25
+    bm25 = BM25.load(str(index_dir))
+
+    cstate = CellState(
+        cell=cell, bm25=bm25, doc_ids=doc_ids,
+        doc_id_to_idx=doc_id_to_idx, corpus_by_id=corpus_by_id, max_df=max_df,
+    )
+
+    # Doc enrichment — apply phrases to this cell's index (same precedence
+    # as the legacy path: pinned/latest run's enrichments.kept.jsonl, else
+    # enrichments/doc/best.jsonl). Per-cell, so a cell with no enrichment
+    # simply runs vanilla BM25 + query-side expansion.
+    doc_run = _resolve_run_dir(base / "runs" / "doc-enrich", _DOC_ENRICH_RUN)
+    phrases_path: Path | None = None
+    if doc_run is not None:
+        cand = doc_run / "enrichments.kept.jsonl"
+        if cand.exists():
+            phrases_path = cand
+    if phrases_path is None:
+        fallback = base / "enrichments" / "doc" / "best.jsonl"
+        if fallback.exists() and fallback.stat().st_size > 0:
+            phrases_path = fallback
+    if phrases_path is not None:
+        enrichments: dict[str, list[str]] = {}
+        with open(phrases_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                did = row.get("doc_id") or row.get("_id")
+                phrases = row.get("phrases") or []
+                if did and phrases and did in doc_id_to_idx:
+                    enrichments.setdefault(did, []).extend(phrases)
+        items = [(doc_id_to_idx[did], ph) for did, ph in enrichments.items()]
+        try:
+            bm25.enrich_batch(items)
+            cstate.doc_enrich_applied_docs = len(items)
+            cstate.doc_enrich_source = str(phrases_path)
+        except Exception as exc:
+            logger.error("cell %s enrich_batch failed (%s) — vanilla BM25",
+                         cell_dirname(cell), exc)
+    return cstate
+
+
+def _load_cells() -> None:
+    """Populate `_cells` from `<db_root>/<mno>__<MMMYYYY>/` datasets.
+
+    Idempotent. On any per-cell load failure, that cell is skipped and
+    the error recorded in `_cells_load_error`; other cells still load so
+    one bad cell doesn't sink the service.
+    """
+    global _cells_load_error
+    if _cells:
+        return
+    if not _DB_ROOT:
+        return
+    db_root = Path(_DB_ROOT)
+    cells = enumerate_cells(db_root)
+    errors: list[str] = []
+    for cell in cells:
+        base = db_root / cell_dirname(cell)
+        try:
+            _cells[cell] = _load_one_cell(base, cell)
+        except Exception as exc:
+            errors.append(f"{cell_dirname(cell)}: {exc}")
+    _cells_load_error = "; ".join(errors) if errors else None
+    if _cells:
+        logger.info(
+            "Multi-cell mode: loaded %d cell(s): %s",
+            len(_cells), ", ".join(cell_dirname(c) for c in sorted(_cells)),
+        )
+
+
+def _build_retrieve_fn(query: str, raw_phrases: list[str]):
+    """retrieve_fn(cell, k) -> [(doc_id, bm25)] for `merge_candidates`.
+
+    Dispatches on the cell; the shared raw expansion phrases are
+    DF-filtered + tokenized against THAT cell's own statistics (a phrase
+    discriminative in one cell may be common in another — D-DRAFT-10
+    call 4: expand once, filter per cell)."""
+    def _retrieve(cell: CellKey, k: int) -> list[tuple[str, float]]:
+        cstate = _cells[cell]
+        expansion = ""
+        if raw_phrases:
+            kept, _ = cstate.bm25.filter_query_expansion(
+                query, raw_phrases, cstate.max_df,
+            )
+            stems: list[str] = []
+            for p in kept:
+                stems.extend(cstate.bm25.tokenize(p))
+            expansion = " ".join(stems)
+        results = cstate.bm25.search_with_expansion(
+            [query], [expansion], k=k, weight=_EXPANSION_WEIGHT,
+        )
+        return [(cstate.doc_ids[idx], float(s)) for idx, s in results[0]]
+    return _retrieve
+
+
+async def _rerank_candidates(client, query: str, candidates: list) -> dict:
+    """rerank_fn for `fuse`: LLM-score the merged candidate pool ->
+    {comp_id: score}. Each candidate's doc text comes from ITS cell's
+    corpus (provenance-aware). Per-call mode; a failed call scores 0 for
+    that candidate (kept, sorts low). Batch mode is a future optimization
+    — the pool spans cells, so batching would need cell-grouped prompts."""
+    scores: dict = {}
+    for cand in candidates:
+        cstate = _cells.get(cand.cell)
+        if cstate is None:
+            continue
+        doc = cstate.corpus_by_id.get(cand.doc_id)
+        if doc is None:
+            continue
+        doc_text = (f"{doc['title']}\n\n{doc['text']}")[:4000]
+        prompt = _rerank_prompt_template.format(query=query, document=doc_text)
+        try:
+            raw = await _llm_call(
+                client, prompt, max_tokens=_RERANK_MAX_TOKENS, temperature=0.0,
+                base_url=_RERANK_LLM_URL or None,
+                model=_RERANK_LLM_MODEL or None,
+                api_key=_RERANK_LLM_API_KEY or None,
+            )
+            scores[cand.comp_id] = float(_parse_score(raw))
+        except Exception as exc:
+            logger.warning("rerank failed for %s: %s", cand.comp_id, exc)
+            scores[cand.comp_id] = 0.0
+    return scores
+
+
+async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, Any]:
+    """Multi-MNO query path: analyze -> resolve scope -> retrieve per cell
+    -> rerank the merged pool -> rank. Results carry (mno, release)
+    provenance and the unresolved-scope list (FR-multi-5).
+
+    Note (first cut): scope extraction uses the keyword MockQueryAnalyzer
+    (make_query_analyzer(None)); wiring an LLMProvider around the
+    service's httpx LLM for LLMQueryAnalyzer is a follow-up (D-DRAFT-9).
+    Doc/section fan-out (plan-aware-sira) is not yet ported to the
+    multi-cell path.
+    """
+    # 1. Scope: analyze -> (mnos, releases) -> resolve to cells.
+    intent = make_query_analyzer(None).analyze(req.query)
+    resolved, unresolved = resolve_cells(intent, _cells.keys())
+    if not resolved:
+        raise HTTPException(status_code=503, detail={
+            "error": "no ingested cell matched the query scope",
+            "requested_unresolved": [list(u) for u in unresolved],
+            "available_cells": [cell_dirname(c) for c in sorted(_cells)],
+        })
+
+    top_n = max(top_k, _RERANK_TOP_N)
+    notes: list[str] = []
+    timings: dict[str, int] = {}
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        # 2. Expand the query ONCE (raw phrases; per-cell DF-filter
+        #    happens inside the retrieve closure — D-DRAFT-10 call 4).
+        t0 = time.time()
+        raw_phrases: list[str] = []
+        if _QUERY_ENRICH_ENABLED and _query_prompt_template:
+            try:
+                prompt = _query_prompt_template.format(doc_text=req.query, max_n=4)
+                raw = await _llm_call(
+                    client, prompt, max_tokens=512,
+                    temperature=_QUERY_ENRICH_TEMPERATURE,
+                )
+                raw_phrases = _parse_phrases(raw)
+            except Exception as exc:
+                notes.append(f"query-enrich failed (continuing): {exc}")
+        elif not _QUERY_ENRICH_ENABLED:
+            notes.append("query enrichment disabled — raw-query BM25 only")
+        timings["expand_ms"] = int((time.time() - t0) * 1000)
+
+        # 3. Retrieve per cell (balanced), merge into the pool.
+        t0 = time.time()
+        retrieve_fn = _build_retrieve_fn(req.query, raw_phrases)
+        per_cell = merge_candidates(resolved, retrieve_fn, top_n)
+        pool = [c for cl in per_cell for c in cl]
+        timings["search_ms"] = int((time.time() - t0) * 1000)
+
+        # 4. Rerank the merged pool (the fusion mechanism). Disabled ->
+        #    round-robin balance (scores=None).
+        t0 = time.time()
+        scores = None
+        if _RERANK_ENABLED and _rerank_prompt_template and pool:
+            scores = await _rerank_candidates(client, req.query, pool)
+        elif not _RERANK_ENABLED:
+            notes.append("rerank disabled — round-robin per-cell balance "
+                         "(cross-cell scores not comparable without rerank)")
+        elif not _rerank_prompt_template:
+            notes.append("rerank prompt missing — round-robin per-cell balance")
+        timings["rerank_ms"] = int((time.time() - t0) * 1000)
+
+    # 5. Rank + top_k, build results with provenance.
+    ranked = rank_candidates(per_cell, scores, top_k)
+    out: list[dict[str, Any]] = []
+    for rank, cand in enumerate(ranked, 1):
+        doc = _cells[cand.cell].corpus_by_id.get(cand.doc_id, {})
+        out.append({
+            "rank": rank,
+            "req_id": cand.doc_id,
+            "mno": cand.mno,                # FR-multi-5 provenance
+            "release": cand.release,
+            "rerank_score": cand.rerank_score,
+            "bm25_score": round(cand.bm25_score, 4),
+            "title": doc.get("title", ""),
+            "text_preview": doc.get("text", "").replace("\n", " ").strip()[:400],
+        })
+
+    return {
+        "query": req.query,
+        "top_k": top_k,
+        "mode": "multi-cell",
+        "resolved_cells": [cell_dirname(c) for c in sorted(resolved)],
+        "unresolved": [list(u) for u in unresolved],   # FR-multi-5 surfacing
+        "candidates_reranked": len(pool),
+        "results": out,
+        "timings_ms": timings,
+        "notes": notes,
+    }
 
 
 # ── FastAPI app ────────────────────────────────────────────────────
@@ -736,14 +1023,22 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         3. LLM pointwise rerank of those candidates
         4. Sort by rerank score, return top_k
     """
-    _load_state()
-    if _load_error:
-        raise HTTPException(status_code=503, detail=_load_error)
-
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query is empty")
 
     top_k = req.top_k if (req.top_k and req.top_k > 0) else _DEFAULT_TOP_K
+
+    # Multi-MNO: when <db_root> holds <mno>__<MMMYYYY> cells, route
+    # through the scope-resolution + fusion path. Else fall back to the
+    # legacy single-dataset handler below (unchanged).
+    _load_cells()
+    if _cells:
+        return await _multi_cell_query(req, top_k)
+
+    _load_state()
+    if _load_error:
+        raise HTTPException(status_code=503, detail=_load_error)
+
     top_n = max(top_k, _RERANK_TOP_N)
     timings: dict[str, int] = {}
     notes: list[str] = []
