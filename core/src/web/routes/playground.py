@@ -414,6 +414,12 @@ async def _build_merged_response_html(
                 "sira_timings_ms": out["sira_result"].get("timings_ms"),
                 "sira_rerank_call_stats": out["sira_result"].get("rerank_call_stats"),
                 "sira_notes": out["sira_result"].get("notes", []),
+                # Multi-MNO surfacing (FR-multi-5). Present only when the
+                # SIRA service ran in multi-cell mode; None on the legacy
+                # single-dataset path.
+                "sira_mode": out["sira_result"].get("mode"),
+                "sira_resolved_cells": out["sira_result"].get("resolved_cells"),
+                "sira_unresolved": out["sira_result"].get("unresolved"),
                 "synth_error": out["synth_error"],
                 "candidate_count": 0,
             })

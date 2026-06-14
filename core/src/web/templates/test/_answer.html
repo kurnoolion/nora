@@ -336,6 +336,25 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
             <span class="badge bg-light text-dark border" style="font-weight: 400;">{{ p }}</span>
           {% endfor %}
         {% endif %}
+        {# Multi-MNO scope surfacing (FR-multi-5). Shows which (MNO,release)
+           cells answered, and any requested-but-unavailable scope so the
+           user never silently believes they compared releases that weren't
+           there. Only present in multi-cell mode. #}
+        {% if sira_resolved_cells %}
+          <div class="mt-1">
+            <span class="text-muted">cells:</span>
+            {% for c in sira_resolved_cells %}
+              <span class="badge bg-info text-dark">{{ c }}</span>
+            {% endfor %}
+            {% if sira_unresolved %}
+              <span class="text-muted ms-2">not available:</span>
+              {% for u in sira_unresolved %}
+                <span class="badge bg-warning text-dark"
+                      title="requested but not ingested">{{ u[0] }}{% if u[1] != '*' %} / {{ u[1] }}{% endif %}</span>
+              {% endfor %}
+            {% endif %}
+          </div>
+        {% endif %}
         {% if not sira_results %}
           <div class="alert alert-info small mt-2">No retrieval results.</div>
         {% else %}
@@ -349,6 +368,10 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
                       <div class="small text-muted mb-1">
                         <span class="badge bg-dark me-1">#{{ r.rank }}</span>
                         <code>{{ r.req_id }}</code>
+                        {% if r.mno %}
+                          <span class="badge bg-info text-dark ms-1"
+                                title="source cell (MNO / release)">{{ r.mno }} {{ r.release }}</span>
+                        {% endif %}
                         {% if r.pinned %}
                           <span class="badge bg-primary ms-1" title="passed score filter → fed to synthesizer">pinned</span>
                         {% else %}
@@ -360,7 +383,8 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
                     </div>
                     <div class="text-end small" style="min-width: 140px;">
                       <div>rerank
-                        <span class="badge bg-{% if r.rerank_score >= 60 %}success{% elif r.rerank_score >= 30 %}warning{% else %}secondary{% endif %}">{{ r.rerank_score }}</span>
+                        {% set rs = r.rerank_score if r.rerank_score is not none else -1 %}
+                        <span class="badge bg-{% if rs >= 60 %}success{% elif rs >= 30 %}warning{% else %}secondary{% endif %}">{{ r.rerank_score if r.rerank_score is not none else '—' }}</span>
                       </div>
                       <div class="text-muted">bm25 {{ '%.2f'|format(r.bm25_score) }}</div>
                     </div>
