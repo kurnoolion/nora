@@ -127,12 +127,18 @@ def test_emit_multi_cell_layout_and_partition(tmp_path):
 
     vzw = tmp_path / "VZW__Feb2026" / "raw"
     tmo = tmp_path / "TMO__Jan2026" / "raw"
-    # each cell has the four files
+    # each cell has the four files; queries/qrels carry a single dummy
+    # index-build row (keeps SIRA's bm25 eval+pick-best alive so
+    # index/best is produced) targeting a real corpus id.
     for raw in (vzw, tmo):
         assert (raw / "corpus.jsonl").is_file()
         assert (raw / "metadata.json").is_file()
-        assert (raw / "queries-test.jsonl").read_text() == ""   # empty scaffolding
-        assert (raw / "qrels-test.jsonl").read_text() == ""
+        q = _read_jsonl(raw / "queries-test.jsonl")
+        qr = _read_jsonl(raw / "qrels-test.jsonl")
+        assert len(q) == 1 and q[0]["_id"] == "_idxbuild_0"
+        assert len(qr) == 1 and qr[0]["query-id"] == "_idxbuild_0"
+        corpus_ids = {r["_id"] for r in _read_jsonl(raw / "corpus.jsonl")}
+        assert qr[0]["corpus-id"] in corpus_ids   # qrel target is real
 
     # partition correctness: VZW cell holds A+B's reqs, TMO holds C's.
     # (doc:/section: multigranularity rows also present — tested in

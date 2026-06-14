@@ -143,10 +143,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sglang-port", type=int, default=None,
                    help="sglang.port override. Omit when LLM is routed via "
                         "NORA_SIRA_*_LLM_URL env vars (per-stage routing).")
-    p.add_argument("--stages", default=None,
-                   help="Comma-separated stage list, e.g. "
-                        "'prepare,bm25,enrich_corpus'. Default: SIRA's "
-                        "configured stages.")
+    p.add_argument("--stages", default="prepare,bm25,enrich_corpus",
+                   help="Comma-separated stage list. Default "
+                        "'prepare,bm25,enrich_corpus' — the corpus-only "
+                        "stages the multi-cell flow needs. Cells have no "
+                        "real queries/qrels (OQ-2 deferred), so "
+                        "enrich_query / rerank / eval are skipped; the "
+                        "runtime service does query enrichment + rerank "
+                        "live. Pass an explicit list to override.")
     p.add_argument("--only", default=None,
                    help="Comma-separated cell names to run (subset). "
                         "Default: all cells under --db-root.")

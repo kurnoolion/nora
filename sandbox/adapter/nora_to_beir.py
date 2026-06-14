@@ -89,6 +89,18 @@ from sandbox.sira_cells import (  # noqa: E402
 )
 
 
+def _first_corpus_id(trees: list[dict[str, Any]]) -> str | None:
+    """First non-empty req_id across a cell's trees — used as the target
+    of the bm25-stage's dummy index-build qrel. None if no requirement
+    rows exist."""
+    for tree in trees:
+        for req in tree.get("requirements") or []:
+            rid = (req.get("req_id") or "").strip()
+            if rid:
+                return rid
+    return None
+
+
 def _partition_trees_by_cell(
     trees: list[dict[str, Any]],
 ) -> dict[tuple[str, str], list[dict[str, Any]]]:
@@ -609,10 +621,33 @@ def _emit_multi_cell(
             section_max_depth=section_max_depth,
         )
         num_corpus = n_req + n_doc + n_section
-        # Empty eval scaffolding — present-but-empty so file-existence
-        # checks pass; intentionally NOT the single-MNO 18-Q set.
-        (raw / "queries-test.jsonl").write_text("", encoding="utf-8")
-        (raw / "qrels-test.jsonl").write_text("", encoding="utf-8")
+        # Eval scaffolding — a single dummy query + qrel, NOT the
+        # single-MNO 18-Q set. SIRA's bm25 stage (eval_bm25) reads
+        # queries/qrels, searches them, and picks the best index by
+        # Recall@K — that's what creates the index/best symlink the
+        # runtime service loads. With ZERO queries that pick-best step
+        # has nothing to evaluate and the symlink isn't created. One
+        # dummy query (pointed at the cell's first corpus row) keeps the
+        # bm25 stage's eval+pick-best alive so index/best is produced.
+        # The dummy metric is meaningless and unused — the runtime
+        # service reads the index, never the eval numbers. Real eval
+        # ground truth is deferred (OQ-2).
+        first_id = _first_corpus_id(cells[cell_key])
+        if first_id:
+            (raw / "queries-test.jsonl").write_text(
+                json.dumps({"_id": "_idxbuild_0",
+                            "text": "index build placeholder"}) + "\n",
+                encoding="utf-8",
+            )
+            (raw / "qrels-test.jsonl").write_text(
+                json.dumps({"query-id": "_idxbuild_0",
+                            "corpus-id": first_id, "score": 1}) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            # Cell has no requirement rows at all — empty scaffolding.
+            (raw / "queries-test.jsonl").write_text("", encoding="utf-8")
+            (raw / "qrels-test.jsonl").write_text("", encoding="utf-8")
         _emit_metadata(raw, name=dirname, num_corpus=num_corpus,
                        n_queries=0, n_qrels=0)
         _check_stale_downstream(
