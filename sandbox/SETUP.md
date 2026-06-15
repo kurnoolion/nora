@@ -622,6 +622,61 @@ python scripts/run_pipeline.py data=nora enrich=nora rerank=nora \
     db_root="$DSP" sglang.port=8030 +run_name=$RUN stages='[enrich_query,rerank]'
 ```
 
+### Retrying only the failed enrichment entries
+
+A run can finish with some rows recorded as **failed** (bad/malformed LLM JSON,
+non-English keywords that break the parser, timeouts, endpoint errors). SIRA's
+resume is `doc_id`-keyed and skips **everything already in the trace —
+`trace.kept` *and* `trace.failed`** — so a plain re-run will **not** retry a
+recorded failure. You must evict the failed entries from the trace first, then
+resume.
+
+First, look at *what* failed — the `status` field distinguishes two kinds, and
+only one is worth retrying:
+
+```bash
+RUN=enrich-stable                          # the SAME run_name the failed run used
+DSP=$(realpath sandbox/adapter/out); DS=$DSP/nora
+less "$DS/runs/doc-enrich/$RUN/trace.failed.jsonl"   # inspect "status"
+```
+
+- **`status: all_filtered`** — the LLM ran fine; every proposed phrase exceeded
+  the DF cap. Expected for broad `doc:` / `section:` rows (see "Verifying
+  enrichment completeness" below). Re-running with the same prompt + LLM won't
+  change the outcome — **don't** retry these.
+- **Any other status** — genuine errors. **These are the ones to retry.**
+
+Evict the genuine failures from the trace, then resume (same `run_name`):
+
+```bash
+source sandbox/sira/.venv/bin/activate     # bm25x venv (the resume subprocess needs it)
+cd $REPO_ROOT
+
+# 1. Evict failed entries so SIRA's resume reprocesses them. Default scope =
+#    "errors only" (keeps all_filtered). --stage default is "both" (doc-enrich
+#    + rerank); narrow with --stage doc-enrich. Prints per-file eviction counts.
+python -m sandbox.sira_incremental retry-failed \
+    --dataset "$DS" --run-name $RUN --stage doc-enrich
+
+# 2. Resume — same run_name. trace.kept docs are skipped; only the evicted
+#    (failed) docs hit the LLM. The same LLM endpoint/shim must be up.
+cd sandbox/sira
+python scripts/run_pipeline.py data=nora enrich=nora rerank=nora \
+    db_root="$DSP" sglang.port=8030 +run_name=$RUN
+```
+
+Two gotchas:
+
+- **`run_name` must match the failed run** — it's the key the trace is stored
+  under. If the original run didn't pin `+run_name=`, the trace won't line up.
+  Always pin a stable `$RUN`.
+- **If the run *crashed* partway** (process died) rather than recording per-doc
+  failures, those docs are in *neither* trace → step 2 alone (plain resume)
+  already re-processes them. `retry-failed` is only for docs **recorded as
+  failed**; running it then resuming covers both cases safely.
+- **`--include-all-filtered`** — only after you change the prompt or swap the
+  LLM and want the `all_filtered` rows reprocessed too. Default leaves them.
+
 ### Verifying enrichment completeness across granularities
 
 The adapter emits multi-granularity rows: `doc:<plan>` (plan-level), `section:…`
