@@ -21,7 +21,7 @@ Cline reads the playbook and executes the steps.
 |---|---|---|
 | [`orient.md`](orient.md) | Load NORA's project context (run on first conversation per session) | `ORIENT` report (~5–8 lines) |
 | [`mapping.md`](mapping.md) | Maintain the redaction table at `<env_dir>/state/cline-mapping.json` | `MAP` report (~2–4 lines) |
-| [`profile-corpus.md`](profile-corpus.md) | Profile one document; capture format patterns | `PROF` report (~12–15 lines) |
+| [`profile-corpus.md`](profile-corpus.md) | Profile one document; capture format patterns (incl. detection model + per-req plan encoding) | `PROF` report (≤18 lines) |
 | [`bootstrap.md`](bootstrap.md) | **Day-0 rule derivation** from human-annotated docs (per `annotation-schema.md`) | `BOOTSTRAP` report (≤25 lines) |
 | [`feedback-loop.md`](feedback-loop.md) | **Day-N rule refinement** from Parse Review feedback | `FEEDBACK` report (≤20 lines) |
 | [`derive-rule.md`](derive-rule.md) | **Fallback** rule derivation (no annotations / no feedback yet) | `RULE` report (~8–10 lines) |
