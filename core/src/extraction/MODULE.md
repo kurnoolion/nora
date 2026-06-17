@@ -32,6 +32,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 **Key choices**
 - PDF: pymupdf (fitz) for text + font metadata, pdfplumber for tables — neither alone covers both well. Pay the double-parse cost per file; cache is the IR JSON on disk.
 - Font groups within a single text span are split into sub-blocks when they diverge — preserves heading detection on pages that mix body and heading fonts on one line.
+- **Source line boundaries preserved** on PDF paragraph/heading blocks via `ContentBlock.lines` (`_extract_text_segments` tags each span with its pymupdf line index; `_make_group` reconstructs per-line strings). `block.text` is unchanged (`" ".join(lines) == text`) so detection regexes don't regress; consumers that need to separate a heading/title line from the body line beneath it read `lines` (a flattened single-block `text` otherwise produces a run-on sentence that blurs the section hierarchy for the synthesizer).
 - Header/footer detection uses vertical margin thresholds (`HEADER_MARGIN_PT=65`, `FOOTER_MARGIN_PT=50`) plus a regex allow-list of phrases that are always header/footer regardless of position.
 - Registry is an instance dict (`_EXTRACTORS`), not a class hierarchy — extractors are stateless; one instance per format.
 - Path-based metadata inference (`<env_dir>/input/<MNO>/<release>/file.ext` per D-023) avoids hardcoding per-MNO dispatch; a new MNO needs no code change.

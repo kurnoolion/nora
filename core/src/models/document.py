@@ -110,6 +110,15 @@ class ContentBlock:
     # in that case.
     runs: list[TextRun] = field(default_factory=list)
 
+    # Source line boundaries for paragraph/heading blocks. The PDF extractor
+    # groups multiple source lines into one block and ``text`` joins them with
+    # spaces; ``lines`` preserves the original per-line split so consumers can
+    # tell a heading/title line from the body line(s) beneath it (the join
+    # otherwise produces a run-on sentence that blurs the section hierarchy).
+    # ``" ".join(lines) == text``. Empty for legacy IRs and extractors that
+    # don't surface line structure — consumers fall back to ``text``.
+    lines: list[str] = field(default_factory=list)
+
     # Table content
     headers: list[str] = field(default_factory=list)
     rows: list[list[str]] = field(default_factory=list)

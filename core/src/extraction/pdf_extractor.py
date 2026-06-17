@@ -285,6 +285,7 @@ class PDFExtractor(BaseExtractor):
                             text=text,
                             font_info=font,
                             runs=runs,
+                            lines=group.get("lines", []),
                         )
                     )
 
@@ -627,7 +628,7 @@ class PDFExtractor(BaseExtractor):
         """
         segments = []
         strike_lines = strike_lines or []
-        for line in block.get("lines", []):
+        for line_idx, line in enumerate(block.get("lines", [])):
             for span in line.get("spans", []):
                 text = span.get("text", "")
                 if not text.strip():
@@ -646,6 +647,10 @@ class PDFExtractor(BaseExtractor):
                         "color": span.get("color", 0),
                         "strikethrough": struck,
                         "len": len(text.strip()),
+                        # Source line index within the pymupdf block — used to
+                        # reconstruct line boundaries in _make_group so a
+                        # heading/title line stays distinct from body text.
+                        "line": line_idx,
                     }
                 )
         return segments
@@ -691,8 +696,30 @@ class PDFExtractor(BaseExtractor):
         total_chars = sum(s.get("len", 0) for s in segs)
         strikethrough = struck_chars * 2 > total_chars  # strictly >50%
         rep = segs[0]
+        # Reconstruct source line boundaries: join spans within a line by
+        # space, emit one entry per source line. `" ".join(lines) == text`,
+        # so block.text is byte-identical to before (no detection regression);
+        # `lines` just preserves where the heading/title line ends and the body
+        # begins. Segments without a "line" key (legacy callers) collapse to a
+        # single line, matching the old behavior.
+        lines: list[str] = []
+        cur_line = None
+        parts: list[str] = []
+        for s in segs:
+            li = s.get("line")
+            # The `and parts` guard means the first segment never spuriously
+            # flushes, so a plain None start is safe even when `li` is None.
+            if li != cur_line and parts:
+                lines.append(" ".join(parts))
+                parts = []
+            cur_line = li
+            parts.append(s["text"])
+        if parts:
+            lines.append(" ".join(parts))
+        lines = [ln.strip() for ln in lines if ln.strip()]
         return {
             "text": " ".join(texts),
+            "lines": lines,
             "font_info": FontInfo(
                 size=rep["size"],
                 bold=rep["bold"],
