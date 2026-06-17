@@ -22,3 +22,7 @@ organization).
 **Landing gate (2026-06-14):** do **not** `/land-strand` until multiple MNO
 releases have been ingested and the multi-plan / leading-id path verified on
 real corpora. D-DRAFT-1 / D-DRAFT-2 stay as drafts until then.
+
+**MNO-B parsing spec:** the complete, authoritative observations + parsing rules
+for the MNO-B corpus live in [`mno-b-spec.md`](mno-b-spec.md) — read it at
+session start before doing profile/parser work.
