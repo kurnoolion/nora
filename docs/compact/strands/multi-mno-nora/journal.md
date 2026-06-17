@@ -298,3 +298,41 @@
 - MODULE.md Structure sections are stale (new `_create_leading_id_req`,
   `_ensure_plan_node`, `plan_id`/`detection_mode` not listed) — regen-map not
   auto-triggered (no module-level structural change), run if desired.
+
+## 2026-06-17 — MNO-B extractor design + PDF line-boundary preservation; ingestion docs + cline playbook
+
+### Done this session
+- Multi-MNO/release ingestion docs (4984adb): README "Ingesting multiple MNOs /
+  releases" (input/<MNO>/<release>/ cells, one-run rglob, MMMYYYY); fixed stale
+  env instructions (--doc-root→--env-dir; documents/→input/out/state). SIRA
+  SETUP.md cross-link. STRAND.md landing gate.
+- Cline profile-corpus playbook (ffd34f0): PROF report now captures detection
+  mode, req_id plan encoding (sep + plan_id_position), distinct plans per doc.
+- MNO-B model observations captured (#1–6): skip front-matter → parse from Ch.3;
+  top-level chapter = plan; sections have no req_ids → content prepended as
+  "Context"; requirement = req_id + blue title + black body; req owns text until
+  the next req_id/section.
+- Converged #5 + implemented (bfd4312): PDF extractor flattened a block's source
+  lines with " ".join → heading/title and body merged into a run-on, blurring
+  hierarchy for the synthesizer. Color is NOT usable (pymupdf reports the blue
+  title as 0; blue reused for sections; purple hyperlinks in titles AND body) —
+  parked. Fix = additive ContentBlock.lines (invariant " ".join(lines)==text →
+  block.text byte-identical, no regression). 6 tests incl. real-pymupdf
+  round-trip; suite 1270 passed. Committed + pushed; verified on the real
+  MNO-B doc (req_id/title/body separated; sections too). Captured as D-DRAFT-3.
+
+### Next
+- Profile stage: author the MNO-B profile (detection_mode=leading_id_body,
+  req_id pattern + components sep "-"/pos 1, heading_detection for sections).
+- Parser design (consume lines): front-matter cutoff at Ch.3; chapter = plan;
+  emit requirement title vs body from block.lines; build ancestor-section
+  "Context" (#4); req-owns-until-next-boundary (#6).
+- Deferred nicety: split a multi-line requirement TITLE from body (no reliable
+  per-span signal; line-boundary fix already delivers section hierarchy).
+
+### Flags
+- D-DRAFT-1/2/3 unlanded; landing gate stands (verify multi-release first).
+- #4 ancestor-context ambiguity: for a req under 5.1.2.3 the user listed
+  "5, 5.1, 5.1.2, 5.1.3" — assuming ancestor chain 5→5.1→5.1.2→5.1.2.3 unless
+  corrected.
+- Parser does not yet CONSUME ContentBlock.lines — lands with the MNO-B parser design.

@@ -150,3 +150,59 @@ Alternatives rejected:
 - This is **parser/profiler architecture work that must land before** an MNO-B
   profile can be authored — a profile written against the current parser would
   silently collapse MNO-B's requirements.
+
+---
+
+## D-DRAFT-3 — Preserve PDF source line boundaries additively (`ContentBlock.lines`), not by changing `block.text` or splitting on color
+
+**Context:** The PDF extractor groups several pymupdf source lines into one
+paragraph block and `_make_group` flattens them with `" ".join(...)`. For
+MNO-B that merges a heading/title line and the body line beneath it into a
+single **run-on sentence** (e.g. `5.1.2 Idle Mode The device shall…`, or
+`ABC-PLAN-123 <title> The device shall…`), which **blurs the section hierarchy
+for the LLM synthesizer** — it can't tell where the heading/title ends and the
+body begins (MNO-B observation #5). The obvious signal — the title's blue
+color — is **not usable for this corpus**: pymupdf reports the blue title text
+as `color: 0` (the blue isn't a glyph fill color it surfaces), blue is *also*
+used for section titles, and purple appears in *both* hyperlinked titles and
+body hyperlinks. So color cannot delimit the title. What pymupdf *does* give us
+reliably is the **line structure** (`block["lines"]`), which the extractor was
+discarding.
+
+**Decision:** Preserve the source line split **additively** on the IR. Add
+`ContentBlock.lines: list[str]` (one entry per pymupdf source line);
+`_extract_text_segments` tags each span with its line index and `_make_group`
+reconstructs the per-line strings. Keep `block.text` exactly as before with the
+invariant **`" ".join(lines) == text`**, so detection regexes (heading
+numbering, req-id match) read the unchanged `text`; only consumers that need to
+separate a heading/title line from the body read `lines`.
+
+**Why:** Additive → **zero detection regression and a no-op for existing
+corpora** (Verizon-OA never reads `lines`); robust to the color unreliability
+(uses the line structure pymupdf actually provides, not the color it doesn't);
+and it keeps the extractor **generic** — the *semantic* heading/body split stays
+in the profile-driven parser, not hard-coded in extraction.
+
+Alternatives rejected:
+- **Change `block.text` line-join `" "` → `"\n"`** — global blast radius on the
+  parser's `^`/`$`/`\s`/`.+` regexes; needs a full re-validation for a gain a
+  side field delivers risk-free.
+- **Split blocks on font color** — pymupdf doesn't surface this PDF's title
+  color (`0` for blue), and blue/purple are ambiguous across section titles and
+  hyperlinks; not a dependable signal here.
+- **Emit a separate block per source line** — fragments multi-line body
+  paragraphs and changes block granularity for all corpora.
+
+**Consequences:**
+- IR gains `ContentBlock.lines` (additive; empty for legacy IRs and non-PDF
+  extractors — DOCX/XLSX can populate later if needed). `models` +
+  `extraction` MODULE.md updated.
+- The `leading_id_body` parser will **consume** `lines` to (a) separate a
+  requirement's title line from its body and (b) build the ancestor-section
+  "Context" with headings distinct from body — **not yet implemented**; lands
+  with the MNO-B parser design.
+- Verified end-to-end through real pymupdf and on the actual MNO-B PDF.
+- A **multi-line requirement title** still can't be split from the body (the
+  line boundary alone can't tell where a wrapped title ends without the
+  unavailable color signal) — deferred nicety; the section hierarchy the
+  synthesizer needs is delivered regardless.
