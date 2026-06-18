@@ -7,6 +7,7 @@
     "bootstrap_id": "bs_5114ac92",
     "source": "Hand-authored for the MNO-B corpus (multi-mno-nora strand). See docs/compact/strands/multi-mno-nora/mno-b-spec.md + D-DRAFT-1..4.",
     "model": "leading_id_body — a single PDF whose top-level chapters are plans; requirements are flat body paragraphs that begin with <PREFIX>-<PLAN>-<DIGITS>; sections/subsections are non-requirement context.",
+    "disabled_detections": "revision-history (signal + label), glossary/definitions, and reference-list detection are OFF — this corpus has none of those sections, and the signal-based revhist path false-positived a content table as a changelog.",
     "placeholders": "Proprietary tokens are placeholders per D-062. The literal req_id common prefix is <MNO0> — map it to the real value in customizations/mappings/bs_5114ac92.json (work-PC mapping; pushed to company-internal git only). Structural values (numbering, font sizes, content_start) are literal and corpus-safe.",
     "todo_work_pc": [
       "Confirm heading_detection.numbering_pattern against the real chapter/section heading TEXT (currently matches 'Chapter N.' chapters and 'N.M.' subsections with a trailing dot).",
@@ -20,7 +21,7 @@
     "levels": [],
     "numbering_pattern": "^(?:Chapter\\s+(\\d+)|(\\d+(?:\\.\\d+)+))\\.?(?=\\s)",
     "max_observed_depth": 6,
-    "definitions_section_pattern": "(?i)acronym|definition|glossary"
+    "definitions_section_pattern": ""
   },
   "requirement_id": {
     "pattern": "<MNO0>-<PLAN>-\\d+",
@@ -77,8 +78,8 @@
     "style_pattern": "",
     "entry_pattern": "^(?P<num>[\\w.]+)\\t(?P<body>.+?)\\t(?P<page>\\d+)\\s*$"
   },
-  "revision_history_label_pattern": "(?i)^\\s*(?:\\S+\\s+)*(revision|change|version|document)\\s+(history|log)\\s*$",
-  "revhist_detection": { "enabled": true },
-  "reference_list_section_pattern": "(?i)^(references|bibliography|normative\\s+references)$",
+  "revision_history_label_pattern": "",
+  "revhist_detection": { "enabled": false },
+  "reference_list_section_pattern": "",
   "reference_list_entry_pattern": "^\\s*[\\[\\(]?(\\d+)[\\]\\)\\.]?\\s+(.+?)\\s*$"
 }
