@@ -28,12 +28,22 @@ sessions on 2026-06-13..17.
 
 ## Document structure rules
 
-1. **Skip all front matter, plus Chapter 1 and Chapter 2.** They carry no
-   requirements we need.
-2. **The parsed tree captures only from Chapter 3 onward.** (Front-matter cutoff
-   ends at the start of Chapter 3.)
-3. **Each top-level chapter (3, 4, 5, …) corresponds to a plan.** So one
-   document fans out to N plans (D-DRAFT-1 per-req `plan_id`).
+Document layout: front/title page → Table of Contents → Chapter 1 (Preface) →
+Chapter 2 → Chapter 3 … Chapter N. The TOC has **no `toc` style set** and its
+leader-dot text pattern is unreliable on this PDF; Chapters 1–2 are general info
+with no req_ids.
+
+1. **Skip everything before the first requirements chapter** — front page, TOC,
+   Chapter 1, Chapter 2. Don't try to detect/drop each negatively (TOC isn't
+   reliably detectable here); instead use a **positive content-start anchor**.
+2. **The parsed tree captures only from the start chapter onward** via a
+   **profile-driven content-start cutoff** (D-DRAFT-4): a parser pre-pass drops
+   every block before the first *real heading* (bold + heading-size font, so a
+   same-numbered TOC entry doesn't trigger it) whose top-level section number
+   equals a **configurable** `content_start_section` (= `"3"` for this corpus,
+   not hardcoded). One anchor subsumes all four skip items.
+3. **Each top-level chapter (start, start+1, …, N) corresponds to a plan.** So
+   one document fans out to many plans (D-DRAFT-1 per-req `plan_id`).
 
 ## Sections / subsections → "Context", not requirements
 
@@ -100,10 +110,15 @@ requirements by the **leading req_id**.
 
 ## Still to design / build (next: profile stage, then parser)
 
-- **Profile** (`leading_id_body`): set `detection_mode`, `anchor`, the req_id
-  `pattern` (needs the literal `<PREFIX>` from the real doc), `components`
-  (`-` / pos 1), `heading_detection` for the section numbering + bold/size,
-  front-matter cutoff to start at Chapter 3, and chapter-as-plan.
+- **Profile** — draft skeleton at `mnob-profile-draft.json`: `detection_mode =
+  leading_id_body`, `anchor = leading_text`, `components` (`-` / pos 1),
+  `content_start_section = "3"`, `enable_table_anchored_extraction = false`,
+  `heading_detection.method = numbering`. Work-PC TODOs: the literal `<PREFIX>`
+  in `requirement_id.pattern`, the section-number `numbering_pattern`, and body
+  font sizes (auto-detect via `profile_debug --create`, then merge).
+- **Content-start cutoff (D-DRAFT-4)** — new profile field `content_start_section`
+  + parser pre-pass; **not yet implemented** (loader ignores the field until
+  then). Small.
 - **Parser consumes `ContentBlock.lines`** (not yet implemented): separate a
   requirement's title line from its body; build the ancestor-section "Context"
   per rule #4 with headings distinct from body.
@@ -116,5 +131,7 @@ requirements by the **leading req_id**.
 - **D-DRAFT-1** — per-requirement `plan_id` (one document → N plans).
 - **D-DRAFT-2** — `leading_id_body` requirement-detection mode.
 - **D-DRAFT-3** — preserve PDF source line boundaries (`ContentBlock.lines`).
+- **D-DRAFT-4** — profile-driven content-start cutoff (skip front matter + intro
+  chapters, anchored at a configurable Chapter N).
 - All unlanded; **landing gate**: no `/land-strand` until multiple MNO releases
   are ingested and the multi-plan / leading-id path is verified on real corpora.

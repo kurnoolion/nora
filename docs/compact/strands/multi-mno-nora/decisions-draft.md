@@ -206,3 +206,55 @@ Alternatives rejected:
   line boundary alone can't tell where a wrapped title ends without the
   unavailable color signal) — deferred nicety; the section hierarchy the
   synthesizer needs is delivered regardless.
+
+---
+
+## D-DRAFT-4 — Profile-driven content-start cutoff (skip front matter + intro chapters, anchored at a configurable Chapter N)
+
+**Context:** MNO-B's single PDF is laid out as: front/title page → Table of
+Contents → Chapter 1 (Preface) → Chapter 2 → Chapter 3 … Chapter N. From a
+requirements perspective only **Chapter 3 onward** matters (each top-level
+chapter from the start point is a plan; Ch.1/2 are general info with no
+req_ids). The parsed tree must begin at the first requirements chapter. The
+existing front-matter cutoff only drops TOC + revision-history
+(`max(toc_end, revhist_end)`), **not real intro chapters**. And the front matter
+is hard to detect *negatively* here: the TOC has **no `toc` style set**
+(style-driven TOC detection is inert) and the leader-dot text pattern is
+unreliable on this PDF (page numbers split into separate blocks); Chapters 1–2
+have no clean drop marker.
+
+**Decision:** Add a **profile-driven content-start cutoff** anchored at a
+**configurable** top-level chapter number **N** (NOT hardcoded). New profile
+field — working name `content_start_section` (string; empty = disabled). A
+parser **pre-pass drops every block before the first *real heading*** (heading-
+level font: bold + heading size) whose **top-level section number equals N**.
+One positive anchor subsumes all the front material — front page, TOC, and
+Chapters 1…(N-1) all precede Chapter N and fall away — with **no negative
+TOC/intro detection required**.
+
+**Font-gating (the one wrinkle):** a TOC *entry* for Chapter N (`N  Title … 45`)
+also carries section number N, so the cutoff must distinguish the real heading
+from its TOC line. It does so by **font** — the real chapter heading is bold +
+chapter-size; the TOC entry is body-size. PyMuPDF captures size/bold reliably
+(unlike color, which it does not surface for this corpus), so the cutoff fires
+only on a heading-font block numbered N.
+
+**Why:** A positive "content starts here" anchor is the single reliable signal —
+chapters are numbered and Chapter N's heading is bold/sized/`N`. The negative
+alternatives are fragile: TOC detection has no usable style field and a flaky
+text pattern; per-chapter content drop has no marker. Keeping **N configurable**
+(not hardcoded to 3) means a future release that adds/removes a front chapter is
+a one-line profile edit, not code. Rejected: "start at the first top-level
+chapter that *contains* a req_id" (fully automatic) — needs a look-ahead pass;
+more machinery than warranted for a per-corpus constant.
+
+**Consequences:**
+- New profile field `content_start_section` (additive; empty default → **no-op**,
+  so Verizon-OA and every existing corpus are unaffected — no gate beyond the
+  empty default).
+- Parser gains a pre-pass cutoff that runs **before** the existing TOC/front-
+  matter logic and drops the contiguous front region in one shot.
+- For MNO-B the profile sets `content_start_section: "3"`.
+- Implementation detail: the font check reuses `FontInfo.size`/`bold` +
+  `heading_detection.levels` hints to decide "real heading vs TOC entry"; exact
+  threshold settled when wiring.
