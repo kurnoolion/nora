@@ -1,0 +1,83 @@
+{
+  "profile_name": "mnob_leading_id_profile",
+  "profile_version": 1,
+  "created_from": [],
+  "last_updated": "2026-06-17",
+  "_provenance": {
+    "source": "Hand-authored for the MNO-B corpus (multi-mno-nora strand). See docs/compact/strands/multi-mno-nora/mno-b-spec.md + D-DRAFT-1..4.",
+    "model": "leading_id_body — a single PDF whose top-level chapters are plans; requirements are flat body paragraphs that begin with <PREFIX>-<PLAN>-<DIGITS>; sections/subsections are non-requirement context.",
+    "placeholders": "Proprietary tokens are placeholders per D-062. The literal req_id common prefix is <MNO0> — map it to the real value in customizations/mappings/mnob_leading_id_profile.json (work-PC mapping; pushed to company-internal git only). Structural values (numbering, font sizes, content_start) are literal and corpus-safe.",
+    "todo_work_pc": [
+      "Confirm heading_detection.numbering_pattern against the real chapter/section heading TEXT (currently matches 'Chapter N.' chapters and 'N.M.' subsections with a trailing dot).",
+      "Confirm body_text sizes and that the real chapter-heading font size is > font_size_max so the content-start font gate fires (the TOC 'Chapter 3' line is ~10pt and is correctly ignored).",
+      "Map <MNO0> -> the real req_id prefix in customizations/mappings/mnob_leading_id_profile.json (or replace <MNO0> inline for a quick local test).",
+      "Confirm enable_table_anchored_extraction stays false (requirements are body paragraphs, not table cells)."
+    ]
+  },
+  "heading_detection": {
+    "method": "numbering",
+    "levels": [],
+    "numbering_pattern": "^(?:Chapter\\s+(\\d+)|(\\d+(?:\\.\\d+)+))\\.?(?=\\s)",
+    "max_observed_depth": 6,
+    "definitions_section_pattern": "(?i)acronym|definition|glossary"
+  },
+  "requirement_id": {
+    "pattern": "<MNO0>-<PLAN>-\\d+",
+    "components": {
+      "prefix": "<MNO0>",
+      "separator": "-",
+      "plan_id_position": 1,
+      "number_position": 2
+    },
+    "anchor": "leading_text",
+    "detection_mode": "leading_id_body",
+    "normalize": "none",
+    "sample_ids": [],
+    "total_found": 0
+  },
+  "content_start_section": "3",
+  "plan_metadata": {
+    "plan_name": { "location": "", "pattern": "", "sample_value": "" },
+    "plan_id": { "location": "", "pattern": "", "sample_value": "" },
+    "version": { "location": "", "pattern": "", "sample_value": "" },
+    "release_date": { "location": "", "pattern": "", "sample_value": "" }
+  },
+  "document_zones": [],
+  "header_footer": {
+    "header_patterns": [],
+    "footer_patterns": [],
+    "page_number_pattern": "^\\s*Page\\s+\\d+\\s+of\\s+\\d+\\s*$"
+  },
+  "cross_reference_patterns": {
+    "standards_citations": [
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Ss]ection\\s+[\\d.]+)?",
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Rr]elease\\s+\\d+)?",
+      "GSMA\\s+\\w+[\\d.]*"
+    ],
+    "internal_section_refs": "[Ss]ee\\s+[Ss]ection\\s+[\\d.]+",
+    "requirement_id_refs": "<MNO0>-<PLAN>-\\d+"
+  },
+  "body_text": {
+    "font_size_min": 11.5,
+    "font_size_max": 12.5,
+    "font_families": ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique"]
+  },
+  "applicability_detection": {
+    "requirement_patterns": [],
+    "global_section_pattern": "",
+    "label_split_pattern": "[,;|]|\\band\\b|\\bor\\b"
+  },
+  "definitions_entry_pattern": "^([A-Z][A-Z0-9/-]{1,15})\\s*[—–:\\-]\\s*(.+?)$",
+  "ignore_strikeout": true,
+  "enable_table_anchored_extraction": false,
+  "toc_detection_pattern": ".*\\.{3,}\\s*\\d+\\s*$",
+  "toc_page_threshold": 0.7,
+  "toc_detection": {
+    "style_pattern": "",
+    "entry_pattern": "^(?P<num>[\\w.]+)\\t(?P<body>.+?)\\t(?P<page>\\d+)\\s*$"
+  },
+  "revision_history_label_pattern": "(?i)^\\s*(?:\\S+\\s+)*(revision|change|version|document)\\s+(history|log)\\s*$",
+  "revhist_detection": { "enabled": true },
+  "reference_list_section_pattern": "(?i)^(references|bibliography|normative\\s+references)$",
+  "reference_list_entry_pattern": "^\\s*[\\[\\(]?(\\d+)[\\]\\)\\.]?\\s+(.+?)\\s*$"
+}
