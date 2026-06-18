@@ -4,6 +4,7 @@
   "created_from": [],
   "last_updated": "2026-06-17",
   "_provenance": {
+    "bootstrap_id": "mnob_leading_id_profile",
     "source": "Hand-authored for the MNO-B corpus (multi-mno-nora strand). See docs/compact/strands/multi-mno-nora/mno-b-spec.md + D-DRAFT-1..4.",
     "model": "leading_id_body — a single PDF whose top-level chapters are plans; requirements are flat body paragraphs that begin with <PREFIX>-<PLAN>-<DIGITS>; sections/subsections are non-requirement context.",
     "placeholders": "Proprietary tokens are placeholders per D-062. The literal req_id common prefix is <MNO0> — map it to the real value in customizations/mappings/mnob_leading_id_profile.json (work-PC mapping; pushed to company-internal git only). Structural values (numbering, font sizes, content_start) are literal and corpus-safe.",
