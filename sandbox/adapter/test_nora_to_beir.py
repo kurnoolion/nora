@@ -303,3 +303,38 @@ class TestMultigranularitySinglePlanBackCompat:
         assert "doc:OTHERPLAN" not in rows               # no plan split
         assert "T-9" in rows["doc:FOOPLAN"]["text"]      # still a doc-row pointer
         assert "T-9" not in rows["section:FOOPLAN:5"]["text"]  # excluded from section rows
+
+
+# ── D-DRAFT-5: per-req Context baked into corpus rows ────────────────
+
+def _ctx_sections():
+    return {"5": ("Bands", "Ch5 intro."), "5.1": ("Frequency", "Freq intro."),
+            "5.1.2": ("LTE", "LTE intro.")}
+
+
+class TestBuildTextContext:
+    def test_path_and_content_context_in_row(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"build_context": "path_and_content", "detection_mode": "leading_id_body", "plan_id": "FOO"}
+        req = {"req_id": "ABC-FOO-1", "title": "Band 13", "text": "Device shall support band 13.",
+               "section_number": "", "parent_section": "5.1.2", "plan_id": "FOO"}
+        out = _build_text(req, tree, None, {}, _ctx_sections())
+        assert "[5 Bands]" in out and "[5.1.2 LTE]" in out    # bracketed section headers
+        assert "Ch5 intro." in out and "LTE intro." in out    # ancestor bodies
+        assert "Device shall support band 13." in out         # req body still present
+
+    def test_path_mode_context_no_body(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"build_context": "path", "detection_mode": "leading_id_body"}
+        req = {"req_id": "ABC-FOO-1", "title": "T", "text": "body", "section_number": "",
+               "parent_section": "5.1.2"}
+        out = _build_text(req, tree, None, {}, _ctx_sections())
+        assert "[Context: 5 Bands > 5.1 Frequency > 5.1.2 LTE]" in out
+        assert "LTE intro." not in out                        # body excluded in path mode
+
+    def test_none_mode_no_context_block(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"build_context": "none"}
+        req = {"req_id": "ABC-FOO-1", "title": "T", "text": "body", "parent_section": "5.1.2"}
+        out = _build_text(req, tree, None, {}, _ctx_sections())
+        assert "[Context:" not in out and "[5 Bands]" not in out

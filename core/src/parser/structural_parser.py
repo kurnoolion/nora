@@ -74,6 +74,63 @@ def _canonicalize_req_id(rid: str) -> str:
     return _REQ_ID_WHITESPACE_RE.sub("_", rid).strip("_")
 
 
+def build_context_string(
+    parent_section: str,
+    section_index: dict[str, tuple[str, str]],
+    mode: str,
+) -> str:
+    """Assemble a requirement's enclosing-section context (D-DRAFT-5).
+
+    Generic for all corpora — consumers (the SIRA adapter, the NORA chunk
+    builder) call this at emit time from the section nodes already in the tree,
+    so the context is **not** duplicated per requirement in the parsed tree.
+
+    Anchors on ``parent_section`` (the deepest enclosing section), which works
+    in both detection models: leading-id requirements' ``parent_section`` is the
+    enclosing section; heading-anchored requirements' is the parent section
+    (their own section is excluded — it is the requirement, not context). Walks
+    that number's prefixes (``5 → 5.1 → 5.1.2 → 5.1.2.3``), looking each up in
+    ``section_index`` (``{section_number: (title, body)}``).
+
+    ``mode`` (formats settled in strand multi-mno-nora, D-DRAFT-5):
+      - ``"none"`` → ``""``.
+      - ``"path"`` → a single-line breadcrumb wrapped in a ``[Context: …]``
+        label: ``"[Context: 5 Bands > 5.1 Frequency > 5.1.2 LTE]"`` (number +
+        title per hop, no section bodies).
+      - ``"path_and_content"`` → one bracketed header per ancestor followed by
+        that section's body, top-down::
+
+            [5 Bands]
+            <5 body>
+            [5.1 Frequency]
+            <5.1 body>
+            [5.1.2 LTE]
+            <5.1.2 body>
+    """
+    if mode == "none" or not parent_section:
+        return ""
+    parts = parent_section.split(".")
+    entries: list[tuple[str, str, str]] = []
+    for i in range(1, len(parts) + 1):
+        num = ".".join(parts[:i])
+        node = section_index.get(num)
+        if node is None:
+            continue
+        title, text = node
+        entries.append((num, title, text))
+    if not entries:
+        return ""
+    if mode == "path":
+        crumbs = " > ".join(f"{num} {title}".strip() for num, title, _ in entries)
+        return f"[Context: {crumbs}]"
+    # path_and_content
+    blocks: list[str] = []
+    for num, title, text in entries:
+        head = "[" + f"{num} {title}".strip() + "]"
+        blocks.append(f"{head}\n{text}".rstrip() if text else head)
+    return "\n".join(blocks)
+
+
 # Glossary-label density gate. The legacy `definitions_section_pattern`
 # (default `(?i)acronym|definition|glossary`) is a substring match — it
 # fires on any title that mentions one of those words ("Section 2.3
@@ -176,6 +233,15 @@ class Requirement:
     priority: str = ""  # FR-31: extracted via profile.heading_detection.priority_marker_pattern
     applicability: list[str] = field(default_factory=list)  # FR-32 [D-030]: form-factor labels
     text: str = ""
+    context: str = ""
+    """D-DRAFT-5: ancestor-section context prepended for synthesis — the
+    headings + body text of the enclosing section/subsection chain, so a
+    requirement carries its structural context explicitly (the synthesizer sees
+    ``5 → 5.1 → 5.1.2`` rather than an unlabeled blob). Populated for
+    ``leading_id_body`` corpora, where sections are non-requirement context;
+    empty otherwise. A general field — other detection models can populate it
+    later. Kept separate from ``text`` so downstream (chunk builder, graph) can
+    label requirement body vs. inherited context."""
     tables: list[TableData] = field(default_factory=list)
     images: list[ImageRef] = field(default_factory=list)
     children: list[str] = field(default_factory=list)  # child req_ids
@@ -252,6 +318,12 @@ class RequirementTree:
     plan_name: str = ""
     version: str = ""
     release_date: str = ""
+    build_context: str = "none"
+    """D-DRAFT-5: mirrors ``profile.build_context`` (`none` | `path` |
+    `path_and_content`). Stamped on the tree so consumers (SIRA adapter, NORA
+    chunk builder) know how much enclosing-section context to assemble per
+    requirement via ``build_context_string`` — the context is built at emit
+    time, not stored per-requirement here."""
     detection_mode: str = "heading"
     """D-DRAFT-1/2: mirrors ``profile.requirement_id.detection_mode``
     (`"heading"` default | `"leading_id_body"`). Stamped on the tree so
@@ -338,6 +410,7 @@ class RequirementTree:
                 priority=r.get("priority", ""),
                 applicability=r.get("applicability", []),
                 text=r.get("text", ""),
+                context=r.get("context", ""),
                 tables=[TableData(**t) for t in r.get("tables", [])],
                 images=[ImageRef(**i) for i in r.get("images", [])],
                 children=r.get("children", []),
@@ -357,6 +430,7 @@ class RequirementTree:
             version=data.get("version", ""),
             release_date=data.get("release_date", ""),
             detection_mode=data.get("detection_mode", "heading"),
+            build_context=data.get("build_context", "none"),
             referenced_standards_releases=data.get("referenced_standards_releases", {}),
             requirements=reqs,
             parse_stats=ParseStats(
@@ -709,6 +783,12 @@ class GenericStructuralParser:
             )
             req.plan_id = rid_plan or tree_plan_id
 
+        # Per-requirement Context (D-DRAFT-5) is NOT materialized in the tree —
+        # consumers (SIRA adapter, NORA chunk builder) assemble it on demand from
+        # the section nodes via `build_context_string`, governed by
+        # `profile.build_context`. Keeps the tree compact (no per-req
+        # duplication); the section content is stored once on the section nodes.
+
         # 9. Build parse transparency log.
         parse_log = self._build_parse_log(
             doc,
@@ -736,6 +816,7 @@ class GenericStructuralParser:
             version=plan_meta.get("version", ""),
             release_date=plan_meta.get("release_date", ""),
             detection_mode=self.profile.requirement_id.detection_mode,
+            build_context=self.profile.build_context,
             referenced_standards_releases=std_releases,
             requirements=sections,
             parse_stats=self._parse_stats,
@@ -1878,18 +1959,39 @@ class GenericStructuralParser:
 
         ``parent_section`` may be ``None`` when a requirement precedes any
         heading; the node is then created with empty parent linkage.
+
+        D-DRAFT-5: the header line (``block.lines[0]`` — the req_id + title)
+        is split from the body (the lines beneath it) using the extractor's
+        preserved line boundaries (D-DRAFT-3). ``title`` = the header line after
+        the req_id; ``text`` = the body. No content is rewritten — the verbatim
+        source is just partitioned on the line boundary (a multi-line title's
+        overflow falls into ``text``; no per-span signal to delimit it). Falls
+        back to the old behavior (empty title, whole block as text) when no line
+        structure is available.
         """
         ids = self._find_req_ids(block.text)
         req_id = ids[0] if ids else ""
+        lines = block.lines or []
+        if lines:
+            header = lines[0]
+            m = (
+                self._req_id_leading_re.match(header)
+                if self._req_id_leading_re else None
+            )
+            title = header[m.end():].strip() if m else header.strip()
+            body = " ".join(ln for ln in lines[1:] if ln).strip()
+        else:
+            title = ""
+            body = block.text
         new_req = Requirement(
             req_id=req_id,
             section_number="",   # no own section — anchored by the leading id
-            title="",
+            title=title,
             parent_req_id=parent_section.req_id if parent_section else "",
             parent_section=parent_section.section_number if parent_section else "",
             hierarchy_path=[],   # filled in _propagate_hierarchy_to_table_reqs
             zone_type=parent_section.zone_type if parent_section else "",
-            text=block.text,
+            text=body,
             source_block_idx=block.position.index,
         )
         sections.append(new_req)

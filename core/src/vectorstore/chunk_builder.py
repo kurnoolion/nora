@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.src.parser.structural_parser import build_context_string
 from core.src.vectorstore.config import VectorStoreConfig
 
 logger = logging.getLogger(__name__)
@@ -198,11 +199,24 @@ class ChunkBuilder:
         # in one pass keeps the per-tree pre-compute cheap.
         id_to_title: dict[str, str] = {}
         id_to_text: dict[str, str] = {}
+        # section_number → (title, body) for ancestor-section Context
+        # (D-DRAFT-5). In leading_id_body corpora the section nodes live in
+        # `requirements` with an empty req_id (carrying section_number/title/
+        # text); requirements themselves have section_number="" so they are
+        # naturally excluded from this index.
+        section_index: dict[str, tuple[str, str]] = {}
         for r in tree.get("requirements", []):
             rid = r.get("req_id", "")
             if rid:
                 id_to_title[rid] = (r.get("title", "") or "").strip()
                 id_to_text[rid] = (r.get("text", "") or "").strip()
+            sn = (r.get("section_number", "") or "").strip()
+            if sn:
+                section_index[sn] = (
+                    (r.get("title", "") or "").strip(),
+                    (r.get("text", "") or "").strip(),
+                )
+        build_context = tree.get("build_context", "none") or "none"
 
         chunks = []
         for req in tree.get("requirements", []):
@@ -222,6 +236,7 @@ class ChunkBuilder:
             text = self._build_chunk_text(
                 req, mno, release, plan_name, version,
                 id_to_title, plan_id, id_to_text,
+                build_context, section_index,
             )
 
             # Skip chunks with no meaningful content (e.g., everything
@@ -433,6 +448,8 @@ class ChunkBuilder:
         id_to_title: dict[str, str] | None = None,
         plan_id: str = "",
         id_to_text: dict[str, str] | None = None,
+        build_context: str = "none",
+        section_index: dict[str, tuple[str, str]] | None = None,
     ) -> str:
         """Build the contextualized text for a single requirement.
 
@@ -501,6 +518,20 @@ class ChunkBuilder:
                     if len(parent_body) > cap:
                         parent_body = parent_body[:cap] + "…"
                     parts.append(f"[Parent context: {parent_body}]")
+
+        # Ancestor-section Context (D-DRAFT-5, strand multi-mno-nora). For
+        # corpora whose sections are non-requirement context (leading_id_body
+        # model), surface each enclosing section's heading + body so the chunk
+        # is self-contained. Only emitted for `path_and_content` — the `path`
+        # breadcrumb is already carried by the `[Path: …]` block above, so
+        # emitting it here would duplicate it. Assembled by the shared
+        # `build_context_string` helper from the tree's section nodes.
+        if build_context == "path_and_content" and section_index is not None:
+            ctx = build_context_string(
+                req.get("parent_section", "") or "", section_index, build_context,
+            )
+            if ctx:
+                parts.append(ctx)
 
         # Section title (always included — it's the heading)
         title = req.get("title", "")

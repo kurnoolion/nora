@@ -336,3 +336,42 @@
   "5, 5.1, 5.1.2, 5.1.3" — assuming ancestor chain 5→5.1→5.1.2→5.1.2.3 unless
   corrected.
 - Parser does not yet CONSUME ContentBlock.lines — lands with the MNO-B parser design.
+
+## 2026-06-18 — D-DRAFT-5 rework: generic, consumer-assembled requirement Context
+
+### Done this session
+- Reworked D-DRAFT-5 from "materialize context per-req in the tree" to a
+  **generic, consumer-assembled** design (the all-plans-in-one-PDF bloat
+  concern: copying ancestor-section content into every req would multiply
+  section text by req count). Tree stays compact; `Requirement.context` is left
+  empty in the tree and assembled at emit time by consumers.
+- `build_context` profile knob (`"none" | "path" | "path_and_content"`, stamped
+  onto `RequirementTree.build_context`) + shared `parser.build_context_string`
+  helper. Formats settled with the user: `path` → single-line
+  `[Context: 5 <T> > 5.1 <T> > 5.1.2 <T>]`; `path_and_content` → `[5 <T>]` +
+  body per ancestor, top-down.
+- Wired both consumers. **SIRA adapter** (`nora_to_beir._build_text`) emits for
+  both modes; dropped the old `**Context**:` wrapper (helper self-labels now).
+  **NORA chunk builder** (`_build_chunk_text`) emits `path_and_content` only —
+  `path` is suppressed because the existing `[Path: …]` breadcrumb already
+  carries it (avoids duplication); builds a per-tree `{section_number:
+  (title, body)}` index from the empty-`req_id` section nodes.
+- Profiles: `bs_d7a2c81f` → `path`, `bs_5114ac92` → `path_and_content`.
+- Tests: new `test_chunk_builder_context.py` (3 cases) + reformatted
+  helper/adapter assertions. Full suite **1291 passed, 109 skipped**.
+- Docs: D-DRAFT-5 rewritten in decisions-draft; mno-b-spec context section +
+  status reworked; parser/profiler/vectorstore MODULE.md updated.
+
+### In progress
+- (none — D-DRAFT-5 rework complete, uncommitted pending this close-session)
+
+### Next
+- Commit + push the D-DRAFT-5 rework (pre-push redaction scan).
+- Ingest a real multi-MNO / multi-release set and verify the leading-id +
+  per-plan + Context path end-to-end on real corpora (landing-gate prerequisite).
+
+### Flags
+- D-DRAFT-1..5 all unlanded; landing gate stands (no /land-strand until
+  multi-release ingested + verified).
+- #4 ancestor-chain ambiguity now resolved: `5 → 5.1 → 5.1.2 → 5.1.2.3`
+  (the "5.1.3" was a sibling typo) — confirmed by the user this session.

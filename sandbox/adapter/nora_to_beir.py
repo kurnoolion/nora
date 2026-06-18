@@ -53,6 +53,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.src.parser.structural_parser import build_context_string
 from core.src.vectorstore.chunk_builder import ChunkBuilder
 
 
@@ -165,8 +166,15 @@ def _cross_refs_line(req: dict[str, Any]) -> str:
 
 def _build_text(req: dict[str, Any], tree: dict[str, Any],
                 defs_re: "re.Pattern | None",
-                definitions_map: dict[str, str]) -> str:
-    """Markdown body for one corpus row."""
+                definitions_map: dict[str, str],
+                section_index: dict[str, tuple[str, str]] | None = None) -> str:
+    """Markdown body for one corpus row.
+
+    `section_index` (`{section_number: (title, body)}`) lets the row carry its
+    enclosing-section **context** (D-DRAFT-5), assembled here from the tree's
+    section nodes per `tree.build_context` — so SIRA's corpus is self-contained
+    while the parsed tree stays compact (context not duplicated there).
+    """
     section_num = req.get("section_number") or ""
     title = req.get("title") or ""
     req_id = req.get("req_id") or ""
@@ -192,6 +200,14 @@ def _build_text(req: dict[str, Any], tree: dict[str, Any],
         lines.append(f"**plan**: {plan}")
     if hierarchy:
         lines.append(f"**hierarchy**: {hierarchy}")
+    ctx = build_context_string(
+        req.get("parent_section") or "",
+        section_index or {},
+        tree.get("build_context") or "none",
+    )
+    if ctx:
+        lines.append("")
+        lines.append(ctx)
     if body:
         lines.append("")
         lines.append(body)
@@ -464,6 +480,13 @@ def _emit_corpus(
             definitions_map = tree.get("definitions_map") or {}
             defs_re = _compile_defs(definitions_map) if definitions_map else None
             leading = (tree.get("detection_mode") or "heading") == "leading_id_body"
+            # {section_number: (title, body)} from this tree's section nodes —
+            # the source for per-req Context (D-DRAFT-5). Built once per tree.
+            section_index = {
+                s["section_number"]: (s.get("title") or "", s.get("text") or "")
+                for s in (tree.get("requirements") or [])
+                if (s.get("section_number") or "")
+            }
             for req in tree.get("requirements") or []:
                 req_id = (req.get("req_id") or "").strip()
                 if not req_id:
@@ -491,7 +514,7 @@ def _emit_corpus(
                 row = {
                     "_id": req_id,
                     "title": title,
-                    "text": _build_text(req, tree, defs_re, definitions_map),
+                    "text": _build_text(req, tree, defs_re, definitions_map, section_index),
                 }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 written += 1

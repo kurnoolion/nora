@@ -519,6 +519,19 @@ class DocumentProfile:
     chapters in one shot, for corpora whose front matter isn't reliably
     detectable negatively. Empty (default) = disabled (no cutoff)."""
 
+    build_context: str = "none"
+    """D-DRAFT-5: how much enclosing-section context a consumer should attach to
+    each requirement (the SIRA adapter and NORA chunk builder assemble it from
+    the section nodes at emit time — it is *not* materialized in the parsed tree,
+    to avoid per-requirement duplication). One of:
+      - ``"none"`` (default) — no context.
+      - ``"path"`` — the ancestor section/subsection **numbers + titles** as a
+        breadcrumb (``"5 Bands > 5.1 Frequency > 5.1.2 LTE"``); no body.
+      - ``"path_and_content"`` — the breadcrumb plus each ancestor section's body
+        text. Use for corpora (e.g. leading-id) where sections are non-requirement
+        context the synthesizer needs in full.
+    A generic, per-corpus knob — independent of `detection_mode`."""
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -635,4 +648,5 @@ class DocumentProfile:
                 r"^\s*[\[\(]?(\d+)[\]\)\.]?\s+(.+?)\s*$",
             ),
             content_start_section=data.get("content_start_section", ""),
+            build_context=data.get("build_context", "none"),
         )

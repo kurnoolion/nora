@@ -48,16 +48,20 @@ with no req_ids.
 ## Sections / subsections → "Context", not requirements
 
 4. Sections and subsections **do not have req_ids**, so we do **not** capture
-   them as separate requirements. Instead their **content (including the
-   section/subsection headings)** is prepended as **"Context" / front-matter**
-   to each requirement beneath them.
+   them as separate requirements. They are kept as **context** nodes in the tree
+   (each section's heading + body stored once), and each requirement's enclosing
+   ancestor-section chain is surfaced to it as **"Context"** at *emit time by
+   consumers* — **not** materialized per-requirement in the tree (D-DRAFT-5; that
+   would multiply section text by the requirement count in this single all-plans
+   doc).
    - Example: for a requirement `<PREFIX>-<PLAN>-12345` under section `5.1.2.3`,
-     prepend the contents of its ancestor sections — `5`, `5.1`, `5.1.2`,
-     `5.1.2.3` — to that requirement.
-   - **Ambiguity to confirm with the user:** the user originally wrote the
-     ancestor list as "5, 5.1, 5.1.2, **5.1.3**". `5.1.3` is a *sibling* of
-     `5.1.2`, not an ancestor of `5.1.2.3`. **Assumed interpretation:** the
-     ancestor chain `5 → 5.1 → 5.1.2 → 5.1.2.3`. Confirm before implementing.
+     the context is its ancestor chain `5 → 5.1 → 5.1.2 → 5.1.2.3` (numbers +
+     titles, plus each ancestor's body — MNO-B uses `build_context:
+     "path_and_content"`). Confirmed ancestor chain (the original "5.1.3" was a
+     sibling typo): `5 → 5.1 → 5.1.2 → 5.1.2.3`.
+   - Mechanism: profile field `build_context` (`"none" | "path" |
+     "path_and_content"`), shared helper `parser.build_context_string`, called by
+     the SIRA BEIR adapter and the NORA chunk builder. Generic across MNOs.
 
 ## Requirement structure & detection
 
@@ -120,9 +124,18 @@ requirements by the **leading req_id**.
 - **Content-start cutoff (D-DRAFT-4)** — **DONE** (commit 41a6f57): profile field
   `content_start_section` + font-gated parser pre-pass. Verified on the real doc
   (front matter dropped, parse starts at Chapter 3).
-- **Parser consumes `ContentBlock.lines`** (not yet implemented): separate a
-  requirement's title line from its body; build the ancestor-section "Context"
-  per rule #4 with headings distinct from body.
+- **Parser title/body split (D-DRAFT-5)** — **DONE**: leading-id requirement
+  `title` = header line after req_id, `text` = body, split on `ContentBlock.lines`.
+  Gated on `leading_id_body`.
+- **Generic `build_context` + consumer-assembled Context (D-DRAFT-5)** — **DONE**:
+  profile field `build_context` + shared `parser.build_context_string` helper;
+  context is assembled by consumers at emit time (NOT materialized in the tree,
+  to avoid bloat). **SIRA BEIR adapter** emits for `path` + `path_and_content`;
+  **NORA chunk builder** emits `path_and_content` only (`path` is already carried
+  by its `[Path: …]` breadcrumb — suppressed to avoid duplication). Formats:
+  `path` → `[Context: 5 <T> > 5.1 <T> > 5.1.2 <T>]`; `path_and_content` →
+  `[5 <T>]` + body per ancestor, top-down. `bs_d7a2c81f` → `"path"`,
+  `bs_5114ac92` → `"path_and_content"`.
 - **Deferred nicety:** split a *multi-line* requirement title from the body —
   no reliable per-span signal (color unavailable); the line-boundary fix already
   delivers the section hierarchy the synthesizer needs.
@@ -134,5 +147,7 @@ requirements by the **leading req_id**.
 - **D-DRAFT-3** — preserve PDF source line boundaries (`ContentBlock.lines`).
 - **D-DRAFT-4** — profile-driven content-start cutoff (skip front matter + intro
   chapters, anchored at a configurable Chapter N).
+- **D-DRAFT-5** — consume `lines` for title/body split; generic `build_context`
+  config with consumer-assembled `Requirement.context` (not tree-materialized).
 - All unlanded; **landing gate**: no `/land-strand` until multiple MNO releases
   are ingested and the multi-plan / leading-id path is verified on real corpora.

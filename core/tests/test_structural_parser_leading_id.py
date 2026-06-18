@@ -228,3 +228,99 @@ class TestDefaultHeadingModeUnchanged:
         sub = next(r for r in tree.requirements if r.section_number == "1.1")
         # Heading 1.1 had no id; the first body id is captured as its req_id.
         assert sub.req_id == "ABC-FOO-001"
+
+
+# ── D-DRAFT-5: title/body split + ancestor-section Context ───────────
+
+
+def _req(idx: int, header: str, *body_lines: str) -> ContentBlock:
+    """A leading-id requirement block with preserved source lines:
+    lines[0] = '<req_id> <title>', the rest = body."""
+    lines = [header, *body_lines]
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=idx),
+        text=" ".join(lines),
+        font_info=FontInfo(size=12.0, bold=False),
+        lines=lines,
+    )
+
+
+class TestTitleBodySplit:
+    def test_title_and_body_separated_from_lines(self):
+        blocks = [
+            _heading(0, "3 Requirements"),
+            _heading(1, "3.1 Registration"),
+            _req(2, "ABC-FOO-001 Re-registration timer",
+                 "The device shall re-register within 30 seconds."),
+        ]
+        tree = _parse(blocks)
+        r = next(x for x in tree.requirements if x.req_id == "ABC-FOO-001")
+        assert r.title == "Re-registration timer"
+        assert r.text == "The device shall re-register within 30 seconds."
+        assert "ABC-FOO-001" not in r.text           # req_id not duplicated into body
+        assert "Re-registration timer" not in r.text  # title not duplicated into body
+
+    def test_no_lines_falls_back_to_whole_block(self):
+        # _body() blocks carry no `lines` — old behavior: empty title, whole
+        # block as text (back-compat for extractors without line structure).
+        tree = _parse(_mnob_blocks())
+        r = next(x for x in tree.requirements if x.req_id == "ABC-FOO-001")
+        assert r.title == ""
+        assert "support IPv6" in r.text
+
+
+class TestBuildContextString:
+    """D-DRAFT-5: the generic context helper (consumed by the SIRA adapter +
+    NORA chunk builder). section_index = {section_number: (title, body)}."""
+
+    SECTIONS = {
+        "5": ("Bands", "Chapter 5 intro."),
+        "5.1": ("Frequency", "Frequency intro."),
+        "5.1.2": ("LTE", "LTE intro."),
+    }
+
+    def test_none_mode_is_empty(self):
+        from core.src.parser.structural_parser import build_context_string
+        assert build_context_string("5.1.2", self.SECTIONS, "none") == ""
+
+    def test_path_mode_numbers_and_titles_no_body(self):
+        from core.src.parser.structural_parser import build_context_string
+        out = build_context_string("5.1.2", self.SECTIONS, "path")
+        # Single-line breadcrumb wrapped in a [Context: …] label.
+        assert out == "[Context: 5 Bands > 5.1 Frequency > 5.1.2 LTE]"
+        assert "intro" not in out  # body excluded in path mode
+
+    def test_path_and_content_includes_numbering_and_body(self):
+        from core.src.parser.structural_parser import build_context_string
+        out = build_context_string("5.1.2", self.SECTIONS, "path_and_content")
+        # One bracketed header per ancestor, each followed by its body.
+        assert out == (
+            "[5 Bands]\nChapter 5 intro.\n"
+            "[5.1 Frequency]\nFrequency intro.\n"
+            "[5.1.2 LTE]\nLTE intro."
+        )
+
+    def test_empty_parent_section_is_empty(self):
+        from core.src.parser.structural_parser import build_context_string
+        assert build_context_string("", self.SECTIONS, "path") == ""
+
+    def test_missing_ancestor_is_skipped(self):
+        from core.src.parser.structural_parser import build_context_string
+        idx = {"5": ("Bands", ""), "5.1.2": ("LTE", "")}  # 5.1 missing
+        assert build_context_string("5.1.2", idx, "path") == "[Context: 5 Bands > 5.1.2 LTE]"
+
+
+class TestContextNotMaterializedInTree:
+    def test_tree_does_not_carry_per_req_context(self):
+        # D-DRAFT-5: context is assembled by consumers, not stored per-req —
+        # the parsed tree stays compact.
+        blocks = [
+            _heading(0, "3 Bands"),
+            _body(1, "Chapter 3 intro."),
+            _heading(2, "3.1 LTE"),
+            _req(3, "ABC-FOO-001 Band 13", "Device shall support band 13."),
+        ]
+        tree = _parse(blocks)
+        assert all(r.context == "" for r in tree.requirements)
+        assert tree.build_context == "none"  # test profile leaves the default

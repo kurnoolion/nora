@@ -258,3 +258,79 @@ more machinery than warranted for a per-corpus constant.
 - Implementation detail: the font check reuses `FontInfo.size`/`bold` +
   `heading_detection.levels` hints to decide "real heading vs TOC entry"; exact
   threshold settled when wiring.
+
+---
+
+## D-DRAFT-5 — Consume `ContentBlock.lines` in the leading-id parser: split requirement title/body + populate a separate `Requirement.context` field
+
+**Context:** In `leading_id_body` mode a requirement was built with everything
+glued into `Requirement.text` — the req_id, the title, and the body were one
+flattened run-on (the parser built `text` from `block.text`), and the enclosing
+section/subsection chain (non-requirement *context* in this model) wasn't
+attached to the requirement at all. So the LLM synthesizer couldn't tell the
+requirement's title from its body, nor see where the requirement sits in the
+`5 → 5.1 → 5.1.2` hierarchy. D-DRAFT-3 already preserved the per-line split on
+`ContentBlock.lines` (`" ".join(lines) == text`), and sections carry their
+heading + preamble text — the parser just wasn't using either.
+
+**Decision:** Two parts — a parser split, and a generic **consumer-assembled**
+context (not materialized in the tree, to avoid per-requirement duplication —
+the bloat concern: one PDF holds all plans, and copying each requirement's full
+ancestor-section content into the tree would multiply section text by the number
+of requirements under it).
+- **Title/body split (parser, `leading_id_body`):** a requirement's `title` is
+  the header line (`lines[0]`) after the leading req_id; `text` is the body (the
+  remaining lines), via the preserved `ContentBlock.lines` (D-DRAFT-3). Falls
+  back to empty title + whole-block `text` when a block has no `lines`.
+- **`build_context` profile knob (generic, all MNOs):** `"none" | "path" |
+  "path_and_content"`. Stamped onto `RequirementTree.build_context`. Rendering
+  (settled with the user):
+  - `path` → a single-line breadcrumb wrapped in a label:
+    `[Context: 5 Bands > 5.1 Frequency > 5.1.2 LTE]` (number + title per hop, no
+    bodies).
+  - `path_and_content` → one bracketed header per ancestor followed by its body,
+    top-down: `[5 Bands]` / `<5 body>` / `[5.1 Frequency]` / `<5.1 body>` /
+    `[5.1.2 LTE]` / `<5.1.2 body>`.
+- **`build_context_string(parent_section, section_index, mode)`** — one shared
+  pure helper (in `parser/structural_parser.py`), self-labeling per the formats
+  above. Anchors on `parent_section` (works in both models: leading-id's is the
+  enclosing section; heading-mode's is the parent, excluding the requirement's
+  own section). The **SIRA adapter** and the **NORA chunk builder** call it at
+  emit time from the section nodes already in the tree, baking context into
+  corpus rows / chunks. **NORA suppresses `path`** (the existing `[Path: …]`
+  breadcrumb already carries it; emitting the numbered block too would
+  duplicate) and emits only for `path_and_content` — which adds ancestor section
+  *content* nothing else in the chunk provides. SIRA (no `[Path: …]`) emits for
+  both `path` and `path_and_content`.
+- **`Requirement.context`** stays as a field (the materialized shape) but is
+  **left empty in the parsed tree** — context lives in the *derived* indexes
+  (BEIR corpus, chunks), where self-contained rows are expected, not in the
+  source-of-truth tree.
+
+**Why:** Duplication is fine in derived retrieval indexes (each row self-
+contained) but not in the source tree, which is inspected and re-run from and
+must stay compact. The `path` vs `path_and_content` knob lets heading-mode
+corpora (e.g. `bs_d7a2c81f` → `path`) get a lightweight breadcrumb while
+leading-id corpora (`bs_5114ac92` → `path_and_content`) get the full section
+bodies they need — generic across MNOs. A **separate** `context` (not prepended
+into `text`) keeps requirement body vs inherited context distinguishable.
+Rejected: materializing context per requirement in the tree (bloat);
+per-plan-split tree files (essentially D-DRAFT-1 Option A — separate decision,
+and it doesn't fix the duplication); splitting the title by font color (this PDF
+doesn't expose it — D-DRAFT-3 context).
+
+**Consequences:**
+- `Requirement` gains `context` (additive, empty in tree). New profile field
+  `build_context` (default `"none"` → no-op for existing profiles).
+  `RequirementTree.build_context` stamped from the profile.
+- Title/body split is `leading_id_body`-only (no-op for heading mode → MNO-A
+  unchanged). Context assembly is generic (driven by `build_context`).
+- Both consumers wired (done): **SIRA adapter** (`_build_text` appends the
+  helper output as a context block in each corpus row) and **NORA chunk builder**
+  (`_build_chunk_text` appends the `path_and_content` block from a per-tree
+  `{section_number: (title, body)}` index; coexists with the pre-existing
+  `[Path: …]` and `[Parent context: …]` blocks).
+- A **multi-line requirement title** still bleeds its overflow into `text` (no
+  per-span signal) — deferred. If a **section heading merges with its intro** in
+  one block, that run-on carries into the context heading label — a heading-path
+  `lines` split is a possible follow-up.
