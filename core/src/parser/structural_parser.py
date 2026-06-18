@@ -621,6 +621,16 @@ class GenericStructuralParser:
             rev_end = max(self._frontmatter_revhist_indices, default=-1)
             self._frontmatter_cutoff = max(toc_end, rev_end)
 
+        # D-DRAFT-4: content-start cutoff. Independent of the toc_style path —
+        # drop every block before the first real (font-confirmed) heading whose
+        # top-level section number == profile.content_start_section, skipping
+        # the front page / TOC / intro chapters in one positive anchor (for
+        # corpora whose front matter isn't reliably detectable negatively).
+        if self.profile.content_start_section:
+            csi = self._find_content_start_index(doc)
+            if csi >= 0:
+                self._frontmatter_cutoff = max(self._frontmatter_cutoff, csi - 1)
+
         # 1. Extract plan metadata
         plan_meta = self._extract_plan_metadata(doc)
 
@@ -2702,6 +2712,37 @@ class GenericStructuralParser:
         if block.font_info.size < body_mid - 2.0:
             return bool(self._req_id_re.search(block.text))
         return False
+
+    def _is_heading_font(self, block: ContentBlock) -> bool:
+        """True when a block's font looks like a real heading rather than a
+        same-text TOC entry (D-DRAFT-4). Chapter/section headings are bold +
+        larger than body; TOC entries are body-size. Used to gate the
+        content-start cutoff so a TOC line numbered N doesn't trigger it.
+        Prefers the size signal (heading > ``body_text.font_size_max``); falls
+        back to bold when body sizes are unconfigured."""
+        fi = block.font_info
+        if not fi:
+            return False
+        body_max = self.profile.body_text.font_size_max
+        if body_max and fi.size > body_max + 0.5:
+            return True
+        return bool(fi.bold)
+
+    def _find_content_start_index(self, doc: DocumentIR) -> int:
+        """Block index of the first real (font-confirmed) heading whose
+        top-level section number == ``profile.content_start_section``; -1 when
+        disabled or not found. Drives the content-start cutoff (D-DRAFT-4) —
+        the front page / TOC / intro chapters all precede it and are dropped."""
+        target = self.profile.content_start_section
+        if not target:
+            return -1
+        for block in doc.content_blocks:
+            if not self._is_heading_font(block):
+                continue
+            section_num, _ = self._classify_heading(block)
+            if section_num and section_num.split(".")[0] == target:
+                return block.position.index
+        return -1
 
     def _find_req_ids(self, text: str) -> list[str]:
         """Find all req_id patterns in `text` and canonicalize each.

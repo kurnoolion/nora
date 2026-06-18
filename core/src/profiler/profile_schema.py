@@ -510,6 +510,15 @@ class DocumentProfile:
     embedding. Use False for corpora where the glossary is purely an
     expansion lookup, not retrieval-relevant content."""
 
+    content_start_section: str = ""
+    """D-DRAFT-4: top-level chapter/section number where requirement content
+    begins (e.g. ``"3"``). When set, the parser drops every block before the
+    first **real heading** (heading-level font — so a same-numbered TOC entry,
+    which is body-size, does not trigger it) whose top-level section number
+    equals this value. One positive anchor skips the front page, TOC, and intro
+    chapters in one shot, for corpora whose front matter isn't reliably
+    detectable negatively. Empty (default) = disabled (no cutoff)."""
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -625,4 +634,5 @@ class DocumentProfile:
                 "reference_list_entry_pattern",
                 r"^\s*[\[\(]?(\d+)[\]\)\.]?\s+(.+?)\s*$",
             ),
+            content_start_section=data.get("content_start_section", ""),
         )
