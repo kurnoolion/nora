@@ -110,16 +110,16 @@ requirements by the **leading req_id**.
 
 ## Still to design / build (next: profile stage, then parser)
 
-- **Profile** — `customizations/profiles/mnob_leading_id_profile.json`
+- **Profile** — `customizations/profiles/bs_5114ac92.json`
   (placeholdered, like `bs_d7a2c81f.json`): `detection_mode = leading_id_body`,
   `anchor = leading_text`, `components` (`-` / pos 1), `content_start_section =
   "3"`, `enable_table_anchored_extraction = false`, `numbering_pattern` matching
   `Chapter N.` + `N.M.` (trailing-dot tolerant), `body_text` 11.5–12.5. Work-PC:
   map `<MNO0>` → the real req_id prefix (or replace inline), and confirm the
   numbering pattern / chapter-heading font against the real doc.
-- **Content-start cutoff (D-DRAFT-4)** — new profile field `content_start_section`
-  + parser pre-pass; **not yet implemented** (loader ignores the field until
-  then). Small.
+- **Content-start cutoff (D-DRAFT-4)** — **DONE** (commit 41a6f57): profile field
+  `content_start_section` + font-gated parser pre-pass. Verified on the real doc
+  (front matter dropped, parse starts at Chapter 3).
 - **Parser consumes `ContentBlock.lines`** (not yet implemented): separate a
   requirement's title line from its body; build the ancestor-section "Context"
   per rule #4 with headings distinct from body.

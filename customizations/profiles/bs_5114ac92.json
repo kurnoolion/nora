@@ -1,17 +1,17 @@
 {
-  "profile_name": "mnob_leading_id_profile",
+  "profile_name": "bs_5114ac92",
   "profile_version": 1,
   "created_from": [],
   "last_updated": "2026-06-17",
   "_provenance": {
-    "bootstrap_id": "mnob_leading_id_profile",
+    "bootstrap_id": "bs_5114ac92",
     "source": "Hand-authored for the MNO-B corpus (multi-mno-nora strand). See docs/compact/strands/multi-mno-nora/mno-b-spec.md + D-DRAFT-1..4.",
     "model": "leading_id_body — a single PDF whose top-level chapters are plans; requirements are flat body paragraphs that begin with <PREFIX>-<PLAN>-<DIGITS>; sections/subsections are non-requirement context.",
-    "placeholders": "Proprietary tokens are placeholders per D-062. The literal req_id common prefix is <MNO0> — map it to the real value in customizations/mappings/mnob_leading_id_profile.json (work-PC mapping; pushed to company-internal git only). Structural values (numbering, font sizes, content_start) are literal and corpus-safe.",
+    "placeholders": "Proprietary tokens are placeholders per D-062. The literal req_id common prefix is <MNO0> — map it to the real value in customizations/mappings/bs_5114ac92.json (work-PC mapping; pushed to company-internal git only). Structural values (numbering, font sizes, content_start) are literal and corpus-safe.",
     "todo_work_pc": [
       "Confirm heading_detection.numbering_pattern against the real chapter/section heading TEXT (currently matches 'Chapter N.' chapters and 'N.M.' subsections with a trailing dot).",
       "Confirm body_text sizes and that the real chapter-heading font size is > font_size_max so the content-start font gate fires (the TOC 'Chapter 3' line is ~10pt and is correctly ignored).",
-      "Map <MNO0> -> the real req_id prefix in customizations/mappings/mnob_leading_id_profile.json (or replace <MNO0> inline for a quick local test).",
+      "Map <MNO0> -> the real req_id prefix in customizations/mappings/bs_5114ac92.json (or replace <MNO0> inline for a quick local test).",
       "Confirm enable_table_anchored_extraction stays false (requirements are body paragraphs, not table cells)."
     ]
   },
