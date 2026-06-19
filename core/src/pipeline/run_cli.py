@@ -293,8 +293,16 @@ def main() -> None:
     ctx.scope_mnos = _csv(args.mno)
     ctx.scope_releases = _csv(args.release)
     ctx.force = args.force
-    if args.model != "auto":
-        ctx.model_name = args.model
+    # Resolve the effective LLM model: --model > NORA_LLM_MODEL >
+    # config/llm.json > env-config > "auto". run_cli previously set model_name
+    # straight from args.model and never called resolve_llm_model, so the
+    # NORA_LLM_MODEL env var was silently ignored (the openai-compatible path
+    # then warned "set NORA_LLM_MODEL or pass --model" and fell back to mock).
+    from core.src.env.config import resolve_llm_model
+    ctx.model_name = resolve_llm_model(
+        cli_value=(None if args.model == "auto" else args.model),
+        env_config_value=(env.model_name if args.env else None),
+    )
     # CLI / env-var overrides for env-config mode
     if args.env:
         from core.src.env.config import (
