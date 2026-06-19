@@ -191,6 +191,7 @@ class QueryPipeline:
         max_distance_threshold: float | None = None,
         enable_grouping: bool = False,
         top_k_cap: int | None = None,
+        cell_stores: "dict | None" = None,
     ) -> None:
         """Initialize the pipeline.
 
@@ -244,16 +245,26 @@ class QueryPipeline:
                 callers that still pass it.
         """
         from core.src.query.bm25_index import BM25Index
+        from core.src.query.reranker import MockReranker
+        from core.src.vectorstore.cell_loader import FLAT_CELL
 
         self._analyzer = analyzer or MockQueryAnalyzer()
         self._resolver = MNOReleaseResolver(graph)
         self._scoper = GraphScoper(graph, max_depth=max_depth)
-        bm25_index = BM25Index.from_store(store) if enable_bm25 else None
-        self._retriever = RAGRetriever(
-            embedder, store, top_k=top_k,
-            bm25_index=bm25_index,
-            reranker=reranker,
-        )
+        # D-DRAFT-11: one retriever per (mno, release) cell. A single flat
+        # `store` (legacy / single-cell) normalizes to {FLAT_CELL: store}, so
+        # existing callers are unchanged. `cell_stores` (from
+        # vectorstore.load_cell_stores) drives multi-cell routing + fusion.
+        if cell_stores is None:
+            cell_stores = {FLAT_CELL: store}
+        self._reranker = reranker or MockReranker()
+        self._retrievers: dict = {}
+        for ck, st in cell_stores.items():
+            bm25 = BM25Index.from_store(st) if enable_bm25 else None
+            self._retrievers[ck] = RAGRetriever(
+                embedder, st, top_k=top_k, bm25_index=bm25, reranker=reranker,
+            )
+        self._stores = list(cell_stores.values())
         self._context_builder = ContextBuilder(graph)
         self._synthesizer = synthesizer or MockSynthesizer()
         self._rewriter = rewriter or MockQueryRewriter()
@@ -263,7 +274,24 @@ class QueryPipeline:
         self._max_distance_threshold = max_distance_threshold
         self._enable_grouping = enable_grouping
         self._top_k_cap = top_k_cap
-        self._store = store
+        # Representative store for back-compat paths; multi-cell pinned-chunk
+        # fetch walks all stores (see _fetch_chunks_by_ids).
+        self._store = self._stores[0] if self._stores else store
+
+    def _select_cells(self, scoped) -> list:
+        """Target cell keys for a query (D-DRAFT-11).
+
+        The resolver already produced `(mno, release)` scope pairs
+        (`scoped.scoped_mnos`, each an `MNOScope`), which map directly to cell
+        keys. Cells present in the pipeline that match are selected; if none
+        match (e.g. a single flat `FLAT_CELL` store, or an unresolved scope),
+        fall back to all loaded cells.
+        """
+        target = [
+            (s.mno, s.release) for s in scoped.scoped_mnos
+            if (s.mno, s.release) in self._retrievers
+        ]
+        return target or list(self._retrievers.keys())
 
     def _fetch_chunks_by_ids(self, ids: list[str]) -> list:
         """Fetch chunks from the store by their chunk IDs.
@@ -279,17 +307,19 @@ class QueryPipeline:
         """
         from core.src.query.schema import RetrievedChunk
 
-        try:
-            all_docs = self._store.get_all()
-        except Exception as e:
-            logger.warning(f"Pinned-chunks fetch: store.get_all() failed ({e!r})")
-            return []
-        by_id = {
-            cid: (doc, meta)
+        # Multi-cell (D-DRAFT-11): a pinned chunk may live in any cell store —
+        # walk them all and union by id (first store wins on a duplicate id).
+        by_id: dict = {}
+        for st in self._stores:
+            try:
+                all_docs = st.get_all()
+            except Exception as e:
+                logger.warning(f"Pinned-chunks fetch: store.get_all() failed ({e!r})")
+                continue
             for cid, doc, meta in zip(
                 all_docs.ids, all_docs.documents, all_docs.metadatas,
-            )
-        }
+            ):
+                by_id.setdefault(cid, (doc, meta))
         out: list = []
         missing: list[str] = []
         for cid in ids:
@@ -460,10 +490,36 @@ class QueryPipeline:
             _TYPE_MAX_DISTANCE.get(intent.query_type, self._max_distance_threshold),
             self._enable_grouping and intent.query_type not in _TYPE_DISABLE_GROUPING,
         )
-        chunks = self._retriever.retrieve(
-            retrieval_query, candidates, scoped.scoped_mnos,
-            top_k=type_top_k, bm25_weight=bm25_weight, rerank=rerank,
-        )
+        # D-DRAFT-11: route to the target cell(s). One cell → its retriever
+        # directly (unchanged behavior). Multiple cells → retrieve per cell
+        # WITHOUT per-cell rerank, merge, then rerank the pool once so the
+        # cross-encoder compares across cells (merge-then-rerank). RRF scores
+        # aren't cross-cell comparable, so without a real reranker the merged
+        # pool is ordered by dense distance (same embedder ⇒ comparable).
+        from core.src.query.reranker import MockReranker
+        target_cells = self._select_cells(scoped)
+        if len(target_cells) == 1:
+            chunks = self._retrievers[target_cells[0]].retrieve(
+                retrieval_query, candidates, scoped.scoped_mnos,
+                top_k=type_top_k, bm25_weight=bm25_weight, rerank=rerank,
+            )
+        else:
+            pool: list = []
+            for ck in target_cells:
+                pool.extend(self._retrievers[ck].retrieve(
+                    retrieval_query, candidates, scoped.scoped_mnos,
+                    top_k=type_top_k, bm25_weight=bm25_weight, rerank=False,
+                ))
+            if rerank and not isinstance(self._reranker, MockReranker):
+                pool = self._reranker.rerank(retrieval_query, pool)
+            else:
+                pool.sort(key=lambda c: c.similarity_score)  # cosine distance: lower = better
+            chunks = pool[:type_top_k]
+            if verbose:
+                logger.info(
+                    f"[Stage 4] Multi-cell merge across {len(target_cells)} cells "
+                    f"→ pool {len(pool)} → top {len(chunks)}"
+                )
         if verbose:
             logger.info(
                 f"[Stage 4] Retrieved: {len(chunks)} chunks "
