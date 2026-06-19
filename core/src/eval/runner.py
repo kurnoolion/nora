@@ -140,10 +140,12 @@ class EvalRunner:
         top_k: int = 10,
         max_depth: int | None = None,
         max_context_chars: int = 30000,
+        cell_stores=None,
     ) -> None:
         self._graph = graph
         self._embedder = embedder
         self._store = store
+        self._cell_stores = cell_stores  # D-DRAFT-11: per-cell stores (or None → flat)
         self._analyzer = analyzer
         self._synthesizer = synthesizer
         self._rewriter = rewriter
@@ -158,6 +160,7 @@ class EvalRunner:
             graph=self._graph,
             embedder=self._embedder,
             store=self._store,
+            cell_stores=self._cell_stores,
             analyzer=self._analyzer,
             synthesizer=self._synthesizer,
             rewriter=self._rewriter,

@@ -698,10 +698,15 @@ def run_eval(ctx: PipelineContext) -> StageResult:
     )
 
     embedder = make_embedder(vs_config)
-    store = ChromaDBStore(
-        persist_directory=vs_config.persist_directory, collection_name=vs_config.collection_name,
-        distance_metric=vs_config.distance_metric,
-    )
+    # D-DRAFT-11: load per-cell stores (flat fallback covers a legacy single
+    # store). The representative store seeds the rag-only stub graph + back-compat.
+    from core.src.vectorstore.cell_loader import load_cell_stores
+    cell_stores = load_cell_stores(vs_dir)
+    if not cell_stores:
+        return _fail(stage, "PIP-E002",
+                     f"No vector store under {vs_dir} (run the vectorstore stage first)",
+                     time.time() - t0)
+    store = next(iter(cell_stores.values()))
 
     if rag_only_mode:
         graph = build_stub_graph_from_store(store)
@@ -747,7 +752,7 @@ def run_eval(ctx: PipelineContext) -> StageResult:
         reranker = None  # falls back to MockReranker in pipeline
 
     runner = EvalRunner(
-        graph=graph, embedder=embedder, store=store,
+        graph=graph, embedder=embedder, store=store, cell_stores=cell_stores,
         synthesizer=synthesizer, rewriter=rewriter, reranker=reranker,
     )
     report = runner.run_all(questions, bypass_graph=rag_only_mode)

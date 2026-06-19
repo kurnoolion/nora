@@ -425,18 +425,18 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     # when prefixing them with "sentence-transformers/".
     embedder = make_embedder(vs_config)
 
-    store = ChromaDBStore(
-        persist_directory=vs_config.persist_directory,
-        collection_name=vs_config.collection_name,
-        distance_metric=vs_config.distance_metric,
-    )
+    # D-DRAFT-11: load per-cell stores (flat fallback covers a legacy single
+    # store). The representative store seeds the rag-only stub graph + count check.
+    from core.src.vectorstore.cell_loader import load_cell_stores
 
-    if store.count == 0:
+    cell_stores = load_cell_stores(vectorstore_dir)
+    if not cell_stores or sum(s.count for s in cell_stores.values()) == 0:
         raise _PipelineBuildError(
             "Vector store is empty. Run the vectorstore pipeline stage "
             "first (Pipeline page, or: "
             "python -m core.src.vectorstore.vectorstore_cli)."
         )
+    store = next(iter(cell_stores.values()))
 
     # Graph: prefer the on-disk graph; fall back to a metadata-derived
     # stub when the graph stage was skipped (--rag-only / --skip-graph
@@ -490,6 +490,7 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         graph=graph,
         embedder=embedder,
         store=store,
+        cell_stores=cell_stores,
         synthesizer=synthesizer,
         reranker=reranker,
         top_k=10,            # floor; per-type widening lifts breadth queries

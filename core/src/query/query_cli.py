@@ -60,18 +60,14 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
         normalize=vs_config.normalize_embeddings,
     )
 
-    # Create store
-    from core.src.vectorstore.store_chroma import ChromaDBStore
-    store = ChromaDBStore(
-        persist_directory=vs_config.persist_directory,
-        collection_name=vs_config.collection_name,
-        distance_metric=vs_config.distance_metric,
-    )
-
-    if store.count == 0:
+    # Create store(s) — D-DRAFT-11: per-cell stores (flat fallback for legacy).
+    from core.src.vectorstore.cell_loader import load_cell_stores
+    cell_stores = load_cell_stores(vs_config.persist_directory)
+    if not cell_stores or sum(s.count for s in cell_stores.values()) == 0:
         print("Error: Vector store is empty.")
         print("Run: python -m core.src.vectorstore.vectorstore_cli")
         sys.exit(1)
+    store = next(iter(cell_stores.values()))
 
     # Create analyzer and synthesizer based on --llm flag
     analyzer = None
@@ -99,6 +95,7 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
         graph=graph,
         embedder=embedder,
         store=store,
+        cell_stores=cell_stores,
         analyzer=analyzer,
         synthesizer=synthesizer,
         top_k=args.top_k,
