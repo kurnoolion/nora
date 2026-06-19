@@ -586,11 +586,16 @@ def run_graph(ctx: PipelineContext) -> StageResult:
 # ---------------------------------------------------------------------------
 
 def run_vectorstore(ctx: PipelineContext) -> StageResult:
-    """Build the vector store."""
+    """Build one vector store PER CELL (D-DRAFT-11).
+
+    Each `(mno, release)` cell gets its own ChromaDB at
+    `out/vectorstore/<mno>/<rel>/`, built from that cell's trees only — so
+    retrieval statistics stay isolated per cell. The (global) taxonomy supplies
+    feature_ids across cells. Query-side cell routing + fusion is the follow-on
+    (D-DRAFT-11 slice 2).
+    """
     t0 = time.time()
     stage = "vectorstore"
-    out_dir = ctx.stage_output(stage)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         from core.src.vectorstore import make_embedder
@@ -600,43 +605,54 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
     except ImportError as e:
         return _fail(stage, "VEC-E001", f"Import error: {e}", time.time() - t0)
 
-    # env_dir is documents_dir's parent (per D-022 layout: documents_dir
-    # = <env_dir>/input/). Marker-classification audit log lives under
-    # <env_dir>/reports/ alongside parse-audit and pipeline reports.
+    cells = ctx.input_cells()
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"No input cells under {ctx.documents_dir}", time.time() - t0)
+
     env_dir = ctx.documents_dir.parent
-    config = VectorStoreConfig(
-        persist_directory=str(out_dir),
+    # One embedder, reused across cells (it doesn't depend on persist_directory).
+    base_config = VectorStoreConfig(
         embedding_provider=ctx.embedding_provider,
         embedding_model=ctx.embedding_model,
         skipped_headers_log=str(env_dir / "reports" / "marker_headers.csv"),
     )
-    embedder = make_embedder(config)
-    store = ChromaDBStore(
-        persist_directory=config.persist_directory,
-        collection_name=config.collection_name,
-        distance_metric=config.distance_metric,
-    )
-
-    builder = VectorStoreBuilder(embedder=embedder, store=store, config=config)
+    embedder = make_embedder(base_config)
     taxonomy_path = Path(ctx.state.get("taxonomy_path", ctx.stage_output("taxonomy") / "taxonomy.json"))
 
-    try:
-        build_stats = builder.build(
-            trees_dir=ctx.stage_output("parse"),
-            taxonomy_path=taxonomy_path,
-            rebuild=True,
+    total_chunks = 0
+    model = ""
+    for cell in cells:
+        cell_out = ctx.stage_output(stage, cell)
+        cell_out.mkdir(parents=True, exist_ok=True)
+        config = VectorStoreConfig(
+            persist_directory=str(cell_out),
+            embedding_provider=ctx.embedding_provider,
+            embedding_model=ctx.embedding_model,
+            skipped_headers_log=str(env_dir / "reports" / "marker_headers.csv"),
         )
-    except Exception as e:
-        return _fail(stage, "VEC-E001", f"Build failed: {e}", time.time() - t0)
+        store = ChromaDBStore(
+            persist_directory=config.persist_directory,
+            collection_name=config.collection_name,
+            distance_metric=config.distance_metric,
+        )
+        builder = VectorStoreBuilder(embedder=embedder, store=store, config=config)
+        try:
+            build_stats = builder.build(
+                trees_dir=ctx.stage_output("parse", cell),  # this cell's trees only
+                taxonomy_path=taxonomy_path,
+                rebuild=True,
+            )
+        except Exception as e:
+            return _fail(stage, "VEC-E001",
+                         f"Build failed for {cell.mno}/{cell.release}: {e}",
+                         time.time() - t0)
+        config.save_json(cell_out / "config.json")
+        build_stats.save_json(cell_out / "build_stats.json")
+        total_chunks += build_stats.total_chunks
+        model = build_stats.embedding_model
 
-    config.save_json(out_dir / "config.json")
-    build_stats.save_json(out_dir / "build_stats.json")
-
-    stats = {
-        "chunks": build_stats.total_chunks,
-        "model": build_stats.embedding_model,
-        "dedup": 0,
-    }
+    stats = {"cells": len(cells), "chunks": total_chunks, "model": model}
     return StageResult(stage=stage, status="OK", elapsed_seconds=time.time() - t0, stats=stats)
 
 
