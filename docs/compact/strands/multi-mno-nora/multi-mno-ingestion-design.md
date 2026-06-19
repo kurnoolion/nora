@@ -225,7 +225,9 @@ step 7 delivers cell-aware **retrieval** (and `QueryType.COMPARISON`).
 - **Landing gate:** no `/land-strand multi-mno-nora` until a real multi-MNO /
   multi-release set is ingested **both** ways (full + incremental), the global
   graph + per-cell stores are verified, and the cross-MNO no-leak resolver case is
-  confirmed. The OA→`VZW-OA/Feb2026` migration is a prerequisite step.
+  confirmed. The OA→`VZW-OA/Feb2026` migration is a prerequisite step. The gate
+  evidence is the sign-off checklist in **`verification-runbook.md`** (run on the
+  real two-MNO corpus) — that runbook discharges this gate.
 - **Cross-strand:** D-DRAFT-6 amends SIRA D-DRAFT-12 (MMMYYYY → core util) and
   D-DRAFT-12 couples to the SIRA adapter — both reconcile when `multi-mno-sira`
   next lands.
