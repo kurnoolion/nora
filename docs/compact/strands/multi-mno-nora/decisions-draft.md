@@ -334,3 +334,278 @@ doesn't expose it — D-DRAFT-3 context).
   per-span signal) — deferred. If a **section heading merges with its intro** in
   one block, that run-on carries into the context heading label — a heading-path
   `lines` split is a possible follow-up.
+
+---
+
+## D-DRAFT-6 — Per-cell stage-output layout + universal `(MNO, MMMYYYY)` cell convention
+
+**Context:** The pipeline is single-`--profile`, flat-output (`out/<stage>/*`).
+The strand goal is multi-MNO / multi-release ingestion (full **and**
+incremental). The `multi-mno-sira` strand already organizes multi-MNO data as
+`(MNO, release)` **cells** (SIRA D-DRAFT-3..6); NORA should share that unit and
+vocabulary. `infer_metadata_from_path` already derives `(mno, release)` from
+`input/<mno>/<release>/`. The last free-form corpus (Verizon Open Access at
+`input/VZW/OA-baseline/`) is being promoted to a real cell
+(`input/VZW-OA/Feb2026/`), removing the only non-MMMYYYY holdout.
+
+**Decision:** The **`(MNO, release)` cell** is NORA's unit of layout, keyed on the
+input convention `input/<MNO>/<MMMYYYY>/` (mirrors SIRA D-DRAFT-5 — the dir name
+is both label and sort key, `Feb2026 → 2026-02`). Stage outputs split into two
+classes:
+- **Per-cell** — `out/<stage>/<mno>/<rel>/`: **extract, profile, parse, resolve,
+  vectorstore**.
+- **Global** — `out/<stage>/`: **standards, taxonomy, graph, eval**.
+
+MMMYYYY is **universal and validated unconditionally** (fail-loud at ingest) via a
+shared **core** util — `release_key(name) -> (label, order_key)`, raising on
+non-MMMYYYY — that `infer_metadata_from_path` calls. **Verizon OA is treated as
+its own MNO** `VZW-OA`, release `Feb2026`.
+
+**Why:** The cell is the consistent unit across NORA + SIRA (same vocabulary, same
+ordering, same provenance). Directory-driven partitioning removes all
+metadata-grouping logic from parse — the directory *is* the partition. Per-cell
+for stages whose output is document/retrieval-scoped (extract/profile/parse/
+resolve/vectorstore); global for the cross-cell KG layer (graph), its shared
+inputs (taxonomy, standards), and eval. Promoting OA to a real cell makes MMMYYYY
+**universal**, which is what lets validation be **unconditional in core** — no
+cell-mode gate — because there is no longer any free-form corpus to protect.
+**This supersedes SIRA D-DRAFT-12's placement:** that decision kept MMMYYYY
+validation sandbox-side *solely* to avoid breaking the free-form `OA-baseline`;
+once OA is migrated, the protection is obsolete, the convention is universal, and
+the logic belongs in a shared **core** util (module boundary preserved — sandbox
+→ core; SIRA's `sira_preflight` calls the same util). Rejected: flat dirs +
+parse-time metadata grouping (more parse logic, no structural isolation); per-MNO
+(not per-cell) directories (loses the release axis that release-diff needs — SIRA
+D-DRAFT-3); cell-mode-gated validation (unnecessary once OA migrates to MMMYYYY).
+
+**Consequences:**
+- New per-cell directory tree under `out/`; graph / taxonomy / standards / eval
+  stay flat (global).
+- Shared **core** util for MMMYYYY parse/validate/order; `infer_metadata_from_path`
+  enforces it. **Amends SIRA D-DRAFT-12** (sandbox-side placement → core util) —
+  flag for the `multi-mno-sira` strand to reconcile at its land time.
+- **One-time migration (work PC):** `input/VZW/OA-baseline/` →
+  `input/VZW-OA/Feb2026/`, then re-extract → re-ingest. Cell key
+  `(VZW, OA-baseline)` → `(VZW-OA, 2026-02)`; req_ids are unchanged (`VZ_REQ_…`),
+  so eval ground-truth + the integration test hold, but mno/release-keyed chunks +
+  graph nodes re-key (graph/vectorstore rebuild).
+- `VZW-OA` cleanly separates the public OA corpus from a future *proprietary* VZW
+  corpus (its own MNO) and keeps the Verizon name confined to the OA context per
+  the redaction rule.
+- Single-MNO is just a **one-cell** env (`--profile` still works); no free-form
+  path remains anywhere.
+
+---
+
+## D-DRAFT-7 — Per-cell profile binding: `<env_dir>/profiles.json` → `out/profile/<mno>/<rel>/profile.json`
+
+**Context:** With per-cell parse (D-DRAFT-6), each cell needs its own profile
+(`VZW-OA` → `bs_d7a2c81f` heading model; MNO-B → `bs_5114ac92` leading-id model).
+A single `--profile` per run can't express that.
+
+**Decision:** A binding manifest `<env_dir>/profiles.json` maps
+`(mno, release) → profile`. The **profile stage resolves bindings and
+materializes each cell's resolved + substituted profile to
+`out/profile/<mno>/<rel>/profile.json`**; parse reads each cell's profile from its
+own directory. Resolution precedence per cell: `--profile` (one-off global
+override) → exact `(mno, release)` → `(mno, "*")` → `default` → **fail loud**
+(`PIP-E0xx`). `load_substituted_profile` runs per cell so each MNO's placeholder
+mapping applies. A bare `--profile` synthesizes a one-cell wildcard binding.
+
+```jsonc
+{ "bindings": [ { "mno": "<mno>", "release": "*", "profile": "customizations/profiles/<id>.json" } ],
+  "default": null }
+```
+
+**Why:** The binding lives with the env (reproducible, works in `--env` and
+`--env-dir` modes) and mirrors the existing per-profile mapping-file pattern.
+Materializing the resolved profile **per cell** keeps parse purely
+directory-driven (read `out/profile/<cell>/profile.json`, parse
+`out/extract/<cell>/`) and gives transparency — Parse-Review can show each cell's
+effective profile. Fail-loud on an uncovered cell (vs. auto-profiling) because
+these corpora use hand-authored profiles. Rejected: CLI-only `--profile-map` (not
+reproducible); per-input-dir sidecars (scatters config across the runtime tree);
+auto-`DocumentProfiler` per cell (wrong for hand-authored corpora).
+
+**Consequences:**
+- New `<env_dir>/profiles.json`; `ProfileBindings` loader/resolver (`env`);
+  `EnvironmentConfig.profile_bindings` for `--env` mode.
+- `run_profile` → resolve + validate + materialize per cell; `run_parse` reads the
+  per-cell profile (no in-memory grouping).
+- Back-compat preserved via wildcard synthesis (single-MNO `--profile` unchanged).
+
+---
+
+## D-DRAFT-8 — Incremental cell ingestion: per-cell stages skip/scope; global stages rebuild over all cells
+
+**Context:** Beyond initial full ingestion, the strand must support **incremental**
+adds — a new cell (new MNO or new release) dropped in later, ingested without
+redoing existing cells. The per-cell layout (D-DRAFT-6) makes a cell's on-disk
+outputs the natural state.
+
+**Decision:** Per-cell stages (extract/profile/parse/resolve/vectorstore) are
+**idempotent + scopable**:
+- **Skip-if-present-and-unchanged** by default: a cell's per-cell outputs are
+  reused when its inputs are unchanged. Parse stamps a **`profile_fingerprint`**
+  (hash of the substituted profile) onto each tree, so a profile/mapping edit
+  invalidates exactly that cell (mtime alone can't see a mapping edit).
+- **`--mno` / `--release`** flags (comma-separable) scope the per-cell stages to
+  specific cells; **`--force` / `--no-skip`** reprocesses regardless.
+- **Global stages (taxonomy/graph/eval) always rebuild over all cells** — they
+  must, to merge. Taxonomy cost is bounded by its fingerprint cache (D-DRAFT-9);
+  graph is cheap; the vectorstore is per-cell, so only new cells embed.
+
+Full and incremental are the **same command** — `run_cli --start extract --end
+graph` (or `--end vectorstore`): full builds all cells; incremental skips
+unchanged cells, builds only the new one, and rebuilds the global graph/taxonomy
+over the union.
+
+**Why:** Cell-presence + fingerprint is the state (no separate DB). One command
+for both cases replaces the scratch-env-and-copy workaround in
+`mno-b-spec.md`. Fingerprinting the **substituted** profile (not file mtime)
+catches profile/mapping edits safely. Per-cell vectorstore means incremental
+**embedding** falls out for free (only the new cell's store builds). Rejected: a
+processed-docs state DB (redundant with on-disk cells); mtime-only skip (misses
+mapping edits); incremental global graph (correctness risk; rebuild is cheap).
+
+**Consequences:**
+- `RequirementTree` gains `profile_fingerprint` (additive, serialized).
+- Per-cell stages gain skip + `--mno` / `--release` / `--force`; global stages
+  always run full.
+- Supersedes the scratch-env workaround (the `mno-b-spec.md` runbook is updated at
+  implementation time).
+
+---
+
+## D-DRAFT-9 — Global taxonomy + corpus-fingerprint cache + temperature=0
+
+**Context:** `taxonomy` is the one global stage that is LLM-driven, expensive, and
+**non-deterministic** (standing STATUS flag — a 3-run accuracy spread traced to
+taxonomy producing different feature mappings → graph-topology shifts). With
+incremental ingestion (D-DRAFT-8) every new-cell add would otherwise re-derive
+over all cells. Yet a **single union** taxonomy is wanted: shared cross-MNO
+features are what make comparison queries answerable (chosen over per-cell
+taxonomy, which would need fuzzy cross-cell feature alignment).
+
+**Decision:** Keep **one global** taxonomy (`out/taxonomy/taxonomy.json`) derived
+over **all** cells, gated on a **corpus fingerprint** (hash of the contributing
+tree set): reuse the cached taxonomy when the set is unchanged; re-derive over the
+union only when it changes; run the LLM at **temperature=0**.
+
+**Why:** A union taxonomy gives the shared feature space the global graph links
+every cell's reqs to — so "compare VZW-OA vs TMO on IMS registration" works
+without feature alignment. The fingerprint cache makes incremental adds cheap and
+stops silent feature drift on unrelated adds; temp=0 makes a forced re-derivation
+reproducible. Rejected: per-cell taxonomy + merge (loses shared features, adds a
+fuzzy alignment problem); always re-derive (cost + non-determinism); dropping
+union taxonomy (breaks comparison queries).
+
+**Consequences:**
+- `run_taxonomy` gains a corpus-fingerprint check + cache; the taxonomy LLM call
+  is temp=0.
+- Incremental runs that don't change the tree set skip the taxonomy LLM entirely;
+  `--skip-taxonomy` / `--rag-only` remain valid escapes.
+- A deliberate re-derivation (prompt change) needs a cache-bust flag rather than
+  manual file deletion.
+- Resolves the standing taxonomy-non-determinism STATUS flag for the multi-MNO
+  path.
+
+---
+
+## D-DRAFT-10 — MNO-scoping is structural via per-cell resolve; cross-cell relations live in the global graph
+
+**Context:** D-DRAFT-6 runs `resolve` per cell (`out/resolve/<mno>/<rel>/`) over
+only that cell's trees. Cross-plan references are id-shaped
+(`<PREFIX>-<PLAN>-<NUM>` / `<MNO>_REQ_<PLAN>_<NUM>`) and plan codes / numbers are
+**not** globally unique across MNOs or releases — two cells can carry the same
+plan or number.
+
+**Decision:** Cross-reference resolution is **structurally cell-scoped** — the
+resolver runs per cell over that cell's trees, so it can never match a reference
+across MNOs or releases. No explicit mno-filter in resolver code is needed; the
+per-cell layout enforces it. **Cross-cell relationships** (release-diff, shared
+features, cross-MNO comparison) are **not** resolver concerns — they live in the
+**global graph**. **Assumption:** cross-references stay within a `(mno, release)`
+cell; if a release ever cites a *prior* release of the same MNO, resolve would
+widen to per-MNO-across-release (flagged here, not built).
+
+**Why:** Per-cell resolve makes the multi-MNO no-leak property a **layout
+invariant** rather than resolver code that could regress. Clean separation:
+intra-cell cross-refs = `resolve`; inter-cell relations = `graph`. Replaces the
+earlier "add an mno filter to the resolver candidate set" decision (now
+unnecessary). Rejected: global resolve + mno filter (more code, regressable);
+assuming globally-unique ids (false across cells).
+
+**Consequences:**
+- `resolve` becomes a per-cell loop (no resolver-internal change beyond running
+  per directory).
+- New test: same plan/number present in two cells resolve independently (no leak).
+- The **cross-release-reference** assumption is a watch item — revisit if a corpus
+  is found to cite across releases of one MNO.
+
+---
+
+## D-DRAFT-11 — Per-cell vectorstore + NORA query-side cell routing & fusion
+
+**Context:** D-DRAFT-6 makes `vectorstore` per cell
+(`out/vectorstore/<mno>/<rel>/`). NORA's query pipeline today loads **one**
+ChromaDB collection and builds an in-memory BM25 over the whole store. Per-cell
+stores isolate BM25 IDF / DF statistics (the dense component is
+statistics-agnostic) and enable balanced fusion for cross-MNO comparison and
+release-diff — mirroring SIRA D-DRAFT-3 (per-cell index) + D-DRAFT-4 (composite
+identity) + D-DRAFT-7 (runtime cell-dict).
+
+**Decision:** Build **one vector store + BM25 per cell**. The NORA query pipeline
+becomes **cell-aware**: resolve query scope → select target cell(s) → retrieve per
+cell → merge into one candidate pool keyed on the **composite
+`(mno, release, chunk_id)`** (chunk ids stay cell-local) → rerank → synthesize.
+The global graph supplies scope / candidate routing (which cells + plans);
+per-cell stores supply retrieval. "Latest release" / release-diff resolve
+structurally over cell order (MMMYYYY).
+
+**Why:** Per-cell isolates BM25 statistics (avoids the cross-cell IDF blending
+that buries the low-frequency release-diff signal — SIRA D-DRAFT-3 rationale,
+which applies to NORA's BM25-hybrid component); the composite identity keeps R2's
+and R3's same `req_id` distinct (citation + release-diff need this — SIRA
+D-DRAFT-4); and it mirrors SIRA's runtime cell-dict so the two systems share one
+model. Rejected: single store + `(mno,release)` metadata filter (simpler, but
+blends BM25 statistics and gives no structural release-diff — diverges from SIRA);
+per-MNO store (loses the release axis).
+
+**Consequences:**
+- **This expands the strand into the query side.** `vectorstore` builds per cell;
+  the `query` pipeline gains scope → cell-select → per-cell retrieve → merge →
+  rerank, threading `(mno, release)` on every retrieved chunk (a path that drops
+  the cell tag silently corrupts comparison answers); BM25 is built per cell;
+  query/service startup scales with cell count.
+- Unblocks the deferred `QueryType.COMPARISON`.
+- `eval` becomes cell-aware (consumes per-cell stores) though its output stays
+  global.
+- Larger surface than ingestion alone — **sequence after the ingestion decisions
+  (D-DRAFT-6..10) land.**
+
+---
+
+## D-DRAFT-12 — SIRA adapter reads nested `out/parse/<mno>/<rel>/`
+
+**Context:** The SIRA adapter (`sandbox/adapter/nora_to_beir.py`) discovers NORA
+parse output via `_load_trees` globbing `<env>/out/parse/*_tree.json` (flat).
+D-DRAFT-6 nests parse output to `out/parse/<mno>/<rel>/*_tree.json`.
+
+**Decision:** Update the adapter's `_load_trees` to walk the **nested**
+`out/parse/<mno>/<rel>/*_tree.json` layout. The adapter's downstream `(mno,
+release)` partitioning + `--multi-cell` cell emission are unchanged (trees still
+carry mno/release) — only the discovery glob changes.
+
+**Why:** The layout change is a NORA-side decision (D-DRAFT-6) that the SIRA
+adapter consumes; they must move in lockstep or the adapter silently reads zero
+trees. Walking the nested dirs is also more direct (the cell *is* the directory).
+Rejected: keeping parse output flat just for the adapter (defeats D-DRAFT-6's
+per-cell layout); a shim globbing both layouts (carries the old layout forward
+needlessly once NORA migrates).
+
+**Consequences:**
+- Cross-strand lockstep change — landing D-DRAFT-6 requires this adapter update in
+  the same migration.
+- `sandbox/adapter` stays informal (no MODULE.md, SIRA D-DRAFT-8); track via the
+  SIRA journal. The `multi-mno-sira` strand should note the coupling.
