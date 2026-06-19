@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-05-13 by regen-map. Do not hand-edit.
+Generated 2026-06-19 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -131,7 +131,8 @@ nora/
 │   │   │   ├── __init__.py
 │   │   │   ├── config.py                              # Environment configuration for multi-user pipeline workflows.
 │   │   │   ├── env_cli.py                             # CLI for environment management.
-│   │   │   └── MODULE.md
+│   │   │   ├── MODULE.md
+│   │   │   └── profile_bindings.py                    # Per-cell profile binding (D-DRAFT-7).
 │   │   ├── eval/                                      # Evaluation framework for the query pipeline.
 │   │   │   ├── __init__.py
 │   │   │   ├── eval_cli.py                            # CLI for the evaluation framework (PoC Step 11).
@@ -147,6 +148,7 @@ nora/
 │   │   │   ├── MODULE.md
 │   │   │   ├── pdf_extractor.py                       # PDF content extractor using pymupdf (text + images) and pdfplumber (tables).
 │   │   │   ├── registry.py                            # Extractor registry — maps file extensions to format-specific extractors.
+│   │   │   ├── release_key.py                         # MMMYYYY release-label convention — parse, validate, order.
 │   │   │   └── xlsx_extractor.py                      # XLSX content extractor using openpyxl.
 │   │   ├── graph/                                     # Unified Knowledge Graph construction (TDD §5.8, D-002).
 │   │   │   ├── __init__.py
@@ -179,6 +181,7 @@ nora/
 │   │   │   └── user_annotations.py                    # Apply user-driven `remove` annotations to a DocumentIR before parse [D-061].
 │   │   ├── pipeline/                                  # Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract → profile → parse → resolve → taxonomy → standards → graph → vectorstore → eval`.
 │   │   │   ├── __init__.py
+│   │   │   ├── cells.py                               # (MNO, release) cell primitives for the NORA pipeline (D-DRAFT-6).
 │   │   │   ├── error_codes.py                         # Structured error codes for all pipeline stages.
 │   │   │   ├── MODULE.md
 │   │   │   ├── report.py                              # Pipeline report generation.
@@ -368,6 +371,8 @@ nora/
 │       ├── test_patterns.py                           # Tests for regex patterns used across extraction, profiling, and parsing.
 │       ├── test_pdf_extractor_strike.py               # Unit tests for PDF strike-detection geometry helpers (FR-33 [D-031]).
 │       ├── test_pipeline.py                           # Pipeline smoke tests — extract, profile, and parse real PDFs.
+│       ├── test_pipeline_cells.py                     # Tests for the pipeline (MNO, release) cell substrate (D-DRAFT-6).
+│       ├── test_profile_bindings.py                   # Tests for per-cell profile binding (D-DRAFT-7).
 │       ├── test_profile_schema.py                     # Tests for DocumentProfile serialize/deserialize round-trip.
 │       ├── test_profile_substitute.py                 # Tests for profile placeholder substitution [D-062].
 │       ├── test_query.py                              # Tests for the query pipeline (PoC Step 10).
@@ -378,9 +383,11 @@ nora/
 │       ├── test_query_reranker.py                     # Tests for `core/src/query/reranker.py` — cross-encoder reranker
 │       ├── test_query_rewriter.py                     # Tests for `core/src/query/rewriter.py` — pre-retrieval query expansion.
 │       ├── test_query_threshold.py                    # Tests for the relevance threshold filter in QueryPipeline (Stage 4.5).
+│       ├── test_release_key.py                        # Tests for the MMMYYYY release-label convention (D-DRAFT-6).
 │       ├── test_reference_list.py                     # Tests for reference_list extraction [D-059, D-061].
 │       ├── test_resolver.py                           # Tests for the cross-reference resolver.
 │       ├── test_revhist_omission.py                   # FR-34 revision-history omission — profiler detection + parser drop.
+│       ├── test_stages_per_cell.py                    # Per-cell stage routing tests (D-DRAFT-6/7/10).
 │       ├── test_strike_runs.py                        # Tests for the unified strike model [D-060].
 │       ├── test_standards.py                          # Tests for the standards ingestion pipeline (Step 7).
 │       ├── test_structural_parser_headings.py         # Tests for the numbering-driven heading classification contract.

@@ -375,3 +375,52 @@
   multi-release ingested + verified).
 - #4 ancestor-chain ambiguity now resolved: `5 → 5.1 → 5.1.2 → 5.1.2.3`
   (the "5.1.3" was a sibling typo) — confirmed by the user this session.
+
+## 2026-06-19 — Implement multi-MNO ingestion (D-DRAFT-6..10, 12)
+
+### Done this session
+- **Designed then implemented** the per-cell multi-MNO ingestion pipeline.
+  Design first (decisions-draft D-DRAFT-6..12 + `multi-mno-ingestion-design.md`
+  + SIRA cross-strand note), then 8 implementation commits (all pushed):
+  - **D-DRAFT-6** — `core/src/extraction/release_key.py` (MMMYYYY core util,
+    mirrors `sandbox/sira_cells.py`); `infer_metadata_from_path` enforces it
+    fail-loud (`EXT-E004`). `core/src/pipeline/cells.py` (`Cell`, per-cell/global
+    stage partition, `enumerate_input_cells`, cell-aware `stage_output`). Per-cell
+    stage I/O: `run_extract` routes IRs to `out/extract/<mno>/<rel>/`, `run_parse`
+    writes per-cell trees; global readers (taxonomy, graph/vectorstore builders,
+    standards collector, req-browser, SIRA adapter) → `rglob`. [10f3aa9, 28866a0, faa5612]
+  - **D-DRAFT-7** — `core/src/env/profile_bindings.py` (`ProfileBindings` +
+    `<env_dir>/profiles.json`); `run_profile` resolves/substitutes/materializes
+    per-cell `profile.json`, fail-loud (`PIP-E003`) on uncovered cells,
+    auto-profiler removed; `run_parse` reads materialized profile raw. [3d9bf49, faa5612]
+  - **D-DRAFT-8** — `--mno`/`--release`/`--force` scope + `profile_fingerprint`
+    skip (extract mtime, parse fingerprint+mtime); `RequirementTree.profile_fingerprint`. [6072d65]
+  - **D-DRAFT-9** — taxonomy corpus-fingerprint cache (`out/taxonomy/.corpus_fingerprint`);
+    temp=0 was ALREADY in `FeatureExtractor`, only the cache was new. [e383e25]
+  - **D-DRAFT-10** — `run_resolve` per-cell → structural mno-scoping (no resolver
+    code change). [faa5612]
+  - **D-DRAFT-12** — SIRA adapter `_load_trees` rglobs nested `out/parse/<mno>/<rel>/`. [faa5612]
+- Both ingestion cases work end-to-end: full (`--start extract --end graph` +
+  `profiles.json`) and incremental (same command, auto-skip; or `--mno <new>`).
+- ~80 new tests; full suite 1356 passed. MODULE.md updated (extraction, pipeline,
+  env, resolver, parser) — all additive.
+- Earlier in session: D-DRAFT-5 rework follow-through, STATUS strand pointer,
+  mno-b-spec SIRA-ingest runbook.
+
+### In progress
+- (none — ingestion design fully implemented + pushed)
+
+### Next
+- **D-DRAFT-11** — per-cell vectorstore + NORA query-side cell routing/fusion
+  (the only unimplemented decision; large, query-side; sequenced last).
+- **OA → `VZW-OA/Feb2026` migration** (work-PC data op) + real end-to-end
+  validation of the per-cell pipeline on the work corpus.
+
+### Flags
+- **Stage funcs aren't exercised by the existing integration tests** (which call
+  the parser directly), so the per-cell `run_*` chain is unit-tested on tiny
+  fixtures but NOT validated end-to-end on real PDFs — do that on the work PC.
+- D-DRAFT-9 temp=0 was pre-existing; only the fingerprint cache is new (noted so
+  the STATUS taxonomy-non-determinism flag isn't assumed fully closed).
+- D-DRAFT-1..12 all unlanded; landing gate stands (full + incremental ingest
+  verified on a real multi-MNO/release set, cross-MNO no-leak confirmed).

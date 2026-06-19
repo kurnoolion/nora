@@ -4,7 +4,7 @@
 
 **Active phase**: architecture
 **Last updated**: 2026-06-18
-**Last drift-check**: 2026-05-14 — mode: dev-full — 4 drift(s) resolved (all direction [a]: MODULE.md → match code across models / extraction / parser / profiler), 0 deferred surfaced
+**Last drift-check**: 2026-06-19 — mode: dev-full — 0 drifts resolved (session-touched modules extraction/pipeline/env/parser/resolver all aligned; new imports within already-declared dependency edges), 0 deferred surfaced
 
 ## Done
 
