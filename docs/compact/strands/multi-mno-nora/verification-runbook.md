@@ -17,6 +17,7 @@ What this exercises:
 - **D-DRAFT-8** — incremental skip + `--mno`/`--release`/`--force`.
 - **D-DRAFT-9** — global taxonomy fingerprint cache.
 - **D-DRAFT-10** — cross-MNO no-leak in resolve.
+- **D-DRAFT-11** — per-cell vectorstore + cell-routed query (merge-then-rerank).
 - **D-DRAFT-12** — SIRA adapter reads the nested layout.
 
 ---
@@ -130,7 +131,44 @@ for x in "$ENV"/out/resolve/*/*/*_xrefs.json; do echo "$x"; done
 
 ---
 
-## D. SIRA adapter reads the nested layout (D-DRAFT-12)
+## D. Per-cell vectorstore + cell-routed query (D-DRAFT-11)
+
+```bash
+# D1. build per-cell vectorstores + run eval (eval now loads per-cell stores)
+python -m core.src.pipeline.run_cli --env-dir "$ENV" --start vectorstore --end eval
+
+# D2. one ChromaDB per cell
+ls -d "$ENV"/out/vectorstore/*/*/                 # VZW-OA/Feb2026/, <MNO-B>/<rel>/
+ls "$ENV"/out/vectorstore/*/*/config.json
+
+# D3. cell-routed query — single cell vs cross-MNO merge
+python -m core.src.query.query_cli \
+  --graph "$ENV"/out/graph/knowledge_graph.json \
+  --vectorstore-dir "$ENV"/out/vectorstore \
+  --query "<a VZW-OA-specific question>" -v
+#   [Stage 4] retrieves from the VZW-OA cell only (single-cell path; no merge line)
+
+python -m core.src.query.query_cli \
+  --graph "$ENV"/out/graph/knowledge_graph.json \
+  --vectorstore-dir "$ENV"/out/vectorstore \
+  --query "<a cross-MNO question naming both MNOs>" -v
+#   [Stage 4] Multi-cell merge across 2 cells → pool N → top K
+#   answer cites requirements from BOTH MNOs
+```
+
+Checks:
+- **Per-cell stores:** `out/vectorstore/<mno>/<rel>/` exists per cell (own
+  ChromaDB) — retrieval statistics isolated per cell.
+- **Single-MNO query → one cell:** verbose log shows **no** "Multi-cell merge"
+  line; every result carries that MNO's metadata.
+- **Cross-MNO query → merge-then-rerank:** verbose log shows the merge line; the
+  top-K spans **both** MNOs.
+- **`eval` completes** against the per-cell stores (no flat-store "empty" error) —
+  proves the eval/query consumers are wired to `load_cell_stores`.
+
+---
+
+## E. SIRA adapter reads the nested layout (D-DRAFT-12)
 
 ```bash
 python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" \
@@ -155,6 +193,10 @@ ls -d "$DB"/*/raw/corpus.jsonl
       scopes; `--force` reprocesses; taxonomy hits cache when unchanged.
 - [ ] MMMYYYY fail-loud (EXT-E004); uncovered-cell fail-loud (PIP-E003).
 - [ ] Cross-MNO no-leak confirmed in resolve.
+- [ ] Per-cell vectorstores built (`out/vectorstore/<mno>/<rel>/` per cell); `eval`
+      runs against them end to end.
+- [ ] Query routing: single-MNO query hits one cell; cross-MNO query merges across
+      cells (merge-then-rerank) with top-K spanning both (D-DRAFT-11).
 - [ ] SIRA adapter emits one cell per (mno, release) from the nested layout.
 
 When all boxes are checked on the real two-MNO corpus, the strand is ready for
