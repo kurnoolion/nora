@@ -12,7 +12,8 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
   - `supported_extensions() -> set[str]`
   - `get_extractor(file_path) -> BaseExtractor` — extension-keyed lookup; raises `ValueError` on unsupported
   - `extract_document(file_path, mno, release, doc_type) -> DocumentIR`
-  - `infer_metadata_from_path(file_path) -> {mno, release, doc_type}` — walks the `<env_dir>/input/<MNO>/<release>/` convention (D-023); `doc_type` defaults to `"requirement"` (FR-26 deferred)
+  - `infer_metadata_from_path(file_path) -> {mno, release, doc_type}` — walks the `<env_dir>/input/<MNO>/<MMMYYYY>/` convention (D-023); `doc_type` defaults to `"requirement"` (FR-26 deferred). Enforces the MMMYYYY release convention fail-loud (`EXT-E004`) via `release_key` (D-DRAFT-6, strand `multi-mno-nora`)
+- `release_key.py` (D-DRAFT-6) — the `(MNO, release)` cell convention: `is_valid_release(release) -> bool` and `release_order_key(release) -> (year, month) | None` (soft checks); `release_key(release) -> (label, order_key)` (fail-loud validator, raises `ValueError`/`EXT-E004` on non-MMMYYYY); `RELEASE_RE`. Single core home for the convention (mirrors `sandbox/sira_cells.py`, which reconciles onto it at multi-mno-sira land time)
 - `extract.main()` — CLI entrypoint (`python -m core.src.extraction.extract`)
 
 **Invariants**
@@ -36,6 +37,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - Header/footer detection uses vertical margin thresholds (`HEADER_MARGIN_PT=65`, `FOOTER_MARGIN_PT=50`) plus a regex allow-list of phrases that are always header/footer regardless of position.
 - Registry is an instance dict (`_EXTRACTORS`), not a class hierarchy — extractors are stateless; one instance per format.
 - Path-based metadata inference (`<env_dir>/input/<MNO>/<release>/file.ext` per D-023) avoids hardcoding per-MNO dispatch; a new MNO needs no code change.
+- **MMMYYYY release convention enforced at ingest** (D-DRAFT-6): `infer_metadata_from_path` validates a parsed (non-empty) release via `release_key` and raises `EXT-E004` on a non-MMMYYYY directory — the `(MNO, release)` cell key is the layout/ordering unit, so a mis-named release dir fails loud here rather than silently mis-ordering downstream. Validation is at the path→metadata boundary only; `extract_document(release=…)` (explicit-arg API) is unvalidated, so unit tests can pass arbitrary release labels. Empty release (path didn't carry the convention) is left to the caller, not raised here.
 - XLSX strategy is one heading + one table per worksheet — minimal but lets the profiler still cluster headings by font size and the parser still see structured rows.
 - Strikeout detected per format. Whole-table and paragraph strikes are marked via `font_info.strikethrough` and dropped by the parser (the corrections workflow can override `profile.ignore_strikeout` without re-extracting) [D-031]. **Exception**: PDF table rows with cell-level strikes (per-word strike segments inside specific cells, common in OA cross-reference tables) are dropped at extract time from the table's `rows` list — the IR has no per-row strike state to preserve and the alternative (mark + parser-side drop) would require a schema extension. If all data rows drop, the table is marked `strikethrough=True` so the parser drops the now-empty remnant via the existing FR-33 path [D-036]. DOCX/XLSX continue to mark, not drop.
 

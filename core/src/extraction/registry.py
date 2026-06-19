@@ -7,6 +7,7 @@ from pathlib import Path
 from core.src.extraction.base import BaseExtractor
 from core.src.extraction.docx_extractor import DOCXExtractor
 from core.src.extraction.pdf_extractor import PDFExtractor
+from core.src.extraction.release_key import release_key
 from core.src.extraction.xlsx_extractor import XLSXExtractor
 from core.src.models.document import DocumentIR
 
@@ -51,8 +52,14 @@ def infer_metadata_from_path(
 ) -> dict[str, str]:
     """Infer mno and release from folder structure (D-023, FR-30).
 
-    Expected layout: <env_dir>/input/<MNO>/<release>/filename.ext
-    e.g., /data/vzw-feb2026/input/VZW/Feb2026/LTEDATARETRY.pdf
+    Expected layout: <env_dir>/input/<MNO>/<MMMYYYY>/filename.ext
+    e.g., /data/vzw-feb2026/input/VZW-OA/Feb2026/LTEDATARETRY.pdf
+
+    The release directory follows the MMMYYYY convention (D-DRAFT-6 — the
+    `(MNO, release)` cell key, mirroring multi-mno-sira D-DRAFT-5). A
+    non-conforming release is rejected **fail-loud here** (`EXT-E004`) via
+    `release_key`, so a mis-named directory is caught at ingest rather than
+    silently mis-ordered downstream.
 
     `doc_type` defaults to "requirement" — v1 has only requirements docs;
     FR-26 (test-case parser) is deferred.
@@ -70,5 +77,12 @@ def infer_metadata_from_path(
         # Fallback when no "input" anchor: assume last two dirs are MNO/release.
         metadata["release"] = parts[-2]
         metadata["mno"] = parts[-3].upper()
+
+    # D-DRAFT-6: enforce the MMMYYYY release convention at the ingest
+    # boundary. Validate only a parsed (non-empty) release — an empty
+    # release means the path didn't carry the convention at all, a
+    # separate layout problem the caller surfaces.
+    if metadata["release"]:
+        release_key(metadata["release"])  # raises ValueError (EXT-E004) on non-MMMYYYY
 
     return metadata
