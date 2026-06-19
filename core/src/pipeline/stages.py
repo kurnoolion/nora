@@ -368,6 +368,24 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
 # Stage 5: taxonomy
 # ---------------------------------------------------------------------------
 
+def _corpus_fingerprint(tree_files: list[Path], parse_dir: Path) -> str:
+    """Hash of the contributing tree set (D-DRAFT-9).
+
+    Captures additions, removals, and edits — each tree's path (relative to
+    `parse_dir`, so it's cell-stable) plus a hash of its bytes. A change in
+    any tree flips the fingerprint and busts the taxonomy cache.
+    """
+    h = hashlib.sha256()
+    for f in sorted(tree_files):
+        try:
+            rel = f.relative_to(parse_dir).as_posix()
+        except ValueError:
+            rel = f.name
+        h.update(rel.encode("utf-8"))
+        h.update(hashlib.sha256(f.read_bytes()).digest())
+    return h.hexdigest()[:16]
+
+
 def run_taxonomy(ctx: PipelineContext) -> StageResult:
     """Extract feature taxonomy from parsed trees."""
     t0 = time.time()
@@ -393,9 +411,6 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     except ImportError as e:
         return _fail(stage, "TAX-E001", f"Import error: {e}", time.time() - t0)
 
-    # Create LLM provider
-    llm = ctx.create_llm_provider()
-
     parse_dir = ctx.stage_output("parse")
     # rglob: taxonomy is a GLOBAL stage — it derives ONE union feature set
     # over every cell's trees (D-DRAFT-9), so it reads nested per-cell trees.
@@ -403,6 +418,24 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     if not tree_files:
         return _fail(stage, "PIP-E002", f"No tree files in {parse_dir}", time.time() - t0)
 
+    # D-DRAFT-9: corpus-fingerprint cache. The taxonomy is LLM-derived,
+    # expensive, and non-deterministic across runs — so re-derive the (global,
+    # union) taxonomy only when the contributing tree set changed; otherwise
+    # reuse the cached taxonomy.json. `--force` busts the cache.
+    taxonomy_path = out_dir / "taxonomy.json"
+    fp_path = out_dir / ".corpus_fingerprint"
+    corpus_fp = _corpus_fingerprint(tree_files, parse_dir)
+    if (not ctx.force and taxonomy_path.exists() and fp_path.exists()
+            and fp_path.read_text(encoding="utf-8").strip() == corpus_fp):
+        ctx.state["taxonomy_path"] = str(taxonomy_path)
+        return StageResult(
+            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
+            stats={"source": "cache", "trees": len(tree_files)},
+        )
+
+    # Create LLM provider (extraction runs at temperature=0 — see
+    # FeatureExtractor — for reproducible feature mappings).
+    llm = ctx.create_llm_provider()
     extractor = FeatureExtractor(llm)
     all_doc_features = []
 
@@ -415,11 +448,12 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
 
     consolidator = TaxonomyConsolidator()
     taxonomy = consolidator.consolidate(all_doc_features)
-    taxonomy_path = out_dir / "taxonomy.json"
     taxonomy.save_json(taxonomy_path)
+    # D-DRAFT-9: stamp the corpus fingerprint so an unchanged re-run hits cache.
+    fp_path.write_text(corpus_fp, encoding="utf-8")
 
     ctx.state["taxonomy_path"] = str(taxonomy_path)
-    stats = {"features": len(taxonomy.features), "docs": len(all_doc_features)}
+    stats = {"features": len(taxonomy.features), "docs": len(all_doc_features), "source": "derived"}
     return StageResult(stage=stage, status="OK", elapsed_seconds=time.time() - t0, stats=stats)
 
 

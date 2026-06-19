@@ -13,7 +13,8 @@ from pathlib import Path
 
 from core.src.models.document import DocumentIR
 from core.src.pipeline.runner import PipelineContext
-from core.src.pipeline.stages import run_parse, run_profile, run_resolve
+from core.src.pipeline.stages import run_parse, run_profile, run_resolve, run_taxonomy
+from core.src.parser.structural_parser import Requirement, RequirementTree
 from core.src.profiler.profile_schema import DocumentProfile
 
 CELLS = [("MNO-A", "Feb2026"), ("MNO-B", "Mar2025")]
@@ -131,6 +132,39 @@ class TestCellScopeInStages:
         assert res.stats["cells"] == 1
         assert (env / "out" / "profile" / "MNO-B" / "Mar2025" / "profile.json").is_file()
         assert not (env / "out" / "profile" / "MNO-A").exists()
+
+
+class TestTaxonomyCache:
+    """D-DRAFT-9 — global taxonomy corpus-fingerprint cache."""
+
+    def _seed_tree(self, env: Path, mno: str, rel: str, plan: str) -> None:
+        d = env / "out" / "parse" / mno / rel
+        d.mkdir(parents=True, exist_ok=True)
+        RequirementTree(
+            mno=mno, release=rel, plan_id=plan,
+            requirements=[Requirement(req_id=f"{plan}-1", title="T",
+                                      text="Device shall support X.")],
+        ).save_json(d / f"{plan}_tree.json")
+
+    def test_cache_hit_on_unchanged_corpus(self, tmp_path):
+        self._seed_tree(tmp_path, "MNO-A", "Feb2026", "PLANX")
+        ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+        assert run_taxonomy(ctx).stats["source"] == "derived"
+        assert run_taxonomy(ctx).stats["source"] == "cache"
+
+    def test_cache_busted_on_new_tree(self, tmp_path):
+        self._seed_tree(tmp_path, "MNO-A", "Feb2026", "PLANX")
+        ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+        run_taxonomy(ctx)
+        self._seed_tree(tmp_path, "MNO-B", "Mar2025", "PLANY")  # add a cell tree
+        assert run_taxonomy(ctx).stats["source"] == "derived"
+
+    def test_force_busts_cache(self, tmp_path):
+        self._seed_tree(tmp_path, "MNO-A", "Feb2026", "PLANX")
+        ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+        run_taxonomy(ctx)
+        ctx.force = True
+        assert run_taxonomy(ctx).stats["source"] == "derived"
 
 
 class TestProfileCoverageFailLoud:
