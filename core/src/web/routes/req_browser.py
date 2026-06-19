@@ -32,7 +32,8 @@ def _list_docs(env_dir_path: Path) -> list[str]:
     d = _parse_dir(env_dir_path)
     if not d.is_dir():
         return []
-    return sorted(p.stem.replace("_tree", "") for p in d.glob("*_tree.json"))
+    # rglob: per-cell layout nests trees at out/parse/<mno>/<rel>/ (D-DRAFT-6).
+    return sorted(p.stem.replace("_tree", "") for p in d.rglob("*_tree.json"))
 
 
 # ---------------------------------------------------------------------------

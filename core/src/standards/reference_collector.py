@@ -226,7 +226,10 @@ class StandardsReferenceCollector:
         if explicit:
             return explicit
         if directory and directory.exists():
-            return sorted(directory.glob(glob_pattern))
+            # rglob: parse trees + resolve manifests nest per cell under
+            # out/<stage>/<mno>/<rel>/ (D-DRAFT-6/10); recursive find also
+            # matches the legacy flat layout.
+            return sorted(directory.rglob(glob_pattern))
         return []
 
 

@@ -70,7 +70,12 @@ def _load_trees(env_dir: Path) -> list[dict[str, Any]]:
             f"No parse output at {parse_dir} — run the parse stage first."
         )
     trees: list[dict[str, Any]] = []
-    for p in sorted(parse_dir.glob("*_tree.json")):
+    # rglob: NORA's per-cell layout nests parse output at
+    # out/parse/<mno>/<rel>/*_tree.json (D-DRAFT-12); recursive find also
+    # matches the legacy flat layout. Trees still carry mno/release, so the
+    # adapter's (mno, release) partitioning + --multi-cell emission are
+    # unchanged.
+    for p in sorted(parse_dir.rglob("*_tree.json")):
         with open(p, "r", encoding="utf-8") as f:
             trees.append(json.load(f))
     return trees

@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.src.pipeline.cells import Cell
+
 if TYPE_CHECKING:
     from core.src.pipeline.runner import PipelineContext
 
@@ -74,13 +76,19 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     ir_paths: list[str] = []
 
     for f in files:
+        # infer_metadata_from_path enforces the MMMYYYY cell convention
+        # fail-loud (EXT-E004); a mis-named release dir aborts the stage here.
         metadata = infer_metadata_from_path(f)
         try:
             ir = extract_document(
                 f, mno=metadata["mno"], release=metadata["release"],
                 doc_type=metadata["doc_type"],
             )
-            out_path = out_dir / f"{f.stem}_ir.json"
+            # D-DRAFT-6: route each IR to its (mno, release) cell directory
+            # out/extract/<mno>/<rel>/.
+            cell_dir = ctx.stage_output(stage, Cell(metadata["mno"], metadata["release"]))
+            cell_dir.mkdir(parents=True, exist_ok=True)
+            out_path = cell_dir / f"{f.stem}_ir.json"
             ir.save_json(out_path)
             ir_paths.append(str(out_path))
             stats["docs"] += 1
@@ -105,73 +113,67 @@ def run_extract(ctx: PipelineContext) -> StageResult:
 # ---------------------------------------------------------------------------
 
 def run_profile(ctx: PipelineContext) -> StageResult:
-    """Create or load document profile."""
+    """Resolve + materialize each cell's parse profile (D-DRAFT-7).
+
+    Per cell, the profile is resolved from `<env_dir>/profiles.json` (or the
+    `--profile` / corrections override applied to every cell), placeholder-
+    substituted, and written to `out/profile/<mno>/<rel>/profile.json` for the
+    parse stage. No auto-profiling — an uncovered cell fails loud (PIP-E003),
+    because these corpora use hand-authored profiles.
+    """
     t0 = time.time()
     stage = "profile"
-    out_dir = ctx.stage_output(stage)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    profile_out = out_dir / "profile.json"
 
-    # Explicit --profile <path> override (set by PipelineContext.standalone
-    # when the CLI gets --profile). Short-circuit the stage entirely:
-    # copy the supplied profile into the standard location so downstream
-    # stages find it where they expect, but don't run the profiler and
-    # don't honor the corrections/profile.json overlay (the CLI flag is
-    # the authoritative choice when it's set).
-    explicit_profile = ctx.state.get("profile_path")
-    if explicit_profile and Path(explicit_profile).exists() and Path(explicit_profile) != profile_out:
-        shutil.copy2(explicit_profile, profile_out)
-        ctx.state["profile_path"] = str(profile_out)
-        return StageResult(
-            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
-            stats={"source": "explicit --profile", "path": str(explicit_profile)},
-            warnings=[],
-        )
+    cells = ctx.input_cells()
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"No input cells under {ctx.documents_dir} "
+                     f"(expected input/<MNO>/<MMMYYYY>/)", time.time() - t0)
 
-    # Check for correction override
-    correction = ctx.correction("profile.json")
-    if correction:
-        shutil.copy2(correction, profile_out)
-        ctx.state["profile_path"] = str(profile_out)
-        return StageResult(
-            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
-            stats={"source": "correction", "path": str(correction)},
-            warnings=["TAX-W002: Using correction file for profile"],
-        )
+    # `--profile` (CLI) or corrections/profile.json act as a single-profile
+    # override applied to every cell (single-MNO back-compat / wildcard).
+    override = ctx.state.get("profile_path")
+    if not override:
+        correction = ctx.correction("profile.json")
+        if correction:
+            override = str(correction)
 
     try:
-        from core.src.models.document import DocumentIR
-        from core.src.profiler.profiler import DocumentProfiler
+        from core.src.env.profile_bindings import load_profile_bindings
+        from core.src.profiler.profile_substitute import load_substituted_profile
     except ImportError as e:
         return _fail(stage, "PRF-E001", f"Import error: {e}", time.time() - t0)
 
-    # Load extracted IRs
-    extract_dir = ctx.stage_output("extract")
-    ir_files = sorted(extract_dir.glob("*_ir.json"))
-    if not ir_files:
-        return _fail(stage, "PIP-E002", f"No IR files in {extract_dir}", time.time() - t0)
+    # <env_dir>/out/profile -> <env_dir>
+    env_dir = ctx.stage_output(stage).parent.parent
+    bindings = load_profile_bindings(env_dir, override=override)
 
-    docs = [DocumentIR.load_json(f) for f in ir_files]
-    profiler = DocumentProfiler()
-    profile = profiler.create_profile(docs, profile_name="auto")
-    profile.save_json(profile_out)
+    # Coverage check — fail loud listing every uncovered cell at once.
+    uncovered = bindings.uncovered(cells)
+    if uncovered:
+        miss = ", ".join(f"{m}/{r}" for m, r in uncovered)
+        return _fail(stage, "PIP-E003",
+                     f"No profile bound for: {miss}. Add bindings to "
+                     f"<env_dir>/profiles.json (or pass --profile).",
+                     time.time() - t0)
 
-    stats = {
-        "heading_levels": len(profile.heading_detection.levels),
-        "req_patterns": 1 if profile.requirement_id.pattern else 0,
-        "zones": len(profile.document_zones),
-        "docs_analyzed": len(docs),
-    }
+    stats = {"cells": 0}
+    for cell in cells:
+        profile_path = bindings.resolve(cell.mno, cell.release)
+        if not Path(profile_path).exists():
+            return _fail(stage, "PIP-E002",
+                         f"Bound profile not found for {cell.mno}/{cell.release}: "
+                         f"{profile_path}", time.time() - t0)
+        # Substitute placeholders ONCE here; parse reads the materialized
+        # profile raw (already substituted).
+        profile = load_substituted_profile(Path(profile_path), env_dir=env_dir)
+        cell_out = ctx.stage_output(stage, cell)
+        cell_out.mkdir(parents=True, exist_ok=True)
+        profile.save_json(cell_out / "profile.json")
+        stats["cells"] += 1
 
-    warnings: list[str] = []
-    if stats["heading_levels"] == 0:
-        warnings.append("PRF-E001: No heading patterns detected")
-    if stats["req_patterns"] == 0:
-        warnings.append("PRF-E002: No requirement ID patterns found")
-
-    ctx.state["profile_path"] = str(profile_out)
-    return StageResult(stage=stage, status="WARN" if warnings else "OK",
-                       elapsed_seconds=time.time() - t0, stats=stats, warnings=warnings)
+    return StageResult(stage=stage, status="OK",
+                       elapsed_seconds=time.time() - t0, stats=stats)
 
 
 # ---------------------------------------------------------------------------
@@ -179,91 +181,89 @@ def run_profile(ctx: PipelineContext) -> StageResult:
 # ---------------------------------------------------------------------------
 
 def run_parse(ctx: PipelineContext) -> StageResult:
-    """Parse extracted documents into requirement trees."""
+    """Parse each cell's IRs into requirement trees (D-DRAFT-6/7).
+
+    Per cell, loads the cell's materialized profile from
+    `out/profile/<mno>/<rel>/profile.json` (already placeholder-substituted by
+    the profile stage) and parses `out/extract/<mno>/<rel>/*_ir.json` into
+    `out/parse/<mno>/<rel>/*_tree.json`.
+    """
     t0 = time.time()
     stage = "parse"
-    out_dir = ctx.stage_output(stage)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         from core.src.models.document import DocumentIR
         from core.src.profiler.profile_schema import DocumentProfile
-        from core.src.profiler.profile_substitute import load_substituted_profile
         from core.src.parser.structural_parser import GenericStructuralParser
         from core.src.parser.user_annotations import apply_user_annotations
     except ImportError as e:
         return _fail(stage, "PRS-E001", f"Import error: {e}", time.time() - t0)
 
-    profile_path = ctx.state.get("profile_path") or str(ctx.stage_output("profile") / "profile.json")
-    if not Path(profile_path).exists():
-        return _fail(stage, "PIP-E002", f"Profile not found: {profile_path}", time.time() - t0)
-
-    # D-062: profiles for proprietary corpora carry placeholders in
-    # their regex strings (e.g. `<MNO0>_REQ_<PLAN>_\d+`); the matching
-    # mapping (placeholder → real value) lives outside the public repo
-    # — at customizations/mappings/<id>.json or, fallback,
-    # <env_dir>/state/cline-mapping.json. `load_substituted_profile`
-    # finds the mapping if one exists and applies it; profiles that
-    # already carry real values (e.g. vzw_oa_profile.json for the
-    # public corpus) are returned unchanged.
-    _env_dir = ctx.stage_output("parse").parent.parent
-    profile = load_substituted_profile(Path(profile_path), env_dir=_env_dir)
-    parser = GenericStructuralParser(profile)
-
-    extract_dir = ctx.stage_output("extract")
-    ir_files = sorted(extract_dir.glob("*_ir.json"))
-    if not ir_files:
-        return _fail(stage, "PIP-E002", f"No IR files in {extract_dir}", time.time() - t0)
+    cells = ctx.input_cells()
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"No input cells under {ctx.documents_dir}", time.time() - t0)
 
     stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0, "toc_pair_misses": 0, "frontmatter": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
-    # Per-doc parse summaries accumulated across the parse pass; emitted
-    # as the consolidated <env_dir>/reports/parse_summary.json at end of
-    # the stage for the Parse Review web UI to surface profile-detector
-    # gaps (revhist_sections=0 / glossary_sections=0 rows).
+    # Per-doc parse summaries accumulated across ALL cells; emitted as the
+    # consolidated <env_dir>/reports/parse_summary.json for the Parse Review UI.
     per_doc_summaries: list = []
-    # Derive env_dir from stage layout (works in both from_env and standalone mode).
     # ctx.stage_output("parse") == <env_dir>/out/parse → parent.parent == <env_dir>
-    _env_dir = ctx.stage_output("parse").parent.parent
+    _env_dir = ctx.stage_output(stage).parent.parent
     log_dir = _env_dir / "reports" / "parse_log"
     annotations_dir = _env_dir / "annotations"
 
-    for f in ir_files:
-        try:
-            doc = DocumentIR.load_json(f)
-            # D-061: apply user-driven `remove` annotations to the IR
-            # before parse. The remove machinery rides on D-060 strike
-            # rails — annotations get translated into in-IR strike marks
-            # so the parser's existing FR-33 cascade drops the content.
-            doc_id = Path(doc.source_file).stem
-            ann_path = annotations_dir / f"{doc_id}_annotations.json"
-            n_removes = apply_user_annotations(doc, ann_path)
-            if n_removes:
-                stats["user_removes"] += n_removes
-            tree = parser.parse(doc)
-            out_name = f.stem.replace("_ir", "_tree") + ".json"
-            out_path = out_dir / out_name
-            tree.save_json(out_path)
-            tree_paths.append(str(out_path))
-            if tree.parse_log is not None:
-                log_path = log_dir / f"{Path(doc.source_file).stem}_parse_log.json"
-                tree.parse_log.save_json(log_path)
-            stats["docs"] += 1
-            stats["reqs"] += len(tree.requirements)
-            depth = max((r.section_number.count(".") for r in tree.requirements), default=0) + 1
-            stats["max_depth"] = max(stats["max_depth"], depth)
-            stats["toc"] += tree.parse_stats.toc_blocks_dropped
-            stats["struck"] += tree.parse_stats.struck_blocks_dropped
-            stats["cascade"] += tree.parse_stats.cascade_blocks_dropped
-            stats["revhist"] += tree.parse_stats.revhist_blocks_dropped
-            stats["defs"] += tree.parse_stats.defs_extracted
-            stats["toc_pair_misses"] += tree.parse_stats.toc_pair_misses
-            stats["frontmatter"] += tree.parse_stats.frontmatter_blocks_dropped
-            if tree.parse_summary is not None:
-                per_doc_summaries.append(tree.parse_summary)
-        except Exception as e:
-            warnings.append(f"PRS-E001: {f.name}: {e}")
+    for cell in cells:
+        # Cell profile materialized (and substituted) by the profile stage.
+        profile_path = ctx.stage_output("profile", cell) / "profile.json"
+        if not profile_path.exists():
+            warnings.append(f"PIP-E002: no profile for {cell.mno}/{cell.release} "
+                            f"(run the profile stage first)")
+            continue
+        profile = DocumentProfile.load_json(profile_path)
+        parser = GenericStructuralParser(profile)
+
+        ir_files = sorted(ctx.stage_output("extract", cell).glob("*_ir.json"))
+        if not ir_files:
+            warnings.append(f"PIP-E002: no IRs for {cell.mno}/{cell.release}")
+            continue
+        cell_out = ctx.stage_output(stage, cell)
+        cell_out.mkdir(parents=True, exist_ok=True)
+
+        for f in ir_files:
+            try:
+                doc = DocumentIR.load_json(f)
+                # D-061: apply user `remove` annotations to the IR before parse.
+                doc_id = Path(doc.source_file).stem
+                ann_path = annotations_dir / f"{doc_id}_annotations.json"
+                n_removes = apply_user_annotations(doc, ann_path)
+                if n_removes:
+                    stats["user_removes"] += n_removes
+                tree = parser.parse(doc)
+                out_name = f.stem.replace("_ir", "_tree") + ".json"
+                out_path = cell_out / out_name
+                tree.save_json(out_path)
+                tree_paths.append(str(out_path))
+                if tree.parse_log is not None:
+                    log_path = log_dir / f"{Path(doc.source_file).stem}_parse_log.json"
+                    tree.parse_log.save_json(log_path)
+                stats["docs"] += 1
+                stats["reqs"] += len(tree.requirements)
+                depth = max((r.section_number.count(".") for r in tree.requirements), default=0) + 1
+                stats["max_depth"] = max(stats["max_depth"], depth)
+                stats["toc"] += tree.parse_stats.toc_blocks_dropped
+                stats["struck"] += tree.parse_stats.struck_blocks_dropped
+                stats["cascade"] += tree.parse_stats.cascade_blocks_dropped
+                stats["revhist"] += tree.parse_stats.revhist_blocks_dropped
+                stats["defs"] += tree.parse_stats.defs_extracted
+                stats["toc_pair_misses"] += tree.parse_stats.toc_pair_misses
+                stats["frontmatter"] += tree.parse_stats.frontmatter_blocks_dropped
+                if tree.parse_summary is not None:
+                    per_doc_summaries.append(tree.parse_summary)
+            except Exception as e:
+                warnings.append(f"PRS-E001: {f.name}: {e}")
 
     # Consolidated parse summary — feeds the Parse Review Summary tab.
     if per_doc_summaries:
@@ -303,24 +303,37 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
     except ImportError as e:
         return _fail(stage, "RES-E001", f"Import error: {e}", time.time() - t0)
 
-    parse_dir = ctx.stage_output("parse")
-    tree_files = sorted(parse_dir.glob("*_tree.json"))
-    if not tree_files:
-        return _fail(stage, "PIP-E002", f"No tree files in {parse_dir}", time.time() - t0)
-
-    trees = [RequirementTree.load_json(f) for f in tree_files]
-    resolver = CrossReferenceResolver(trees)
-    manifests = resolver.resolve_all()
+    cells = ctx.input_cells()
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"No input cells under {ctx.documents_dir}", time.time() - t0)
 
     stats = {"internal": 0, "cross_plan": 0, "standards": 0, "unresolved": 0}
-    for m in manifests:
-        out_path = out_dir / f"{m.plan_id}_xrefs.json"
-        m.save_json(out_path)
-        s = m.summary
-        stats["internal"] += s.resolved_internal
-        stats["cross_plan"] += s.resolved_cross_plan
-        stats["standards"] += s.resolved_standards
-        stats["unresolved"] += s.broken_internal
+    n_trees = 0
+    # D-DRAFT-10: resolve PER CELL — each cell's trees only. Cross-references
+    # therefore never match across MNOs or releases (plan codes/numbers aren't
+    # globally unique); cross-cell relations are the global graph's job.
+    for cell in cells:
+        cell_trees_dir = ctx.stage_output("parse", cell)
+        tree_files = sorted(cell_trees_dir.glob("*_tree.json"))
+        if not tree_files:
+            continue
+        n_trees += len(tree_files)
+        trees = [RequirementTree.load_json(f) for f in tree_files]
+        manifests = CrossReferenceResolver(trees).resolve_all()
+        cell_out = ctx.stage_output(stage, cell)
+        cell_out.mkdir(parents=True, exist_ok=True)
+        for m in manifests:
+            m.save_json(cell_out / f"{m.plan_id}_xrefs.json")
+            s = m.summary
+            stats["internal"] += s.resolved_internal
+            stats["cross_plan"] += s.resolved_cross_plan
+            stats["standards"] += s.resolved_standards
+            stats["unresolved"] += s.broken_internal
+
+    if n_trees == 0:
+        return _fail(stage, "PIP-E002",
+                     f"No tree files under {ctx.stage_output('parse')}", time.time() - t0)
 
     warnings: list[str] = []
     if stats["unresolved"] > 0:
@@ -363,7 +376,9 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     llm = ctx.create_llm_provider()
 
     parse_dir = ctx.stage_output("parse")
-    tree_files = sorted(parse_dir.glob("*_tree.json"))
+    # rglob: taxonomy is a GLOBAL stage — it derives ONE union feature set
+    # over every cell's trees (D-DRAFT-9), so it reads nested per-cell trees.
+    tree_files = sorted(parse_dir.rglob("*_tree.json"))
     if not tree_files:
         return _fail(stage, "PIP-E002", f"No tree files in {parse_dir}", time.time() - t0)
 

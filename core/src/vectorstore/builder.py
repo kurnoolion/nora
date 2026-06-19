@@ -252,7 +252,9 @@ class VectorStoreBuilder:
     @staticmethod
     def _load_trees(trees_dir: Path) -> list[dict]:
         trees = []
-        for path in sorted(trees_dir.glob("*_tree.json")):
+        # rglob: per-cell layout nests trees at out/parse/<mno>/<rel>/ (D-DRAFT-6);
+        # recursive find also matches the legacy flat layout.
+        for path in sorted(trees_dir.rglob("*_tree.json")):
             with open(path, "r", encoding="utf-8") as f:
                 trees.append(json.load(f))
         logger.info(f"Loaded {len(trees)} parsed trees from {trees_dir}")

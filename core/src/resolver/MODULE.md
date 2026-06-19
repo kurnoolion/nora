@@ -16,6 +16,7 @@ Deterministic cross-reference resolver (TDD §5.5, Methods 1 & 2). Walks every `
 
 **Invariants**
 - **LLM-free.** Method 3 (concept linking) is delegated to [taxonomy](../taxonomy/MODULE.md); this module stays deterministic and cheap to re-run.
+- **Caller scopes by cell** (D-DRAFT-10, strand `multi-mno-nora`): the resolver matches references only within the `RequirementTree` list it's constructed with. The pipeline (`run_resolve`) constructs one `CrossReferenceResolver` **per `(mno, release)` cell** over that cell's trees, so cross-plan references never match across MNOs/releases (plan codes/numbers aren't globally unique). The resolver itself is unchanged — the cell-scoping is a property of how it's fed; do not pass a multi-cell tree set if cross-cell isolation is required.
 - `RefStatus` has a precise three-way meaning:
   - `resolved` — target found in the corpus
   - `broken` — target *ID/section* is a valid shape but missing from the corpus (likely a typo or a removed requirement)
