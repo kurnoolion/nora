@@ -140,6 +140,98 @@ requirements by the **leading req_id**.
   no reliable per-span signal (color unavailable); the line-boundary fix already
   delivers the section hierarchy the synthesizer needs.
 
+## Runbook — parse, verify Context, ingest into SIRA
+
+Work-PC only (real corpus + mapping live there). `$ENV` = NORA env dir, `$DB` =
+SIRA db-root. Verifying the D-DRAFT-5 Context code **is** the SIRA ingest path —
+context is assembled at adapter emit time, so running the adapter and inspecting
+its rows is the verification.
+
+### Prereqs
+
+- `git pull origin main` includes the D-DRAFT-5 commit (`e4d0e92`).
+- MNO-B doc at `$ENV/input/<MNO>/<MMMYYYY>/<doc>.pdf` — the release dir **must**
+  be `MMMYYYY` (e.g. `Mar2025`) or `--multi-cell` fails loud. `<MNO>`/`<release>`
+  are inferred from this path and stamped on the tree.
+- `customizations/mappings/bs_5114ac92.json` maps `<MNO0>` → the real req_id
+  prefix (work-PC only; never pushed). Resolves via `_provenance.bootstrap_id`
+  even though the pipeline copies the profile to `out/profile/profile.json`.
+- For an MNO-B-only SIRA cell, use a dedicated `$ENV` (the adapter loads **all**
+  `out/parse/*_tree.json` and emits one cell per `(mno, release)`).
+
+### A. Parse + verify the tree
+
+```bash
+python -m core.src.pipeline.run_cli \
+  --env-dir "$ENV" --profile customizations/profiles/bs_5114ac92.json \
+  --start extract --end parse
+```
+
+```bash
+T=$ENV/out/parse/*_tree.json
+jq '{build_context, detection_mode}' $T
+#   expect {"build_context":"path_and_content","detection_mode":"leading_id_body"}
+jq '{n_sections:([.requirements[]|select((.section_number//"")!="")]|length),
+     n_reqs:    ([.requirements[]|select((.req_id//"")!="")]|length)}' $T
+jq '[.requirements[]|select((.req_id//"")!="")][0]
+    | {req_id, section_number, title, text:(.text[0:80]), context, parent_section}' $T
+#   expect req_id substituted (no "<MNO0>"), parent_section like "5.1.2", context=""
+jq '[.requirements[]|select((.context//"")!="")]|length' $T   # expect 0 (consumer-assembled)
+```
+
+If `req_id` still shows `<MNO0>`, the mapping didn't resolve — recheck the
+mapping file (this was the historical failure mode).
+
+### B. Run the adapter (= Context proof + SIRA ingest artifact)
+
+```bash
+python -m sandbox.adapter.nora_to_beir \
+  --env-dir "$ENV" --output "$DB" --multi-cell --wipe-all-derived
+```
+
+`--wipe-all-derived` on the **first** ingest (establishes the cell baseline).
+Verify Context baked into the per-req rows:
+
+```bash
+C=$DB/<mno>__<release>/raw/corpus.jsonl
+jq -r 'select((._id|startswith("doc:")|not) and (._id|startswith("section:")|not)) | .text' $C | sed -n '1,40p'
+#   expect, before the body, the bracketed ancestor chain top-down:
+#     [5 Bands]\n<intro>\n[5.1 Frequency]\n<intro>\n[5.1.2 LTE]\n<intro>
+jq -r 'select((._id|startswith("doc:")|not) and (._id|startswith("section:")|not)) | .text' $C | grep -c '^\['
+```
+
+Then build/enrich the `<mno>__<release>` cell on the SIRA side (corpus rows are
+self-contained — retrieval doesn't depend on NORA's graph).
+
+### C. Incremental adds (next MNO / release / docs)
+
+Wipe semantics per cell (`$DB/<mno>__<release>/`):
+
+| flag | wipes | keeps | effect |
+|---|---|---|---|
+| `--wipe-stale-index` | `index/ enrichments/ eval/ retrieval/` | **`runs/`** (enrich cache) | index rebuilds; only new/changed docs re-enriched |
+| `--wipe-all-derived` | the above **+ `runs/`** | — | full rebuild; re-enriches everything |
+| neither | — | — | warn-only; SIRA then panics `doc_id N out of range` |
+
+Steady-state add (enrichment prompt **unchanged**):
+
+```bash
+# 1. drop new corpus at $ENV/input/<MNO>/<MMMYYYY>/  then parse it
+python -m core.src.pipeline.run_cli --env-dir "$ENV" \
+  --profile customizations/profiles/<that-profile>.json --start extract --end parse
+# 2. re-emit cells, incremental-safe
+python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" \
+  --multi-cell --wipe-stale-index
+# 3. SIRA build/enrich: new docs LLM-enriched, unchanged docs hit runs/ cache,
+#    all cells re-index (cheap)
+```
+
+Escalate to `--wipe-all-derived` only when: the **enrichment prompt changed**
+(cache is stale), a **major composition shift** re-baselines the DF-filter
+(1 MNO → 3), or you changed `--section-max-depth` (alters section-row counts in
+every cell). **Always pass one wipe flag after any corpus change** — forgetting
+leaves SIRA on a stale BM25 index that panics with `doc_id N out of range`.
+
 ## Related decisions
 
 - **D-DRAFT-1** — per-requirement `plan_id` (one document → N plans).
