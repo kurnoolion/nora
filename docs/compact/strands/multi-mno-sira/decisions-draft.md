@@ -543,3 +543,35 @@ would need a way to scope it to multi-MNO runs without affecting the
 legacy path. Supersedes the "in/beside `infer_metadata_from_path`"
 phrasing in D-DRAFT-5's Decision; D-DRAFT-5's convention + ordering
 semantics are unchanged.
+
+---
+
+## Cross-strand couplings — incoming from `multi-mno-nora` (2026-06-19)
+
+The `multi-mno-nora` strand adopted the `(MNO, release)` **cell** model (its
+D-DRAFT-6..12, see `docs/compact/strands/multi-mno-nora/multi-mno-ingestion-design.md`).
+Two of its decisions reach back into this strand and must be reconciled when
+`multi-mno-sira` next lands:
+
+1. **NORA D-DRAFT-6 amends this strand's D-DRAFT-12 (MMMYYYY validation
+   placement).** NORA promotes Verizon OA to its own cell
+   (`input/VZW-OA/Feb2026/`), removing the last free-form-release holdout — the
+   *sole* reason D-DRAFT-12 kept MMMYYYY validation sandbox-side (to protect
+   `OA-baseline`). With that holdout gone, MMMYYYY becomes a **universal**
+   convention validated in a shared **core** util (`release_key()`), which both
+   NORA's `infer_metadata_from_path` and this strand's `sira_preflight` call.
+   D-DRAFT-12's *intent* (fail-loud early, no sandbox→core boundary inversion)
+   stands; only its "logic lives sandbox-side" placement changes to "logic lives
+   in a core util, invoked from sandbox." **At land time, update D-DRAFT-12's
+   Decision/Consequences to reference the core util.**
+
+2. **NORA D-DRAFT-12 changes the adapter's tree discovery (couples to this
+   strand's adapter / D-DRAFT-6).** NORA nests parse output to
+   `out/parse/<mno>/<rel>/*_tree.json`. The adapter's `_load_trees` (currently a
+   flat `out/parse/*_tree.json` glob) must walk the nested layout, or it silently
+   reads zero trees. Downstream `(mno, release)` partitioning + `--multi-cell`
+   emission are unchanged. **Lockstep:** landing NORA's per-cell layout requires
+   this adapter change in the same migration.
+
+No SIRA decision is rewritten here — this note flags the reconciliation for
+whoever lands this strand.
