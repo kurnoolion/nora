@@ -5,8 +5,9 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 
 **Public surface**
 - Orchestration (runner.py):
-  - `PipelineContext` — shared state (documents_dir, corrections_dir, eval_dir, stage_dirs, model_provider/name/timeout, mnos, releases, state); `stage_output(stage)`, `correction(filename)`, `create_llm_provider(require_real=False)`
+  - `PipelineContext` — shared state (documents_dir, corrections_dir, eval_dir, stage_dirs, model_provider/name/timeout, mnos, releases, state); `stage_output(stage, cell=None)`, `input_cells()`, `correction(filename)`, `create_llm_provider(require_real=False)`
   - `PipelineRunner(ctx)` — `run(stages, continue_on_error=False) -> list[StageResult]`
+- Cell primitives (cells.py, D-DRAFT-6): `Cell(mno, release)` with `.relpath`; `PER_CELL_STAGES` / `GLOBAL_STAGES` partition + `is_per_cell_stage(stage)`; `enumerate_input_cells(documents_dir) -> list[Cell]` (validated + sorted by `release_order_key`)
 - Stage functions (stages.py): `run_extract`, `run_profile`, `run_parse`, `run_resolve`, `run_taxonomy`, `run_standards`, `run_graph`, `run_vectorstore`, `run_eval` — each `PipelineContext -> StageResult`
 - `StageResult` — `stage`, `status` (`OK | WARN | FAIL | SKIP`), `elapsed_seconds`, `stats`, optional `error_code`, `error_message`
 - `STAGE_FUNCS` — the stage-name → function dispatch table
@@ -19,6 +20,7 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 **Invariants**
 - **Every failure surfaces a stable prefixed code** registered in `error_codes.CODES`. Ad-hoc strings are a D-012 violation — the user can't diagnose chat-pasted logs without the code.
 - Each stage is **re-runnable and idempotent** over the same inputs. Outputs go under `<env_dir>/out/<stage>/`; `<env_dir>/corrections/*.json` is picked up automatically on the next run (D-011, D-022). `run_parse` additionally writes `<env_dir>/reports/parse_log/<doc_id>_parse_log.json` per document (parse transparency log).
+- **Per-cell vs global stage outputs** (D-DRAFT-6, strand `multi-mno-nora`): `stage_output(stage, cell)` resolves a **per-cell** stage (`extract`/`profile`/`parse`/`resolve`/`vectorstore`) to `out/<stage>/<mno>/<rel>/` when a `Cell` is supplied, and a **global** stage (`taxonomy`/`standards`/`graph`/`eval`) — or any stage with no cell — to the flat `out/<stage>/`. The `cell` argument is additive (defaults `None` → flat), so callers that don't pass a cell are unchanged; stage rewiring to consume per-cell paths lands incrementally. The per-cell/global partition is exhaustive + disjoint over `STAGE_NAMES`.
 - Stage order is fixed and matches `env.config.PIPELINE_STAGES`. Running a downstream stage without its prerequisites emits `PIP-E002` (required input missing) rather than silently failing later.
 - `StageResult.status` uses four discrete values: `OK` (clean), `WARN` (completed but flagged), `FAIL` (aborted), `SKIP` (not run this invocation). Collapsing WARN into OK loses the signal that drives compact QC reports.
 - `PipelineContext.create_llm_provider()` falls back to `MockLLMProvider` when Ollama is unreachable unless `require_real=True`. This keeps offline stages runnable on work laptops without an LLM server.

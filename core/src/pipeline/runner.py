@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.src.env.config import STAGE_NAMES
+from core.src.pipeline.cells import Cell, enumerate_input_cells, is_per_cell_stage
 from core.src.pipeline.stages import STAGE_FUNCS, StageResult
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,23 @@ class PipelineContext:
     # Accumulated state between stages (paths, intermediate data)
     state: dict = field(default_factory=dict)
 
-    def stage_output(self, stage: str) -> Path:
-        """Get the output directory for a stage."""
-        return self.stage_dirs[stage]
+    def stage_output(self, stage: str, cell: "Cell | None" = None) -> Path:
+        """Get the output directory for a stage.
+
+        With `cell` and a **per-cell** stage (D-DRAFT-6: extract / profile /
+        parse / resolve / vectorstore), returns the cell subdirectory
+        `out/<stage>/<mno>/<rel>/`. For a **global** stage, or when no `cell`
+        is given, returns the flat `out/<stage>/` — so existing callers that
+        pass no cell are unchanged.
+        """
+        base = self.stage_dirs[stage]
+        if cell is not None and is_per_cell_stage(stage):
+            return base / cell.relpath
+        return base
+
+    def input_cells(self) -> "list[Cell]":
+        """The `(MNO, release)` cells present under `input/`, validated + sorted."""
+        return enumerate_input_cells(self.documents_dir)
 
     def correction(self, filename: str) -> Path | None:
         """Get a correction file path if it exists."""
