@@ -324,6 +324,12 @@ class RequirementTree:
     chunk builder) know how much enclosing-section context to assemble per
     requirement via ``build_context_string`` — the context is built at emit
     time, not stored per-requirement here."""
+    profile_fingerprint: str = ""
+    """D-DRAFT-8: hash of the substituted profile this tree was parsed with.
+    The pipeline parse stage stamps it so an incremental re-run can skip a
+    cell whose tree is up-to-date AND whose profile/mapping is unchanged — a
+    changed fingerprint forces a re-parse (mtime alone can't see a mapping
+    edit). Empty for trees parsed outside the pipeline."""
     detection_mode: str = "heading"
     """D-DRAFT-1/2: mirrors ``profile.requirement_id.detection_mode``
     (`"heading"` default | `"leading_id_body"`). Stamped on the tree so
@@ -431,6 +437,7 @@ class RequirementTree:
             release_date=data.get("release_date", ""),
             detection_mode=data.get("detection_mode", "heading"),
             build_context=data.get("build_context", "none"),
+            profile_fingerprint=data.get("profile_fingerprint", ""),
             referenced_standards_releases=data.get("referenced_standards_releases", {}),
             requirements=reqs,
             parse_stats=ParseStats(

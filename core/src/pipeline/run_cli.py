@@ -110,6 +110,14 @@ def main() -> None:
 
     # Pipeline options
     parser.add_argument("--profile", type=Path, default=None, help="Explicit profile path (standalone mode)")
+    # D-DRAFT-8 — per-cell ingestion scope (restrict the PER-CELL stages to
+    # specific (mno, release) cells; global stages still read the whole union).
+    parser.add_argument("--mno", default=None,
+                        help="Comma-separated MNO(s) to restrict per-cell stages to (default: all)")
+    parser.add_argument("--release", default=None,
+                        help="Comma-separated release(s), e.g. Feb2026, to restrict per-cell stages to (default: all)")
+    parser.add_argument("--force", action="store_true",
+                        help="Reprocess in-scope cells even if their outputs look up-to-date (D-DRAFT-8)")
     parser.add_argument("--model", default="auto", help="LLM model name (default: auto)")
     parser.add_argument("--model-timeout", type=int, default=600, help="LLM timeout in seconds")
     parser.add_argument(
@@ -280,6 +288,11 @@ def main() -> None:
         end = resolve_stage(args.end) if args.end else "eval"
 
     ctx.verbose = args.verbose
+    # D-DRAFT-8 — per-cell ingestion scope (applies to both env + standalone modes).
+    _csv = lambda v: [t.strip() for t in v.split(",") if t.strip()] if v else []
+    ctx.scope_mnos = _csv(args.mno)
+    ctx.scope_releases = _csv(args.release)
+    ctx.force = args.force
     if args.model != "auto":
         ctx.model_name = args.model
     # CLI / env-var overrides for env-config mode

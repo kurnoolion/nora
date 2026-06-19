@@ -6,6 +6,7 @@ Imports are lazy within each function to tolerate missing dependencies.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -71,7 +72,7 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     if not files:
         return _fail(stage, "ENV-E002", f"No documents in {ctx.documents_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "blocks": 0, "tables": 0, "failed": 0}
+    stats = {"docs": 0, "skipped": 0, "blocks": 0, "tables": 0, "failed": 0}
     warnings: list[str] = []
     ir_paths: list[str] = []
 
@@ -79,16 +80,23 @@ def run_extract(ctx: PipelineContext) -> StageResult:
         # infer_metadata_from_path enforces the MMMYYYY cell convention
         # fail-loud (EXT-E004); a mis-named release dir aborts the stage here.
         metadata = infer_metadata_from_path(f)
+        # D-DRAFT-8: honor the --mno/--release cell scope.
+        if not ctx.cell_in_scope(metadata["mno"], metadata["release"]):
+            continue
+        # D-DRAFT-6: route each IR to its (mno, release) cell directory.
+        cell_dir = ctx.stage_output(stage, Cell(metadata["mno"], metadata["release"]))
+        out_path = cell_dir / f"{f.stem}_ir.json"
+        # D-DRAFT-8 skip: reuse an IR that's newer than its source. `--force` overrides.
+        if not ctx.force and out_path.exists() and out_path.stat().st_mtime >= f.stat().st_mtime:
+            ir_paths.append(str(out_path))
+            stats["skipped"] += 1
+            continue
         try:
             ir = extract_document(
                 f, mno=metadata["mno"], release=metadata["release"],
                 doc_type=metadata["doc_type"],
             )
-            # D-DRAFT-6: route each IR to its (mno, release) cell directory
-            # out/extract/<mno>/<rel>/.
-            cell_dir = ctx.stage_output(stage, Cell(metadata["mno"], metadata["release"]))
             cell_dir.mkdir(parents=True, exist_ok=True)
-            out_path = cell_dir / f"{f.stem}_ir.json"
             ir.save_json(out_path)
             ir_paths.append(str(out_path))
             stats["docs"] += 1
@@ -194,7 +202,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     try:
         from core.src.models.document import DocumentIR
         from core.src.profiler.profile_schema import DocumentProfile
-        from core.src.parser.structural_parser import GenericStructuralParser
+        from core.src.parser.structural_parser import GenericStructuralParser, RequirementTree
         from core.src.parser.user_annotations import apply_user_annotations
     except ImportError as e:
         return _fail(stage, "PRS-E001", f"Import error: {e}", time.time() - t0)
@@ -204,7 +212,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
         return _fail(stage, "PIP-E002",
                      f"No input cells under {ctx.documents_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0, "toc_pair_misses": 0, "frontmatter": 0}
+    stats = {"docs": 0, "skipped": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0, "toc_pair_misses": 0, "frontmatter": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
     # Per-doc parse summaries accumulated across ALL cells; emitted as the
@@ -224,6 +232,9 @@ def run_parse(ctx: PipelineContext) -> StageResult:
             continue
         profile = DocumentProfile.load_json(profile_path)
         parser = GenericStructuralParser(profile)
+        # D-DRAFT-8: fingerprint of the (already-substituted) cell profile —
+        # a changed profile/mapping flips it and forces a re-parse.
+        profile_fp = hashlib.sha256(profile_path.read_bytes()).hexdigest()[:16]
 
         ir_files = sorted(ctx.stage_output("extract", cell).glob("*_ir.json"))
         if not ir_files:
@@ -233,6 +244,17 @@ def run_parse(ctx: PipelineContext) -> StageResult:
         cell_out.mkdir(parents=True, exist_ok=True)
 
         for f in ir_files:
+            out_path = cell_out / (f.stem.replace("_ir", "_tree") + ".json")
+            # D-DRAFT-8 skip: reuse an up-to-date tree (newer than its IR) whose
+            # stamped fingerprint matches the current profile. `--force` overrides.
+            if not ctx.force and out_path.exists() and out_path.stat().st_mtime >= f.stat().st_mtime:
+                try:
+                    if RequirementTree.load_json(out_path).profile_fingerprint == profile_fp:
+                        tree_paths.append(str(out_path))
+                        stats["skipped"] += 1
+                        continue
+                except Exception:
+                    pass  # unreadable/old tree — fall through and re-parse
             try:
                 doc = DocumentIR.load_json(f)
                 # D-061: apply user `remove` annotations to the IR before parse.
@@ -242,8 +264,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
                 if n_removes:
                     stats["user_removes"] += n_removes
                 tree = parser.parse(doc)
-                out_name = f.stem.replace("_ir", "_tree") + ".json"
-                out_path = cell_out / out_name
+                tree.profile_fingerprint = profile_fp  # D-DRAFT-8 skip key
                 tree.save_json(out_path)
                 tree_paths.append(str(out_path))
                 if tree.parse_log is not None:

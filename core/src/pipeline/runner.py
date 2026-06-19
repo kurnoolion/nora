@@ -52,6 +52,13 @@ class PipelineContext:
     mnos: list[str] = field(default_factory=lambda: ["VZW"])
     releases: list[str] = field(default_factory=lambda: ["Feb2026"])
 
+    # Per-cell ingestion scope (D-DRAFT-8). Empty = all cells. Restrict which
+    # `(mno, release)` cells the PER-CELL stages process; `force` ignores the
+    # skip-if-unchanged check. Global stages always read the whole union.
+    scope_mnos: list[str] = field(default_factory=list)
+    scope_releases: list[str] = field(default_factory=list)
+    force: bool = False
+
     # Standards ingestion source: "huggingface" | "3gpp"
     standards_source: str = "huggingface"
 
@@ -72,9 +79,23 @@ class PipelineContext:
             return base / cell.relpath
         return base
 
+    def cell_in_scope(self, mno: str, release: str) -> bool:
+        """True iff `(mno, release)` passes the `--mno`/`--release` scope (D-DRAFT-8).
+
+        Empty scope = all cells. MNO match is case-insensitive; release exact.
+        """
+        if self.scope_mnos and mno.upper() not in {m.upper() for m in self.scope_mnos}:
+            return False
+        if self.scope_releases and release not in self.scope_releases:
+            return False
+        return True
+
     def input_cells(self) -> "list[Cell]":
-        """The `(MNO, release)` cells present under `input/`, validated + sorted."""
-        return enumerate_input_cells(self.documents_dir)
+        """The in-scope `(MNO, release)` cells present under `input/`, validated + sorted."""
+        return [
+            c for c in enumerate_input_cells(self.documents_dir)
+            if self.cell_in_scope(c.mno, c.release)
+        ]
 
     def correction(self, filename: str) -> Path | None:
         """Get a correction file path if it exists."""

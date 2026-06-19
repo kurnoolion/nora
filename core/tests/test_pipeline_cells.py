@@ -90,3 +90,36 @@ class TestStageOutputCellAware:
         ctx = self._ctx(tmp_path)
         assert ctx.stage_output("parse") == ctx.stage_dirs["parse"]
         assert ctx.stage_output("graph") == ctx.stage_dirs["graph"]
+
+
+class TestCellScope:
+    """D-DRAFT-8 — --mno/--release scope filtering of input_cells()."""
+
+    def test_no_scope_is_all_cells(self, tmp_path):
+        _make_input(tmp_path, {"vzw-oa": ["Feb2026"], "mno-b": ["Mar2025"]})
+        ctx = PipelineContext.standalone(env_dir=tmp_path)
+        assert len(ctx.input_cells()) == 2
+
+    def test_mno_scope(self, tmp_path):
+        _make_input(tmp_path, {"vzw-oa": ["Feb2026"], "mno-b": ["Mar2025"]})
+        ctx = PipelineContext.standalone(env_dir=tmp_path)
+        ctx.scope_mnos = ["MNO-B"]
+        assert [c.mno for c in ctx.input_cells()] == ["MNO-B"]
+
+    def test_mno_scope_case_insensitive(self, tmp_path):
+        _make_input(tmp_path, {"mno-b": ["Mar2025"]})
+        ctx = PipelineContext.standalone(env_dir=tmp_path)
+        ctx.scope_mnos = ["mno-b"]
+        assert len(ctx.input_cells()) == 1
+
+    def test_release_scope(self, tmp_path):
+        _make_input(tmp_path, {"vzw": ["Feb2026", "Jun2026"]})
+        ctx = PipelineContext.standalone(env_dir=tmp_path)
+        ctx.scope_releases = ["Jun2026"]
+        assert [c.release for c in ctx.input_cells()] == ["Jun2026"]
+
+    def test_cell_in_scope_method(self, tmp_path):
+        ctx = PipelineContext.standalone(env_dir=tmp_path)
+        ctx.scope_mnos = ["MNO-B"]
+        assert ctx.cell_in_scope("MNO-B", "Mar2025") is True
+        assert ctx.cell_in_scope("VZW-OA", "Feb2026") is False

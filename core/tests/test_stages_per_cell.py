@@ -85,6 +85,54 @@ class TestPerCellPipeline:
             assert (env / "out" / "resolve" / mno / rel).is_dir()
 
 
+class TestIncrementalSkip:
+    """D-DRAFT-8 — profile_fingerprint + mtime skip in run_parse."""
+
+    def _prep(self, env: Path) -> PipelineContext:
+        _seed_env(env)
+        ctx = PipelineContext.standalone(env_dir=env)
+        run_profile(ctx)
+        _seed_irs(env)
+        return ctx
+
+    def test_parse_skips_unchanged_on_rerun(self, tmp_path):
+        ctx = self._prep(tmp_path)
+        r1 = run_parse(ctx)
+        assert r1.stats["docs"] == 2 and r1.stats["skipped"] == 0
+        r2 = run_parse(ctx)
+        assert r2.stats["docs"] == 0 and r2.stats["skipped"] == 2
+
+    def test_force_reparses(self, tmp_path):
+        ctx = self._prep(tmp_path)
+        run_parse(ctx)
+        ctx.force = True
+        r = run_parse(ctx)
+        assert r.stats["docs"] == 2 and r.stats["skipped"] == 0
+
+    def test_profile_change_reparses_only_that_cell(self, tmp_path):
+        ctx = self._prep(tmp_path)
+        run_parse(ctx)
+        # mutate MNO-A's materialized profile -> its fingerprint flips
+        pj = tmp_path / "out" / "profile" / "MNO-A" / "Feb2026" / "profile.json"
+        data = json.loads(pj.read_text(encoding="utf-8"))
+        data["profile_name"] = "changed"
+        pj.write_text(json.dumps(data), encoding="utf-8")
+        r = run_parse(ctx)
+        assert r.stats["docs"] == 1 and r.stats["skipped"] == 1  # A re-parsed, B skipped
+
+
+class TestCellScopeInStages:
+    def test_scope_processes_only_scoped_cell(self, tmp_path):
+        env = _seed_env(tmp_path)  # MNO-A/Feb2026 + MNO-B/Mar2025
+        ctx = PipelineContext.standalone(env_dir=env)
+        ctx.scope_mnos = ["MNO-B"]
+        res = run_profile(ctx)
+        assert res.status == "OK", res
+        assert res.stats["cells"] == 1
+        assert (env / "out" / "profile" / "MNO-B" / "Mar2025" / "profile.json").is_file()
+        assert not (env / "out" / "profile" / "MNO-A").exists()
+
+
 class TestProfileCoverageFailLoud:
     def test_uncovered_cell_fails_pip_e003(self, tmp_path):
         env = tmp_path
