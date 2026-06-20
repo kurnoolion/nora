@@ -121,6 +121,28 @@ class VectorStoreBuilder:
             f"Embedding {len(texts)} chunks with {self.embedder.model_name} "
             f"({self.embedder.dimension}d)"
         )
+        # Oversize-chunk pre-scan: the embedder operates on a bare list of
+        # texts (no ids), so its truncation warning can only cite the batch
+        # index ("text 26"). Here we still have chunk_id, so log each chunk
+        # whose text exceeds the embedder's input limit BY chunk_id — lets
+        # the architect see exactly which requirement is being truncated.
+        # Threshold is the embedder's own cap when it exposes one, else 8000.
+        max_input_chars = getattr(
+            self.embedder, "max_input_chars",
+            getattr(self.embedder, "_max_input_chars", 8000),
+        )
+        oversize = [
+            (c.chunk_id, len(c.text)) for c in chunks
+            if len(c.text) > max_input_chars
+        ]
+        if oversize:
+            logger.warning(
+                "%d chunk(s) exceed the embedder input limit (%d chars) and "
+                "will be truncated for embedding (full text is still stored):",
+                len(oversize), max_input_chars,
+            )
+            for cid, n in sorted(oversize, key=lambda x: -x[1]):
+                logger.warning("  oversize chunk %s: %d chars", cid, n)
         embeddings, skipped_indices = self._embed_batched(texts)
 
         # Store — filter out chunks whose embedding failed after retries.

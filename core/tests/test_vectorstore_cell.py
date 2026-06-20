@@ -94,3 +94,50 @@ class TestRunVectorstorePerCell:
         assert set(load_cell_stores(tmp_path / "out" / "vectorstore")) == {
             ("MNO-A", "Feb2026"), ("MNO-B", "Mar2025")
         }
+
+
+class _CapEmbedder(_StubEmbedder):
+    max_input_chars = 8000
+
+
+class _MemStore:
+    count = 0
+
+    def reset(self):
+        pass
+
+    def add(self, ids, embeddings, documents, metadatas):
+        pass
+
+
+class TestOversizeChunkWarning:
+    """Builder logs the chunk_id (req:<id>) for chunks over the embedder limit."""
+
+    def _tree(self, big_text: str) -> RequirementTree:
+        return RequirementTree(
+            mno="MNO-A", release="Feb2026", plan_id="P",
+            requirements=[
+                Requirement(req_id="VZ_REQ_BIG_1", section_number="1.1",
+                            title="Big", text=big_text),
+                Requirement(req_id="VZ_REQ_OK_2", section_number="1.2",
+                            title="Ok", text="small body"),
+            ],
+        )
+
+    def test_warns_with_req_id(self, tmp_path, caplog):
+        from core.src.vectorstore.builder import VectorStoreBuilder
+        from core.src.vectorstore.config import VectorStoreConfig
+
+        td = tmp_path / "parse"
+        td.mkdir()
+        self._tree("X" * 20000).save_json(td / "P_tree.json")
+
+        builder = VectorStoreBuilder(
+            embedder=_CapEmbedder(), store=_MemStore(), config=VectorStoreConfig(),
+        )
+        with caplog.at_level("WARNING"):
+            builder.build(trees_dir=td, rebuild=True)
+
+        msgs = "\n".join(caplog.messages)
+        assert "oversize chunk req:VZ_REQ_BIG_1" in msgs
+        assert "req:VZ_REQ_OK_2" not in msgs  # under the limit → not listed
