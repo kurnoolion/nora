@@ -789,6 +789,13 @@ class GenericStructuralParser:
         ) = self._extract_reference_list(sections)
         self._parse_stats.refs_extracted = len(reference_list_map)
 
+        # 8b'. Drop profile-excluded sections (D-DRAFT-13) — non-normative
+        #      sections matched by `exclude_section_pattern` (REFERENCES,
+        #      traceability matrices). Runs AFTER reference extraction so a
+        #      REFERENCES section still populates `reference_list_map` before
+        #      being dropped from the tree / RAG. No-op when the pattern is empty.
+        sections = self._drop_excluded_sections(sections)
+
         # 8c. Populate per-requirement plan_id (D-DRAFT-1). The plan is encoded
         #     in the req_id and extracted via the profile's
         #     ``requirement_id.components`` config (separator + plan_id_position).
@@ -2282,44 +2289,94 @@ class GenericStructuralParser:
             summary=summary,
         )
 
+    @staticmethod
+    def _drop_section_subtree(
+        sections: list[Requirement],
+        section_num: str,
+    ) -> list[Requirement]:
+        """Return ``sections`` with ``section_num`` + its descendants removed.
+
+        A Requirement belongs to the subtree when its ``section_number``
+        equals ``section_num`` or starts with it followed by a dot, OR its
+        ``parent_section`` matches the same conditions (catches table-anchored
+        Requirements which carry no ``section_number``). Mirrors
+        ``vectorstore.chunk_builder._belongs_to_definitions``. No logging —
+        callers log with their own reason.
+        """
+        if not section_num:
+            return sections
+        prefix = section_num + "."
+
+        def _belongs(r: Requirement) -> bool:
+            if r.section_number == section_num:
+                return True
+            if r.section_number.startswith(prefix):
+                return True
+            if r.parent_section == section_num:
+                return True
+            if r.parent_section.startswith(prefix):
+                return True
+            return False
+
+        return [r for r in sections if not _belongs(r)]
+
     def _drop_glossary_subtree(
         self,
         sections: list[Requirement],
         defs_section_num: str,
     ) -> list[Requirement]:
         """Remove the glossary section and all of its descendants from
-        ``sections``. Used when ``profile.embed_glossary == False``.
-
-        Mirrors the predicate used by
-        ``vectorstore.chunk_builder._belongs_to_definitions``: a
-        Requirement belongs to the glossary subtree when its
-        ``section_number`` equals the glossary section number, or
-        starts with that number followed by a dot, or its
-        ``parent_section`` matches the same conditions (catches
-        table-anchored Requirements which carry no
-        ``section_number``).
-        """
+        ``sections``. Used when ``profile.embed_glossary == False``."""
         if not defs_section_num:
             return sections
-        prefix = defs_section_num + "."
-
-        def _belongs(r: Requirement) -> bool:
-            if r.section_number == defs_section_num:
-                return True
-            if r.section_number.startswith(prefix):
-                return True
-            if r.parent_section == defs_section_num:
-                return True
-            if r.parent_section.startswith(prefix):
-                return True
-            return False
-
-        kept = [r for r in sections if not _belongs(r)]
+        kept = self._drop_section_subtree(sections, defs_section_num)
         dropped = len(sections) - len(kept)
         if dropped:
             logger.info(
                 "parser.glossary_dropped: section=%s count=%d (embed_glossary=False)",
                 defs_section_num, dropped,
+            )
+        return kept
+
+    def _drop_excluded_sections(
+        self,
+        sections: list[Requirement],
+    ) -> list[Requirement]:
+        """Drop sections whose *title* matches ``profile.exclude_section_pattern``
+        plus their descendants (D-DRAFT-13).
+
+        For non-normative sections that carry a heading (sometimes a trailing
+        req_id) but aren't requirements — bibliographies (``REFERENCES``),
+        requirement→test-case traceability matrices, etc. A matched section
+        with a ``section_number`` drops its whole subtree; a matched node
+        without one drops just itself. No-op when the pattern is empty.
+        """
+        pattern = self.profile.exclude_section_pattern
+        if not pattern:
+            return sections
+        try:
+            rx = re.compile(pattern)
+        except re.error as e:
+            logger.warning(
+                "parser.exclude_section: bad exclude_section_pattern %r (%s)",
+                pattern, e,
+            )
+            return sections
+        matched = [r for r in sections if rx.search(r.title or "")]
+        if not matched:
+            return sections
+        kept = sections
+        for m in matched:
+            if m.section_number:
+                kept = self._drop_section_subtree(kept, m.section_number)
+            else:
+                kept = [r for r in kept if r is not m]
+        dropped = len(sections) - len(kept)
+        if dropped:
+            logger.info(
+                "parser.excluded_sections: dropped %d node(s) across %d "
+                "title-matched section(s) (exclude_section_pattern)",
+                dropped, len(matched),
             )
         return kept
 

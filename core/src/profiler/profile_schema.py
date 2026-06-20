@@ -423,6 +423,19 @@ class DocumentProfile:
     (everything up to the first comma / quote / em-dash). Empty
     disables entry extraction even if the section is found."""
 
+    exclude_section_pattern: str = ""
+    """Regex matched against a section's *title*. Any section whose title
+    matches is dropped from the parsed tree along with its descendants — it
+    never becomes a Requirement or a RAG chunk (D-DRAFT-13, strand
+    `multi-mno-nora`). For non-normative sections that carry a heading (and
+    sometimes a trailing req_id) but aren't real requirements: bibliographies
+    (``REFERENCES``), requirement→test-case traceability matrices, etc. Runs
+    *after* `reference_list_section_pattern` extraction, so a REFERENCES
+    section still populates `reference_list_map` before being dropped from
+    chunks. Empty (default) = no-op, so other corpora are unaffected.
+    May contain placeholders (e.g. ``<TRACEABILITY>``) resolved from the
+    mapping file like any other regex field."""
+
     # ── Revision/version history omission (FR-34) ────────────────
     revision_history_label_pattern: str = (
         r"(?i)^\s*(?:\S+\s+)*(revision|change|version|document)\s+(history|log)\s*$"
@@ -648,6 +661,7 @@ class DocumentProfile:
                 "reference_list_entry_pattern",
                 r"^\s*[\[\(]?(\d+)[\]\)\.]?\s+(.+?)\s*$",
             ),
+            exclude_section_pattern=data.get("exclude_section_pattern", ""),
             content_start_section=data.get("content_start_section", ""),
             build_context=data.get("build_context", "none"),
             build_context_max_chars=int(data.get("build_context_max_chars", 0) or 0),

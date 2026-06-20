@@ -93,5 +93,6 @@
     "enabled": true
   },
   "reference_list_section_pattern": "(?i)^(references|bibliography|normative\\s+references)$",
-  "reference_list_entry_pattern": "^\\s*[\\[\\(]?(\\d+)[\\]\\)\\.]?\\s+(.+?)\\s*$"
+  "reference_list_entry_pattern": "^\\s*[\\[\\(]?(\\d+)[\\]\\)\\.]?\\s+(.+?)\\s*$",
+  "exclude_section_pattern": "(?i)^\\s*references\\b|<TRACEABILITY>"
 }

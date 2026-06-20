@@ -139,6 +139,7 @@ def substitute_placeholders(
     out.revision_history_label_pattern = sub(out.revision_history_label_pattern)
     out.reference_list_section_pattern = sub(out.reference_list_section_pattern)
     out.reference_list_entry_pattern = sub(out.reference_list_entry_pattern)
+    out.exclude_section_pattern = sub(out.exclude_section_pattern)
 
     return out
 
