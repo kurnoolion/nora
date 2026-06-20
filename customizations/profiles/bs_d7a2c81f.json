@@ -94,5 +94,6 @@
   },
   "reference_list_section_pattern": "(?i)^(references|bibliography|normative\\s+references)$",
   "reference_list_entry_pattern": "^\\s*[\\[\\(]?(\\d+)[\\]\\)\\.]?\\s+(.+?)\\s*$",
-  "exclude_section_pattern": "(?i)^\\s*references\\b|<TRACEABILITY>"
+  "exclude_section_pattern": "(?i)^\\s*references\\b",
+  "content_end_marker": "<TRACEABILITY>"
 }

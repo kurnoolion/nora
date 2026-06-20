@@ -73,6 +73,64 @@ class TestDropExcludedSections:
         assert p._drop_excluded_sections(sections) == sections
 
 
+def _parser_marker(marker: str) -> GenericStructuralParser:
+    return GenericStructuralParser(
+        DocumentProfile(profile_name="t", content_end_marker=marker)
+    )
+
+
+class TestContentEndMarker:
+    def _req_with_appendix(self) -> Requirement:
+        r = Requirement(
+            req_id="R-1", section_number="1.4.25", title="In-call",
+            text="The device shall continue the call.\nTRACEABILITY MATRIX\n"
+                 "INTRODUCTION R-37623\nIDLE MODE R-37627",
+        )
+        r.tables = [{"headers": ["Test Case Name", "Test Plan Id"], "rows": [["x", "y"]]}]
+        r.images = [{"caption": "c"}]
+        return r
+
+    def test_truncates_text_at_marker_and_drops_tables(self):
+        p = _parser_marker(r"TRACEABILITY MATRIX")
+        r = self._req_with_appendix()
+        p._apply_content_end_marker([r])
+        assert r.text == "The device shall continue the call."  # body kept, appendix cut
+        assert "INTRODUCTION" not in r.text
+        assert r.tables == []      # trailing test-case tables dropped
+        assert r.images == []
+
+    def test_escaped_literal_marker_matches(self):
+        # mirrors post-substitution: re.escape of the real marker literal
+        p = _parser_marker(r"Req\-Trace\ Matrix")
+        r = Requirement(req_id="R", section_number="1", title="t",
+                        text="body line\nReq-Trace Matrix\nA R-1")
+        r.tables = [{"headers": ["h"], "rows": [["v"]]}]
+        p._apply_content_end_marker([r])
+        assert r.text == "body line"
+        assert r.tables == []
+
+    def test_no_marker_leaves_req_untouched(self):
+        p = _parser_marker(r"TRACEABILITY MATRIX")
+        r = Requirement(req_id="R", section_number="1", title="t", text="normal body")
+        r.tables = [{"headers": ["h"], "rows": [["v"]]}]
+        p._apply_content_end_marker([r])
+        assert r.text == "normal body"
+        assert r.tables == [{"headers": ["h"], "rows": [["v"]]}]  # preserved
+
+    def test_empty_marker_is_noop(self):
+        p = _parser_marker("")
+        r = self._req_with_appendix()
+        before = r.text
+        p._apply_content_end_marker([r])
+        assert r.text == before and r.tables  # untouched
+
+    def test_bad_marker_is_noop_not_crash(self):
+        p = _parser_marker("(unclosed")
+        r = self._req_with_appendix()
+        p._apply_content_end_marker([r])  # should not raise
+        assert "TRACEABILITY" in r.text
+
+
 class TestProfileFieldRoundTrip:
     def test_load_and_default(self, tmp_path):
         assert DocumentProfile(profile_name="t").exclude_section_pattern == ""
@@ -83,6 +141,15 @@ class TestProfileFieldRoundTrip:
     def test_substitution_resolves_placeholder(self):
         from core.src.profiler.profile_substitute import substitute_placeholders
         prof = DocumentProfile(profile_name="t",
-                               exclude_section_pattern=r"(?i)^references\b|<TRACEABILITY>")
+                               exclude_section_pattern=r"(?i)^references\b")
         out = substitute_placeholders(prof, {"TRACEABILITY": "TC Matrix"})
-        assert out.exclude_section_pattern == r"(?i)^references\b|TC\ Matrix"
+        assert out.exclude_section_pattern == r"(?i)^references\b"
+
+    def test_content_end_marker_round_trip_and_substitution(self, tmp_path):
+        from core.src.profiler.profile_substitute import substitute_placeholders
+        assert DocumentProfile(profile_name="t").content_end_marker == ""
+        prof = DocumentProfile(profile_name="t", content_end_marker="<TRACEABILITY>")
+        prof.save_json(tmp_path / "p.json")
+        assert DocumentProfile.load_json(tmp_path / "p.json").content_end_marker == "<TRACEABILITY>"
+        out = substitute_placeholders(prof, {"TRACEABILITY": "TC Matrix"})
+        assert out.content_end_marker == r"TC\ Matrix"

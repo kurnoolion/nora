@@ -795,6 +795,11 @@ class GenericStructuralParser:
         #      REFERENCES section still populates `reference_list_map` before
         #      being dropped from the tree / RAG. No-op when the pattern is empty.
         sections = self._drop_excluded_sections(sections)
+        # 8b''. Truncate trailing non-normative appendices glued onto a
+        #       requirement's body (D-DRAFT-13) — e.g. a traceability matrix +
+        #       test-case tables that begin at `content_end_marker` on the last
+        #       real requirement. No-op when the marker is empty.
+        self._apply_content_end_marker(sections)
 
         # 8c. Populate per-requirement plan_id (D-DRAFT-1). The plan is encoded
         #     in the req_id and extracted via the profile's
@@ -2337,6 +2342,44 @@ class GenericStructuralParser:
                 defs_section_num, dropped,
             )
         return kept
+
+    def _apply_content_end_marker(self, sections: list[Requirement]) -> None:
+        """Truncate each requirement's text at ``profile.content_end_marker``
+        and drop its trailing appendix tables/images (D-DRAFT-13).
+
+        The marker is matched per body line. For a requirement whose text
+        contains a matching line, the text is cut to the lines *before* the
+        marker and the requirement's ``tables`` + ``images`` are cleared — they
+        are the trailing non-normative appendix (e.g. a test-case traceability
+        matrix the parser glued onto the last real requirement). Mutates in
+        place. No-op when the marker is empty.
+        """
+        marker = self.profile.content_end_marker
+        if not marker:
+            return
+        try:
+            rx = re.compile(marker)
+        except re.error as e:
+            logger.warning(
+                "parser.content_end_marker: bad pattern %r (%s)", marker, e,
+            )
+            return
+        n = 0
+        for r in sections:
+            if not r.text:
+                continue
+            lines = r.text.split("\n")
+            cut = next((i for i, ln in enumerate(lines) if rx.search(ln)), None)
+            if cut is not None:
+                r.text = "\n".join(lines[:cut]).rstrip()
+                r.tables = []
+                r.images = []
+                n += 1
+        if n:
+            logger.info(
+                "parser.content_end_marker: truncated %d requirement(s) "
+                "(+ dropped their trailing tables/images)", n,
+            )
 
     def _drop_excluded_sections(
         self,

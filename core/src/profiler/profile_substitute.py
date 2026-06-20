@@ -140,6 +140,7 @@ def substitute_placeholders(
     out.reference_list_section_pattern = sub(out.reference_list_section_pattern)
     out.reference_list_entry_pattern = sub(out.reference_list_entry_pattern)
     out.exclude_section_pattern = sub(out.exclude_section_pattern)
+    out.content_end_marker = sub(out.content_end_marker)
 
     return out
 

@@ -423,6 +423,19 @@ class DocumentProfile:
     (everything up to the first comma / quote / em-dash). Empty
     disables entry extraction even if the section is found."""
 
+    content_end_marker: str = ""
+    """Regex matched against each *line* of a requirement's body text. When a
+    line matches, the requirement's text is truncated **before** that line and
+    the requirement's trailing `tables` + `images` are dropped (D-DRAFT-13,
+    strand `multi-mno-nora`). For a non-normative **trailing appendix** that the
+    parser glued onto the last real requirement — e.g. a requirement→test-case
+    traceability matrix rendered as text + test-case tables, which begins on its
+    own line at the end of the document rather than under its own heading (so
+    `exclude_section_pattern` can't catch it). Assumes the marker begins a
+    trailing appendix; the matched requirement keeps its real body (everything
+    before the marker). May contain placeholders (e.g. `<TRACEABILITY>`).
+    Empty (default) = no-op."""
+
     exclude_section_pattern: str = ""
     """Regex matched against a section's *title*. Any section whose title
     matches is dropped from the parsed tree along with its descendants — it
@@ -662,6 +675,7 @@ class DocumentProfile:
                 r"^\s*[\[\(]?(\d+)[\]\)\.]?\s+(.+?)\s*$",
             ),
             exclude_section_pattern=data.get("exclude_section_pattern", ""),
+            content_end_marker=data.get("content_end_marker", ""),
             content_start_section=data.get("content_start_section", ""),
             build_context=data.get("build_context", "none"),
             build_context_max_chars=int(data.get("build_context_max_chars", 0) or 0),
