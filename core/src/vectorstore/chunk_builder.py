@@ -217,6 +217,7 @@ class ChunkBuilder:
                     (r.get("text", "") or "").strip(),
                 )
         build_context = tree.get("build_context", "none") or "none"
+        build_context_max_chars = int(tree.get("build_context_max_chars", 0) or 0)
 
         chunks = []
         for req in tree.get("requirements", []):
@@ -236,7 +237,7 @@ class ChunkBuilder:
             text = self._build_chunk_text(
                 req, mno, release, plan_name, version,
                 id_to_title, plan_id, id_to_text,
-                build_context, section_index,
+                build_context, section_index, build_context_max_chars,
             )
 
             # Skip chunks with no meaningful content (e.g., everything
@@ -450,6 +451,7 @@ class ChunkBuilder:
         id_to_text: dict[str, str] | None = None,
         build_context: str = "none",
         section_index: dict[str, tuple[str, str]] | None = None,
+        build_context_max_chars: int = 0,
     ) -> str:
         """Build the contextualized text for a single requirement.
 
@@ -529,6 +531,7 @@ class ChunkBuilder:
         if build_context == "path_and_content" and section_index is not None:
             ctx = build_context_string(
                 req.get("parent_section", "") or "", section_index, build_context,
+                max_chars=build_context_max_chars,
             )
             if ctx:
                 parts.append(ctx)

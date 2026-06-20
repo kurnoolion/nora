@@ -78,6 +78,7 @@ def build_context_string(
     parent_section: str,
     section_index: dict[str, tuple[str, str]],
     mode: str,
+    max_chars: int = 0,
 ) -> str:
     """Assemble a requirement's enclosing-section context (D-DRAFT-5).
 
@@ -106,6 +107,12 @@ def build_context_string(
             <5.1 body>
             [5.1.2 LTE]
             <5.1.2 body>
+
+    ``max_chars`` (profile ``build_context_max_chars``, 0 = uncapped) bounds
+    **each ancestor's body** in ``path_and_content`` — a single huge ancestor
+    section would otherwise dominate the chunk and blow past the embedder's
+    input limit (truncating its embedding). Headers/titles are never truncated;
+    ``path`` mode (no bodies) is unaffected.
     """
     if mode == "none" or not parent_section:
         return ""
@@ -127,6 +134,8 @@ def build_context_string(
     blocks: list[str] = []
     for num, title, text in entries:
         head = "[" + f"{num} {title}".strip() + "]"
+        if text and max_chars and len(text) > max_chars:
+            text = text[:max_chars].rstrip() + "…"
         blocks.append(f"{head}\n{text}".rstrip() if text else head)
     return "\n".join(blocks)
 
@@ -324,6 +333,11 @@ class RequirementTree:
     chunk builder) know how much enclosing-section context to assemble per
     requirement via ``build_context_string`` — the context is built at emit
     time, not stored per-requirement here."""
+    build_context_max_chars: int = 0
+    """Mirrors ``profile.build_context_max_chars`` (0 = uncapped). Per-ancestor
+    body cap for ``path_and_content`` context — bounds chunk growth so one huge
+    ancestor section can't blow past the embedder input limit. Passed to
+    ``build_context_string`` by consumers."""
     profile_fingerprint: str = ""
     """D-DRAFT-8: hash of the substituted profile this tree was parsed with.
     The pipeline parse stage stamps it so an incremental re-run can skip a
@@ -437,6 +451,7 @@ class RequirementTree:
             release_date=data.get("release_date", ""),
             detection_mode=data.get("detection_mode", "heading"),
             build_context=data.get("build_context", "none"),
+            build_context_max_chars=int(data.get("build_context_max_chars", 0) or 0),
             profile_fingerprint=data.get("profile_fingerprint", ""),
             referenced_standards_releases=data.get("referenced_standards_releases", {}),
             requirements=reqs,
@@ -824,6 +839,7 @@ class GenericStructuralParser:
             release_date=plan_meta.get("release_date", ""),
             detection_mode=self.profile.requirement_id.detection_mode,
             build_context=self.profile.build_context,
+            build_context_max_chars=self.profile.build_context_max_chars,
             referenced_standards_releases=std_releases,
             requirements=sections,
             parse_stats=self._parse_stats,

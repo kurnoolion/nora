@@ -520,6 +520,7 @@ class DocumentProfile:
     detectable negatively. Empty (default) = disabled (no cutoff)."""
 
     build_context: str = "none"
+    build_context_max_chars: int = 0
     """D-DRAFT-5: how much enclosing-section context a consumer should attach to
     each requirement (the SIRA adapter and NORA chunk builder assemble it from
     the section nodes at emit time — it is *not* materialized in the parsed tree,
@@ -649,4 +650,5 @@ class DocumentProfile:
             ),
             content_start_section=data.get("content_start_section", ""),
             build_context=data.get("build_context", "none"),
+            build_context_max_chars=int(data.get("build_context_max_chars", 0) or 0),
         )

@@ -310,6 +310,25 @@ class TestBuildContextString:
         idx = {"5": ("Bands", ""), "5.1.2": ("LTE", "")}  # 5.1 missing
         assert build_context_string("5.1.2", idx, "path") == "[Context: 5 Bands > 5.1.2 LTE]"
 
+    def test_max_chars_caps_each_ancestor_body(self):
+        from core.src.parser.structural_parser import build_context_string
+        idx = {"5": ("Bands", "X" * 5000), "5.1": ("Freq", "Y" * 100)}
+        out = build_context_string("5.1", idx, "path_and_content", max_chars=2000)
+        assert "X" * 2000 + "…" in out      # long body capped to 2000 + ellipsis
+        assert "X" * 2001 not in out
+        assert "Y" * 100 in out             # short body untouched
+
+    def test_max_chars_zero_is_uncapped(self):
+        from core.src.parser.structural_parser import build_context_string
+        idx = {"5": ("Bands", "X" * 5000)}
+        out = build_context_string("5", idx, "path_and_content", max_chars=0)
+        assert "X" * 5000 in out
+
+    def test_path_mode_unaffected_by_max_chars(self):
+        from core.src.parser.structural_parser import build_context_string
+        idx = {"5": ("Bands", "X" * 5000)}
+        assert build_context_string("5", idx, "path", max_chars=10) == "[Context: 5 Bands]"
+
 
 class TestContextNotMaterializedInTree:
     def test_tree_does_not_carry_per_req_context(self):

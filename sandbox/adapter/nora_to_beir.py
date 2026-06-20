@@ -209,6 +209,7 @@ def _build_text(req: dict[str, Any], tree: dict[str, Any],
         req.get("parent_section") or "",
         section_index or {},
         tree.get("build_context") or "none",
+        max_chars=int(tree.get("build_context_max_chars", 0) or 0),
     )
     if ctx:
         lines.append("")

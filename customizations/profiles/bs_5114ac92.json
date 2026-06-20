@@ -39,6 +39,7 @@
   },
   "content_start_section": "3",
   "build_context": "path_and_content",
+  "build_context_max_chars": 2000,
   "plan_metadata": {
     "plan_name": { "location": "", "pattern": "", "sample_value": "" },
     "plan_id": { "location": "", "pattern": "", "sample_value": "" },
