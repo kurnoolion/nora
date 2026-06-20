@@ -738,18 +738,20 @@ def run_eval(ctx: PipelineContext) -> StageResult:
         from core.src.query.rewriter import LLMQueryRewriter
         rewriter = LLMQueryRewriter(llm)
 
-    # Cross-encoder reranker — final-pass relevance scoring on the
-    # fused top-K from BM25 + dense retrieval. Per-query-type policy
-    # gates which queries actually rerank (see
-    # `pipeline._TYPE_RERANK_ENABLED`). Construction is graceful:
-    # if the cross-encoder model isn't cached locally and offline
-    # mode is on, the reranker logs a warning and degrades to a
-    # passthrough. No new dependency — uses sentence-transformers'
-    # `CrossEncoder` already in requirements.txt.
-    from core.src.query.reranker import CrossEncoderReranker
-    reranker = CrossEncoderReranker()
-    if not reranker.available:
-        reranker = None  # falls back to MockReranker in pipeline
+    # Cross-encoder reranker — final-pass relevance scoring on the fused
+    # top-K. Gated on `resolve_reranker_enabled()` (NORA_RERANKER_ENABLED >
+    # DB > config/llm.json > env config > default False) so that, with the
+    # reranker disabled (the default), the eval stage never constructs the
+    # cross-encoder and never reaches out to HuggingFace for its model —
+    # matching the web query path. When enabled, construction is graceful:
+    # an uncached/offline model degrades to a MockReranker passthrough.
+    from core.src.env.config import resolve_reranker_enabled
+    reranker = None
+    if resolve_reranker_enabled():
+        from core.src.query.reranker import CrossEncoderReranker
+        reranker = CrossEncoderReranker()
+        if not reranker.available:
+            reranker = None  # falls back to MockReranker in pipeline
 
     runner = EvalRunner(
         graph=graph, embedder=embedder, store=store, cell_stores=cell_stores,
