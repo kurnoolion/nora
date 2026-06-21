@@ -760,8 +760,9 @@ exact end-to-end procedure. (Design: `docs/compact/strands/multi-mno-sira/`.)
   directory name IS the release identity. The free-form "Release Date:"
   inside the documents is display-only and is NOT used.
 - **NORA must have already extracted + parsed every cell** — SIRA consumes the
-  parsed trees (`<env_dir>/out/parse/*_tree.json`), so the NORA pipeline has to
-  run across all `(MNO, release)` cells first. The extract stage ingests every
+  parsed trees (`<env_dir>/out/parse/<mno>/<rel>/*_tree.json` — the per-cell
+  layout the adapter reads recursively, NORA D-DRAFT-12), so the NORA pipeline
+  has to run across all `(MNO, release)` cells first. The extract stage ingests every
   cell under `input/` in one run; see the NORA `README.md` → "Ingesting multiple
   MNOs / releases" for laying out the cells and building them.
 
