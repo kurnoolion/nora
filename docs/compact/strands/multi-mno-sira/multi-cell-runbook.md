@@ -78,6 +78,12 @@ python -m sandbox.sira_multi \
 - Runs SIRA's `scripts/run_pipeline.py` per cell with `data.name=<cell>`, stages
   `prepare,bm25,enrich_corpus` (the corpus-only stages multi-cell needs;
   query-enrich/rerank/eval run live in the service).
+- **Per-cell data config is auto-generated.** SIRA's `_with_dataset` re-reads
+  `configs/data/<cell>.yaml` by name (it does NOT honor `data.name` as an
+  override on a reused config), so `sira_multi` writes
+  `$CLONE/scripts/configs/data/<cell>.yaml` from the installed `nora.yaml`
+  template (only `name:` differs) before each cell. No manual config needed;
+  the `nora.yaml` template must be installed (SETUP.md §4).
 - **Incremental:** enrichment cost scales with *changed* docs, not cell count —
   a later release reuses the prior release's enrichment via content-hash resume.
 

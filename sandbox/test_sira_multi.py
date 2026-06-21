@@ -12,13 +12,49 @@ from pathlib import Path
 
 import pytest
 
-from sandbox.sira_multi import _parse_cell_list, build_pipeline_cmd, run_cells
+from sandbox.sira_multi import (
+    _parse_cell_list,
+    build_pipeline_cmd,
+    ensure_cell_data_config,
+    run_cells,
+)
 
 
 def _make_cell(db_root: Path, dirname: str) -> None:
     raw = db_root / dirname / "raw"
     raw.mkdir(parents=True)
     (raw / "metadata.json").write_text("{}")
+
+
+# ── ensure_cell_data_config ───────────────────────────────────────
+
+def _seed_clone(tmp_path: Path, body: str = "name: nora\nsplit: test\nk_values: [10]\n") -> Path:
+    cfg_dir = tmp_path / "scripts" / "configs" / "data"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "nora.yaml").write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+def test_ensure_cell_data_config_writes_named_yaml(tmp_path):
+    clone = _seed_clone(tmp_path)
+    out = ensure_cell_data_config(clone, "VZW__Feb2026")
+    assert out == clone / "scripts" / "configs" / "data" / "VZW__Feb2026.yaml"
+    body = out.read_text(encoding="utf-8")
+    assert "name: VZW__Feb2026" in body and "name: nora" not in body
+    assert "split: test" in body and "k_values: [10]" in body  # other fields preserved
+
+
+def test_ensure_cell_data_config_adds_name_when_absent(tmp_path):
+    clone = _seed_clone(tmp_path, body="split: test\n")
+    assert ensure_cell_data_config(clone, "TMO__Jan2026").read_text(
+        encoding="utf-8"
+    ).startswith("name: TMO__Jan2026\n")
+
+
+def test_ensure_cell_data_config_missing_template_fails_loud(tmp_path):
+    (tmp_path / "scripts" / "configs" / "data").mkdir(parents=True)  # no nora.yaml
+    with pytest.raises(SystemExit, match="template not found"):
+        ensure_cell_data_config(tmp_path, "VZW__Feb2026")
 
 
 # ── build_pipeline_cmd ────────────────────────────────────────────
@@ -89,6 +125,7 @@ def test_run_cells_no_cells(tmp_path, capsys):
 
 
 def test_run_cells_continue_on_error(tmp_path, monkeypatch):
+    _seed_clone(tmp_path)  # clone == db_root here; provide the nora.yaml template
     _make_cell(tmp_path, "VZW__Feb2026")
     _make_cell(tmp_path, "TMO__Jan2026")
 

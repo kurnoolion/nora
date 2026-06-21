@@ -26,11 +26,41 @@ port is irrelevant. See sandbox/sira_patches/README.md.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells, parse_cell_dirname
+
+
+def ensure_cell_data_config(sira_clone: Path, cell_name: str, template: str = "nora") -> Path:
+    """Write `configs/data/<cell_name>.yaml` for a cell; return its path.
+
+    SIRA's `run_pipeline.py._with_dataset(cfg, ds_name)` re-reads
+    `configs/data/<ds_name>.yaml` from disk for each dataset — it does NOT
+    honor `data.name=<cell>` as an override on a reused config (correcting the
+    SIRA D-DRAFT-6 "no per-cell config files" assumption). So each cell needs
+    its own data YAML. We generate it from the installed `<template>.yaml`
+    (`nora.yaml`) with only the `name:` field set to the cell — every other
+    field (split, k_values, …) is cell-independent. Idempotent: rewritten each
+    run so a changed template propagates.
+    """
+    cfg_dir = sira_clone / "scripts" / "configs" / "data"
+    tmpl_path = cfg_dir / f"{template}.yaml"
+    if not tmpl_path.is_file():
+        raise SystemExit(
+            f"data config template not found: {tmpl_path} — run "
+            f"install_configs.sh in the clone (SETUP.md §4) first?"
+        )
+    text = tmpl_path.read_text(encoding="utf-8")
+    if re.search(r"(?m)^name:", text):
+        text = re.sub(r"(?m)^name:.*$", f"name: {cell_name}", text)
+    else:
+        text = f"name: {cell_name}\n" + text
+    out = cfg_dir / f"{cell_name}.yaml"
+    out.write_text(text, encoding="utf-8")
+    return out
 
 
 def build_pipeline_cmd(
@@ -46,9 +76,12 @@ def build_pipeline_cmd(
 ) -> list[str]:
     """Build the `run_pipeline.py` argv for one cell (cwd = SIRA clone).
 
-    Reuses one `data` config with `data.name=<cell>` overridden per cell
-    (D-DRAFT-6) — no per-cell config files. `db_root` is passed absolute
-    so the command is cwd-independent of the clone.
+    `data.name=<cell>` makes SIRA's `_with_dataset` read
+    `configs/data/<cell>.yaml`, which `run_cells` generates per cell via
+    `ensure_cell_data_config` (SIRA's pipeline re-reads the file by name — it
+    does NOT honor `data.name` as an override on a reused config, correcting the
+    SIRA D-DRAFT-6 assumption). `db_root` is passed absolute so the command is
+    cwd-independent of the clone.
     """
     name = cell_dirname(cell)
     cmd = [
@@ -103,6 +136,9 @@ def run_cells(
         if dry_run:
             results[cell] = 0
             continue
+        # SIRA's _with_dataset re-reads configs/data/<name>.yaml — generate it
+        # per cell from the nora.yaml template (see ensure_cell_data_config).
+        ensure_cell_data_config(sira_clone, name)
         proc = subprocess.run(cmd, cwd=str(sira_clone))
         results[cell] = proc.returncode
         print(f"  cell {name}: exit {proc.returncode}")
