@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-06-19 by regen-map. Do not hand-edit.
+Generated 2026-06-20 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -244,6 +244,7 @@ nora/
 │   │   ├── vectorstore/                               # Unified vector-store construction and configuration.
 │   │   │   ├── __init__.py                            # Vector store module — embedding + storage Protocols + provider factory.
 │   │   │   ├── builder.py                             # Vector store builder (TDD 5.9).
+│   │   │   ├── cell_loader.py                         # Load per-cell vector stores from a vectorstore root (D-DRAFT-11).
 │   │   │   ├── chunk_builder.py                       # Chunk builder for contextualized requirement chunks (TDD 5.9).
 │   │   │   ├── config.py                              # Vector store configuration.
 │   │   │   ├── embed_debug.py                         # Embed debug — verify the embedding provider standalone, find failing chunks.
@@ -368,6 +369,7 @@ nora/
 │       ├── test_parse_bootstrap.py                    # Tests for the Bootstrap annotation harness.
 │       ├── test_parse_log.py                          # Tests for ParseLog generation: dropped block recording, range merging,
 │       ├── test_parse_review.py                       # Tests for parse_review: template generation and compact report format.
+│   ├── test_parser_exclude_sections.py                # Profile-driven section exclusion (D-DRAFT-13).
 │       ├── test_patterns.py                           # Tests for regex patterns used across extraction, profiling, and parsing.
 │       ├── test_pdf_extractor_strike.py               # Unit tests for PDF strike-detection geometry helpers (FR-33 [D-031]).
 │       ├── test_pipeline.py                           # Pipeline smoke tests — extract, profile, and parse real PDFs.
@@ -377,6 +379,7 @@ nora/
 │       ├── test_profile_substitute.py                 # Tests for profile placeholder substitution [D-062].
 │       ├── test_query.py                              # Tests for the query pipeline (PoC Step 10).
 │       ├── test_query_citation_audit.py               # Tests for Stage 6.5 — per-sentence citation audit.
+│   ├── test_query_cell_routing.py                     # Query-side cell routing (D-DRAFT-11 slice 2).
 │       ├── test_query_grouping.py                     # Tests for hierarchy-based chunk grouping (Stage 4.7).
 │       ├── test_query_grouping_pipeline.py            # Tests for Stage 4.7 (hierarchy grouping) pipeline integration.
 │       ├── test_query_intent.py                       # Tests for Step 4 — FACT and SUMMARIZE intent classification + routing.
@@ -394,6 +397,7 @@ nora/
 │       ├── test_structural_parser_table_anchors.py    # Tests for table-cell req-ID anchoring in GenericStructuralParser.
 │       ├── test_taxonomy.py                           # Tests for the feature taxonomy pipeline (Step 6).
 │       ├── test_vectorstore.py                        # Tests for vector store construction (PoC Step 9).
+│   ├── test_vectorstore_cell.py                       # Per-cell vectorstore build + cell-store loader (D-DRAFT-11 slice 1).
 │       ├── test_web_config.py                         # Tests for `core/src/web/config.py` — env_dir + DB-path resolution.
 │       ├── test_web_config_db.py                      # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_jobs.py                           # Tests for the NORA web job queue.

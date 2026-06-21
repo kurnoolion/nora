@@ -609,3 +609,64 @@ needlessly once NORA migrates).
   the same migration.
 - `sandbox/adapter` stays informal (no MODULE.md, SIRA D-DRAFT-8); track via the
   SIRA journal. The `multi-mno-sira` strand should note the coupling.
+
+---
+
+## D-DRAFT-13 — Profile-driven exclusion of non-normative sections + trailing appendices (REFERENCES, traceability matrices)
+
+**Context:** The MNO-A (heading model) corpus carries content that is
+structurally a "requirement" to the parser but is **not normative** and badly
+bloats RAG chunks (driving them past the embedder's 8000-char input limit):
+(1) **REFERENCES / bibliography** sections — a titled heading (with a trailing
+req_id) whose body is a citation list; (2) a **requirement→test-case
+traceability appendix** — NOT a titled section: a marker line followed by a
+section→req_id matrix and test-case tables (`Test Case Name | Test Plan Id | …`)
+that the parser glued onto the **last real requirement's** `text` + `tables`
+(no new req_id or heading breaks it). Both surfaced as oversize chunks during
+multi-MNO work-PC verification. The existing per-doc `kind=remove` annotation
+(D-061) is manual; these are systematic for the corpus and want a profile rule.
+
+**Decision:** Two complementary profile-driven mechanisms (additive, empty =
+no-op):
+- **`exclude_section_pattern`** — regex matched on a section **title**. Matching
+  sections + descendants are dropped from the parsed tree (never become
+  Requirements or chunks). Runs **after** `reference_list_section_pattern`
+  extraction, so a REFERENCES section still populates `reference_list_map`
+  (citation resolution preserved) before being dropped from RAG. Generalizes the
+  glossary drop into a shared `_drop_section_subtree` helper.
+- **`content_end_marker`** — regex matched per **body line**, for a trailing
+  appendix glued onto a requirement (no heading to match). For a requirement
+  whose text has a matching line, the parser truncates the text **before** that
+  line and clears that requirement's `tables`/`images`. Symmetric to
+  `content_start_section` (D-DRAFT-4, front cut).
+- Both accept placeholders (`<TRACEABILITY>`) resolved from the work-PC mapping
+  file. `bs_d7a2c81f`: `exclude_section_pattern` = `(?i)^\s*references\b`;
+  `content_end_marker` = `<TRACEABILITY>`.
+
+**Why:** Title-based exclusion is right for *sectioned* non-requirements
+(REFERENCES has a heading); a *content marker* is required for the traceability
+appendix because it has no heading — it's trailing text+tables on the last req,
+so nothing title-based can reach it. Splitting into two knobs keeps each
+mechanism simple and each matches what it targets. Extracting references to
+`reference_list_map` *before* dropping keeps future indirect-citation resolution
+free. Rejected: manual `kind=remove` per doc (not systematic); a single combined
+knob (the two cases are structurally different — title vs body line); hard
+char-cap truncation of all chunks (would silently drop *legitimate* long
+requirements — kept those, see Consequences).
+
+**Consequences:**
+- New profile fields `exclude_section_pattern`, `content_end_marker` (both
+  empty-default no-ops; substituted like other regex fields). New parser passes
+  `_drop_excluded_sections` + `_apply_content_end_marker`; shared
+  `_drop_section_subtree` (also backs the glossary drop). MODULE.md updated
+  (parser, profiler).
+- `content_end_marker` clears **all** of a marked requirement's tables/images on
+  the assumption the marker begins a trailing appendix — over-drops if a legit
+  table ever *precedes* the marker in the same req. Safe for this corpus (marker
+  is a document-end delimiter); flagged if another corpus differs.
+- **Legitimately long requirements** (category 1 — table-heavy normative reqs)
+  are deliberately NOT truncated; they still exceed the embedder limit (vector
+  on the prefix, full text stored). Chunk-splitting remains deferred (standing
+  token-dense-chunks STATUS flag).
+- Generic + reusable: any corpus can name its non-normative sections / trailing
+  appendices via profile, no code change.

@@ -424,3 +424,67 @@
   the STATUS taxonomy-non-determinism flag isn't assumed fully closed).
 - D-DRAFT-1..12 all unlanded; landing gate stands (full + incremental ingest
   verified on a real multi-MNO/release set, cross-MNO no-leak confirmed).
+
+## 2026-06-20 — D-DRAFT-11 (per-cell vectorstore + query routing) + D-DRAFT-13 (section/appendix exclusion) + verification fixes
+
+### Done this session
+- **D-DRAFT-11 — per-cell vectorstore + query-side cell routing** (3 slices, all pushed):
+  - Slice 1 [2868ddc]: `run_vectorstore` builds one ChromaDB per `(mno, release)`
+    cell at `out/vectorstore/<mno>/<rel>/`; new `vectorstore/cell_loader.py`
+    (`load_cell_stores`, `FLAT_CELL` fallback).
+  - Slice 2a [9ef3c7f]: cell-aware `QueryPipeline` (`cell_stores=` param,
+    `_select_cells` routing). Single cell → its retriever directly; multiple
+    cells → per-cell retrieve (no per-cell rerank) → merge → rerank-once
+    (merge-then-rerank, user-confirmed fusion). Flat store → `{FLAT_CELL: store}`
+    so single-store callers unchanged.
+  - Slice 2b [b76cc83]: wired eval / web route / query_cli through
+    `load_cell_stores`; `EvalRunner` gained `cell_stores`.
+- **D-DRAFT-13 — non-normative section/appendix exclusion** (NEW decision):
+  - `exclude_section_pattern` [abe61e3]: regex on section *title*; drops matching
+    section + descendants (REFERENCES). Runs after reference-list extraction so
+    `reference_list_map` is still populated. Generalized glossary drop into
+    shared `_drop_section_subtree`.
+  - `content_end_marker` [06edf7f]: traceability appendix isn't a titled section —
+    a marker line + section→req_id matrix + test-case tables get glued onto the
+    LAST real requirement. Regex per body line truncates the req's text before the
+    marker and clears its trailing tables/images. Symmetric to
+    `content_start_section`. Both support `<TRACEABILITY>` placeholder.
+  - `bs_d7a2c81f` (MNO-A): `exclude_section_pattern` = references; `content_end_marker`
+    = `<TRACEABILITY>`.
+- **Work-PC verification fixes:**
+  - `resolve_llm_model` wired into `run_cli` [8d20072] — `NORA_LLM_MODEL` was
+    silently ignored (CLI passed args.model straight through), causing fallback
+    to mock taxonomy.
+  - eval reranker gated on `resolve_reranker_enabled()` [0916da5] — eval
+    unconditionally constructed the cross-encoder → HF reach-out even when
+    disabled. Now no HF traffic with reranker off.
+  - `build_context_max_chars` per-ancestor cap [64a5a56] — `path_and_content`
+    (MNO-B) produced giant chunks the embedder truncated; bs_5114ac92 → 2000.
+  - oversize-chunk logging by `chunk_id` [bcd2a99] — builder pre-scan names the
+    req being truncated (embedder only knows batch index).
+- Docs: verification runbook + D-DRAFT-11 §D query checks [d53505d, 1f1def8].
+- All suites green throughout (~110 new tests across the session). Working tree
+  clean, all pushed.
+
+### In progress
+- (none code-wise — all committed/pushed)
+
+### Next
+- **WebUI evaluation** of the multi-cell query path (the one D-DRAFT-11 consumer
+  not yet exercised) — deferred to a combined eval with `multi-mno-sira`.
+- Switch to `multi-mno-sira`: ingest the multi-MNO corpus (adapter already reads
+  nested `out/parse/<mno>/<rel>/`, D-DRAFT-12), reconcile `sira_cells.py` onto the
+  core `release_key` util (cross-strand amendment), run/verify build+enrich.
+- Then `/land-strand multi-mno-nora` (after WebUI sign-off) → promotes D-DRAFT-1..13.
+
+### Flags
+- **WebUI query path UNVERIFIED** — `routes/query.py` wired to `load_cell_stores`
+  but not run end-to-end. If the combined eval surfaces a NORA-web bug, fix it
+  bound to this strand before landing.
+- **Category-1 oversize chunks remain** (legitimately long reqs, table-heavy) —
+  accepted, not truncated; chunk-splitting deferred (aligns with the standing
+  token-dense-chunks STATUS flag). `content_end_marker` clears ALL tables on a
+  marked req (assumes marker = trailing appendix) — over-drops if a legit table
+  ever precedes the marker; safe for this corpus.
+- D-DRAFT-1..13 all unlanded; landing gate stands (full + incremental + WebUI
+  verified, cross-MNO no-leak confirmed).
