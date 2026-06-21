@@ -18,23 +18,24 @@ used for ordering.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Iterable
 
+# MMMYYYY release convention — single source of truth lives in **core**
+# (multi-mno-nora D-DRAFT-6 promoted it to `core.src.extraction.release_key`,
+# amending this strand's D-DRAFT-12). `sira_cells` re-exports the primitives so
+# existing importers keep working (`from sandbox.sira_cells import
+# is_valid_release`, the adapter's `RELEASE_RE`, the `order_key` sort key); the
+# cell-identity helpers below (cell_dirname / parse_cell_dirname /
+# latest_release / enumerate_cells) are SIRA-specific and stay here.
+# sandbox -> core is the allowed import direction (core never imports sandbox).
+from core.src.extraction.release_key import (  # noqa: F401  (re-exported)
+    RELEASE_RE,
+    is_valid_release,
+    release_order_key as order_key,
+)
+
 CellKey = tuple[str, str]  # (mno, release), e.g. ("VZW", "Feb2026")
-
-_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-_MONTH_IDX = {m: i + 1 for i, m in enumerate(_MONTHS)}
-
-# A conforming release label: 3-letter title-case month + 4-digit year.
-RELEASE_RE = re.compile(r"^(?:" + "|".join(_MONTHS) + r")\d{4}$")
-
-
-def is_valid_release(release: str) -> bool:
-    """True iff `release` matches the MMMYYYY convention (e.g. 'Feb2026')."""
-    return bool(RELEASE_RE.match(release or ""))
 
 
 def cell_dirname(cell: CellKey) -> str:
@@ -61,20 +62,6 @@ def parse_cell_dirname(name: str) -> CellKey | None:
     if not mno or not is_valid_release(release):
         return None
     return (mno, release)
-
-
-def order_key(release: str) -> tuple[int, int] | None:
-    """Sortable key for a release label: 'Feb2026' -> (2026, 2).
-
-    Returns None for a non-conforming label. Sorting strictly off the
-    MMMYYYY directory label — NEVER the free-form `release_date`
-    (D-DRAFT-5 trap).
-    """
-    m = re.match(r"^([A-Z][a-z]{2})(\d{4})$", release or "")
-    if not m:
-        return None
-    idx = _MONTH_IDX.get(m.group(1))
-    return (int(m.group(2)), idx) if idx else None
 
 
 def latest_release(mno: str, cells: Iterable[CellKey]) -> str | None:
