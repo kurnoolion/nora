@@ -99,6 +99,23 @@ done
 
 ## C. Launch the cell-aware service + verify cell loading
 
+**Prompt selection (set before launching).** Three prompts, two categories:
+
+- **Query-enrich + rerank (live, in the service)** — env-overridable; set to your
+  variant (e.g. corpus-tuned `*_v02.txt`) *before* `uvicorn`. The service prefers
+  a per-stage run-dir copy over these env paths, but the corpus-only build
+  (`prepare,bm25,enrich_corpus`) creates no live `query-enrich`/`rerank` run dirs,
+  so the env path wins. Verify via the `*_source` fields in `/healthz`.
+  ```bash
+  export NORA_QUERY_PROMPT=scripts/configs/enrich/prompts/query_requirement_v02.txt
+  export NORA_RERANK_PROMPT=scripts/configs/rerank/prompts/relevance_requirement_v02.txt
+  ```
+- **Doc/corpus enrichment (offline, baked into `runs/doc-enrich/`)** — NOT
+  env-switchable. To change it, edit the installed enrich config
+  (`<clone>/scripts/configs/enrich/nora.yaml` → `doc_prompt_file: …_v02.txt`) and
+  **re-run** `sira_multi --stages enrich_corpus` (an LLM pass over the corpus),
+  then restart the service.
+
 ```bash
 # Terminal: shim (if used) on 8030, then the SIRA query service:
 uvicorn sandbox.sira_query.service:app --port 8040
@@ -108,8 +125,10 @@ On startup the service enumerates cells under `$DB` and loads each cell's BM25
 index + doc enrichments (D-DRAFT-7 cell-dict). Check it loaded:
 ```bash
 curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
-#   ok: true, corpus_size: <NN>, query_prompt_loaded: true,
-#   n_req_rows / n_doc_rows / n_section_rows > 0
+#   ok: true, mode: "multi-cell", cells: [both], corpus_size: <NN>,
+#   query_prompt_loaded / rerank_prompt_loaded: true,
+#   query_prompt_source / rerank_prompt_source → the v02 paths (confirms prompt
+#   selection took); n_req_rows / n_doc_rows / n_section_rows > 0
 ```
 Confirm in the **startup logs** that BOTH cells loaded (one BM25Index per cell).
 
