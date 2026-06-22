@@ -42,13 +42,14 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
 
     graph = load_graph(graph_path)
 
-    # Load vector store config
-    vs_config_path = Path(args.vectorstore_dir) / "config.json"
-    if vs_config_path.exists():
-        from core.src.vectorstore.config import VectorStoreConfig
+    # Load vector store config. D-DRAFT-11: per-cell layout has no flat
+    # config.json — read the embedder config from a per-cell config (shared).
+    from core.src.vectorstore.config import VectorStoreConfig
+    from core.src.vectorstore.cell_loader import embedder_config_path
+    vs_config_path = embedder_config_path(args.vectorstore_dir)
+    if vs_config_path is not None:
         vs_config = VectorStoreConfig.load_json(vs_config_path)
     else:
-        from core.src.vectorstore.config import VectorStoreConfig
         vs_config = VectorStoreConfig(persist_directory=args.vectorstore_dir)
 
     # Create embedder

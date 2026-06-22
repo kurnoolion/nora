@@ -38,6 +38,25 @@ def _open(store_dir: Path) -> ChromaDBStore:
     )
 
 
+def embedder_config_path(vectorstore_root) -> "Path | None":
+    """Path to a `config.json` to read the (shared) embedder config from.
+
+    Prefers the flat `<root>/config.json` (legacy single store); else any
+    per-cell `<mno>/<rel>/config.json` (D-DRAFT-11) — the embedder is shared
+    across cells, so any cell's config carries the right
+    embedding_provider/model. Returns `None` when neither exists (caller then
+    falls back to a default `VectorStoreConfig`). Without this, a per-cell
+    layout has no flat config and callers default to the `sentence-transformers`
+    provider → `make_embedder` tries to download from HuggingFace.
+    """
+    root = Path(vectorstore_root)
+    flat = root / "config.json"
+    if flat.exists():
+        return flat
+    cell_cfgs = sorted(root.glob("*/*/config.json"))
+    return cell_cfgs[0] if cell_cfgs else None
+
+
 def load_cell_stores(vectorstore_root) -> dict[CellKey, ChromaDBStore]:
     """Enumerate per-cell stores under `vectorstore_root`.
 

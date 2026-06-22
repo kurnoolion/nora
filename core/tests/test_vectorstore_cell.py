@@ -7,7 +7,11 @@ from pathlib import Path
 from core.src.parser.structural_parser import Requirement, RequirementTree
 from core.src.pipeline.runner import PipelineContext
 from core.src.pipeline.stages import run_vectorstore
-from core.src.vectorstore.cell_loader import FLAT_CELL, load_cell_stores
+from core.src.vectorstore.cell_loader import (
+    FLAT_CELL,
+    embedder_config_path,
+    load_cell_stores,
+)
 from core.src.vectorstore.config import VectorStoreConfig
 
 
@@ -61,6 +65,24 @@ class TestLoadCellStores:
     def test_empty(self, tmp_path):
         assert load_cell_stores(tmp_path) == {}
         assert load_cell_stores(tmp_path / "nope") == {}
+
+
+class TestEmbedderConfigPath:
+    """D-DRAFT-11: read the embedder config from a per-cell config when the flat
+    one is absent (else callers default to sentence-transformers/HF)."""
+
+    def test_prefers_flat_config(self, tmp_path):
+        VectorStoreConfig(persist_directory=str(tmp_path)).save_json(tmp_path / "config.json")
+        _seed_cell_dir(tmp_path, "VZW-OA", "Feb2026")
+        assert embedder_config_path(tmp_path) == tmp_path / "config.json"
+
+    def test_falls_back_to_per_cell_config(self, tmp_path):
+        _seed_cell_dir(tmp_path, "MNO-B", "Mar2025")   # no flat config
+        assert embedder_config_path(tmp_path) == tmp_path / "MNO-B" / "Mar2025" / "config.json"
+
+    def test_none_when_no_config(self, tmp_path):
+        assert embedder_config_path(tmp_path) is None
+        assert embedder_config_path(tmp_path / "nope") is None
 
 
 # ── per-cell build ───────────────────────────────────────────────────

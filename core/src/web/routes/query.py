@@ -413,8 +413,11 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     from core.src.vectorstore.config import VectorStoreConfig
     from core.src.vectorstore.store_chroma import ChromaDBStore
 
-    vs_config_path = vectorstore_dir / "config.json"
-    if vs_config_path.exists():
+    # D-DRAFT-11: read the embedder config from a per-cell config when the flat
+    # one is absent (else we default to sentence-transformers → HuggingFace).
+    from core.src.vectorstore.cell_loader import embedder_config_path
+    vs_config_path = embedder_config_path(vectorstore_dir)
+    if vs_config_path is not None:
         vs_config = VectorStoreConfig.load_json(vs_config_path)
     else:
         vs_config = VectorStoreConfig(persist_directory=str(vectorstore_dir))

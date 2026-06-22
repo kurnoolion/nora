@@ -686,10 +686,14 @@ def run_eval(ctx: PipelineContext) -> StageResult:
 
     # Load vector store
     vs_dir = ctx.stage_output("vectorstore")
-    vs_config_path = vs_dir / "config.json"
+    # D-DRAFT-11: per-cell layout has no flat config.json — read the embedder
+    # config from a per-cell config (shared across cells) so the embedder
+    # matches what built the cells (else defaults to sentence-transformers/HF).
+    from core.src.vectorstore.cell_loader import embedder_config_path
+    vs_config_path = embedder_config_path(vs_dir)
     vs_config = (
         VectorStoreConfig.load_json(vs_config_path)
-        if vs_config_path.exists()
+        if vs_config_path is not None
         else VectorStoreConfig(
             persist_directory=str(vs_dir),
             embedding_provider=ctx.embedding_provider,
