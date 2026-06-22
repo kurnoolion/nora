@@ -148,6 +148,24 @@ def test_healthz_reports_cell_state(client):
     assert body["cells_load_error"] is None
 
 
+def test_load_prompts_from_run_dir(tmp_path, monkeypatch):
+    # D-DRAFT-7: service-level prompts must load in multi-cell mode (where
+    # _load_state is skipped). _load_prompts resolves the run dir under a cell
+    # base and loads both prompt templates.
+    monkeypatch.setattr(svc, "_USE_LATEST", True)
+    monkeypatch.setattr(svc, "_QUERY_ENRICH_RUN", "")
+    monkeypatch.setattr(svc, "_RERANK_RUN", "")
+    base = tmp_path / "VZW__Feb2026"
+    (base / "runs" / "query-enrich" / "r1").mkdir(parents=True)
+    (base / "runs" / "query-enrich" / "r1" / "query_prompt.txt").write_text("QP", encoding="utf-8")
+    (base / "runs" / "rerank" / "r1").mkdir(parents=True)
+    (base / "runs" / "rerank" / "r1" / "prompt.txt").write_text("RP", encoding="utf-8")
+
+    svc._load_prompts(base)
+    assert svc._query_prompt_template == "QP"
+    assert svc._rerank_prompt_template == "RP"
+
+
 def test_healthz_single_dataset_when_no_cells(monkeypatch):
     # No cells loaded → legacy single-dataset reporting (ok reflects _bm25).
     monkeypatch.setattr(svc, "_cells", {})

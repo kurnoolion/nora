@@ -269,6 +269,48 @@ def _resolve_run_dir(stage_dir: Path, pinned_name: str) -> Path | None:
     return None
 
 
+def _load_prompts(base: Path) -> None:
+    """Load the service-level query-enrich + rerank prompt templates.
+
+    Prefers the pinned/latest run's own copy under ``<base>/runs/<stage>/`` so
+    the prompt is byte-identical to the offline pipeline; falls back to the
+    clone's canonical prompt file. Called by both `_load_state` (legacy) and
+    multi-cell startup — the prompts are service-level (shared across cells, used
+    by `_multi_cell_query`), so they must load in multi-cell mode too (where
+    `_load_state` is skipped).
+    """
+    global _query_prompt_template, _query_prompt_source
+    global _rerank_prompt_template, _rerank_prompt_source
+
+    query_run = _resolve_run_dir(base / "runs" / "query-enrich", _QUERY_ENRICH_RUN)
+    qp_path: Path | None = None
+    if query_run is not None and (query_run / "query_prompt.txt").exists():
+        qp_path = query_run / "query_prompt.txt"
+    elif (_SIRA_CLONE_ROOT / _QUERY_PROMPT_PATH).exists():
+        qp_path = _SIRA_CLONE_ROOT / _QUERY_PROMPT_PATH
+    if qp_path is not None:
+        _query_prompt_template = qp_path.read_text(encoding="utf-8")
+        _query_prompt_source = str(qp_path)
+        logger.info("Query enrichment prompt loaded from %s", qp_path)
+    else:
+        _query_prompt_template = ""
+        logger.warning("Query enrichment prompt not found — expansion stage skipped")
+
+    rerank_run = _resolve_run_dir(base / "runs" / "rerank", _RERANK_RUN)
+    rp_path: Path | None = None
+    if rerank_run is not None and (rerank_run / "prompt.txt").exists():
+        rp_path = rerank_run / "prompt.txt"
+    elif (_SIRA_CLONE_ROOT / _RERANK_PROMPT_PATH).exists():
+        rp_path = _SIRA_CLONE_ROOT / _RERANK_PROMPT_PATH
+    if rp_path is not None:
+        _rerank_prompt_template = rp_path.read_text(encoding="utf-8")
+        _rerank_prompt_source = str(rp_path)
+        logger.info("Rerank prompt loaded from %s", rp_path)
+    else:
+        _rerank_prompt_template = ""
+        logger.warning("Rerank prompt not found — rerank stage skipped")
+
+
 def _load_state() -> None:
     """Load BM25 index + corpus + prompts. Called once on first use.
 
@@ -326,8 +368,6 @@ def _load_state() -> None:
     # Resolve per-stage run directories (or None if falling back to
     # best-pointer behavior).
     doc_run = _resolve_run_dir(base / "runs" / "doc-enrich", _DOC_ENRICH_RUN)
-    query_run = _resolve_run_dir(base / "runs" / "query-enrich", _QUERY_ENRICH_RUN)
-    rerank_run = _resolve_run_dir(base / "runs" / "rerank", _RERANK_RUN)
 
     # Doc enrichment: apply phrases to the loaded BM25 index. Prefer the
     # pinned/latest run's `enrichments.kept.jsonl`; fall back to
@@ -396,48 +436,8 @@ def _load_state() -> None:
             "No doc-enrichment phrases found — running vanilla BM25 + query-side enrichment only"
         )
 
-    # Query enrichment prompt — prefer the run's own copy so the prompt
-    # used at query time is byte-identical to what the offline pipeline
-    # used. Fall back to SIRA_CLONE_ROOT/sandbox-copied prompt if not
-    # found in the run.
-    qp_path: Path | None = None
-    if query_run is not None:
-        cand = query_run / "query_prompt.txt"
-        if cand.exists():
-            qp_path = cand
-    if qp_path is None:
-        fallback_qp = _SIRA_CLONE_ROOT / _QUERY_PROMPT_PATH
-        if fallback_qp.exists():
-            qp_path = fallback_qp
-    if qp_path is not None:
-        _query_prompt_template = qp_path.read_text(encoding="utf-8")
-        _query_prompt_source = str(qp_path)
-        logger.info("Query enrichment prompt loaded from %s", qp_path)
-    else:
-        _query_prompt_template = ""
-        logger.warning(
-            "Query enrichment prompt not found in run dir or SIRA_CLONE_ROOT — expansion stage skipped"
-        )
-
-    # Rerank prompt — same logic.
-    rp_path: Path | None = None
-    if rerank_run is not None:
-        cand = rerank_run / "prompt.txt"
-        if cand.exists():
-            rp_path = cand
-    if rp_path is None:
-        fallback_rp = _SIRA_CLONE_ROOT / _RERANK_PROMPT_PATH
-        if fallback_rp.exists():
-            rp_path = fallback_rp
-    if rp_path is not None:
-        _rerank_prompt_template = rp_path.read_text(encoding="utf-8")
-        _rerank_prompt_source = str(rp_path)
-        logger.info("Rerank prompt loaded from %s", rp_path)
-    else:
-        _rerank_prompt_template = ""
-        logger.warning(
-            "Rerank prompt not found in run dir or SIRA_CLONE_ROOT — rerank stage skipped"
-        )
+    # Query-enrich + rerank prompts (service-level; shared helper).
+    _load_prompts(base)
 
     _load_error = None
     logger.info(
@@ -720,7 +720,13 @@ def _startup() -> None:
     # ok:false even though the cell-dict is healthy.
     try:
         _load_cells()
-        if not _cells:
+        if _cells:
+            # Service-level prompts aren't loaded by _load_cells (which is
+            # skipped → no _load_state in multi-cell mode). Load them from the
+            # first cell's runs/ (prompt content is identical across cells).
+            first = sorted(_cells)[0]
+            _load_prompts(Path(_DB_ROOT) / cell_dirname(first))
+        else:
             _load_state()
     except Exception as exc:  # pragma: no cover — defensive
         logger.exception("Startup load failed")
