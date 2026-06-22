@@ -148,6 +148,25 @@ def test_healthz_reports_cell_state(client):
     assert body["cells_load_error"] is None
 
 
+def test_healthz_aggregates_per_cell_doc_enrich(monkeypatch):
+    # doc enrichment is per-cell (CellState); healthz must aggregate it, not
+    # report the legacy global (which _load_state — skipped in multi-cell —
+    # would set). Otherwise it falsely reads "(none) / 0" even when cells are
+    # enriched.
+    a = _cell(VZW_F, [("req:v1", "v1", "x")])
+    a.doc_enrich_source = "/db/VZW__Feb2026/runs/doc-enrich/enrich-1/enrichments.kept.jsonl"
+    a.doc_enrich_applied_docs = 10
+    b = _cell(TMO_J, [("req:t1", "t1", "x")])
+    b.doc_enrich_source = "/db/TMO__Jan2026/runs/doc-enrich/enrich-2/enrichments.kept.jsonl"
+    b.doc_enrich_applied_docs = 7
+    client = _setup(monkeypatch, {VZW_F: a, TMO_J: b})
+
+    body = client.get("/healthz").json()
+    assert body["doc_enrich_applied_docs"] == 17        # summed across cells
+    assert set(body["doc_enrich_source"]) == {"TMO__Jan2026", "VZW__Feb2026"}
+    assert "enrich-1" in body["doc_enrich_source"]["VZW__Feb2026"]
+
+
 def test_load_prompts_from_run_dir(tmp_path, monkeypatch):
     # D-DRAFT-7: service-level prompts must load in multi-cell mode (where
     # _load_state is skipped). _load_prompts resolves the run dir under a cell

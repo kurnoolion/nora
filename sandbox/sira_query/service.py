@@ -783,8 +783,17 @@ def healthz() -> dict[str, Any]:
         "query_prompt_loaded": bool(_query_prompt_template),
         "rerank_prompt_loaded": bool(_rerank_prompt_template),
         # Provenance — verify everything ties back to the run you expect.
-        "doc_enrich_source": _doc_enrich_source or "(none — vanilla BM25)",
-        "doc_enrich_applied_docs": _doc_enrich_applied_docs,
+        # Multi-cell: doc enrichment is per-cell (CellState), so aggregate;
+        # the legacy globals are only set by the single-dataset _load_state.
+        "doc_enrich_source": (
+            {cell_dirname(c): (_cells[c].doc_enrich_source or "(none — vanilla BM25)")
+             for c in sorted(_cells)}
+            if multi else (_doc_enrich_source or "(none — vanilla BM25)")
+        ),
+        "doc_enrich_applied_docs": (
+            sum(cs.doc_enrich_applied_docs for cs in _cells.values())
+            if multi else _doc_enrich_applied_docs
+        ),
         "query_prompt_source": _query_prompt_source or "(none)",
         "rerank_prompt_source": _rerank_prompt_source or "(none)",
         "doc_enrich_run_pinned": _DOC_ENRICH_RUN or "(unset)",
