@@ -713,8 +713,15 @@ class _SiraQueryRequest(BaseModel):
 
 @app.on_event("startup")
 def _startup() -> None:
+    # Multi-cell first: when <db_root> holds <mno>__<MMMYYYY> cells, load them
+    # at startup so /healthz reports cell state (D-DRAFT-7). Only fall back to
+    # the legacy single-dataset load when no cells are present — otherwise the
+    # legacy load fails (no <db_root>/<dataset>/ dir) and falsely reports
+    # ok:false even though the cell-dict is healthy.
     try:
-        _load_state()
+        _load_cells()
+        if not _cells:
+            _load_state()
     except Exception as exc:  # pragma: no cover — defensive
         logger.exception("Startup load failed")
         global _load_error
@@ -723,12 +730,21 @@ def _startup() -> None:
 
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
+    # Multi-cell (D-DRAFT-7): aggregate health across loaded cells. A pure
+    # multi-cell deployment has no legacy `_bm25`, so `ok` must consider cells.
+    multi = bool(_cells)
+    eff_doc_ids = (
+        [rid for c in _cells.values() for rid in c.doc_ids] if multi else _doc_ids
+    )
     return {
-        "ok": _bm25 is not None,
+        "ok": multi or (_bm25 is not None),
+        "mode": "multi-cell" if multi else "single-dataset",
+        "cells": [cell_dirname(c) for c in sorted(_cells)] if multi else [],
+        "cells_load_error": _cells_load_error,
         "load_error": _load_error,
         "db_root": _DB_ROOT,
-        "dataset": _DATASET,
-        "corpus_size": len(_doc_ids),
+        "dataset": "(multi-cell)" if multi else _DATASET,
+        "corpus_size": len(eff_doc_ids),
         "max_df_ratio": _MAX_DF_RATIO,
         "max_df_absolute": _max_df_absolute,
         "expansion_weight": _EXPANSION_WEIGHT,
@@ -750,10 +766,10 @@ def healthz() -> dict[str, Any]:
         "fanout_per_hit": _FANOUT_PER_HIT,
         # Counts of doc/section rows in the loaded corpus — confirms the
         # adapter wrote multi-granularity rows (plan-aware-sira).
-        "n_doc_rows": sum(1 for x in _doc_ids if x.startswith("doc:")),
-        "n_section_rows": sum(1 for x in _doc_ids if x.startswith("section:")),
+        "n_doc_rows": sum(1 for x in eff_doc_ids if x.startswith("doc:")),
+        "n_section_rows": sum(1 for x in eff_doc_ids if x.startswith("section:")),
         "n_req_rows": sum(
-            1 for x in _doc_ids
+            1 for x in eff_doc_ids
             if not x.startswith("doc:") and not x.startswith("section:")
         ),
         "shim_url": _SHIM_URL,

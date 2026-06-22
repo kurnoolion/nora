@@ -134,3 +134,25 @@ def test_release_diff_same_reqid_both_cells(monkeypatch):
 def test_empty_query_rejected(client):
     r = client.post("/sira-query", json={"query": "   "})
     assert r.status_code == 400
+
+
+def test_healthz_reports_cell_state(client):
+    # D-DRAFT-7: in multi-cell mode healthz is cell-aware (ok=true even with no
+    # legacy _bm25; mode + cells + aggregated corpus_size across cells).
+    body = client.get("/healthz").json()
+    assert body["ok"] is True
+    assert body["mode"] == "multi-cell"
+    assert body["cells"] == ["TMO__Jan2026", "VZW__Feb2026"]   # sorted
+    assert body["corpus_size"] == 4        # 2 + 2 across both cells
+    assert body["n_req_rows"] == 4
+    assert body["cells_load_error"] is None
+
+
+def test_healthz_single_dataset_when_no_cells(monkeypatch):
+    # No cells loaded → legacy single-dataset reporting (ok reflects _bm25).
+    monkeypatch.setattr(svc, "_cells", {})
+    monkeypatch.setattr(svc, "_bm25", None)
+    body = TestClient(svc.app).get("/healthz").json()
+    assert body["mode"] == "single-dataset"
+    assert body["ok"] is False
+    assert body["cells"] == []
