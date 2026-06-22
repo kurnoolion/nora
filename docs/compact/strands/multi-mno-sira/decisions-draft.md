@@ -544,6 +544,19 @@ legacy path. Supersedes the "in/beside `infer_metadata_from_path`"
 phrasing in D-DRAFT-5's Decision; D-DRAFT-5's convention + ordering
 semantics are unchanged.
 
+**Superseded (2026-06-22) by multi-mno-nora D-DRAFT-6.** That decision
+removed the last free-form release (OA → `VZW-OA/Feb2026`), making MMMYYYY
+**universal**, so validation moved into a shared **core** util
+(`core.src.extraction.release_key`) that `infer_metadata_from_path` now
+enforces unconditionally — and `sandbox/sira_cells.py` re-exports the
+primitives from it (commit `4f01a93`, multi-mno-sira). So this decision's
+core premise (a) — "enforcing MMMYYYY in core would break the legacy
+free-form flow" — no longer holds; the placement is now **core**, not
+sandbox-side. The *intent* (fail-loud early, no sandbox→core boundary
+inversion) stands; `sira_preflight` may still run as an opt-in pre-extract
+check, calling the same core util. At land time, rewrite this decision's
+title + Decision to reflect the core-util placement.
+
 ---
 
 ## Cross-strand couplings — incoming from `multi-mno-nora` (2026-06-19)
@@ -575,3 +588,47 @@ Two of its decisions reach back into this strand and must be reconciled when
 
 No SIRA decision is rewritten here — this note flags the reconciliation for
 whoever lands this strand.
+
+---
+
+## D-DRAFT-13 — Per-cell SIRA data config is generated, not a reused config with `data.name` override (corrects D-DRAFT-6)
+
+**Context:** D-DRAFT-6 assumed SIRA's pipeline could run each cell off **one
+reused `data/nora.yaml`** with `data.name=<cell>` overridden per cell — "no
+per-cell config files." The first work-PC multi-cell run falsified this: SIRA's
+`scripts/run_pipeline.py._with_dataset(cfg, ds_name)` **re-reads
+`configs/data/<ds_name>.yaml` from disk** for each dataset (the `data=` hydra
+group default is discarded), so every cell aborted with
+`FileNotFoundError: configs/data/<cell>.yaml`. The reused-config-with-override
+model is fundamentally incompatible with how `_with_dataset` resolves the
+dataset by name.
+
+**Decision:** The batch orchestrator **generates a per-cell data config** before
+invoking each cell. `sira_multi.ensure_cell_data_config(clone, cell)` reads the
+installed `configs/data/nora.yaml` template, sets only the `name:` field to the
+cell, and writes `configs/data/<cell>.yaml` into the clone — then
+`run_pipeline.py data.name=<cell>` resolves cleanly. Generated each run
+(idempotent), so a changed template propagates. All other fields (`split`,
+`k_values`, …) are cell-independent and copied verbatim. Keeps `run_pipeline.py`
+itself unchanged (patch-don't-fork posture, SIRA D-DRAFT-7).
+
+**Why:** Generation is the minimal fix that respects `_with_dataset`'s
+file-by-name contract without forking SIRA or hand-maintaining N YAMLs. The
+template-with-`name:`-substituted approach keeps cells identical apart from the
+one field that must differ (the dataset identity that routes outputs to
+`<db_root>/<cell>/`). Rejected: patching `run_pipeline._with_dataset` to accept
+an in-memory override (forks the upstream clone — violates patch-don't-fork);
+pre-generating all cell YAMLs in `install_configs.sh` (not automatic; drifts as
+cells are added); symlinking each cell YAML to `nora.yaml` (the `name:` field
+would be wrong, colliding all cells onto one dataset dir).
+
+**Consequences:**
+- New `sira_multi.ensure_cell_data_config`; `run_cells` calls it per cell before
+  the subprocess. Requires the `nora.yaml` template installed in the clone
+  (SETUP.md §4) — fail-loud if absent.
+- `build_pipeline_cmd` docstring corrected; runbook §B documents the
+  auto-generation. **Supersedes the "no per-cell config files" clause of
+  D-DRAFT-6** — update D-DRAFT-6's text to reference generated per-cell configs
+  at land time.
+- The generated `configs/data/<cell>.yaml` files live in the gitignored clone
+  (transient build artifacts), not the repo.

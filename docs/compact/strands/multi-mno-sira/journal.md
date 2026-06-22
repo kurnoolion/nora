@@ -449,3 +449,57 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
 - Neither touches cell-identity or fusion logic — both are loading-strategy
   changes. The architecture front-loaded the isolation so scaling is a
   loading fix, not a redesign.
+
+## 2026-06-22 — Cross-strand reconciliation + multi-cell runbook + per-cell data-config fix
+
+### Done this session
+- **`sira_cells.py` → core `release_key`** [4f01a93]: removed the duplicated
+  MMMYYYY primitives (`_MONTHS`/`_MONTH_IDX`/`RELEASE_RE`/`is_valid_release`/
+  `order_key`); now re-exports `is_valid_release` / `RELEASE_RE` /
+  `release_order_key as order_key` from `core.src.extraction.release_key`. Cell
+  helpers (cell_dirname, parse_cell_dirname, latest_release, enumerate_cells,
+  CellKey) stay SIRA-specific. Public surface unchanged; all importers +
+  test_sira_cells pass untouched. **Realizes the cross-strand amendment** —
+  MMMYYYY logic lives in core (sandbox -> core); SIRA D-DRAFT-12's sandbox-side
+  placement is now superseded in code (update D-DRAFT-12 text at land time).
+- **Multi-cell runbook** [2e5e069]: new `multi-cell-runbook.md` — per-cell
+  ingest (`nora_to_beir --multi-cell`) -> `sira_multi` build/enrich -> cell-aware
+  service -> cross-cell query checks, with a landing-gate sign-off checklist
+  (mirrors NORA's verification-runbook). Build+enrich code was already complete;
+  the gap was the operational path SETUP.md's single-dataset flow didn't cover.
+  Also fixed stale flat `out/parse/*_tree.json` refs in SETUP.md + README.md to
+  the nested per-cell layout the adapter reads recursively (NORA D-DRAFT-12).
+- **Per-cell data-config generation in `sira_multi`** [b429244]: **fixed a real
+  bug** from the work-PC run — SIRA's `run_pipeline.py._with_dataset` re-reads
+  `configs/data/<cell>.yaml` per dataset (it does NOT honor `data.name=` as an
+  override on a reused config), so every cell hit `FileNotFoundError`.
+  `sira_multi.ensure_cell_data_config` now writes
+  `$CLONE/scripts/configs/data/<cell>.yaml` from the installed `nora.yaml`
+  template (only `name:` differs) before each cell. Corrects SIRA D-DRAFT-6's
+  "no per-cell config files" assumption. 3 new tests; runbook §B notes it.
+- 163 SIRA-owned tests pass; all pushed.
+
+### In progress
+- (none code-wise — all committed/pushed)
+
+### Next
+- **Work-PC re-run** of the multi-cell build+enrich, after `git pull`:
+  - the per-cell-config fix unblocks `sira_multi`;
+  - **re-emit cells** (`nora_to_beir --multi-cell`) so dir names match the
+    current double-underscore `cell_dirname` (see Flags).
+- Combined NORA + SIRA web eval over the shared corpus (NORA Test page §E).
+- Land both strands; at SIRA land time, update D-DRAFT-12 text -> core util.
+
+### Flags
+- **Work-PC version mismatch (verify on next run):** the failing log showed
+  single-underscore cell names (`ATT_Nov2025`) but the repo's `cell_dirname`
+  produces double (`ATT__Nov2025`, the D-DRAFT-6 separator). The work PC was on
+  older code or a stale `db_root`. After `git pull`, a `--dry-run` should show
+  DOUBLE underscores; if not, the `sandbox/` checkout is stale. Cells must be
+  re-emitted so dataset dirs match what `sira_multi` passes as `data.name`.
+- **Deferred (unchanged):** lazy-load + LRU-evict for the service's eager
+  cell loading (revisit after work-PC verification); OQ-2 per-cell eval
+  queries/qrels.
+- D-DRAFT-1..12 (+ this session's D-DRAFT-13 correction, pending capture) all
+  unlanded; landing gate stands (multi-cell build+enrich + cross-cell query
+  verified on real corpus).
