@@ -116,8 +116,32 @@ done
   **re-run** `sira_multi --stages enrich_corpus` (an LLM pass over the corpus),
   then restart the service.
 
+**Service LLM routing (set before launching).** The service's *live* stages use
+their own LLM env vars (NOT the batch `NORA_SIRA_ENRICH_LLM_*` vars). **Base URLs
+must NOT include `/v1`** — the service appends `/v1/chat/completions` (chat) or
+the backend path (rerank) itself.
+
 ```bash
-# Terminal: shim (if used) on 8030, then the SIRA query service:
+# Query enrichment → any OpenAI-compatible endpoint (vLLM/TEI/shim). No separate
+# shim needed — point straight at your endpoint:
+export NORA_LLM_SHIM_URL=http://<host>:<port>      # base only, no /v1
+export NORA_LLM_MODEL=<chat-model>
+
+# Rerank backend (multi-mno-sira D-DRAFT-14): chat | tei | openai-dedicated
+export NORA_SIRA_RERANK_BACKEND=tei                # or openai-dedicated, or chat (default)
+export NORA_SIRA_RERANK_LLM_URL=http://<reranker-host>:<port>   # base only, no /v1
+export NORA_SIRA_RERANK_LLM_MODEL=<reranker-model>             # used by openai-dedicated
+# export NORA_SIRA_RERANK_LLM_API_KEY=<key>        # only if the endpoint needs auth
+```
+- **`chat`** (default) — pointwise LLM-as-judge, one chat call per candidate,
+  uses the rerank prompt. Slowest.
+- **`tei`** — one bulk `POST {RERANK_LLM_URL}/rerank` (TEI cross-encoder). Fast.
+- **`openai-dedicated`** — one bulk `POST {RERANK_LLM_URL}/v1/rerank` (vLLM
+  Cohere-style). Fast.
+- Verify via `/healthz`: `rerank_backend`, `shim_url`, `rerank_llm_url` (real
+  `http://…` URLs, not the model name).
+
+```bash
 uvicorn sandbox.sira_query.service:app --port 8040
 ```
 

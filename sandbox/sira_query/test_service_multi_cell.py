@@ -148,6 +148,66 @@ def test_healthz_reports_cell_state(client):
     assert body["cells_load_error"] is None
 
 
+class _FakeResp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
+
+class _FakeClient:
+    def __init__(self, payload):
+        self._p = payload
+        self.last = None
+
+    async def post(self, url, json=None, headers=None):
+        self.last = (url, json, headers)
+        return _FakeResp(self._p)
+
+
+def test_rerank_bulk_tei(monkeypatch):
+    import asyncio
+    from sandbox.sira_query.fusion import Candidate
+    monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, [
+        ("req:a", "A", "x"), ("req:b", "B", "y")])})
+    monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://tei:8080")
+    cands = [Candidate(VZW_F, "req:a", 1.0), Candidate(VZW_F, "req:b", 1.0)]
+    client = _FakeClient([{"index": 0, "score": 0.9}, {"index": 1, "score": 0.2}])
+    scores = asyncio.run(svc._rerank_bulk(client, "q", cands, "tei"))
+    assert scores[("VZW", "Feb2026", "req:a")] == 90.0    # 0.9 → 0-100
+    assert scores[("VZW", "Feb2026", "req:b")] == 20.0
+    assert client.last[0] == "http://tei:8080/rerank"     # no /v1 for TEI
+    assert client.last[1]["texts"] == ["A\n\nx", "B\n\ny"]
+
+
+def test_rerank_bulk_openai_dedicated(monkeypatch):
+    import asyncio
+    from sandbox.sira_query.fusion import Candidate
+    monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, [("req:a", "A", "x")])})
+    monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://dgx:8000")
+    monkeypatch.setattr(svc, "_RERANK_LLM_MODEL", "bge-reranker")
+    cands = [Candidate(VZW_F, "req:a", 1.0)]
+    client = _FakeClient({"results": [{"index": 0, "relevance_score": 0.75}]})
+    scores = asyncio.run(svc._rerank_bulk(client, "q", cands, "openai-dedicated"))
+    assert scores[("VZW", "Feb2026", "req:a")] == 75.0
+    assert client.last[0] == "http://dgx:8000/v1/rerank"   # /v1/rerank for vLLM
+    assert client.last[1]["model"] == "bge-reranker"
+
+
+def test_rerank_bulk_no_url_scores_zero(monkeypatch):
+    import asyncio
+    from sandbox.sira_query.fusion import Candidate
+    monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, [("req:a", "A", "x")])})
+    monkeypatch.setattr(svc, "_RERANK_LLM_URL", "")
+    cands = [Candidate(VZW_F, "req:a", 1.0)]
+    scores = asyncio.run(svc._rerank_bulk(_FakeClient(None), "q", cands, "tei"))
+    assert scores == {("VZW", "Feb2026", "req:a"): 0.0}
+
+
 def test_healthz_aggregates_per_cell_doc_enrich(monkeypatch):
     # doc enrichment is per-cell (CellState); healthz must aggregate it, not
     # report the legacy global (which _load_state — skipped in multi-cell —

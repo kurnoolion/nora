@@ -64,6 +64,15 @@ _SHIM_MODEL = os.getenv("NORA_LLM_MODEL", "")
 _RERANK_LLM_URL = os.getenv("NORA_SIRA_RERANK_LLM_URL", "").rstrip("/")
 _RERANK_LLM_MODEL = os.getenv("NORA_SIRA_RERANK_LLM_MODEL", "")
 _RERANK_LLM_API_KEY = os.getenv("NORA_SIRA_RERANK_LLM_API_KEY", "")
+# Rerank backend (multi-mno-sira): "chat" (default — pointwise LLM-as-judge,
+# one chat-completion per candidate, uses the rerank prompt) | "tei" (one bulk
+# POST to {RERANK_LLM_URL}/rerank, TEI/HF cross-encoder shape) | "openai-
+# dedicated" (one bulk POST to {RERANK_LLM_URL}/v1/rerank, vLLM Cohere-style).
+# The bulk backends replace the per-pair fanout with a single call, ignore the
+# rerank prompt (cross-encoders take none), and scale scores to 0-100 so the
+# fusion's "comparable score" contract holds (one call over the merged pool ⇒
+# scores already cross-cell comparable).
+_RERANK_BACKEND = os.getenv("NORA_SIRA_RERANK_BACKEND", "chat").strip().lower()
 
 # Max tokens for the rerank LLM call. Default was 64 sized for the
 # proprietary LLM (no chain-of-thought preamble). Modern reasoning-
@@ -578,13 +587,10 @@ def _build_retrieve_fn(query: str, raw_phrases: list[str]):
     return _retrieve
 
 
-async def _rerank_candidates(client, query: str, candidates: list) -> dict:
-    """rerank_fn for `fuse`: LLM-score the merged candidate pool ->
-    {comp_id: score}. Each candidate's doc text comes from ITS cell's
-    corpus (provenance-aware). Per-call mode; a failed call scores 0 for
-    that candidate (kept, sorts low). Batch mode is a future optimization
-    — the pool spans cells, so batching would need cell-grouped prompts."""
-    scores: dict = {}
+def _candidate_doc_texts(candidates: list) -> list:
+    """[(cand, doc_text)] for candidates whose doc is present in its cell's
+    corpus, preserving order so a bulk reranker's index maps back to comp_id."""
+    items = []
     for cand in candidates:
         cstate = _cells.get(cand.cell)
         if cstate is None:
@@ -592,7 +598,63 @@ async def _rerank_candidates(client, query: str, candidates: list) -> dict:
         doc = cstate.corpus_by_id.get(cand.doc_id)
         if doc is None:
             continue
-        doc_text = (f"{doc['title']}\n\n{doc['text']}")[:4000]
+        items.append((cand, (f"{doc['title']}\n\n{doc['text']}")[:4000]))
+    return items
+
+
+async def _rerank_bulk(client, query: str, candidates: list, backend: str) -> dict:
+    """One bulk call to a dedicated cross-encoder /rerank endpoint (D-DRAFT-14).
+
+    `backend="tei"`   → POST {RERANK_LLM_URL}/rerank  {query, texts}      → [{index, score}]
+    `backend="openai-dedicated"` (vLLM) → POST {RERANK_LLM_URL}/v1/rerank {model, query, documents}
+                        → {results: [{index, relevance_score}]}
+    Scores (0-1) scaled to 0-100. The base URL must NOT include `/v1` (we add
+    the path). Any failure scores every candidate 0 (kept, sorts low)."""
+    items = _candidate_doc_texts(candidates)
+    if not items:
+        return {}
+    if not _RERANK_LLM_URL:
+        logger.warning("rerank backend=%s needs NORA_SIRA_RERANK_LLM_URL — scoring 0", backend)
+        return {cand.comp_id: 0.0 for cand, _ in items}
+    docs = [t for _, t in items]
+    headers = {"Authorization": f"Bearer {_RERANK_LLM_API_KEY}"} if _RERANK_LLM_API_KEY else None
+    try:
+        if backend == "tei":
+            url = f"{_RERANK_LLM_URL}/rerank"
+            payload = {"query": query, "texts": docs, "raw_scores": False}
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            rows = resp.json()  # [{"index", "score"}, ...]
+            idx_score = {int(r["index"]): float(r["score"]) for r in rows}
+        else:  # openai-dedicated (vLLM Cohere-style)
+            url = f"{_RERANK_LLM_URL}/v1/rerank"
+            payload = {"model": _RERANK_LLM_MODEL or "rerank", "query": query, "documents": docs}
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            body = resp.json()
+            rows = body.get("results", body)  # {"results": [...]} or bare list
+            idx_score = {
+                int(r["index"]): float(r.get("relevance_score", r.get("score", 0.0)))
+                for r in rows
+            }
+        return {cand.comp_id: idx_score.get(i, 0.0) * 100.0
+                for i, (cand, _) in enumerate(items)}
+    except Exception as exc:
+        logger.warning("bulk rerank (%s) failed: %s — candidates score 0", backend, exc)
+        return {cand.comp_id: 0.0 for cand, _ in items}
+
+
+async def _rerank_candidates(client, query: str, candidates: list) -> dict:
+    """rerank_fn for `fuse`: score the merged candidate pool -> {comp_id: score}.
+    Dispatches on `NORA_SIRA_RERANK_BACKEND` (D-DRAFT-14): a dedicated /rerank
+    endpoint (`tei` / `openai-dedicated`) does ONE bulk call; `chat` (default)
+    does pointwise LLM-as-judge. Each candidate's doc text comes from ITS cell's
+    corpus (provenance-aware)."""
+    if _RERANK_BACKEND in ("tei", "openai-dedicated"):
+        return await _rerank_bulk(client, query, candidates, _RERANK_BACKEND)
+    # chat (default) — pointwise LLM, one call per candidate; failure scores 0.
+    scores: dict = {}
+    for cand, doc_text in _candidate_doc_texts(candidates):
         prompt = _rerank_prompt_template.format(query=query, document=doc_text)
         try:
             raw = await _llm_call(
@@ -762,6 +824,7 @@ def healthz() -> dict[str, Any]:
         # Rerank-only LLM override. When any of these is set, rerank
         # calls bypass the shim and go directly to the configured
         # endpoint. Query enrichment continues to use the shim.
+        "rerank_backend": _RERANK_BACKEND,
         "rerank_llm_url": _RERANK_LLM_URL or "(unset → uses shim)",
         "rerank_llm_model": _RERANK_LLM_MODEL or "(unset → uses shim model)",
         "rerank_llm_api_key_set": bool(_RERANK_LLM_API_KEY),
