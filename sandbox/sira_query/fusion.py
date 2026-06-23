@@ -112,6 +112,15 @@ def rank_candidates(
     if scores is not None:
         for c in pool:
             c.rerank_score = scores.get(c.comp_id)
+        present = [c.rerank_score for c in pool if c.rerank_score is not None]
+        # Degenerate rerank — every candidate scored the same (the all-zero
+        # signature of a failed endpoint, e.g. TEI 413) or nothing scored at
+        # all. A stable score-sort then collapses to pool order, which is
+        # cell-sorted, silently starving every cell after the first (one MNO
+        # takes all top_k). Fall back to round-robin so a rerank outage
+        # degrades to BALANCED across cells, never to single-cell.
+        if not present or len(set(present)) <= 1:
+            return _round_robin(per_cell)[:top_k]
         pool.sort(
             key=lambda c: (c.rerank_score is not None, c.rerank_score or 0.0),
             reverse=True,

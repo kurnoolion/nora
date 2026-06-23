@@ -141,6 +141,31 @@ def test_no_rerank_single_cell_is_bm25_order():
     assert [c.doc_id for c in out] == ["a", "b"]
 
 
+# ── degenerate rerank — round-robin instead of cell collapse ─────
+
+def test_all_equal_scores_fall_back_to_round_robin():
+    # Reranker returned (or failed to → all-zero) the SAME score for every
+    # candidate. A stable score-sort would keep pool order (cell-sorted),
+    # so cell-0 takes every top_k slot and the other MNO vanishes. The
+    # degenerate-score guard must round-robin instead, keeping both cells.
+    table = {
+        VZW_F: [("v0", 9.0), ("v1", 8.0)],
+        TMO_J: [("t0", 1.0), ("t1", 0.5)],
+    }
+    zero = {c.comp_id: 0.0 for c in
+            [Candidate(VZW_F, "v0", 0), Candidate(VZW_F, "v1", 0),
+             Candidate(TMO_J, "t0", 0), Candidate(TMO_J, "t1", 0)]}
+    # full pool: round-robin interleave (TMO_J < VZW_F → TMO first)
+    out = fuse("q", {VZW_F, TMO_J}, retrieve_fn=_retriever(table),
+               rerank_fn=_reranker(zero), per_cell_top_n=10, top_k=4)
+    assert [c.doc_id for c in out] == ["t0", "v0", "t1", "v1"]
+    # the sharp case — top_k smaller than the pool must STILL show both MNOs
+    # (a pure score-sort would return ["t0","t1"], TMO-only)
+    out2 = fuse("q", {VZW_F, TMO_J}, retrieve_fn=_retriever(table),
+                rerank_fn=_reranker(zero), per_cell_top_n=10, top_k=2)
+    assert {c.mno for c in out2} == {"VZW", "TMO"}
+
+
 # ── top_k cap + empties ──────────────────────────────────────────
 
 def test_top_k_caps_results():

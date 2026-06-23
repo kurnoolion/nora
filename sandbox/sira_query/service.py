@@ -115,6 +115,18 @@ try:
 except ValueError:
     _RERANK_BATCH_SIZE = 0
 
+# Bulk /rerank (tei / openai-dedicated) HTTP request batching. A dedicated
+# cross-encoder endpoint caps inputs per request (TEI's --max-client-batch-size
+# defaults to 32); the merged multi-cell pool is n_cells × top_n and easily
+# exceeds that → 413 Request Entity Too Large, which scores the whole pool 0.
+# So the bulk path chunks the pool into HTTP sub-batches and merges. The
+# sub-batch size honors _RERANK_BATCH_SIZE (the same knob the chat path uses)
+# when set; otherwise this conservative default keeps each request under TEI's
+# cap regardless of cell count. (The chat/LLM-as-judge path in the legacy
+# `sira_query` handler batches independently — "docs per prompt", a different
+# mechanism that this bulk path does not share.)
+_RERANK_BULK_DEFAULT_BATCH = int(os.getenv("NORA_SIRA_RERANK_BULK_BATCH_SIZE", "16"))
+
 # Output budget when batching. Each chunk needs ~10-15 tokens in the
 # JSON output ({"id": N, "score": NN}, plus formatting). 4096 covers
 # batch_size up to ~50 with CoT models that add a thinking preamble.
@@ -602,21 +614,13 @@ def _candidate_doc_texts(candidates: list) -> list:
     return items
 
 
-async def _rerank_bulk(client, query: str, candidates: list, backend: str) -> dict:
-    """One bulk call to a dedicated cross-encoder /rerank endpoint (D-DRAFT-14).
-
-    `backend="tei"`   → POST {RERANK_LLM_URL}/rerank  {query, texts}      → [{index, score}]
-    `backend="openai-dedicated"` (vLLM) → POST {RERANK_LLM_URL}/v1/rerank {model, query, documents}
-                        → {results: [{index, relevance_score}]}
-    Scores (0-1) scaled to 0-100. The base URL must NOT include `/v1` (we add
-    the path). Any failure scores every candidate 0 (kept, sorts low)."""
-    items = _candidate_doc_texts(candidates)
-    if not items:
-        return {}
-    if not _RERANK_LLM_URL:
-        logger.warning("rerank backend=%s needs NORA_SIRA_RERANK_LLM_URL — scoring 0", backend)
-        return {cand.comp_id: 0.0 for cand, _ in items}
-    docs = [t for _, t in items]
+async def _rerank_one_batch(client, query: str, batch_items: list, backend: str) -> dict:
+    """POST one sub-batch of `[(cand, doc_text), …]` to the /rerank endpoint and
+    return `{comp_id: score}` (0-100). Indices in the response are local to this
+    request (the endpoint echoes input order), so they map back to `batch_items`
+    positionally. A failed or unparseable batch scores ONLY its own candidates 0
+    (kept, sorts low) — it does not poison sibling batches."""
+    docs = [t for _, t in batch_items]
     headers = {"Authorization": f"Bearer {_RERANK_LLM_API_KEY}"} if _RERANK_LLM_API_KEY else None
     try:
         if backend == "tei":
@@ -628,13 +632,39 @@ async def _rerank_bulk(client, query: str, candidates: list, backend: str) -> di
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         idx_score = _parse_rerank_response(resp.json())
-        if not idx_score:
-            return {cand.comp_id: 0.0 for cand, _ in items}
-        return {cand.comp_id: idx_score.get(i, 0.0) * 100.0
-                for i, (cand, _) in enumerate(items)}
     except Exception as exc:
-        logger.warning("bulk rerank (%s) failed: %s — candidates score 0", backend, exc)
+        logger.warning("bulk rerank (%s) batch of %d failed: %s — batch scores 0",
+                       backend, len(batch_items), exc)
+        return {cand.comp_id: 0.0 for cand, _ in batch_items}
+    if not idx_score:
+        return {cand.comp_id: 0.0 for cand, _ in batch_items}
+    return {cand.comp_id: idx_score.get(i, 0.0) * 100.0
+            for i, (cand, _) in enumerate(batch_items)}
+
+
+async def _rerank_bulk(client, query: str, candidates: list, backend: str) -> dict:
+    """Score candidates via a dedicated cross-encoder /rerank endpoint (D-DRAFT-14),
+    chunked into HTTP sub-batches so the merged multi-cell pool never exceeds the
+    endpoint's per-request cap (TEI --max-client-batch-size, default 32 → 413).
+
+    `backend="tei"`   → POST {RERANK_LLM_URL}/rerank  {query, texts}      → [{index, score}]
+    `backend="openai-dedicated"` (vLLM) → POST {RERANK_LLM_URL}/v1/rerank {model, query, documents}
+                        → {results: [{index, relevance_score}]}
+    Scores (0-1) scaled to 0-100. The base URL must NOT include `/v1` (we add the
+    path). Sub-batch size honors _RERANK_BATCH_SIZE when set, else
+    _RERANK_BULK_DEFAULT_BATCH. A failed sub-batch scores only its own candidates 0."""
+    items = _candidate_doc_texts(candidates)
+    if not items:
+        return {}
+    if not _RERANK_LLM_URL:
+        logger.warning("rerank backend=%s needs NORA_SIRA_RERANK_LLM_URL — scoring 0", backend)
         return {cand.comp_id: 0.0 for cand, _ in items}
+    bs = max(1, _RERANK_BATCH_SIZE if _RERANK_BATCH_SIZE > 0 else _RERANK_BULK_DEFAULT_BATCH)
+    scores: dict = {}
+    for start in range(0, len(items), bs):
+        batch = items[start : start + bs]
+        scores.update(await _rerank_one_batch(client, query, batch, backend))
+    return scores
 
 
 def _parse_rerank_response(body: "Any") -> dict:

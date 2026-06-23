@@ -222,6 +222,66 @@ def test_rerank_bulk_no_url_scores_zero(monkeypatch):
     assert scores == {("VZW", "Feb2026", "req:a"): 0.0}
 
 
+class _BatchClient:
+    """Records each POST's input size; returns per-request positional scores
+    so the bulk path's index→candidate mapping is exercised per sub-batch."""
+    def __init__(self):
+        self.calls: list[int] = []
+
+    async def post(self, url, json=None, headers=None):
+        docs = (json or {}).get("texts") or (json or {}).get("documents") or []
+        self.calls.append(len(docs))
+        return _FakeResp([{"index": i, "score": 0.5} for i in range(len(docs))])
+
+
+def test_rerank_bulk_chunks_pool_under_batch_size(monkeypatch):
+    # The 413 fix: a pool larger than the batch size is split into sub-batches
+    # so no single /rerank request exceeds the endpoint's cap. Every candidate
+    # is still scored (no all-zero collapse).
+    import asyncio
+    from sandbox.sira_query.fusion import Candidate
+    docs = [(f"req:{i}", f"T{i}", f"x{i}") for i in range(5)]
+    monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, docs)})
+    monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://tei:8080")
+    monkeypatch.setattr(svc, "_RERANK_BATCH_SIZE", 2)        # → batches 2 + 2 + 1
+    cands = [Candidate(VZW_F, f"req:{i}", 1.0) for i in range(5)]
+    client = _BatchClient()
+    scores = asyncio.run(svc._rerank_bulk(client, "q", cands, "tei"))
+    assert client.calls == [2, 2, 1]                         # never exceeds 2 → no 413
+    assert len(scores) == 5
+    assert all(s == 50.0 for s in scores.values())           # all scored, none collapsed
+
+
+class _FlakyBatchClient:
+    """First sub-batch succeeds; the second raises (transient 413/500)."""
+    def __init__(self):
+        self.n = 0
+
+    async def post(self, url, json=None, headers=None):
+        self.n += 1
+        docs = (json or {}).get("texts") or []
+        if self.n == 2:
+            raise RuntimeError("413 Request Entity Too Large")
+        return _FakeResp([{"index": i, "score": 0.5} for i in range(len(docs))])
+
+
+def test_rerank_bulk_batch_failure_isolated(monkeypatch):
+    # A failed sub-batch scores ONLY its own candidates 0 — it must not poison
+    # sibling batches (unlike the old atomic whole-pool zero).
+    import asyncio
+    from sandbox.sira_query.fusion import Candidate
+    docs = [(f"req:{i}", f"T{i}", f"x{i}") for i in range(4)]
+    monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, docs)})
+    monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://tei:8080")
+    monkeypatch.setattr(svc, "_RERANK_BATCH_SIZE", 2)        # batch1: 0,1 ; batch2: 2,3
+    cands = [Candidate(VZW_F, f"req:{i}", 1.0) for i in range(4)]
+    scores = asyncio.run(svc._rerank_bulk(_FlakyBatchClient(), "q", cands, "tei"))
+    assert scores[("VZW", "Feb2026", "req:0")] == 50.0       # batch1 ok
+    assert scores[("VZW", "Feb2026", "req:1")] == 50.0
+    assert scores[("VZW", "Feb2026", "req:2")] == 0.0        # batch2 failed → 0, isolated
+    assert scores[("VZW", "Feb2026", "req:3")] == 0.0
+
+
 def test_healthz_aggregates_per_cell_doc_enrich(monkeypatch):
     # doc enrichment is per-cell (CellState); healthz must aggregate it, not
     # report the legacy global (which _load_state — skipped in multi-cell —
