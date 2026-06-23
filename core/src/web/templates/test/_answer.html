@@ -105,6 +105,9 @@
           expand={{ sira_timings_ms.get('expand_ms', 0) }} ms ·
           search={{ sira_timings_ms.get('search_ms', 0) }} ms ·
           rerank={{ sira_timings_ms.get('rerank_ms', 0) }} ms
+          {% if sira_timings_ms.get('synth_ms') is not none %}
+            · synth={{ sira_timings_ms.get('synth_ms', 0) }} ms
+          {% endif %}
           {% if sira_rerank_call_stats and sira_rerank_call_stats.count %}
             ({{ sira_rerank_call_stats.count }} calls,
             mean={{ sira_rerank_call_stats.mean_ms }} ms,

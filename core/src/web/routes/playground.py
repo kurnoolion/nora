@@ -292,10 +292,18 @@ async def _run_sira_lane_for_merged(
             f"Running NORA synthesizer on {len(pinned_chunk_ids)} "
             f"SIRA-pinned chunks…"
         )
+        synth_start = time.time()
         try:
             synth_result = await asyncio.to_thread(
                 _run_query_for_test, question, request.app, pinned_chunk_ids,
             )
+            # Surface NORA-synthesizer latency alongside SIRA's retrieval
+            # timings (expand/search/rerank) so the test page shows the full
+            # expand·search·rerank·synth chain, not just the retrieval lane.
+            synth_ms = int((time.time() - synth_start) * 1000)
+            timings = sira_result.setdefault("timings_ms", {})
+            if isinstance(timings, dict):
+                timings["synth_ms"] = synth_ms
             if "error" in synth_result:
                 synth_error = synth_result["error"]
                 await _say(f"SIRA synthesizer error: {synth_error}")
