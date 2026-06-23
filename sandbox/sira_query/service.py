@@ -730,7 +730,7 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
     notes: list[str] = []
     timings: dict[str, int] = {}
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client:
         # 2. Expand the query ONCE (raw phrases; per-cell DF-filter
         #    happens inside the retrieve closure — D-DRAFT-10 call 4).
         t0 = time.time()
@@ -1172,7 +1172,7 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
     timings: dict[str, int] = {}
     notes: list[str] = []
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client:
         # 1. Query enrichment ---------------------------------------
         t0 = time.time()
         kept_phrases: list[str] = []
