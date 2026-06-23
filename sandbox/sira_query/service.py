@@ -648,6 +648,11 @@ def _parse_rerank_response(body: "Any") -> dict:
     if isinstance(body, list):
         rows = body
     elif isinstance(body, dict):
+        if "error" in body:
+            err = body["error"]
+            msg = err.get("message") if isinstance(err, dict) else err
+            logger.warning("rerank: endpoint returned error: %s", msg)
+            return {}
         rows = body.get("results") or body.get("data") or body.get("scores")
         if rows is None:
             logger.warning(
