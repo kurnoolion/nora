@@ -622,26 +622,56 @@ async def _rerank_bulk(client, query: str, candidates: list, backend: str) -> di
         if backend == "tei":
             url = f"{_RERANK_LLM_URL}/rerank"
             payload = {"query": query, "texts": docs, "raw_scores": False}
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            rows = resp.json()  # [{"index", "score"}, ...]
-            idx_score = {int(r["index"]): float(r["score"]) for r in rows}
         else:  # openai-dedicated (vLLM Cohere-style)
             url = f"{_RERANK_LLM_URL}/v1/rerank"
             payload = {"model": _RERANK_LLM_MODEL or "rerank", "query": query, "documents": docs}
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            body = resp.json()
-            rows = body.get("results", body)  # {"results": [...]} or bare list
-            idx_score = {
-                int(r["index"]): float(r.get("relevance_score", r.get("score", 0.0)))
-                for r in rows
-            }
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        idx_score = _parse_rerank_response(resp.json())
+        if not idx_score:
+            return {cand.comp_id: 0.0 for cand, _ in items}
         return {cand.comp_id: idx_score.get(i, 0.0) * 100.0
                 for i, (cand, _) in enumerate(items)}
     except Exception as exc:
         logger.warning("bulk rerank (%s) failed: %s — candidates score 0", backend, exc)
         return {cand.comp_id: 0.0 for cand, _ in items}
+
+
+def _parse_rerank_response(body: "Any") -> dict:
+    """Extract `{index: score}` from a cross-encoder /rerank response.
+
+    Tolerant of the shapes different servers emit: a bare list of result objects,
+    or a dict wrapping the list under `results` (Cohere/Jina/vLLM `/v1/rerank`),
+    `data` (vLLM `/score`-style), or `scores`. Each result's score is read from
+    `relevance_score` or `score`. Returns `{}` (logging the actual shape) when it
+    can't recognize the structure, so the caller scores 0 rather than crashing."""
+    if isinstance(body, list):
+        rows = body
+    elif isinstance(body, dict):
+        rows = body.get("results") or body.get("data") or body.get("scores")
+        if rows is None:
+            logger.warning(
+                "rerank: unrecognized response — top-level keys %s; "
+                "expected a list under results/data/scores", list(body.keys()),
+            )
+            return {}
+    else:
+        logger.warning("rerank: unrecognized response type %s", type(body).__name__)
+        return {}
+    out: dict = {}
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            # bare list of scores [0.9, 0.2, …] → positional
+            try:
+                out[i] = float(r)
+            except (TypeError, ValueError):
+                continue
+            continue
+        idx = r.get("index", i)
+        score = r.get("relevance_score", r.get("score"))
+        if score is not None:
+            out[int(idx)] = float(score)
+    return out
 
 
 async def _rerank_candidates(client, query: str, candidates: list) -> dict:

@@ -198,6 +198,20 @@ def test_rerank_bulk_openai_dedicated(monkeypatch):
     assert client.last[1]["model"] == "bge-reranker"
 
 
+def test_parse_rerank_response_shapes():
+    p = svc._parse_rerank_response
+    # bare list of dicts
+    assert p([{"index": 0, "score": 0.9}, {"index": 1, "score": 0.2}]) == {0: 0.9, 1: 0.2}
+    # Cohere/vLLM results wrapper, relevance_score
+    assert p({"results": [{"index": 0, "relevance_score": 0.7}]}) == {0: 0.7}
+    # vLLM /score-style data wrapper
+    assert p({"data": [{"index": 1, "score": 0.5}]}) == {1: 0.5}
+    # positional bare list of floats (no index)
+    assert p([0.4, 0.8]) == {0: 0.4, 1: 0.8}
+    # unrecognized dict → empty (no crash) — this was the bug shape
+    assert p({"object": "error", "message": "nope"}) == {}
+
+
 def test_rerank_bulk_no_url_scores_zero(monkeypatch):
     import asyncio
     from sandbox.sira_query.fusion import Candidate
