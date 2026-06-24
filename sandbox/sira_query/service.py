@@ -625,7 +625,15 @@ async def _rerank_one_batch(client, query: str, batch_items: list, backend: str)
     try:
         if backend == "tei":
             url = f"{_RERANK_LLM_URL}/rerank"
-            payload = {"query": query, "texts": docs, "raw_scores": False}
+            # truncate=True: TEI clips any (query, doc) pair longer than the
+            # reranker model's max sequence length to fit, instead of rejecting
+            # the WHOLE request with 413. Without it a single over-long chunk
+            # (dense MNO docs run well past the model's limit) poisons its
+            # entire batch, zeroing every candidate in it — so that cell sinks
+            # below the cut. Sub-batching alone can't help: a single doc that's
+            # too long still 413s at batch size 1.
+            payload = {"query": query, "texts": docs, "raw_scores": False,
+                       "truncate": True}
         else:  # openai-dedicated (vLLM Cohere-style)
             url = f"{_RERANK_LLM_URL}/v1/rerank"
             payload = {"model": _RERANK_LLM_MODEL or "rerank", "query": query, "documents": docs}

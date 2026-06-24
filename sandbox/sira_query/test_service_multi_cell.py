@@ -182,6 +182,7 @@ def test_rerank_bulk_tei(monkeypatch):
     assert scores[("VZW", "Feb2026", "req:b")] == 20.0
     assert client.last[0] == "http://tei:8080/rerank"     # no /v1 for TEI
     assert client.last[1]["texts"] == ["A\n\nx", "B\n\ny"]
+    assert client.last[1]["truncate"] is True             # clip over-long docs, not 413
 
 
 def test_rerank_bulk_openai_dedicated(monkeypatch):
