@@ -360,3 +360,55 @@ def test_select_pinned_default_mode_score_filters(monkeypatch):
     # rel_floor = 45; only MNO-B rows (90..86) clear it → default stays MNO-B-only,
     # which is exactly why balanced mode exists.
     assert {r["mno"] for r in pinned} == {"MNO-B"}
+
+
+# ── Path-B helpers (LLM-select synthesis) ─────────────────────────────
+
+def _cand(mno, rid, text, release="Feb2026"):
+    return {"mno": mno, "release": release, "req_id": rid, "text": text}
+
+
+def test_pack_pathb_round_robins_and_respects_budget():
+    from core.src.web.routes import playground as pg
+    cands = (
+        [_cand("MNO-B", f"b{i}", "x" * 100) for i in range(10)]
+        + [_cand("MNO-A", f"a{i}", "y" * 100) for i in range(10)]
+    )
+    # char budget = token_budget × 3.5 ≈ 665 → fits 6 chunks (600 chars), not 7 (700)
+    packed = pg._pack_pathb(cands, token_budget=190)
+    assert len(packed) == 6
+    assert [c["req_id"] for c in packed] == ["b0", "a0", "b1", "a1", "b2", "a2"]
+    assert {c["mno"] for c in packed} == {"MNO-A", "MNO-B"}
+
+
+def test_pack_pathb_keeps_at_least_one_when_first_chunk_exceeds_budget():
+    from core.src.web.routes import playground as pg
+    cands = [_cand("MNO-A", "a0", "z" * 100000)]      # one giant chunk
+    packed = pg._pack_pathb(cands, token_budget=10)    # tiny budget
+    assert [c["req_id"] for c in packed] == ["a0"]      # never returns empty on a non-empty pool
+
+
+def test_build_pathb_context_groups_by_cell():
+    from core.src.web.routes import playground as pg
+    packed = [
+        _cand("MNO-A", "a0", "alpha body"),
+        _cand("MNO-B", "b0", "bravo body"),
+    ]
+    ctx = pg._build_pathb_context("what bands?", packed)
+    assert "USER QUESTION: what bands?" in ctx
+    assert "OPERATOR: MNO-A | RELEASE: Feb2026" in ctx
+    assert "OPERATOR: MNO-B | RELEASE: Feb2026" in ctx
+    assert "req_id: a0" in ctx and "alpha body" in ctx
+
+
+def test_pathb_extract_citations_is_corpus_agnostic():
+    from core.src.web.routes import playground as pg
+    packed = [
+        _cand("MNO-A", "VZ-FOO-12", "..."),       # not VZ_REQ_*; the old regex would miss it
+        _cand("MNO-B", "ATT_BAR_3", "..."),
+        _cand("MNO-B", "ATT_BAZ_9", "..."),        # not mentioned in answer
+    ]
+    answer = "Per VZ-FOO-12 and ATT_BAR_3, both operators require band n78."
+    cites = pg._pathb_extract_citations(answer, packed)
+    assert [c["req_id"] for c in cites] == ["VZ-FOO-12", "ATT_BAR_3"]
+    assert all(c["llm_cited"] for c in cites)

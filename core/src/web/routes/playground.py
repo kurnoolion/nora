@@ -82,6 +82,43 @@ _PIN_REL_THRESHOLD = float(os.getenv("NORA_SIRA_PIN_REL_THRESHOLD", "0.5"))
 _PIN_MODE = os.getenv("NORA_SIRA_PIN_MODE", "rerank-topk").strip().lower()
 _PIN_MAX = int(os.getenv("NORA_SIRA_PIN_MAX", "16"))
 
+# ── Path-B: LLM-select synthesis (no cross-encoder reranker) ──────────
+# The reranker scores surface query↔passage similarity and misses telecom term
+# associations ("SA NR" == "5G NR standalone"), dropping source-of-truth chunks
+# before NORA sees them. Path-B drops the reranker entirely: fetch all balanced
+# BM25 candidates with FULL text, group them by MNO/release, and feed them to the
+# telecom LLM in ONE call that selects the relevant ones and synthesizes. Sized
+# for a 128K-context model.
+#   NORA_SIRA_SYNTH_MODE=llm-select → Path-B   (default "rerank-pin" = unchanged)
+# IMPORTANT: run the SIRA service with NORA_SIRA_RERANK_ENABLED=false so its
+# top_k cut is BM25 (round-robin balanced), not rerank-score — otherwise the
+# reranker drops the chunk before Path-B can ever see it.
+_SYNTH_MODE = os.getenv("NORA_SIRA_SYNTH_MODE", "rerank-pin").strip().lower()
+_PATHB_TOP_K = int(os.getenv("NORA_SIRA_PATHB_TOP_K", "40"))               # SIRA candidates to fetch
+_PATHB_TEXT_CHARS = int(os.getenv("NORA_SIRA_PATHB_TEXT_CHARS", "16000"))  # per-chunk full-text cap from SIRA
+_SYNTH_TOKEN_BUDGET = int(os.getenv("NORA_SIRA_SYNTH_TOKEN_BUDGET", "120000"))  # context ceiling (128K − headroom)
+_PATHB_MAX_OUTPUT_TOKENS = int(os.getenv("NORA_SIRA_PATHB_MAX_OUTPUT_TOKENS", "4096"))
+_CHARS_PER_TOKEN = 3.5   # rough; telecom text is token-dense
+
+_PATHB_SYSTEM_PROMPT = (
+    "You are an expert telecom (3GPP/GSMA) device-requirements analyst. Below "
+    "are candidate requirement chunks retrieved for the user's question, GROUPED "
+    "by operator (MNO) and release. Retrieval is recall-oriented, so MANY chunks "
+    "are NOT relevant.\n\n"
+    "Work in order:\n"
+    "1. SELECT only the chunks that actually answer the question. Judge by "
+    "MEANING, not keyword overlap — telecom terminology varies: e.g. 'SA NR', "
+    "'5G NR standalone' and '5G SA' mean the same thing; 'NR' is the 5G air "
+    "interface; a band may appear as 'n78', 'NR band 78' or 'B78'. A chunk that "
+    "uses different wording can still be the source of truth.\n"
+    "2. ANSWER from the selected chunks only. When the question spans multiple "
+    "operators, compare/contrast them explicitly; use a table when it helps.\n"
+    "3. CITE every requirement you rely on by writing its exact req_id (shown as "
+    "'req_id: <ID>' in each chunk header) inline in your answer. Do not cite "
+    "chunks you judged irrelevant. If the selected chunks don't answer the "
+    "question, say so plainly rather than guessing."
+)
+
 
 # ── merged-tab helpers (team-eval-pilot) ──────────────────────────────
 #
@@ -277,8 +314,10 @@ async def _run_sira_lane_for_merged(
         if emit_progress is not None:
             await emit_progress(msg)
 
-    await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     start = time.time()
+    if _SYNTH_MODE == "llm-select":
+        return await _run_pathb_lane(question, _say, start)
+    await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
         sira_result = await _call_sira_query(question)
     except Exception as exc:
@@ -525,9 +564,181 @@ def _balanced_pin(
     return out
 
 
-async def _call_sira_query(question: str, top_k: int | None = None) -> dict[str, Any]:
+# ── Path-B helpers (LLM-select synthesis) ─────────────────────────────
+
+def _pack_pathb(candidates: list[dict[str, Any]], token_budget: int) -> list[dict[str, Any]]:
+    """Round-robin across (mno, release) cells, packing WHOLE chunks until the
+    token budget is hit. Candidates carry full `text` (SIRA `text_chars`). Keeps
+    cross-cell balance and bounds the context to fit the model window."""
+    by_cell: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for c in candidates:
+        by_cell.setdefault((c.get("mno", ""), c.get("release", "")), []).append(c)
+    char_budget = int(token_budget * _CHARS_PER_TOKEN)
+    out: list[dict[str, Any]] = []
+    used = 0
+    rank = 0
+    width = max((len(v) for v in by_cell.values()), default=0)
+    while rank < width:
+        added = False
+        for cell_list in by_cell.values():
+            if rank < len(cell_list):
+                c = cell_list[rank]
+                txt = c.get("text") or c.get("text_preview") or ""
+                if out and used + len(txt) > char_budget:
+                    return out
+                out.append(c)
+                used += len(txt)
+                added = True
+        if not added:
+            break
+        rank += 1
+    return out
+
+
+def _build_pathb_context(question: str, packed: list[dict[str, Any]]) -> str:
+    """Group packed chunks by (mno, release) with explicit headers + full text,
+    so the LLM knows which operator/release each requirement belongs to (needed
+    to compare/contrast across MNOs)."""
+    by_cell: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for c in packed:
+        by_cell.setdefault((c.get("mno", ""), c.get("release", "")), []).append(c)
+    parts = [f"USER QUESTION: {question}\n"]
+    for (mno, rel), chunks in by_cell.items():
+        parts.append(
+            f"\n===== OPERATOR: {mno or 'UNKNOWN'} | RELEASE: {rel or 'UNKNOWN'} ====="
+        )
+        for c in chunks:
+            rid = c.get("req_id", "")
+            title = c.get("title", "")
+            txt = c.get("text") or c.get("text_preview") or ""
+            header = f"req_id: {rid}" + (f" | {title}" if title else "")
+            parts.append(f"\n--- {header} ---\n{txt}")
+    return "\n".join(parts)
+
+
+def _pathb_extract_citations(answer: str, packed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Corpus-agnostic citation extraction: which packed req_ids appear verbatim
+    in the answer. Works for any MNO req_id format, unlike the synthesizer's
+    VZ_REQ_-specific regex."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for c in packed:
+        rid = c.get("req_id")
+        if rid and rid not in seen and rid in answer:
+            out.append({"req_id": rid, "plan_id": c.get("mno"), "llm_cited": True})
+            seen.add(rid)
+    return out
+
+
+def _pathb_synthesize(question: str, packed: list[dict[str, Any]]) -> dict[str, Any]:
+    """One LLM call over all packed chunks: the model selects relevant ones and
+    synthesizes. Returns the dict shape the merged template consumes."""
+    from core.src.web.routes.query import _build_llm_from_env_or_default
+    llm = _build_llm_from_env_or_default()
+    if llm is None or getattr(llm, "_is_mock", False):
+        return {"error": "Path-B needs a real LLM (NORA_LLM_* not configured)"}
+    context_text = _build_pathb_context(question, packed)
+    try:
+        answer = llm.complete(
+            prompt=context_text, system=_PATHB_SYSTEM_PROMPT,
+            temperature=0.0, max_tokens=_PATHB_MAX_OUTPUT_TOKENS,
+        )
+    except Exception as exc:  # noqa: BLE001 — surfaced to the UI
+        logger.exception("Path-B LLM synthesis failed")
+        return {"error": f"LLM synthesis failed: {exc}"}
+    cites = _pathb_extract_citations(answer, packed)
+    rag_chunks = [
+        {
+            "req_id": c.get("req_id"),
+            "text": c.get("text") or c.get("text_preview") or "",
+            "similarity_score": 0.0,
+            "plan_id": c.get("mno"),
+        }
+        for c in packed
+    ]
+    return {
+        "answer": answer,
+        "citations": cites,
+        "llm_citations": cites,            # all extracted from the answer = LLM-cited
+        "rag_chunks": rag_chunks,
+        "rag_chunk_count": len(rag_chunks),
+        "llm_model": getattr(llm, "model_name", "") or getattr(llm, "model", "") or "",
+        "llm_system_prompt": _PATHB_SYSTEM_PROMPT,
+        "llm_context_text": context_text,
+    }
+
+
+async def _run_pathb_lane(
+    question: str, _say: "Callable[[str], Awaitable[None]]", start: float,
+) -> dict[str, Any]:
+    """Path-B lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
+    that selects relevant chunks + synthesizes. Same dict shape as the default
+    rerank-pin lane so the merged template/response is unchanged."""
+    await _say(
+        f"Path-B: fetching {_PATHB_TOP_K} BM25 candidates with full text "
+        f"(reranker bypassed)…"
+    )
+    try:
+        sira_result = await _call_sira_query(
+            question, top_k=_PATHB_TOP_K, text_chars=_PATHB_TEXT_CHARS,
+        )
+    except Exception as exc:
+        logger.exception("SIRA service call failed (Path-B)")
+        await _say(f"SIRA service error: {exc}")
+        return {"error": f"SIRA service call failed: {exc}"}
+
+    sira_results = sira_result.get("results", []) or []
+    packed = _pack_pathb(sira_results, _SYNTH_TOKEN_BUDGET)
+    packed_keys = {(p.get("mno"), p.get("req_id")) for p in packed}
+    for r in sira_results:
+        r["pinned"] = (r.get("mno"), r.get("req_id")) in packed_keys
+    n_cells = len({(p.get("mno"), p.get("release")) for p in packed})
+    await _say(
+        f"Path-B: {len(sira_results)} candidates → {len(packed)} packed across "
+        f"{n_cells} cell(s); one LLM select+synthesize call…"
+    )
+
+    synth_start = time.time()
+    synth_result = await asyncio.to_thread(_pathb_synthesize, question, packed)
+    synth_ms = int((time.time() - synth_start) * 1000)
+    timings = sira_result.setdefault("timings_ms", {})
+    if isinstance(timings, dict):
+        timings["synth_ms"] = synth_ms
+
+    synth_error = synth_result.get("error")
+    if synth_error:
+        await _say(f"Path-B synth error: {synth_error}")
+    elapsed_ms = int((time.time() - start) * 1000)
+    if not synth_error:
+        await _say(f"Path-B: answer ready ({elapsed_ms} ms)")
+
+    retrieved_ids = [r["req_id"] for r in sira_results if r.get("req_id")]
+    lane_config = await _snapshot_sira_lane_config()
+    return {
+        "result": {} if synth_error else synth_result,
+        "sira_result": sira_result,
+        "sira_results": sira_results,
+        "max_rerank_score": 0,
+        "pinned_count": len(packed),
+        "synth_error": synth_error,
+        "elapsed_ms": elapsed_ms,
+        "retrieved_ids": retrieved_ids,
+        "reranked_ids": None,
+        "cited_ids": _flatten_cited_ids(
+            [] if synth_error else (synth_result.get("llm_citations") or [])
+        ),
+        "lane_config": lane_config,
+    }
+
+
+async def _call_sira_query(
+    question: str, top_k: int | None = None, text_chars: int | None = None,
+) -> dict[str, Any]:
     """POST the question to the SIRA per-query probe service and
     return its JSON response.
+
+    `text_chars` (Path-B) asks SIRA to include each result's full chunk text
+    (newlines preserved, capped) so the synthesizer gets whole band tables.
 
     Errors are surfaced verbatim — caller renders them in the answer
     template as an error block.
@@ -535,6 +746,8 @@ async def _call_sira_query(question: str, top_k: int | None = None) -> dict[str,
     payload: dict[str, Any] = {"query": question}
     if top_k:
         payload["top_k"] = top_k
+    if text_chars:
+        payload["text_chars"] = text_chars
     async with httpx.AsyncClient(timeout=_SIRA_QUERY_TIMEOUT) as client:
         resp = await client.post(
             f"{_SIRA_QUERY_URL}/sira-query", json=payload,
