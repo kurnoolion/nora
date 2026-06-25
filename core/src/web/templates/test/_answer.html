@@ -92,7 +92,12 @@
           {{ sira_candidates_reranked }} reranked · top {{ sira_top_k }} retrieved ·
           <strong>{{ sira_pinned_count }} pinned to synth</strong>
         </span>
-        {% if sira_max_rerank_score is defined and sira_max_rerank_score > 0 %}
+        {% if sira_pin_mode == 'balanced' %}
+          <span class="text-muted small">·</span>
+          <span class="text-muted small">
+            balanced: round-robin across cells · top {{ sira_pin_max }}
+          </span>
+        {% elif sira_max_rerank_score is defined and sira_max_rerank_score > 0 %}
           <span class="text-muted small">·</span>
           <span class="text-muted small">
             filter: score ≥ max({{ sira_pin_min_score|int }}, {{ sira_max_rerank_score }}×{{ sira_pin_rel_threshold }})

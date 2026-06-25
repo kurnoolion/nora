@@ -70,6 +70,18 @@ _SIRA_QUERY_TIMEOUT = float(os.getenv("NORA_SIRA_QUERY_TIMEOUT", "1200"))
 _PIN_MIN_SCORE = float(os.getenv("NORA_SIRA_PIN_MIN_SCORE", "30"))
 _PIN_REL_THRESHOLD = float(os.getenv("NORA_SIRA_PIN_REL_THRESHOLD", "0.5"))
 
+# Pin-selection mode (multi-mno-nora D-DRAFT-16). For multi-MNO/multi-release
+# queries, the score-based filter above sorts the merged pool by absolute rerank
+# score and the highest-scoring cell can take every slot — chunk-granularity
+# asymmetry across corpora makes cross-cell scores unfairly favour one MNO.
+#   * "rerank-topk" (default): the score-filter above (single-corpus-friendly).
+#   * "balanced": round-robin across (mno, release) cells up to NORA_SIRA_PIN_MAX,
+#     guaranteeing every resolved cell is represented; the synthesizer then does
+#     the final relevance judgment over the balanced set (robust to the chunking
+#     asymmetry the cross-encoder is not). Sized to fit the 32K synth context.
+_PIN_MODE = os.getenv("NORA_SIRA_PIN_MODE", "rerank-topk").strip().lower()
+_PIN_MAX = int(os.getenv("NORA_SIRA_PIN_MAX", "16"))
+
 
 # ── merged-tab helpers (team-eval-pilot) ──────────────────────────────
 #
@@ -419,6 +431,8 @@ async def _build_merged_response_html(
                 "sira_max_rerank_score": out["max_rerank_score"],
                 "sira_pin_min_score": _PIN_MIN_SCORE,
                 "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
+                "sira_pin_mode": _PIN_MODE,
+                "sira_pin_max": _PIN_MAX,
                 "sira_timings_ms": out["sira_result"].get("timings_ms"),
                 "sira_rerank_call_stats": out["sira_result"].get("rerank_call_stats"),
                 "sira_notes": out["sira_result"].get("notes", []),
@@ -462,6 +476,11 @@ def _select_pinned_chunks(
     if not sira_results:
         return [], 0
     max_score = max(int(r.get("rerank_score", 0) or 0) for r in sira_results)
+    if _PIN_MODE == "balanced":
+        # D-DRAFT-16: ignore the global score sort; round-robin across cells so
+        # both MNOs are pinned regardless of which corpus the reranker favoured.
+        # max_score is still surfaced for the template's filter caption.
+        return _balanced_pin(sira_results, _PIN_MAX), max_score
     if max_score == 0:
         # Rerank disabled or universally-zero: pin everything as-is.
         return list(sira_results), 0
@@ -472,6 +491,33 @@ def _select_pinned_chunks(
         and int(r.get("rerank_score", 0) or 0) >= rel_floor
     ]
     return pinned, max_score
+
+
+def _balanced_pin(
+    sira_results: list[dict[str, Any]], limit: int,
+) -> list[dict[str, Any]]:
+    """Round-robin across (mno, release) cells, capped at `limit`.
+
+    SIRA returns the merged pool already in rerank order, so each cell's
+    slice is in-cell rerank order; we interleave the slices (cell-0 rank-0,
+    cell-1 rank-0, …) so every resolved cell gets fair representation in the
+    pinned set rather than the top-scoring cell taking every slot. Cell
+    insertion order is preserved (first appearance in `sira_results`).
+    """
+    by_cell: "dict[tuple[str, str], list[dict[str, Any]]]" = {}
+    for r in sira_results:
+        by_cell.setdefault((r.get("mno", ""), r.get("release", "")), []).append(r)
+    out: list[dict[str, Any]] = []
+    rank = 0
+    width = max((len(v) for v in by_cell.values()), default=0)
+    while rank < width and len(out) < limit:
+        for cell_list in by_cell.values():
+            if rank < len(cell_list):
+                out.append(cell_list[rank])
+                if len(out) >= limit:
+                    break
+        rank += 1
+    return out
 
 
 async def _call_sira_query(question: str, top_k: int | None = None) -> dict[str, Any]:
@@ -739,6 +785,8 @@ async def playground_ask(request: Request):
             "sira_max_rerank_score": max_rerank_score,
             "sira_pin_min_score": _PIN_MIN_SCORE,
             "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
+            "sira_pin_mode": _PIN_MODE,
+            "sira_pin_max": _PIN_MAX,
             "elapsed_ms": elapsed_ms,
             # Synthesizer view — pass the SAME fields requirement_bot
             # passes, so the shared template renders citation audit /

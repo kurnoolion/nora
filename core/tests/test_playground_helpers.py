@@ -304,3 +304,59 @@ def test_sira_lane_runner_emits_progress_on_service_failure():
     assert len(msgs) == 2
     assert "SIRA service error" in msgs[1]
     assert "error" in out
+
+
+# ── balanced pin selection (D-DRAFT-16) ───────────────────────────────
+
+def _sira_row(mno, rid, score):
+    return {"mno": mno, "release": "Feb2026", "req_id": rid, "rerank_score": score}
+
+
+def test_balanced_pin_round_robins_across_cells():
+    from core.src.web.routes import playground as pg
+    # MNO-B out-scores MNO-A across the board (the real-world skew).
+    results = (
+        [_sira_row("MNO-B", f"b{i}", 90 - i) for i in range(5)]
+        + [_sira_row("MNO-A", f"a{i}", 40 - i) for i in range(5)]
+    )
+    out = pg._balanced_pin(results, limit=6)
+    # interleaved by cell, in-cell rerank order, capped at 6 → 3 per cell
+    assert [r["req_id"] for r in out] == ["b0", "a0", "b1", "a1", "b2", "a2"]
+    assert {r["mno"] for r in out} == {"MNO-A", "MNO-B"}
+
+
+def test_balanced_pin_caps_total():
+    from core.src.web.routes import playground as pg
+    results = [_sira_row("MNO-B", f"b{i}", 90 - i) for i in range(20)]
+    assert len(pg._balanced_pin(results, limit=8)) == 8        # single cell still capped
+
+
+def test_select_pinned_balanced_mode_keeps_both_mnos(monkeypatch):
+    from core.src.web.routes import playground as pg
+    monkeypatch.setattr(pg, "_PIN_MODE", "balanced")
+    monkeypatch.setattr(pg, "_PIN_MAX", 4)
+    # In rerank-topk mode the rel-threshold would drop every MNO-A row (40 < 90×0.5);
+    # balanced mode must still surface MNO-A.
+    results = (
+        [_sira_row("MNO-B", f"b{i}", 90 - i) for i in range(5)]
+        + [_sira_row("MNO-A", f"a{i}", 40 - i) for i in range(5)]
+    )
+    pinned, max_score = pg._select_pinned_chunks(results)
+    assert max_score == 90
+    assert len(pinned) == 4
+    assert {r["mno"] for r in pinned} == {"MNO-A", "MNO-B"}
+
+
+def test_select_pinned_default_mode_score_filters(monkeypatch):
+    from core.src.web.routes import playground as pg
+    monkeypatch.setattr(pg, "_PIN_MODE", "rerank-topk")
+    monkeypatch.setattr(pg, "_PIN_MIN_SCORE", 30)
+    monkeypatch.setattr(pg, "_PIN_REL_THRESHOLD", 0.5)
+    results = (
+        [_sira_row("MNO-B", f"b{i}", 90 - i) for i in range(5)]
+        + [_sira_row("MNO-A", f"a{i}", 40 - i) for i in range(5)]
+    )
+    pinned, max_score = pg._select_pinned_chunks(results)
+    # rel_floor = 45; only MNO-B rows (90..86) clear it → default stays MNO-B-only,
+    # which is exactly why balanced mode exists.
+    assert {r["mno"] for r in pinned} == {"MNO-B"}
