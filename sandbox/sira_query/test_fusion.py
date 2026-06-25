@@ -141,6 +141,44 @@ def test_no_rerank_single_cell_is_bm25_order():
     assert [c.doc_id for c in out] == ["a", "b"]
 
 
+# ── balanced fusion — round-robin under real (non-degenerate) scores ─────
+
+def test_balanced_fusion_keeps_both_cells_under_score_skew():
+    # The real-world skew: VZW's chunks all out-score TMO's (sharper chunking),
+    # so the default global sort + top_k cut returns mostly VZW. balanced=True
+    # must return a cell-balanced top_k instead.
+    table = {
+        VZW_F: [(f"v{i}", 10.0 - i) for i in range(10)],
+        TMO_J: [(f"t{i}", 10.0 - i) for i in range(10)],
+    }
+    scores = {}
+    scores.update({("VZW", "Feb2026", f"v{i}"): 90 - i for i in range(10)})  # 90..81
+    scores.update({("TMO", "Jan2026", f"t{i}"): 40 - i for i in range(10)})  # 40..31
+
+    # default: pure global sort → all 6 are VZW (its scores dominate)
+    default = fuse("q", {VZW_F, TMO_J}, retrieve_fn=_retriever(table),
+                   rerank_fn=_reranker(scores), per_cell_top_n=10, top_k=6)
+    assert {c.mno for c in default} == {"VZW"}                 # the bug
+
+    # balanced: round-robin within-cell-sorted → 3 VZW / 3 TMO, interleaved
+    bal = fuse("q", {VZW_F, TMO_J}, retrieve_fn=_retriever(table),
+               rerank_fn=_reranker(scores), per_cell_top_n=10, top_k=6, balanced=True)
+    assert {c.mno for c in bal} == {"VZW", "TMO"}
+    assert [c.mno for c in bal] == ["TMO", "VZW", "TMO", "VZW", "TMO", "VZW"]  # TMO_J<VZW_F
+    # within each cell still rerank-ordered (best first)
+    assert [c.doc_id for c in bal if c.mno == "VZW"] == ["v0", "v1", "v2"]
+
+
+def test_balanced_single_cell_is_plain_rerank_order():
+    # balanced is a no-op for one cell (no cross-cell starvation possible).
+    table = {VZW_F: [("a", 5.0), ("b", 4.0), ("c", 3.0)]}
+    scores = {("VZW", "Feb2026", "a"): 10, ("VZW", "Feb2026", "b"): 90,
+              ("VZW", "Feb2026", "c"): 50}
+    out = fuse("q", {VZW_F}, retrieve_fn=_retriever(table),
+               rerank_fn=_reranker(scores), per_cell_top_n=10, top_k=3, balanced=True)
+    assert [c.doc_id for c in out] == ["b", "c", "a"]          # pure rerank order
+
+
 # ── degenerate rerank — round-robin instead of cell collapse ─────
 
 def test_all_equal_scores_fall_back_to_round_robin():

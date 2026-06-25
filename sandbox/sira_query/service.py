@@ -203,6 +203,17 @@ _RERANK_ENABLED = os.getenv("NORA_SIRA_RERANK_ENABLED", "true").lower() in {
     "1", "true", "yes", "on",
 }
 
+# Balanced cross-cell fusion (D-DRAFT-16). Default off = global rerank-score sort
+# (best for single-MNO / when cross-cell scores ARE comparable). On = round-robin
+# across cells after within-cell rerank sort, so a multi-MNO query's top_k keeps
+# every cell represented instead of the highest-scoring corpus taking most slots
+# (chunk-granularity asymmetry skews absolute scores across cells). Pairs with
+# NORA_SIRA_PIN_MODE=balanced on the NORA synth side — without this, the SIRA cut
+# starves the lower-scoring MNO before NORA ever sees it.
+_FUSION_BALANCED = os.getenv("NORA_SIRA_FUSION_BALANCED", "").lower() in {
+    "1", "true", "yes", "on",
+}
+
 # Run-pinning — determinism across "which offline run drives this service?".
 # Three knobs (each independent):
 #   NORA_SIRA_DOC_ENRICH_RUN   — exact run-name under runs/doc-enrich/<name>
@@ -808,7 +819,7 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
         timings["rerank_ms"] = int((time.time() - t0) * 1000)
 
     # 5. Rank + top_k, build results with provenance.
-    ranked = rank_candidates(per_cell, scores, top_k)
+    ranked = rank_candidates(per_cell, scores, top_k, balanced=_FUSION_BALANCED)
     out: list[dict[str, Any]] = []
     for rank, cand in enumerate(ranked, 1):
         doc = _cells[cand.cell].corpus_by_id.get(cand.doc_id, {})
@@ -894,6 +905,7 @@ def healthz() -> dict[str, Any]:
         "default_top_k": _DEFAULT_TOP_K,
         "rerank_top_n": _RERANK_TOP_N,
         "rerank_enabled": _RERANK_ENABLED,
+        "fusion_balanced": _FUSION_BALANCED,
         # Rerank-only LLM override. When any of these is set, rerank
         # calls bypass the shim and go directly to the configured
         # endpoint. Query enrichment continues to use the shim.

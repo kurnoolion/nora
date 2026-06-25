@@ -89,22 +89,39 @@ def merge_candidates(
     return per_cell
 
 
+def _rerank_sorted(cell_list: list[Candidate]) -> list[Candidate]:
+    """A cell's candidates in descending rerank-score order (None last)."""
+    return sorted(
+        cell_list,
+        key=lambda c: (c.rerank_score is not None, c.rerank_score or 0.0),
+        reverse=True,
+    )
+
+
 def rank_candidates(
     per_cell: list[list[Candidate]],
     scores: dict[CompId, float] | None,
     top_k: int,
+    *,
+    balanced: bool = False,
 ) -> list[Candidate]:
     """Rank the merged pool and return top_k.
 
-    - With `scores` (rerank done): sort the union by the reranker's
-      absolute 0-100 score (comparable across cells), NOT RRF
-      (D-DRAFT-10 call 1). A candidate absent from `scores` (failed
-      batch) keeps rerank_score None and sorts to the bottom — NOT
-      dropped before top_k.
+    - With `scores` (rerank done):
+      - default — sort the union by the reranker's absolute 0-100 score
+        (comparable across cells), NOT RRF (D-DRAFT-10 call 1). A candidate
+        absent from `scores` (failed batch) keeps rerank_score None and sorts
+        to the bottom — NOT dropped before top_k.
+      - `balanced=True` and >1 cell — sort WITHIN each cell by rerank score,
+        then round-robin (D-DRAFT-16). The absolute-score premise breaks when
+        cells are chunked differently (one corpus's sharper chunks out-score
+        another's, so the global sort + top_k cut starves the lower-scoring MNO
+        even though both were retrieved). Within-cell order stays reliable;
+        cross-cell representation is enforced structurally.
     - With `scores=None` (no rerank): round-robin interleave per cell
-      (balanced). BM25 scores aren't comparable across cells, so a
-      global BM25 sort would be meaningless for >1 cell; for one cell
-      it degenerates to the cell's BM25 order.
+      (balanced). BM25 scores aren't comparable across cells, so a global BM25
+      sort would be meaningless for >1 cell; for one cell it degenerates to the
+      cell's BM25 order.
     """
     pool: list[Candidate] = [c for cell_list in per_cell for c in cell_list]
     if not pool:
@@ -121,6 +138,8 @@ def rank_candidates(
         # degrades to BALANCED across cells, never to single-cell.
         if not present or len(set(present)) <= 1:
             return _round_robin(per_cell)[:top_k]
+        if balanced and len(per_cell) > 1:
+            return _round_robin([_rerank_sorted(cl) for cl in per_cell])[:top_k]
         pool.sort(
             key=lambda c: (c.rerank_score is not None, c.rerank_score or 0.0),
             reverse=True,
@@ -137,6 +156,7 @@ def fuse(
     rerank_fn: RerankFn | None,
     per_cell_top_n: int,
     top_k: int,
+    balanced: bool = False,
 ) -> list[Candidate]:
     """Synchronous retrieve -> merge -> rerank -> rank convenience wrapper.
 
@@ -144,9 +164,9 @@ def fuse(
     itself (`merge_candidates`, then await the LLM rerank, then
     `rank_candidates`) because the real reranker is async. Single-cell
     is N=1 — no separate cross-cell branch; the three query shapes
-    collapse to this one path.
+    collapse to this one path. `balanced` forwards to `rank_candidates`.
     """
     per_cell = merge_candidates(target_cells, retrieve_fn, per_cell_top_n)
     pool = [c for cell_list in per_cell for c in cell_list]
     scores = rerank_fn(query, pool) if (rerank_fn is not None and pool) else None
-    return rank_candidates(per_cell, scores, top_k)
+    return rank_candidates(per_cell, scores, top_k, balanced=balanced)
