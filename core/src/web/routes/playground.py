@@ -424,6 +424,11 @@ async def _build_merged_response_html(
         }
         if lane == "sira":
             ctx.update({
+                # The SIRA lane synthesizes from SIRA-pinned chunks (retrieval is
+                # skipped), so the synthesizer's rag_chunks ARE the pinned set and
+                # carry no dense score — relabel the "Returned by RAG" block and
+                # hide the dense_score column for this lane.
+                "pinned_synth": True,
                 "sira_results": out["sira_results"],
                 "sira_candidates_reranked": out["sira_result"].get("candidates_reranked", 0),
                 "sira_top_k": out["sira_result"].get("top_k", 0),

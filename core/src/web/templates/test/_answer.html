@@ -280,8 +280,8 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
     {% if rag_chunks %}
       <hr>
       <div class="small">
-        <strong>Returned by RAG</strong>
-        ({{ rag_chunk_count }} chunk{% if rag_chunk_count != 1 %}s{% endif %}):
+        <strong>{% if pinned_synth %}Synthesized from{% else %}Returned by RAG{% endif %}</strong>
+        ({{ rag_chunk_count }} {% if pinned_synth %}pinned {% endif %}chunk{% if rag_chunk_count != 1 %}s{% endif %}):
         <ul class="list-unstyled mt-1 mb-0">
           {% for ch in rag_chunks %}
             {% set frag_id = "frag-rag-" ~ row_id ~ "-" ~ loop.index %}
@@ -296,7 +296,7 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
               </button>
               {% if ch.plan_id %}<span class="badge bg-secondary ms-1">{{ ch.plan_id }}</span>{% endif %}
               {% if ch.section_number %} — sec <code>{{ ch.section_number }}</code>{% endif %}
-              <span class="text-muted ms-1">dense_score={{ ch.similarity_score }}</span>
+              {% if not pinned_synth %}<span class="text-muted ms-1">dense_score={{ ch.similarity_score }}</span>{% endif %}
               {# Retrieval-provenance badges (D-041 RRF + reranker + glossary pin). #}
               {% if ch.source == "glossary_pin" %}
                 <span class="badge bg-info ms-1" title="Pinned by acronym chain (D-043)">pin</span>
