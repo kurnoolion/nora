@@ -503,3 +503,53 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
 - D-DRAFT-1..12 (+ this session's D-DRAFT-13 correction, pending capture) all
   unlanded; landing gate stands (multi-cell build+enrich + cross-cell query
   verified on real corpus).
+
+## 2026-06-24 — Web-eval rerank hardening: backend abstraction, 413 cascade, MNO-balance diagnosis
+
+### Done this session
+- **Closed the multi-cell startup/healthz/prompt gaps** (D-DRAFT-7 was wired at
+  the query layer but not the runtime-surface layers):
+  - `89f07bf` load cells at startup + cell-aware healthz;
+  - `4b6c0bd` load query/rerank prompts in multi-cell mode;
+  - `64957c4` healthz aggregates per-cell doc enrichment.
+- **D-DRAFT-14 dedicated `/rerank` backend abstraction** (`chat` | `tei` |
+  `openai-dedicated`):
+  - `cc222b1` backend dispatch + bulk call shapes (tei `{query,texts}` →
+    `/rerank`; openai-dedicated `{model,query,documents}` → `/v1/rerank`);
+  - `1192cc7` tolerant response parsing (results/data/scores/bare-list/positional);
+  - `4e8a30d` surface upstream `/rerank` error message in logs;
+  - `10dd49e` follow redirects (308 from the rerank endpoint).
+- **Rerank 413 cascade fixed** — the cross-MNO "only MNO-B" symptom:
+  - root cause: TEI 413 (pool > `--max-client-batch-size`) → `except` scored the
+    whole pool 0 → `rank_candidates` stable tie-break collapsed to cell-sorted
+    pool order → MNO-B (alphabetically first) took every `top_k` slot;
+  - `7787205` bulk HTTP **sub-batching** (`_rerank_one_batch`, honors
+    `_RERANK_BATCH_SIZE`, per-batch failure isolated) + **degenerate-score
+    round-robin fallback** in `fusion.rank_candidates`;
+  - `5732532` **`truncate: true`** on the TEI payload — over-long dense chunks
+    get clipped instead of 413-ing their batch (sub-batching alone can't help a
+    single over-long doc).
+- **Verified on the work PC:** both MNOs now score with real varied scores, no
+  413s in the service log.
+
+### In progress
+- (none half-built — the 413 arc is complete and verified)
+
+### Next
+- **Balanced packing → single-call LLM rank+synthesize (Path B)** on
+  **multi-mno-nora** (synthesis-side): round-robin across cells, token-budgeted
+  (~20 chunks, ~3K-char cap, fits 32K), behind a `NORA_SIRA_PIN_MODE` flag with
+  the rerank-topk path as fallback. → D-DRAFT-16 (on multi-mno-nora).
+- **Chunking-granularity fix** (deepest answer-quality lever): re-chunk MNO-A's
+  monster band-tables to MNO-B's granularity — NORA parser, multi-mno-nora.
+- Landing gate stands; at land, update D-DRAFT-6 + D-DRAFT-12 text.
+
+### Flags
+- **MNO-B ~80% dominance is a data-shape issue, not a ranking bug** — chunking
+  asymmetry (MNO-A 12,111 chunks, p50 536 + 40K-char tail; MNO-B 4,212 uniform
+  ~700). Design chosen (Path B + re-chunking), not yet built.
+- **`truncate: true` clips 40K tables to the model window** — rows past it are
+  invisible to the reranker; the chunking fix is still needed for table-heavy
+  queries.
+- (carry-forward) eager per-cell load → RAM scales with cell count; OQ-2 per-cell
+  eval queries/qrels.

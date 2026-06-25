@@ -632,3 +632,94 @@ would be wrong, colliding all cells onto one dataset dir).
   at land time.
 - The generated `configs/data/<cell>.yaml` files live in the gitignored clone
   (transient build artifacts), not the repo.
+
+## D-DRAFT-14 — Pluggable `/rerank` backend (chat | tei | openai-dedicated), bulk-call protocol
+
+**Context:** The cell-aware service reranks the merged cross-cell candidate pool
+live. The original path was `chat` — pointwise LLM-as-judge, one chat call per
+candidate, which is slow (N round-trips) and ties reranking to a generative LLM.
+The work-PC has dedicated cross-encoder rerankers available (TEI on the HP z620,
+vLLM on the DGX) that score a whole batch in one call. Different servers speak
+different wire shapes and emit different response envelopes.
+
+**Decision:** Add a `NORA_SIRA_RERANK_BACKEND` dispatch with three backends:
+- `chat` (default) — pointwise LLM-as-judge via the rerank prompt; one call per
+  candidate; failure scores that candidate 0 (graceful, per-candidate).
+- `tei` — one bulk `POST {RERANK_LLM_URL}/rerank` `{query, texts, raw_scores}`
+  → `[{index, score}]` (Hugging Face TEI cross-encoder).
+- `openai-dedicated` — one bulk `POST {RERANK_LLM_URL}/v1/rerank`
+  `{model, query, documents}` → `{results:[{index, relevance_score}]}` (vLLM
+  Cohere-style).
+Scores are scaled to 0-100 and are treated as absolute (cross-cell comparable
+for the fusion sort). Base URLs must NOT include `/v1` (the service appends the
+backend path). A **tolerant parser** reads bare-list / `results` / `data` /
+`scores` / positional-float shapes and reads `relevance_score` or `score`; an
+unrecognized shape logs the top-level keys and scores 0 rather than crashing.
+Upstream `{error:{message}}` envelopes are surfaced to the log; HTTP calls
+follow redirects (the rerank endpoint 308s).
+
+**Why:** A dedicated cross-encoder is far cheaper than N LLM calls and keeps
+reranking independent of the synthesis LLM. Dispatch (not a hard swap) keeps
+`chat` as a zero-dependency default and lets operators point at whichever
+endpoint their hardware serves. Tolerant parsing was forced by reality — vLLM
+returned an `{error}` envelope (model didn't support the Score API), TEI and
+Cohere-style differ in both request and response shape; a strict parser turned
+every shape mismatch into a 500. Rejected: committing to one server's schema
+(brittle across the two boxes); keeping `chat`-only (too slow at pool scale).
+
+**Consequences:**
+- New `_rerank_bulk` / `_rerank_candidates` dispatch, `_parse_rerank_response`,
+  `_candidate_doc_texts`; healthz surfaces `rerank_backend`, `rerank_llm_url`.
+- Operators must set base URLs WITHOUT `/v1` — documented in the runbook §C;
+  a `/v1`-suffixed URL double-paths and 404s.
+- Bulk backends score atomically per call — which created the 413 failure mode
+  that **D-DRAFT-15** hardens.
+- `openai-dedicated` requires a server that actually implements the rerank/score
+  API; a chat-only vLLM returns an error envelope (now surfaced, not swallowed).
+
+## D-DRAFT-15 — Bulk rerank resilience: sub-batch + truncate + degenerate-score round-robin
+
+**Context:** With the D-DRAFT-14 `tei` backend, cross-MNO queries returned
+**only MNO-B** chunks. Root cause chain: the merged pool is `n_cells × top_n`
+(easily 40-100), sent to TEI in ONE request; TEI rejects it with **413** (pool >
+`--max-client-batch-size`, default 32, and/or over-long dense chunks past the
+model's max sequence length); `_rerank_bulk`'s `except` then scored the **whole
+pool 0**; with all scores equal, `rank_candidates`' stable score-sort preserved
+**pool order**, which is `sorted(target_cells)` (cell-alphabetical), so the
+first cell took every `top_k` slot and the other MNO silently vanished. Lowering
+`top_k`/batch size only narrowed which batch failed — the symptom persisted.
+
+**Decision:** Three coupled changes so a rerank hiccup degrades to *balanced*,
+never to *single-cell*:
+1. **HTTP sub-batching** — `_rerank_bulk` chunks the pool into sub-batches
+   honoring `NORA_RERANK_BATCH_SIZE` (else `NORA_SIRA_RERANK_BULK_BATCH_SIZE`,
+   default 16) via `_rerank_one_batch`, and merges; a failed sub-batch scores
+   ONLY its own candidates 0 (no longer poisons the whole pool).
+2. **`truncate: true`** on the TEI payload — over-long chunks (MNO-A's dense
+   band-tables run past the model window) are clipped server-side instead of
+   413-ing; sub-batching alone can't help a single over-long doc (it 413s at
+   batch size 1).
+3. **Degenerate-score round-robin fallback** in `fusion.rank_candidates` — when
+   rerank scores are all-equal / all-zero / none-present, fall back to
+   `_round_robin(per_cell)` instead of the cell-collapsing stable sort.
+
+**Why:** The failure is structural, not incidental — cross-cell fusion must not
+let a transient rerank failure erase an entire MNO from a multi-MNO query.
+Sub-batching addresses the count/payload limit, truncation the per-doc length
+limit, and the round-robin fallback the *consequence* if scoring still fails.
+Each is necessary: batch tuning alone still 413'd on dense single docs;
+truncate alone still overflows the batch count at scale; the fallback alone
+masks but doesn't fix the 413. Rejected: raising TEI server limits (per-box,
+brittle, breaks as cells/`top_k` grow); auto-bisecting a 413'd batch (a single
+over-long doc still 413s at size 1 — confirmed before building, so not built).
+
+**Consequences:**
+- A rerank-backend outage now yields balanced (round-robin) results with
+  `rerank_score` 0/None, not a single-MNO result — visible degradation, not
+  silent erasure.
+- `truncate: true` clips over-long chunks to the model window — rows past it are
+  invisible to the reranker, so table-heavy cells still need the upstream
+  chunking fix (tracked on multi-mno-nora). Truncation is a floor, not a cure.
+- The degenerate fallback does NOT fire on *partial* failure (one cell scored,
+  one cell 413'd-to-zero) — that still sinks the zeroed cell; the durable answer
+  is balanced packing (Path B / D-DRAFT-16 on multi-mno-nora), not this fallback.
