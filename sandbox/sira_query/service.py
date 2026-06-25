@@ -832,6 +832,8 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
             "bm25_score": round(cand.bm25_score, 4),
             "title": doc.get("title", ""),
             "text_preview": doc.get("text", "").replace("\n", " ").strip()[:400],
+            # Full chunk text (newlines preserved) for Path-B; null unless asked.
+            "text": (doc.get("text", "")[: req.text_chars] if req.text_chars else None),
         })
 
     return {
@@ -855,6 +857,11 @@ app = FastAPI(title="NORA SIRA per-query probe")
 class _SiraQueryRequest(BaseModel):
     query: str
     top_k: int | None = None
+    # When set, each result carries a `text` field with the full chunk text
+    # (newlines preserved, capped at this many chars) in addition to the short
+    # `text_preview`. Used by NORA's Path-B synth, which feeds whole chunks
+    # (band tables intact) to the LLM. Omitted/None → `text` is null (default).
+    text_chars: int | None = None
 
 
 @app.on_event("startup")
