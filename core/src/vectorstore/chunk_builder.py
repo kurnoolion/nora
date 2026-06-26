@@ -546,12 +546,11 @@ class ChunkBuilder:
         if body:
             parts.append(body)
 
-        # Tables as Markdown
-        if self.config.include_tables:
-            for table in req.get("tables", []):
-                table_md = self._table_to_markdown(table)
-                if table_md:
-                    parts.append(table_md)
+        # Tables are inlined into req.text at their document position by the
+        # parser (faithful order), so they're already in the body above — no
+        # separate append here (that would duplicate them and lose position).
+        # `include_tables` stays in config for back-compat but no longer gates
+        # rendering; tables are intrinsic to the requirement text now.
 
         # Image context
         if self.config.include_image_context:
@@ -595,44 +594,10 @@ class ChunkBuilder:
 
     @staticmethod
     def _table_to_markdown(table: dict) -> str:
-        """Convert a table dict to Markdown table format.
-
-        Tables from the parser have 'headers' and 'rows'.
-        Single-column tables with just req IDs (formatting artifacts)
-        are included but compact.
-        """
-        headers = table.get("headers", [])
-        rows = table.get("rows", [])
-
-        if not rows:
-            return ""
-
-        # If headers are empty strings, try to use first row as header
-        if headers and all(h == "" for h in headers):
-            # Single empty-header table — likely a req ID artifact table
-            # Still include it but compactly
-            all_cells = [cell for row in rows for cell in row if cell.strip()]
-            if all_cells:
-                return "[Table: " + " | ".join(all_cells) + "]"
-            return ""
-
-        if not headers:
-            # No headers at all — just format rows
-            lines = []
-            for row in rows:
-                lines.append("| " + " | ".join(str(c) for c in row) + " |")
-            return "\n".join(lines)
-
-        # Normal table with headers
-        lines = []
-        lines.append("| " + " | ".join(str(h) for h in headers) + " |")
-        lines.append("| " + " | ".join("---" for _ in headers) + " |")
-        for row in rows:
-            # Pad row to match header length
-            padded = list(row) + [""] * (len(headers) - len(row))
-            lines.append("| " + " | ".join(str(c) for c in padded[:len(headers)]) + " |")
-
-        return "\n".join(lines)
+        """Convert a table dict to Markdown. Delegates to the parser's canonical
+        renderer so NORA chunks and the SIRA corpus render tables identically."""
+        from core.src.parser.structural_parser import render_table_markdown
+        return render_table_markdown(table.get("headers", []), table.get("rows", []))
 
     @staticmethod
     def _build_plan_feature_map(taxonomy: dict | None) -> dict[str, list[str]]:

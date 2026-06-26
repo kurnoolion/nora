@@ -163,6 +163,34 @@ _GLOSSARY_LABEL_TOKEN_SPLIT_RE = re.compile(r"[\s/,&|;()]+")
 _GLOSSARY_LABEL_MIN_DENSITY = 0.75
 
 
+def render_table_markdown(headers: list[str], rows: list[list[str]]) -> str:
+    """Render a parsed table as GitHub-flavored markdown.
+
+    The canonical table renderer: the parser inlines this into ``Requirement.text``
+    at the table's document position (so text is faithful and self-contained), and
+    ``ChunkBuilder._table_to_markdown`` delegates here so NORA chunks and the SIRA
+    corpus render tables identically. Empty-header artifact tables collapse to a
+    compact ``[Table: …]`` line; headerless tables render rows only.
+    """
+    if not rows:
+        return ""
+    if headers and all((h or "") == "" for h in headers):
+        cells = [c for row in rows for c in row if (c or "").strip()]
+        return "[Table: " + " | ".join(cells) + "]" if cells else ""
+    if not headers:
+        return "\n".join(
+            "| " + " | ".join(str(c) for c in row) + " |" for row in rows
+        )
+    lines = [
+        "| " + " | ".join(str(h) for h in headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in rows:
+        padded = list(row) + [""] * (len(headers) - len(row))
+        lines.append("| " + " | ".join(str(c) for c in padded[: len(headers)]) + " |")
+    return "\n".join(lines)
+
+
 def _glossary_label_density(
     text: str, req_id_re: re.Pattern | None,
 ) -> tuple[int, int, float, list[str]]:
@@ -1834,6 +1862,16 @@ class GenericStructuralParser:
                             rows=block.rows,
                             source="inline",
                         )
+                    )
+                    # Inline the table into the body text AT ITS DOCUMENT
+                    # POSITION (this loop runs in block order), so text-then-
+                    # table-then-text ordering is preserved for the synthesizer
+                    # instead of all tables being appended at the end. `tables`
+                    # stays populated as structured metadata; consumers
+                    # (chunk_builder, SIRA adapter) read the faithful text.
+                    self._append_text(
+                        current_section,
+                        render_table_markdown(block.headers, block.rows),
                     )
                     # Defer table-anchored extraction to a second pass —
                     # paragraph_req_ids and struck_req_ids must be

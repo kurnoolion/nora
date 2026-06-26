@@ -217,20 +217,10 @@ def _build_text(req: dict[str, Any], tree: dict[str, Any],
     if body:
         lines.append("")
         lines.append(body)
-    # Serialize the requirement's tables into the searchable corpus text. They
-    # live in a SEPARATE `tables` field on the parsed Requirement, so building
-    # text from `req.text` alone silently dropped them — and band/frequency
-    # requirements keep their source-of-truth data IN tables, so retrieval and
-    # the Path-B synthesizer never saw it. Reuse ChunkBuilder's renderer so the
-    # SIRA corpus matches NORA's own chunk text. (Trailing traceability tables
-    # were already cleared at parse time by content_end_marker — D-DRAFT-13 —
-    # so this only re-adds legitimate content tables.)
-    from core.src.vectorstore.chunk_builder import ChunkBuilder
-    for _t in req.get("tables") or []:
-        _tmd = ChunkBuilder._table_to_markdown(_t)
-        if _tmd:
-            lines.append("")
-            lines.append(_tmd)
+    # Tables are inlined into `req.text` at their document position by the parser
+    # (faithful order), so `body` above already contains them — no separate
+    # append here. (The parser's `Requirement.tables` field is kept as structured
+    # metadata but is intentionally NOT re-serialized, to preserve ordering.)
     xref = _cross_refs_line(req)
     if xref:
         lines.append("")

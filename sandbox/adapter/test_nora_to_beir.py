@@ -341,22 +341,28 @@ class TestBuildTextContext:
 
 
 class TestBuildTextTables:
-    """Band/frequency data lives in the parsed Requirement's separate `tables`
-    field; the corpus text must include it (source of truth for band queries)."""
+    """Tables are inlined into req.text by the parser (faithful order); the
+    adapter must pass that text through and NOT re-serialize req.tables (which
+    would duplicate the table and lose its document position)."""
 
-    def test_tables_serialized_into_corpus_text(self):
+    def test_inline_tables_in_text_flow_through_once(self):
         from sandbox.adapter.nora_to_beir import _build_text
         tree = {"build_context": "none", "detection_mode": "leading_id_body"}
-        req = {
-            "req_id": "ABC-FOO-1", "title": "NR SA FR1 Bands", "section_number": "86.3",
-            "text": "Device shall support the following bands.", "plan_id": "FOO",
-            "tables": [{"headers": ["Band", "BW (MHz)"],
-                        "rows": [["n78", "100"], ["n77", "100"]]}],
-        }
+        # Faithful parser output: intro → table → note, all inline in `text`.
+        body = (
+            "Device shall support the following bands.\n"
+            "| Band | BW (MHz) |\n| --- | --- |\n| n78 | 100 |\n| n77 | 100 |\n"
+            "Note: FR2 bands are specified separately."
+        )
+        req = {"req_id": "ABC-FOO-1", "title": "NR SA FR1 Bands", "section_number": "86.3",
+               "text": body, "plan_id": "FOO",
+               "tables": [{"headers": ["Band", "BW (MHz)"],
+                           "rows": [["n78", "100"], ["n77", "100"]]}]}
         out = _build_text(req, tree, None, {})
-        assert "| Band | BW (MHz) |" in out            # header row rendered
-        assert "| n78 | 100 |" in out and "| n77 | 100 |" in out   # the band data
-        assert "Device shall support the following bands." in out  # body still present
+        assert "| n78 | 100 |" in out                       # band data present
+        assert out.count("| n78 | 100 |") == 1              # NOT duplicated by the adapter
+        # order preserved: intro before table before note
+        assert out.index("following bands") < out.index("| n78 | 100 |") < out.index("FR2 bands")
 
     def test_no_tables_is_unchanged(self):
         from sandbox.adapter.nora_to_beir import _build_text

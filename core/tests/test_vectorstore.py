@@ -150,7 +150,9 @@ def _make_tree(
             },
         }
 
-        # Add a table to the second requirement
+        # Add a table to the second requirement. The parser inlines tables into
+        # req.text at their document position, so the body text carries the
+        # markdown; `tables` stays populated as structured metadata.
         if i == 1:
             req["tables"] = [
                 {
@@ -162,6 +164,13 @@ def _make_tree(
                     "source": "inline",
                 }
             ]
+            req["text"] = (
+                req["text"]
+                + "\n| Parameter | Value | Unit |"
+                + "\n| --- | --- | --- |"
+                + "\n| T3402 | 720 | seconds |"
+                + "\n| T3411 | 10 | seconds |"
+            )
 
         # Add an image to the third requirement
         if i == 2:
@@ -491,13 +500,17 @@ class TestChunkBuilder:
         chunks = builder.build_chunks([tree])
         assert "[Req ID:" not in chunks[0].text
 
-    def test_no_tables_when_disabled(self):
+    def test_include_tables_false_no_longer_strips_inline_tables(self):
+        # Tables are inlined into req.text by the parser now (faithful order), so
+        # they're intrinsic to the requirement body; `include_tables` is retained
+        # in config for back-compat but no longer suppresses them.
+        # (Was test_no_tables_when_disabled.)
         config = VectorStoreConfig(include_tables=False)
         builder = ChunkBuilder(config)
         tree = _make_tree(n_reqs=3)
 
         chunks = builder.build_chunks([tree])
-        assert "| Parameter" not in chunks[1].text
+        assert "| Parameter | Value | Unit |" in chunks[1].text
 
     def test_no_images_when_disabled(self):
         config = VectorStoreConfig(include_image_context=False)

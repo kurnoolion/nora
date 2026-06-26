@@ -238,3 +238,26 @@ def test_definitions_table_header_fallback_only_when_section_lookup_fails():
     tree = GenericStructuralParser(profile).parse(_doc(blocks))
     assert "GPP" in tree.definitions_map
     assert "XXX" not in tree.definitions_map
+
+
+# ---------------------------------------------------------------------------
+# Inline table ordering (faithful document position)
+# ---------------------------------------------------------------------------
+
+def test_tables_inlined_into_body_in_document_order():
+    """A table between two paragraphs is inlined into req.text at its document
+    position (not appended after all body text), so the synthesizer sees
+    intro → table → note in the original order."""
+    blocks = [
+        _heading(0, "1 Frequency Bands"),
+        _para(1, "The device shall support the following FR1 bands."),
+        _table(2, headers=["Band", "BW (MHz)"], rows=[["n78", "100"], ["n77", "100"]]),
+        _para(3, "Note: FR2 bands are specified separately."),
+    ]
+    tree = GenericStructuralParser(_profile()).parse(_doc(blocks))
+    req = next(r for r in tree.requirements if "Frequency Bands" in (r.title or ""))
+    text = req.text
+    assert "| Band | BW (MHz) |" in text and "| n78 | 100 |" in text   # table inlined
+    # faithful order: intro before the table before the trailing note
+    assert text.index("following FR1 bands") < text.index("| n78 | 100 |") < text.index("FR2 bands")
+    assert req.tables and req.tables[0].rows == [["n78", "100"], ["n77", "100"]]  # metadata kept
