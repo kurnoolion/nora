@@ -23,6 +23,7 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_query/service.py` | Cell-aware FastAPI per-query service (`/sira-query`, `/healthz`) — loads every cell at startup; resolves query scope → retrieve per cell → merge → rerank. Query-time config in the multi-mno-sira runbook. | ✅ |
 | `sira_cells.py` | Cell-identity helpers (`cell_dirname`, `parse_cell_dirname`, `enumerate_cells`); release ordering re-exported from `core.extraction.release_key`. | ✅ |
 | `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`. | ✅ |
+| `verify_tables.py` | Verifies parsed tables are inlined into NORA parse text (fails on any `tables`-field req missing its inline table) and reached the per-cell SIRA corpus, with a cross-check. `--parse` and/or `--db-root`. | ✅ |
 | `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
 | `prompts/doc_requirement_v01.txt` | Telecom-tuned doc-enrichment prompt (replaces SIRA's Wikipedia-tuned `doc_v07.txt`). | ✅ |
 | `prompts/query_requirement_v01.txt` | Mirror query-enrichment prompt. | ✅ |
@@ -155,10 +156,14 @@ first, or re-emit with `--wipe-all-derived` for a full re-enrich.
     uvicorn sandbox.sira_query.service:app --port 8040
     curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool   # mode: multi-cell, cells: [...]
 
-**Inspect / verify a cell**:
+**Inspect / verify**:
 
-    # corpus rows that carry markdown tables, per cell:
-    python3 -c "import json,glob,sys;[print(c.split('/')[-3]+': '+str(sum('\n|' in json.loads(l).get('text','') for l in open(c)))+' rows-with-tables') for c in sorted(glob.glob(sys.argv[1]+'/*/raw/corpus.jsonl'))]" sandbox/adapter/out-db
+    # tables inlined into NORA parse text + reached the SIRA corpus (one command):
+    python -m sandbox.verify_tables --parse <env_dir>/out/parse --db-root sandbox/adapter/out-db
 
     # the enrichment phrases + full text (tables inline) for one req:
     python -m sandbox.sira_enrich_inspect <req_id> --text
+
+`verify_tables` reports per-(mno/rel) parse counts (and fails if any req has a
+`tables` field but no inline table — an inline regression), per-cell corpus
+table counts, and a cross-check that tables reached the corpus.
