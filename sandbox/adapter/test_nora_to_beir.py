@@ -338,3 +338,29 @@ class TestBuildTextContext:
         req = {"req_id": "ABC-FOO-1", "title": "T", "text": "body", "parent_section": "5.1.2"}
         out = _build_text(req, tree, None, {}, _ctx_sections())
         assert "[Context:" not in out and "[5 Bands]" not in out
+
+
+class TestBuildTextTables:
+    """Band/frequency data lives in the parsed Requirement's separate `tables`
+    field; the corpus text must include it (source of truth for band queries)."""
+
+    def test_tables_serialized_into_corpus_text(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"build_context": "none", "detection_mode": "leading_id_body"}
+        req = {
+            "req_id": "ABC-FOO-1", "title": "NR SA FR1 Bands", "section_number": "86.3",
+            "text": "Device shall support the following bands.", "plan_id": "FOO",
+            "tables": [{"headers": ["Band", "BW (MHz)"],
+                        "rows": [["n78", "100"], ["n77", "100"]]}],
+        }
+        out = _build_text(req, tree, None, {})
+        assert "| Band | BW (MHz) |" in out            # header row rendered
+        assert "| n78 | 100 |" in out and "| n77 | 100 |" in out   # the band data
+        assert "Device shall support the following bands." in out  # body still present
+
+    def test_no_tables_is_unchanged(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"build_context": "none", "detection_mode": "leading_id_body"}
+        req = {"req_id": "ABC-FOO-1", "title": "T", "text": "body", "plan_id": "FOO"}
+        out = _build_text(req, tree, None, {})
+        assert "|" not in out                          # no spurious table markup
