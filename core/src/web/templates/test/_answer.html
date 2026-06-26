@@ -88,20 +88,28 @@
     {% if sira_results is defined %}
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
         <span class="badge bg-secondary">SIRA retrieval → NORA synthesizer</span>
-        <span class="text-muted small">
-          {{ sira_candidates_reranked }} reranked · top {{ sira_top_k }} retrieved ·
-          <strong>{{ sira_pinned_count }} pinned to synth</strong>
-        </span>
-        {% if sira_pin_mode == 'balanced' %}
-          <span class="text-muted small">·</span>
+        {% if sira_synth_mode == 'llm-select' %}
+          <span class="badge bg-info">Path-B · LLM-select</span>
           <span class="text-muted small">
-            balanced: round-robin across cells · top {{ sira_pin_max }}
+            top {{ sira_top_k }} retrieved ·
+            <strong>{{ sira_pinned_count }} packed to LLM</strong> · no rerank
           </span>
-        {% elif sira_max_rerank_score is defined and sira_max_rerank_score > 0 %}
-          <span class="text-muted small">·</span>
+        {% else %}
           <span class="text-muted small">
-            filter: score ≥ max({{ sira_pin_min_score|int }}, {{ sira_max_rerank_score }}×{{ sira_pin_rel_threshold }})
+            {{ sira_candidates_reranked }} reranked · top {{ sira_top_k }} retrieved ·
+            <strong>{{ sira_pinned_count }} pinned to synth</strong>
           </span>
+          {% if sira_pin_mode == 'balanced' %}
+            <span class="text-muted small">·</span>
+            <span class="text-muted small">
+              balanced: round-robin across cells · top {{ sira_pin_max }}
+            </span>
+          {% elif sira_max_rerank_score is defined and sira_max_rerank_score > 0 %}
+            <span class="text-muted small">·</span>
+            <span class="text-muted small">
+              filter: score ≥ max({{ sira_pin_min_score|int }}, {{ sira_max_rerank_score }}×{{ sira_pin_rel_threshold }})
+            </span>
+          {% endif %}
         {% endif %}
       </div>
       {% if sira_timings_ms %}

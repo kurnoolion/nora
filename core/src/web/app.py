@@ -100,6 +100,22 @@ async def lifespan(app: FastAPI):
     _start_time = time.time()
     logger.info("NORA Web UI starting (root_path=%r)", config.root_path)
 
+    # SIRA synth-lane config — surfaced so "is my Path-B env var live?" is a
+    # glance at the startup log instead of guessing from the /test output.
+    from core.src.web.routes import playground as _pg
+    if _pg._SYNTH_MODE == "llm-select":
+        logger.info(
+            "SIRA synth lane: Path-B (llm-select) — top_k=%d, text_chars=%d, "
+            "token_budget=%d. (Run the SIRA service with "
+            "NORA_SIRA_RERANK_ENABLED=false.)",
+            _pg._PATHB_TOP_K, _pg._PATHB_TEXT_CHARS, _pg._SYNTH_TOKEN_BUDGET,
+        )
+    else:
+        logger.info(
+            "SIRA synth lane: rerank-pin (mode=%r, pin_mode=%r, pin_max=%d)",
+            _pg._SYNTH_MODE, _pg._PIN_MODE, _pg._PIN_MAX,
+        )
+
     # Ensure state/ directory exists (D-022: <env_dir>/state/)
     state_dir = config.state_path()
     state_dir.mkdir(parents=True, exist_ok=True)

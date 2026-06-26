@@ -477,6 +477,7 @@ async def _build_merged_response_html(
                 "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
                 "sira_pin_mode": _PIN_MODE,
                 "sira_pin_max": _PIN_MAX,
+                "sira_synth_mode": _SYNTH_MODE,
                 "sira_timings_ms": out["sira_result"].get("timings_ms"),
                 "sira_rerank_call_stats": out["sira_result"].get("rerank_call_stats"),
                 "sira_notes": out["sira_result"].get("notes", []),
@@ -1005,6 +1006,7 @@ async def playground_ask(request: Request):
             "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
             "sira_pin_mode": _PIN_MODE,
             "sira_pin_max": _PIN_MAX,
+            "sira_synth_mode": _SYNTH_MODE,
             "elapsed_ms": elapsed_ms,
             # Synthesizer view — pass the SAME fields requirement_bot
             # passes, so the shared template renders citation audit /
