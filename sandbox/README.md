@@ -19,6 +19,11 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_patches/per-stage-routing.patch` | Adds `NORA_SIRA_{ENRICH,RERANK}_LLM_{URL,MODEL}` env vars to SIRA's batch pipeline, letting enrichment and rerank stages target different OpenAI-compatible endpoints without running the shim. Applied idempotently by `install_configs.sh`. See `sira_patches/README.md` for env-var reference and usage examples. | ✅ |
 | `sira_patches/test/probe_per_stage_endpoints.py` | Stdlib sanity probe — POSTs a tiny chat-completion to each configured endpoint and reports compact `SPK` lines. Use before running the pipeline to confirm reachability + response shape. | ✅ |
 | `adapter/nora_to_beir.py` | Converts NORA parse output (`<env_dir>/out/parse/**/*_tree.json` — recursive, covers the per-cell `<mno>/<rel>/` layout, NORA D-DRAFT-12) + the 18-Q eval set into BEIR-format `corpus.jsonl` + `queries.jsonl` + `qrels/test.tsv`. `--multi-cell` emits one dataset per `(mno, release)` cell. | ✅ |
+| `sira_multi.py` | Multi-MNO batch orchestrator — enumerates the `(mno, release)` cells under a db_root and runs SIRA's `run_pipeline.py` once per cell (writes each cell's `configs/data/<cell>.yaml` from the `nora.yaml` template first). See "Running — multi-MNO" below. | ✅ |
+| `sira_query/service.py` | Cell-aware FastAPI per-query service (`/sira-query`, `/healthz`) — loads every cell at startup; resolves query scope → retrieve per cell → merge → rerank. Query-time config in the multi-mno-sira runbook. | ✅ |
+| `sira_cells.py` | Cell-identity helpers (`cell_dirname`, `parse_cell_dirname`, `enumerate_cells`); release ordering re-exported from `core.extraction.release_key`. | ✅ |
+| `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`. | ✅ |
+| `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
 | `prompts/doc_requirement_v01.txt` | Telecom-tuned doc-enrichment prompt (replaces SIRA's Wikipedia-tuned `doc_v07.txt`). | ✅ |
 | `prompts/query_requirement_v01.txt` | Mirror query-enrichment prompt. | ✅ |
 | `prompts/relevance_requirement_v01.txt` | LLM-reranker prompt. | ✅ |
@@ -106,3 +111,54 @@ which URL it resolved (`(env-routed via NORA_SIRA_*_LLM_URL)` vs.
 > `customizations/llm/proprietary_provider.py`): start the shim,
 > point env vars at it, and the same pipeline command works. See
 > `SETUP.md` for the shim setup.
+
+## Running — multi-MNO (multi-cell)
+
+The flow above handles **one** corpus. For a **multi-MNO / multi-release**
+corpus, each `(mno, release)` is its own **cell** — a separate BEIR dataset
+under a shared `db_root`, built and enriched independently. `sira_multi` is the
+batch orchestrator that runs the single-cell pipeline once per cell. Full
+operational detail (cross-cell query checks, rerank backends, Path-B synthesis)
+lives in the **`multi-mno-sira` runbook**:
+`docs/compact/strands/multi-mno-sira/multi-cell-runbook.md`.
+
+Prereqs: NORA parse output exists for every cell
+(`<env_dir>/out/parse/<mno>/<rel>/*_tree.json`); configs + patches installed
+(`install_configs.sh`); enrichment LLM env vars set (Step 3 above).
+
+**Step 1 — Emit one BEIR dataset per cell** (`--output` is the **db_root**):
+
+    python -m sandbox.adapter.nora_to_beir \
+        --env-dir /path/to/env_dir --output sandbox/adapter/out-db --multi-cell \
+        --wipe-all-derived          # FIRST ingest: clears index/ enrichments/ runs/ per cell
+
+Use `--wipe-stale-index` instead for an **incremental re-emit** — rebuilds the
+BM25 index but KEEPS the `runs/` enrichment cache (so resume works). One dataset
+lands at `<db_root>/<mno>__<release>/raw/` per cell (double-underscore).
+
+**Step 2 — Build + enrich every cell** (batch orchestrator):
+
+    python -m sandbox.sira_multi \
+        --db-root sandbox/adapter/out-db --sira-clone sandbox/sira \
+        --stages prepare,bm25,enrich_corpus
+        # --only VZW__Feb2026,ATT__Nov2025   subset of cells
+        # --dry-run                          print per-cell commands, don't run
+
+Enrichment resumes by `doc_id`, so a new release re-enriches only its new docs.
+**Caveat — content changes under an existing doc_id** (e.g. a re-parse that adds
+tables) are NOT detected by SIRA's resume: the `bm25` stage re-indexes the new
+text, but to *re-enrich* the changed docs run `sira_incremental prune` per cell
+first, or re-emit with `--wipe-all-derived` for a full re-enrich.
+
+**Step 3 — Launch the cell-aware service**:
+
+    uvicorn sandbox.sira_query.service:app --port 8040
+    curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool   # mode: multi-cell, cells: [...]
+
+**Inspect / verify a cell**:
+
+    # corpus rows that carry markdown tables, per cell:
+    python3 -c "import json,glob,sys;[print(c.split('/')[-3]+': '+str(sum('\n|' in json.loads(l).get('text','') for l in open(c)))+' rows-with-tables') for c in sorted(glob.glob(sys.argv[1]+'/*/raw/corpus.jsonl'))]" sandbox/adapter/out-db
+
+    # the enrichment phrases + full text (tables inline) for one req:
+    python -m sandbox.sira_enrich_inspect <req_id> --text
