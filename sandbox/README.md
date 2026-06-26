@@ -141,15 +141,21 @@ lands at `<db_root>/<mno>__<release>/raw/` per cell (double-underscore).
 
     python -m sandbox.sira_multi \
         --db-root sandbox/adapter/out-db --sira-clone sandbox/sira \
-        --stages prepare,bm25,enrich_corpus
+        --run-name enrich-stable --stages prepare,bm25,enrich_corpus
         # --only VZW__Feb2026,ATT__Nov2025   subset of cells
         # --dry-run                          print per-cell commands, don't run
+
+**Pass `--run-name`** (e.g. `enrich-stable`) — it pins each cell's doc-enrich run
+dir (`<cell>/runs/doc-enrich/<name>/`) so SIRA's resume can accumulate across
+runs. Without it, `run_pipeline` uses a timestamped name and **a re-run can't
+resume**. Point the service's `NORA_SIRA_DOC_ENRICH_RUN` at the same name.
 
 Enrichment resumes by `doc_id`, so a new release re-enriches only its new docs.
 **Caveat — content changes under an existing doc_id** (e.g. a re-parse that adds
 tables) are NOT detected by SIRA's resume: the `bm25` stage re-indexes the new
 text, but to *re-enrich* the changed docs run `sira_incremental prune` per cell
-first, or re-emit with `--wipe-all-derived` for a full re-enrich.
+first, or re-emit with `--wipe-all-derived` for a full re-enrich (see
+**Operational scenarios** below).
 
 **Step 3 — Launch the cell-aware service**:
 
@@ -167,3 +173,77 @@ first, or re-emit with `--wipe-all-derived` for a full re-enrich.
 `verify_tables` reports per-(mno/rel) parse counts (and fails if any req has a
 `tables` field but no inline table — an inline regression), per-cell corpus
 table counts, and a cross-check that tables reached the corpus.
+
+## Operational scenarios (multi-MNO)
+
+All of these assume a **pinned `--run-name`** (e.g. `enrich-stable`) so SIRA's
+doc-enrich resume is stable. `$DB` = db_root, `$CLONE` = SIRA clone, `$ENV` =
+NORA env dir.
+
+### Continue after an abrupt stop / crash
+
+`sira_multi` is per-cell sequential and continue-on-error, so finished cells are
+intact. Just re-run the **same** command (same `--run-name`):
+
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
+        --run-name enrich-stable --stages prepare,bm25,enrich_corpus
+
+- Completed cells: `prepare`/`bm25` re-run in seconds; `enrich` resumes from the
+  pinned trace and skips every done doc (no LLM calls).
+- The cell that was mid-enrich: resumes — only not-yet-enriched docs hit the LLM.
+- To skip finished cells entirely, add `--only <remaining cells>`.
+
+If the crash left **failed** docs in a cell's trace (they'd otherwise count as
+"seen" and be skipped), clear them first:
+
+    python -m sandbox.sira_incremental retry-failed \
+        --dataset "$DB/<cell>" --run-name enrich-stable --stage doc-enrich
+
+### Add a new MNO and/or release (incremental)
+
+1. Produce the new cell's NORA parse output (`$ENV/out/parse/<mno>/<rel>/`).
+2. Re-emit — `--wipe-stale-index` rebuilds indexes but KEEPS every cell's
+   enrichment cache, so existing cells don't re-enrich:
+
+       python -m sandbox.adapter.nora_to_beir \
+           --env-dir "$ENV" --output "$DB" --multi-cell --wipe-stale-index
+
+3. Build + enrich **only the new cell(s)** (`--only`); existing cells untouched:
+
+       python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
+           --run-name enrich-stable --only <mno>__<rel> \
+           --stages prepare,bm25,enrich_corpus
+
+4. Restart the service — it enumerates + loads the new cell at startup
+   (`curl /healthz` lists it). A new *release* of an existing MNO is the same
+   flow; latest-release routing then picks the newest cell for an MNO-only query.
+
+### Re-ingest after a corpus CONTENT change (re-parse / table fix / profile edit)
+
+A re-parse changes existing docs' text under the same `doc_id`. SIRA's resume is
+`doc_id`-keyed, so it would wrongly **skip** them. The `bm25` stage re-indexes
+the new text regardless (so retrieval sees it), but to **re-enrich** the changed
+docs:
+
+- **Targeted** — evict changed/removed doc_ids from each cell's trace, then
+  re-run step 2 (only changed docs re-hit the LLM):
+
+      python -m sandbox.sira_incremental prune --dataset "$DB/<cell>" --run-name enrich-stable
+      python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name enrich-stable ...
+
+  `prune` needs a content-hash baseline from a prior `commit`; without one it
+  can't tell what changed (then use the full path).
+- **Full** — re-emit with `--wipe-all-derived` (clears the enrichment cache so
+  everything re-enriches — the ~13h path; reserve for prompt/model changes).
+
+After a successful enrich, record the new baseline for next time:
+
+    python -m sandbox.sira_incremental commit --dataset "$DB/<cell>" --run-name enrich-stable
+    #   add --full if this followed a --wipe-all-derived rebuild
+
+### Change the enrichment prompt or model
+
+Edit `prompts/doc_requirement_v01.txt` (or the model env var), re-run
+`install_configs.sh`, then **force a re-enrich** — resume would otherwise skip
+done docs. Use the **Full** path above (`--wipe-all-derived`), since the change
+is corpus-wide.

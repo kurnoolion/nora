@@ -84,6 +84,16 @@ def test_build_cmd_stages(tmp_path):
     assert "stages=[prepare,bm25,enrich_corpus]" in cmd
 
 
+def test_build_cmd_run_name_when_set(tmp_path):
+    cmd = build_pipeline_cmd(("VZW", "Feb2026"), tmp_path, run_name="enrich-stable")
+    assert "+run_name=enrich-stable" in cmd          # pinned for resume
+
+
+def test_build_cmd_no_run_name_when_unset(tmp_path):
+    cmd = build_pipeline_cmd(("VZW", "Feb2026"), tmp_path)
+    assert not any(c.startswith("+run_name") for c in cmd)   # default: run_pipeline's own name
+
+
 # ── _parse_cell_list ──────────────────────────────────────────────
 
 def test_parse_cell_list_ok():

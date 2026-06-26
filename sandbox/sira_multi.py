@@ -73,6 +73,7 @@ def build_pipeline_cmd(
     rerank_config: str = "nora",
     sglang_port: int | None = None,
     stages: list[str] | None = None,
+    run_name: str | None = None,
 ) -> list[str]:
     """Build the `run_pipeline.py` argv for one cell (cwd = SIRA clone).
 
@@ -96,6 +97,12 @@ def build_pipeline_cmd(
         cmd.append(f"sglang.port={sglang_port}")
     if stages:
         cmd.append("stages=[" + ",".join(stages) + "]")
+    if run_name:
+        # Pin the doc-enrich run dir name so SIRA's resume accumulates across
+        # invocations (continue after a crash; incremental re-enrich). Per cell
+        # the run lives at <cell>/runs/doc-enrich/<run_name>/. run_pipeline
+        # accepts `+run_name` (see sira_incremental's documented flow).
+        cmd.append(f"+run_name={run_name}")
     return cmd
 
 
@@ -106,6 +113,7 @@ def run_cells(
     only: list[CellKey] | None = None,
     sglang_port: int | None = None,
     stages: list[str] | None = None,
+    run_name: str | None = None,
     dry_run: bool = False,
 ) -> dict[CellKey, int]:
     """Run the SIRA pipeline per cell. Returns {cell: returncode}.
@@ -129,6 +137,7 @@ def run_cells(
     for cell in cells:
         cmd = build_pipeline_cmd(
             cell, db_root, sglang_port=sglang_port, stages=stages,
+            run_name=run_name,
         )
         name = cell_dirname(cell)
         print(f"=== cell {name} ===")
@@ -190,6 +199,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--only", default=None,
                    help="Comma-separated cell names to run (subset). "
                         "Default: all cells under --db-root.")
+    p.add_argument("--run-name", default=None,
+                   help="Pin the doc-enrich run dir name (e.g. enrich-stable) so "
+                        "SIRA's resume accumulates across runs — needed for "
+                        "reliable resume after an interrupted run and for "
+                        "incremental re-enrich. Per cell the run lives at "
+                        "<cell>/runs/doc-enrich/<run-name>/; point the service's "
+                        "NORA_SIRA_DOC_ENRICH_RUN at the same name. Default: "
+                        "run_pipeline's own (timestamped) run name.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the per-cell commands without executing.")
     args = p.parse_args(argv)
@@ -205,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     results = run_cells(
         args.db_root, args.sira_clone,
         only=only, sglang_port=args.sglang_port, stages=stages,
-        dry_run=args.dry_run,
+        run_name=args.run_name, dry_run=args.dry_run,
     )
     return 1 if any(rc != 0 for rc in results.values()) else 0
 
