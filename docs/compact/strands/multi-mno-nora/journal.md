@@ -488,3 +488,58 @@
   ever precedes the marker; safe for this corpus.
 - D-DRAFT-1..13 all unlanded; landing gate stands (full + incremental + WebUI
   verified, cross-MNO no-leak confirmed).
+
+## 2026-06-27 — Path-B LLM-select synthesis, balanced pin, faithful table inlining (core)
+
+### Done this session
+- **Path-B — LLM-select synthesis** (`7c926f6`, `NORA_SIRA_SYNTH_MODE=llm-select`,
+  default off). The cross-encoder reranker scores surface similarity and misses
+  domain term variants — it dropped the source-of-truth MNO-A chunk because it
+  says "SA NR" not "5G". Path-B bypasses the reranker: fetch all balanced BM25
+  candidates with full text (SIRA `text_chars`), round-robin-pack across cells
+  under a token budget (`NORA_SIRA_SYNTH_TOKEN_BUDGET`, default 120K for a 128K
+  model), group by MNO/release, and feed them to the telecom LLM in ONE
+  select+synthesize call. Citations extracted corpus-agnostically (any req_id
+  format, not the synthesizer's VZ_REQ_-only regex). → D-DRAFT-14.
+- **Balanced pin mode** (`da49ad5`, `NORA_SIRA_PIN_MODE=balanced`): round-robin
+  the SIRA-pinned chunks across cells so the synthesizer sees both MNOs — the
+  rerank-pin lane's counterpart to SIRA's balanced fusion (multi-mno-sira
+  D-DRAFT-16). Found insufficient alone (SIRA's top_k cut starves the input
+  first), which motivated the SIRA-side fusion balance. → D-DRAFT-16.
+- **Faithful table inlining — core mechanism** (`deb6493`): the parser inlines
+  each table's markdown into `req.text` at its document position
+  (`render_table_markdown` + the block-loop append, so intro→table→note order is
+  preserved); `ChunkBuilder._table_to_markdown` delegates to the shared parser
+  renderer (vectorstore→parser) and no longer appends separately. NORA RAG and
+  the SIRA corpus both read the faithful text. Decision drafted on multi-mno-sira
+  as **D-DRAFT-17** (driven by the SIRA band-query); referenced here, not
+  re-drafted. `include_tables` is now vestigial.
+- **Web UX / observability:** RAG-list relabel for the SIRA lane
+  ("Synthesized from", `pinned_synth`, hide dense_score) (`7ee8da7`); synth-mode
+  caption (`Path-B · LLM-select` badge) + startup-log line (`73e2dda`); synth
+  timing in the SIRA lane (`expand·search·rerank·synth`) (`6a5e0b3`).
+
+### In progress
+- Path-B awaiting work-PC verification (the post-table-fix full enrich is
+  running). Expect Path-B to now select + cite the FR2 "SA NR" band chunk.
+
+### Next
+- Verify Path-B end-to-end once the enrich + re-emit complete (FR2 chunk lands,
+  both MNOs represented, `synth_ms` tolerable on the 128K call).
+- `regen-map` to refresh Structure sections (new public functions:
+  `render_table_markdown`, Path-B helpers in playground, `_rerank_sorted`) and a
+  `/drift-check dev-full` — both deferred from this close (see Flags).
+- Decide whether Path-B becomes the default lane or stays opt-in after eval.
+
+### Flags
+- **Draft-ID numbering:** code comments + multi-mno-sira cross-refs call NORA's
+  balanced pin "D-DRAFT-16", but this strand's drafts only ran to 13. Assigned
+  Path-B=D-DRAFT-14, balanced-pin=D-DRAFT-16 (to match the existing refs);
+  D-DRAFT-15 intentionally unused. All renumber to canonical D-XXX at land.
+- **regen-map / drift-check deferred** — new functions added across parser /
+  vectorstore / web; Structure sections are stale until regen-map.
+- **Path-B caveats:** citations rely on the LLM writing req_ids verbatim; 128K
+  single-call latency is eval-grade not production; capped giant tables still
+  lose rows past the cap (re-chunking is the deeper fix).
+- Two flaky tests to ticket: `MockEmbedder` hash-seed (`test_query`) + asyncio
+  event-loop isolation (`test_playground_helpers`).

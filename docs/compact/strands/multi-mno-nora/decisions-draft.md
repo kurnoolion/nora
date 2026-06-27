@@ -670,3 +670,81 @@ requirements — kept those, see Consequences).
   token-dense-chunks STATUS flag).
 - Generic + reusable: any corpus can name its non-normative sections / trailing
   appendices via profile, no code change.
+
+<!-- D-DRAFT-15 intentionally unused: code comments + multi-mno-sira cross-refs
+     pegged NORA's balanced pin at D-DRAFT-16 before this strand's drafts caught
+     up (they ran to 13). Path-B took 14; balanced pin took 16 to match the
+     existing references. All renumber to canonical D-XXX at land. -->
+
+## D-DRAFT-14 — Path-B: LLM-select synthesis (drop the reranker; the LLM picks relevant chunks)
+
+**Context:** Even with the rerank-413 and balance fixes, a cross-MNO band query
+still missed the source-of-truth MNO-A chunk. Root cause is fundamental to the
+cross-encoder reranker: it scores surface query↔passage similarity and does not
+bridge telecom term variants — the chunk says "SA NR", the query says "5G", and
+the reranker scores it low and drops it (while picking keyword-matching but
+irrelevant chunks). Telecom-pretrained LLMs (Qwen3) handle that association
+natively. The DGX was provisioned to 128K context to make a stuff-the-context
+approach feasible.
+
+**Decision:** Add `NORA_SIRA_SYNTH_MODE=llm-select` (default `rerank-pin` =
+unchanged). Path-B drops the cross-encoder entirely: fetch all BM25 candidates
+with full text (SIRA `text_chars`, rerank off so the top_k cut is BM25), then on
+the NORA side round-robin-pack them across cells under a token budget
+(`NORA_SIRA_SYNTH_TOKEN_BUDGET`, default 120K), group the context by
+(MNO, release) with headers, and feed everything to the LLM in ONE call that
+both SELECTS the relevant chunks (instructed that "SA NR" ≡ "5G NR standalone",
+band aliases, etc.) and SYNTHESIZES. Citations are extracted corpus-agnostically
+by matching the packed candidates' actual req_ids against the answer (the
+synthesizer's regex only matched `VZ_REQ_*`). Implemented as a dedicated lane in
+`playground.py`, bypassing the graph-heavy `pipeline.query`.
+
+**Why:** The reranker's term-variant blindness is a hard limit, not a tuning
+knob — no fusion/pin change fixes a chunk dropped before fusion. An LLM is robust
+to granularity + terminology, and at 128K we can give it a bounded, balanced
+candidate set and let it do relevance from content. Rejected: more reranker
+tuning (can't bridge ontology); pure per-cell balance (the right chunk was never
+scored); a smaller-context stuff (band tables don't fit). Kept rerank-pin as the
+default + fallback behind the flag.
+
+**Consequences:**
+- New Path-B helpers (`_pack_pathb`, `_build_pathb_context`,
+  `_pathb_synthesize`, `_pathb_extract_citations`, `_run_pathb_lane`) + the
+  `_PATHB_*` / `_SYNTH_*` env knobs; SIRA service gained `text_chars`.
+- Cost/latency shifts from cheap rerank to one large-context LLM call — eval-grade,
+  not production throughput; `synth_ms` surfaces it.
+- Citations depend on the LLM writing req_ids verbatim; a paraphrased id is missed.
+- Requires the SIRA service run with `NORA_SIRA_RERANK_ENABLED=false` so the
+  returned top_k is BM25 (else the reranker re-introduces the drop).
+- Open: whether Path-B replaces the rerank lane or stays opt-in (decide after eval).
+
+## D-DRAFT-16 — Balanced pin: round-robin SIRA-pinned chunks across cells for synthesis
+
+**Context:** The merged SIRA lane pins the top SIRA results to NORA's
+synthesizer via a score-based filter. For a cross-MNO query the highest-scoring
+cell took ~all pin slots (the same cross-cell score-skew as the SIRA fusion
+problem), so the synthesizer only saw one MNO and produced a one-sided answer.
+
+**Decision:** Add `NORA_SIRA_PIN_MODE=balanced` (default `rerank-topk` =
+unchanged score filter). In balanced mode `_select_pinned_chunks` round-robins
+across `(mno, release)` cells (in-cell rerank order) up to `NORA_SIRA_PIN_MAX`
+(default 16, sized for the 32K synth context), so every resolved cell is
+represented in the pinned set; the synthesizer does final relevance over the
+balanced set. The `/test` caption is mode-aware.
+
+**Why:** A pure score filter can't represent "both MNOs" when one corpus
+out-scores the other. Round-robin guarantees representation while keeping
+in-cell rerank order. Pairs with SIRA's balanced fusion (multi-mno-sira
+D-DRAFT-16) — but found **insufficient alone**: SIRA's own top_k cut starves the
+input before NORA pins it, so both layers are needed (this fixes what survives
+to synth; the SIRA fusion fixes what SIRA returns). Largely superseded for the
+band-query use case by Path-B (D-DRAFT-14), which doesn't pin-by-score at all;
+kept for the rerank-pin lane.
+
+**Consequences:**
+- New `_balanced_pin` + `_PIN_MODE`/`_PIN_MAX` knobs; two `/test` context sites
+  + the caption carry `sira_pin_mode`/`sira_pin_max`.
+- Balanced mode ignores the score floor/threshold — representation over strict
+  relevance, by design for comparison queries.
+- Numbered D-DRAFT-16 (not 15) to match pre-existing code + cross-strand
+  references; a coordinated pair with multi-mno-sira's D-DRAFT-16.
