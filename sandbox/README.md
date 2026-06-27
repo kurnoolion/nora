@@ -271,7 +271,27 @@ appended for synthesis).
 To point any of those DBs elsewhere, the web app also takes explicit flags
 (`--jobs-db` / `--metrics-db` / `--feedback-db` / `--config-db`) or the matching
 env vars (`$NORA_JOBS_DB` / `$NORA_METRICS_DB` / `$NORA_FEEDBACK_DB` /
-`$NORA_CONFIG_DB`); `run_stack.sh` just wires them to `<state>/…` by default.
+`$NORA_CONFIG_DB`); `run_stack.sh` honors those env vars and otherwise defaults
+each to `<state>/…`.
+
+**Config DB vs feedback DB across two instances:**
+- **Feedback DB — pool it.** Each `test_feedback` row records `llm_model`, so a
+  single shared feedback DB stays attributable *and* makes A/B comparison a
+  one-liner. Point both stacks at one path:
+
+      export NORA_FEEDBACK_DB=$HOME/nora-ab/feedback.db   # before BOTH run_stack calls
+      # then compare:
+      sqlite3 "$NORA_FEEDBACK_DB" \
+        "SELECT llm_model, vote, COUNT(*) FROM test_feedback GROUP BY llm_model, vote;"
+
+  (The store opens a fresh connection per write with no WAL/busy-timeout, so a
+  shared DB is fine for human-paced A/B voting; under heavy concurrent writes it
+  could occasionally hit `database is locked` — keep them separate + `UNION` the
+  two DBs at analysis time if that ever bites.)
+- **Config DB — keep it per-stack** (the default). Independent `/config` page per
+  instance, no write contention; and since the LLM is pinned via `NORA_LLM_*`
+  env (which outranks the config DB), the per-stack config never overrides the
+  model under test anyway.
 
 **Logs:** each stack writes `service-<svc_port>-<ts>.log` and
 `web-<web_port>-<ts>.log` (`ts`=YYYYMMDD-HHMMSS), combining stdout+stderr.

@@ -31,6 +31,13 @@
 #   NORA_LLM_PROVIDER          synthesis provider tag          (default: openai)
 #   NORA_STACK_STATE_DIR       base dir for per-stack state     (default: /tmp/nora-stacks)
 #   NORA_STACK_LOG_DIR         default log dir (overridden by --log-dir)
+#   NORA_FEEDBACK_DB / NORA_CONFIG_DB / NORA_JOBS_DB / NORA_METRICS_DB
+#                              per-DB path override (default: <state>/<name>.db).
+#                              Point NORA_FEEDBACK_DB at the SAME path for both
+#                              stacks to POOL A/B feedback into one DB — each row
+#                              records `llm_model`, so it stays attributable
+#                              (compare with GROUP BY llm_model). Config DB is
+#                              best left per-stack (independent /config page).
 #
 # Notes:
 #   * Run from your SIRA venv (python + uvicorn on PATH).
@@ -89,6 +96,14 @@ ts="$(date +%Y%m%d-%H%M%S)"
 svc_log="$log_dir/service-${svc_port}-${ts}.log"
 web_log="$log_dir/web-${web_port}-${ts}.log"
 
+# Web state DBs — per-stack by default, but each is overridable via its env var
+# so you can SHARE one across stacks (e.g. one feedback DB for A/B comparison —
+# the rows carry `llm_model`, so a shared feedback DB stays attributable).
+jobs_db="${NORA_JOBS_DB:-$sdir/jobs.db}"
+metrics_db="${NORA_METRICS_DB:-$sdir/metrics.db}"
+feedback_db="${NORA_FEEDBACK_DB:-$sdir/feedback.db}"
+config_db="${NORA_CONFIG_DB:-$sdir/config.db}"
+
 if [[ $DRY -eq 0 ]]; then
     [[ -d "$db_root" ]] || { echo "error: db_root not found: $db_root" >&2; exit 1; }
     mkdir -p "$sdir" "$log_dir"
@@ -117,8 +132,8 @@ NORA_SIRA_QUERY_URL=http://127.0.0.1:$svc_port NORA_SIRA_SYNTH_MODE=llm-select \
 NORA_LLM_PROVIDER=$provider NORA_LLM_BASE_URL=$llm_base/v1 \\
 NORA_LLM_MODEL=$llm_model NORA_LLM_API_KEY=${api_key:+<set>} \\
   python -m core.src.web.app --port $web_port \\
-    --jobs-db $sdir/jobs.db --metrics-db $sdir/metrics.db \\
-    --feedback-db $sdir/feedback.db --config-db $sdir/config.db
+    --jobs-db $jobs_db --metrics-db $metrics_db \\
+    --feedback-db $feedback_db --config-db $config_db
 EOF
     exit 0
 fi
@@ -145,10 +160,10 @@ write_header() {
         echo "  state_dir     = $sdir"
         echo "  log_dir       = $log_dir"
         if [[ "$role" == web ]]; then
-            echo "  jobs-db       = $sdir/jobs.db"
-            echo "  metrics-db    = $sdir/metrics.db"
-            echo "  feedback-db   = $sdir/feedback.db"
-            echo "  config-db     = $sdir/config.db"
+            echo "  jobs-db       = $jobs_db"
+            echo "  metrics-db    = $metrics_db"
+            echo "  feedback-db   = $feedback_db"
+            echo "  config-db     = $config_db"
         fi
         echo "[NORA/SIRA env set in this process]"
         { env | grep -E '^(NORA_|SIRA_)' || true; } \
@@ -184,10 +199,10 @@ cd "$REPO_ROOT"
     [[ -n "$api_key" ]] && export NORA_LLM_API_KEY="$api_key"
     write_header web "$web_log"
     nohup python -m core.src.web.app --port "$web_port" \
-        --jobs-db "$sdir/jobs.db" \
-        --metrics-db "$sdir/metrics.db" \
-        --feedback-db "$sdir/feedback.db" \
-        --config-db "$sdir/config.db" \
+        --jobs-db "$jobs_db" \
+        --metrics-db "$metrics_db" \
+        --feedback-db "$feedback_db" \
+        --config-db "$config_db" \
         >> "$web_log" 2>&1 &
     echo $! > "$sdir/web.pid"
 )
