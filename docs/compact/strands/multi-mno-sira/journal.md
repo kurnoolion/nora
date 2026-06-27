@@ -553,3 +553,53 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
   queries.
 - (carry-forward) eager per-cell load → RAM scales with cell count; OQ-2 per-cell
   eval queries/qrels.
+
+## 2026-06-27 — Balanced fusion, faithful table ingestion, multi-MNO tooling + ops docs
+
+### Done this session
+- **Balanced cross-cell fusion** (`cd0561a`) — `NORA_SIRA_FUSION_BALANCED`
+  (default off). When on and >1 cell, `rank_candidates` sorts WITHIN each cell
+  by rerank score then round-robins, so a multi-MNO query's `top_k` keeps every
+  cell represented. Root cause it fixes: SIRA's global score-sort + `top_k` cut
+  returned ~21 MNO-B / 4 MNO-A because chunk-granularity asymmetry makes one
+  corpus out-score the other — starving the lower-scoring MNO before NORA's pin
+  ever sees it. Pairs with NORA's balanced pin (multi-mno-nora). → D-DRAFT-16.
+- **Faithful table ingestion into the corpus** — the band/frequency tables were
+  silently dropped: `Requirement.tables` is a SEPARATE field, and the adapter
+  built corpus text from `req.text` alone. First fix appended tables in the
+  adapter (`a220722`), but that lost document order (table-then-note reordered).
+  Superseded by the parser inlining tables into `req.text` at their document
+  position (`deb6493`, core parser — journaled on multi-mno-nora); the adapter
+  now passes text through and does NOT re-serialize `req.tables`. → D-DRAFT-17.
+- **Full-text in query results** (`71366f5`) — `text_chars` request field; SIRA
+  returns each result's whole chunk text (tables intact) for Path-B synthesis.
+- **Tooling:** `sira_enrich_inspect` (`cb4b27b`) — phrases by req_id, multi-cell,
+  with `--text`/`--trace`; `verify_tables` (`ee056f9`) — checks tables are
+  inlined in NORA parse text AND reached the per-cell SIRA corpus, with a
+  cross-check; `sira_multi --run-name` (`ea8e852`) — pins the doc-enrich run dir
+  so SIRA's resume accumulates across runs.
+- **Docs** (`0235b7f`, `ea8e852`) — sandbox README gained a multi-MNO ingestion +
+  pipeline section and an **operational scenarios** section: continue-after-crash,
+  incremental new MNO/release, content-change re-ingest, prompt/model change.
+
+### In progress
+- **Full enrich running on the work PC** under `--run-name enrich-stable` (fresh,
+  post-table-fix). User will report when done; then verify tables + Path-B.
+
+### Next
+- When the enrich finishes: `verify_tables` (NORA + SIRA) + `sira_enrich_inspect`
+  on the FR2 band req; restart service with `NORA_SIRA_DOC_ENRICH_RUN=enrich-stable`;
+  re-run the Path-B band query and confirm the SA-NR / FR2 chunk lands + is cited.
+- Landing gate still stands; at land, update D-DRAFT-6 + D-DRAFT-12 text and
+  reconcile the two D-DRAFT-16s (this strand's balanced fusion + multi-mno-nora's
+  balanced pin — a coordinated pair).
+
+### Flags
+- **Two D-DRAFT-16s across strands** (intentional pair: SIRA balanced fusion +
+  NORA balanced pin) — note at land time so the canonical IDs don't confuse.
+- **Enrichment vs tables:** the running enrich is a full pass (no prior trace
+  under `enrich-stable`); future runs off this baseline are incremental. A
+  re-parse content change still needs `sira_incremental prune` to re-enrich
+  changed docs (SIRA resume is doc_id-keyed).
+- Carry-forward: eager per-cell load → RAM scales with cell count; OQ-2 per-cell
+  eval queries/qrels.

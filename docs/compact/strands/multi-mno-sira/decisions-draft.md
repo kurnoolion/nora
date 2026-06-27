@@ -723,3 +723,87 @@ over-long doc still 413s at size 1 — confirmed before building, so not built).
 - The degenerate fallback does NOT fire on *partial* failure (one cell scored,
   one cell 413'd-to-zero) — that still sinks the zeroed cell; the durable answer
   is balanced packing (Path B / D-DRAFT-16 on multi-mno-nora), not this fallback.
+
+## D-DRAFT-16 — Balanced cross-cell fusion: round-robin the top_k for multi-MNO queries
+
+**Context:** A cross-MNO query (`"5G NR bands for both MNO-A and MNO-B"`)
+returned ~21 MNO-B / 4 MNO-A in the top 25. `rank_candidates` sorts the merged
+pool by the reranker's absolute 0-100 score and cuts at `top_k`. The premise
+(D-DRAFT-10 call 1) was that absolute scores are cross-cell comparable — but
+**chunk-granularity asymmetry breaks that**: MNO-B's sharper, smaller chunks
+systematically out-score MNO-A's large/diluted/truncated band tables, so the
+global sort + cut starves the lower-scoring MNO before it ever leaves SIRA (the
+downstream NORA pin can't balance what it never receives).
+
+**Decision:** Add `NORA_SIRA_FUSION_BALANCED` (default **off** = the global
+score-sort, correct for single-MNO and when scores are genuinely comparable).
+When **on and >1 cell**, `rank_candidates` sorts WITHIN each cell by rerank
+score then `_round_robin`-interleaves the per-cell lists before the `top_k` cut.
+Within-cell ordering stays score-ranked (reliable); cross-cell representation is
+enforced structurally rather than trusted to absolute scores. `fusion.py` stays
+I/O-free — the flag is a parameter; `service.py` reads the env var and passes
+`balanced=`. Pairs with NORA's balanced pin (multi-mno-nora D-DRAFT-16) for
+end-to-end balance: this fixes *what SIRA returns*, the pin fixes *what survives
+to synth*.
+
+**Why:** Cross-cell absolute-score comparability is the assumption that fails
+when corpora are chunked differently — and re-chunking is a larger, separate
+fix. Round-robin is the minimal structural guarantee that "show me both MNOs"
+returns both. Default-off preserves the single-MNO/ comparable-score path.
+Rejected: a per-cell *floor* + global fill (more knobs, less predictable);
+trusting rerank scores (the very thing that's skewed); fixing only at the NORA
+pin (starved by the SIRA cut, as observed).
+
+**Consequences:**
+- New `_rerank_sorted` helper + `balanced` param on `rank_candidates`/`fuse`;
+  `_FUSION_BALANCED` env in the service; `fusion_balanced` in `/healthz`.
+- Multi-cell results are no longer globally score-ordered when the flag is on —
+  they interleave by cell. Acceptable (and desired) for comparison queries.
+- Two strands now carry a **D-DRAFT-16** (this fusion balance + NORA's pin
+  balance) — a coordinated pair; reconcile the canonical IDs at land time.
+- Does not fix *answer quality* for table-heavy MNO-A chunks — that's the
+  upstream chunking/table work (D-DRAFT-17 + re-chunking).
+
+## D-DRAFT-17 — Tables inlined into req.text at document position (faithful order), consumers read text
+
+**Context:** Band/frequency requirements keep their source-of-truth data in
+tables, but the parser stored tables in a SEPARATE `Requirement.tables` field
+and every consumer built searchable text from `req.text` alone — so tables were
+**silently dropped** from the BEIR corpus (and the band chunks looked empty,
+ranked low, and weren't selected by Path-B). A first fix appended tables in the
+SIRA adapter (`a220722`), but appending after the body **loses document order**:
+a requirement shaped intro → table → note became intro → note → table, which
+breaks the LLM synthesizer's reading of the table against its surrounding text.
+
+**Decision:** Inline each table's markdown into `req.text` **at its document
+position**, at parse time — the block loop already runs in order, so the table
+is appended to the section's text exactly where it appears (after preceding
+prose, before following prose). `req.text` becomes the faithful, self-contained
+content. A shared `render_table_markdown` is the single renderer:
+`ChunkBuilder._table_to_markdown` delegates to it (vectorstore→parser, correct
+layering) and **stops appending separately**; the SIRA adapter stops
+re-serializing `req.tables`. `Requirement.tables` is kept as structured metadata
+but is no longer the rendering source. Trailing traceability tables are already
+cleared at parse time by `content_end_marker` (D-DRAFT-13), so this only inlines
+legitimate content tables.
+
+**Why:** The prose/table split was the actual defect — `req.text` *should* be
+the full requirement content, in order. Inlining at the source makes BOTH lanes
+(NORA RAG, SIRA corpus) faithful for free and removes the duplication risk of
+two consumers each appending. Rejected: position markers in text (leak to
+context/eval consumers that don't render them); per-consumer interleaving from a
+new ordered-segments field (more model surface, req.text stays lossy for
+context/eval); keeping the adapter-append (loses order — the bug we hit).
+
+**Consequences:**
+- `req.text` now contains tables → NORA RAG chunks, `build_context`, and eval
+  text all see them (more faithful; larger context — capped by
+  `build_context_max_chars` / synth budgets).
+- `include_tables` config is now **vestigial** (tables are intrinsic to text;
+  the flag no longer suppresses them) — documented, kept for back-compat.
+- **Requires a re-parse** (cheap) → re-build NORA vectorstore / re-emit SIRA
+  corpus + rebuild BM25; re-enrich only the changed table-bearing docs.
+- Cross-cutting: the parser/chunk_builder mechanism is core (multi-mno-nora);
+  this strand owns the SIRA-corpus facet (adapter passthrough + the band-query
+  problem that drove it). `verify_tables` guards the invariant (no req with a
+  `tables` field may lack the inline table).
