@@ -268,18 +268,19 @@ two webs don't lock-contend or conflate Q&A logs, and each gets its own `/config
 page. `llm_base_url` is the base WITHOUT `/v1` (used as-is for the SIRA shim, `/v1`
 appended for synthesis).
 
-To point any of those DBs elsewhere, the web app also takes explicit flags
-(`--jobs-db` / `--metrics-db` / `--feedback-db` / `--config-db`) or the matching
-env vars (`$NORA_JOBS_DB` / `$NORA_METRICS_DB` / `$NORA_FEEDBACK_DB` /
-`$NORA_CONFIG_DB`); `run_stack.sh` honors those env vars and otherwise defaults
-each to `<state>/…`.
+To point any of those DBs elsewhere, `run_stack.sh` takes them as flags
+(`--feedback-db` / `--config-db` / `--jobs-db` / `--metrics-db`, before the
+positional args) or honors the matching env vars (`$NORA_FEEDBACK_DB` etc.),
+defaulting each to `<state>/…`. Precedence: **flag > env var > default**.
 
 **Config DB vs feedback DB across two instances:**
 - **Feedback DB — pool it.** Each `test_feedback` row records `llm_model`, so a
   single shared feedback DB stays attributable *and* makes A/B comparison a
   one-liner. Point both stacks at one path:
 
-      export NORA_FEEDBACK_DB=$HOME/nora-ab/feedback.db   # before BOTH run_stack calls
+      # as a flag on each run_stack call (or export NORA_FEEDBACK_DB once):
+      sandbox/run_stack.sh --feedback-db $HOME/nora-ab/feedback.db qwen "$DB_QWEN" 8040 8080 ...
+      sandbox/run_stack.sh --feedback-db $HOME/nora-ab/feedback.db prop "$DB_PROP" 8041 8081 ...
       # then compare:
       sqlite3 "$NORA_FEEDBACK_DB" \
         "SELECT llm_model, vote, COUNT(*) FROM test_feedback GROUP BY llm_model, vote;"

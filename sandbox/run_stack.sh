@@ -5,7 +5,7 @@
 # DBs (so Q&A logs / feedback don't conflate across stacks).
 #
 # Usage:
-#   sandbox/run_stack.sh [--log-dir DIR] [--dry-run] \
+#   sandbox/run_stack.sh [OPTIONS] \
 #       <label> <db_root> <svc_port> <web_port> <llm_base_url> <llm_model> [api_key]
 #   sandbox/run_stack.sh --stop <label>
 #
@@ -19,11 +19,19 @@
 #   <llm_model>    model name for both query-enrich and synthesis
 #   [api_key]      optional bearer key for the LLM endpoint
 #
+# OPTIONS (any order, before the positional args):
 #   --log-dir DIR  where to write logs (default: the stack's state dir).
 #                  Log files are  <DIR>/service-<svc_port>-<ts>.log  and
 #                  <DIR>/web-<web_port>-<ts>.log  where ts = YYYYMMDD-HHMMSS.
 #                  Each log starts with a header dumping the script args + all
 #                  set NORA_*/SIRA_* env vars (API keys redacted).
+#   --feedback-db PATH   web feedback DB    (default: <state>/feedback.db)
+#   --config-db   PATH   web /config DB     (default: <state>/config.db)
+#   --jobs-db     PATH   web jobs DB        (default: <state>/jobs.db)
+#   --metrics-db  PATH   web metrics DB     (default: <state>/metrics.db)
+#                  Each overrides its $NORA_*_DB env var. Point --feedback-db at
+#                  one shared path across both stacks to POOL A/B feedback (rows
+#                  carry llm_model). Precedence: flag > env var > default.
 #   --dry-run      print the env + commands without launching.
 #
 # Env overrides (optional):
@@ -75,11 +83,16 @@ fi
 # ── leading options ──────────────────────────────────────────────────
 DRY=0
 LOG_DIR_OPT=""
+JOBS_DB_OPT=""; METRICS_DB_OPT=""; FEEDBACK_DB_OPT=""; CONFIG_DB_OPT=""
 while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
     case "$1" in
-        --dry-run) DRY=1; shift;;
-        --log-dir) LOG_DIR_OPT="${2:?--log-dir needs a path}"; shift 2;;
-        --help|-h) usage 0;;
+        --dry-run)     DRY=1; shift;;
+        --log-dir)     LOG_DIR_OPT="${2:?--log-dir needs a path}"; shift 2;;
+        --jobs-db)     JOBS_DB_OPT="${2:?--jobs-db needs a path}"; shift 2;;
+        --metrics-db)  METRICS_DB_OPT="${2:?--metrics-db needs a path}"; shift 2;;
+        --feedback-db) FEEDBACK_DB_OPT="${2:?--feedback-db needs a path}"; shift 2;;
+        --config-db)   CONFIG_DB_OPT="${2:?--config-db needs a path}"; shift 2;;
+        --help|-h)     usage 0;;
         *) echo "unknown option: $1" >&2; usage 2;;
     esac
 done
@@ -99,10 +112,11 @@ web_log="$log_dir/web-${web_port}-${ts}.log"
 # Web state DBs — per-stack by default, but each is overridable via its env var
 # so you can SHARE one across stacks (e.g. one feedback DB for A/B comparison —
 # the rows carry `llm_model`, so a shared feedback DB stays attributable).
-jobs_db="${NORA_JOBS_DB:-$sdir/jobs.db}"
-metrics_db="${NORA_METRICS_DB:-$sdir/metrics.db}"
-feedback_db="${NORA_FEEDBACK_DB:-$sdir/feedback.db}"
-config_db="${NORA_CONFIG_DB:-$sdir/config.db}"
+# precedence: CLI flag > env var > <state>/<name>.db
+jobs_db="${JOBS_DB_OPT:-${NORA_JOBS_DB:-$sdir/jobs.db}}"
+metrics_db="${METRICS_DB_OPT:-${NORA_METRICS_DB:-$sdir/metrics.db}}"
+feedback_db="${FEEDBACK_DB_OPT:-${NORA_FEEDBACK_DB:-$sdir/feedback.db}}"
+config_db="${CONFIG_DB_OPT:-${NORA_CONFIG_DB:-$sdir/config.db}}"
 
 if [[ $DRY -eq 0 ]]; then
     [[ -d "$db_root" ]] || { echo "error: db_root not found: $db_root" >&2; exit 1; }
