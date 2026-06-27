@@ -272,3 +272,11 @@ To point any of those DBs elsewhere, the web app also takes explicit flags
 (`--jobs-db` / `--metrics-db` / `--feedback-db` / `--config-db`) or the matching
 env vars (`$NORA_JOBS_DB` / `$NORA_METRICS_DB` / `$NORA_FEEDBACK_DB` /
 `$NORA_CONFIG_DB`); `run_stack.sh` just wires them to `<state>/…` by default.
+
+**Logs:** each stack writes `service-<svc_port>-<ts>.log` and
+`web-<web_port>-<ts>.log` (`ts`=YYYYMMDD-HHMMSS), combining stdout+stderr.
+Default location is the stack's state dir; override with `--log-dir DIR` (or
+`$NORA_STACK_LOG_DIR`). Each log starts with a header dumping the script args
+(incl. the resolved DB paths) and every set `NORA_*`/`SIRA_*` env var (API keys
+redacted) — so a log is self-describing about exactly how that process was
+launched.
