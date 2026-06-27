@@ -262,11 +262,12 @@ Each stack is a SIRA service + NORA web pinned to one ingestion + one LLM
 
 Then `:8080` = Qwen3, `:8081` = proprietary; same query in each, compare.
 `--dry-run` prints the exact env + commands without launching; `--stop <label>`
-kills a stack. Per-stack web state (jobs / metrics / feedback / config DBs) lives
-under `$NORA_STACK_STATE_DIR/<label>/` (default `/tmp/nora-stacks/<label>/`) so the
-two webs don't lock-contend or conflate Q&A logs, and each gets its own `/config`
-page. `llm_base_url` is the base WITHOUT `/v1` (used as-is for the SIRA shim, `/v1`
-appended for synthesis).
+kills a stack. Per-stack web state (pids + jobs / metrics / feedback / config DBs)
+lives under `<state-dir>/<label>/`, where `<state-dir>` is `--state-dir DIR` (or
+`$NORA_STACK_STATE_DIR`, default `/tmp/nora-stacks`) — so the two webs don't
+lock-contend or conflate Q&A logs, and each gets its own `/config` page. Pass the
+same `--state-dir` to `--stop` so it finds the pids. `llm_base_url` is the base
+WITHOUT `/v1` (used as-is for the SIRA shim, `/v1` appended for synthesis).
 
 To point any of those DBs elsewhere, `run_stack.sh` takes them as flags
 (`--feedback-db` / `--config-db` / `--jobs-db` / `--metrics-db`, before the

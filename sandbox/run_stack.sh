@@ -7,7 +7,7 @@
 # Usage:
 #   sandbox/run_stack.sh [OPTIONS] \
 #       <label> <db_root> <svc_port> <web_port> <llm_base_url> <llm_model> [api_key]
-#   sandbox/run_stack.sh --stop <label>
+#   sandbox/run_stack.sh [--state-dir DIR] --stop <label>
 #
 #   <label>        short id (e.g. qwen, prop) — names the state dir + log prefix
 #   <db_root>      the ingestion dir (NORA_SIRA_DB_ROOT) for this stack
@@ -20,6 +20,10 @@
 #   [api_key]      optional bearer key for the LLM endpoint
 #
 # OPTIONS (any order, before the positional args):
+#   --state-dir DIR  base dir for per-stack state (pids + DBs); the stack lands
+#                  under <DIR>/<label>/. Overrides $NORA_STACK_STATE_DIR.
+#                  Default: /tmp/nora-stacks. (Pass the same --state-dir to
+#                  --stop so it finds the pids.)
 #   --log-dir DIR  where to write logs (default: the stack's state dir).
 #                  Log files are  <DIR>/service-<svc_port>-<ts>.log  and
 #                  <DIR>/web-<web_port>-<ts>.log  where ts = YYYYMMDD-HHMMSS.
@@ -38,6 +42,7 @@
 #   NORA_SIRA_DOC_ENRICH_RUN   pinned doc-enrich run name      (default: enrich-stable)
 #   NORA_LLM_PROVIDER          synthesis provider tag          (default: openai)
 #   NORA_STACK_STATE_DIR       base dir for per-stack state     (default: /tmp/nora-stacks)
+#                              (--state-dir flag overrides this)
 #   NORA_STACK_LOG_DIR         default log dir (overridden by --log-dir)
 #   NORA_FEEDBACK_DB / NORA_CONFIG_DB / NORA_JOBS_DB / NORA_METRICS_DB
 #                              per-DB path override (default: <state>/<name>.db).
@@ -56,17 +61,35 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STATE_BASE="${NORA_STACK_STATE_DIR:-/tmp/nora-stacks}"
-
 # Print the leading comment block (everything after the shebang up to the first
 # non-comment line) as help text.
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit "${1:-0}"; }
 
+# ── options (any order, before the positional args) ──────────────────
+DRY=0; STOP=0; STOP_LABEL=""
+STATE_DIR_OPT=""; LOG_DIR_OPT=""
+JOBS_DB_OPT=""; METRICS_DB_OPT=""; FEEDBACK_DB_OPT=""; CONFIG_DB_OPT=""
+while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
+    case "$1" in
+        --stop)        STOP=1; STOP_LABEL="${2:?--stop needs a <label>}"; shift 2;;
+        --state-dir)   STATE_DIR_OPT="${2:?--state-dir needs a path}"; shift 2;;
+        --log-dir)     LOG_DIR_OPT="${2:?--log-dir needs a path}"; shift 2;;
+        --jobs-db)     JOBS_DB_OPT="${2:?--jobs-db needs a path}"; shift 2;;
+        --metrics-db)  METRICS_DB_OPT="${2:?--metrics-db needs a path}"; shift 2;;
+        --feedback-db) FEEDBACK_DB_OPT="${2:?--feedback-db needs a path}"; shift 2;;
+        --config-db)   CONFIG_DB_OPT="${2:?--config-db needs a path}"; shift 2;;
+        --dry-run)     DRY=1; shift;;
+        --help|-h)     usage 0;;
+        *) echo "unknown option: $1" >&2; usage 2;;
+    esac
+done
+
+# state base: --state-dir > $NORA_STACK_STATE_DIR > /tmp/nora-stacks
+STATE_BASE="${STATE_DIR_OPT:-${NORA_STACK_STATE_DIR:-/tmp/nora-stacks}}"
+
 # ── stop mode ────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--stop" ]]; then
-    label="${2:-}"
-    [[ -n "$label" ]] || { echo "error: --stop needs a <label>" >&2; exit 2; }
-    sdir="$STATE_BASE/$label"
+if [[ $STOP -eq 1 ]]; then
+    sdir="$STATE_BASE/$STOP_LABEL"
     [[ -d "$sdir" ]] || { echo "no stack state at $sdir" >&2; exit 1; }
     for role in service web; do
         pf="$sdir/$role.pid"
@@ -80,22 +103,6 @@ if [[ "${1:-}" == "--stop" ]]; then
     exit 0
 fi
 
-# ── leading options ──────────────────────────────────────────────────
-DRY=0
-LOG_DIR_OPT=""
-JOBS_DB_OPT=""; METRICS_DB_OPT=""; FEEDBACK_DB_OPT=""; CONFIG_DB_OPT=""
-while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
-    case "$1" in
-        --dry-run)     DRY=1; shift;;
-        --log-dir)     LOG_DIR_OPT="${2:?--log-dir needs a path}"; shift 2;;
-        --jobs-db)     JOBS_DB_OPT="${2:?--jobs-db needs a path}"; shift 2;;
-        --metrics-db)  METRICS_DB_OPT="${2:?--metrics-db needs a path}"; shift 2;;
-        --feedback-db) FEEDBACK_DB_OPT="${2:?--feedback-db needs a path}"; shift 2;;
-        --config-db)   CONFIG_DB_OPT="${2:?--config-db needs a path}"; shift 2;;
-        --help|-h)     usage 0;;
-        *) echo "unknown option: $1" >&2; usage 2;;
-    esac
-done
 [[ $# -ge 6 ]] || { echo "error: expected 6 args (got $#)" >&2; usage 2; }
 
 label="$1"; db_root="$2"; svc_port="$3"; web_port="$4"; llm_base="$5"; llm_model="$6"
