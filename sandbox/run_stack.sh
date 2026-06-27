@@ -98,7 +98,8 @@ NORA_SIRA_SYNTH_MODE=llm-select \\
 NORA_LLM_PROVIDER=$provider NORA_LLM_BASE_URL=$llm_base/v1 \\
 NORA_LLM_MODEL=$llm_model NORA_LLM_API_KEY=${api_key:+<set>} \\
   python -m core.src.web.app --port $web_port \\
-    --jobs-db $sdir/jobs.db --metrics-db $sdir/metrics.db --feedback-db $sdir/feedback.db
+    --jobs-db $sdir/jobs.db --metrics-db $sdir/metrics.db \\
+    --feedback-db $sdir/feedback.db --config-db $sdir/config.db
 EOF
     exit 0
 fi
@@ -130,6 +131,7 @@ cd "$REPO_ROOT"
         --jobs-db "$sdir/jobs.db" \
         --metrics-db "$sdir/metrics.db" \
         --feedback-db "$sdir/feedback.db" \
+        --config-db "$sdir/config.db" \
         > "$sdir/web.log" 2>&1 &
     echo $! > "$sdir/web.pid"
 )
