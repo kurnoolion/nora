@@ -22,8 +22,8 @@
 # OPTIONS (any order, before OR after the positional args):
 #   --state-dir DIR  base dir for per-stack state (pids + DBs); the stack lands
 #                  under <DIR>/<label>/. Overrides $NORA_STACK_STATE_DIR.
-#                  Default: /tmp/nora-stacks. (Pass the same --state-dir to
-#                  --stop so it finds the pids.)
+#                  Default: /tmp/nora-stacks. (--stop finds the state dir from a
+#                  registry written at start, so you need NOT repeat --state-dir.)
 #   --log-dir DIR  where to write logs (default: the stack's state dir).
 #                  Log files: <DIR>/service-<svc_port>-<ts>.log and
 #                  <DIR>/web-<web_port>-<ts>.log (ts=YYYYMMDD-HHMMSS). Each log
@@ -56,6 +56,7 @@
 #                              per-DB path override (default: <state>/<name>.db)
 #   NORA_STACK_SERVICE_ACTIVATE / NORA_STACK_WEB_ACTIVATE   activate-script paths
 #   NORA_STACK_SERVICE_PYTHON  / NORA_STACK_WEB_PYTHON       interpreter paths
+#   NORA_STACK_REGISTRY        label→state-dir registry dir (default: ~/.nora-stacks)
 #
 # Recommended: run this FROM the full NORA venv (so the web inherits it); the
 # service auto-sources sandbox/activate.sh to switch to the SIRA venv. A preflight
@@ -108,11 +109,24 @@ done
 if [[ ${#POS[@]} -gt 0 ]]; then set -- "${POS[@]}"; else set --; fi
 
 STATE_BASE="${STATE_DIR_OPT:-${NORA_STACK_STATE_DIR:-/tmp/nora-stacks}}"
+# Registry maps a label → its state dir, written at start, so --stop finds the
+# pids without re-specifying --state-dir.
+REGISTRY_DIR="${NORA_STACK_REGISTRY:-$HOME/.nora-stacks}"
 
 # ── stop mode ────────────────────────────────────────────────────────
 if [[ $STOP -eq 1 ]]; then
-    sdir="$STATE_BASE/$STOP_LABEL"
-    [[ -d "$sdir" ]] || { echo "no stack state at $sdir" >&2; exit 1; }
+    # locate the state dir: explicit --state-dir wins; else the registry; else default.
+    if [[ -n "$STATE_DIR_OPT" ]]; then
+        sdir="$STATE_BASE/$STOP_LABEL"
+    elif [[ -f "$REGISTRY_DIR/$STOP_LABEL" ]]; then
+        sdir="$(cat "$REGISTRY_DIR/$STOP_LABEL")"
+    else
+        sdir="$STATE_BASE/$STOP_LABEL"
+    fi
+    [[ -d "$sdir" ]] || {
+        echo "no stack state for '$STOP_LABEL' at $sdir" >&2
+        echo "  (if it was started with a custom --state-dir, pass the same one to --stop)" >&2
+        exit 1; }
     for role in service web; do
         pf="$sdir/$role.pid"
         if [[ -f "$pf" ]] && kill -0 "$(cat "$pf")" 2>/dev/null; then
@@ -122,6 +136,7 @@ if [[ $STOP -eq 1 ]]; then
         fi
         rm -f "$pf"
     done
+    rm -f "$REGISTRY_DIR/$STOP_LABEL"
     exit 0
 fi
 
@@ -297,6 +312,9 @@ cd "$REPO_ROOT"
         >> "$web_log" 2>&1 &
     echo $! > "$sdir/web.pid"
 )
+
+# Record label → state dir so `--stop $label` finds the pids without --state-dir.
+mkdir -p "$REGISTRY_DIR" 2>/dev/null && echo "$sdir" > "$REGISTRY_DIR/$label" || true
 
 echo "  pids          → service $(cat "$sdir/service.pid"), web $(cat "$sdir/web.pid")"
 
