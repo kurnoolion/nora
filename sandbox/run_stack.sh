@@ -284,6 +284,10 @@ cd "$REPO_ROOT"
     export NORA_SIRA_DB_ROOT="$db_root"
     export NORA_SIRA_DOC_ENRICH_RUN="$enrich_run"
     export NORA_SIRA_RERANK_ENABLED=false
+    # Path-B: the service does pure BM25; the LLM works at synthesis (web side).
+    # Default query-enrich OFF — it has no API-key support and, left on, each
+    # stack would expand queries with ITS OWN LLM, confounding an A/B. Overridable.
+    export NORA_SIRA_QUERY_ENRICH_ENABLED="${NORA_SIRA_QUERY_ENRICH_ENABLED:-false}"
     export NORA_LLM_SHIM_URL="$llm_base"
     export NORA_LLM_MODEL="$llm_model"
     [[ -n "$api_key" ]] && export NORA_SIRA_RERANK_LLM_API_KEY="$api_key"
