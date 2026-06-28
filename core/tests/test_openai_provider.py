@@ -133,22 +133,38 @@ class TestStripReasoning:
     def test_empty_passthrough(self):
         assert _strip_reasoning("") == ""
 
-    def test_final_answer_marker_drops_untagged_reasoning(self):
+    def test_final_answer_marker_drops_untagged_reasoning(self, monkeypatch):
         from core.src.llm.openai_provider import FINAL_ANSWER_MARKER
+        monkeypatch.setattr(
+            "core.src.llm.openai_provider.REASONING_SENTINEL_ENABLED", True
+        )
         raw = (
             "Alright, let me reason through this at length, no tags at all...\n"
             f"{FINAL_ANSWER_MARKER}\nBand n78 is required (req_id: X)."
         )
         assert _strip_reasoning(raw) == "Band n78 is required (req_id: X)."
 
-    def test_final_answer_marker_uses_last_occurrence(self):
+    def test_final_answer_marker_uses_last_occurrence(self, monkeypatch):
         from core.src.llm.openai_provider import FINAL_ANSWER_MARKER
+        monkeypatch.setattr(
+            "core.src.llm.openai_provider.REASONING_SENTINEL_ENABLED", True
+        )
         # Model may echo the marker while reasoning about the instruction.
         raw = (
             f"I should print {FINAL_ANSWER_MARKER} before answering.\n"
             f"{FINAL_ANSWER_MARKER}\nThe real answer."
         )
         assert _strip_reasoning(raw) == "The real answer."
+
+    def test_sentinel_off_by_default_leaves_marker_text(self, monkeypatch):
+        # With the toggle off, untagged reasoning is NOT reshaped — the model is
+        # responsible for not emitting it. (Marker text passes through verbatim.)
+        from core.src.llm.openai_provider import FINAL_ANSWER_MARKER
+        monkeypatch.setattr(
+            "core.src.llm.openai_provider.REASONING_SENTINEL_ENABLED", False
+        )
+        raw = f"reasoning...\n{FINAL_ANSWER_MARKER}\nthe answer"
+        assert _strip_reasoning(raw) == raw.strip()
 
 
 # ---------------------------------------------------------------------------

@@ -106,10 +106,11 @@ async def lifespan(app: FastAPI):
     if _pg._SELECT_SYNTH_ENABLED:
         logger.info(
             "SIRA synth lane: select-synth (mode=%s) — top_k=%d, text_chars=%d, "
-            "token_budget=%d. (Run the SIRA service with "
+            "token_budget=%d, reasoning_sentinel=%s. (Run the SIRA service with "
             "NORA_SIRA_RERANK_ENABLED=false.)",
             _pg._SYNTH_MODE,
             _pg._SELECT_SYNTH_TOP_K, _pg._SELECT_SYNTH_TEXT_CHARS, _pg._SYNTH_TOKEN_BUDGET,
+            _pg._REASONING_SENTINEL_ENABLED,
         )
     else:
         logger.info(

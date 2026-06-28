@@ -57,23 +57,30 @@ _THINK_CLOSE_RE = re.compile(
 # answer, with no <think> delimiter to match. For those, a prompt can instruct
 # the model to print this marker on its own line just before the final answer;
 # _strip_reasoning then drops everything up to (and including) the last marker.
-# Harmless when absent. Prompts that opt in must use this exact literal — they
-# import this constant, so overriding it via NORA_LLM_FINAL_ANSWER_MARKER keeps
-# the prompt instruction and the strip in sync. Set it empty to disable.
-ENV_FINAL_ANSWER_MARKER = "NORA_LLM_FINAL_ANSWER_MARKER"
-FINAL_ANSWER_MARKER = os.getenv(ENV_FINAL_ANSWER_MARKER, "===FINAL_ANSWER===")
+#
+# This is a per-model opt-in: most models (Qwen3, Gemma, …) skip their thinking
+# natively, so the sentinel is OFF by default and only the prompt+strip pair is
+# activated — per stack — by setting NORA_LLM_REASONING_SENTINEL=1 for the model
+# that needs it. Prompts import FINAL_ANSWER_MARKER and REASONING_SENTINEL_ENABLED
+# so the instruction and the strip stay in lockstep.
+FINAL_ANSWER_MARKER = "===FINAL_ANSWER==="
+ENV_REASONING_SENTINEL = "NORA_LLM_REASONING_SENTINEL"
+REASONING_SENTINEL_ENABLED = (
+    os.getenv(ENV_REASONING_SENTINEL, "").strip().lower() in ("1", "true", "yes", "on")
+)
 
 
 def _strip_reasoning(text: str) -> str:
     """Remove reasoning from model output. Handles (1) a prompt-driven
-    FINAL_ANSWER_MARKER sentinel and (2) inline <think>…</think> tag blocks.
+    FINAL_ANSWER_MARKER sentinel — only when REASONING_SENTINEL_ENABLED — and
+    (2) inline <think>…</think> tag blocks (always, harmless when absent).
     Idempotent and safe on normal answers (no marker/tags → returned unchanged
     apart from surrounding whitespace)."""
     if not text:
         return text
-    # Sentinel wins — it's the only reliable signal for untagged reasoning.
-    # Skip when disabled (empty marker) so we never strip on an empty rfind.
-    if FINAL_ANSWER_MARKER:
+    # Sentinel: the only reliable signal for untagged reasoning, but opt-in per
+    # model — most models don't need it and shouldn't have output reshaped.
+    if REASONING_SENTINEL_ENABLED:
         marker_at = text.rfind(FINAL_ANSWER_MARKER)
         if marker_at != -1:
             text = text[marker_at + len(FINAL_ANSWER_MARKER):]

@@ -28,7 +28,10 @@ import httpx
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
-from core.src.llm.openai_provider import FINAL_ANSWER_MARKER as _FINAL_ANSWER_MARKER
+from core.src.llm.openai_provider import (
+    FINAL_ANSWER_MARKER as _FINAL_ANSWER_MARKER,
+    REASONING_SENTINEL_ENABLED as _REASONING_SENTINEL_ENABLED,
+)
 from core.src.web.feedback_db import CATEGORIES
 
 logger = logging.getLogger(__name__)
@@ -136,12 +139,18 @@ _SELECT_SYNTH_SYSTEM_PROMPT = (
     "3. CITE every requirement you rely on by writing its exact req_id (shown as "
     "'req_id: <ID>' in each chunk header) inline in your answer. Do not cite "
     "chunks you judged irrelevant. If the selected chunks don't answer the "
-    "question, say so plainly rather than guessing.\n\n"
-    "OUTPUT FORMAT: You may reason first if needed, but you MUST then print a "
-    f"line containing exactly {_FINAL_ANSWER_MARKER} and put ONLY your final "
-    f"answer (with inline req_id citations) after it. Anything before "
-    f"{_FINAL_ANSWER_MARKER} is discarded and never shown to the user."
+    "question, say so plainly rather than guessing."
 )
+# Sentinel instruction — appended only for models whose untagged chain-of-thought
+# leaks into the answer (NORA_LLM_REASONING_SENTINEL=1). Models that skip thinking
+# natively (Qwen3, Gemma, …) leave it off and get the clean prompt above.
+if _REASONING_SENTINEL_ENABLED:
+    _SELECT_SYNTH_SYSTEM_PROMPT += (
+        "\n\nOUTPUT FORMAT: You may reason first if needed, but you MUST then "
+        f"print a line containing exactly {_FINAL_ANSWER_MARKER} and put ONLY "
+        f"your final answer (with inline req_id citations) after it. Anything "
+        f"before {_FINAL_ANSWER_MARKER} is discarded and never shown to the user."
+    )
 
 
 # ── merged-tab helpers (team-eval-pilot) ──────────────────────────────
