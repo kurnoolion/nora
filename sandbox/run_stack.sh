@@ -45,6 +45,11 @@
 #   --service-python PATH / --web-python PATH  interpreter override (default:
 #                  `python`, i.e. whatever the activate script / current venv
 #                  provides). Override $NORA_STACK_{SERVICE,WEB}_PYTHON.
+#   --reasoning-sentinel  set NORA_LLM_REASONING_SENTINEL=1 for the WEB process,
+#                  so select-synth instructs the model to emit a final-answer
+#                  marker and strips everything before it. Use ONLY for a model
+#                  whose untagged chain-of-thought leaks into the answer (e.g. a
+#                  proprietary "thinking" LLM); leave off for Qwen3/Gemma/etc.
 #   --dry-run      print the env + commands without launching.
 #
 # Env overrides (optional):
@@ -82,7 +87,7 @@ add_localhost_noproxy() {
 }
 
 # ── options (any order, before OR after positionals) ─────────────────
-DRY=0; STOP=0; STOP_LABEL=""
+DRY=0; STOP=0; STOP_LABEL=""; SENTINEL=0
 STATE_DIR_OPT=""; LOG_DIR_OPT=""
 JOBS_DB_OPT=""; METRICS_DB_OPT=""; FEEDBACK_DB_OPT=""; CONFIG_DB_OPT=""
 SVC_PY_OPT=""; WEB_PY_OPT=""; SVC_ACT_OPT=""; WEB_ACT_OPT=""
@@ -100,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --web-activate)    WEB_ACT_OPT="${2:?--web-activate needs a path}"; shift 2;;
         --service-python)  SVC_PY_OPT="${2:?--service-python needs a path}"; shift 2;;
         --web-python)      WEB_PY_OPT="${2:?--web-python needs a path}"; shift 2;;
+        --reasoning-sentinel) SENTINEL=1; shift;;
         --dry-run)         DRY=1; shift;;
         --help|-h)         usage 0;;
         --*) echo "unknown option: $1" >&2; usage 2;;
@@ -217,6 +223,7 @@ echo "                  $web_log"
 echo ""
 
 if [[ $DRY -eq 1 ]]; then
+    sentinel_env=""; [[ $SENTINEL -eq 1 ]] && sentinel_env="NORA_LLM_REASONING_SENTINEL=1 "
     cat <<EOF
 [dry-run] would launch (each log prefixed with a header of args + NORA/SIRA env):
 
@@ -229,9 +236,9 @@ NORA_LLM_SHIM_URL=$llm_base NORA_LLM_MODEL=$llm_model \\
 
 # NORA web  → $web_log
 ${web_activate:+source $web_activate; }add_localhost_noproxy
-NORA_SIRA_QUERY_URL=http://127.0.0.1:$svc_port NORA_SIRA_SYNTH_MODE=llm-select \\
+NORA_SIRA_QUERY_URL=http://127.0.0.1:$svc_port NORA_SIRA_SYNTH_MODE=select-synth \\
 NORA_LLM_PROVIDER=$provider NORA_LLM_BASE_URL=$llm_base/v1 \\
-NORA_LLM_MODEL=$llm_model NORA_LLM_API_KEY=${api_key:+<set>} \\
+NORA_LLM_MODEL=$llm_model NORA_LLM_API_KEY=${api_key:+<set>} ${sentinel_env}\\
   $web_python -m core.src.web.app --port $web_port \\
     --jobs-db $jobs_db --metrics-db $metrics_db \\
     --feedback-db $feedback_db --config-db $config_db
@@ -306,11 +313,14 @@ cd "$REPO_ROOT"
     set +u; [[ -n "$web_activate" ]] && source "$web_activate" >/dev/null 2>&1; set -u
     add_localhost_noproxy
     export NORA_SIRA_QUERY_URL="http://127.0.0.1:$svc_port"
-    export NORA_SIRA_SYNTH_MODE=llm-select
+    export NORA_SIRA_SYNTH_MODE=select-synth
     export NORA_LLM_PROVIDER="$provider"
     export NORA_LLM_BASE_URL="$llm_base/v1"
     export NORA_LLM_MODEL="$llm_model"
     [[ -n "$api_key" ]] && export NORA_LLM_API_KEY="$api_key"
+    # Strip untagged chain-of-thought via the final-answer sentinel — only for a
+    # model that needs it (--reasoning-sentinel). Otherwise inherit the shell.
+    [[ "$SENTINEL" -eq 1 ]] && export NORA_LLM_REASONING_SENTINEL=1
     write_header web "$web_log" "$web_python" "$web_activate"
     nohup "$web_python" -m core.src.web.app --port "$web_port" \
         --jobs-db "$jobs_db" \
