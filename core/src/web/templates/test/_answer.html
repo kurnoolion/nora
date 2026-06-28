@@ -88,8 +88,8 @@
     {% if sira_results is defined %}
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
         <span class="badge bg-secondary">SIRA retrieval → NORA synthesizer</span>
-        {% if sira_synth_mode == 'llm-select' %}
-          <span class="badge bg-info">Path-B · LLM-select</span>
+        {% if sira_synth_mode in ('select-synth', 'llm-select') %}
+          <span class="badge bg-info">select-synth</span>
           <span class="text-muted small">
             top {{ sira_top_k }} retrieved ·
             <strong>{{ sira_pinned_count }} packed to LLM</strong> · no rerank

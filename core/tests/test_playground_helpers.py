@@ -412,3 +412,19 @@ def test_select_synth_extract_citations_is_corpus_agnostic():
     cites = pg._select_synth_extract_citations(answer, packed)
     assert [c["req_id"] for c in cites] == ["VZ-FOO-12", "ATT_BAR_3"]
     assert all(c["llm_cited"] for c in cites)
+
+
+def test_filter_sira_notes_drops_rerank_disabled_in_select_synth(monkeypatch):
+    import core.src.web.routes.playground as pg
+    monkeypatch.setattr(pg, "_SELECT_SYNTH_ENABLED", True)
+    notes = ["rerank disabled — round-robin per-cell balance (...)",
+             "query-enrich failed (continuing): boom"]
+    # rerank-off is intended in select-synth → drop that note; real failure stays
+    assert pg._filter_sira_notes(notes) == ["query-enrich failed (continuing): boom"]
+
+
+def test_filter_sira_notes_keeps_all_when_not_select_synth(monkeypatch):
+    import core.src.web.routes.playground as pg
+    monkeypatch.setattr(pg, "_SELECT_SYNTH_ENABLED", False)
+    notes = ["rerank disabled — round-robin per-cell balance (...)", "other"]
+    assert pg._filter_sira_notes(notes) == notes

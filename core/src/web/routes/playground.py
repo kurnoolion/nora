@@ -124,6 +124,16 @@ _SYNTH_TOKEN_BUDGET = int(os.getenv("NORA_SIRA_SYNTH_TOKEN_BUDGET", "120000"))  
 _SELECT_SYNTH_MAX_OUTPUT_TOKENS = _select_synth_int("MAX_OUTPUT_TOKENS", 4096)
 _CHARS_PER_TOKEN = 3.5   # rough; telecom text is token-dense
 
+
+def _filter_sira_notes(notes: list[str]) -> list[str]:
+    """In select-synth mode, rerank-off is the intended design (the lane drops
+    the cross-encoder), so the service's 'rerank disabled' note is expected, not
+    a warning — drop it so it doesn't surface as a ⚠ to team members. Real
+    failures (query-enrich/rerank errors, prompt-missing) still pass through."""
+    if not _SELECT_SYNTH_ENABLED:
+        return notes
+    return [n for n in notes if not n.startswith("rerank disabled")]
+
 _SELECT_SYNTH_SYSTEM_PROMPT = (
     "You are an expert telecom (3GPP/GSMA) device-requirements analyst. Below "
     "are candidate requirement chunks retrieved for the user's question, GROUPED "
@@ -514,7 +524,7 @@ async def _build_merged_response_html(
                 "sira_synth_mode": _SYNTH_MODE,
                 "sira_timings_ms": out["sira_result"].get("timings_ms"),
                 "sira_rerank_call_stats": out["sira_result"].get("rerank_call_stats"),
-                "sira_notes": out["sira_result"].get("notes", []),
+                "sira_notes": _filter_sira_notes(out["sira_result"].get("notes", [])),
                 # Multi-MNO surfacing (FR-multi-5). Present only when the
                 # SIRA service ran in multi-cell mode; None on the legacy
                 # single-dataset path.
@@ -1035,7 +1045,7 @@ async def playground_ask(request: Request):
             "sira_timings_ms": sira_result.get("timings_ms", {}),
             "sira_rerank_call_stats": sira_result.get("rerank_call_stats", {}),
             "sira_candidates_reranked": sira_result.get("candidates_reranked", 0),
-            "sira_notes": sira_result.get("notes", []),
+            "sira_notes": _filter_sira_notes(sira_result.get("notes", [])),
             "sira_top_k": sira_result.get("top_k"),
             "sira_pinned_count": len(pinned_chunk_ids),
             "sira_max_rerank_score": max_rerank_score,
