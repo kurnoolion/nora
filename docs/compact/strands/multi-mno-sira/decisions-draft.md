@@ -847,3 +847,45 @@ work-PC failures rather than designed up front.
 - Per-stack config-DB + env-at-import means a running stack can't be reconfigured
   live — restart to change model/flags (acceptable for eval).
 - Renumbers to a canonical D-XXX at land.
+
+## D-DRAFT-19 — Per-cell top_k: scale the balanced cut by cell count (3-MNO readiness)
+
+**Context:** A 3-MNO readiness audit found the stack is otherwise N-cell-general,
+but representation budgets are **global**: in balanced multi-cell mode the final
+fusion cut takes `[:top_k]` after round-robin, so each cell gets `top_k / N`.
+The per-cell retrieve pool (`top_n`) is already per-cell, so the dilution is
+entirely at that final cut. Going 2→3 cells shrinks every MNO's share ~33%,
+which can push a borderline-ranked chunk (the FR2 band case is exactly this
+shape) below the per-cell cut — structurally reproducing the "cross-MNO drops
+one MNO" symptom we'd already fought.
+
+**Decision:** Treat `top_k` as a **per-cell budget** in balanced multi-cell mode.
+`_multi_cell_query` computes `cut = top_k * n_cells` (n_cells = cells with
+candidates) and passes that to `rank_candidates`; round-robin order means the
+first `top_k * n_cells` items are exactly the top `top_k` from each cell, and
+unequal cells self-balance. Gated by `NORA_SIRA_SCALE_TOPK_BY_CELLS` (default on;
+off = legacy global cut, for A/B). The response surfaces `n_cells` +
+`effective_top_k`; `/healthz` reports the flag. `rank_candidates` stays a pure
+mechanism — the per-cell policy lives in its one caller.
+
+**Why:** The dilution is a budget-allocation problem, not a ranking problem, so
+the fix belongs at the cut, not in retrieval or rerank. Per-cell scaling makes
+adding an MNO *add* budget. Rejected alternatives: a **per-cell floor** with a
+global ceiling (more complex, and the ceiling is the same dilution deferred);
+**scaling the select-synth token budget** by N (it's bounded by the model's 128K
+window — you physically can't grow per-MNO context, and the round-robin packer is
+already fair, so retrieval quality is the right lever); **scaling `PIN_MAX`**
+(that's the rerank-pin lane, now owned by `nora-retrieval-quality`, not this
+strand). Default-on so MNO-C benefits without a remembered per-deploy bump.
+
+**Consequences:**
+- The service returns more candidates at higher cell counts (`top_k * N`); the
+  select-synth packer trims to the token budget round-robin, so each cell's
+  top-`top_k` are *available* even though not all are packed. Larger localhost
+  payloads at 3+ cells (acceptable for eval).
+- The per-MNO **context** share still shrinks with cell count (token budget is
+  context-bound) — this fix guarantees the right candidates *reach* the packer,
+  not that all fit. Retrieval/ranking quality is the complementary lever.
+- New flag + two response fields + healthz field are a small persistent surface.
+  Tests: per-cell budget preserved across 3 cells + the starvation counterfactual.
+- Renumbers to a canonical D-XXX at land.

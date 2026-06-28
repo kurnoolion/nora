@@ -654,3 +654,50 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
   eval, not concurrent load.
 - Carry-forward: enrich-vs-tables incrementality; eager per-cell load RAM; OQ-2
   per-cell eval queries/qrels.
+
+## 2026-06-28 — 2-MNO band verified · 3-MNO readiness audit + per-cell top_k
+
+### Done this session
+- **2-MNO band verification confirmed** (user-verified): the FR2 / SA-NR band
+  case retrieves + cites end-to-end on the SIRA side after table-inlining
+  (D-DRAFT-17) + the fresh `enrich-stable` run. Closes the in-flight item — and
+  confirms the nora-lane FR2 miss is an **integration gap** (now owned by
+  `nora-retrieval-quality`), not a SIRA retrieval fault.
+- **3-MNO readiness audit** — verdict: the stack is already **N-cell-general**,
+  no hard blockers. Verified N-general: scope resolve loops `intent.mnos`;
+  classify `len(mnos) >= 2`; SIRA fusion round-robin gated `len(per_cell) > 1`;
+  NORA pipeline 1-vs-`len(target_cells)`; select-synth pack + context iterate
+  `by_cell.values()`; `/test` template joins the MNO list + per-row cell tags;
+  adapter logs `{len(cells)} cells`. The one real risk: **global representation
+  caps dilute per-MNO share to ~budget/N** (a 3rd corpus cuts each MNO ~33%, can
+  starve a borderline chunk). Secondary (lower severity): 2-cell-only test
+  fixtures; eager per-cell load → RAM ×1.5 at 3 cells; 3rd-cell eval qrels (OQ-2).
+- **Per-cell top_k cap-scaling** (`e9c7226`, renamed `492cc09`):
+  `NORA_SIRA_SCALE_TOPK_BY_CELLS` (default on). In balanced multi-cell mode the
+  final cut scales to `top_k * n_cells`, so each cell keeps its full per-cell
+  budget instead of `top_k/N`. Only the final cut moved (the per-cell retrieve
+  pool `top_n` was already per-cell). Response carries `n_cells` +
+  `effective_top_k`; `/healthz` reports the flag. Deliberately NOT scaled: the
+  select-synth token budget (bounded by the model's 128K window — can't grow
+  per-MNO context) and `PIN_MAX` (rerank-pin lane → `nora-retrieval-quality`).
+  New 3-cell fusion test + a starvation counterfactual; 35 SIRA tests green.
+  → D-DRAFT-19.
+- **Landing gate set** (during the NORA strand split): do not land until the 3rd
+  MNO is ingested AND a 3-way cross-MNO query is verified (recorded in STRAND.md).
+
+### In progress
+- Nothing actively in flight — all corpus-free 3-MNO prep is done.
+
+### Next
+- **Blocked on the MNO-C corpus** (not in hand). When it arrives: ingest the new
+  `(MNO-C, release)` cell via the landed pipeline, then run the 3-way cross-MNO
+  verification (e.g. compare VoWiFi across MNO-A/B/C). A 3-cell query should show
+  `n_cells: 3, effective_top_k: 120` (default base 40).
+- After 3-way verification passes → `/land-strand multi-mno-sira`.
+
+### Flags
+- **Strand idles until the MNO-C corpus is available** — clean stopping point;
+  the landing gate is the only remaining work and it's corpus-dependent.
+- Carry-forward: 2-cell-only test fixtures (add a 3-cell service test when MNO-C
+  lands); eager per-cell load RAM; OQ-2 per-cell eval qrels; the shim-auth
+  `NORA_LLM_API_KEY` fallback (inert today).
