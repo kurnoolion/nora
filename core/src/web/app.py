@@ -15,14 +15,14 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from core.src.web.config import load_config
 from core.src.web.jobs import JobQueue
 from core.src.web.metrics import MetricsStore
-from core.src.web.middleware import MetricsMiddleware
+from core.src.web.middleware import MetricsMiddleware, TeamModeMiddleware
 from core.src.web.path_mapper import PathMapper
 from core.src.web.routes.corrections import router as corrections_router
 from core.src.web.routes.dashboard import router as dashboard_router
@@ -216,6 +216,8 @@ app = FastAPI(
 )
 
 app.add_middleware(MetricsMiddleware)
+# Added after Metrics → outermost → the team-mode gate runs first on each request.
+app.add_middleware(TeamModeMiddleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(dashboard_router)
 app.include_router(corrections_router)
@@ -258,6 +260,23 @@ def _template_response(
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     return _template_response(request, "dashboard.html")
+
+
+@app.get("/admin-unlock")
+async def admin_unlock(request: Request, token: str = ""):
+    """Admin full-access unlock for team mode: a correct ?token sets an HttpOnly
+    cookie and redirects home. No-op when the gate is off."""
+    from core.src.web import team_mode as tm
+    if not tm.TEAM_MODE:
+        return RedirectResponse("/", status_code=302)
+    if tm.ADMIN_TOKEN and token == tm.ADMIN_TOKEN:
+        resp = RedirectResponse("/", status_code=302)
+        resp.set_cookie(
+            tm.ADMIN_COOKIE, tm.ADMIN_TOKEN,
+            httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30,
+        )
+        return resp
+    return RedirectResponse("/test", status_code=302)  # wrong/no token → eval page
 
 
 # -- API endpoints ------------------------------------------------------------

@@ -43,7 +43,7 @@
                 id="lane-nora"
                 name="lanes"
                 value="nora"
-                checked>
+                {% if team_restricted %}disabled{% else %}checked{% endif %}>
             <label class="form-check-label" for="lane-nora">
               <span class="badge bg-success">NORA</span> hybrid (KG + RAG)
             </label>
@@ -55,11 +55,14 @@
                 id="lane-sira"
                 name="lanes"
                 value="sira"
-                checked>
+                checked{% if team_restricted %} disabled{% endif %}>
             <label class="form-check-label" for="lane-sira">
               <span class="badge bg-primary">SIRA</span> BM25 + LLM rerank
             </label>
           </div>
+          {% if team_restricted %}
+          <div class="form-text">SIRA-only eval (lane selection locked).</div>
+          {% endif %}
           <div class="form-text">
             Both checked → side-by-side compare. One checked → single-lane
             full-width.

@@ -33,6 +33,7 @@ from core.src.llm.openai_provider import (
     REASONING_SENTINEL_ENABLED as _REASONING_SENTINEL_ENABLED,
 )
 from core.src.web.feedback_db import CATEGORIES
+from core.src.web.team_mode import team_restricted
 
 logger = logging.getLogger(__name__)
 
@@ -900,6 +901,7 @@ async def playground_page(request: Request, section: str = "requirement_bot"):
     return _template_response(request, "test/index.html", {
         "sections": _build_sections(),
         "active_section": active_section,
+        "team_restricted": team_restricted(request),
     })
 
 
@@ -929,6 +931,8 @@ async def playground_ask(request: Request):
     # sira_retrieval) are kept below for back-compat and direct POSTs.
     if section == "merged":
         lanes_checked = [l for l in form.getlist("lanes") if l in ("nora", "sira")]
+        if team_restricted(request):
+            lanes_checked = ["sira"]   # gated team eval: SIRA only, server-enforced
         user_name = (form.get("user_name") or "").strip() or None
         if not lanes_checked:
             return _template_response(request, "test/_answer.html", {
@@ -1149,6 +1153,8 @@ async def playground_ask_stream(request: Request):
     question = (form.get("question") or "").strip()
     section = (form.get("section") or "merged").strip()
     lanes_checked = [l for l in form.getlist("lanes") if l in ("nora", "sira")]
+    if team_restricted(request):
+        lanes_checked = ["sira"]   # gated team eval: SIRA only, server-enforced
     user_name = (form.get("user_name") or "").strip() or None
 
     if section != "merged":
