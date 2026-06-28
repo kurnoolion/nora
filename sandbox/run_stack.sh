@@ -25,84 +25,88 @@
 #                  Default: /tmp/nora-stacks. (Pass the same --state-dir to
 #                  --stop so it finds the pids.)
 #   --log-dir DIR  where to write logs (default: the stack's state dir).
-#                  Log files are  <DIR>/service-<svc_port>-<ts>.log  and
-#                  <DIR>/web-<web_port>-<ts>.log  where ts = YYYYMMDD-HHMMSS.
-#                  Each log starts with a header dumping the script args + all
-#                  set NORA_*/SIRA_* env vars (API keys redacted).
-#   --feedback-db PATH   web feedback DB    (default: <state>/feedback.db)
-#   --config-db   PATH   web /config DB     (default: <state>/config.db)
-#   --jobs-db     PATH   web jobs DB        (default: <state>/jobs.db)
-#   --metrics-db  PATH   web metrics DB     (default: <state>/metrics.db)
-#                  Each overrides its $NORA_*_DB env var. Point --feedback-db at
-#                  one shared path across both stacks to POOL A/B feedback (rows
+#                  Log files: <DIR>/service-<svc_port>-<ts>.log and
+#                  <DIR>/web-<web_port>-<ts>.log (ts=YYYYMMDD-HHMMSS). Each log
+#                  opens with a header of args + set NORA_*/SIRA_* env (keys
+#                  redacted).
+#   --feedback-db PATH / --config-db PATH / --jobs-db PATH / --metrics-db PATH
+#                  web state DB paths (default: <state>/<name>.db; override the
+#                  matching $NORA_*_DB env var). Point --feedback-db at one
+#                  shared path across both stacks to POOL A/B feedback (rows
 #                  carry llm_model). Precedence: flag > env var > default.
-#   --service-python PATH  python for the SIRA service (default: `python`).
-#   --web-python     PATH  python for the NORA web (default: `python`).
-#                  The service usually needs the trimmed SIRA venv (bm25x) and
-#                  the web the full NORA venv (fastapi etc.) — point each at its
-#                  venv's bin/python if they differ. Override $NORA_STACK_
-#                  SERVICE_PYTHON / $NORA_STACK_WEB_PYTHON.
+#   --service-activate PATH  shell script to `source` before the SERVICE (sets
+#                  its venv + env). Default: sandbox/activate.sh — it activates
+#                  the trimmed SIRA venv (bm25x), adds sandbox/sira to
+#                  PYTHONPATH, and sets localhost NO_PROXY + HF-offline, all of
+#                  which the service needs. Pass `none` to skip.
+#   --web-activate PATH      shell script to `source` before the WEB. Default:
+#                  none — the web inherits the launching shell's venv, so run
+#                  this script from the full NORA venv (the one with fastapi).
+#   --service-python PATH / --web-python PATH  interpreter override (default:
+#                  `python`, i.e. whatever the activate script / current venv
+#                  provides). Override $NORA_STACK_{SERVICE,WEB}_PYTHON.
 #   --dry-run      print the env + commands without launching.
 #
 # Env overrides (optional):
 #   NORA_SIRA_DOC_ENRICH_RUN   pinned doc-enrich run name      (default: enrich-stable)
 #   NORA_LLM_PROVIDER          synthesis provider tag          (default: openai)
-#   NORA_STACK_STATE_DIR       base dir for per-stack state     (default: /tmp/nora-stacks)
-#                              (--state-dir flag overrides this)
+#   NORA_STACK_STATE_DIR       base dir for per-stack state    (default: /tmp/nora-stacks)
 #   NORA_STACK_LOG_DIR         default log dir (overridden by --log-dir)
 #   NORA_FEEDBACK_DB / NORA_CONFIG_DB / NORA_JOBS_DB / NORA_METRICS_DB
-#                              per-DB path override (default: <state>/<name>.db).
-#                              Point NORA_FEEDBACK_DB at the SAME path for both
-#                              stacks to POOL A/B feedback into one DB — each row
-#                              records `llm_model`, so it stays attributable
-#                              (compare with GROUP BY llm_model). Config DB is
-#                              best left per-stack (independent /config page).
+#                              per-DB path override (default: <state>/<name>.db)
+#   NORA_STACK_SERVICE_ACTIVATE / NORA_STACK_WEB_ACTIVATE   activate-script paths
+#   NORA_STACK_SERVICE_PYTHON  / NORA_STACK_WEB_PYTHON       interpreter paths
+#
+# Recommended: run this FROM the full NORA venv (so the web inherits it); the
+# service auto-sources sandbox/activate.sh to switch to the SIRA venv. A preflight
+# import-checks each before launching, so a wrong venv fails fast.
 #
 # Notes:
-#   * The service and web often need DIFFERENT venvs (service: trimmed SIRA venv
-#     with bm25x; web: full NORA venv with fastapi). Point --service-python /
-#     --web-python at each. If one venv has BOTH, just run from it (default
-#     `python`). A preflight import-checks each before launching.
-#   * Config is read at IMPORT time, so each process is pinned to its launch
-#     env — that's why parallel stacks need separate processes, which this does.
+#   * Config is read at IMPORT time, so each process is pinned to its launch env.
 #   * Path-B requires rerank OFF on the service; this sets NORA_SIRA_RERANK_ENABLED=false.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Print the leading comment block (everything after the shebang up to the first
-# non-comment line) as help text.
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit "${1:-0}"; }
 
-# ── options (any order, before the positional args) ──────────────────
+# Add localhost to NO_PROXY so httpx/urllib calls to 127.0.0.1 (the SIRA service,
+# a local LLM) aren't routed through a corporate proxy. Idempotent.
+add_localhost_noproxy() {
+    case ",${NO_PROXY:-}," in
+        *",127.0.0.1,"*) ;;
+        *) export NO_PROXY="${NO_PROXY:+${NO_PROXY},}127.0.0.1,localhost,::1,0.0.0.0"
+           export no_proxy="$NO_PROXY" ;;
+    esac
+}
+
+# ── options (any order, before OR after positionals) ─────────────────
 DRY=0; STOP=0; STOP_LABEL=""
 STATE_DIR_OPT=""; LOG_DIR_OPT=""
 JOBS_DB_OPT=""; METRICS_DB_OPT=""; FEEDBACK_DB_OPT=""; CONFIG_DB_OPT=""
-SVC_PY_OPT=""; WEB_PY_OPT=""
+SVC_PY_OPT=""; WEB_PY_OPT=""; SVC_ACT_OPT=""; WEB_ACT_OPT=""
 POS=()
-# Options may appear ANYWHERE — before or after the positional args. An
-# unrecognized --flag is a hard error (a typo like --logs-dir won't be silently
-# ignored). Positionals are collected and restored after the loop.
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --stop)        STOP=1; STOP_LABEL="${2:?--stop needs a <label>}"; shift 2;;
-        --state-dir)   STATE_DIR_OPT="${2:?--state-dir needs a path}"; shift 2;;
-        --log-dir)     LOG_DIR_OPT="${2:?--log-dir needs a path}"; shift 2;;
-        --jobs-db)     JOBS_DB_OPT="${2:?--jobs-db needs a path}"; shift 2;;
-        --metrics-db)  METRICS_DB_OPT="${2:?--metrics-db needs a path}"; shift 2;;
-        --feedback-db) FEEDBACK_DB_OPT="${2:?--feedback-db needs a path}"; shift 2;;
-        --config-db)   CONFIG_DB_OPT="${2:?--config-db needs a path}"; shift 2;;
-        --service-python) SVC_PY_OPT="${2:?--service-python needs a path}"; shift 2;;
-        --web-python)  WEB_PY_OPT="${2:?--web-python needs a path}"; shift 2;;
-        --dry-run)     DRY=1; shift;;
-        --help|-h)     usage 0;;
-        --*) echo "unknown option: $1 (did you mean --log-dir / --state-dir ?)" >&2; usage 2;;
+        --stop)            STOP=1; STOP_LABEL="${2:?--stop needs a <label>}"; shift 2;;
+        --state-dir)       STATE_DIR_OPT="${2:?--state-dir needs a path}"; shift 2;;
+        --log-dir)         LOG_DIR_OPT="${2:?--log-dir needs a path}"; shift 2;;
+        --jobs-db)         JOBS_DB_OPT="${2:?--jobs-db needs a path}"; shift 2;;
+        --metrics-db)      METRICS_DB_OPT="${2:?--metrics-db needs a path}"; shift 2;;
+        --feedback-db)     FEEDBACK_DB_OPT="${2:?--feedback-db needs a path}"; shift 2;;
+        --config-db)       CONFIG_DB_OPT="${2:?--config-db needs a path}"; shift 2;;
+        --service-activate) SVC_ACT_OPT="${2:?--service-activate needs a path}"; shift 2;;
+        --web-activate)    WEB_ACT_OPT="${2:?--web-activate needs a path}"; shift 2;;
+        --service-python)  SVC_PY_OPT="${2:?--service-python needs a path}"; shift 2;;
+        --web-python)      WEB_PY_OPT="${2:?--web-python needs a path}"; shift 2;;
+        --dry-run)         DRY=1; shift;;
+        --help|-h)         usage 0;;
+        --*) echo "unknown option: $1" >&2; usage 2;;
         *) POS+=("$1"); shift;;
     esac
 done
 if [[ ${#POS[@]} -gt 0 ]]; then set -- "${POS[@]}"; else set --; fi
 
-# state base: --state-dir > $NORA_STACK_STATE_DIR > /tmp/nora-stacks
 STATE_BASE="${STATE_DIR_OPT:-${NORA_STACK_STATE_DIR:-/tmp/nora-stacks}}"
 
 # ── stop mode ────────────────────────────────────────────────────────
@@ -127,38 +131,51 @@ label="$1"; db_root="$2"; svc_port="$3"; web_port="$4"; llm_base="$5"; llm_model
 api_key="${7:-}"
 enrich_run="${NORA_SIRA_DOC_ENRICH_RUN:-enrich-stable}"
 provider="${NORA_LLM_PROVIDER:-openai}"
-llm_base="${llm_base%/}"                       # strip trailing slash
+llm_base="${llm_base%/}"
 sdir="$STATE_BASE/$label"
 log_dir="${LOG_DIR_OPT:-${NORA_STACK_LOG_DIR:-$sdir}}"
 ts="$(date +%Y%m%d-%H%M%S)"
 svc_log="$log_dir/service-${svc_port}-${ts}.log"
 web_log="$log_dir/web-${web_port}-${ts}.log"
 
-# Web state DBs — per-stack by default, but each is overridable via its env var
-# so you can SHARE one across stacks (e.g. one feedback DB for A/B comparison —
-# the rows carry `llm_model`, so a shared feedback DB stays attributable).
-# precedence: CLI flag > env var > <state>/<name>.db
+# Web state DBs — flag > env var > <state>/<name>.db
 jobs_db="${JOBS_DB_OPT:-${NORA_JOBS_DB:-$sdir/jobs.db}}"
 metrics_db="${METRICS_DB_OPT:-${NORA_METRICS_DB:-$sdir/metrics.db}}"
 feedback_db="${FEEDBACK_DB_OPT:-${NORA_FEEDBACK_DB:-$sdir/feedback.db}}"
 config_db="${CONFIG_DB_OPT:-${NORA_CONFIG_DB:-$sdir/config.db}}"
 
-# The SIRA service and the NORA web usually need DIFFERENT venvs (service needs
-# bm25x from the trimmed SIRA venv; web needs the full NORA stack incl. fastapi).
-# Point each at its venv's python; precedence: flag > env var > `python`.
+# Per-process venv: activate script (sourced) + interpreter. The service defaults
+# to sandbox/activate.sh (SIRA venv + PYTHONPATH + NO_PROXY + HF); the web inherits
+# the launching shell unless --web-activate is given. `none` disables sourcing.
+service_activate="${SVC_ACT_OPT:-${NORA_STACK_SERVICE_ACTIVATE:-$REPO_ROOT/sandbox/activate.sh}}"
+web_activate="${WEB_ACT_OPT:-${NORA_STACK_WEB_ACTIVATE:-}}"
+[[ "$service_activate" == none ]] && service_activate=""
+[[ "$web_activate" == none ]] && web_activate=""
 service_python="${SVC_PY_OPT:-${NORA_STACK_SERVICE_PYTHON:-python}}"
 web_python="${WEB_PY_OPT:-${NORA_STACK_WEB_PYTHON:-python}}"
 
+# Import-check a python in the env an activate script would set up (run in a
+# subshell so the source doesn't leak). Returns the python's exit status.
+check_imports() { # <activate-or-empty> <python> <modules>
+    ( set +u
+      [[ -n "$1" ]] && source "$1"
+      set -u
+      "$2" -c "import ${3// /, }" ) >/dev/null 2>&1
+}
+
 if [[ $DRY -eq 0 ]]; then
     [[ -d "$db_root" ]] || { echo "error: db_root not found: $db_root" >&2; exit 1; }
-    # Fail fast on the wrong venv (else you only find out from the log).
-    "$service_python" -c 'import uvicorn, fastapi' 2>/dev/null || {
-        echo "error: service python '$service_python' can't import uvicorn/fastapi." >&2
-        echo "       Pass --service-python <sira-venv>/bin/python (the venv with bm25x)." >&2
+    [[ -z "$service_activate" || -f "$service_activate" ]] \
+        || { echo "error: --service-activate '$service_activate' not found" >&2; exit 1; }
+    [[ -z "$web_activate" || -f "$web_activate" ]] \
+        || { echo "error: --web-activate '$web_activate' not found" >&2; exit 1; }
+    check_imports "$service_activate" "$service_python" "uvicorn fastapi bm25x" || {
+        echo "error: SIRA service env can't import uvicorn/fastapi/bm25x." >&2
+        echo "       Check --service-activate (default sandbox/activate.sh) + the SIRA venv." >&2
         exit 1; }
-    "$web_python" -c 'import fastapi' 2>/dev/null || {
-        echo "error: web python '$web_python' can't import fastapi." >&2
-        echo "       Pass --web-python <nora-venv>/bin/python (the full NORA venv)." >&2
+    check_imports "$web_activate" "$web_python" "fastapi" || {
+        echo "error: NORA web env can't import fastapi." >&2
+        echo "       Run from the NORA venv, or pass --web-activate / --web-python." >&2
         exit 1; }
     mkdir -p "$sdir" "$log_dir"
 fi
@@ -176,12 +193,14 @@ if [[ $DRY -eq 1 ]]; then
 [dry-run] would launch (each log prefixed with a header of args + NORA/SIRA env):
 
 # SIRA service  → $svc_log
+${service_activate:+source $service_activate; }add_localhost_noproxy
 NORA_SIRA_DB_ROOT=$db_root NORA_SIRA_DOC_ENRICH_RUN=$enrich_run \\
 NORA_SIRA_RERANK_ENABLED=false \\
 NORA_LLM_SHIM_URL=$llm_base NORA_LLM_MODEL=$llm_model \\
   $service_python -m uvicorn sandbox.sira_query.service:app --port $svc_port
 
 # NORA web  → $web_log
+${web_activate:+source $web_activate; }add_localhost_noproxy
 NORA_SIRA_QUERY_URL=http://127.0.0.1:$svc_port NORA_SIRA_SYNTH_MODE=llm-select \\
 NORA_LLM_PROVIDER=$provider NORA_LLM_BASE_URL=$llm_base/v1 \\
 NORA_LLM_MODEL=$llm_model NORA_LLM_API_KEY=${api_key:+<set>} \\
@@ -192,11 +211,10 @@ EOF
     exit 0
 fi
 
-# Write a header to a log: script args + the role's DB paths + every set
-# NORA_/SIRA_ env var (API keys / tokens / secrets redacted). Called INSIDE
-# each subshell so `env` reflects that process's exported config.
+# Header for a log: args + role DB paths + every set NORA_/SIRA_ env (secrets
+# redacted). Called INSIDE each subshell so `env` reflects that process's config.
 write_header() {
-    local role="$1" logf="$2"
+    local role="$1" logf="$2" pyexe="$3" act="$4"
     {
         echo "=========================================================="
         echo "run_stack.sh — $role  (label=$label)  started $ts"
@@ -213,14 +231,13 @@ write_header() {
         echo "  provider      = $provider"
         echo "  state_dir     = $sdir"
         echo "  log_dir       = $log_dir"
+        echo "  activate      = ${act:-<none>}"
+        echo "  python        = $pyexe"
         if [[ "$role" == web ]]; then
-            echo "  python        = $web_python"
             echo "  jobs-db       = $jobs_db"
             echo "  metrics-db    = $metrics_db"
             echo "  feedback-db   = $feedback_db"
             echo "  config-db     = $config_db"
-        else
-            echo "  python        = $service_python"
         fi
         echo "[NORA/SIRA env set in this process]"
         { env | grep -E '^(NORA_|SIRA_)' || true; } \
@@ -234,13 +251,15 @@ cd "$REPO_ROOT"
 
 # ── SIRA service ─────────────────────────────────────────────────────
 (
+    set +u; [[ -n "$service_activate" ]] && source "$service_activate" >/dev/null 2>&1; set -u
+    add_localhost_noproxy
     export NORA_SIRA_DB_ROOT="$db_root"
     export NORA_SIRA_DOC_ENRICH_RUN="$enrich_run"
     export NORA_SIRA_RERANK_ENABLED=false
     export NORA_LLM_SHIM_URL="$llm_base"
     export NORA_LLM_MODEL="$llm_model"
     [[ -n "$api_key" ]] && export NORA_SIRA_RERANK_LLM_API_KEY="$api_key"
-    write_header service "$svc_log"
+    write_header service "$svc_log" "$service_python" "$service_activate"
     nohup "$service_python" -m uvicorn sandbox.sira_query.service:app --port "$svc_port" \
         >> "$svc_log" 2>&1 &
     echo $! > "$sdir/service.pid"
@@ -248,13 +267,15 @@ cd "$REPO_ROOT"
 
 # ── NORA web ─────────────────────────────────────────────────────────
 (
+    set +u; [[ -n "$web_activate" ]] && source "$web_activate" >/dev/null 2>&1; set -u
+    add_localhost_noproxy
     export NORA_SIRA_QUERY_URL="http://127.0.0.1:$svc_port"
     export NORA_SIRA_SYNTH_MODE=llm-select
     export NORA_LLM_PROVIDER="$provider"
     export NORA_LLM_BASE_URL="$llm_base/v1"
     export NORA_LLM_MODEL="$llm_model"
     [[ -n "$api_key" ]] && export NORA_LLM_API_KEY="$api_key"
-    write_header web "$web_log"
+    write_header web "$web_log" "$web_python" "$web_activate"
     nohup "$web_python" -m core.src.web.app --port "$web_port" \
         --jobs-db "$jobs_db" \
         --metrics-db "$metrics_db" \

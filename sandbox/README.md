@@ -264,17 +264,20 @@ Then `:8080` = Qwen3, `:8081` = proprietary; same query in each, compare.
 
 The SIRA service and the NORA web usually live in **different venvs** (service:
 the trimmed SIRA venv with `bm25x`; web: the full NORA venv with `fastapi`).
-Point each at its venv — else the web logs `ModuleNotFoundError: fastapi` (or the
-service can't import `bm25x`):
+`run_stack.sh` handles this: **run it from the full NORA venv** (so the web
+inherits it), and the service auto-`source`s **`sandbox/activate.sh`** — which
+activates the SIRA venv, adds `sandbox/sira` to `PYTHONPATH`, and sets the
+localhost `NO_PROXY` + HF-offline vars the service needs:
 
-    sandbox/run_stack.sh \
-      --service-python ~/work/nora/sandbox/sira/.venv/bin/python \
-      --web-python     ~/work/nora/.venv/bin/python \
-      qwen "$DB_QWEN" 8040 8080 http://<qwen>:<port> <qwen-model>
+    source ~/work/nora/.venv/bin/activate         # the NORA venv (has fastapi)
+    sandbox/run_stack.sh qwen "$DB_QWEN" 8040 8080 http://<qwen>:<port> <qwen-model>
 
-(or `$NORA_STACK_SERVICE_PYTHON` / `$NORA_STACK_WEB_PYTHON`; default `python`).
-A preflight import-checks both before launching, so a wrong venv fails fast with
-a clear message instead of only in the log.
+Override the per-process env if your layout differs: `--service-activate PATH`
+(default `sandbox/activate.sh`; `none` to skip), `--web-activate PATH` (default:
+none — inherit the shell), and `--service-python` / `--web-python` to override
+just the interpreter. A preflight import-checks `uvicorn`/`fastapi`/`bm25x`
+(service) and `fastapi` (web) **in each activate env** before launching, so a
+wrong venv fails fast with a clear message instead of only in the log.
 
 `--dry-run` prints the exact env + commands without launching; `--stop <label>`
 kills a stack. Per-stack web state (pids + jobs / metrics / feedback / config DBs)
