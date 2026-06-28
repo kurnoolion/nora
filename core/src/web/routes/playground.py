@@ -28,6 +28,7 @@ import httpx
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from core.src.llm.openai_provider import FINAL_ANSWER_MARKER as _FINAL_ANSWER_MARKER
 from core.src.web.feedback_db import CATEGORIES
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,11 @@ _PATHB_SYSTEM_PROMPT = (
     "3. CITE every requirement you rely on by writing its exact req_id (shown as "
     "'req_id: <ID>' in each chunk header) inline in your answer. Do not cite "
     "chunks you judged irrelevant. If the selected chunks don't answer the "
-    "question, say so plainly rather than guessing."
+    "question, say so plainly rather than guessing.\n\n"
+    "OUTPUT FORMAT: You may reason first if needed, but you MUST then print a "
+    f"line containing exactly {_FINAL_ANSWER_MARKER} and put ONLY your final "
+    f"answer (with inline req_id citations) after it. Anything before "
+    f"{_FINAL_ANSWER_MARKER} is discarded and never shown to the user."
 )
 
 

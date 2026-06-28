@@ -133,6 +133,23 @@ class TestStripReasoning:
     def test_empty_passthrough(self):
         assert _strip_reasoning("") == ""
 
+    def test_final_answer_marker_drops_untagged_reasoning(self):
+        from core.src.llm.openai_provider import FINAL_ANSWER_MARKER
+        raw = (
+            "Alright, let me reason through this at length, no tags at all...\n"
+            f"{FINAL_ANSWER_MARKER}\nBand n78 is required (req_id: X)."
+        )
+        assert _strip_reasoning(raw) == "Band n78 is required (req_id: X)."
+
+    def test_final_answer_marker_uses_last_occurrence(self):
+        from core.src.llm.openai_provider import FINAL_ANSWER_MARKER
+        # Model may echo the marker while reasoning about the instruction.
+        raw = (
+            f"I should print {FINAL_ANSWER_MARKER} before answering.\n"
+            f"{FINAL_ANSWER_MARKER}\nThe real answer."
+        )
+        assert _strip_reasoning(raw) == "The real answer."
+
 
 # ---------------------------------------------------------------------------
 # complete() — payload, response, headers, errors

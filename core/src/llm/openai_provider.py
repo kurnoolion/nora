@@ -53,12 +53,25 @@ _THINK_CLOSE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Some reasoning models emit UNtagged chain-of-thought — plain prose before the
+# answer, with no <think> delimiter to match. For those, a prompt can instruct
+# the model to print this marker on its own line just before the final answer;
+# _strip_reasoning then drops everything up to (and including) the last marker.
+# Harmless when absent. Prompts that opt in must use this exact literal.
+FINAL_ANSWER_MARKER = "===FINAL_ANSWER==="
+
 
 def _strip_reasoning(text: str) -> str:
-    """Remove inline reasoning blocks from model output. Idempotent and safe on
-    normal answers (no tags → returned unchanged apart from surrounding whitespace)."""
+    """Remove reasoning from model output. Handles (1) a prompt-driven
+    FINAL_ANSWER_MARKER sentinel and (2) inline <think>…</think> tag blocks.
+    Idempotent and safe on normal answers (no marker/tags → returned unchanged
+    apart from surrounding whitespace)."""
     if not text:
         return text
+    # Sentinel wins — it's the only reliable signal for untagged reasoning.
+    marker_at = text.rfind(FINAL_ANSWER_MARKER)
+    if marker_at != -1:
+        text = text[marker_at + len(FINAL_ANSWER_MARKER):]
     cleaned = _THINK_BLOCK_RE.sub("", text)
     # Some servers drop the opening tag and return "<reasoning…></think>answer"
     # or "reasoning…</think>answer" — a dangling close with no matching open.
