@@ -219,6 +219,15 @@ _FUSION_BALANCED = os.getenv("NORA_SIRA_FUSION_BALANCED", "").lower() in {
     "1", "true", "yes", "on",
 }
 
+# Per-cell top_k (3-MNO readiness). In balanced multi-cell mode, treat top_k as a
+# PER-CELL budget: the final cut becomes top_k * (cells in scope), so adding an
+# MNO ADDS representation instead of shrinking each cell's share to top_k/N (which
+# would starve a borderline-ranked chunk in a 3rd corpus). The per-cell retrieve
+# pool (top_n) is already per-cell, so only the final cut moves. Default on.
+_PER_CELL_TOP_K = os.getenv("NORA_SIRA_PER_CELL_TOP_K", "true").lower() in {
+    "1", "true", "yes", "on",
+}
+
 # Run-pinning — determinism across "which offline run drives this service?".
 # Three knobs (each independent):
 #   NORA_SIRA_DOC_ENRICH_RUN   — exact run-name under runs/doc-enrich/<name>
@@ -823,8 +832,12 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
             notes.append("rerank prompt missing — round-robin per-cell balance")
         timings["rerank_ms"] = int((time.time() - t0) * 1000)
 
-    # 5. Rank + top_k, build results with provenance.
-    ranked = rank_candidates(per_cell, scores, top_k, balanced=_FUSION_BALANCED)
+    # 5. Rank + cut. In balanced multi-cell mode top_k is a PER-CELL budget, so
+    #    the effective cut scales with the number of cells in scope (3-MNO
+    #    readiness — keeps each MNO represented instead of top_k/N).
+    n_cells = len(per_cell)
+    cut = top_k * n_cells if (_FUSION_BALANCED and _PER_CELL_TOP_K and n_cells > 1) else top_k
+    ranked = rank_candidates(per_cell, scores, cut, balanced=_FUSION_BALANCED)
     out: list[dict[str, Any]] = []
     for rank, cand in enumerate(ranked, 1):
         doc = _cells[cand.cell].corpus_by_id.get(cand.doc_id, {})
@@ -844,6 +857,8 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
     return {
         "query": req.query,
         "top_k": top_k,
+        "n_cells": n_cells,
+        "effective_top_k": cut,
         "mode": "multi-cell",
         "resolved_cells": [cell_dirname(c) for c in sorted(resolved)],
         "unresolved": [list(u) for u in unresolved],   # FR-multi-5 surfacing
@@ -918,6 +933,7 @@ def healthz() -> dict[str, Any]:
         "rerank_top_n": _RERANK_TOP_N,
         "rerank_enabled": _RERANK_ENABLED,
         "fusion_balanced": _FUSION_BALANCED,
+        "per_cell_top_k": _PER_CELL_TOP_K,
         # Rerank-only LLM override. When any of these is set, rerank
         # calls bypass the shim and go directly to the configured
         # endpoint. Query enrichment continues to use the shim.

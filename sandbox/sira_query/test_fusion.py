@@ -6,7 +6,7 @@ with synthetic data — no bm25x, no live LLM.
 
 from __future__ import annotations
 
-from sandbox.sira_query.fusion import Candidate, fuse
+from sandbox.sira_query.fusion import Candidate, fuse, rank_candidates
 
 
 def _retriever(table):
@@ -225,3 +225,38 @@ def test_cell_with_no_hits():
     out = fuse("q", {VZW_F, TMO_J}, retrieve_fn=_retriever(table),
                rerank_fn=None, per_cell_top_n=10, top_k=10)
     assert [c.doc_id for c in out] == ["t0"]
+
+
+def test_balanced_cut_is_per_cell_across_three_cells():
+    """3-MNO readiness (NORA_SIRA_PER_CELL_TOP_K). The service scales the cut to
+    top_k * n_cells in balanced multi-cell mode; with that cut, balanced fusion
+    keeps the full per-cell budget for EVERY cell instead of starving a 3rd MNO
+    to top_k/N. Here: base top_k=40, 3 cells -> cut 120 -> 40 per cell."""
+    from collections import Counter
+    ATT_J = ("ATT", "Jan2026")
+    per_cell = [
+        [Candidate(VZW_F, f"a{i}", 1.0) for i in range(40)],
+        [Candidate(TMO_J, f"b{i}", 1.0) for i in range(40)],
+        [Candidate(ATT_J, f"c{i}", 1.0) for i in range(40)],
+    ]
+    out = rank_candidates(per_cell, scores=None, top_k=40 * 3, balanced=True)
+    per = Counter(c.cell[0] for c in out)
+    assert per["VZW"] == per["TMO"] == per["ATT"] == 40   # not 120/3 = 40 each? -> all kept
+    assert len(out) == 120
+
+
+def test_unscaled_cut_would_starve_third_cell():
+    """Counterfactual the scaling fixes: the OLD global cut (top_k not scaled)
+    splits ~evenly, so each of 3 cells gets only top_k/3 — a borderline chunk
+    ranked deeper than that in its cell is dropped."""
+    from collections import Counter
+    ATT_J = ("ATT", "Jan2026")
+    per_cell = [
+        [Candidate(VZW_F, f"a{i}", 1.0) for i in range(40)],
+        [Candidate(TMO_J, f"b{i}", 1.0) for i in range(40)],
+        [Candidate(ATT_J, f"c{i}", 1.0) for i in range(40)],
+    ]
+    out = rank_candidates(per_cell, scores=None, top_k=40, balanced=True)  # NOT scaled
+    per = Counter(c.cell[0] for c in out)
+    assert max(per.values()) - min(per.values()) <= 1   # ~13-14 each
+    assert all(v < 40 for v in per.values())             # every cell starved vs its 40
