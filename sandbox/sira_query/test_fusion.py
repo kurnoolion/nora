@@ -228,7 +228,7 @@ def test_cell_with_no_hits():
 
 
 def test_balanced_cut_is_per_cell_across_three_cells():
-    """3-MNO readiness (NORA_SIRA_PER_CELL_TOP_K). The service scales the cut to
+    """3-MNO readiness (NORA_SIRA_SCALE_TOPK_BY_CELLS). The service scales the cut to
     top_k * n_cells in balanced multi-cell mode; with that cut, balanced fusion
     keeps the full per-cell budget for EVERY cell instead of starving a 3rd MNO
     to top_k/N. Here: base top_k=40, 3 cells -> cut 120 -> 40 per cell."""

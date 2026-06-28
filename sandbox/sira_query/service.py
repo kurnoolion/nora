@@ -224,7 +224,7 @@ _FUSION_BALANCED = os.getenv("NORA_SIRA_FUSION_BALANCED", "").lower() in {
 # MNO ADDS representation instead of shrinking each cell's share to top_k/N (which
 # would starve a borderline-ranked chunk in a 3rd corpus). The per-cell retrieve
 # pool (top_n) is already per-cell, so only the final cut moves. Default on.
-_PER_CELL_TOP_K = os.getenv("NORA_SIRA_PER_CELL_TOP_K", "true").lower() in {
+_SCALE_TOPK_BY_CELLS = os.getenv("NORA_SIRA_SCALE_TOPK_BY_CELLS", "true").lower() in {
     "1", "true", "yes", "on",
 }
 
@@ -836,7 +836,7 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
     #    the effective cut scales with the number of cells in scope (3-MNO
     #    readiness — keeps each MNO represented instead of top_k/N).
     n_cells = len(per_cell)
-    cut = top_k * n_cells if (_FUSION_BALANCED and _PER_CELL_TOP_K and n_cells > 1) else top_k
+    cut = top_k * n_cells if (_FUSION_BALANCED and _SCALE_TOPK_BY_CELLS and n_cells > 1) else top_k
     ranked = rank_candidates(per_cell, scores, cut, balanced=_FUSION_BALANCED)
     out: list[dict[str, Any]] = []
     for rank, cand in enumerate(ranked, 1):
@@ -933,7 +933,7 @@ def healthz() -> dict[str, Any]:
         "rerank_top_n": _RERANK_TOP_N,
         "rerank_enabled": _RERANK_ENABLED,
         "fusion_balanced": _FUSION_BALANCED,
-        "per_cell_top_k": _PER_CELL_TOP_K,
+        "scale_topk_by_cells": _SCALE_TOPK_BY_CELLS,
         # Rerank-only LLM override. When any of these is set, rerank
         # calls bypass the shim and go directly to the configured
         # endpoint. Query enrichment continues to use the shim.
