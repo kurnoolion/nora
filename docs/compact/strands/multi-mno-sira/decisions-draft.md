@@ -807,3 +807,43 @@ context/eval); keeping the adapter-append (loses order — the bug we hit).
   this strand owns the SIRA-corpus facet (adapter passthrough + the band-query
   problem that drove it). `verify_tables` guards the invariant (no req with a
   `tables` field may lack the inline table).
+
+## D-DRAFT-18 — run_stack.sh: isolated parallel stacks with a pooled feedback DB for attributable LLM A/B
+
+**Context:** Comparing two synthesis LLMs (Qwen3 vs a proprietary model) under
+select-synth means running two full NORA stacks (SIRA service + web) at once
+without cross-talk, while keeping their outputs comparable. Each process reads
+its config at import time, so a stack is pinned to its launch env — but a naive
+two-stack launch would share ports/state/DBs and clobber each other, and a
+per-stack feedback DB would force a manual merge to compare results.
+
+**Decision:** `run_stack.sh` launches ONE isolated SIRA-service + web stack from
+positional args (label, db_root, ports, llm_base, model[, api_key]) plus flags;
+two invocations run in parallel. **Isolated per stack:** ports, state dir,
+`--config-db`/`--jobs-db`/`--metrics-db` (precedence flag > env >
+`<state>/<name>.db`), logs, per-process venv/python, and a
+`~/.nora-stacks/<label>` registry backing `--stop <label>`. **Shared
+deliberately:** the feedback DB — because `test_feedback` carries an `llm_model`
+column, both stacks write to one DB and the A/B becomes a single
+`GROUP BY llm_model` query instead of a cross-DB merge.
+
+**Why:** Parallel stacks need hard isolation (ports/state/DBs/venvs) or they
+corrupt each other's runtime; per-process env-at-import pinning is desirable here
+(one model per stack, fixed). Pooling ONLY the feedback DB is the deliberate
+exception: it is the comparison surface, and `llm_model` makes shared rows
+attributable, so analysis needs no join. Config/jobs/metrics stay per-stack —
+they're operational state, not comparison data. The operational tooling
+(`--stop` registry, per-process venvs, preflight error surfacing,
+options-anywhere parsing, NO_PROXY bypass) was hardened iteratively against real
+work-PC failures rather than designed up front.
+
+**Consequences:**
+- The feedback DB is a shared write target across two processes; `FeedbackStore`
+  uses per-op `aiosqlite.connect` (no WAL / busy_timeout) — fine for human-paced
+  eval, NOT high concurrency. Revisit if the A/B is ever automated/parallel-load.
+- `run_stack.sh` lives in `sandbox/` (not a core module) and encodes select-synth
+  A/B assumptions (rerank off, synth-mode select-synth). It is eval scaffolding,
+  not a production launcher.
+- Per-stack config-DB + env-at-import means a running stack can't be reconfigured
+  live — restart to change model/flags (acceptable for eval).
+- Renumbers to a canonical D-XXX at land.

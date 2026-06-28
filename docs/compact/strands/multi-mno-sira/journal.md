@@ -603,3 +603,54 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
   changed docs (SIRA resume is doc_id-keyed).
 - Carry-forward: eager per-cell load → RAM scales with cell count; OQ-2 per-cell
   eval queries/qrels.
+
+## 2026-06-28 — A/B harness (run_stack.sh) + SIRA shim auth for the two-LLM select-synth eval
+
+### Done this session
+- **`run_stack.sh` — parallel A/B harness** (`9023813`..`388a179`, `df57569`,
+  `43ef6d4`): launches ONE isolated SIRA-service + NORA-web stack from args, so
+  two (Qwen3 vs the proprietary model) run side-by-side for a select-synth LLM
+  A/B. Isolated per stack: ports, state dir, `--config-db`/`--jobs-db`/
+  `--metrics-db` (precedence flag > env > `<state>/<n>.db`), `--state-dir`/
+  `--log-dir` with timestamped/port-named logs + a per-log env header. **Pooled**
+  `--feedback-db` (shared) so the A/B stays attributable via the `llm_model`
+  column. Hardened against real work-PC failures: options-anywhere parsing +
+  bad-flag errors, per-process venvs (`--service-python`/`--web-python`) +
+  `source sandbox/activate.sh` for the service, preflight that surfaces the real
+  import error, `--stop <label>` via a `~/.nora-stacks/<label>` registry, NO_PROXY
+  localhost bypass per subshell. → D-DRAFT-18.
+- **SIRA shim/query-enrich API-key auth** (`7e46a3d`): the live query-enrich call
+  sent no `Authorization` header (only the rerank path had a key). Added
+  `_SHIM_API_KEY` (`NORA_LLM_SHIM_API_KEY`, falling back to `NORA_LLM_API_KEY`);
+  `_llm_call` attaches `Bearer` on the shim path while explicit-base_url callers
+  (rerank) keep their own key; `/healthz` reports `shim_api_key_set`. Query-enrich
+  kept ON (run_stack forwards the positional key) — inert for the user's keyless
+  endpoints. NOTE: with query-enrich on, each stack expands queries with ITS OWN
+  LLM, so *retrieval* (not just synthesis) differs across the A/B — documented;
+  `NORA_SIRA_QUERY_ENRICH_ENABLED=false` gives a synthesis-only A/B.
+- **`--reasoning-sentinel` flag** (`43ef6d4`): sets `NORA_LLM_REASONING_SENTINEL=1`
+  on the web process for a stack whose model emits untagged chain-of-thought (the
+  select-synth sentinel — multi-mno-nora D-DRAFT-17). Aligned the launched/preview
+  `NORA_SIRA_SYNTH_MODE` to `select-synth`.
+
+### In progress
+- Both stacks operational for the Qwen3-vs-proprietary A/B (keyless web provider,
+  select-synth, pooled feedback DB). Awaiting the band-chunk verification + the
+  per-LLM comparison.
+
+### Next
+- `verify_tables` + `sira_enrich_inspect` on the FR2 band req against the fresh
+  `enrich-stable` run, then the band query through both stacks; compare via the
+  feedback DB (`GROUP BY llm_model`).
+- Landing gate stands; reconcile the two D-DRAFT-16s + the cross-strand
+  select-synth decisions at land.
+
+### Flags
+- Shim-auth's `NORA_LLM_API_KEY` fallback could send an unwanted `Bearer` if that
+  var is ever exported for a keyless endpoint (inert today — no keys in use).
+- `run_stack.sh` is sandbox tooling (not a core module); it encodes select-synth
+  A/B assumptions (rerank off). The pooled feedback DB is a shared write target —
+  `FeedbackStore` is per-op aiosqlite (no WAL/busy_timeout), fine for human-paced
+  eval, not concurrent load.
+- Carry-forward: enrich-vs-tables incrementality; eager per-cell load RAM; OQ-2
+  per-cell eval queries/qrels.
