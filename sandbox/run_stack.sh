@@ -284,12 +284,16 @@ cd "$REPO_ROOT"
     export NORA_SIRA_DB_ROOT="$db_root"
     export NORA_SIRA_DOC_ENRICH_RUN="$enrich_run"
     export NORA_SIRA_RERANK_ENABLED=false
-    # Path-B: the service does pure BM25; the LLM works at synthesis (web side).
-    # Default query-enrich OFF — it has no API-key support and, left on, each
-    # stack would expand queries with ITS OWN LLM, confounding an A/B. Overridable.
-    export NORA_SIRA_QUERY_ENRICH_ENABLED="${NORA_SIRA_QUERY_ENRICH_ENABLED:-false}"
+    # Query-enrich stays on (service default). It's the service's one live LLM
+    # call — query expansion before BM25 — and routes to the shim below.
+    # NOTE: with it on, each stack expands queries with ITS OWN LLM, so retrieval
+    # (not just synthesis) differs between stacks. Set NORA_SIRA_QUERY_ENRICH_ENABLED=false
+    # in your shell if you want a synthesis-only A/B with identical retrieval.
     export NORA_LLM_SHIM_URL="$llm_base"
     export NORA_LLM_MODEL="$llm_model"
+    # Auth for the shim/query-enrich call. Prefer the explicit positional key;
+    # else inherit NORA_LLM_SHIM_API_KEY / NORA_LLM_API_KEY from the shell.
+    [[ -n "$api_key" ]] && export NORA_LLM_SHIM_API_KEY="$api_key"
     [[ -n "$api_key" ]] && export NORA_SIRA_RERANK_LLM_API_KEY="$api_key"
     write_header service "$svc_log" "$service_python" "$service_activate"
     nohup "$service_python" -m uvicorn sandbox.sira_query.service:app --port "$svc_port" \

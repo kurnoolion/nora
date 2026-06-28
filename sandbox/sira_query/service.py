@@ -45,6 +45,11 @@ _DB_ROOT = os.getenv("NORA_SIRA_DB_ROOT", "")
 _DATASET = os.getenv("NORA_SIRA_DATASET", "nora")
 _SHIM_URL = os.getenv("NORA_LLM_SHIM_URL", "http://127.0.0.1:8030").rstrip("/")
 _SHIM_MODEL = os.getenv("NORA_LLM_MODEL", "")
+# Bearer key for the shim/query-enrich path. A bare local shim needs none, but
+# a proprietary OpenAI-compat endpoint usually requires auth. Prefer the
+# shim-specific name; fall back to the general NORA_LLM_API_KEY the web side
+# already uses, so a single export covers both processes.
+_SHIM_API_KEY = os.getenv("NORA_LLM_SHIM_API_KEY", "") or os.getenv("NORA_LLM_API_KEY", "")
 
 # Rerank-only LLM override. Query enrichment continues to go through
 # the standard shim (and so reaches whatever upstream LLM the shim
@@ -935,6 +940,7 @@ def healthz() -> dict[str, Any]:
         ),
         "shim_url": _SHIM_URL,
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
+        "shim_api_key_set": bool(_SHIM_API_KEY),
         "query_prompt_loaded": bool(_query_prompt_template),
         "rerank_prompt_loaded": bool(_rerank_prompt_template),
         # Provenance — verify everything ties back to the run you expect.
@@ -976,6 +982,11 @@ async def _llm_call(
     path)."""
     url = base_url or _SHIM_URL
     used_model = model or _SHIM_MODEL or "sira-shim"
+    # Shim-path callers (query-enrich) pass no explicit base_url/api_key — auth
+    # them with _SHIM_API_KEY when set. Explicit-base_url callers (rerank) keep
+    # full control of their own key.
+    if api_key is None and base_url is None:
+        api_key = _SHIM_API_KEY or None
     payload: dict[str, Any] = {
         "model": used_model,
         "messages": [{"role": "user", "content": prompt}],

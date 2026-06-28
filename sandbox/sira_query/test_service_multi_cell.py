@@ -169,6 +169,57 @@ class _FakeClient:
         return _FakeResp(self._p)
 
 
+class _ChatResp:
+    status_code = 200
+    text = ""
+
+    def json(self):
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+
+class _ChatClient:
+    def __init__(self):
+        self.last = None
+
+    async def post(self, url, json=None, headers=None):
+        self.last = (url, json, headers)
+        return _ChatResp()
+
+
+def test_shim_call_sends_bearer_when_key_set(monkeypatch):
+    # Query-enrich routes through the shim path (no base_url/api_key args);
+    # _SHIM_API_KEY must become an Authorization header so proprietary
+    # OpenAI-compat endpoints accept the call.
+    import asyncio
+    monkeypatch.setattr(svc, "_SHIM_API_KEY", "sk-secret")
+    client = _ChatClient()
+    asyncio.run(svc._llm_call(client, "expand this"))
+    url, _payload, headers = client.last
+    assert url.endswith("/v1/chat/completions")
+    assert headers == {"Authorization": "Bearer sk-secret"}
+
+
+def test_shim_call_no_header_when_key_unset(monkeypatch):
+    # A bare local shim needs no auth — don't send an empty Bearer.
+    import asyncio
+    monkeypatch.setattr(svc, "_SHIM_API_KEY", "")
+    client = _ChatClient()
+    asyncio.run(svc._llm_call(client, "expand this"))
+    assert client.last[2] is None
+
+
+def test_explicit_base_url_keeps_own_key(monkeypatch):
+    # Rerank-style callers pass base_url explicitly; the shim key must NOT
+    # leak into that call. No api_key passed → no auth header.
+    import asyncio
+    monkeypatch.setattr(svc, "_SHIM_API_KEY", "sk-secret")
+    client = _ChatClient()
+    asyncio.run(svc._llm_call(client, "x", base_url="http://other:9000"))
+    url, _payload, headers = client.last
+    assert url.startswith("http://other:9000")
+    assert headers is None
+
+
 def test_rerank_bulk_tei(monkeypatch):
     import asyncio
     from sandbox.sira_query.fusion import Candidate
