@@ -100,15 +100,16 @@ async def lifespan(app: FastAPI):
     _start_time = time.time()
     logger.info("NORA Web UI starting (root_path=%r)", config.root_path)
 
-    # SIRA synth-lane config — surfaced so "is my Path-B env var live?" is a
+    # SIRA synth-lane config — surfaced so "is my select-synth env var live?" is a
     # glance at the startup log instead of guessing from the /test output.
     from core.src.web.routes import playground as _pg
-    if _pg._SYNTH_MODE == "llm-select":
+    if _pg._SELECT_SYNTH_ENABLED:
         logger.info(
-            "SIRA synth lane: Path-B (llm-select) — top_k=%d, text_chars=%d, "
+            "SIRA synth lane: select-synth (mode=%s) — top_k=%d, text_chars=%d, "
             "token_budget=%d. (Run the SIRA service with "
             "NORA_SIRA_RERANK_ENABLED=false.)",
-            _pg._PATHB_TOP_K, _pg._PATHB_TEXT_CHARS, _pg._SYNTH_TOKEN_BUDGET,
+            _pg._SYNTH_MODE,
+            _pg._SELECT_SYNTH_TOP_K, _pg._SELECT_SYNTH_TEXT_CHARS, _pg._SYNTH_TOKEN_BUDGET,
         )
     else:
         logger.info(

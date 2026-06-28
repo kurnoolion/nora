@@ -83,25 +83,44 @@ _PIN_REL_THRESHOLD = float(os.getenv("NORA_SIRA_PIN_REL_THRESHOLD", "0.5"))
 _PIN_MODE = os.getenv("NORA_SIRA_PIN_MODE", "rerank-topk").strip().lower()
 _PIN_MAX = int(os.getenv("NORA_SIRA_PIN_MAX", "16"))
 
-# ── Path-B: LLM-select synthesis (no cross-encoder reranker) ──────────
+# ── select-synth: LLM-select synthesis (no cross-encoder reranker) ──────────
 # The reranker scores surface query↔passage similarity and misses telecom term
 # associations ("SA NR" == "5G NR standalone"), dropping source-of-truth chunks
-# before NORA sees them. Path-B drops the reranker entirely: fetch all balanced
+# before NORA sees them. select-synth drops the reranker entirely: fetch all balanced
 # BM25 candidates with FULL text, group them by MNO/release, and feed them to the
 # telecom LLM in ONE call that selects the relevant ones and synthesizes. Sized
 # for a 128K-context model.
-#   NORA_SIRA_SYNTH_MODE=llm-select → Path-B   (default "rerank-pin" = unchanged)
+#   NORA_SIRA_SYNTH_MODE=select-synth (or legacy "llm-select") enables it;
+#   default "rerank-pin" = unchanged.
 # IMPORTANT: run the SIRA service with NORA_SIRA_RERANK_ENABLED=false so its
 # top_k cut is BM25 (round-robin balanced), not rerank-score — otherwise the
-# reranker drops the chunk before Path-B can ever see it.
+# reranker drops the chunk before select-synth can ever see it.
+
+
+def _select_synth_int(name: str, default: int) -> int:
+    """Read NORA_SIRA_SELECT_SYNTH_<name>, falling back to the legacy
+    NORA_SIRA_PATHB_<name> spelling (deprecated) so existing launch scripts
+    keep working."""
+    new = f"NORA_SIRA_SELECT_SYNTH_{name}"
+    old = f"NORA_SIRA_PATHB_{name}"
+    raw = os.getenv(new)
+    if raw is None:
+        raw = os.getenv(old)
+        if raw is not None:
+            logger.warning("%s is deprecated; rename it to %s", old, new)
+    return int(raw) if raw is not None else default
+
+
 _SYNTH_MODE = os.getenv("NORA_SIRA_SYNTH_MODE", "rerank-pin").strip().lower()
-_PATHB_TOP_K = int(os.getenv("NORA_SIRA_PATHB_TOP_K", "40"))               # SIRA candidates to fetch
-_PATHB_TEXT_CHARS = int(os.getenv("NORA_SIRA_PATHB_TEXT_CHARS", "16000"))  # per-chunk full-text cap from SIRA
+# "select-synth" is the current value; "llm-select" stays accepted for compat.
+_SELECT_SYNTH_ENABLED = _SYNTH_MODE in ("select-synth", "llm-select")
+_SELECT_SYNTH_TOP_K = _select_synth_int("TOP_K", 40)               # SIRA candidates to fetch
+_SELECT_SYNTH_TEXT_CHARS = _select_synth_int("TEXT_CHARS", 16000)  # per-chunk full-text cap from SIRA
 _SYNTH_TOKEN_BUDGET = int(os.getenv("NORA_SIRA_SYNTH_TOKEN_BUDGET", "120000"))  # context ceiling (128K − headroom)
-_PATHB_MAX_OUTPUT_TOKENS = int(os.getenv("NORA_SIRA_PATHB_MAX_OUTPUT_TOKENS", "4096"))
+_SELECT_SYNTH_MAX_OUTPUT_TOKENS = _select_synth_int("MAX_OUTPUT_TOKENS", 4096)
 _CHARS_PER_TOKEN = 3.5   # rough; telecom text is token-dense
 
-_PATHB_SYSTEM_PROMPT = (
+_SELECT_SYNTH_SYSTEM_PROMPT = (
     "You are an expert telecom (3GPP/GSMA) device-requirements analyst. Below "
     "are candidate requirement chunks retrieved for the user's question, GROUPED "
     "by operator (MNO) and release. Retrieval is recall-oriented, so MANY chunks "
@@ -320,8 +339,8 @@ async def _run_sira_lane_for_merged(
             await emit_progress(msg)
 
     start = time.time()
-    if _SYNTH_MODE == "llm-select":
-        return await _run_pathb_lane(question, _say, start)
+    if _SELECT_SYNTH_ENABLED:
+        return await _run_select_synth_lane(question, _say, start)
     await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
         sira_result = await _call_sira_query(question)
@@ -570,9 +589,9 @@ def _balanced_pin(
     return out
 
 
-# ── Path-B helpers (LLM-select synthesis) ─────────────────────────────
+# ── select-synth helpers (LLM-select synthesis) ─────────────────────────────
 
-def _pack_pathb(candidates: list[dict[str, Any]], token_budget: int) -> list[dict[str, Any]]:
+def _pack_select_synth(candidates: list[dict[str, Any]], token_budget: int) -> list[dict[str, Any]]:
     """Round-robin across (mno, release) cells, packing WHOLE chunks until the
     token budget is hit. Candidates carry full `text` (SIRA `text_chars`). Keeps
     cross-cell balance and bounds the context to fit the model window."""
@@ -601,7 +620,7 @@ def _pack_pathb(candidates: list[dict[str, Any]], token_budget: int) -> list[dic
     return out
 
 
-def _build_pathb_context(question: str, packed: list[dict[str, Any]]) -> str:
+def _build_select_synth_context(question: str, packed: list[dict[str, Any]]) -> str:
     """Group packed chunks by (mno, release) with explicit headers + full text,
     so the LLM knows which operator/release each requirement belongs to (needed
     to compare/contrast across MNOs)."""
@@ -622,7 +641,7 @@ def _build_pathb_context(question: str, packed: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
-def _pathb_extract_citations(answer: str, packed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _select_synth_extract_citations(answer: str, packed: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Corpus-agnostic citation extraction: which packed req_ids appear verbatim
     in the answer. Works for any MNO req_id format, unlike the synthesizer's
     VZ_REQ_-specific regex."""
@@ -636,23 +655,23 @@ def _pathb_extract_citations(answer: str, packed: list[dict[str, Any]]) -> list[
     return out
 
 
-def _pathb_synthesize(question: str, packed: list[dict[str, Any]]) -> dict[str, Any]:
+def _select_synth_synthesize(question: str, packed: list[dict[str, Any]]) -> dict[str, Any]:
     """One LLM call over all packed chunks: the model selects relevant ones and
     synthesizes. Returns the dict shape the merged template consumes."""
     from core.src.web.routes.query import _build_llm_from_env_or_default
     llm = _build_llm_from_env_or_default()
     if llm is None or getattr(llm, "_is_mock", False):
-        return {"error": "Path-B needs a real LLM (NORA_LLM_* not configured)"}
-    context_text = _build_pathb_context(question, packed)
+        return {"error": "select-synth needs a real LLM (NORA_LLM_* not configured)"}
+    context_text = _build_select_synth_context(question, packed)
     try:
         answer = llm.complete(
-            prompt=context_text, system=_PATHB_SYSTEM_PROMPT,
-            temperature=0.0, max_tokens=_PATHB_MAX_OUTPUT_TOKENS,
+            prompt=context_text, system=_SELECT_SYNTH_SYSTEM_PROMPT,
+            temperature=0.0, max_tokens=_SELECT_SYNTH_MAX_OUTPUT_TOKENS,
         )
     except Exception as exc:  # noqa: BLE001 — surfaced to the UI
-        logger.exception("Path-B LLM synthesis failed")
+        logger.exception("select-synth LLM synthesis failed")
         return {"error": f"LLM synthesis failed: {exc}"}
-    cites = _pathb_extract_citations(answer, packed)
+    cites = _select_synth_extract_citations(answer, packed)
     rag_chunks = [
         {
             "req_id": c.get("req_id"),
@@ -669,43 +688,43 @@ def _pathb_synthesize(question: str, packed: list[dict[str, Any]]) -> dict[str, 
         "rag_chunks": rag_chunks,
         "rag_chunk_count": len(rag_chunks),
         "llm_model": getattr(llm, "model_name", "") or getattr(llm, "model", "") or "",
-        "llm_system_prompt": _PATHB_SYSTEM_PROMPT,
+        "llm_system_prompt": _SELECT_SYNTH_SYSTEM_PROMPT,
         "llm_context_text": context_text,
     }
 
 
-async def _run_pathb_lane(
+async def _run_select_synth_lane(
     question: str, _say: "Callable[[str], Awaitable[None]]", start: float,
 ) -> dict[str, Any]:
-    """Path-B lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
+    """select-synth lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
     that selects relevant chunks + synthesizes. Same dict shape as the default
     rerank-pin lane so the merged template/response is unchanged."""
     await _say(
-        f"Path-B: fetching {_PATHB_TOP_K} BM25 candidates with full text "
+        f"select-synth: fetching {_SELECT_SYNTH_TOP_K} BM25 candidates with full text "
         f"(reranker bypassed)…"
     )
     try:
         sira_result = await _call_sira_query(
-            question, top_k=_PATHB_TOP_K, text_chars=_PATHB_TEXT_CHARS,
+            question, top_k=_SELECT_SYNTH_TOP_K, text_chars=_SELECT_SYNTH_TEXT_CHARS,
         )
     except Exception as exc:
-        logger.exception("SIRA service call failed (Path-B)")
+        logger.exception("SIRA service call failed (select-synth)")
         await _say(f"SIRA service error: {exc}")
         return {"error": f"SIRA service call failed: {exc}"}
 
     sira_results = sira_result.get("results", []) or []
-    packed = _pack_pathb(sira_results, _SYNTH_TOKEN_BUDGET)
+    packed = _pack_select_synth(sira_results, _SYNTH_TOKEN_BUDGET)
     packed_keys = {(p.get("mno"), p.get("req_id")) for p in packed}
     for r in sira_results:
         r["pinned"] = (r.get("mno"), r.get("req_id")) in packed_keys
     n_cells = len({(p.get("mno"), p.get("release")) for p in packed})
     await _say(
-        f"Path-B: {len(sira_results)} candidates → {len(packed)} packed across "
+        f"select-synth: {len(sira_results)} candidates → {len(packed)} packed across "
         f"{n_cells} cell(s); one LLM select+synthesize call…"
     )
 
     synth_start = time.time()
-    synth_result = await asyncio.to_thread(_pathb_synthesize, question, packed)
+    synth_result = await asyncio.to_thread(_select_synth_synthesize, question, packed)
     synth_ms = int((time.time() - synth_start) * 1000)
     timings = sira_result.setdefault("timings_ms", {})
     if isinstance(timings, dict):
@@ -713,10 +732,10 @@ async def _run_pathb_lane(
 
     synth_error = synth_result.get("error")
     if synth_error:
-        await _say(f"Path-B synth error: {synth_error}")
+        await _say(f"select-synth synth error: {synth_error}")
     elapsed_ms = int((time.time() - start) * 1000)
     if not synth_error:
-        await _say(f"Path-B: answer ready ({elapsed_ms} ms)")
+        await _say(f"select-synth: answer ready ({elapsed_ms} ms)")
 
     retrieved_ids = [r["req_id"] for r in sira_results if r.get("req_id")]
     lane_config = await _snapshot_sira_lane_config()
@@ -743,7 +762,7 @@ async def _call_sira_query(
     """POST the question to the SIRA per-query probe service and
     return its JSON response.
 
-    `text_chars` (Path-B) asks SIRA to include each result's full chunk text
+    `text_chars` (select-synth) asks SIRA to include each result's full chunk text
     (newlines preserved, capped) so the synthesizer gets whole band tables.
 
     Errors are surfaced verbatim — caller renders them in the answer
