@@ -72,6 +72,8 @@ def _strip_reasoning(text: str) -> str:
 ENV_BASE_URL = "NORA_LLM_BASE_URL"
 ENV_API_KEY = "NORA_LLM_API_KEY"
 ENV_MODEL = "NORA_LLM_MODEL"
+# Opt-in diagnostic: log each response's raw content + reasoning fields at INFO.
+ENV_DEBUG_RAW = "NORA_LLM_DEBUG_RAW"
 
 
 class OpenAICompatibleProvider:
@@ -200,7 +202,19 @@ class OpenAICompatibleProvider:
                 f"LLM returned no choices: {json.dumps(data)[:400]}"
             )
         message = choices[0].get("message") or {}
-        content = _strip_reasoning(message.get("content", "") or "")
+        raw_content = message.get("content", "") or ""
+        # Opt-in raw dump (NORA_LLM_DEBUG_RAW=1) to inspect a model's reasoning
+        # delimiters when chain-of-thought leaks past _strip_reasoning. Off by
+        # default — raw model output may contain corpus content (no proprietary
+        # content in logs otherwise). `%r` preserves exact/unicode markers.
+        if os.environ.get(ENV_DEBUG_RAW):
+            reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+            logger.info(
+                "LLM raw content (pre-strip, %d chars): %r | reasoning_content(%d): %r",
+                len(raw_content), raw_content[:800],
+                len(reasoning), reasoning[:200],
+            )
+        content = _strip_reasoning(raw_content)
 
         usage = data.get("usage") or {}
         eval_count = int(usage.get("completion_tokens", 0) or 0)
