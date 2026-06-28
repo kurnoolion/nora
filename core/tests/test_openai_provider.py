@@ -13,6 +13,7 @@ from core.src.llm.openai_provider import (
     ENV_BASE_URL,
     ENV_MODEL,
     OpenAICompatibleProvider,
+    _strip_reasoning,
 )
 
 
@@ -111,6 +112,28 @@ class TestConstruction:
         assert p is not None
 
 
+class TestStripReasoning:
+    def test_paired_think_block_removed(self):
+        assert _strip_reasoning("<think>reasoning here</think>final") == "final"
+
+    def test_multiline_and_variant_tags(self):
+        assert _strip_reasoning("<thinking>\na\nb\n</thinking>\nout") == "out"
+        assert _strip_reasoning("<reasoning>x</reasoning>y") == "y"
+
+    def test_dangling_close_tag_no_open(self):
+        # Server stripped the opening tag, leaving only the close.
+        assert _strip_reasoning("musing about it</think>the answer") == "the answer"
+
+    def test_plain_answer_unchanged(self):
+        assert _strip_reasoning("just an answer") == "just an answer"
+
+    def test_case_insensitive(self):
+        assert _strip_reasoning("<Think>r</Think>z") == "z"
+
+    def test_empty_passthrough(self):
+        assert _strip_reasoning("") == ""
+
+
 # ---------------------------------------------------------------------------
 # complete() — payload, response, headers, errors
 # ---------------------------------------------------------------------------
@@ -177,6 +200,13 @@ class TestComplete:
             p.complete("ping")
         auth = captured["headers"].get("Authorization") or captured["headers"].get("authorization")
         assert auth is None
+
+    def test_inline_reasoning_stripped_from_answer(self):
+        # A reasoning model that inlines <think>…</think> must not leak it.
+        body = "<think>Let me work through this step by step.</think>The answer is 42."
+        with patch("urllib.request.urlopen", return_value=_ok_response(body)):
+            out = _make_provider().complete("q")
+        assert out == "The answer is 42."
 
     def test_extra_headers_merged(self):
         captured: dict = {}

@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +37,36 @@ import urllib.request
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 300
+
+# Reasoning ("thinking") models sometimes inline their chain-of-thought in the
+# message content as <think>…</think> (or <thinking>/<reasoning>) rather than
+# splitting it into a separate `reasoning_content` field. We only ever want the
+# final answer, so strip those blocks. Endpoints that already separate reasoning
+# never hit this; plain answers contain no such tags and pass through unchanged.
+_THINK_TAGS = ("think", "thinking", "reason", "reasoning")
+_THINK_BLOCK_RE = re.compile(
+    r"<(" + "|".join(_THINK_TAGS) + r")\b[^>]*>.*?</\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+_THINK_CLOSE_RE = re.compile(
+    r"</(?:" + "|".join(_THINK_TAGS) + r")\s*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Remove inline reasoning blocks from model output. Idempotent and safe on
+    normal answers (no tags → returned unchanged apart from surrounding whitespace)."""
+    if not text:
+        return text
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    # Some servers drop the opening tag and return "<reasoning…></think>answer"
+    # or "reasoning…</think>answer" — a dangling close with no matching open.
+    # Everything up to and including the last such close tag is reasoning.
+    matches = list(_THINK_CLOSE_RE.finditer(cleaned))
+    if matches:
+        cleaned = cleaned[matches[-1].end():]
+    return cleaned.strip()
 
 # Env-var names mirror the NORA_STANDARDS_SOURCE pattern.
 ENV_BASE_URL = "NORA_LLM_BASE_URL"
@@ -169,7 +200,7 @@ class OpenAICompatibleProvider:
                 f"LLM returned no choices: {json.dumps(data)[:400]}"
             )
         message = choices[0].get("message") or {}
-        content = message.get("content", "") or ""
+        content = _strip_reasoning(message.get("content", "") or "")
 
         usage = data.get("usage") or {}
         eval_count = int(usage.get("completion_tokens", 0) or 0)
