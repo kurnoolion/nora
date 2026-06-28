@@ -155,12 +155,14 @@ service_python="${SVC_PY_OPT:-${NORA_STACK_SERVICE_PYTHON:-python}}"
 web_python="${WEB_PY_OPT:-${NORA_STACK_WEB_PYTHON:-python}}"
 
 # Import-check a python in the env an activate script would set up (run in a
-# subshell so the source doesn't leak). Returns the python's exit status.
+# subshell so the source doesn't leak). Prints the diagnostic (stdout+stderr)
+# and returns the underlying status, so the caller can SURFACE the real cause.
 check_imports() { # <activate-or-empty> <python> <modules>
     ( set +u
       [[ -n "$1" ]] && source "$1"
       set -u
-      "$2" -c "import ${3// /, }" ) >/dev/null 2>&1
+      command -v "$2" >/dev/null 2>&1 || { echo "python '$2' not found on PATH"; exit 127; }
+      "$2" -c "import ${3// /, }" ) 2>&1
 }
 
 if [[ $DRY -eq 0 ]]; then
@@ -169,14 +171,25 @@ if [[ $DRY -eq 0 ]]; then
         || { echo "error: --service-activate '$service_activate' not found" >&2; exit 1; }
     [[ -z "$web_activate" || -f "$web_activate" ]] \
         || { echo "error: --web-activate '$web_activate' not found" >&2; exit 1; }
-    check_imports "$service_activate" "$service_python" "uvicorn fastapi bm25x" || {
-        echo "error: SIRA service env can't import uvicorn/fastapi/bm25x." >&2
-        echo "       Check --service-activate (default sandbox/activate.sh) + the SIRA venv." >&2
-        exit 1; }
-    check_imports "$web_activate" "$web_python" "fastapi" || {
-        echo "error: NORA web env can't import fastapi." >&2
-        echo "       Run from the NORA venv, or pass --web-activate / --web-python." >&2
-        exit 1; }
+    if ! out=$(check_imports "$service_activate" "$service_python" "uvicorn fastapi bm25x"); then
+        { echo "error: SIRA service env can't import uvicorn/fastapi/bm25x —"
+          echo "  activate = ${service_activate:-<none>}"
+          echo "  python   = $service_python"
+          printf '%s\n' "$out" | sed 's/^/  | /'
+          echo "  reproduce: source ${service_activate:-/dev/null} && $service_python -c 'import uvicorn,fastapi,bm25x'"
+          echo "  (if your deps are in ONE venv, run from it and pass --service-activate none;"
+          echo "   if bm25x is missing, rebuild: cd sandbox/sira/src/sira/bm25x/python && maturin develop --release)"
+        } >&2
+        exit 1
+    fi
+    if ! out=$(check_imports "$web_activate" "$web_python" "fastapi"); then
+        { echo "error: NORA web env can't import fastapi —"
+          echo "  activate = ${web_activate:-<none>}  python = $web_python"
+          printf '%s\n' "$out" | sed 's/^/  | /'
+          echo "  (run from the NORA venv, or pass --web-activate / --web-python)"
+        } >&2
+        exit 1
+    fi
     mkdir -p "$sdir" "$log_dir"
 fi
 
