@@ -36,6 +36,12 @@
 #                  Each overrides its $NORA_*_DB env var. Point --feedback-db at
 #                  one shared path across both stacks to POOL A/B feedback (rows
 #                  carry llm_model). Precedence: flag > env var > default.
+#   --service-python PATH  python for the SIRA service (default: `python`).
+#   --web-python     PATH  python for the NORA web (default: `python`).
+#                  The service usually needs the trimmed SIRA venv (bm25x) and
+#                  the web the full NORA venv (fastapi etc.) — point each at its
+#                  venv's bin/python if they differ. Override $NORA_STACK_
+#                  SERVICE_PYTHON / $NORA_STACK_WEB_PYTHON.
 #   --dry-run      print the env + commands without launching.
 #
 # Env overrides (optional):
@@ -53,7 +59,10 @@
 #                              best left per-stack (independent /config page).
 #
 # Notes:
-#   * Run from your SIRA venv (python + uvicorn on PATH).
+#   * The service and web often need DIFFERENT venvs (service: trimmed SIRA venv
+#     with bm25x; web: full NORA venv with fastapi). Point --service-python /
+#     --web-python at each. If one venv has BOTH, just run from it (default
+#     `python`). A preflight import-checks each before launching.
 #   * Config is read at IMPORT time, so each process is pinned to its launch
 #     env — that's why parallel stacks need separate processes, which this does.
 #   * Path-B requires rerank OFF on the service; this sets NORA_SIRA_RERANK_ENABLED=false.
@@ -69,6 +78,7 @@ usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 
 DRY=0; STOP=0; STOP_LABEL=""
 STATE_DIR_OPT=""; LOG_DIR_OPT=""
 JOBS_DB_OPT=""; METRICS_DB_OPT=""; FEEDBACK_DB_OPT=""; CONFIG_DB_OPT=""
+SVC_PY_OPT=""; WEB_PY_OPT=""
 POS=()
 # Options may appear ANYWHERE — before or after the positional args. An
 # unrecognized --flag is a hard error (a typo like --logs-dir won't be silently
@@ -82,6 +92,8 @@ while [[ $# -gt 0 ]]; do
         --metrics-db)  METRICS_DB_OPT="${2:?--metrics-db needs a path}"; shift 2;;
         --feedback-db) FEEDBACK_DB_OPT="${2:?--feedback-db needs a path}"; shift 2;;
         --config-db)   CONFIG_DB_OPT="${2:?--config-db needs a path}"; shift 2;;
+        --service-python) SVC_PY_OPT="${2:?--service-python needs a path}"; shift 2;;
+        --web-python)  WEB_PY_OPT="${2:?--web-python needs a path}"; shift 2;;
         --dry-run)     DRY=1; shift;;
         --help|-h)     usage 0;;
         --*) echo "unknown option: $1 (did you mean --log-dir / --state-dir ?)" >&2; usage 2;;
@@ -131,8 +143,23 @@ metrics_db="${METRICS_DB_OPT:-${NORA_METRICS_DB:-$sdir/metrics.db}}"
 feedback_db="${FEEDBACK_DB_OPT:-${NORA_FEEDBACK_DB:-$sdir/feedback.db}}"
 config_db="${CONFIG_DB_OPT:-${NORA_CONFIG_DB:-$sdir/config.db}}"
 
+# The SIRA service and the NORA web usually need DIFFERENT venvs (service needs
+# bm25x from the trimmed SIRA venv; web needs the full NORA stack incl. fastapi).
+# Point each at its venv's python; precedence: flag > env var > `python`.
+service_python="${SVC_PY_OPT:-${NORA_STACK_SERVICE_PYTHON:-python}}"
+web_python="${WEB_PY_OPT:-${NORA_STACK_WEB_PYTHON:-python}}"
+
 if [[ $DRY -eq 0 ]]; then
     [[ -d "$db_root" ]] || { echo "error: db_root not found: $db_root" >&2; exit 1; }
+    # Fail fast on the wrong venv (else you only find out from the log).
+    "$service_python" -c 'import uvicorn, fastapi' 2>/dev/null || {
+        echo "error: service python '$service_python' can't import uvicorn/fastapi." >&2
+        echo "       Pass --service-python <sira-venv>/bin/python (the venv with bm25x)." >&2
+        exit 1; }
+    "$web_python" -c 'import fastapi' 2>/dev/null || {
+        echo "error: web python '$web_python' can't import fastapi." >&2
+        echo "       Pass --web-python <nora-venv>/bin/python (the full NORA venv)." >&2
+        exit 1; }
     mkdir -p "$sdir" "$log_dir"
 fi
 
@@ -152,13 +179,13 @@ if [[ $DRY -eq 1 ]]; then
 NORA_SIRA_DB_ROOT=$db_root NORA_SIRA_DOC_ENRICH_RUN=$enrich_run \\
 NORA_SIRA_RERANK_ENABLED=false \\
 NORA_LLM_SHIM_URL=$llm_base NORA_LLM_MODEL=$llm_model \\
-  uvicorn sandbox.sira_query.service:app --port $svc_port
+  $service_python -m uvicorn sandbox.sira_query.service:app --port $svc_port
 
 # NORA web  → $web_log
 NORA_SIRA_QUERY_URL=http://127.0.0.1:$svc_port NORA_SIRA_SYNTH_MODE=llm-select \\
 NORA_LLM_PROVIDER=$provider NORA_LLM_BASE_URL=$llm_base/v1 \\
 NORA_LLM_MODEL=$llm_model NORA_LLM_API_KEY=${api_key:+<set>} \\
-  python -m core.src.web.app --port $web_port \\
+  $web_python -m core.src.web.app --port $web_port \\
     --jobs-db $jobs_db --metrics-db $metrics_db \\
     --feedback-db $feedback_db --config-db $config_db
 EOF
@@ -187,10 +214,13 @@ write_header() {
         echo "  state_dir     = $sdir"
         echo "  log_dir       = $log_dir"
         if [[ "$role" == web ]]; then
+            echo "  python        = $web_python"
             echo "  jobs-db       = $jobs_db"
             echo "  metrics-db    = $metrics_db"
             echo "  feedback-db   = $feedback_db"
             echo "  config-db     = $config_db"
+        else
+            echo "  python        = $service_python"
         fi
         echo "[NORA/SIRA env set in this process]"
         { env | grep -E '^(NORA_|SIRA_)' || true; } \
@@ -211,7 +241,7 @@ cd "$REPO_ROOT"
     export NORA_LLM_MODEL="$llm_model"
     [[ -n "$api_key" ]] && export NORA_SIRA_RERANK_LLM_API_KEY="$api_key"
     write_header service "$svc_log"
-    nohup uvicorn sandbox.sira_query.service:app --port "$svc_port" \
+    nohup "$service_python" -m uvicorn sandbox.sira_query.service:app --port "$svc_port" \
         >> "$svc_log" 2>&1 &
     echo $! > "$sdir/service.pid"
 )
@@ -225,7 +255,7 @@ cd "$REPO_ROOT"
     export NORA_LLM_MODEL="$llm_model"
     [[ -n "$api_key" ]] && export NORA_LLM_API_KEY="$api_key"
     write_header web "$web_log"
-    nohup python -m core.src.web.app --port "$web_port" \
+    nohup "$web_python" -m core.src.web.app --port "$web_port" \
         --jobs-db "$jobs_db" \
         --metrics-db "$metrics_db" \
         --feedback-db "$feedback_db" \
