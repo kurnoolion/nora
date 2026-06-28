@@ -61,6 +61,10 @@
             </label>
           </div>
           {% if team_restricted %}
+          {# Disabled checkboxes aren't submitted (FormData skips them), so carry
+             the locked SIRA lane in a hidden input — passes the client-side
+             "at least one lane" check and the POST. Server also force-sets it. #}
+          <input type="hidden" name="lanes" value="sira">
           <div class="form-text">SIRA-only eval (lane selection locked).</div>
           {% endif %}
           <div class="form-text">
