@@ -100,13 +100,15 @@ class TestConstruction:
         with pytest.raises(ValueError, match="base_url"):
             OpenAICompatibleProvider(model="m", api_key="sk")
 
-    def test_missing_api_key_raises(self, monkeypatch):
+    def test_missing_api_key_allowed(self, monkeypatch):
+        # Keyless construction is valid — self-hosted OpenAI-compat servers
+        # (vLLM, sglang, Ollama) commonly need no auth.
         for v in (ENV_BASE_URL, ENV_API_KEY, ENV_MODEL):
             monkeypatch.delenv(v, raising=False)
-        with pytest.raises(ValueError, match="api_key"):
-            OpenAICompatibleProvider(
-                model="m", base_url="https://example.test/v1"
-            )
+        p = OpenAICompatibleProvider(
+            model="m", base_url="https://example.test/v1"
+        )
+        assert p is not None
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +167,16 @@ class TestComplete:
         # urllib lowercases header keys when stored on Request.
         auth = captured["headers"].get("Authorization") or captured["headers"].get("authorization")
         assert auth == "Bearer sk-test"
+
+    def test_no_authorization_header_when_keyless(self, monkeypatch):
+        for v in (ENV_BASE_URL, ENV_API_KEY, ENV_MODEL):
+            monkeypatch.delenv(v, raising=False)
+        captured: dict = {}
+        with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
+            p = OpenAICompatibleProvider(model="m", base_url="https://example.test/v1")
+            p.complete("ping")
+        auth = captured["headers"].get("Authorization") or captured["headers"].get("authorization")
+        assert auth is None
 
     def test_extra_headers_merged(self):
         captured: dict = {}

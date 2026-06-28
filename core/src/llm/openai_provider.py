@@ -52,6 +52,8 @@ class OpenAICompatibleProvider:
         base_url: API root URL ending in `/v1` (e.g. https://openrouter.ai/api/v1).
             Falls back to NORA_LLM_BASE_URL env var if None.
         api_key: Bearer token. Falls back to NORA_LLM_API_KEY env var if None.
+            Optional — when empty, no Authorization header is sent (for
+            self-hosted endpoints that accept unauthenticated requests).
         timeout: Per-request timeout in seconds (default: 300; cloud LLMs need it).
         extra_headers: Optional headers merged into every request (e.g. OpenRouter's
             HTTP-Referer / X-Title for analytics).
@@ -80,15 +82,13 @@ class OpenAICompatibleProvider:
                 f"OpenAICompatibleProvider needs `base_url` "
                 f"(constructor arg or {ENV_BASE_URL} env var)."
             )
-        if not resolved_api_key:
-            raise ValueError(
-                f"OpenAICompatibleProvider needs `api_key` "
-                f"(constructor arg or {ENV_API_KEY} env var)."
-            )
+        # api_key is optional: self-hosted OpenAI-compat servers (vLLM, sglang,
+        # Ollama, llama.cpp) commonly accept unauthenticated requests. When
+        # empty we simply omit the Authorization header (see `complete`).
 
         self._model = resolved_model
         self._base_url = resolved_base_url.rstrip("/")
-        self._api_key = resolved_api_key
+        self._api_key = resolved_api_key or ""
         self._timeout = timeout
         self._extra_headers = dict(extra_headers or {})
         self._call_count = 0
@@ -123,10 +123,13 @@ class OpenAICompatibleProvider:
 
         body = json.dumps(payload).encode("utf-8")
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             **self._extra_headers,
         }
+        # Only authenticate when a key is configured; keyless endpoints reject
+        # (or ignore) a bogus `Bearer ` header.
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         req = urllib.request.Request(
             f"{self._base_url}/chat/completions",
             data=body,
