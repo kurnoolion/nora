@@ -19,7 +19,7 @@
 #   <llm_model>    model name for both query-enrich and synthesis
 #   [api_key]      optional bearer key for the LLM endpoint
 #
-# OPTIONS (any order, before the positional args):
+# OPTIONS (any order, before OR after the positional args):
 #   --state-dir DIR  base dir for per-stack state (pids + DBs); the stack lands
 #                  under <DIR>/<label>/. Overrides $NORA_STACK_STATE_DIR.
 #                  Default: /tmp/nora-stacks. (Pass the same --state-dir to
@@ -69,7 +69,11 @@ usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 
 DRY=0; STOP=0; STOP_LABEL=""
 STATE_DIR_OPT=""; LOG_DIR_OPT=""
 JOBS_DB_OPT=""; METRICS_DB_OPT=""; FEEDBACK_DB_OPT=""; CONFIG_DB_OPT=""
-while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
+POS=()
+# Options may appear ANYWHERE — before or after the positional args. An
+# unrecognized --flag is a hard error (a typo like --logs-dir won't be silently
+# ignored). Positionals are collected and restored after the loop.
+while [[ $# -gt 0 ]]; do
     case "$1" in
         --stop)        STOP=1; STOP_LABEL="${2:?--stop needs a <label>}"; shift 2;;
         --state-dir)   STATE_DIR_OPT="${2:?--state-dir needs a path}"; shift 2;;
@@ -80,9 +84,11 @@ while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
         --config-db)   CONFIG_DB_OPT="${2:?--config-db needs a path}"; shift 2;;
         --dry-run)     DRY=1; shift;;
         --help|-h)     usage 0;;
-        *) echo "unknown option: $1" >&2; usage 2;;
+        --*) echo "unknown option: $1 (did you mean --log-dir / --state-dir ?)" >&2; usage 2;;
+        *) POS+=("$1"); shift;;
     esac
 done
+if [[ ${#POS[@]} -gt 0 ]]; then set -- "${POS[@]}"; else set --; fi
 
 # state base: --state-dir > $NORA_STACK_STATE_DIR > /tmp/nora-stacks
 STATE_BASE="${STATE_DIR_OPT:-${NORA_STACK_STATE_DIR:-/tmp/nora-stacks}}"
