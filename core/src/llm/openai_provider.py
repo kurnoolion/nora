@@ -57,8 +57,11 @@ _THINK_CLOSE_RE = re.compile(
 # answer, with no <think> delimiter to match. For those, a prompt can instruct
 # the model to print this marker on its own line just before the final answer;
 # _strip_reasoning then drops everything up to (and including) the last marker.
-# Harmless when absent. Prompts that opt in must use this exact literal.
-FINAL_ANSWER_MARKER = "===FINAL_ANSWER==="
+# Harmless when absent. Prompts that opt in must use this exact literal — they
+# import this constant, so overriding it via NORA_LLM_FINAL_ANSWER_MARKER keeps
+# the prompt instruction and the strip in sync. Set it empty to disable.
+ENV_FINAL_ANSWER_MARKER = "NORA_LLM_FINAL_ANSWER_MARKER"
+FINAL_ANSWER_MARKER = os.getenv(ENV_FINAL_ANSWER_MARKER, "===FINAL_ANSWER===")
 
 
 def _strip_reasoning(text: str) -> str:
@@ -69,9 +72,11 @@ def _strip_reasoning(text: str) -> str:
     if not text:
         return text
     # Sentinel wins — it's the only reliable signal for untagged reasoning.
-    marker_at = text.rfind(FINAL_ANSWER_MARKER)
-    if marker_at != -1:
-        text = text[marker_at + len(FINAL_ANSWER_MARKER):]
+    # Skip when disabled (empty marker) so we never strip on an empty rfind.
+    if FINAL_ANSWER_MARKER:
+        marker_at = text.rfind(FINAL_ANSWER_MARKER)
+        if marker_at != -1:
+            text = text[marker_at + len(FINAL_ANSWER_MARKER):]
     cleaned = _THINK_BLOCK_RE.sub("", text)
     # Some servers drop the opening tag and return "<reasoning…></think>answer"
     # or "reasoning…</think>answer" — a dangling close with no matching open.
