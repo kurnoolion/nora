@@ -545,47 +545,6 @@ assuming globally-unique ids (false across cells).
 
 ---
 
-## D-DRAFT-11 — Per-cell vectorstore + NORA query-side cell routing & fusion
-
-**Context:** D-DRAFT-6 makes `vectorstore` per cell
-(`out/vectorstore/<mno>/<rel>/`). NORA's query pipeline today loads **one**
-ChromaDB collection and builds an in-memory BM25 over the whole store. Per-cell
-stores isolate BM25 IDF / DF statistics (the dense component is
-statistics-agnostic) and enable balanced fusion for cross-MNO comparison and
-release-diff — mirroring SIRA D-DRAFT-3 (per-cell index) + D-DRAFT-4 (composite
-identity) + D-DRAFT-7 (runtime cell-dict).
-
-**Decision:** Build **one vector store + BM25 per cell**. The NORA query pipeline
-becomes **cell-aware**: resolve query scope → select target cell(s) → retrieve per
-cell → merge into one candidate pool keyed on the **composite
-`(mno, release, chunk_id)`** (chunk ids stay cell-local) → rerank → synthesize.
-The global graph supplies scope / candidate routing (which cells + plans);
-per-cell stores supply retrieval. "Latest release" / release-diff resolve
-structurally over cell order (MMMYYYY).
-
-**Why:** Per-cell isolates BM25 statistics (avoids the cross-cell IDF blending
-that buries the low-frequency release-diff signal — SIRA D-DRAFT-3 rationale,
-which applies to NORA's BM25-hybrid component); the composite identity keeps R2's
-and R3's same `req_id` distinct (citation + release-diff need this — SIRA
-D-DRAFT-4); and it mirrors SIRA's runtime cell-dict so the two systems share one
-model. Rejected: single store + `(mno,release)` metadata filter (simpler, but
-blends BM25 statistics and gives no structural release-diff — diverges from SIRA);
-per-MNO store (loses the release axis).
-
-**Consequences:**
-- **This expands the strand into the query side.** `vectorstore` builds per cell;
-  the `query` pipeline gains scope → cell-select → per-cell retrieve → merge →
-  rerank, threading `(mno, release)` on every retrieved chunk (a path that drops
-  the cell tag silently corrupts comparison answers); BM25 is built per cell;
-  query/service startup scales with cell count.
-- Unblocks the deferred `QueryType.COMPARISON`.
-- `eval` becomes cell-aware (consumes per-cell stores) though its output stays
-  global.
-- Larger surface than ingestion alone — **sequence after the ingestion decisions
-  (D-DRAFT-6..10) land.**
-
----
-
 ## D-DRAFT-12 — SIRA adapter reads nested `out/parse/<mno>/<rel>/`
 
 **Context:** The SIRA adapter (`sandbox/adapter/nora_to_beir.py`) discovers NORA
@@ -717,37 +676,6 @@ default + fallback behind the flag.
 - Requires the SIRA service run with `NORA_SIRA_RERANK_ENABLED=false` so the
   returned top_k is BM25 (else the reranker re-introduces the drop).
 - Open: whether Path-B replaces the rerank lane or stays opt-in (decide after eval).
-
-## D-DRAFT-16 — Balanced pin: round-robin SIRA-pinned chunks across cells for synthesis
-
-**Context:** The merged SIRA lane pins the top SIRA results to NORA's
-synthesizer via a score-based filter. For a cross-MNO query the highest-scoring
-cell took ~all pin slots (the same cross-cell score-skew as the SIRA fusion
-problem), so the synthesizer only saw one MNO and produced a one-sided answer.
-
-**Decision:** Add `NORA_SIRA_PIN_MODE=balanced` (default `rerank-topk` =
-unchanged score filter). In balanced mode `_select_pinned_chunks` round-robins
-across `(mno, release)` cells (in-cell rerank order) up to `NORA_SIRA_PIN_MAX`
-(default 16, sized for the 32K synth context), so every resolved cell is
-represented in the pinned set; the synthesizer does final relevance over the
-balanced set. The `/test` caption is mode-aware.
-
-**Why:** A pure score filter can't represent "both MNOs" when one corpus
-out-scores the other. Round-robin guarantees representation while keeping
-in-cell rerank order. Pairs with SIRA's balanced fusion (multi-mno-sira
-D-DRAFT-16) — but found **insufficient alone**: SIRA's own top_k cut starves the
-input before NORA pins it, so both layers are needed (this fixes what survives
-to synth; the SIRA fusion fixes what SIRA returns). Largely superseded for the
-band-query use case by Path-B (D-DRAFT-14), which doesn't pin-by-score at all;
-kept for the rerank-pin lane.
-
-**Consequences:**
-- New `_balanced_pin` + `_PIN_MODE`/`_PIN_MAX` knobs; two `/test` context sites
-  + the caption carry `sira_pin_mode`/`sira_pin_max`.
-- Balanced mode ignores the score floor/threshold — representation over strict
-  relevance, by design for comparison queries.
-- Numbered D-DRAFT-16 (not 15) to match pre-existing code + cross-strand
-  references; a coordinated pair with multi-mno-sira's D-DRAFT-16.
 
 ## D-DRAFT-17 — Per-model reasoning sentinel for select-synth (untagged chain-of-thought)
 
