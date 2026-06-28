@@ -543,3 +543,60 @@
   lose rows past the cap (re-chunking is the deeper fix).
 - Two flaky tests to ticket: `MockEmbedder` hash-seed (`test_query`) + asyncio
   event-loop isolation (`test_playground_helpers`).
+
+## 2026-06-28 — select-synth productionization: keyless provider, per-model reasoning sentinel, rename
+
+### Done this session
+- **Keyless OpenAI-compatible provider** (`9100556`): `OpenAICompatibleProvider`
+  mandated `api_key` at construction, so a no-auth endpoint raised `ValueError`
+  and the pipeline runner silently fell back to `MockLLMProvider` (canned
+  answers). This was the *actual* cause of the "LLM calls failing / can't find
+  NORA_LLM_*" report — the SIRA service was fine (`shim_url` correct,
+  `/sira-query` 200); the **web** provider was the culprit. Made `api_key`
+  optional; omit the `Authorization` header when empty. Tests: keyless
+  construction allowed, no-header-when-keyless, with-key path unchanged.
+- **Reasoning-leak handling for select-synth** (`6250e96`, `45fd4d1`, `4a720b5`,
+  `60c188c`): the proprietary "thinking" LLM leaked chain-of-thought into
+  answers; Qwen3/Gemma did not. Diagnosis ladder: `_strip_reasoning` for
+  `<think>` tags first; then an opt-in raw dump (`NORA_LLM_DEBUG_RAW`, repr-level,
+  OFF by default to keep model output out of logs) proved the model emits
+  **untagged** CoT (no tags, empty `reasoning_content`). Fix: a final-answer
+  sentinel (`===FINAL_ANSWER===`) — the select-synth prompt instructs the model
+  to print it, `_strip_reasoning` drops everything before the last occurrence.
+  Gated **per-model** by `NORA_LLM_REASONING_SENTINEL` (default off — most models
+  skip thinking natively and shouldn't have output reshaped); the prompt
+  instruction and the strip move together off one switch (the prompt imports the
+  flag). Superseded a brief configurable-marker-text attempt (`7d74aee`) after
+  the user clarified they wanted an on/off toggle, not a configurable string.
+  → D-DRAFT-17.
+- **`Path-B → select-synth` rename** (`c89ac72`): "Path-B" named nothing; renamed
+  to state the function — the LLM **selects** relevant chunks and **synth**esizes
+  in one call. Symbols `_PATHB_*`/`_pathb_*` → `_SELECT_SYNTH_*`/`_select_synth_*`;
+  env vars `NORA_SIRA_PATHB_*` → `NORA_SIRA_SELECT_SYNTH_*` (legacy read with a
+  deprecation log); `NORA_SIRA_SYNTH_MODE` accepts `select-synth` (legacy
+  `llm-select` still enables via the new `_SELECT_SYNTH_ENABLED` flag). Startup
+  log surfaces `reasoning_sentinel=<bool>` per stack.
+
+### In progress
+- Qwen3-vs-proprietary A/B is operational: both stacks keyless + select-synth;
+  the proprietary stack runs with the sentinel on; the pooled feedback DB
+  (`llm_model` column) keeps rows attributable per model.
+
+### Next
+- Band-chunk verification: confirm select-synth selects + cites the FR2 "SA NR"
+  chunk, then compare the two LLMs via the feedback DB (`GROUP BY llm_model`).
+- `regen-map` for the renamed select-synth helpers + `drift-check dev-full`
+  (still deferred — see Flags).
+- Decide select-synth default-vs-opt-in after the eval.
+
+### Flags
+- **Token-waste caveat:** the sentinel *extracts* the answer but the model still
+  *generates* the thinking, which counts against `max_tokens` (4096) — long
+  reasoning could truncate the answer. Cleaner fix is native thinking-disable
+  (e.g. `chat_template_kwargs={"enable_thinking": false}` / `/no_think`), which
+  needs provider `extra_body` support — not built.
+- `decisions-draft.md` still names the old `_pathb_*` symbols (historical draft
+  body) — reconcile at land time.
+- Carried: `regen-map` / `drift-check` deferred (now also the select-synth
+  rename); two flaky tests to ticket (`MockEmbedder` hash-seed, asyncio
+  event-loop isolation).

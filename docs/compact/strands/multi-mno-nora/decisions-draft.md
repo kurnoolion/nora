@@ -748,3 +748,47 @@ kept for the rerank-pin lane.
   relevance, by design for comparison queries.
 - Numbered D-DRAFT-16 (not 15) to match pre-existing code + cross-strand
   references; a coordinated pair with multi-mno-sira's D-DRAFT-16.
+
+## D-DRAFT-17 — Per-model reasoning sentinel for select-synth (untagged chain-of-thought)
+
+**Context:** select-synth makes one LLM call that selects + synthesizes. A
+proprietary "thinking" LLM emitted its chain-of-thought *into* the answer
+content; Qwen3/Gemma did not (they skip thinking natively or split it into a
+`reasoning_content` field we don't read). An opt-in raw dump
+(`NORA_LLM_DEBUG_RAW`) proved the proprietary model's CoT is **untagged** — no
+`<think>` tags, empty `reasoning_content` — so tag/pattern stripping has nothing
+to match.
+
+**Decision:** A final-answer **sentinel**, gated per model by
+`NORA_LLM_REASONING_SENTINEL` (default off). When on: (a) the select-synth
+system prompt instructs the model to print a line containing exactly
+`===FINAL_ANSWER===` before its answer, and (b)
+`OpenAICompatibleProvider._strip_reasoning` drops everything up to the *last*
+marker occurrence. The marker constant and the flag live in the provider and are
+imported by the prompt builder, so the instruction and the strip cannot drift.
+`<think>`-tag stripping stays always-on (harmless when absent). The toggle is
+read per process → naturally per-stack; `run_stack.sh` exposes
+`--reasoning-sentinel`.
+
+**Why:** Untagged CoT can't be split structurally and the boundary isn't
+otherwise discoverable, so we *make* it explicit via the prompt. Per-model
+opt-in (not global) because most models skip thinking natively and shouldn't
+have output reshaped — a stray marker inside reasoning is mitigated by taking
+the LAST occurrence. Chosen over: native thinking-disable
+(`chat_template_kwargs={"enable_thinking": false}` / `/no_think`) — cleanest but
+depends on the proprietary server's unknown API and needs provider `extra_body`
+support; and over relying on `reasoning_content` — the endpoint leaves it empty.
+A brief configurable-marker-*text* design was reverted once the user clarified
+they wanted an on/off switch, not a configurable string.
+
+**Consequences:**
+- Provider gains `FINAL_ANSWER_MARKER` (fixed) + `REASONING_SENTINEL_ENABLED`
+  (env) + sentinel logic in `_strip_reasoning`; the select-synth prompt appends
+  the instruction only when enabled; startup log shows `reasoning_sentinel=<bool>`.
+- **Token-waste / truncation risk:** the model still *generates* the thinking
+  (counts against `max_tokens`); long reasoning could truncate the answer. The
+  cleaner native-disable fix is deferred (needs provider `extra_body`).
+- A/B integrity: enabling the sentinel only on the stack that needs it keeps
+  retrieval+synthesis otherwise identical across the Qwen3-vs-proprietary
+  comparison.
+- Renumbers to a canonical D-XXX at land.
