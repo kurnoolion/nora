@@ -651,3 +651,44 @@ present, never reached). Operators who want to point SIRA at a
 non-localhost endpoint without per-stage routing now have no path
 other than setting both env vars to the same URL — which works
 fine but is mildly awkward.
+
+## D-DRAFT-18 — Team-eval access gate: single instance, env flag + admin-token cookie (not reverse-proxy auth / two instances)
+
+**Context:** For the team eval we needed two things on the web app: (1) team
+members see only the `/test` page (not the admin tools — parse, corrections,
+jobs, config, …), and (2) the test page runs the SIRA lane only (NORA's retrieval
+is known-weak and excluded from eval), while the architect still has full access
+to everything. The app had no auth at all.
+
+**Decision:** A single deployment gated by `NORA_WEB_TEAM_MODE` (default off =
+no-op). When on, `TeamModeMiddleware` whitelists `/test` + `/api/test` + `/static`
++ health and redirects everything else to `/test`; the test page is SIRA-locked
+(disabled checkboxes + a hidden `lanes=sira` input + server-side force
+`lanes=["sira"]` in both ask handlers). The admin unlocks the full app **for their
+own browser** by visiting `/admin-unlock?token=<NORA_WEB_ADMIN_TOKEN>`, which sets
+an HttpOnly cookie checked on every request (`is_admin` / `team_restricted` in a
+new `core/src/web/team_mode.py`). Same URL for everyone; the cookie flips access
+and the page UI (lane lock + description) per request.
+
+**Why:** Single-instance + cookie keeps it one deployment, one URL, no extra
+process to run — and the lock is enforced server-side (UI disabling alone is
+bypassable). Rejected: **reverse-proxy auth** (no app code, but pushes config onto
+the proxy the architect manages, and we wanted the lane-lock + per-role UI in the
+app anyway); **two instances** (a team-mode instance + a full instance) — simplest
+code but operationally heavier and the architect explicitly wanted one URL with
+per-role behavior. Defense-in-depth on the lane lock (template + hidden input +
+server force) because each layer alone is insufficient (disabled inputs don't
+submit; a crafted POST bypasses the UI).
+
+**Consequences:**
+- New persistent surface: `NORA_WEB_TEAM_MODE`, `NORA_WEB_ADMIN_TOKEN`, the
+  `nora_admin` cookie, `team_mode.py`, `TeamModeMiddleware`, the `/admin-unlock`
+  route. `team_restricted(request)` is now threaded into the `/test` render +
+  both ask handlers.
+- **Security caveat (documented):** the cookie carries the admin token (HttpOnly);
+  fine for an internal eval with one trusted admin, NOT real auth on an untrusted
+  network — pair with HTTPS + the production reverse proxy. The token also rides
+  in the unlock URL (treat as secret, use HTTPS).
+- The progress display had to become server-authoritative (the client can't be
+  trusted to know the forced lanes) — see the `lanes` SSE event.
+- Renumbers to a canonical D-XXX at land.

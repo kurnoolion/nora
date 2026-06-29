@@ -396,3 +396,53 @@ Two distinct waves landed today plus the morning's TODO pointer:
   clone reset (`git checkout -- scripts/`) before `install_configs.sh`
   re-applies. Documented in SETUP.md troubleshooting. Worth flagging
   again if anyone else pulls and hits the skip-on-sentinel surprise.
+
+## 2026-06-29 — Team-mode gate (SIRA-only for team, full app for admin) + test-page accuracy
+
+### Done this session
+- **Team-mode access gate** (`5af9c2b`): `NORA_WEB_TEAM_MODE` + `TeamModeMiddleware`
+  (new `core/src/web/team_mode.py`). Team members are restricted to `/test`
+  (+`/api/test`, `/static`, health); every other path → redirect to `/test`. The
+  test page is **SIRA-locked**: NORA checkbox disabled+unchecked, SIRA
+  checked+disabled, a hidden `lanes=sira` input, AND the ask handlers force
+  `lanes=["sira"]` server-side (defense in depth — a crafted POST can't run NORA).
+  The admin unlocks the full app for their browser via
+  `/admin-unlock?token=<NORA_WEB_ADMIN_TOKEN>` → HttpOnly cookie. No-op when the
+  flag is off. → D-DRAFT-18.
+- **Hidden-input fix** (`f142c11`): disabled checkboxes aren't submitted in
+  FormData, so the locked SIRA lane is carried by a hidden input (passes the
+  client-side "≥1 lane" check + the POST).
+- **Test-page accuracy after the select-synth rename** (`13cf588`): the SIRA
+  caption gated "no rerank" on the stale `sira_synth_mode == 'llm-select'` (value
+  is now `select-synth`) → was wrongly showing "N reranked · pinned to synth" +
+  the old "Path-B" badge; accept `select-synth`, rename badge. `_filter_sira_notes`
+  suppresses the expected "rerank disabled" ⚠ in select-synth (rerank-off is by
+  design there, not a fault). Conditional `/test` description (`9f6e64b`): team
+  sees a SIRA-only blurb, admin sees the "selected lane(s)" version.
+- **Authoritative-lanes progress** (`df61234`): the SSE stream emits a `lanes`
+  event first with the lanes the server actually runs; the client renders the
+  progress rows from that, not the submitted form.
+- **`Cache-Control: no-cache` on `/test`** (`38e8940`): the progress logic ships
+  inline in the page, so a cached copy served stale JS until a hard-refresh;
+  no-cache makes the browser revalidate every load. Test asserts the header.
+
+### In progress
+- Nothing active — team eval for 2 MNOs is operational and the gate is live.
+
+### Next
+- (Cross-strand) MNO-C onboarding moves to a new `mno-c-ingestion` strand, then
+  `multi-mno-sira` for the 3-way verification. Not this strand's work.
+- Eventually: land team-eval-pilot once the eval round wraps (it carries 18 drafts).
+
+### Flags
+- **Cosmetic: NORA progress row still spins in team view.** The authoritative-
+  lanes fix + no-cache header are in place, but the user still sees the NORA
+  spinner. **NORA does NOT actually run** — the server force-locks `lanes=["sira"]`
+  — so it's a misleading UI element, not execution. Most likely the client is
+  still receiving stale JS via a layer above the browser cache (reverse proxy
+  caching `/test`, or the web process serving a cached template). Parked as
+  non-critical; revisit by confirming the served page contains the `lanes`-event
+  handler (`parsed.event === "lanes"`) and, if not, purging the proxy / verifying
+  the web restarted on current code.
+- Strand still carries the `nora_test_feedback.db` schema overlaps (citations_json
+  vs cited_ids etc.) noted in earlier drafts — reconcile at land.
