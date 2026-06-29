@@ -79,3 +79,20 @@ def test_build_sections_blurb_includes_label():
     assert "VZW Feb2026 requirements" in bot["blurb"]
     # Hardcoded "VZW OA" must not slip back in.
     assert "OA" not in bot["blurb"]
+
+
+def test_test_page_sets_no_cache_header(monkeypatch):
+    """The /test page must send Cache-Control: no-cache so the team gets the
+    latest inline progress JS on a normal refresh (no manual hard-refresh)."""
+    import asyncio
+    from types import SimpleNamespace
+    from starlette.responses import HTMLResponse
+    from core.src.web.routes import playground as pg
+
+    monkeypatch.setattr(
+        "core.src.web.app._template_response",
+        lambda request, name, ctx: HTMLResponse("<html></html>"),
+    )
+    req = SimpleNamespace(cookies={})            # team_restricted() reads .cookies
+    resp = asyncio.run(pg.playground_page(req))
+    assert resp.headers["Cache-Control"] == "no-cache"

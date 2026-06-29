@@ -908,11 +908,16 @@ async def playground_page(request: Request, section: str = "requirement_bot"):
     # Default to first enabled section if user passed an unknown id
     active_section = section if section in _SECTION_IDS else "requirement_bot"
 
-    return _template_response(request, "test/index.html", {
+    resp = _template_response(request, "test/index.html", {
         "sections": _build_sections(),
         "active_section": active_section,
         "team_restricted": team_restricted(request),
     })
+    # Always revalidate the test page so template / inline-JS changes reach the
+    # team on a normal refresh — the progress logic ships inline in this page, so
+    # a cached copy otherwise serves stale JS until a manual hard-refresh.
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 # -- API: ask + feedback ----------------------------------------------------
