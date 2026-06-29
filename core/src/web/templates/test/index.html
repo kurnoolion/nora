@@ -252,7 +252,12 @@
           buf = buf.slice(sep + 2);
           const parsed = parseSSEBlock(block);
           if (!parsed) continue;
-          if (parsed.event === "progress") {
+          if (parsed.event === "lanes") {
+            // Authoritative: re-render the rows for the lanes the SERVER is
+            // actually running (team-mode may have forced SIRA-only), so a
+            // form-submitted lane the server dropped doesn't spin forever.
+            showProgressFor(parsed.data.lanes || []);
+          } else if (parsed.event === "progress") {
             applyProgressEvent(parsed.data);
           } else if (parsed.event === "done") {
             answerEl.innerHTML = parsed.data.html || "";

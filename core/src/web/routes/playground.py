@@ -1204,6 +1204,12 @@ async def playground_ask_stream(request: Request):
         )
 
     async def event_stream():
+        # Authoritative lane list FIRST: tell the client which lanes are actually
+        # running (after any team-mode forcing), so its progress rows match the
+        # server, not the submitted form. Without this, a form that still carries
+        # 'nora' (e.g. team-mode bypass / stale page) leaves a NORA row spinning
+        # at "waiting…" forever because the server never runs or emits for it.
+        yield f"event: lanes\ndata: {json.dumps({'lanes': lanes_checked})}\n\n"
         tasks = {
             lane: asyncio.create_task(coro)
             for lane, coro in runners.items()
