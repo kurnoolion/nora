@@ -6,14 +6,23 @@
 {% block content %}
 <div class="container-fluid py-3">
   <h1 class="mb-2">Test</h1>
+  {% if team_restricted %}
   <p class="text-muted">
-    Free-form playground for ad-hoc testing. Ask a question and the
-    response runs through both retrieval lanes (NORA's hybrid path and
-    SIRA's BM25 + LLM-rerank path) so you can compare side-by-side.
-    Each question, the chunks returned, and your feedback (0–9 score
-    + categories + comment) are persisted to <code>nora_test_feedback.db</code>
-    for offline review.
+    Ask a question and the answer comes from the <strong>SIRA</strong> retrieval
+    lane (BM25 retrieval → LLM select-synthesize). Your question, the chunks
+    returned, and your feedback (0–9 score + categories + comment) are saved for
+    offline review.
   </p>
+  {% else %}
+  <p class="text-muted">
+    Free-form playground for ad-hoc testing. Runs the <strong>selected</strong>
+    retrieval lane(s) — NORA's hybrid (KG + RAG) and/or SIRA's BM25 retrieval →
+    LLM select-synthesize — shown side-by-side when more than one is selected.
+    Each question, the chunks returned, and your feedback (0–9 score + categories
+    + comment) are persisted to <code>nora_test_feedback.db</code> for offline
+    review.
+  </p>
+  {% endif %}
 
   <div class="card">
     <div class="card-body">
