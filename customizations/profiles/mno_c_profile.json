@@ -1,0 +1,87 @@
+{
+  "profile_name": "mno_c_profile",
+  "profile_version": 1,
+  "created_from": [],
+  "last_updated": "2026-06-30",
+  "_provenance": {
+    "bootstrap_id": "mno_c_profile",
+    "source": "hand-drafted from IR inspection of MNO-C sample (strand mno-c-ingestion)",
+    "notes": "All proprietary tokens are placeholders per D-062. <PREFIX> = common req-id prefix; <PREFIX1>/<PREFIX2>/<PREFIX3> = the req-id TYPE tags (non-requirement text / structural sub-section / actual requirement). Real values live ONLY in customizations/mappings/mno_c_profile.json (work-PC, pushed to company-internal git, never the public mirror). The req-id pattern is scoped to <PREFIX3> so ONLY actual-requirement headings become Requirements; <PREFIX1>/<PREFIX2> headings stay structural. DRAFT — several fields (font levels/body_text, exclude pattern, plan extraction) need validation against the full IR on the work PC."
+  },
+  "heading_detection": {
+    "method": "font_size_clustering",
+    "levels": [],
+    "numbering_pattern": "^(\\d+(?:\\.\\d+)*)\\s+\\S",
+    "max_observed_depth": 6,
+    "definitions_section_pattern": "(?i)acronym|definition|glossary",
+    "priority_marker_pattern": "\\(([A-Za-z][A-Za-z /]+)\\)\\s*ID:"
+  },
+  "requirement_id": {
+    "pattern": "<PREFIX>-<PREFIX3>-<DIGITS>",
+    "components": {
+      "prefix": "<PREFIX>-<PREFIX3>",
+      "separator": "-",
+      "number_position": 2
+    },
+    "detection_mode": "heading",
+    "anchor": "leading_text",
+    "normalize": "none",
+    "sample_ids": [],
+    "total_found": 0
+  },
+  "build_context": "path",
+  "plan_metadata": {
+    "plan_name": {
+      "location": "first_page",
+      "pattern": "",
+      "sample_value": ""
+    },
+    "plan_id": {
+      "location": "first_page",
+      "pattern": "",
+      "sample_value": ""
+    }
+  },
+  "document_zones": [],
+  "header_footer": {
+    "header_patterns": [],
+    "footer_patterns": [],
+    "page_number_pattern": "^\\s*Page\\s+\\d+\\s+of\\s+\\d+\\s*$"
+  },
+  "cross_reference_patterns": {
+    "standards_citations": [
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Ss]ection\\s+[\\d.]+)?",
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Rr]elease\\s+\\d+)?",
+      "GSMA\\s+\\w+[\\d.]*"
+    ],
+    "internal_section_refs": "[Ss]ee\\s+[Ss]ection\\s+[\\d.]+",
+    "requirement_id_refs": "<PREFIX>-<PREFIX3>-<DIGITS>"
+  },
+  "body_text": {
+    "font_size_min": 4.0,
+    "font_size_max": 5.5,
+    "font_families": []
+  },
+  "applicability_detection": {
+    "requirement_patterns": [],
+    "global_section_pattern": "",
+    "label_split_pattern": "[,;|]|\\band\\b|\\bor\\b"
+  },
+  "definitions_entry_pattern": "^([A-Z][A-Z0-9/-]{1,15})\\s+(.+?)$",
+  "ignore_strikeout": true,
+  "enable_table_anchored_extraction": false,
+  "toc_detection_pattern": "",
+  "toc_page_threshold": 0.7,
+  "toc_detection": {
+    "style_pattern": "",
+    "entry_pattern": ""
+  },
+  "revision_history_label_pattern": "",
+  "revhist_detection": {
+    "enabled": false
+  },
+  "reference_list_section_pattern": "(?i)^\\s*references\\b",
+  "reference_list_entry_pattern": "^\\s*[\\[\\(]?(\\d+)[\\]\\)\\.]?\\s+(.+?)\\s*$",
+  "exclude_section_pattern": "(?i)^\\s*(scope|references|bibliography)\\b",
+  "content_end_marker": ""
+}
