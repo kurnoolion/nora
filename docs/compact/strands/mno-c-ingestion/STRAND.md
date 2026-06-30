@@ -5,6 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** parser, profiler, extraction
+**Active phase:** development
 
 ## Summary
 
@@ -25,3 +26,10 @@ stable, landed code we run. This strand is a **prerequisite for
 verification.
 
 ## Notes
+
+**Deferred (out of scope for this strand):** referenced-asset ingestion — flow
+images + API-spec/flow PDFs that plan requirements reference — designed in
+[`asset-ingestion-design.md`](asset-ingestion-design.md). Cross-module capability
+(extraction → asset entity → corpus → fan-out retrieval → synthesis → UI vision/
+image display); belongs in `references-handling` (or a new `asset-ingestion`
+strand) under an architecture-phase pass. XL asset files are ignored.
