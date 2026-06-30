@@ -121,3 +121,21 @@ def test_title_strip_is_noop_without_pattern():
                     release="R", content_blocks=blocks)
     tree = GenericStructuralParser(prof).parse(ir)
     assert "ID: GP-SEC-1" in _by_section(tree, "4.1").title
+
+
+def test_plan_id_falls_back_to_path_plan():
+    """When the profile's plan_metadata yields no plan, the tree (and each req)
+    take DocumentIR.plan — the plan the pipeline captured from a per-plan input
+    directory (mno-c-ingestion)."""
+    blocks = [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1.2 TS 1 shall hold (Mandatory) ID: GP-REQ-1", size=5.7),
+    ]
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="MNOC",
+                    release="Mar2026", plan="PlanFoo", content_blocks=blocks)
+    tree = GenericStructuralParser(_profile()).parse(ir)
+    assert tree.plan_id == "PlanFoo"                      # tree-level from path
+    req = next(r for r in tree.requirements if r.req_id == "GP-REQ-1")
+    assert req.plan_id == "PlanFoo"                       # per-req falls back to tree

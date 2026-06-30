@@ -244,6 +244,8 @@ class DocumentIR:
     mno: str = ""
     release: str = ""
     doc_type: str = ""  # "requirement", "testcase"
+    plan: str = ""  # plan name when the input layout carries it (e.g. a per-plan
+    # directory under input/<MNO>/<release>/<plan>/); empty for flat layouts.
     content_blocks: list[ContentBlock] = field(default_factory=list)
     extraction_metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -320,6 +322,7 @@ class DocumentIR:
             mno=data.get("mno", ""),
             release=data.get("release", ""),
             doc_type=data.get("doc_type", ""),
+            plan=data.get("plan", ""),
             content_blocks=blocks,
             extraction_metadata=data.get("extraction_metadata", {}),
         )

@@ -766,6 +766,13 @@ class GenericStructuralParser:
 
         # 1. Extract plan metadata
         plan_meta = self._extract_plan_metadata(doc)
+        # Path-derived plan fallback: when the profile's plan_metadata yields no
+        # plan (e.g. the plan lives in a per-plan input directory, not the title
+        # page), use the plan the pipeline captured from the path (DocumentIR.plan).
+        # Generic — flat-layout corpora carry no path plan, so they're unaffected;
+        # this only fills a gap, never overrides a title-page plan.
+        if not plan_meta.get("plan_id") and getattr(doc, "plan", ""):
+            plan_meta["plan_id"] = doc.plan
 
         # 2. Classify blocks and build section hierarchy.
         #    Two anchor sources for Requirements (see Key Choices in MODULE.md):

@@ -96,6 +96,9 @@ def run_extract(ctx: PipelineContext) -> StageResult:
                 f, mno=metadata["mno"], release=metadata["release"],
                 doc_type=metadata["doc_type"],
             )
+            # Path-derived plan (per-plan input dir), if any — the extractors
+            # don't see the path, so stamp it here for the parser to consume.
+            ir.plan = metadata.get("plan", "")
             cell_dir.mkdir(parents=True, exist_ok=True)
             ir.save_json(out_path)
             ir_paths.append(str(out_path))

@@ -65,7 +65,7 @@ def infer_metadata_from_path(
     FR-26 (test-case parser) is deferred.
     """
     parts = file_path.resolve().parts
-    metadata = {"mno": "", "release": "", "doc_type": "requirement"}
+    metadata = {"mno": "", "release": "", "doc_type": "requirement", "plan": ""}
 
     # Look for the "input" anchor; the two segments immediately after it are MNO/release.
     if "input" in parts:
@@ -73,6 +73,11 @@ def infer_metadata_from_path(
         if idx + 2 < len(parts):
             metadata["mno"] = parts[idx + 1].upper()
             metadata["release"] = parts[idx + 2]
+            # A directory between <release> and the file is a per-plan dir
+            # (input/<MNO>/<release>/<plan>/<file>) — capture it as the plan.
+            # Flat layouts (file directly under <release>) leave plan empty.
+            if idx + 4 < len(parts):
+                metadata["plan"] = parts[idx + 3]
     elif len(parts) >= 3:
         # Fallback when no "input" anchor: assume last two dirs are MNO/release.
         metadata["release"] = parts[-2]

@@ -90,3 +90,13 @@ class TestInferMetadataEnforcesConvention:
     def test_mno_is_uppercased(self):
         p = Path("/data/env/input/vzw-oa/Feb2026/x.pdf")
         assert infer_metadata_from_path(p)["mno"] == "VZW-OA"
+
+    def test_plan_from_nested_dir(self):
+        # input/<MNO>/<release>/<plan>/<file> → plan captured from the dir
+        md = infer_metadata_from_path(Path("/data/env/input/MNOC/Mar2026/PlanFoo/doc.pdf"))
+        assert md["mno"] == "MNOC" and md["release"] == "Mar2026"
+        assert md["plan"] == "PlanFoo"
+
+    def test_no_plan_for_flat_layout(self):
+        # file directly under <release> → no plan dir
+        assert infer_metadata_from_path(Path("/data/env/input/VZW-OA/Feb2026/x.pdf"))["plan"] == ""
