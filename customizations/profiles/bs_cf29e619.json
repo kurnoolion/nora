@@ -1,12 +1,12 @@
 {
-  "profile_name": "mno_c_profile",
+  "profile_name": "bs_cf29e619",
   "profile_version": 1,
   "created_from": [],
   "last_updated": "2026-06-30",
   "_provenance": {
-    "bootstrap_id": "mno_c_profile",
+    "bootstrap_id": "bs_cf29e619",
     "source": "hand-drafted from IR inspection of MNO-C sample (strand mno-c-ingestion)",
-    "notes": "All proprietary tokens are placeholders per D-062. <PREFIX> = common req-id prefix; <PREFIX1>/<PREFIX2>/<PREFIX3> = the req-id TYPE tags (non-requirement text / structural sub-section / actual requirement). Real values live ONLY in customizations/mappings/mno_c_profile.json (work-PC, pushed to company-internal git, never the public mirror). The req-id pattern is scoped to <PREFIX3> so ONLY actual-requirement headings become Requirements; <PREFIX1>/<PREFIX2> headings stay structural. DRAFT — several fields (font levels/body_text, exclude pattern, plan extraction) need validation against the full IR on the work PC."
+    "notes": "All proprietary tokens are placeholders per D-062. <PREFIX> = common req-id prefix; <PREFIX1>/<PREFIX2>/<PREFIX3> = the req-id TYPE tags (non-requirement text / structural sub-section / actual requirement). Real values live ONLY in customizations/mappings/bs_cf29e619.json (work-PC, pushed to company-internal git, never the public mirror). The req-id pattern is scoped to <PREFIX3> so ONLY actual-requirement headings become Requirements; <PREFIX1>/<PREFIX2> headings stay structural. <PRIORITY1>..<PRIORITY5> = the 5 requirement-severity type names (e.g. one is the 'Mandatory' marker) — map each to one value; the alternation `|`s live in the pattern, not the mapped values (specific placeholders are re.escape'd). DRAFT — several fields (font levels/body_text, exclude pattern, plan extraction) need validation against the full IR on the work PC."
   },
   "heading_detection": {
     "method": "font_size_clustering",
@@ -14,7 +14,7 @@
     "numbering_pattern": "^(\\d+(?:\\.\\d+)*)\\s+\\S",
     "max_observed_depth": 6,
     "definitions_section_pattern": "(?i)acronym|definition|glossary",
-    "priority_marker_pattern": "\\(([A-Za-z][A-Za-z /]+)\\)",
+    "priority_marker_pattern": "\\((<PRIORITY1>|<PRIORITY2>|<PRIORITY3>|<PRIORITY4>|<PRIORITY5>)\\)",
     "title_strip_pattern": "\\s*ID:\\s*\\S+\\s*$"
   },
   "requirement_id": {
