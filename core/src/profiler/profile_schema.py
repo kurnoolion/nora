@@ -63,6 +63,15 @@ class HeadingDetection:
     # variants. Empty string disables definitions extraction.
     definitions_section_pattern: str = r"(?i)acronym|definition|glossary"
 
+    # Optional regex stripped from EVERY heading title (after priority
+    # extraction). For corpora that carry a trailing id-marker INSIDE the
+    # heading text — e.g. "<title> ID: <PREFIX>-<TYPE>-<DIGITS>" — so the
+    # requirement statement and the hierarchy paths stay clean, for requirement
+    # AND structural headings alike (the latter's id doesn't match
+    # `requirement_id.pattern`, so it isn't peeled otherwise). Independent of
+    # `requirement_id.anchor`. Example: r"\s*ID:\s*\S+\s*$". Empty string disables.
+    title_strip_pattern: str = ""
+
     # Table-header fallback for the glossary section: when a TABLE block
     # has no preceding heading that matches `definitions_section_pattern`
     # but its joined headers (` | `.join(headers)) match this regex, the
@@ -596,6 +605,7 @@ class DocumentProfile:
                 numbering_pattern=hd.get("numbering_pattern", ""),
                 max_observed_depth=hd.get("max_observed_depth", 0),
                 priority_marker_pattern=hd.get("priority_marker_pattern", ""),
+                title_strip_pattern=hd.get("title_strip_pattern", ""),
                 definitions_section_pattern=hd.get(
                     "definitions_section_pattern", r"(?i)acronym|definition|glossary"
                 ),

@@ -609,6 +609,15 @@ class GenericStructuralParser:
             if profile.heading_detection.priority_marker_pattern
             else None
         )
+        # Heading-title decoration strip — compiled once; None if disabled.
+        # Removes a trailing in-text id-marker (e.g. "ID: <id>") from every
+        # heading title after priority extraction, for clean titles on both
+        # requirement and structural headings (mno-c-ingestion).
+        self._title_strip_re = (
+            re.compile(profile.heading_detection.title_strip_pattern)
+            if profile.heading_detection.title_strip_pattern
+            else None
+        )
         # Applicability detection (FR-32 [D-030]) — compiled once
         ad = profile.applicability_detection
         self._applicability_res = [re.compile(p) for p in ad.requirement_patterns]
@@ -1745,6 +1754,11 @@ class GenericStructuralParser:
                     # FR-31: extract priority marker (if any) from heading text
                     # before storing — title carries the cleaned form.
                     priority, heading_text = self._extract_priority(heading_text)
+                    # Strip a trailing in-text id-marker (e.g. "ID: <id>") so the
+                    # title is the clean statement — for requirement AND structural
+                    # headings (the latter's id never matches requirement_id.pattern).
+                    if self._title_strip_re is not None:
+                        heading_text = self._title_strip_re.sub("", heading_text).strip()
                     # Heading-anchored req_id (anchor="last_run" / "leading_text"
                     # corpora; trailing_text mode falls back to pending_req_id
                     # from a separate small-font block per the OA convention).

@@ -14,7 +14,8 @@
     "numbering_pattern": "^(\\d+(?:\\.\\d+)*)\\s+\\S",
     "max_observed_depth": 6,
     "definitions_section_pattern": "(?i)acronym|definition|glossary",
-    "priority_marker_pattern": "\\(([A-Za-z][A-Za-z /]+)\\)\\s*ID:"
+    "priority_marker_pattern": "\\(([A-Za-z][A-Za-z /]+)\\)",
+    "title_strip_pattern": "\\s*ID:\\s*\\S+\\s*$"
   },
   "requirement_id": {
     "pattern": "<PREFIX>-<PREFIX3>-<DIGITS>",
