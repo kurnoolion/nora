@@ -99,6 +99,7 @@ _MAX_LINE_GAP_PT = 40.0   # vertical gap that breaks a region (points, top-to-to
 _TWO_SIDED_LOOK = 4       # recent lines checked for text on both sides of a gutter
 _LINE_Y_TOL = 2.0         # words within this many points of top share a text-line
 _WORD_MERGE_GAP_PT = 4.0  # words closer than this join into one segment
+_COL_MIN_FRAC = 0.7       # a column boundary must be empty in >= this fraction of lines
 
 
 def _page_lines(
@@ -165,6 +166,48 @@ def _region_gutters(
     return gutters, xmin, xmax
 
 
+def _column_separators(
+    lines: list[dict],
+    *,
+    min_gutter: float = _MIN_GUTTER_PT,
+    min_frac: float = _COL_MIN_FRAC,
+) -> list[float]:
+    """Column-boundary x-positions within a table region: the centre of each
+    maximal x-interval that is empty in >= `min_frac` of the region's lines and
+    >= `min_gutter` wide. Fed to pdfplumber as explicit vertical lines so a
+    multi-word cell is NOT split at every inter-word gap (those gaps sit at
+    different x per line, so no single x is empty across most lines — only true
+    column gutters are). Returns [] when no boundary is confident enough (caller
+    falls back to the plain text strategy)."""
+    if not lines:
+        return []
+    xs = [s for ln in lines for s in ln["segs"]]
+    xmin = min(a for a, _ in xs)
+    xmax = max(b for _, b in xs)
+    n = len(lines)
+
+    def _covered(ln: dict, x: float) -> bool:
+        return any(a - 0.01 <= x <= b + 0.01 for a, b in ln["segs"])
+
+    seps: list[float] = []
+    cur: list[float] | None = None
+    x = xmin
+    while x <= xmax:
+        empty = sum(1 for ln in lines if not _covered(ln, x))
+        if empty >= min_frac * n:
+            cur = [x, x] if cur is None else [cur[0], x]
+        else:
+            if (cur is not None and cur[1] - cur[0] >= min_gutter
+                    and cur[0] > xmin + 0.5 and cur[1] < xmax - 0.5):
+                seps.append((cur[0] + cur[1]) / 2.0)
+            cur = None
+        x += 1.0
+    if (cur is not None and cur[1] - cur[0] >= min_gutter
+            and cur[0] > xmin + 0.5 and cur[1] < xmax - 0.5):
+        seps.append((cur[0] + cur[1]) / 2.0)
+    return seps
+
+
 def _trim_region(region: list[dict], min_gutter: float, min_rows: int) -> list[dict]:
     """Drop leading/trailing lines with no text past the first column — these are
     single-column prose the two-sided look-back window let the region bleed into.
@@ -193,7 +236,7 @@ def _gutter_table_regions(
     min_rows: int = _MIN_TABLE_ROWS,
     max_line_gap: float = _MAX_LINE_GAP_PT,
     look: int = _TWO_SIDED_LOOK,
-) -> list[tuple[float, float, float, float]]:
+) -> list[tuple[tuple[float, float, float, float], list[dict]]]:
     """Locate borderless-table regions by persistent column gutters.
 
     A table (unlike prose) has a vertical whitespace gutter that stays empty
@@ -203,11 +246,12 @@ def _gutter_table_regions(
     the most recent `look` lines some has text left of that gutter and some right
     — the two-sided check stops the region bleeding into single-column prose
     below a far-right column. Regions with >= `min_rows` lines yield an
-    ``(x0, top, x1, bottom)`` bbox. Pure over `_page_lines` output; validated
-    against real MNO-C prose/table pages.
+    ``(bbox, member_lines)`` pair — the member lines let the caller derive column
+    boundaries (`_column_separators`) for the crop. Pure over `_page_lines`
+    output; validated against real MNO-C prose/table pages.
     """
     n = len(lines)
-    regions: list[tuple[float, float, float, float]] = []
+    regions: list[tuple[tuple[float, float, float, float], list[dict]]] = []
     i = 0
     while i < n:
         region = [lines[i]]
@@ -236,7 +280,8 @@ def _gutter_table_regions(
         if len(region) >= min_rows and gutters:
             top = region[0]["top"]
             bottom = region[-1]["bottom"]
-            regions.append((xmin - 2.0, top - 2.0, xmax + 2.0, bottom + 2.0))
+            bbox = (xmin - 2.0, top - 2.0, xmax + 2.0, bottom + 2.0)
+            regions.append((bbox, region))
         i = j + 1 if j > i else i + 1
     return regions
 
@@ -256,9 +301,12 @@ def _clamp_bbox(
     )
 
 
-def _find_table_regions(plumber_page) -> list[tuple[float, float, float, float]]:
-    """Borderless-table regions on a pdfplumber page (best-effort; returns [] on
-    any extract_words failure so a bad page never aborts extraction)."""
+def _find_table_regions(
+    plumber_page,
+) -> list[tuple[tuple[float, float, float, float], list[dict]]]:
+    """Borderless-table regions on a pdfplumber page, each ``(bbox, lines)``
+    (best-effort; returns [] on any extract_words failure so a bad page never
+    aborts extraction)."""
     try:
         words = plumber_page.extract_words(use_text_flow=False)
     except Exception:  # noqa: BLE001 — detection must never abort the page
@@ -353,31 +401,47 @@ class PDFExtractor(BaseExtractor):
             plumber_tables = list(plumber_page.find_tables())
             # Opt-in: borderless tables. Locate each table REGION by its
             # persistent column gutters, then run the text strategy ONLY inside
-            # that crop (never page-wide — that mis-reads prose). The resulting
-            # table feeds the same processing below and its bbox is added to
-            # table_bboxes, so its rows stop leaking out as paragraphs the parser
-            # mis-reads as sections / merges into the requirement's prose.
+            # that crop (never page-wide — that mis-reads prose). Feed the region's
+            # detected column boundaries as EXPLICIT vertical lines so a multi-word
+            # cell isn't split at every inter-word gap; horizontal rows still come
+            # from the text strategy. The resulting table feeds the same processing
+            # below and its bbox is added to table_bboxes, so its rows stop leaking
+            # out as paragraphs the parser mis-reads as sections / prose.
             if detect_text_tables:
                 line_bboxes = [t.bbox for t in plumber_tables]
                 page_w, page_h = plumber_page.width, plumber_page.height
-                for region in _find_table_regions(plumber_page):
-                    if _bbox_overlaps_any(region, line_bboxes):
+                for region_bbox, region_lines in _find_table_regions(plumber_page):
+                    if _bbox_overlaps_any(region_bbox, line_bboxes):
                         continue
+                    seps = _column_separators(region_lines)
+                    if seps:
+                        rx0, _, rx1, _ = region_bbox
+                        settings = {
+                            "vertical_strategy": "explicit",
+                            "explicit_vertical_lines": [rx0, *seps, rx1],
+                            "horizontal_strategy": "text",
+                        }
+                    else:
+                        settings = _TEXT_TABLE_SETTINGS
                     try:
                         crop = plumber_page.crop(
-                            _clamp_bbox(region, page_w, page_h)
+                            _clamp_bbox(region_bbox, page_w, page_h)
                         )
-                        for tt in crop.find_tables(table_settings=_TEXT_TABLE_SETTINGS):
+                        for tt in crop.find_tables(table_settings=settings):
                             if _looks_tabular(tt.extract()):
                                 plumber_tables.append(tt)
                     except Exception as exc:  # noqa: BLE001 — a bad region shouldn't abort the page
-                        logger.debug("numbered-row table skipped: %s", exc)
+                        logger.debug("borderless table skipped: %s", exc)
             for table_obj in plumber_tables:
                 bbox = table_obj.bbox  # (x0, y0, x1, y1) top-left origin
-                # pdfplumber uses top-left origin, same as our convention
-                table_bboxes.append(bbox)
+                # NOTE: bbox is reserved in `table_bboxes` (which suppresses the
+                # paragraph text beneath it) ONLY once we commit to keeping the
+                # table — see just before the ContentBlock append below. A table
+                # we skip here (empty / 1×1 hallucination) must NOT suppress its
+                # underlying text, or the content vanishes from the IR entirely.
                 table_data = table_obj.extract()
                 if not table_data or len(table_data) < 1:
+                    logger.debug("table skipped (no data) at %s", bbox)
                     continue
                 headers = [
                     str(c).strip() if c else "" for c in table_data[0]
@@ -395,6 +459,7 @@ class PDFExtractor(BaseExtractor):
                 non_empty_headers = sum(1 for h in headers if h)
                 non_empty_body = sum(1 for row in rows for c in row if c)
                 if non_empty_headers == 0 and non_empty_body == 0:
+                    logger.debug("table skipped (all cells empty) at %s", bbox)
                     continue
                 # Skip 1×1 "tables" — pdfplumber commonly hallucinates a
                 # 1-row × 1-column "table" around small column-aligned
@@ -408,6 +473,7 @@ class PDFExtractor(BaseExtractor):
                     and len(rows[0]) == 1
                     and non_empty_headers <= 1
                 ):
+                    logger.debug("table skipped (1×1 hallucination) at %s", bbox)
                     continue
                 # FR-33: detect strike-through at row AND table level.
                 # Row-level (per-row data-cell strikes) drops just the
@@ -462,6 +528,9 @@ class PDFExtractor(BaseExtractor):
                     ]
                     for i, row in enumerate(rows)
                 ]
+                # Table committed — now reserve its bbox so the paragraph pass
+                # suppresses the text underneath it (that text IS this table).
+                table_bboxes.append(bbox)
                 all_blocks.append(
                     ContentBlock(
                         type=BlockType.TABLE,
