@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from core.src.extraction.pdf_extractor import (
     _bbox_overlaps_any,
-    _column_separators,
     _gutter_table_regions,
     _looks_tabular,
+    _normalize_region_text,
     _page_lines,
     _text_table_detection_enabled,
 )
@@ -155,37 +155,18 @@ class TestPageLines:
         assert lines[0]["segs"] == [(36.0, 90.0), (130.0, 200.0)]
 
 
-class TestColumnSeparators:
-    def test_recovers_column_boundaries(self):
-        # 3 columns; a separator falls in each of the two gutters.
-        w = []
-        for i in range(6):
-            y = 100 + i * 12
-            w += [_wd(36, 130, y), _wd(160, 250, y), _wd(400, 500, y)]
-        seps = _column_separators(_page_lines(w))
-        assert len(seps) == 2                      # 3 columns → 2 separators
-        assert 130 <= seps[0] <= 160
-        assert 250 <= seps[1] <= 400
+class TestRegionText:
+    def test_dedents_common_indent_and_drops_blank_lines(self):
+        # Layout-mode extraction pads leading whitespace (crop x starts at 0);
+        # the common indent is stripped while inter-column spacing is preserved.
+        raw = "      State      Icon\n\n      Off        A  \n      On         B\n"
+        out = _normalize_region_text(raw)
+        assert out == "State      Icon\nOff        A\nOn         B"
 
-    def test_multiword_cell_not_split(self):
-        # col1 | col2 where col2 holds several words separated by ~5pt gaps.
-        # pdfplumber's raw text strategy would split every gap into a column;
-        # the min_gutter guard keeps col2 whole (only the real col1|col2 gutter).
-        w = []
-        for i in range(6):
-            y = 100 + i * 12
-            w.append(_wd(36, 90, y))               # col1
-            x = 160
-            for _ in range(3):                     # 3 words, 5pt gaps (< min_gutter)
-                w.append(_wd(x, x + 25, y))
-                x += 30
-        seps = _column_separators(_page_lines(w))
-        assert len(seps) == 1                       # not split on the 5pt word gaps
-        assert 90 <= seps[0] <= 160
-
-    def test_single_column_no_separators(self):
-        w = [_wd(36, 300, 100 + i * 12) for i in range(5)]
-        assert _column_separators(_page_lines(w)) == []
+    def test_empty_and_none(self):
+        assert _normalize_region_text("") == ""
+        assert _normalize_region_text(None) == ""
+        assert _normalize_region_text("   \n  \n") == ""
 
 
 class TestProfileFlag:

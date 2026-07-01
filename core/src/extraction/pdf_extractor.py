@@ -99,7 +99,14 @@ _MAX_LINE_GAP_PT = 40.0   # vertical gap that breaks a region (points, top-to-to
 _TWO_SIDED_LOOK = 4       # recent lines checked for text on both sides of a gutter
 _LINE_Y_TOL = 2.0         # words within this many points of top share a text-line
 _WORD_MERGE_GAP_PT = 4.0  # words closer than this join into one segment
-_COL_MIN_FRAC = 0.7       # a column boundary must be empty in >= this fraction of lines
+
+# Markers wrapping a borderless-table region rendered as preserved text. A grid
+# reconstruction of a borderless table with wrapped/multi-line cells and ragged
+# columns is unreliable, so the region is kept as clean, layout-preserved text
+# (readable for retrieval/synthesis) demarcated by these markers rather than a
+# mangled column/row grid.
+_TABLE_TEXT_OPEN = "[TABLE]"
+_TABLE_TEXT_CLOSE = "[/TABLE]"
 
 
 def _page_lines(
@@ -166,53 +173,42 @@ def _region_gutters(
     return gutters, xmin, xmax
 
 
-def _column_separators(
-    lines: list[dict],
-    *,
-    min_gutter: float = _MIN_GUTTER_PT,
-    min_frac: float = _COL_MIN_FRAC,
-) -> list[float]:
-    """Column-boundary x-positions within a table region: the centre of each
-    maximal x-interval that is empty in >= `min_frac` of the region's lines and
-    >= `min_gutter` wide. Fed to pdfplumber as explicit vertical lines so a
-    multi-word cell is NOT split at every inter-word gap (those gaps sit at
-    different x per line, so no single x is empty across most lines — only true
-    column gutters are). Returns [] when no boundary is confident enough (caller
-    falls back to the plain text strategy)."""
+def _normalize_region_text(txt: str | None) -> str:
+    """Clean a region's extracted text: drop blank lines, strip trailing
+    whitespace, and remove the common leading indent that layout-mode extraction
+    pads on (crop coordinates start at page x=0). Preserves inter-column spacing
+    on each line so the table stays readable. Returns "" for empty input."""
+    lines = [ln.rstrip() for ln in (txt or "").splitlines() if ln.strip()]
     if not lines:
-        return []
-    xs = [s for ln in lines for s in ln["segs"]]
-    xmin = min(a for a, _ in xs)
-    xmax = max(b for _, b in xs)
-    n = len(lines)
+        return ""
+    indent = min(len(ln) - len(ln.lstrip()) for ln in lines)
+    return "\n".join(ln[indent:] for ln in lines)
 
-    def _covered(ln: dict, x: float) -> bool:
-        return any(a - 0.01 <= x <= b + 0.01 for a, b in ln["segs"])
 
-    seps: list[float] = []
-    cur: list[float] | None = None
-    x = xmin
-    while x <= xmax:
-        empty = sum(1 for ln in lines if not _covered(ln, x))
-        if empty >= min_frac * n:
-            cur = [x, x] if cur is None else [cur[0], x]
-        else:
-            if (cur is not None and cur[1] - cur[0] >= min_gutter
-                    and cur[0] > xmin + 0.5 and cur[1] < xmax - 0.5):
-                seps.append((cur[0] + cur[1]) / 2.0)
-            cur = None
-        x += 1.0
-    if (cur is not None and cur[1] - cur[0] >= min_gutter
-            and cur[0] > xmin + 0.5 and cur[1] < xmax - 0.5):
-        seps.append((cur[0] + cur[1]) / 2.0)
-    return seps
+def _region_text(crop) -> str:
+    """Layout-preserving text of a cropped table region (falls back to plain
+    text, then ""), normalized. Best-effort — never raises."""
+    txt = None
+    try:
+        txt = crop.extract_text(layout=True)
+    except Exception:  # noqa: BLE001 — layout mode can fail on odd regions
+        txt = None
+    if not txt:
+        try:
+            txt = crop.extract_text()
+        except Exception:  # noqa: BLE001
+            txt = None
+    return _normalize_region_text(txt)
 
 
 def _trim_region(region: list[dict], min_gutter: float, min_rows: int) -> list[dict]:
-    """Drop leading/trailing lines with no text past the first column — these are
-    single-column prose the two-sided look-back window let the region bleed into.
-    Interior single-column lines (wrapped-cell continuations) are kept because
-    they are flanked by multi-column rows. Never trims below `min_rows`."""
+    """Drop TRAILING lines with no text past the first column — these are the
+    single-column prose the two-sided look-back window let the region bleed into
+    below a far-right column. Only trailing lines are trimmed: leading lines are
+    kept because a multi-line header cell can occupy the top of the region as a
+    single-column line, and trimming it would split the header off the table.
+    Interior single-column lines (wrapped-cell continuations) are always kept.
+    Never trims below `min_rows`."""
     gutters, _, _ = _region_gutters(region, min_gutter)
     if not gutters:
         return region
@@ -221,12 +217,10 @@ def _trim_region(region: list[dict], min_gutter: float, min_rows: int) -> list[d
     def _has_right(ln: dict) -> bool:
         return any(s[0] >= right_edge - 0.5 for s in ln["segs"])
 
-    lo, hi = 0, len(region)
-    while hi - lo > min_rows and not _has_right(region[hi - 1]):
+    hi = len(region)
+    while hi > min_rows and not _has_right(region[hi - 1]):
         hi -= 1
-    while hi - lo > min_rows and not _has_right(region[lo]):
-        lo += 1
-    return region[lo:hi]
+    return region[:hi]
 
 
 def _gutter_table_regions(
@@ -400,38 +394,45 @@ class PDFExtractor(BaseExtractor):
             table_bboxes: list[tuple[float, float, float, float]] = []
             plumber_tables = list(plumber_page.find_tables())
             # Opt-in: borderless tables. Locate each table REGION by its
-            # persistent column gutters, then run the text strategy ONLY inside
-            # that crop (never page-wide — that mis-reads prose). Feed the region's
-            # detected column boundaries as EXPLICIT vertical lines so a multi-word
-            # cell isn't split at every inter-word gap; horizontal rows still come
-            # from the text strategy. The resulting table feeds the same processing
-            # below and its bbox is added to table_bboxes, so its rows stop leaking
-            # out as paragraphs the parser mis-reads as sections / prose.
+            # persistent column gutters (never page-wide — that mis-reads prose),
+            # then keep it as layout-preserved TEXT wrapped in [TABLE] markers
+            # rather than a reconstructed grid: borderless tables with wrapped
+            # multi-line cells and ragged columns don't reconstruct into a clean
+            # grid, and a mangled grid reads worse than the plain text. The block
+            # is emitted at the region's position and its bbox is added to
+            # table_bboxes, so the individual rows stop leaking out as paragraphs
+            # the parser mis-reads as sections / merges into the requirement prose.
             if detect_text_tables:
                 line_bboxes = [t.bbox for t in plumber_tables]
                 page_w, page_h = plumber_page.width, plumber_page.height
-                for region_bbox, region_lines in _find_table_regions(plumber_page):
+                for region_bbox, _region_lines in _find_table_regions(plumber_page):
                     if _bbox_overlaps_any(region_bbox, line_bboxes):
                         continue
-                    seps = _column_separators(region_lines)
-                    if seps:
-                        rx0, _, rx1, _ = region_bbox
-                        settings = {
-                            "vertical_strategy": "explicit",
-                            "explicit_vertical_lines": [rx0, *seps, rx1],
-                            "horizontal_strategy": "text",
-                        }
-                    else:
-                        settings = _TEXT_TABLE_SETTINGS
                     try:
                         crop = plumber_page.crop(
                             _clamp_bbox(region_bbox, page_w, page_h)
                         )
-                        for tt in crop.find_tables(table_settings=settings):
-                            if _looks_tabular(tt.extract()):
-                                plumber_tables.append(tt)
+                        region_text = _region_text(crop)
                     except Exception as exc:  # noqa: BLE001 — a bad region shouldn't abort the page
                         logger.debug("borderless table skipped: %s", exc)
+                        continue
+                    if not region_text:
+                        continue
+                    table_bboxes.append(region_bbox)  # suppress the rows below
+                    demarcated = (
+                        f"{_TABLE_TEXT_OPEN}\n{region_text}\n{_TABLE_TEXT_CLOSE}"
+                    )
+                    all_blocks.append(
+                        ContentBlock(
+                            type=BlockType.PARAGRAPH,
+                            position=Position(
+                                page=page_num + 1, index=0, bbox=region_bbox
+                            ),
+                            text=demarcated,
+                            font_info=FontInfo(size=10.0),
+                            runs=[TextRun(text=demarcated, struck=False)],
+                        )
+                    )
             for table_obj in plumber_tables:
                 bbox = table_obj.bbox  # (x0, y0, x1, y1) top-left origin
                 # NOTE: bbox is reserved in `table_bboxes` (which suppresses the
