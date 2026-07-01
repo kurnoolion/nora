@@ -1,0 +1,3 @@
+# Hiro provider = thin HTTP client. The heavy lifting is the Hiro FastAPI service
+# + its separate MOSS-OCR vLLM GPU endpoint, deployed per the Hiro repo (not here).
+requests

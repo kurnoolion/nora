@@ -1,0 +1,2 @@
+# Docling provider (own venv). CPU works; first run downloads models.
+docling

@@ -1,0 +1,6 @@
+# PaddleOCR PP-Structure provider (own venv — paddle conflicts with torch).
+# CPU build shown; for GPU install the matching paddlepaddle-gpu instead.
+paddlepaddle
+paddleocr>=2.7
+pymupdf
+numpy

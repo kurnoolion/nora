@@ -1,0 +1,5 @@
+# Never commit corpus PDFs or their parsed outputs (proprietary MNO content).
+out/
+*.pdf
+__pycache__/
+*.pyc
