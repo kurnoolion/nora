@@ -64,7 +64,8 @@ class HiroProvider:
         except Exception as e:  # noqa: BLE001
             return False, f"service not reachable at {self.base_url}: {e}"
 
-    def parse(self, pdf_path: Path) -> LayoutResult:
+    def parse(self, pdf_path: Path, image_dir: Path | None = None) -> LayoutResult:
+        # image_dir accepted for the protocol; Hiro returns text/HTML per region.
         t0 = time.time()
         res = LayoutResult(provider=self.name, source=Path(pdf_path).name)
         import requests

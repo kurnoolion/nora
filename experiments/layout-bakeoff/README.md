@@ -131,7 +131,9 @@ m=L().model_spec; print('layout:', m.repo_id, m.revision, '->', m.model_repo_fol
 - **Text correctness** on born-digital pages: does OCR-based re-reading introduce
   errors the current text-layer path doesn't have? (A real risk for Hiro.)
 - **Figures / formulas / reading order**: relevant to the deferred
-  API-spec / flow-image work.
+  API-spec / flow-image work. Docling saves figure crops to `out/images/` and the
+  per-doc `.md` renders them inline (`generate_picture_images` is enabled — no
+  extra model download, works offline).
 - **Cost**: wall-clock per page, and whether a GPU/service is required.
 
 ## Caveats (read before trusting a zero result)

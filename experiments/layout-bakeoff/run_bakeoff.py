@@ -51,7 +51,7 @@ def main() -> None:
             failures += 1
             continue
         print(f"[{provider.name}] parsing {pdf.name} ...", flush=True)
-        result = provider.parse(pdf)
+        result = provider.parse(pdf, image_dir=args.out / "images")
         path = save_result(result, args.out)
         print(f"   ok={result.ok} blocks={len(result.blocks)} "
               f"tables={len(result.tables)} figures={len(result.figures)} "

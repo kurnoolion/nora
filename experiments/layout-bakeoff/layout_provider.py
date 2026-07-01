@@ -69,10 +69,11 @@ class LayoutProvider(Protocol):
         service isn't reachable — the harness skips the provider, never crashes."""
         ...
 
-    def parse(self, pdf_path: Path) -> LayoutResult:
-        """Parse a PDF into normalized blocks. Must not raise — capture failures
-        into `LayoutResult(ok=False, error=...)` so one bad doc/provider doesn't
-        sink the run."""
+    def parse(self, pdf_path: Path, image_dir: Path | None = None) -> LayoutResult:
+        """Parse a PDF into normalized blocks. When `image_dir` is given, figure
+        crops are saved there and referenced via `LayoutBlock.image_path`. Must
+        not raise — capture failures into `LayoutResult(ok=False, error=...)` so
+        one bad doc/provider doesn't sink the run."""
         ...
 
 
@@ -114,7 +115,8 @@ def to_markdown(result: LayoutResult) -> str:
             out.append(f"{tag}\n**[TABLE p{b.page}]**\n\n{body}\n")
         elif b.kind == "figure":
             cap = f"\ncaption: {b.text}" if b.text else ""
-            out.append(f"{tag}\n**[FIGURE p{b.page}]** {b.image_path or '(no image)'}{cap}\n")
+            img = f"![figure]({b.image_path})" if b.image_path else "_(image not extracted)_"
+            out.append(f"{tag}\n**[FIGURE p{b.page}]** {img}{cap}\n")
         else:
             out.append(f"{tag}\n{b.text}\n")
     return "\n".join(out)

@@ -40,7 +40,8 @@ class PaddleProvider:
         except Exception as e:  # noqa: BLE001
             return False, f"paddleocr/pymupdf not installed: {e}"
 
-    def parse(self, pdf_path: Path) -> LayoutResult:
+    def parse(self, pdf_path: Path, image_dir: Path | None = None) -> LayoutResult:
+        # image_dir accepted for the protocol; figure-crop saving not wired here yet.
         t0 = time.time()
         res = LayoutResult(provider=self.name, source=Path(pdf_path).name)
         try:

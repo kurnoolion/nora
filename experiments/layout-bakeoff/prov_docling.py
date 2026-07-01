@@ -36,6 +36,13 @@ def _build_converter():
         opts = PdfPipelineOptions()
         opts.do_ocr = _DO_OCR
         opts.do_table_structure = True
+        # Extract picture crops (off by default) so figures/flow images are
+        # actually captured, not just detected — needed for the deferred
+        # figure/API-spec ingestion this bake-off is also scouting.
+        if hasattr(opts, "generate_picture_images"):
+            opts.generate_picture_images = True
+        if hasattr(opts, "images_scale"):
+            opts.images_scale = 2.0
         if _ARTIFACTS:
             opts.artifacts_path = _ARTIFACTS
         return DocumentConverter(
@@ -84,6 +91,37 @@ def _table_html(item, doc) -> str:
     return ""
 
 
+def _caption(item, doc) -> str:
+    fn = getattr(item, "caption_text", None)
+    if callable(fn):
+        try:
+            return (fn(doc) or "").strip()
+        except Exception:
+            return ""
+    return ""
+
+
+def _save_picture(item, doc, image_dir: Path | None, name: str) -> str:
+    """Save a picture crop into image_dir; return a path relative to image_dir's
+    parent (so the sibling .md can render it), or '' if unavailable."""
+    get = getattr(item, "get_image", None)
+    if image_dir is None or not callable(get):
+        return ""
+    try:
+        img = get(doc)
+    except Exception:
+        img = None
+    if img is None:
+        return ""
+    try:
+        image_dir.mkdir(parents=True, exist_ok=True)
+        fpath = image_dir / f"{name}.png"
+        img.save(fpath)
+        return str(Path(image_dir.name) / fpath.name)
+    except Exception:
+        return ""
+
+
 def _table_text(item, doc) -> str:
     fn = getattr(item, "export_to_dataframe", None)
     if not callable(fn):
@@ -108,7 +146,7 @@ class DoclingProvider:
         except Exception as e:  # noqa: BLE001
             return False, f"docling not installed: {e}"
 
-    def parse(self, pdf_path: Path) -> LayoutResult:
+    def parse(self, pdf_path: Path, image_dir: Path | None = None) -> LayoutResult:
         t0 = time.time()
         res = LayoutResult(provider=self.name, source=Path(pdf_path).name)
         try:
@@ -138,6 +176,10 @@ class DoclingProvider:
             if kind == "table":
                 blk.html = _table_html(item, doc)
                 blk.text = _table_text(item, doc)
+            elif kind == "figure":
+                blk.image_path = _save_picture(
+                    item, doc, image_dir, f"{Path(pdf_path).stem}_p{page}_{order}")
+                blk.text = _caption(item, doc)
             else:
                 blk.text = (getattr(item, "text", "") or "").strip()
             res.blocks.append(blk)
