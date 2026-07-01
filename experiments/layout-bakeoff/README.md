@@ -90,14 +90,38 @@ or pre-provision the models offline:
   ```
 - _If HF is fully blocked_, download the models on a connected machine and copy
   them over (OCR models are skipped, so the PP-OCRv4 download that fails is
-  avoided):
+  avoided). Any of these on a machine WITH access:
   ```bash
-  # on a machine WITH network access:
+  # (a) python + docling installed:
   python fetch_docling_models.py ./docling-models
 
-  # copy ./docling-models to the work PC, then run fully offline:
+  # (b) huggingface-cli (pip install huggingface_hub) — no docling needed:
+  huggingface-cli download docling-project/docling-layout-heron --revision main \
+    --local-dir docling-models/docling-project--docling-layout-heron
+  huggingface-cli download docling-project/docling-models --revision v2.3.0 \
+    --local-dir docling-models/docling-project--docling-models
+
+  # (c) git + git-lfs:
+  git lfs install
+  git clone https://huggingface.co/docling-project/docling-layout-heron \
+    docling-models/docling-project--docling-layout-heron
+  git clone https://huggingface.co/docling-project/docling-models \
+    docling-models/docling-project--docling-models
+  ( cd docling-models/docling-project--docling-models && git checkout v2.3.0 )
+  ```
+  Then copy the whole `docling-models/` dir to the work PC and run fully offline:
+  ```bash
   DOCLING_ARTIFACTS=/abs/path/docling-models HF_HUB_OFFLINE=1 \
     python run_bakeoff.py doc.pdf --provider docling --out ./out
+  ```
+
+  Required folders under `DOCLING_ARTIFACTS` (repo id with `/`→`--`):
+  `docling-project--docling-layout-heron` (layout @ main) and
+  `docling-project--docling-models` (tableformer @ v2.3.0). To print the exact
+  repo/folder for YOUR installed docling version:
+  ```bash
+  python -c "from docling.datamodel.pipeline_options import LayoutOptions as L; \
+m=L().model_spec; print('layout:', m.repo_id, m.revision, '->', m.model_repo_folder)"
   ```
 
 ## What to compare
