@@ -56,3 +56,14 @@ class TestTabularShape:
 
     def test_empty_rejected(self):
         assert _looks_tabular([]) is False and _looks_tabular(None) is False
+
+
+class TestProfileFlag:
+    def test_default_off_and_roundtrips(self):
+        from core.src.profiler.profile_schema import DocumentProfile
+        p = DocumentProfile(profile_name="t", profile_version=1,
+                            created_from=[], last_updated="x")
+        assert p.detect_text_tables is False           # default off (back-compat)
+        p.detect_text_tables = True
+        # survives to_dict → _from_dict (the load_json path)
+        assert DocumentProfile._from_dict(p.to_dict()).detect_text_tables is True

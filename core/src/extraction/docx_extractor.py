@@ -59,6 +59,7 @@ class DOCXExtractor(BaseExtractor):
         mno: str = "",
         release: str = "",
         doc_type: str = "",
+        detect_text_tables: bool = False,  # PDF-only hint; ignored here
     ) -> DocumentIR:
         file_path = Path(file_path)
         logger.info(f"Extracting DOCX: {file_path.name}")

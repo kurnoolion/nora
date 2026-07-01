@@ -20,6 +20,7 @@ class BaseExtractor(ABC):
         mno: str = "",
         release: str = "",
         doc_type: str = "",
+        detect_text_tables: bool = False,
     ) -> DocumentIR:
         """Extract content from a document file.
 
@@ -28,6 +29,8 @@ class BaseExtractor(ABC):
             mno: MNO identifier (e.g., "VZW"). Derived from folder structure.
             release: Release identifier (e.g., "2026_Feb"). Derived from folder structure.
             doc_type: Document type ("requirement" or "testcase"). Derived from folder structure.
+            detect_text_tables: per-corpus PDF hint — enable text-alignment
+                (borderless) table detection. PDF-only; other extractors ignore it.
 
         Returns:
             Normalized DocumentIR ready for the DocumentProfiler or structural parser.

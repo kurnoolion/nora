@@ -107,6 +107,7 @@ class PDFExtractor(BaseExtractor):
         mno: str = "",
         release: str = "",
         doc_type: str = "",
+        detect_text_tables: bool = False,
     ) -> DocumentIR:
         if fitz is None or pdfplumber is None:
             raise ImportError(
@@ -123,7 +124,10 @@ class PDFExtractor(BaseExtractor):
             fitz_doc.close()
             raise
         try:
-            return self._extract_impl(file_path, fitz_doc, plumber_pdf, mno, release, doc_type)
+            return self._extract_impl(
+                file_path, fitz_doc, plumber_pdf, mno, release, doc_type,
+                detect_text_tables=detect_text_tables,
+            )
         finally:
             fitz_doc.close()
             plumber_pdf.close()
@@ -136,6 +140,7 @@ class PDFExtractor(BaseExtractor):
         mno: str,
         release: str,
         doc_type: str,
+        detect_text_tables: bool = False,
     ) -> DocumentIR:
         # First pass: detect repeating header/footer text across pages
         header_footer_patterns = self._detect_header_footer_patterns(fitz_doc)
@@ -167,7 +172,7 @@ class PDFExtractor(BaseExtractor):
             # region then feeds the same processing below (and is excluded from
             # paragraph extraction via table_bboxes), so their rows stop leaking
             # out as number-prefixed paragraphs the parser mis-reads as sections.
-            if _text_table_detection_enabled():
+            if detect_text_tables:
                 line_bboxes = [t.bbox for t in plumber_tables]
                 for tt in plumber_page.find_tables(table_settings=_TEXT_TABLE_SETTINGS):
                     if _bbox_overlaps_any(tt.bbox, line_bboxes):

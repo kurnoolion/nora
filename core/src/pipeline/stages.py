@@ -51,6 +51,37 @@ def _fail(stage: str, code: str, message: str, elapsed: float = 0.0) -> StageRes
 # Stage 1: extract
 # ---------------------------------------------------------------------------
 
+def _cells_with_text_tables(ctx: PipelineContext) -> set[tuple[str, str]]:
+    """Per-cell text-table flag from each in-scope cell's bound profile
+    (D-DRAFT-7). Best-effort — the profile stage validates binding coverage; the
+    extract stage just reads the boolean so a full multi-MNO run only enables
+    borderless-table detection where the profile asks. Returns `{(MNO, release)}`."""
+    out: set[tuple[str, str]] = set()
+    try:
+        from core.src.env.profile_bindings import load_profile_bindings
+        from core.src.profiler.profile_schema import DocumentProfile
+    except ImportError:
+        return out
+    override = ctx.state.get("profile_path")
+    if not override:
+        corr = ctx.correction("profile.json")
+        if corr:
+            override = str(corr)
+    env_dir = ctx.stage_output("extract").parent.parent
+    try:
+        bindings = load_profile_bindings(env_dir, override=override)
+    except Exception:
+        return out
+    for cell in ctx.input_cells():
+        try:
+            p = bindings.resolve(cell.mno, cell.release)
+            if p and DocumentProfile.load_json(p).detect_text_tables:
+                out.add((cell.mno.upper(), cell.release))
+        except Exception:
+            continue
+    return out
+
+
 def run_extract(ctx: PipelineContext) -> StageResult:
     """Extract documents into normalized IR."""
     t0 = time.time()
@@ -76,6 +107,12 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     warnings: list[str] = []
     ir_paths: list[str] = []
 
+    # Per-cell borderless-table detection from each cell's profile; the env var
+    # is a global debug override (forces it on for every cell this run).
+    from core.src.extraction.pdf_extractor import _text_table_detection_enabled
+    tt_cells = _cells_with_text_tables(ctx)
+    tt_env = _text_table_detection_enabled()
+
     for f in files:
         # infer_metadata_from_path enforces the MMMYYYY cell convention
         # fail-loud (EXT-E004); a mis-named release dir aborts the stage here.
@@ -92,9 +129,12 @@ def run_extract(ctx: PipelineContext) -> StageResult:
             stats["skipped"] += 1
             continue
         try:
+            detect_tt = tt_env or (
+                (metadata["mno"].upper(), metadata["release"]) in tt_cells
+            )
             ir = extract_document(
                 f, mno=metadata["mno"], release=metadata["release"],
-                doc_type=metadata["doc_type"],
+                doc_type=metadata["doc_type"], detect_text_tables=detect_tt,
             )
             # Path-derived plan (per-plan input dir), if any — the extractors
             # don't see the path, so stamp it here for the parser to consume.

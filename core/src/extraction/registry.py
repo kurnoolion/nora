@@ -41,10 +41,14 @@ def extract_document(
     mno: str = "",
     release: str = "",
     doc_type: str = "",
+    detect_text_tables: bool = False,
 ) -> DocumentIR:
     """Extract a document using the appropriate format extractor."""
     extractor = get_extractor(file_path)
-    return extractor.extract(file_path, mno=mno, release=release, doc_type=doc_type)
+    return extractor.extract(
+        file_path, mno=mno, release=release, doc_type=doc_type,
+        detect_text_tables=detect_text_tables,
+    )
 
 
 def infer_metadata_from_path(

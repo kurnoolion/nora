@@ -364,6 +364,13 @@ class DocumentProfile:
     text of the definitions section identified by
     `heading_detection.definitions_section_pattern`. See FR-35 [D-032]."""
 
+    # Enable pdfplumber's text-alignment table detection at EXTRACT time for
+    # this corpus — for tables drawn with no ruling lines (the "lines" strategy
+    # misses them, so their rows leak out as paragraphs). Per-corpus because the
+    # text strategy over-detects on prose; the extract stage reads it per cell so
+    # a full multi-MNO run only enables it where the profile asks. Default off.
+    detect_text_tables: bool = False
+
     # ── Strikeout omission (FR-33 [D-031]) ────────────────────────
     ignore_strikeout: bool = True
     """When True (default), the parser drops content blocks whose
@@ -641,6 +648,7 @@ class DocumentProfile:
             applicability_detection=ApplicabilityDetection(
                 **data.get("applicability_detection", {})
             ),
+            detect_text_tables=data.get("detect_text_tables", False),
             ignore_strikeout=data.get("ignore_strikeout", True),
             enable_table_anchored_extraction=data.get(
                 "enable_table_anchored_extraction", True
