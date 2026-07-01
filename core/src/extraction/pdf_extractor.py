@@ -41,10 +41,11 @@ logger = logging.getLogger(__name__)
 # are invisible to it and their rows leak out as text. The "text" strategy
 # infers the grid from word alignment, but run over a whole page it mis-reads
 # prose as a grid (fragmenting text, dropping paragraphs). So we NEVER run it
-# page-wide: we first locate a genuine table REGION from a specific signal — a
-# left column of sequential row numbers (1, 2, 3…) — then run the text strategy
-# only inside that crop, where over-detection is impossible. Per-corpus opt-in
-# via DocumentProfile.detect_text_tables; NORA_EXTRACT_TEXT_TABLES forces it on
+# page-wide: we first locate a genuine table REGION by its persistent column
+# gutters (a vertical whitespace strip empty across many lines with text on both
+# sides — present in tables, absent in prose), then run the text strategy only
+# inside that crop, where over-detection is impossible. Per-corpus opt-in via
+# DocumentProfile.detect_text_tables; NORA_EXTRACT_TEXT_TABLES forces it on
 # globally for debugging.
 _TEXT_TABLE_SETTINGS = {
     "vertical_strategy": "text",
@@ -90,87 +91,154 @@ def _looks_tabular(data: list[list] | None) -> bool:
     return nonempty_rows >= 2
 
 
-def _numbered_row_regions(
+# Borderless-table region detection tunables (calibrated against the MNO-C
+# corpus: prose marker-gaps run ~5-6pt, real column gutters ~10-27pt).
+_MIN_GUTTER_PT = 8.0      # min width of a column gutter (> prose marker-gaps)
+_MIN_TABLE_ROWS = 3       # min text-lines in a region to qualify as a table
+_MAX_LINE_GAP_PT = 40.0   # vertical gap that breaks a region (points, top-to-top)
+_TWO_SIDED_LOOK = 4       # recent lines checked for text on both sides of a gutter
+_LINE_Y_TOL = 2.0         # words within this many points of top share a text-line
+_WORD_MERGE_GAP_PT = 4.0  # words closer than this join into one segment
+
+
+def _page_lines(
     words: list[dict],
     *,
-    min_rows: int = 3,
-    x_tol: float = 8.0,
-) -> list[tuple[float, float, float, float]]:
-    """Locate borderless numbered-row table regions from a page's words.
+    y_tol: float = _LINE_Y_TOL,
+    merge_gap: float = _WORD_MERGE_GAP_PT,
+) -> list[dict]:
+    """Group a page's words into text-lines with merged x-segments.
 
-    Signal: a vertical run of >= `min_rows` standalone integer "row markers"
-    that (a) share a left column (``x0`` within `x_tol`) and (b) increment by
-    exactly 1 (1, 2, 3, …). For each run the region spans one median row-height
-    above the first marker (to include the header row) to one below the last,
-    across the x-extent of the words in that vertical band. Returns
-    ``(x0, top, x1, bottom)`` bboxes (pdfplumber top-left origin).
-
-    Pure over word dicts (``{'text','x0','x1','top','bottom'}``) so the geometry
-    is unit-testable without a real PDF. Deliberately specific — a left column
-    of consecutive integers is a strong table signal that prose, numbered lists
-    (``1.`` keeps the period, so ``isdigit()`` is False), page numbers, and
-    figure captions do not produce.
+    Words within `y_tol` of each other's top share a line; within a line, words
+    closer than `merge_gap` join into one segment (so a wider gap survives as a
+    potential column gutter). Returns lines sorted by top, each
+    ``{'top','bottom','segs':[(x0,x1)]}``. Pure over word dicts so the geometry
+    is unit-testable without a real PDF.
     """
-    markers: list[tuple[int, float, float, float]] = []
+    buckets: dict[int, list[dict]] = {}
     for w in words:
-        t = (w.get("text") or "").strip()
-        if t.isdigit():
-            markers.append(
-                (int(t), float(w["x0"]), float(w["top"]), float(w["bottom"]))
-            )
-    if len(markers) < min_rows:
-        return []
-    # Cluster markers into left-columns by x0.
-    markers.sort(key=lambda m: (m[1], m[2]))
-    columns: list[list[tuple[int, float, float, float]]] = []
-    for m in markers:
-        for col in columns:
-            if abs(m[1] - col[0][1]) <= x_tol:
-                col.append(m)
-                break
+        buckets.setdefault(round(float(w["top"]) / y_tol), []).append(w)
+    lines: list[dict] = []
+    for key in sorted(buckets):
+        ws = sorted(buckets[key], key=lambda w: float(w["x0"]))
+        top = min(float(w["top"]) for w in ws)
+        bottom = max(float(w["bottom"]) for w in ws)
+        segs: list[tuple[float, float]] = []
+        a, b = float(ws[0]["x0"]), float(ws[0]["x1"])
+        for w in ws[1:]:
+            x0, x1 = float(w["x0"]), float(w["x1"])
+            if x0 - b > merge_gap:
+                segs.append((a, b))
+                a, b = x0, x1
+            else:
+                b = max(b, x1)
+        segs.append((a, b))
+        lines.append({"top": top, "bottom": bottom, "segs": segs})
+    lines.sort(key=lambda ln: ln["top"])
+    return lines
+
+
+def _region_gutters(
+    region: list[dict],
+    min_gutter: float,
+) -> tuple[list[tuple[float, float]], float, float]:
+    """Column gutters of a line-set: x-intervals >= `min_gutter` that no word in
+    any line covers (gaps in the union of every line's segments). Returns
+    ``(gutters, xmin, xmax)``. A gutter is empty-in-all-lines and interior by
+    construction (it lies between covered spans)."""
+    segs = sorted(s for ln in region for s in ln["segs"])
+    if not segs:
+        return [], 0.0, 0.0
+    merged: list[list[float]] = [list(segs[0])]
+    xmin, xmax = segs[0][0], segs[0][1]
+    for a, b in segs[1:]:
+        xmax = max(xmax, b)
+        if a <= merged[-1][1] + 0.01:
+            merged[-1][1] = max(merged[-1][1], b)
         else:
-            columns.append([m])
-
-    regions: list[tuple[float, float, float, float]] = []
-    for col in columns:
-        col.sort(key=lambda m: m[2])  # by top
-        i, n = 0, len(col)
-        while i < n:
-            j = i
-            while j + 1 < n and col[j + 1][0] == col[j][0] + 1:
-                j += 1
-            run = col[i : j + 1]
-            if len(run) >= min_rows:
-                region = _region_from_run(run, words)
-                if region is not None:
-                    regions.append(region)
-            i = j + 1
-    return regions
-
-
-def _region_from_run(
-    run: list[tuple[int, float, float, float]],
-    words: list[dict],
-) -> tuple[float, float, float, float] | None:
-    """Bounding box for a numbered-row run: extend one median row-height above
-    the first marker (header) and below the last, and take the x-extent of the
-    words falling in that vertical band. Returns None if the band is empty."""
-    tops = [m[2] for m in run]
-    bottoms = [m[3] for m in run]
-    gaps = sorted(tops[k + 1] - tops[k] for k in range(len(tops) - 1))
-    row_gap = gaps[len(gaps) // 2] if gaps else (bottoms[0] - tops[0])
-    y_top = tops[0] - row_gap
-    y_bottom = bottoms[-1] + row_gap
-    band = [
-        w
-        for w in words
-        if float(w["top"]) >= y_top - 0.1 and float(w["bottom"]) <= y_bottom + 0.1
+            merged.append([a, b])
+    gutters = [
+        (merged[k][1], merged[k + 1][0])
+        for k in range(len(merged) - 1)
+        if merged[k + 1][0] - merged[k][1] >= min_gutter
     ]
-    if not band:
-        return None
-    x0 = min(float(w["x0"]) for w in band)
-    x1 = max(float(w["x1"]) for w in band)
-    return (x0 - 2.0, y_top, x1 + 2.0, y_bottom)
+    return gutters, xmin, xmax
+
+
+def _trim_region(region: list[dict], min_gutter: float, min_rows: int) -> list[dict]:
+    """Drop leading/trailing lines with no text past the first column — these are
+    single-column prose the two-sided look-back window let the region bleed into.
+    Interior single-column lines (wrapped-cell continuations) are kept because
+    they are flanked by multi-column rows. Never trims below `min_rows`."""
+    gutters, _, _ = _region_gutters(region, min_gutter)
+    if not gutters:
+        return region
+    right_edge = gutters[0][1]  # right edge of the leftmost gutter
+
+    def _has_right(ln: dict) -> bool:
+        return any(s[0] >= right_edge - 0.5 for s in ln["segs"])
+
+    lo, hi = 0, len(region)
+    while hi - lo > min_rows and not _has_right(region[hi - 1]):
+        hi -= 1
+    while hi - lo > min_rows and not _has_right(region[lo]):
+        lo += 1
+    return region[lo:hi]
+
+
+def _gutter_table_regions(
+    lines: list[dict],
+    *,
+    min_gutter: float = _MIN_GUTTER_PT,
+    min_rows: int = _MIN_TABLE_ROWS,
+    max_line_gap: float = _MAX_LINE_GAP_PT,
+    look: int = _TWO_SIDED_LOOK,
+) -> list[tuple[float, float, float, float]]:
+    """Locate borderless-table regions by persistent column gutters.
+
+    A table (unlike prose) has a vertical whitespace gutter that stays empty
+    across many consecutive lines with text on BOTH sides. Grow a region line by
+    line while (a) the vertical gap stays within `max_line_gap`, (b) >=1 gutter
+    of width >= `min_gutter` remains empty across all region lines, and (c) among
+    the most recent `look` lines some has text left of that gutter and some right
+    — the two-sided check stops the region bleeding into single-column prose
+    below a far-right column. Regions with >= `min_rows` lines yield an
+    ``(x0, top, x1, bottom)`` bbox. Pure over `_page_lines` output; validated
+    against real MNO-C prose/table pages.
+    """
+    n = len(lines)
+    regions: list[tuple[float, float, float, float]] = []
+    i = 0
+    while i < n:
+        region = [lines[i]]
+        j = i
+        while j + 1 < n:
+            if lines[j + 1]["top"] - lines[j]["top"] > max_line_gap:
+                break
+            trial = region + [lines[j + 1]]
+            gutters, _, _ = _region_gutters(trial, min_gutter)
+            if not gutters:
+                break
+            recent = trial[-look:]
+            two_sided = False
+            for ga, gb in gutters:
+                left = any(any(s[1] <= ga + 0.5 for s in ln["segs"]) for ln in recent)
+                right = any(any(s[0] >= gb - 0.5 for s in ln["segs"]) for ln in recent)
+                if left and right:
+                    two_sided = True
+                    break
+            if not two_sided:
+                break
+            region = trial
+            j += 1
+        region = _trim_region(region, min_gutter, min_rows)
+        gutters, xmin, xmax = _region_gutters(region, min_gutter)
+        if len(region) >= min_rows and gutters:
+            top = region[0]["top"]
+            bottom = region[-1]["bottom"]
+            regions.append((xmin - 2.0, top - 2.0, xmax + 2.0, bottom + 2.0))
+        i = j + 1 if j > i else i + 1
+    return regions
 
 
 def _clamp_bbox(
@@ -188,14 +256,14 @@ def _clamp_bbox(
     )
 
 
-def _find_numbered_row_tables(plumber_page) -> list[tuple[float, float, float, float]]:
-    """Numbered-row table regions on a pdfplumber page (best-effort; returns []
-    on any extract_words failure so a bad page never aborts extraction)."""
+def _find_table_regions(plumber_page) -> list[tuple[float, float, float, float]]:
+    """Borderless-table regions on a pdfplumber page (best-effort; returns [] on
+    any extract_words failure so a bad page never aborts extraction)."""
     try:
         words = plumber_page.extract_words(use_text_flow=False)
     except Exception:  # noqa: BLE001 — detection must never abort the page
         return []
-    return _numbered_row_regions(words)
+    return _gutter_table_regions(_page_lines(words))
 
 
 class PDFExtractor(BaseExtractor):
@@ -280,16 +348,16 @@ class PDFExtractor(BaseExtractor):
             # --- Tables (pdfplumber) ---
             table_bboxes: list[tuple[float, float, float, float]] = []
             plumber_tables = list(plumber_page.find_tables())
-            # Opt-in: borderless numbered-row tables. Locate each table REGION
-            # from its sequential row-number column, then run the text strategy
-            # ONLY inside that crop (never page-wide — that mis-reads prose). The
-            # resulting table feeds the same processing below and its bbox is
-            # added to table_bboxes, so its rows stop leaking out as
-            # number-prefixed paragraphs the parser mis-reads as sections.
+            # Opt-in: borderless tables. Locate each table REGION by its
+            # persistent column gutters, then run the text strategy ONLY inside
+            # that crop (never page-wide — that mis-reads prose). The resulting
+            # table feeds the same processing below and its bbox is added to
+            # table_bboxes, so its rows stop leaking out as paragraphs the parser
+            # mis-reads as sections / merges into the requirement's prose.
             if detect_text_tables:
                 line_bboxes = [t.bbox for t in plumber_tables]
                 page_w, page_h = plumber_page.width, plumber_page.height
-                for region in _find_numbered_row_tables(plumber_page):
+                for region in _find_table_regions(plumber_page):
                     if _bbox_overlaps_any(region, line_bboxes):
                         continue
                     try:
