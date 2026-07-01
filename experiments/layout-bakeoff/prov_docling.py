@@ -63,20 +63,40 @@ _MAP = {
 }
 
 
-def _prov(item) -> tuple[int, tuple[float, float, float, float] | None]:
+def _prov(item, doc) -> tuple[int, tuple[float, float, float, float] | None]:
+    """Page + bbox normalized to TOP-LEFT origin, PDF points (matches pymupdf).
+    Docling bbox carries a coord_origin; convert via the page height so downstream
+    fusion compares like-for-like."""
     prov = getattr(item, "prov", None) or []
     if not prov:
         return 0, None
     p0 = prov[0]
     page = int(getattr(p0, "page_no", 0) or 0)
     bb = getattr(p0, "bbox", None)
-    bbox = None
-    if bb is not None:
-        try:
-            bbox = (float(bb.l), float(bb.t), float(bb.r), float(bb.b))
+    if bb is None:
+        return page, None
+    try:
+        page_h = float(doc.pages[page].size.height)
+        tl = bb.to_top_left_origin(page_height=page_h)
+        return page, (float(tl.l), float(tl.t), float(tl.r), float(tl.b))
+    except Exception:
+        try:  # last resort: raw l,t,r,b (origin unnormalized — overlay will show it)
+            return page, (float(bb.l), float(bb.t), float(bb.r), float(bb.b))
         except Exception:
-            bbox = None
-    return page, bbox
+            return page, None
+
+
+def _page_sizes(doc) -> dict:
+    """{page_no: [width, height]} in Docling's points frame."""
+    out: dict = {}
+    try:
+        for pno, pitem in (doc.pages or {}).items():
+            sz = getattr(pitem, "size", None)
+            if sz is not None:
+                out[int(pno)] = [float(sz.width), float(sz.height)]
+    except Exception:
+        pass
+    return out
 
 
 def _table_html(item, doc) -> str:
@@ -168,7 +188,7 @@ class DoclingProvider:
         for entry in items:
             item = entry[0] if isinstance(entry, tuple) else entry
             kind = normalize_kind(str(getattr(item, "label", "") or ""), _MAP)
-            page, bbox = _prov(item)
+            page, bbox = _prov(item, doc)
             if page:
                 pages.add(page)
             blk = LayoutBlock(kind=kind, page=page, order=order, bbox=bbox,
@@ -185,6 +205,7 @@ class DoclingProvider:
             res.blocks.append(blk)
             order += 1
 
+        res.page_sizes = _page_sizes(doc)
         npages = getattr(doc, "num_pages", None)
         try:
             res.page_count = npages() if callable(npages) else (npages or len(pages))

@@ -71,6 +71,27 @@ table plus every extracted table rendered inline, provider-by-provider, so you c
 judge table fidelity directly. Per-provider full dumps are in
 `out/<doc>__<provider>.md`.
 
+## Verify coordinate alignment (do this before trusting fusion)
+
+The production plan fuses Docling tables/figures into the pymupdf text flow by
+position, which assumes both engines agree on `(page, bbox)`. They agree only up
+to coordinate-frame handling (rotation / CropBox), so **measure it**:
+
+```bash
+# 1. run with --dump-bboxes (bboxes are normalized to top-left points):
+python run_bakeoff.py doc.pdf --provider docling --out ./out --dump-bboxes
+
+# 2. overlay those boxes on the pymupdf-rendered pages (needs pymupdf + Pillow):
+pip install pymupdf pillow
+python overlay.py doc.pdf out/doc__docling.json --out overlays --kinds table,figure
+```
+
+Open the PNGs in `overlays/`. The boxes should sit **exactly** on the tables and
+figures. A consistent offset, an axis flip, or a printed **FRAME MISMATCH** note
+(pymupdf page size ≠ Docling's) means the two engines disagree on geometry —
+handle that in the coordinate-normalization helper before wiring fusion in. Check
+a rotated or odd-CropBox page specifically. `--kinds all` overlays every block.
+
 ## Offline / proxy-blocked work PC (Docling)
 
 Two symptoms, two fixes:

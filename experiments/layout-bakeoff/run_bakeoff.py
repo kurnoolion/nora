@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from layout_provider import save_result
+from layout_provider import LayoutResult, save_result
 from prov_docling import DoclingProvider
 from prov_hiro import HiroProvider
 from prov_paddle import PaddleProvider
@@ -29,12 +29,32 @@ PROVIDERS = {
 }
 
 
+def _dump_bboxes(result: LayoutResult, out_dir: Path) -> None:
+    """Compact per-page bbox listing (normalized top-left points) for eyeballing
+    and for feeding overlay.py."""
+    stem = f"{Path(result.source).stem}__{result.provider}"
+    lines = [f"# {result.provider}  {result.source}  (top-left points)"]
+    pages = sorted({b.page for b in result.blocks if b.bbox})
+    for pno in pages:
+        w, h = result.page_sizes.get(pno, [0, 0])
+        lines.append(f"page {pno}  size={w:.0f}x{h:.0f}")
+        for b in result.blocks:
+            if b.page == pno and b.bbox:
+                l, t, r, bt = b.bbox
+                lines.append(f"  {b.kind:14} ({l:.0f},{t:.0f},{r:.0f},{bt:.0f})")
+    (out_dir / f"{stem}.bboxes.txt").write_text("\n".join(lines), encoding="utf-8")
+    print(f"   dumped bboxes -> {stem}.bboxes.txt")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Layout-parser bake-off (one provider).")
     ap.add_argument("pdfs", nargs="+", type=Path, help="PDF file(s) to parse.")
     ap.add_argument("--provider", required=True, choices=sorted(PROVIDERS))
     ap.add_argument("--out", type=Path, default=Path("./out"),
                     help="Output dir (shared across providers). Default ./out")
+    ap.add_argument("--dump-bboxes", action="store_true",
+                    help="Also write <stem>__<provider>.bboxes.txt (page/kind/bbox, "
+                         "normalized top-left points) for the overlay check.")
     args = ap.parse_args()
 
     provider = PROVIDERS[args.provider]()
@@ -56,6 +76,8 @@ def main() -> None:
         print(f"   ok={result.ok} blocks={len(result.blocks)} "
               f"tables={len(result.tables)} figures={len(result.figures)} "
               f"{result.seconds:.1f}s -> {path.name}")
+        if args.dump_bboxes:
+            _dump_bboxes(result, args.out)
         if not result.ok:
             print(f"   error: {result.error}")
             failures += 1

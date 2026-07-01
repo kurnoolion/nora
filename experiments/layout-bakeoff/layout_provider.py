@@ -49,6 +49,9 @@ class LayoutResult:
     seconds: float = 0.0
     ok: bool = True
     error: str = ""
+    # page_no -> [width, height] in the provider's own points frame — lets the
+    # overlay flag a page whose size disagrees with pymupdf's (rotation/CropBox).
+    page_sizes: dict = field(default_factory=dict)
 
     @property
     def tables(self) -> list[LayoutBlock]:
