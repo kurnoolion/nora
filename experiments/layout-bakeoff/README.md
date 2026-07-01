@@ -48,11 +48,15 @@ pip install -r requirements-paddle.txt
 python run_bakeoff.py /path/to/doc1.pdf /path/to/doc2.pdf --provider paddle --out ./out
 deactivate
 
-# 3) Hiro — start its FastAPI service + MOSS-OCR vLLM endpoint per the Hiro repo,
-#    then point the client at it (thin client only needs `requests`):
+# 3) Hiro — two services. On the SERVER: launch the MOSS-OCR vLLM (OpenAI-
+#    compatible, ends in /v1) and the Hiro FastAPI app, wiring them together via
+#    Hiro's own env: MOSS_VLLM_OCR_API=http://127.0.0.1:8088/v1 (this is the /v1
+#    URL), MOSS_VLLM_OCR_API_KEY, MOSS_VLLM_MODEL.
+#    Our client only needs `requests` and points at the HIRO APP (no /v1):
 pip install -r requirements-hiro.txt
 HIRO_BASE_URL=http://127.0.0.1:8000 \
   python run_bakeoff.py /path/to/doc1.pdf --provider hiro --out ./out
+# endpoint defaults to /pdf/smart-doc; override with HIRO_ENDPOINT / HIRO_FILE_FIELD
 
 # 4) Combine
 python summarize.py ./out          # -> ./out/summary.md
