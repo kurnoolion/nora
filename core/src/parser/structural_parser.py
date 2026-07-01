@@ -609,6 +609,14 @@ class GenericStructuralParser:
             if profile.heading_detection.priority_marker_pattern
             else None
         )
+        # When True, a priority marker qualifies only a heading that is itself
+        # a requirement (req_id present) — some corpora carry the marker solely
+        # on requirement headings, so a structural heading whose title happens
+        # to contain a marker-shaped token must NOT be mined. Default False
+        # preserves the general FR-31 contract (any heading may carry priority).
+        self._priority_requires_req_id = bool(
+            profile.heading_detection.priority_requires_req_id
+        )
         # Heading-title decoration strip — compiled once; None if disabled.
         # Removes a trailing in-text id-marker (e.g. "ID: <id>") from every
         # heading title after priority extraction, for clean titles on both
@@ -1758,9 +1766,6 @@ class GenericStructuralParser:
                         # Stay in heading context — multi-line continuations stack.
                         continue
 
-                    # FR-31: extract priority marker (if any) from heading text
-                    # before storing — title carries the cleaned form.
-                    priority, heading_text = self._extract_priority(heading_text)
                     # Strip a trailing in-text id-marker (e.g. "ID: <id>") so the
                     # title is the clean statement — for requirement AND structural
                     # headings (the latter's id never matches requirement_id.pattern).
@@ -1771,6 +1776,15 @@ class GenericStructuralParser:
                     # from a separate small-font block per the OA convention).
                     heading_req_id = self._heading_req_id(block)
                     section_req_id = heading_req_id or pending_req_id
+                    # FR-31: extract the priority marker from the heading. When
+                    # the profile scopes priority to requirement headings only
+                    # (priority_requires_req_id), a structural heading — one with
+                    # no req_id — is left untouched so a marker-shaped token in
+                    # its title is neither mis-read as a priority nor stripped.
+                    if self._priority_requires_req_id and not section_req_id:
+                        priority = ""
+                    else:
+                        priority, heading_text = self._extract_priority(heading_text)
                     # Empty section_num (docx_styles + TOC pair miss) is
                     # never deduplicated — every such heading creates its
                     # own Requirement. Numbered sections continue to

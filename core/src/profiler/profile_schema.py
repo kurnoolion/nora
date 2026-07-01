@@ -58,6 +58,15 @@ class HeadingDetection:
     #   r"\[(MANDATORY|OPTIONAL|CONDITIONAL)\]"
     priority_marker_pattern: str = ""
 
+    # When True, `priority_marker_pattern` is applied ONLY to headings that are
+    # themselves requirements (a req_id was resolved for the heading). Some
+    # corpora place the priority marker solely on requirement headings, so a
+    # structural heading whose title coincidentally contains a marker-shaped
+    # token must not be mined (it would gain a spurious priority and lose the
+    # token from its title). Default False preserves the general FR-31 contract
+    # that any heading may carry a priority marker.
+    priority_requires_req_id: bool = False
+
     # FR-35 [D-032]: regex matching the heading text of a document's
     # definitions / acronyms / glossary section. Default catches common
     # variants. Empty string disables definitions extraction.
@@ -612,6 +621,7 @@ class DocumentProfile:
                 numbering_pattern=hd.get("numbering_pattern", ""),
                 max_observed_depth=hd.get("max_observed_depth", 0),
                 priority_marker_pattern=hd.get("priority_marker_pattern", ""),
+                priority_requires_req_id=hd.get("priority_requires_req_id", False),
                 title_strip_pattern=hd.get("title_strip_pattern", ""),
                 definitions_section_pattern=hd.get(
                     "definitions_section_pattern", r"(?i)acronym|definition|glossary"

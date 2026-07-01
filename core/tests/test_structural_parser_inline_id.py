@@ -123,6 +123,45 @@ def test_title_strip_is_noop_without_pattern():
     assert "ID: GP-SEC-1" in _by_section(tree, "4.1").title
 
 
+def test_priority_scoped_to_requirement_headings_when_flag_set():
+    """priority_requires_req_id=True: a structural heading (no req_id) whose
+    title contains a marker-shaped token is NOT mined for priority — the token
+    stays in the title. Requirement headings are still mined (mno-c-ingestion)."""
+    prof = _profile()
+    prof.heading_detection.priority_requires_req_id = True
+    blocks = [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1 Handover (see clause 5) ID: GP-SEC-99", size=7.3),
+        _block(2, "4.1.2 TS 37.865 shall be supported (Mandatory) ID: GP-REQ-12345", size=5.7),
+    ]
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="MNOC",
+                    release="Mar2026", content_blocks=blocks)
+    tree = GenericStructuralParser(prof).parse(ir)
+    sec = _by_section(tree, "4.1")
+    assert sec.req_id == "" and sec.priority == ""        # structural → not mined
+    assert "(see clause 5)" in sec.title                  # marker-shaped token retained
+    assert "ID:" not in sec.title                         # trailing id still stripped
+    req = _by_section(tree, "4.1.2")
+    assert req.priority == "MANDATORY"                    # requirement → still mined
+    assert "(Mandatory)" not in req.title
+
+
+def test_priority_mined_from_any_heading_when_flag_unset():
+    """Default (flag off) preserves the general FR-31 contract: a structural
+    heading with a marker-shaped token IS mined."""
+    prof = _profile()  # priority_requires_req_id defaults False
+    blocks = [_block(0, "4.1 Handover (Mandatory) ID: GP-SEC-99", size=7.3)]
+    blocks[0].position.index = 0
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="M",
+                    release="R", content_blocks=blocks)
+    tree = GenericStructuralParser(prof).parse(ir)
+    sec = _by_section(tree, "4.1")
+    assert sec.priority == "MANDATORY"                    # mined despite no req_id
+    assert "(Mandatory)" not in sec.title
+
+
 def test_plan_id_falls_back_to_path_plan():
     """When the profile's plan_metadata yields no plan, the tree (and each req)
     take DocumentIR.plan — the plan the pipeline captured from a per-plan input
