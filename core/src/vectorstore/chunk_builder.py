@@ -265,6 +265,10 @@ class ChunkBuilder:
                 "doc_type": "requirement",
                 "plan_id": plan_id,
                 "req_id": req_id,
+                # True for actual requirements, False for structural section nodes
+                # (a corpus may assign ids to both). Back-compat: trees without the
+                # flag treat any req_id as a requirement.
+                "is_requirement": req.get("is_requirement", bool(req_id)),
                 "section_number": req.get("section_number", ""),
                 "zone_type": req.get("zone_type", ""),
                 "feature_ids": feature_ids,

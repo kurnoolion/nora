@@ -108,6 +108,14 @@ class RequirementIdPattern:
     sample_ids: list[str] = field(default_factory=list)
     total_found: int = 0
 
+    requirement_type_pattern: str = ""
+    """Optional regex identifying which captured ids are ACTUAL requirements vs
+    structural sections. When `pattern` is broadened to capture both requirement
+    and section ids (e.g. a corpus whose sections also carry ids), a node's
+    ``is_requirement`` is True only when its ``req_id`` matches this narrower
+    pattern. Empty (default) → any node with a req_id is a requirement
+    (back-compat: the historical "req_id present ⇒ requirement" semantics)."""
+
     anchor: str = "trailing_text"
     """Where in a heading the req_id is anchored:
       - ``"last_run"``: take the last ``TextRun`` of the heading; treat its

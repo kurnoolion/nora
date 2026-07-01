@@ -268,6 +268,13 @@ class Requirement:
     parent_section: str = ""
     hierarchy_path: list[str] = field(default_factory=list)
     zone_type: str = ""
+    is_requirement: bool = False
+    """True when this node is an ACTUAL requirement — its ``req_id`` matches the
+    profile's ``requirement_id.requirement_type_pattern``. False for structural
+    section nodes (a ``req_id`` that isn't the requirement type) and nodes with no
+    ``req_id``. When the profile sets no requirement_type_pattern, any node with a
+    ``req_id`` is a requirement (back-compat). Lets downstream tell requirements
+    from sections when a corpus assigns ids to both."""
     priority: str = ""  # FR-31: extracted via profile.heading_detection.priority_marker_pattern
     applicability: list[str] = field(default_factory=list)  # FR-32 [D-030]: form-factor labels
     text: str = ""
@@ -456,6 +463,7 @@ class RequirementTree:
                 parent_section=r.get("parent_section", ""),
                 hierarchy_path=r.get("hierarchy_path", []),
                 zone_type=r.get("zone_type", ""),
+                is_requirement=r.get("is_requirement", bool(r.get("req_id", ""))),
                 priority=r.get("priority", ""),
                 applicability=r.get("applicability", []),
                 text=r.get("text", ""),
@@ -544,6 +552,14 @@ class GenericStructuralParser:
         )
         self._leading_id_mode = (
             profile.requirement_id.detection_mode == "leading_id_body"
+        )
+        # Requirement-vs-section discriminator (D-DRAFT): a captured req_id is an
+        # ACTUAL requirement only when it matches this narrower pattern. None →
+        # any req_id is a requirement (back-compat).
+        self._requirement_type_re = (
+            re.compile(profile.requirement_id.requirement_type_pattern)
+            if profile.requirement_id.requirement_type_pattern
+            else None
         )
         # Revision/version-history heading detection (FR-34) — compiled
         # once; None if disabled. Drops the matching paragraph and the
@@ -813,6 +829,11 @@ class GenericStructuralParser:
         #    _link_parents skips them. Inherit hierarchy_path from their
         #    paragraph-anchored parent now that the parents are linked.
         self._propagate_hierarchy_to_table_reqs(sections)
+
+        # 6b. Mark actual requirements vs structural section nodes (one pass over
+        #     all nodes, independent of how each was created).
+        for sec in sections:
+            sec.is_requirement = self._is_requirement(sec.req_id)
 
         # 7. Apply form-factor applicability with hierarchical inheritance
         #    (FR-32 [D-030]). Document-order walk; explicit value wins,
@@ -3396,6 +3417,16 @@ class GenericStructuralParser:
             section.text = text
 
     # ── Parent-child linking ────────────────────────────────────────
+
+    def _is_requirement(self, req_id: str) -> bool:
+        """True when `req_id` denotes an actual requirement (not a structural
+        section). No req_id → False. No requirement_type_pattern configured →
+        any req_id is a requirement (back-compat)."""
+        if not req_id:
+            return False
+        if self._requirement_type_re is None:
+            return True
+        return bool(self._requirement_type_re.search(req_id))
 
     def _link_parents(self, sections: list[Requirement]) -> None:
         """Build parent-child relationships and hierarchy paths."""

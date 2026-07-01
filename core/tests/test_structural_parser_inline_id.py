@@ -212,3 +212,44 @@ def test_plan_id_falls_back_to_path_plan():
     assert tree.plan_id == "PlanFoo"                      # tree-level from path
     req = next(r for r in tree.requirements if r.req_id == "GP-REQ-1")
     assert req.plan_id == "PlanFoo"                       # per-req falls back to tree
+
+
+def _parse_prof(prof, blocks):
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="MNOC",
+                    release="Mar2026", content_blocks=blocks)
+    return GenericStructuralParser(prof).parse(ir)
+
+
+def test_section_id_captured_with_type_discriminator():
+    """Broadened pattern captures both section (SEC) and requirement (REQ) ids;
+    requirement_type_pattern marks which nodes are actual requirements."""
+    prof = _profile()
+    prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"          # capture both
+    prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"  # REQ = requirement
+    tree = _parse_prof(prof, [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1 3GPP specification compliance ID: GP-SEC-99", size=7.3),
+        _block(2, "4.1.2 TS 37.865 shall be supported (Mandatory) ID: GP-REQ-12345",
+               size=5.7),
+    ])
+    sec = _by_section(tree, "4.1")
+    assert sec.req_id == "GP-SEC-99"          # section id now captured (was empty)
+    assert sec.is_requirement is False         # but flagged a structural section
+    req = _by_section(tree, "4.1.2")
+    assert req.req_id == "GP-REQ-12345"
+    assert req.is_requirement is True          # actual requirement
+    # parent linking now resolves the section id (bonus)
+    assert req.parent_req_id == "GP-SEC-99"
+
+
+def test_is_requirement_backcompat_without_type_pattern():
+    # No requirement_type_pattern → any req_id is a requirement; no req_id → not.
+    prof = _profile()  # pattern GP-REQ-\d+, requirement_type_pattern unset
+    tree = _parse_prof(prof, [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1.2 Foo shall hold (Mandatory) ID: GP-REQ-1", size=5.7),
+    ])
+    assert _by_section(tree, "4.1.2").is_requirement is True
+    assert _by_section(tree, "4").is_requirement is False   # no req_id
