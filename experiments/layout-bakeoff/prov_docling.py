@@ -84,13 +84,17 @@ def _table_html(item, doc) -> str:
     return ""
 
 
-def _table_text(item) -> str:
+def _table_text(item, doc) -> str:
     fn = getattr(item, "export_to_dataframe", None)
-    if callable(fn):
+    if not callable(fn):
+        return ""
+    for args in ((doc,), ()):  # API: newer docling wants the doc (no-arg deprecated)
         try:
-            return fn().to_string(index=False)
+            return fn(*args).to_string(index=False)
+        except TypeError:
+            continue
         except Exception:
-            pass
+            return ""
     return ""
 
 
@@ -133,7 +137,7 @@ class DoclingProvider:
                               meta={"label": str(getattr(item, "label", ""))})
             if kind == "table":
                 blk.html = _table_html(item, doc)
-                blk.text = _table_text(item)
+                blk.text = _table_text(item, doc)
             else:
                 blk.text = (getattr(item, "text", "") or "").strip()
             res.blocks.append(blk)
