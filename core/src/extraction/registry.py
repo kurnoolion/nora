@@ -43,6 +43,7 @@ def extract_document(
     doc_type: str = "",
     detect_text_tables: bool = False,
     header_footer_margin_mode: str = "blanket",
+    layout_provider: str = "",
 ) -> DocumentIR:
     """Extract a document using the appropriate format extractor."""
     extractor = get_extractor(file_path)
@@ -50,6 +51,7 @@ def extract_document(
         file_path, mno=mno, release=release, doc_type=doc_type,
         detect_text_tables=detect_text_tables,
         header_footer_margin_mode=header_footer_margin_mode,
+        layout_provider=layout_provider,
     )
 
 

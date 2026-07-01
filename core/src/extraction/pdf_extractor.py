@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - optional dep
     pdfplumber = None  # type: ignore[assignment]
 
 from core.src.extraction.base import BaseExtractor
+from core.src.extraction.layout_provider import get_layout_provider
 from core.src.models.document import (
     BlockType,
     ContentBlock,
@@ -332,6 +333,7 @@ class PDFExtractor(BaseExtractor):
         doc_type: str = "",
         detect_text_tables: bool = False,
         header_footer_margin_mode: str = "blanket",
+        layout_provider: str = "",
     ) -> DocumentIR:
         if fitz is None or pdfplumber is None:
             raise ImportError(
@@ -352,6 +354,7 @@ class PDFExtractor(BaseExtractor):
                 file_path, fitz_doc, plumber_pdf, mno, release, doc_type,
                 detect_text_tables=detect_text_tables,
                 header_footer_margin_mode=header_footer_margin_mode,
+                layout_provider=layout_provider,
             )
         finally:
             fitz_doc.close()
@@ -367,6 +370,7 @@ class PDFExtractor(BaseExtractor):
         doc_type: str,
         detect_text_tables: bool = False,
         header_footer_margin_mode: str = "blanket",
+        layout_provider: str = "",
     ) -> DocumentIR:
         # First pass: detect repeating header/footer text across pages
         header_footer_patterns = self._detect_header_footer_patterns(fitz_doc)
@@ -379,6 +383,17 @@ class PDFExtractor(BaseExtractor):
             file_path.parent / "extracted_images" / file_path.stem
         )
 
+        # Optional layout provider (e.g. Docling): parse the whole PDF once for
+        # tables + figures, keyed by page. When set, the geometric table/image
+        # paths below are skipped and these replace them; pymupdf still supplies
+        # the text. Fails loud if the profile names an unavailable provider.
+        prov_tables: dict[int, list] = {}
+        prov_figures: dict[int, list] = {}
+        if layout_provider:
+            self._collect_provider_layout(
+                layout_provider, file_path, fitz_doc, images_dir,
+                prov_tables, prov_figures)
+
         for page_num in range(len(fitz_doc)):
             page = fitz_doc[page_num]
             plumber_page = plumber_pdf.pages[page_num]
@@ -390,49 +405,59 @@ class PDFExtractor(BaseExtractor):
             # inside `_extract_text_segments` for paragraph blocks.
             strike_lines = self._collect_strike_lines(page)
 
-            # --- Tables (pdfplumber) ---
+            # --- Tables + figures ---
             table_bboxes: list[tuple[float, float, float, float]] = []
-            plumber_tables = list(plumber_page.find_tables())
-            # Opt-in: borderless tables. Locate each table REGION by its
-            # persistent column gutters (never page-wide — that mis-reads prose),
-            # then keep it as layout-preserved TEXT wrapped in [TABLE] markers
-            # rather than a reconstructed grid: borderless tables with wrapped
-            # multi-line cells and ragged columns don't reconstruct into a clean
-            # grid, and a mangled grid reads worse than the plain text. The block
-            # is emitted at the region's position and its bbox is added to
-            # table_bboxes, so the individual rows stop leaking out as paragraphs
-            # the parser mis-reads as sections / merges into the requirement prose.
-            if detect_text_tables:
-                line_bboxes = [t.bbox for t in plumber_tables]
-                page_w, page_h = plumber_page.width, plumber_page.height
-                for region_bbox, _region_lines in _find_table_regions(plumber_page):
-                    if _bbox_overlaps_any(region_bbox, line_bboxes):
-                        continue
-                    try:
-                        crop = plumber_page.crop(
-                            _clamp_bbox(region_bbox, page_w, page_h)
+            if layout_provider:
+                # Provider path: tables + figures come from the layout provider;
+                # their bboxes suppress the pymupdf text beneath them. The
+                # geometric pdfplumber / get_images paths are skipped.
+                self._emit_provider_blocks(
+                    page_num, file_path, prov_tables, prov_figures,
+                    all_blocks, table_bboxes)
+                plumber_tables = []
+            else:
+                plumber_tables = list(plumber_page.find_tables())
+                # Opt-in: borderless tables. Locate each table REGION by its
+                # persistent column gutters (never page-wide — that mis-reads
+                # prose), then keep it as layout-preserved TEXT wrapped in [TABLE]
+                # markers rather than a reconstructed grid: borderless tables with
+                # wrapped multi-line cells and ragged columns don't reconstruct
+                # into a clean grid, and a mangled grid reads worse than the plain
+                # text. The block is emitted at the region's position and its bbox
+                # is added to table_bboxes, so the individual rows stop leaking out
+                # as paragraphs the parser mis-reads as sections / merges into the
+                # requirement prose.
+                if detect_text_tables:
+                    line_bboxes = [t.bbox for t in plumber_tables]
+                    page_w, page_h = plumber_page.width, plumber_page.height
+                    for region_bbox, _region_lines in _find_table_regions(plumber_page):
+                        if _bbox_overlaps_any(region_bbox, line_bboxes):
+                            continue
+                        try:
+                            crop = plumber_page.crop(
+                                _clamp_bbox(region_bbox, page_w, page_h)
+                            )
+                            region_text = _region_text(crop)
+                        except Exception as exc:  # noqa: BLE001 — a bad region shouldn't abort the page
+                            logger.debug("borderless table skipped: %s", exc)
+                            continue
+                        if not region_text:
+                            continue
+                        table_bboxes.append(region_bbox)  # suppress the rows below
+                        demarcated = (
+                            f"{_TABLE_TEXT_OPEN}\n{region_text}\n{_TABLE_TEXT_CLOSE}"
                         )
-                        region_text = _region_text(crop)
-                    except Exception as exc:  # noqa: BLE001 — a bad region shouldn't abort the page
-                        logger.debug("borderless table skipped: %s", exc)
-                        continue
-                    if not region_text:
-                        continue
-                    table_bboxes.append(region_bbox)  # suppress the rows below
-                    demarcated = (
-                        f"{_TABLE_TEXT_OPEN}\n{region_text}\n{_TABLE_TEXT_CLOSE}"
-                    )
-                    all_blocks.append(
-                        ContentBlock(
-                            type=BlockType.PARAGRAPH,
-                            position=Position(
-                                page=page_num + 1, index=0, bbox=region_bbox
-                            ),
-                            text=demarcated,
-                            font_info=FontInfo(size=10.0),
-                            runs=[TextRun(text=demarcated, struck=False)],
+                        all_blocks.append(
+                            ContentBlock(
+                                type=BlockType.PARAGRAPH,
+                                position=Position(
+                                    page=page_num + 1, index=0, bbox=region_bbox
+                                ),
+                                text=demarcated,
+                                font_info=FontInfo(size=10.0),
+                                runs=[TextRun(text=demarcated, struck=False)],
+                            )
                         )
-                    )
             for table_obj in plumber_tables:
                 bbox = table_obj.bbox  # (x0, y0, x1, y1) top-left origin
                 # NOTE: bbox is reserved in `table_bboxes` (which suppresses the
@@ -624,8 +649,10 @@ class PDFExtractor(BaseExtractor):
                         )
                     )
 
-            # --- Images (pymupdf) ---
-            for img_idx, img_info in enumerate(page.get_images()):
+            # --- Images (pymupdf) --- skipped when a layout provider supplies
+            # figures (it detects vector flow diagrams pymupdf's get_images misses).
+            for img_idx, img_info in enumerate(
+                [] if layout_provider else page.get_images()):
                 xref = img_info[0]
                 try:
                     base_image = fitz_doc.extract_image(xref)
@@ -700,6 +727,67 @@ class PDFExtractor(BaseExtractor):
         )
 
         return doc_ir
+
+    # --- Layout-provider fusion ---
+
+    def _collect_provider_layout(
+        self, name, file_path, fitz_doc, images_dir, prov_tables, prov_figures
+    ) -> None:
+        """Parse the PDF once through the selected layout provider; group its
+        tables/figures by page. Fails loud if the provider is unknown or its
+        dependency/models are missing (a profile asked for it explicitly)."""
+        prov = get_layout_provider(name)
+        if prov is None:
+            raise ValueError(f"Unknown layout_provider: {name!r}")
+        ok, why = prov.available()
+        if not ok:
+            raise ImportError(f"layout_provider {name!r} unavailable: {why}")
+        structs = prov.extract_layout(file_path, image_dir=images_dir)
+        for t in structs.tables:
+            prov_tables.setdefault(t.page, []).append(t)
+        for f in structs.figures:
+            prov_figures.setdefault(f.page, []).append(f)
+        # Overlay confirmed frame alignment; warn if a page disagrees at runtime.
+        for pno, (pw, ph) in structs.page_sizes.items():
+            try:
+                r = fitz_doc[pno - 1].rect
+                if abs(r.width - pw) > 1 or abs(r.height - ph) > 1:
+                    logger.warning(
+                        "layout provider page %d size %.0fx%.0f != pymupdf "
+                        "%.0fx%.0f (rotation/CropBox?) — fusion may be misplaced",
+                        pno, pw, ph, r.width, r.height)
+            except Exception:
+                pass
+
+    def _emit_provider_blocks(
+        self, page_num, file_path, prov_tables, prov_figures,
+        all_blocks, table_bboxes
+    ) -> None:
+        """Turn this page's provider tables/figures into TABLE / IMAGE blocks and
+        reserve their bboxes so the pymupdf text pass suppresses the text beneath.
+        Blocks sort into reading order by (page, y) with the pymupdf paragraphs."""
+        pageno = page_num + 1
+        for t in prov_tables.get(pageno, []):
+            if t.bbox:
+                table_bboxes.append(t.bbox)
+            all_blocks.append(ContentBlock(
+                type=BlockType.TABLE,
+                position=Position(page=pageno, index=0, bbox=t.bbox),
+                headers=list(t.headers), rows=[list(r) for r in t.rows],
+                html=t.html, font_info=FontInfo(size=12.0)))
+        for f in prov_figures.get(pageno, []):
+            if f.bbox:
+                table_bboxes.append(f.bbox)
+            img_path = f.image_path
+            try:  # match the get_images convention: path relative to the doc dir
+                if img_path:
+                    img_path = str(Path(img_path).relative_to(file_path.parent))
+            except Exception:
+                pass
+            all_blocks.append(ContentBlock(
+                type=BlockType.IMAGE,
+                position=Position(page=pageno, index=0, bbox=f.bbox),
+                image_path=img_path, caption=f.caption))
 
     # --- Header/footer detection ---
 

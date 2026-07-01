@@ -71,3 +71,12 @@ class LayoutProvider(Protocol):
         not raise for recoverable errors — return empty structures so extraction
         falls back to the geometric path rather than aborting the document."""
         ...
+
+
+def get_layout_provider(name: str) -> LayoutProvider | None:
+    """Resolve a provider by profile name, or None if unknown. Providers are
+    lazy-imported so their heavy optional deps aren't loaded until selected."""
+    if name == "docling":
+        from core.src.extraction.docling_provider import DoclingProvider
+        return DoclingProvider()
+    return None

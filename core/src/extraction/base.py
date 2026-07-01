@@ -22,6 +22,7 @@ class BaseExtractor(ABC):
         doc_type: str = "",
         detect_text_tables: bool = False,
         header_footer_margin_mode: str = "blanket",
+        layout_provider: str = "",
     ) -> DocumentIR:
         """Extract content from a document file.
 
@@ -35,6 +36,9 @@ class BaseExtractor(ABC):
             header_footer_margin_mode: per-corpus PDF hint — "blanket" drops all
                 page-margin text; "pattern_only" keeps it unless it matches a
                 header/footer pattern. PDF-only; other extractors ignore it.
+            layout_provider: per-corpus PDF hint — name of a LayoutProvider (e.g.
+                "docling") to source tables + figures from; "" uses the built-in
+                geometric path. PDF-only; other extractors ignore it.
 
         Returns:
             Normalized DocumentIR ready for the DocumentProfiler or structural parser.
