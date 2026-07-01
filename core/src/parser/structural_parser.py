@@ -227,6 +227,7 @@ class TableData:
     headers: list[str] = field(default_factory=list)
     rows: list[list[str]] = field(default_factory=list)
     source: str = "inline"  # "inline" or "embedded_xlsx"
+    html: str = ""  # lossless HTML from a layout provider (else "" → use headers/rows)
 
 
 @dataclass
@@ -1902,6 +1903,7 @@ class GenericStructuralParser:
                         TableData(
                             headers=block.headers,
                             rows=block.rows,
+                            html=block.html,
                             source="inline",
                         )
                     )
@@ -1910,10 +1912,12 @@ class GenericStructuralParser:
                     # table-then-text ordering is preserved for the synthesizer
                     # instead of all tables being appended at the end. `tables`
                     # stays populated as structured metadata; consumers
-                    # (chunk_builder, SIRA adapter) read the faithful text.
+                    # (chunk_builder, SIRA adapter) read the faithful text. A
+                    # layout-provider table carries lossless HTML (keeps merged
+                    # cells) — prefer it; else render the headers/rows grid.
                     self._append_text(
                         current_section,
-                        render_table_markdown(block.headers, block.rows),
+                        block.html or render_table_markdown(block.headers, block.rows),
                     )
                     # Defer table-anchored extraction to a second pass —
                     # paragraph_req_ids and struck_req_ids must be

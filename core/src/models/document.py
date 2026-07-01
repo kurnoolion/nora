@@ -136,9 +136,16 @@ class ContentBlock:
     # non-merged tables and for extractors that don't surface merges.
     merged_cells: list[MergedCell] = field(default_factory=list)
 
+    # Lossless table HTML from a layout provider (e.g. Docling). Preserves
+    # structure the flat headers/rows grid can't — merged cells, nested headers.
+    # Empty for the pdfplumber/geometric path; consumers prefer it when present,
+    # else fall back to render_table_markdown(headers, rows).
+    html: str = ""
+
     # Image content
     image_path: str = ""
     surrounding_text: str = ""
+    caption: str = ""  # figure caption from a layout provider (else "")
 
     # Embedded object content
     object_type: str = ""  # "xlsx", "docx", "pdf", etc.
@@ -309,8 +316,10 @@ class DocumentIR:
                 header_runs=header_runs,
                 row_runs=row_runs,
                 merged_cells=merged_cells,
+                html=b.get("html", ""),
                 image_path=b.get("image_path", ""),
                 surrounding_text=b.get("surrounding_text", ""),
+                caption=b.get("caption", ""),
                 object_type=b.get("object_type", ""),
                 extracted_path=b.get("extracted_path", ""),
                 extracted_content=b.get("extracted_content", {}),

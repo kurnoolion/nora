@@ -390,6 +390,14 @@ class DocumentProfile:
     # a full multi-MNO run only enables it where the profile asks. Default off.
     detect_text_tables: bool = False
 
+    # Structure source for tables + figures. "" (default) uses the built-in
+    # geometric path (pdfplumber tables + pymupdf/borderless detection). A named
+    # provider (e.g. "docling") routes tables + figures through a LayoutProvider
+    # while the pymupdf text layer + this profile-driven parser still own the
+    # requirement text. Per-corpus, opt-in (D-003) — heavy engines stay off for
+    # corpora that don't need them.
+    layout_provider: str = ""
+
     # How the PDF extractor treats the top/bottom page margins for header/footer
     # removal. "blanket" (default) drops ALL text in the margin band — correct
     # for corpora whose headers sit in the margin and whose requirements never
@@ -681,6 +689,7 @@ class DocumentProfile:
                 **data.get("applicability_detection", {})
             ),
             detect_text_tables=data.get("detect_text_tables", False),
+            layout_provider=data.get("layout_provider", ""),
             header_footer_margin_mode=data.get(
                 "header_footer_margin_mode", "blanket"
             ),
