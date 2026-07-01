@@ -41,6 +41,10 @@ python -m venv .venv-docling && . .venv-docling/bin/activate
 pip install -r requirements-docling.txt
 python run_bakeoff.py /path/to/doc1.pdf /path/to/doc2.pdf --provider docling --out ./out
 deactivate
+#  OCR is OFF by default (born-digital PDFs need no OCR — this also skips the
+#  OCR-model download, e.g. ch_PP-OCRv4_det_mobile.onnx, that fails on restricted
+#  networks). For scanned/image-only pages: DOCLING_OCR=1 python run_bakeoff.py ...
+#  Docling still downloads its LAYOUT + table-structure models on first run.
 
 # 2) PaddleOCR — its own venv (CPU paddlepaddle; swap for -gpu if you have one)
 python -m venv .venv-paddle && . .venv-paddle/bin/activate

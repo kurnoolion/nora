@@ -6,10 +6,36 @@ Docling's API moves between versions; the version-sensitive calls are marked
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 from layout_provider import LayoutBlock, LayoutResult, normalize_kind
+
+# MNO-C PDFs are born-digital (real text layer), so OCR is OFF by default: it's
+# unnecessary, avoids OCR-introduced text errors, and skips the OCR-model
+# download (e.g. ch_PP-OCRv4_det_mobile.onnx) that fails on restricted networks.
+# Set DOCLING_OCR=1 for scanned/image-only pages. Table STRUCTURE stays on.
+_DO_OCR = os.getenv("DOCLING_OCR", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _build_converter():
+    """Converter with OCR gated by DOCLING_OCR and table structure enabled.
+    Falls back to a default converter if this docling version's options API
+    differs."""
+    try:
+        from docling.datamodel.base_models import InputFormat  # API:
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        opts = PdfPipelineOptions()
+        opts.do_ocr = _DO_OCR
+        opts.do_table_structure = True
+        return DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
+        )
+    except Exception:
+        from docling.document_converter import DocumentConverter
+        return DocumentConverter()
 
 # Docling DocItemLabel -> normalized kind.
 _MAP = {
@@ -74,8 +100,7 @@ class DoclingProvider:
         t0 = time.time()
         res = LayoutResult(provider=self.name, source=Path(pdf_path).name)
         try:
-            from docling.document_converter import DocumentConverter  # API:
-            doc = DocumentConverter().convert(str(pdf_path)).document
+            doc = _build_converter().convert(str(pdf_path)).document
         except Exception as e:  # noqa: BLE001
             res.ok, res.error = False, f"convert failed: {e}"
             res.seconds = time.time() - t0
