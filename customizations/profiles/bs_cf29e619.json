@@ -6,7 +6,7 @@
   "_provenance": {
     "bootstrap_id": "bs_cf29e619",
     "source": "hand-drafted from IR inspection of MNO-C sample (strand mno-c-ingestion)",
-    "notes": "All proprietary tokens are placeholders per D-062. <PREFIX> = common req-id prefix; <PREFIX1>/<PREFIX2>/<PREFIX3> = the req-id TYPE tags (non-requirement text / structural sub-section / actual requirement). Real values live ONLY in customizations/mappings/bs_cf29e619.json (work-PC, pushed to company-internal git, never the public mirror). The req-id pattern is scoped to <PREFIX3> so ONLY actual-requirement headings become Requirements; <PREFIX1>/<PREFIX2> headings stay structural. <PRIORITY1>..<PRIORITY5> = the 5 requirement-severity type names (e.g. one is the 'Mandatory' marker) — map each to one value; the alternation `|`s live in the pattern, not the mapped values (specific placeholders are re.escape'd). DRAFT — several fields (font levels/body_text, exclude pattern, plan extraction) need validation against the full IR on the work PC."
+    "notes": "All proprietary tokens are placeholders per D-062. <PREFIX> = common req-id prefix; <PREFIX1>/<PREFIX2>/<PREFIX3> = the req-id TYPE tags (non-requirement text / structural sub-section / actual requirement). Real values live ONLY in customizations/mappings/bs_cf29e619.json (work-PC, pushed to company-internal git, never the public mirror). The req-id pattern is scoped to <PREFIX3> so ONLY actual-requirement headings become Requirements; <PREFIX1>/<PREFIX2> headings stay structural. <PRIORITY1>..<PRIORITY5> = the 5 requirement-severity type names (e.g. one is the 'Mandatory' marker) — map each to one value; the alternation `|`s live in the pattern, not the mapped values (specific placeholders are re.escape'd). Tables + figures come from the Docling LayoutProvider (layout_provider='docling'); the geometric borderless path (detect_text_tables) is therefore off. Docling must be installed in the pipeline env (optional dep) with models provisioned offline (DOCLING_ARTIFACTS + HF_HUB_OFFLINE) or extraction fails loud. DRAFT — several fields (font levels/body_text, exclude pattern, plan extraction) need validation against the full IR on the work PC."
   },
   "heading_detection": {
     "method": "font_size_clustering",
@@ -73,7 +73,8 @@
   "definitions_entry_pattern": "^([A-Z][A-Z0-9/-]{1,15})\\s+(.+?)$",
   "ignore_strikeout": true,
   "enable_table_anchored_extraction": false,
-  "detect_text_tables": true,
+  "layout_provider": "docling",
+  "detect_text_tables": false,
   "header_footer_margin_mode": "pattern_only",
   "toc_detection_pattern": "",
   "toc_page_threshold": 0.7,
