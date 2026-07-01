@@ -8,6 +8,7 @@ heading detection (font size clustering).
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -34,6 +35,54 @@ from core.src.models.document import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Opt-in borderless-table detection (mno-c-ingestion). pdfplumber's default
+# find_tables() uses the "lines" strategy — tables drawn with no ruling lines
+# are invisible to it and their rows leak out as text. The "text" strategy
+# infers the grid from word alignment, but it over-detects on prose, so it is
+# per-run opt-in via NORA_EXTRACT_TEXT_TABLES and needs corpus tuning.
+_TEXT_TABLE_SETTINGS = {
+    "vertical_strategy": "text",
+    "horizontal_strategy": "text",
+}
+
+
+def _text_table_detection_enabled() -> bool:
+    return os.getenv("NORA_EXTRACT_TEXT_TABLES", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _bbox_overlaps_any(
+    bbox: tuple[float, float, float, float],
+    others: list[tuple[float, float, float, float]],
+    min_frac: float = 0.5,
+) -> bool:
+    """True when `bbox` overlaps any of `others` by >= `min_frac` of its own
+    area — used to drop a text-detected table that duplicates a line-detected
+    one. Boxes are (x0, y0, x1, y1)."""
+    ax0, ay0, ax1, ay1 = bbox
+    area = max(0.0, ax1 - ax0) * max(0.0, ay1 - ay0)
+    if area <= 0:
+        return False
+    for bx0, by0, bx1, by1 in others:
+        ix = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+        iy = max(0.0, min(ay1, by1) - max(ay0, by0))
+        if (ix * iy) / area >= min_frac:
+            return True
+    return False
+
+
+def _looks_tabular(data: list[list] | None) -> bool:
+    """Keep a text-detected table only when it has real tabular shape — >= 2
+    columns AND >= 2 rows with content — so prose the text strategy mis-reads
+    as a 1-column or single-row 'table' is rejected."""
+    if not data or len(data) < 2:
+        return False
+    if max((len(r) for r in data), default=0) < 2:
+        return False
+    nonempty_rows = sum(1 for r in data if any((c or "").strip() for c in r))
+    return nonempty_rows >= 2
 
 
 class PDFExtractor(BaseExtractor):
@@ -112,7 +161,22 @@ class PDFExtractor(BaseExtractor):
 
             # --- Tables (pdfplumber) ---
             table_bboxes: list[tuple[float, float, float, float]] = []
-            plumber_tables = plumber_page.find_tables()
+            plumber_tables = list(plumber_page.find_tables())
+            # Opt-in: add borderless tables found by the text strategy that don't
+            # overlap a line-detected table and have real tabular shape. Their
+            # region then feeds the same processing below (and is excluded from
+            # paragraph extraction via table_bboxes), so their rows stop leaking
+            # out as number-prefixed paragraphs the parser mis-reads as sections.
+            if _text_table_detection_enabled():
+                line_bboxes = [t.bbox for t in plumber_tables]
+                for tt in plumber_page.find_tables(table_settings=_TEXT_TABLE_SETTINGS):
+                    if _bbox_overlaps_any(tt.bbox, line_bboxes):
+                        continue
+                    try:
+                        if _looks_tabular(tt.extract()):
+                            plumber_tables.append(tt)
+                    except Exception as exc:  # noqa: BLE001 — a bad text-table shouldn't abort the page
+                        logger.debug("text-strategy table skipped: %s", exc)
             for table_obj in plumber_tables:
                 bbox = table_obj.bbox  # (x0, y0, x1, y1) top-left origin
                 # pdfplumber uses top-left origin, same as our convention
