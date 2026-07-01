@@ -73,7 +73,7 @@
   "definitions_entry_pattern": "^([A-Z][A-Z0-9/-]{1,15})\\s+(.+?)$",
   "ignore_strikeout": true,
   "enable_table_anchored_extraction": false,
-  "detect_text_tables": false,
+  "detect_text_tables": true,
   "toc_detection_pattern": "",
   "toc_page_threshold": 0.7,
   "toc_detection": {

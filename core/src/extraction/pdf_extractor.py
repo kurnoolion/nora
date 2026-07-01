@@ -39,8 +39,13 @@ logger = logging.getLogger(__name__)
 # Opt-in borderless-table detection (mno-c-ingestion). pdfplumber's default
 # find_tables() uses the "lines" strategy — tables drawn with no ruling lines
 # are invisible to it and their rows leak out as text. The "text" strategy
-# infers the grid from word alignment, but it over-detects on prose, so it is
-# per-run opt-in via NORA_EXTRACT_TEXT_TABLES and needs corpus tuning.
+# infers the grid from word alignment, but run over a whole page it mis-reads
+# prose as a grid (fragmenting text, dropping paragraphs). So we NEVER run it
+# page-wide: we first locate a genuine table REGION from a specific signal — a
+# left column of sequential row numbers (1, 2, 3…) — then run the text strategy
+# only inside that crop, where over-detection is impossible. Per-corpus opt-in
+# via DocumentProfile.detect_text_tables; NORA_EXTRACT_TEXT_TABLES forces it on
+# globally for debugging.
 _TEXT_TABLE_SETTINGS = {
     "vertical_strategy": "text",
     "horizontal_strategy": "text",
@@ -83,6 +88,114 @@ def _looks_tabular(data: list[list] | None) -> bool:
         return False
     nonempty_rows = sum(1 for r in data if any((c or "").strip() for c in r))
     return nonempty_rows >= 2
+
+
+def _numbered_row_regions(
+    words: list[dict],
+    *,
+    min_rows: int = 3,
+    x_tol: float = 8.0,
+) -> list[tuple[float, float, float, float]]:
+    """Locate borderless numbered-row table regions from a page's words.
+
+    Signal: a vertical run of >= `min_rows` standalone integer "row markers"
+    that (a) share a left column (``x0`` within `x_tol`) and (b) increment by
+    exactly 1 (1, 2, 3, …). For each run the region spans one median row-height
+    above the first marker (to include the header row) to one below the last,
+    across the x-extent of the words in that vertical band. Returns
+    ``(x0, top, x1, bottom)`` bboxes (pdfplumber top-left origin).
+
+    Pure over word dicts (``{'text','x0','x1','top','bottom'}``) so the geometry
+    is unit-testable without a real PDF. Deliberately specific — a left column
+    of consecutive integers is a strong table signal that prose, numbered lists
+    (``1.`` keeps the period, so ``isdigit()`` is False), page numbers, and
+    figure captions do not produce.
+    """
+    markers: list[tuple[int, float, float, float]] = []
+    for w in words:
+        t = (w.get("text") or "").strip()
+        if t.isdigit():
+            markers.append(
+                (int(t), float(w["x0"]), float(w["top"]), float(w["bottom"]))
+            )
+    if len(markers) < min_rows:
+        return []
+    # Cluster markers into left-columns by x0.
+    markers.sort(key=lambda m: (m[1], m[2]))
+    columns: list[list[tuple[int, float, float, float]]] = []
+    for m in markers:
+        for col in columns:
+            if abs(m[1] - col[0][1]) <= x_tol:
+                col.append(m)
+                break
+        else:
+            columns.append([m])
+
+    regions: list[tuple[float, float, float, float]] = []
+    for col in columns:
+        col.sort(key=lambda m: m[2])  # by top
+        i, n = 0, len(col)
+        while i < n:
+            j = i
+            while j + 1 < n and col[j + 1][0] == col[j][0] + 1:
+                j += 1
+            run = col[i : j + 1]
+            if len(run) >= min_rows:
+                region = _region_from_run(run, words)
+                if region is not None:
+                    regions.append(region)
+            i = j + 1
+    return regions
+
+
+def _region_from_run(
+    run: list[tuple[int, float, float, float]],
+    words: list[dict],
+) -> tuple[float, float, float, float] | None:
+    """Bounding box for a numbered-row run: extend one median row-height above
+    the first marker (header) and below the last, and take the x-extent of the
+    words falling in that vertical band. Returns None if the band is empty."""
+    tops = [m[2] for m in run]
+    bottoms = [m[3] for m in run]
+    gaps = sorted(tops[k + 1] - tops[k] for k in range(len(tops) - 1))
+    row_gap = gaps[len(gaps) // 2] if gaps else (bottoms[0] - tops[0])
+    y_top = tops[0] - row_gap
+    y_bottom = bottoms[-1] + row_gap
+    band = [
+        w
+        for w in words
+        if float(w["top"]) >= y_top - 0.1 and float(w["bottom"]) <= y_bottom + 0.1
+    ]
+    if not band:
+        return None
+    x0 = min(float(w["x0"]) for w in band)
+    x1 = max(float(w["x1"]) for w in band)
+    return (x0 - 2.0, y_top, x1 + 2.0, y_bottom)
+
+
+def _clamp_bbox(
+    bbox: tuple[float, float, float, float],
+    width: float,
+    height: float,
+) -> tuple[float, float, float, float]:
+    """Clamp a region bbox to page bounds so pdfplumber's crop() won't raise."""
+    x0, top, x1, bottom = bbox
+    return (
+        max(0.0, x0),
+        max(0.0, top),
+        min(width, x1),
+        min(height, bottom),
+    )
+
+
+def _find_numbered_row_tables(plumber_page) -> list[tuple[float, float, float, float]]:
+    """Numbered-row table regions on a pdfplumber page (best-effort; returns []
+    on any extract_words failure so a bad page never aborts extraction)."""
+    try:
+        words = plumber_page.extract_words(use_text_flow=False)
+    except Exception:  # noqa: BLE001 — detection must never abort the page
+        return []
+    return _numbered_row_regions(words)
 
 
 class PDFExtractor(BaseExtractor):
@@ -167,21 +280,27 @@ class PDFExtractor(BaseExtractor):
             # --- Tables (pdfplumber) ---
             table_bboxes: list[tuple[float, float, float, float]] = []
             plumber_tables = list(plumber_page.find_tables())
-            # Opt-in: add borderless tables found by the text strategy that don't
-            # overlap a line-detected table and have real tabular shape. Their
-            # region then feeds the same processing below (and is excluded from
-            # paragraph extraction via table_bboxes), so their rows stop leaking
-            # out as number-prefixed paragraphs the parser mis-reads as sections.
+            # Opt-in: borderless numbered-row tables. Locate each table REGION
+            # from its sequential row-number column, then run the text strategy
+            # ONLY inside that crop (never page-wide — that mis-reads prose). The
+            # resulting table feeds the same processing below and its bbox is
+            # added to table_bboxes, so its rows stop leaking out as
+            # number-prefixed paragraphs the parser mis-reads as sections.
             if detect_text_tables:
                 line_bboxes = [t.bbox for t in plumber_tables]
-                for tt in plumber_page.find_tables(table_settings=_TEXT_TABLE_SETTINGS):
-                    if _bbox_overlaps_any(tt.bbox, line_bboxes):
+                page_w, page_h = plumber_page.width, plumber_page.height
+                for region in _find_numbered_row_tables(plumber_page):
+                    if _bbox_overlaps_any(region, line_bboxes):
                         continue
                     try:
-                        if _looks_tabular(tt.extract()):
-                            plumber_tables.append(tt)
-                    except Exception as exc:  # noqa: BLE001 — a bad text-table shouldn't abort the page
-                        logger.debug("text-strategy table skipped: %s", exc)
+                        crop = plumber_page.crop(
+                            _clamp_bbox(region, page_w, page_h)
+                        )
+                        for tt in crop.find_tables(table_settings=_TEXT_TABLE_SETTINGS):
+                            if _looks_tabular(tt.extract()):
+                                plumber_tables.append(tt)
+                    except Exception as exc:  # noqa: BLE001 — a bad region shouldn't abort the page
+                        logger.debug("numbered-row table skipped: %s", exc)
             for table_obj in plumber_tables:
                 bbox = table_obj.bbox  # (x0, y0, x1, y1) top-left origin
                 # pdfplumber uses top-left origin, same as our convention
