@@ -159,9 +159,9 @@ class TestRegionText:
     def test_dedents_common_indent_and_drops_blank_lines(self):
         # Layout-mode extraction pads leading whitespace (crop x starts at 0);
         # the common indent is stripped while inter-column spacing is preserved.
-        raw = "      State      Icon\n\n      Off        A  \n      On         B\n"
+        raw = "      colA       colB\n\n      r1a        r1b  \n      r2a        r2b\n"
         out = _normalize_region_text(raw)
-        assert out == "State      Icon\nOff        A\nOn         B"
+        assert out == "colA       colB\nr1a        r1b\nr2a        r2b"
 
     def test_empty_and_none(self):
         assert _normalize_region_text("") == ""
