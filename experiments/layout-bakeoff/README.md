@@ -71,6 +71,35 @@ table plus every extracted table rendered inline, provider-by-provider, so you c
 judge table fidelity directly. Per-provider full dumps are in
 `out/<doc>__<provider>.md`.
 
+## Offline / proxy-blocked work PC (Docling)
+
+Two symptoms, two fixes:
+
+**"cannot write to /srv/hf_cache"** — something set `HF_HOME` to a non-writable
+path. Point it at a writable dir:
+```bash
+export HF_HOME="$HOME/.cache/huggingface"
+```
+
+**Can't reach huggingface.co (proxy blocks it)** — either route through the proxy,
+or pre-provision the models offline:
+
+- _If the corporate proxy can reach HF_, just export it and re-run:
+  ```bash
+  export HTTPS_PROXY=http://user:pass@proxy:port HTTP_PROXY=http://user:pass@proxy:port
+  ```
+- _If HF is fully blocked_, download the models on a connected machine and copy
+  them over (OCR models are skipped, so the PP-OCRv4 download that fails is
+  avoided):
+  ```bash
+  # on a machine WITH network access:
+  python fetch_docling_models.py ./docling-models
+
+  # copy ./docling-models to the work PC, then run fully offline:
+  DOCLING_ARTIFACTS=/abs/path/docling-models HF_HUB_OFFLINE=1 \
+    python run_bakeoff.py doc.pdf --provider docling --out ./out
+  ```
+
 ## What to compare
 
 - **Tables** (the point): are borderless tables recovered with the right

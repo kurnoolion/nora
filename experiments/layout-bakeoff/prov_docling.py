@@ -18,11 +18,17 @@ from layout_provider import LayoutBlock, LayoutResult, normalize_kind
 # Set DOCLING_OCR=1 for scanned/image-only pages. Table STRUCTURE stays on.
 _DO_OCR = os.getenv("DOCLING_OCR", "").strip().lower() in ("1", "true", "yes", "on")
 
+# Offline model provisioning: point at a locally-copied models dir (produced by
+# fetch_docling_models.py on a connected machine). When set, Docling loads models
+# from here instead of Hugging Face — the fix for proxy-blocked / air-gapped PCs.
+# Pair it with HF_HUB_OFFLINE=1 so no network call is even attempted.
+_ARTIFACTS = os.getenv("DOCLING_ARTIFACTS", "").strip()
+
 
 def _build_converter():
-    """Converter with OCR gated by DOCLING_OCR and table structure enabled.
-    Falls back to a default converter if this docling version's options API
-    differs."""
+    """Converter with OCR gated by DOCLING_OCR, table structure enabled, and
+    models loaded from DOCLING_ARTIFACTS when set. Falls back to a default
+    converter if this docling version's options API differs."""
     try:
         from docling.datamodel.base_models import InputFormat  # API:
         from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -30,6 +36,8 @@ def _build_converter():
         opts = PdfPipelineOptions()
         opts.do_ocr = _DO_OCR
         opts.do_table_structure = True
+        if _ARTIFACTS:
+            opts.artifacts_path = _ARTIFACTS
         return DocumentConverter(
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
         )
