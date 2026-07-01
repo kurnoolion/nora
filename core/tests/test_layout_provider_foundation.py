@@ -79,6 +79,52 @@ class TestParserPrefersTableHtml:
         assert "| A | B |" in sec.text and "<table>" not in sec.text
 
 
+class TestProviderTableGridTrim:
+    """A provider table carries lossless HTML; the redundant flat headers/rows are
+    kept only when the table-anchored req-id path needs them."""
+
+    def _blocks(self):
+        return [
+            _heading(0, "4 Requirements"),
+            ContentBlock(type=BlockType.TABLE, position=Position(page=1, index=1),
+                         html=_HTML, headers=["A", "B"], rows=[["1", "2"]]),
+        ]
+
+    def _parse_anchoring(self, blocks, anchoring: bool):
+        prof = _profile()
+        prof.enable_table_anchored_extraction = anchoring
+        for i, b in enumerate(blocks):
+            b.position.index = i
+        ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="M",
+                        release="R", content_blocks=blocks)
+        return GenericStructuralParser(prof).parse(ir)
+
+    def test_grid_dropped_when_anchoring_off(self):
+        tree = self._parse_anchoring(self._blocks(), anchoring=False)
+        td = next(r for r in tree.requirements if r.section_number == "4").tables[0]
+        assert td.html == _HTML
+        assert td.headers == [] and td.rows == []        # redundant grid dropped
+        assert _HTML in next(r for r in tree.requirements
+                             if r.section_number == "4").text  # still inlined
+
+    def test_grid_kept_when_anchoring_on(self):
+        tree = self._parse_anchoring(self._blocks(), anchoring=True)
+        td = next(r for r in tree.requirements if r.section_number == "4").tables[0]
+        assert td.html == _HTML
+        assert td.headers == ["A", "B"] and td.rows == [["1", "2"]]  # kept for anchoring
+
+    def test_geometric_table_grid_always_kept(self):
+        # No html (geometric path) → headers/rows preserved regardless of anchoring.
+        blocks = [
+            _heading(0, "4 Requirements"),
+            ContentBlock(type=BlockType.TABLE, position=Position(page=1, index=1),
+                         headers=["A", "B"], rows=[["1", "2"]]),
+        ]
+        td = next(r for r in self._parse_anchoring(blocks, anchoring=False).requirements
+                  if r.section_number == "4").tables[0]
+        assert td.headers == ["A", "B"] and td.rows == [["1", "2"]] and not td.html
+
+
 class TestIRRoundTrip:
     def test_html_and_caption_survive_save_load(self, tmp_path):
         ir = DocumentIR(source_file="f.pdf", source_format="pdf", content_blocks=[

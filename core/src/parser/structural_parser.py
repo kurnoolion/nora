@@ -1899,10 +1899,17 @@ class GenericStructuralParser:
 
             elif block.type == BlockType.TABLE:
                 if current_section:
+                    # A layout-provider table carries lossless HTML; its flat
+                    # headers/rows only feed the table-anchored req-id path, so
+                    # drop them from the stored TableData when anchoring is off —
+                    # otherwise they redundantly duplicate the HTML. (Geometric
+                    # tables have no HTML and keep headers/rows as before.)
+                    drop_grid = bool(block.html) and not (
+                        self.profile.enable_table_anchored_extraction)
                     current_section.tables.append(
                         TableData(
-                            headers=block.headers,
-                            rows=block.rows,
+                            headers=[] if drop_grid else block.headers,
+                            rows=[] if drop_grid else block.rows,
                             html=block.html,
                             source="inline",
                         )
