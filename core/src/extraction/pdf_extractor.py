@@ -289,6 +289,7 @@ class PDFExtractor(BaseExtractor):
         release: str = "",
         doc_type: str = "",
         detect_text_tables: bool = False,
+        header_footer_margin_mode: str = "blanket",
     ) -> DocumentIR:
         if fitz is None or pdfplumber is None:
             raise ImportError(
@@ -308,6 +309,7 @@ class PDFExtractor(BaseExtractor):
             return self._extract_impl(
                 file_path, fitz_doc, plumber_pdf, mno, release, doc_type,
                 detect_text_tables=detect_text_tables,
+                header_footer_margin_mode=header_footer_margin_mode,
             )
         finally:
             fitz_doc.close()
@@ -322,6 +324,7 @@ class PDFExtractor(BaseExtractor):
         release: str,
         doc_type: str,
         detect_text_tables: bool = False,
+        header_footer_margin_mode: str = "blanket",
     ) -> DocumentIR:
         # First pass: detect repeating header/footer text across pages
         header_footer_patterns = self._detect_header_footer_patterns(fitz_doc)
@@ -494,8 +497,14 @@ class PDFExtractor(BaseExtractor):
                 if width * height < self.MIN_BLOCK_AREA:
                     continue
 
-                # Skip header/footer regions
-                if self._is_in_margin(bbox, page_height):
+                # Skip header/footer regions. In "blanket" mode any margin block
+                # is dropped up front; in "pattern_only" mode margin text is kept
+                # and removed below only if it matches a header/footer /
+                # page-number / confidential pattern — so a requirement heading
+                # that begins at the very top of a page isn't silently discarded.
+                if self._should_drop_margin(
+                    bbox, page_height, header_footer_margin_mode
+                ):
                     continue
 
                 # Skip blocks that overlap with detected tables
@@ -658,6 +667,23 @@ class PDFExtractor(BaseExtractor):
             text for text, count in margin_texts.items() if count >= threshold
         ]
         return patterns
+
+    def _should_drop_margin(
+        self,
+        bbox: tuple[float, float, float, float],
+        page_height: float,
+        margin_mode: str,
+    ) -> bool:
+        """Whether to drop a block up front as header/footer margin.
+
+        "blanket" (default) drops any block in the margin band. "pattern_only"
+        never drops here — the block falls through to the pattern / page-number /
+        confidential checks, so genuine content (e.g. a requirement heading at the
+        top of a page) survives while true repeating headers are still removed.
+        """
+        if margin_mode == "pattern_only":
+            return False
+        return self._is_in_margin(bbox, page_height)
 
     def _is_in_margin(
         self,

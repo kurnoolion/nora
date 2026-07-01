@@ -74,6 +74,7 @@
   "ignore_strikeout": true,
   "enable_table_anchored_extraction": false,
   "detect_text_tables": true,
+  "header_footer_margin_mode": "pattern_only",
   "toc_detection_pattern": "",
   "toc_page_threshold": 0.7,
   "toc_detection": {

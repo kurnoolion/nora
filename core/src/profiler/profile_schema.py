@@ -390,6 +390,15 @@ class DocumentProfile:
     # a full multi-MNO run only enables it where the profile asks. Default off.
     detect_text_tables: bool = False
 
+    # How the PDF extractor treats the top/bottom page margins for header/footer
+    # removal. "blanket" (default) drops ALL text in the margin band — correct
+    # for corpora whose headers sit in the margin and whose requirements never
+    # start that high. "pattern_only" keeps margin text and drops it only when it
+    # matches a repeating header/footer, a "Page N of M" line, or a confidential
+    # notice — for corpora where a requirement heading can begin at the very top
+    # of a page (blanket mode would silently discard it).
+    header_footer_margin_mode: str = "blanket"
+
     # ── Strikeout omission (FR-33 [D-031]) ────────────────────────
     ignore_strikeout: bool = True
     """When True (default), the parser drops content blocks whose
@@ -672,6 +681,9 @@ class DocumentProfile:
                 **data.get("applicability_detection", {})
             ),
             detect_text_tables=data.get("detect_text_tables", False),
+            header_footer_margin_mode=data.get(
+                "header_footer_margin_mode", "blanket"
+            ),
             ignore_strikeout=data.get("ignore_strikeout", True),
             enable_table_anchored_extraction=data.get(
                 "enable_table_anchored_extraction", True

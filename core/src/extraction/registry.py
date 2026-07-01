@@ -42,12 +42,14 @@ def extract_document(
     release: str = "",
     doc_type: str = "",
     detect_text_tables: bool = False,
+    header_footer_margin_mode: str = "blanket",
 ) -> DocumentIR:
     """Extract a document using the appropriate format extractor."""
     extractor = get_extractor(file_path)
     return extractor.extract(
         file_path, mno=mno, release=release, doc_type=doc_type,
         detect_text_tables=detect_text_tables,
+        header_footer_margin_mode=header_footer_margin_mode,
     )
 
 

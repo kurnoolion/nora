@@ -21,6 +21,7 @@ class BaseExtractor(ABC):
         release: str = "",
         doc_type: str = "",
         detect_text_tables: bool = False,
+        header_footer_margin_mode: str = "blanket",
     ) -> DocumentIR:
         """Extract content from a document file.
 
@@ -31,6 +32,9 @@ class BaseExtractor(ABC):
             doc_type: Document type ("requirement" or "testcase"). Derived from folder structure.
             detect_text_tables: per-corpus PDF hint — enable text-alignment
                 (borderless) table detection. PDF-only; other extractors ignore it.
+            header_footer_margin_mode: per-corpus PDF hint — "blanket" drops all
+                page-margin text; "pattern_only" keeps it unless it matches a
+                header/footer pattern. PDF-only; other extractors ignore it.
 
         Returns:
             Normalized DocumentIR ready for the DocumentProfiler or structural parser.

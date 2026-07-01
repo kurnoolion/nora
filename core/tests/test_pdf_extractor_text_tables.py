@@ -162,3 +162,34 @@ class TestProfileFlag:
         p.detect_text_tables = True
         # survives to_dict → _from_dict (the load_json path)
         assert DocumentProfile._from_dict(p.to_dict()).detect_text_tables is True
+
+    def test_margin_mode_default_and_roundtrips(self):
+        from core.src.profiler.profile_schema import DocumentProfile
+        p = DocumentProfile(profile_name="t", profile_version=1,
+                            created_from=[], last_updated="x")
+        assert p.header_footer_margin_mode == "blanket"   # default (back-compat)
+        p.header_footer_margin_mode = "pattern_only"
+        assert (DocumentProfile._from_dict(p.to_dict()).header_footer_margin_mode
+                == "pattern_only")
+
+
+class TestMarginMode:
+    def _extractor(self):
+        from core.src.extraction.pdf_extractor import PDFExtractor
+        return PDFExtractor()
+
+    def test_blanket_drops_top_margin_block(self):
+        ex = self._extractor()
+        top_block = (36, 36, 200, 44)     # y0=36, y1=44 — both < HEADER_MARGIN_PT
+        assert ex._should_drop_margin(top_block, 792, "blanket") is True
+
+    def test_pattern_only_keeps_top_margin_block(self):
+        ex = self._extractor()
+        top_block = (36, 36, 200, 44)     # a requirement heading at page top
+        assert ex._should_drop_margin(top_block, 792, "pattern_only") is False
+
+    def test_body_block_kept_in_both_modes(self):
+        ex = self._extractor()
+        body = (36, 300, 400, 320)        # mid-page, not in any margin
+        assert ex._should_drop_margin(body, 792, "blanket") is False
+        assert ex._should_drop_margin(body, 792, "pattern_only") is False

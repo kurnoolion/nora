@@ -51,12 +51,13 @@ def _fail(stage: str, code: str, message: str, elapsed: float = 0.0) -> StageRes
 # Stage 1: extract
 # ---------------------------------------------------------------------------
 
-def _cells_with_text_tables(ctx: PipelineContext) -> set[tuple[str, str]]:
-    """Per-cell text-table flag from each in-scope cell's bound profile
+def _cell_extract_hints(ctx: PipelineContext) -> dict[tuple[str, str], dict]:
+    """Per-cell PDF extractor hints from each in-scope cell's bound profile
     (D-DRAFT-7). Best-effort — the profile stage validates binding coverage; the
-    extract stage just reads the boolean so a full multi-MNO run only enables
-    borderless-table detection where the profile asks. Returns `{(MNO, release)}`."""
-    out: set[tuple[str, str]] = set()
+    extract stage just reads these so a full multi-MNO run applies each corpus's
+    settings only where its profile asks. Returns
+    `{(MNO, release): {"detect_text_tables": bool, "header_footer_margin_mode": str}}`."""
+    out: dict[tuple[str, str], dict] = {}
     try:
         from core.src.env.profile_bindings import load_profile_bindings
         from core.src.profiler.profile_schema import DocumentProfile
@@ -75,8 +76,13 @@ def _cells_with_text_tables(ctx: PipelineContext) -> set[tuple[str, str]]:
     for cell in ctx.input_cells():
         try:
             p = bindings.resolve(cell.mno, cell.release)
-            if p and DocumentProfile.load_json(p).detect_text_tables:
-                out.add((cell.mno.upper(), cell.release))
+            if not p:
+                continue
+            prof = DocumentProfile.load_json(p)
+            out[(cell.mno.upper(), cell.release)] = {
+                "detect_text_tables": prof.detect_text_tables,
+                "header_footer_margin_mode": prof.header_footer_margin_mode,
+            }
         except Exception:
             continue
     return out
@@ -107,10 +113,10 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     warnings: list[str] = []
     ir_paths: list[str] = []
 
-    # Per-cell borderless-table detection from each cell's profile; the env var
-    # is a global debug override (forces it on for every cell this run).
+    # Per-cell PDF extractor hints from each cell's profile; the env var is a
+    # global debug override for borderless-table detection (forces it on).
     from core.src.extraction.pdf_extractor import _text_table_detection_enabled
-    tt_cells = _cells_with_text_tables(ctx)
+    cell_hints = _cell_extract_hints(ctx)
     tt_env = _text_table_detection_enabled()
 
     for f in files:
@@ -129,12 +135,15 @@ def run_extract(ctx: PipelineContext) -> StageResult:
             stats["skipped"] += 1
             continue
         try:
-            detect_tt = tt_env or (
-                (metadata["mno"].upper(), metadata["release"]) in tt_cells
+            hints = cell_hints.get(
+                (metadata["mno"].upper(), metadata["release"]), {}
             )
+            detect_tt = tt_env or hints.get("detect_text_tables", False)
+            margin_mode = hints.get("header_footer_margin_mode", "blanket")
             ir = extract_document(
                 f, mno=metadata["mno"], release=metadata["release"],
                 doc_type=metadata["doc_type"], detect_text_tables=detect_tt,
+                header_footer_margin_mode=margin_mode,
             )
             # Path-derived plan (per-plan input dir), if any — the extractors
             # don't see the path, so stamp it here for the parser to consume.
