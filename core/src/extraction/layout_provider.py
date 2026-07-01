@@ -64,12 +64,15 @@ class LayoutProvider(Protocol):
         ...
 
     def extract_layout(
-        self, pdf_path: Path, image_dir: Path | None = None
+        self, pdf_path: Path, image_dir: Path | None = None,
+        want_table_grid: bool = True,
     ) -> LayoutStructures:
         """Return tables + figures for the PDF. When `image_dir` is given, figure
-        crops are saved there and referenced via `LayoutFigure.image_path`. Must
-        not raise for recoverable errors — return empty structures so extraction
-        falls back to the geometric path rather than aborting the document."""
+        crops are saved there and referenced via `LayoutFigure.image_path`. When
+        `want_table_grid` is False, skip the best-effort flat `headers`/`rows`
+        (HTML is the lossless form; the grid only feeds the table-anchored req-id
+        path). Must not raise for recoverable errors — return empty structures so
+        extraction falls back to the geometric path rather than aborting."""
         ...
 
 

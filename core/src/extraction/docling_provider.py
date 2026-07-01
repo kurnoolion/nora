@@ -70,7 +70,8 @@ class DoclingProvider:
     # -- parse ---------------------------------------------------------------
 
     def extract_layout(
-        self, pdf_path: Path, image_dir: Path | None = None
+        self, pdf_path: Path, image_dir: Path | None = None,
+        want_table_grid: bool = True,
     ) -> LayoutStructures:
         out = LayoutStructures()
         try:
@@ -92,7 +93,7 @@ class DoclingProvider:
             label = str(getattr(item, "label", "") or "").lower()
             if label in _TABLE_LABELS:
                 page, bbox = _prov(item, doc)
-                headers, rows = _table_grid(item, doc)
+                headers, rows = _table_grid(item, doc) if want_table_grid else ([], [])
                 out.tables.append(LayoutTable(
                     page=page, bbox=bbox, html=_table_html(item, doc),
                     headers=headers, rows=rows))

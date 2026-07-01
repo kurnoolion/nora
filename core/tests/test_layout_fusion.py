@@ -30,10 +30,11 @@ class _FakeProvider:
     def available(self):
         return True, "fake"
 
-    def extract_layout(self, pdf_path, image_dir=None):
+    def extract_layout(self, pdf_path, image_dir=None, want_table_grid=True):
+        grid = (["H"], [["X"]]) if want_table_grid else ([], [])
         return LayoutStructures(
             tables=[LayoutTable(page=1, bbox=(30, 135, 270, 165), html=_HTML,
-                                headers=["H"], rows=[["X"]])],
+                                headers=grid[0], rows=grid[1])],
             figures=[LayoutFigure(page=1, bbox=(30, 320, 200, 360),
                                   image_path="", caption="Figure Z")],
             page_sizes={1: (300.0, 400.0)})
@@ -53,11 +54,12 @@ def synth_pdf(tmp_path):
     return path
 
 
-def _extract(pdf, monkeypatch):
+def _extract(pdf, monkeypatch, provider_table_grid=True):
     monkeypatch.setattr(
         pe, "get_layout_provider",
         lambda name: _FakeProvider() if name == "fake" else None)
-    return pe.PDFExtractor().extract(pdf, layout_provider="fake")
+    return pe.PDFExtractor().extract(
+        pdf, layout_provider="fake", provider_table_grid=provider_table_grid)
 
 
 def test_provider_table_becomes_html_block(synth_pdf, monkeypatch):
@@ -74,6 +76,19 @@ def test_paragraph_under_table_is_suppressed(synth_pdf, monkeypatch):
     assert "inside table cell" not in para_text     # suppressed by the table bbox
     assert "outside body text" in para_text          # outside the table → kept
     assert "Requirements" in para_text               # heading above the table → kept
+
+
+def test_ir_table_grid_present_by_default(synth_pdf, monkeypatch):
+    t = _extract(synth_pdf, monkeypatch, provider_table_grid=True) \
+        .blocks_by_type(BlockType.TABLE)[0]
+    assert t.html == _HTML and t.headers == ["H"] and t.rows == [["X"]]
+
+
+def test_ir_table_grid_omitted_when_disabled(synth_pdf, monkeypatch):
+    # provider_table_grid=False → HTML only, no redundant flat grid in the IR.
+    t = _extract(synth_pdf, monkeypatch, provider_table_grid=False) \
+        .blocks_by_type(BlockType.TABLE)[0]
+    assert t.html == _HTML and t.headers == [] and t.rows == []
 
 
 def test_provider_figure_becomes_image_block_with_caption(synth_pdf, monkeypatch):

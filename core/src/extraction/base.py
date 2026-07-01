@@ -23,6 +23,7 @@ class BaseExtractor(ABC):
         detect_text_tables: bool = False,
         header_footer_margin_mode: str = "blanket",
         layout_provider: str = "",
+        provider_table_grid: bool = True,
     ) -> DocumentIR:
         """Extract content from a document file.
 
@@ -39,6 +40,9 @@ class BaseExtractor(ABC):
             layout_provider: per-corpus PDF hint — name of a LayoutProvider (e.g.
                 "docling") to source tables + figures from; "" uses the built-in
                 geometric path. PDF-only; other extractors ignore it.
+            provider_table_grid: when False, layout-provider tables carry HTML only
+                (skip the flat headers/rows the anchoring path would use). PDF-only;
+                other extractors ignore it.
 
         Returns:
             Normalized DocumentIR ready for the DocumentProfiler or structural parser.

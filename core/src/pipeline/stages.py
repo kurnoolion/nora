@@ -83,6 +83,8 @@ def _cell_extract_hints(ctx: PipelineContext) -> dict[tuple[str, str], dict]:
                 "detect_text_tables": prof.detect_text_tables,
                 "header_footer_margin_mode": prof.header_footer_margin_mode,
                 "layout_provider": prof.layout_provider,
+                "enable_table_anchored_extraction": (
+                    prof.enable_table_anchored_extraction),
             }
         except Exception:
             continue
@@ -142,11 +144,15 @@ def run_extract(ctx: PipelineContext) -> StageResult:
             detect_tt = tt_env or hints.get("detect_text_tables", False)
             margin_mode = hints.get("header_footer_margin_mode", "blanket")
             layout_prov = hints.get("layout_provider", "")
+            # Provider tables carry the flat headers/rows only when the anchoring
+            # path needs them — otherwise HTML is the single structured form.
+            grid = hints.get("enable_table_anchored_extraction", True)
             ir = extract_document(
                 f, mno=metadata["mno"], release=metadata["release"],
                 doc_type=metadata["doc_type"], detect_text_tables=detect_tt,
                 header_footer_margin_mode=margin_mode,
                 layout_provider=layout_prov,
+                provider_table_grid=grid,
             )
             # Path-derived plan (per-plan input dir), if any — the extractors
             # don't see the path, so stamp it here for the parser to consume.

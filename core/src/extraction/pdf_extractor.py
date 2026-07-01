@@ -334,6 +334,7 @@ class PDFExtractor(BaseExtractor):
         detect_text_tables: bool = False,
         header_footer_margin_mode: str = "blanket",
         layout_provider: str = "",
+        provider_table_grid: bool = True,
     ) -> DocumentIR:
         if fitz is None or pdfplumber is None:
             raise ImportError(
@@ -355,6 +356,7 @@ class PDFExtractor(BaseExtractor):
                 detect_text_tables=detect_text_tables,
                 header_footer_margin_mode=header_footer_margin_mode,
                 layout_provider=layout_provider,
+                provider_table_grid=provider_table_grid,
             )
         finally:
             fitz_doc.close()
@@ -371,6 +373,7 @@ class PDFExtractor(BaseExtractor):
         detect_text_tables: bool = False,
         header_footer_margin_mode: str = "blanket",
         layout_provider: str = "",
+        provider_table_grid: bool = True,
     ) -> DocumentIR:
         # First pass: detect repeating header/footer text across pages
         header_footer_patterns = self._detect_header_footer_patterns(fitz_doc)
@@ -392,7 +395,7 @@ class PDFExtractor(BaseExtractor):
         if layout_provider:
             self._collect_provider_layout(
                 layout_provider, file_path, fitz_doc, images_dir,
-                prov_tables, prov_figures)
+                prov_tables, prov_figures, provider_table_grid)
 
         for page_num in range(len(fitz_doc)):
             page = fitz_doc[page_num]
@@ -731,18 +734,21 @@ class PDFExtractor(BaseExtractor):
     # --- Layout-provider fusion ---
 
     def _collect_provider_layout(
-        self, name, file_path, fitz_doc, images_dir, prov_tables, prov_figures
+        self, name, file_path, fitz_doc, images_dir, prov_tables, prov_figures,
+        provider_table_grid=True
     ) -> None:
         """Parse the PDF once through the selected layout provider; group its
         tables/figures by page. Fails loud if the provider is unknown or its
-        dependency/models are missing (a profile asked for it explicitly)."""
+        dependency/models are missing (a profile asked for it explicitly).
+        `provider_table_grid` False → tables carry HTML only (no flat grid)."""
         prov = get_layout_provider(name)
         if prov is None:
             raise ValueError(f"Unknown layout_provider: {name!r}")
         ok, why = prov.available()
         if not ok:
             raise ImportError(f"layout_provider {name!r} unavailable: {why}")
-        structs = prov.extract_layout(file_path, image_dir=images_dir)
+        structs = prov.extract_layout(
+            file_path, image_dir=images_dir, want_table_grid=provider_table_grid)
         for t in structs.tables:
             prov_tables.setdefault(t.page, []).append(t)
         for f in structs.figures:
