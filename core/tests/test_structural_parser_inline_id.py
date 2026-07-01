@@ -123,6 +123,40 @@ def test_title_strip_is_noop_without_pattern():
     assert "ID: GP-SEC-1" in _by_section(tree, "4.1").title
 
 
+def test_borderless_table_rows_not_sections_with_font_gate():
+    """require_heading_font_for_numbering=True: body-font, non-bold rows that
+    start with a row number leak from a borderless table and must NOT become
+    sections; bold/larger real headings still do (mno-c-ingestion)."""
+    prof = _profile()
+    prof.heading_detection.require_heading_font_for_numbering = True
+    blocks = [
+        _block(0, "4 Requirements", size=9.8, bold=True),        # real heading
+        _block(1, "COL0 COL1", size=4.5, bold=True),             # table header (no number)
+        _block(2, "1 alpha beta gamma", size=4.5, bold=False),   # table row
+        _block(3, "2 delta epsilon zeta", size=4.5, bold=False),  # table row
+    ]
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="MNOC",
+                    release="Mar2026", content_blocks=blocks)
+    tree = GenericStructuralParser(prof).parse(ir)
+    nums = {r.section_number for r in tree.requirements}
+    assert "4" in nums                              # real heading kept
+    assert "1" not in nums and "2" not in nums      # leaked rows are not sections
+
+
+def test_body_font_number_row_is_section_without_font_gate():
+    """Default (flag off) preserves the legacy advisory-font behavior: a
+    body-font number-prefixed block is still classified as a section."""
+    prof = _profile()  # require_heading_font_for_numbering defaults False
+    blocks = [_block(0, "1 alpha beta gamma", size=4.5, bold=False)]
+    blocks[0].position.index = 0
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="M",
+                    release="R", content_blocks=blocks)
+    tree = GenericStructuralParser(prof).parse(ir)
+    assert any(r.section_number == "1" for r in tree.requirements)
+
+
 def test_priority_scoped_to_requirement_headings_when_flag_set():
     """priority_requires_req_id=True: a structural heading (no req_id) whose
     title contains a marker-shaped token is NOT mined for priority — the token

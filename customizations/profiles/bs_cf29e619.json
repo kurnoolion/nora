@@ -15,6 +15,7 @@
     "max_observed_depth": 6,
     "definitions_section_pattern": "(?i)acronym|definition|glossary",
     "priority_marker_pattern": "\\((<PRIORITY1>|<PRIORITY2>|<PRIORITY3>|<PRIORITY4>|<PRIORITY5>)\\)",
+    "require_heading_font_for_numbering": true,
     "priority_requires_req_id": true,
     "title_strip_pattern": "\\s*ID:\\s*\\S+\\s*$"
   },

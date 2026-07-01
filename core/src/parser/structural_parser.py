@@ -609,6 +609,13 @@ class GenericStructuralParser:
             if profile.heading_detection.priority_marker_pattern
             else None
         )
+        # When True, a numbering-pattern match is promoted to a heading only if
+        # the block's font also looks like a heading (see `_classify_heading`) —
+        # keeps borderless-table rows (body-font, number-prefixed) out of the
+        # section tree. Default False keeps font advisory-only.
+        self._require_heading_font_for_numbering = bool(
+            profile.heading_detection.require_heading_font_for_numbering
+        )
         # When True, a priority marker qualifies only a heading that is itself
         # a requirement (req_id present) — some corpora carry the marker solely
         # on requirement headings, so a structural heading whose title happens
@@ -3213,6 +3220,16 @@ class GenericStructuralParser:
         text = block.text.strip()
         m = self._num_re.match(text)
         if not m:
+            return "", ""
+
+        # Font gate (opt-in): a numbering match at body font is not a heading.
+        # Borderless-table rows leak as body-font paragraphs starting with a row
+        # number (1, 2, 3…); without this gate each becomes a phantom section.
+        # Real headings are bold or larger than body, so `_is_heading_font`
+        # keeps them. Off by default (font stays advisory for legacy corpora).
+        if self._require_heading_font_for_numbering and not self._is_heading_font(
+            block
+        ):
             return "", ""
 
         # Length guard: real headings are short. Numbered list items in body

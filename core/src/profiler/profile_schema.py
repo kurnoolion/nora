@@ -58,6 +58,16 @@ class HeadingDetection:
     #   r"\[(MANDATORY|OPTIONAL|CONDITIONAL)\]"
     priority_marker_pattern: str = ""
 
+    # When True, a block matching `numbering_pattern` is promoted to a section
+    # heading ONLY if its font also looks like a heading (bold, or larger than
+    # `body_text.font_size_max`). Some corpora contain borderless tables whose
+    # rows are body-font paragraphs starting with a row number (1, 2, 3…) — the
+    # relaxed numbering gate mis-reads each row as its own section. This flag
+    # gates those out (real headings are bold/larger; leaked table rows are
+    # body-font, non-bold). Default False preserves the legacy "font is advisory
+    # only" behavior for corpora whose headings are body-font.
+    require_heading_font_for_numbering: bool = False
+
     # When True, `priority_marker_pattern` is applied ONLY to headings that are
     # themselves requirements (a req_id was resolved for the heading). Some
     # corpora place the priority marker solely on requirement headings, so a
@@ -621,6 +631,9 @@ class DocumentProfile:
                 numbering_pattern=hd.get("numbering_pattern", ""),
                 max_observed_depth=hd.get("max_observed_depth", 0),
                 priority_marker_pattern=hd.get("priority_marker_pattern", ""),
+                require_heading_font_for_numbering=hd.get(
+                    "require_heading_font_for_numbering", False
+                ),
                 priority_requires_req_id=hd.get("priority_requires_req_id", False),
                 title_strip_pattern=hd.get("title_strip_pattern", ""),
                 definitions_section_pattern=hd.get(
