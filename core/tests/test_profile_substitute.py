@@ -421,7 +421,7 @@ class TestSubstituteIdLabel:
         from core.src.profiler.profile_schema import DocumentProfile, RequirementIdPattern
         from core.src.profiler.profile_substitute import substitute_placeholders
         p = DocumentProfile(requirement_id=RequirementIdPattern(
-            id_label_pattern=r"ID:\s*(<MNO0>-(?:<T2>|<T3>)-\d+)\s*$"))
+            id_label_pattern=r"ID:\s*(<MNO0>-(?:<T2>|<T3>)-\d+)"))
         out = substitute_placeholders(p, {"MNO0": "GP", "T2": "SEC", "T3": "REQ"})
         assert out.requirement_id.id_label_pattern == \
-            r"ID:\s*(GP-(?:SEC|REQ)-\d+)\s*$"
+            r"ID:\s*(GP-(?:SEC|REQ)-\d+)"

@@ -1734,7 +1734,15 @@ class GenericStructuralParser:
 
                 # Check if this is a requirement ID block (small font)
                 if block.type == BlockType.PARAGRAPH and self._is_req_id_block(block):
-                    req_ids = self._find_req_ids(block.text)
+                    # When id_label is configured, a standalone req-id block must
+                    # ALSO carry the "ID:" label to count as a definition — a bare
+                    # req-id in a small-font block is a REFERENCE (e.g. a
+                    # release-notes citation), not this section's own id.
+                    if self._id_label_re is not None:
+                        _m = self._id_label_re.search(block.text)
+                        req_ids = [_m.group(1)] if _m else []
+                    else:
+                        req_ids = self._find_req_ids(block.text)
                     if req_ids:
                         if current_section is None:
                             # No section opened yet — hold for the first heading.

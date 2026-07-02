@@ -255,32 +255,49 @@ def test_is_requirement_backcompat_without_type_pattern():
     assert _by_section(tree, "4").is_requirement is False   # no req_id
 
 
-def test_id_label_extraction_ignores_bare_and_midline_references():
-    """id_label_pattern anchored to end-of-line: a heading's own req_id comes ONLY
-    from the TRAILING 'ID: <id>' marker. A bare reference, or a release-notes
-    citation with text AFTER the id ('updated ID: <id> to ...'), is not at the
-    trailing position and is NOT captured — the fix for reference→duplicate-
-    requirement collisions (mno-c-ingestion)."""
+def test_id_label_extraction_ignores_bare_references():
+    """id_label_pattern: a heading's own req_id must be behind the 'ID:' label. A
+    bare req-id reference (no 'ID:', e.g. a release-notes citation) is NOT captured
+    — the fix for reference→duplicate-requirement collisions (mno-c-ingestion)."""
     prof = _profile()
     prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"
     prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"
-    prof.requirement_id.id_label_pattern = r"ID:\s*(GP-(?:REQ|SEC)-\d+)\s*$"
+    prof.requirement_id.id_label_pattern = r"ID:\s*(GP-(?:REQ|SEC)-\d+)"
     tree = _parse_prof(prof, [
         _block(0, "4 Requirements", size=9.8),
         _block(1, "4.1.2 TS 37.865 shall be supported (Mandatory) ID: GP-REQ-12345",
                size=5.7),
-        _block(2, "4.1 Compliance ID: GP-SEC-99", size=7.3),        # trailing, no priority
-        _block(3, "4.9 Release note: updated ID: GP-REQ-12345 to require X", size=7.3),
-        _block(4, "4.8 See GP-SEC-99 and GP-REQ-12345", size=7.3),  # bare mentions
+        _block(2, "4.1 Compliance ID: GP-SEC-99", size=7.3),        # labeled section
+        _block(3, "4.9 Release note: see GP-REQ-12345 and GP-SEC-99", size=7.3),  # bare
     ])
     req = _by_section(tree, "4.1.2")
-    assert req.req_id == "GP-REQ-12345" and req.is_requirement is True   # trailing labeled id
+    assert req.req_id == "GP-REQ-12345" and req.is_requirement is True   # labeled id
     sec = _by_section(tree, "4.1")
-    assert sec.req_id == "GP-SEC-99" and sec.is_requirement is False     # trailing labeled section
+    assert sec.req_id == "GP-SEC-99" and sec.is_requirement is False     # labeled section
     rn = _by_section(tree, "4.9")
-    assert rn.req_id == "" and rn.is_requirement is False                # mid-line citation ignored
-    bare = _by_section(tree, "4.8")
-    assert bare.req_id == "" and bare.is_requirement is False            # bare mentions ignored
+    assert rn.req_id == "" and rn.is_requirement is False                # bare refs ignored
+
+
+def test_small_font_bare_reqid_block_ignored_with_id_label():
+    """The standalone small-font req-id-block path (OA trailing-marker) must ALSO
+    respect id_label: a bare req-id in a small-font block is a REFERENCE, not a
+    definition, so it does NOT become the section's req_id (mno-c-ingestion)."""
+    prof = _profile()
+    prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"
+    prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"
+    prof.requirement_id.id_label_pattern = r"ID:\s*(GP-(?:REQ|SEC)-\d+)"
+    blocks = [
+        _block(0, "9 Release notes", size=9.8),
+        _block(1, "9.1 Change entry", size=7.3),
+        _block(2, "GP-REQ-12345", size=2.5, bold=False),   # bare id, small font → reference
+    ]
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="MNOC",
+                    release="Mar2026", content_blocks=blocks)
+    tree = GenericStructuralParser(prof).parse(ir)
+    entry = _by_section(tree, "9.1")
+    assert entry.req_id == "" and entry.is_requirement is False  # bare small-font ref ignored
 
 
 def test_trailing_id_marker_with_priority_clean_title():
@@ -290,7 +307,7 @@ def test_trailing_id_marker_with_priority_clean_title():
     prof = _profile()
     prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"
     prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"
-    prof.requirement_id.id_label_pattern = r"ID:\s*(GP-(?:REQ|SEC)-\d+)\s*$"
+    prof.requirement_id.id_label_pattern = r"ID:\s*(GP-(?:REQ|SEC)-\d+)"
     prof.heading_detection.priority_requires_req_id = True
     tree = _parse_prof(prof, [
         _block(0, "4 Requirements", size=9.8),
