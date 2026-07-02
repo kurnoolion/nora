@@ -203,17 +203,29 @@ If the crash left **failed** docs in a cell's trace (they'd otherwise count as
 ### Add a new MNO and/or release (incremental)
 
 1. Produce the new cell's NORA parse output (`$ENV/out/parse/<mno>/<rel>/`).
-2. Re-emit — `--wipe-stale-index` rebuilds indexes but KEEPS every cell's
-   enrichment cache, so existing cells don't re-enrich:
+2. Emit **only the new cell(s)** with the adapter's `--only` (comma-separated
+   `<mno>/<rel>`), so cells already in `$DB` are neither re-emitted nor wiped —
+   even when `$ENV` also holds them (e.g. a shared env that already ran other
+   MNOs). `--wipe-stale-index` clears the new cell's stale index but KEEPS its
+   enrichment cache:
 
        python -m sandbox.adapter.nora_to_beir \
-           --env-dir "$ENV" --output "$DB" --multi-cell --wipe-stale-index
+           --env-dir "$ENV" --output "$DB" --multi-cell \
+           --only <mno>/<rel> --wipe-stale-index
 
+   `--only` matches case-insensitively and **fails loud** on a cell with no
+   parsed trees (typo / not parsed). Omit it to (re-)emit every cell under
+   `$ENV/out/parse` — but then every emitted cell's index is wiped, so you must
+   rebuild them all in step 3 too.
 3. Build + enrich **only the new cell(s)** (`--only`); existing cells untouched:
 
        python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
            --run-name enrich-stable --only <mno>__<rel> \
            --stages prepare,bm25,enrich_corpus
+
+   > **Format gotcha:** the adapter's `--only` uses **`<mno>/<rel>`** (slash,
+   > mirroring the parse path); `sira_multi`'s `--only` uses **`<mno>__<rel>`**
+   > (double-underscore, matching the cell-dir name).
 
 4. Restart the service — it enumerates + loads the new cell at startup
    (`curl /healthz` lists it). A new *release* of an existing MNO is the same
