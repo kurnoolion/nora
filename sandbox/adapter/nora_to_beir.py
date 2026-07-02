@@ -519,17 +519,22 @@ def _emit_multigranularity_rows(
     return n_doc, n_section
 
 
+_NOID_SAMPLE = 40  # how many id-less nodes --print-noid samples (strided)
+
+
 def _emit_corpus(
     trees: list[dict[str, Any]],
     out_path: Path,
     section_max_depth: int = 2,
     print_skips: bool = False,
+    print_noid: bool = False,
 ) -> tuple[int, int, int]:
     """Emit corpus.jsonl with per-req + doc-level + section-level rows.
 
     Returns (n_req_rows, n_doc_rows, n_section_rows). When `print_skips`, also
     dumps the req_ids that were dropped as sections (is_requirement=False) or as
-    duplicates — an audit aid for confirming the filters caught the right nodes.
+    duplicates. When `print_noid`, prints a strided sample of the id-less nodes
+    (section_number + title) — to confirm none are requirements that lost their id.
     """
     seen_ids: set[str] = set()
     written = 0
@@ -538,6 +543,7 @@ def _emit_corpus(
     skipped_section = 0
     section_ids: list[tuple[str, str, str]] = []   # (req_id, section_number, title)
     dup_ids: list[str] = []
+    noid_nodes: list[tuple[str, str]] = []          # (section_number, title)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         # Per-requirement rows (existing behavior, unchanged shape)
@@ -556,6 +562,10 @@ def _emit_corpus(
                 req_id = (req.get("req_id") or "").strip()
                 if not req_id:
                     skipped_no_id += 1
+                    if print_noid:
+                        noid_nodes.append((
+                            (req.get("section_number") or "").strip(),
+                            (req.get("title") or "").strip()))
                     continue
                 # Skip structural section nodes. Some corpora assign req_ids to
                 # sections too (parser `is_requirement` discriminator); those must
@@ -616,6 +626,14 @@ def _emit_corpus(
             print(f"  -- {len(dup_ids)} duplicate req_ids (kept first occurrence):")
             for rid in dup_ids:
                 print(f"       {rid}")
+    if print_noid and noid_nodes:
+        total = len(noid_nodes)
+        stride = max(1, total // _NOID_SAMPLE)
+        sample = noid_nodes[::stride][:_NOID_SAMPLE]
+        print(f"  -- {total} no-id nodes; strided sample of {len(sample)} "
+              f"([section_number] title):")
+        for sn, title in sample:
+            print(f"       [{sn}] {title}")
     print(f"  corpus.jsonl: wrote {n_doc} doc-level rows "
           f"+ {n_section} section-level rows "
           f"(section_max_depth={section_max_depth})")
@@ -772,6 +790,7 @@ def _emit_multi_cell(
     wipe_index: bool,
     wipe_all: bool,
     print_skips: bool = False,
+    print_noid: bool = False,
 ) -> list[str]:
     """Multi-MNO mode: partition trees into (mno, release) cells and emit
     one corpus-only BEIR dataset per cell at `<db_root>/<mno>__<release>/raw/`.
@@ -797,6 +816,7 @@ def _emit_multi_cell(
             cells[cell_key], raw / "corpus.jsonl",
             section_max_depth=section_max_depth,
             print_skips=print_skips,
+            print_noid=print_noid,
         )
         num_corpus = n_req + n_doc + n_section
         # Eval scaffolding — a single dummy query + qrel, NOT the
@@ -888,6 +908,12 @@ def main() -> int:
                        "audit that the filters caught the right nodes. Off by "
                        "default (the counts always print)."
                    ))
+    p.add_argument("--print-noid", action="store_true",
+                   help=(
+                       f"Print a strided sample (up to {_NOID_SAMPLE}) of the "
+                       "id-less nodes (section_number + title) — to confirm none "
+                       "are requirements that lost their req_id. Off by default."
+                   ))
     p.add_argument("--section-max-depth", type=int, default=2,
                    help=(
                        "Max section-prefix depth for section-level "
@@ -942,6 +968,7 @@ def main() -> int:
             wipe_index=args.wipe_stale_index,
             wipe_all=args.wipe_all_derived,
             print_skips=args.print_skips,
+            print_noid=args.print_noid,
         )
         print(f"done — point SIRA at db_root={out_dir}")
         print(f"       cells (use as data.name): {', '.join(names)}")
@@ -953,6 +980,7 @@ def main() -> int:
         trees, raw_dir / "corpus.jsonl",
         section_max_depth=args.section_max_depth,
         print_skips=args.print_skips,
+        print_noid=args.print_noid,
     )
     num_corpus = n_req + n_doc + n_section
     print()

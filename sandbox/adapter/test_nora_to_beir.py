@@ -477,3 +477,23 @@ def test_print_skips_off_by_default(tmp_path, capsys):
     }
     _emit_corpus([tree], tmp_path / "corpus.jsonl")   # print_skips defaults False
     assert "is_requirement=False" not in capsys.readouterr().out
+
+
+def test_print_noid_samples_idless_nodes(tmp_path, capsys):
+    reqs = [{"req_id": "", "title": f"noid {i}", "section_number": str(i)}
+            for i in range(100)]
+    reqs.append({"req_id": "GP-REQ-1", "is_requirement": True, "title": "R",
+                 "text": "b", "section_number": "9"})
+    tree = {"mno": "MNOC", "release": "Mar2026", "plan_id": "P",
+            "plan_name": "P plan", "requirements": reqs}
+    _emit_corpus([tree], tmp_path / "corpus.jsonl", print_noid=True)
+    out = capsys.readouterr().out
+    assert "100 no-id nodes" in out and "strided sample of 40" in out
+    assert "noid 0" in out                       # first node is in the strided sample
+
+
+def test_print_noid_off_by_default(tmp_path, capsys):
+    tree = {"mno": "MNOC", "release": "Mar2026", "plan_id": "P", "plan_name": "P plan",
+            "requirements": [{"req_id": "", "title": "x", "section_number": "1"}]}
+    _emit_corpus([tree], tmp_path / "corpus.jsonl")
+    assert "strided sample" not in capsys.readouterr().out
