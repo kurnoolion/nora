@@ -211,10 +211,11 @@ If the crash left **failed** docs in a cell's trace (they'd otherwise count as
 
        python -m sandbox.adapter.nora_to_beir \
            --env-dir "$ENV" --output "$DB" --multi-cell \
-           --only <mno>/<rel> --wipe-stale-index
+           --only <mno>__<rel> --wipe-stale-index
 
-   `--only` matches case-insensitively and **fails loud** on a cell with no
-   parsed trees (typo / not parsed). Omit it to (re-)emit every cell under
+   `--only` takes comma-separated `<mno>__<rel>` cell names (same format as
+   `sira_multi --only`), matches case-insensitively, and **fails loud** on a cell
+   with no parsed trees (typo / not parsed). Omit it to (re-)emit every cell under
    `$ENV/out/parse` — but then every emitted cell's index is wiped, so you must
    rebuild them all in step 3 too.
 3. Build + enrich **only the new cell(s)** (`--only`); existing cells untouched:
@@ -222,10 +223,6 @@ If the crash left **failed** docs in a cell's trace (they'd otherwise count as
        python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
            --run-name enrich-stable --only <mno>__<rel> \
            --stages prepare,bm25,enrich_corpus
-
-   > **Format gotcha:** the adapter's `--only` uses **`<mno>/<rel>`** (slash,
-   > mirroring the parse path); `sira_multi`'s `--only` uses **`<mno>__<rel>`**
-   > (double-underscore, matching the cell-dir name).
 
 4. Restart the service — it enumerates + loads the new cell at startup
    (`curl /healthz` lists it). A new *release* of an existing MNO is the same

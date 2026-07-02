@@ -413,13 +413,13 @@ def test_emit_corpus_backcompat_no_flag_keeps_reqid_rows(tmp_path):
 # ── --only cell filter ────────────────────────────────────────────
 
 def test_parse_only_splits_mno_release_pairs():
-    assert _parse_only("MNOC/Mar2026, MNOA/Feb2026") == [
+    assert _parse_only("MNOC__Mar2026, MNOA__Feb2026") == [
         ("MNOC", "Mar2026"), ("MNOA", "Feb2026")]
 
 
-def test_parse_only_rejects_missing_slash():
-    with pytest.raises(ValueError, match="MNO./.RELEASE"):
-        _parse_only("MNOC_Mar2026")
+def test_parse_only_rejects_missing_separator():
+    with pytest.raises(ValueError, match="__"):
+        _parse_only("MNOC/Mar2026")          # slash is not the separator
 
 
 def test_filter_trees_by_only_keeps_requested_cells():

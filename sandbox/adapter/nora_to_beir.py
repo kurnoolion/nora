@@ -145,18 +145,19 @@ def _partition_trees_by_cell(
 
 
 def _parse_only(spec: str) -> list[tuple[str, str]]:
-    """Parse a --only spec ('<MNO>/<REL>,<MNO>/<REL>') into (mno, release) pairs.
-    Whitespace-tolerant; matched case-insensitively against each tree later."""
+    """Parse a --only spec ('<MNO>__<REL>,<MNO>__<REL>') into (mno, release)
+    pairs — the same cell-name format as sira_multi's --only. Whitespace-tolerant;
+    matched case-insensitively against each tree later."""
     out: list[tuple[str, str]] = []
     for tok in spec.split(","):
         tok = tok.strip()
         if not tok:
             continue
-        if "/" not in tok:
+        if "__" not in tok:
             raise ValueError(
-                f"--only entry {tok!r} must be '<MNO>/<RELEASE>' "
-                f"(e.g. 'MNOC/Mar2026')")
-        mno, rel = tok.split("/", 1)
+                f"--only entry {tok!r} must be '<MNO>__<RELEASE>' "
+                f"(e.g. 'MNOA__Mar2026')")
+        mno, rel = tok.split("__", 1)
         out.append((mno.strip(), rel.strip()))
     return out
 
@@ -851,11 +852,11 @@ def main() -> int:
     p.add_argument("--only", default=None,
                    help=(
                        "Restrict emission to specific cells: comma-separated "
-                       "'<MNO>/<RELEASE>' (e.g. 'MNOA/Mar2026,MNOB/Feb2026'). "
-                       "Matched case-insensitively; fails loud if a requested "
-                       "cell has no parsed trees. Lets you add one cell to an "
-                       "existing multi-cell db_root without re-emitting or "
-                       "wiping the others."
+                       "'<MNO>__<RELEASE>' (e.g. 'MNOA__Mar2026,MNOB__Feb2026') "
+                       "— same cell-name format as sira_multi's --only. Matched "
+                       "case-insensitively; fails loud if a requested cell has "
+                       "no parsed trees. Lets you add one cell to an existing "
+                       "multi-cell db_root without re-emitting or wiping others."
                    ))
     p.add_argument("--section-max-depth", type=int, default=2,
                    help=(
