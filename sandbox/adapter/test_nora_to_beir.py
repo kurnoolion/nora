@@ -15,11 +15,17 @@ import io
 
 from sandbox.adapter.nora_to_beir import (
     _cell_dirname,
+    _emit_corpus,
     _emit_multi_cell,
     _emit_multigranularity_rows,
     _partition_trees_by_cell,
     _RELEASE_RE,
 )
+
+
+def _read_ids(path) -> set:
+    with open(path, encoding="utf-8") as f:
+        return {json.loads(line)["_id"] for line in f if line.strip()}
 
 
 def _tree(mno: str, release: str, plan_id: str = "PLAN") -> dict:
@@ -370,3 +376,33 @@ class TestBuildTextTables:
         req = {"req_id": "ABC-FOO-1", "title": "T", "text": "body", "plan_id": "FOO"}
         out = _build_text(req, tree, None, {})
         assert "|" not in out                          # no spurious table markup
+
+
+# ── is_requirement filter: sections must not become per-req corpus rows ──
+
+def test_emit_corpus_skips_structural_sections(tmp_path):
+    # A requirement (is_requirement True) + a structural section (has a req_id
+    # but is_requirement False) → only the requirement becomes a per-req row.
+    tree = {
+        "mno": "MNOC", "release": "Mar2026", "plan_id": "P", "plan_name": "P plan",
+        "requirements": [
+            {"req_id": "GP-REQ-1", "is_requirement": True, "title": "Req",
+             "text": "body", "section_number": "1.1"},
+            {"req_id": "GP-SEC-9", "is_requirement": False, "title": "Section",
+             "text": "section body", "section_number": "1"},
+        ],
+    }
+    out = tmp_path / "corpus.jsonl"
+    _emit_corpus([tree], out)
+    ids = _read_ids(out)
+    assert "GP-REQ-1" in ids           # actual requirement kept
+    assert "GP-SEC-9" not in ids        # structural section excluded from per-req rows
+
+
+def test_emit_corpus_backcompat_no_flag_keeps_reqid_rows(tmp_path):
+    # Older trees / corpora without the discriminator have no is_requirement key
+    # → any node with a req_id is a corpus row, unchanged.
+    tree = _tree_with_req("VZW", "Feb2026", "P", "REQ-1")   # no is_requirement key
+    out = tmp_path / "corpus.jsonl"
+    _emit_corpus([tree], out)
+    assert "REQ-1" in _read_ids(out)

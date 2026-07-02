@@ -388,6 +388,8 @@ def _emit_multigranularity_rows(
             rid = (req.get("req_id") or "").strip()
             if not rid:
                 continue
+            if not req.get("is_requirement", bool(rid)):
+                continue  # structural sections aren't retrievable requirements
             plan = (
                 ((req.get("plan_id") or "").strip() or tree_plan_id)
                 if leading else tree_plan_id
@@ -483,6 +485,7 @@ def _emit_corpus(
     written = 0
     skipped_no_id = 0
     skipped_dup = 0
+    skipped_section = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         # Per-requirement rows (existing behavior, unchanged shape)
@@ -501,6 +504,16 @@ def _emit_corpus(
                 req_id = (req.get("req_id") or "").strip()
                 if not req_id:
                     skipped_no_id += 1
+                    continue
+                # Skip structural section nodes. Some corpora assign req_ids to
+                # sections too (parser `is_requirement` discriminator); those must
+                # NOT become standalone per-req corpus rows — the corpus's _id=req_id
+                # rows and the qrels are ACTUAL requirements. Sections still feed
+                # each requirement's Context via `section_index`. Back-compat: no
+                # flag → bool(req_id), so corpora without the discriminator (older
+                # trees / no requirement_type_pattern) are unchanged.
+                if not req.get("is_requirement", bool(req_id)):
+                    skipped_section += 1
                     continue
                 if req_id in seen_ids:
                     # Same req_id reported by two trees: keep first.
@@ -533,7 +546,8 @@ def _emit_corpus(
             trees, f, section_max_depth=section_max_depth,
         )
     print(f"  corpus.jsonl: wrote {written} per-req rows "
-          f"(skipped: {skipped_no_id} no-id, {skipped_dup} duplicate)")
+          f"(skipped: {skipped_no_id} no-id, {skipped_dup} duplicate, "
+          f"{skipped_section} section)")
     print(f"  corpus.jsonl: wrote {n_doc} doc-level rows "
           f"+ {n_section} section-level rows "
           f"(section_max_depth={section_max_depth})")
