@@ -1804,25 +1804,30 @@ class GenericStructuralParser:
                         # Stay in heading context — multi-line continuations stack.
                         continue
 
-                    # Strip a trailing in-text id-marker (e.g. "ID: <id>") so the
-                    # title is the clean statement — for requirement AND structural
-                    # headings (the latter's id never matches requirement_id.pattern).
-                    if self._title_strip_re is not None:
-                        heading_text = self._title_strip_re.sub("", heading_text).strip()
                     # Heading-anchored req_id (anchor="last_run" / "leading_text"
-                    # corpora; trailing_text mode falls back to pending_req_id
-                    # from a separate small-font block per the OA convention).
+                    # / id_label corpora; trailing_text mode falls back to
+                    # pending_req_id from a separate small-font block per the OA
+                    # convention). Uses block.live_text(), so it is unaffected by
+                    # the title-strip below.
                     heading_req_id = self._heading_req_id(block)
                     section_req_id = heading_req_id or pending_req_id
-                    # FR-31: extract the priority marker from the heading. When
-                    # the profile scopes priority to requirement headings only
-                    # (priority_requires_req_id), a structural heading — one with
-                    # no req_id — is left untouched so a marker-shaped token in
-                    # its title is neither mis-read as a priority nor stripped.
+                    # FR-31: extract the priority marker BEFORE stripping the
+                    # id-marker — the priority can sit INSIDE the trailing marker
+                    # ("... ID: (Priority) <id>"), so stripping first would lose
+                    # it. When the profile scopes priority to requirement headings
+                    # (priority_requires_req_id), a heading with no req_id is left
+                    # untouched so a marker-shaped token in its title is neither
+                    # mis-read as a priority nor stripped.
                     if self._priority_requires_req_id and not section_req_id:
                         priority = ""
                     else:
                         priority, heading_text = self._extract_priority(heading_text)
+                    # Strip the trailing in-text id-marker (e.g. "ID: <id>", with
+                    # the priority already peeled above) so the title is the clean
+                    # statement — for requirement AND structural headings (the
+                    # latter's id never matches requirement_type_pattern).
+                    if self._title_strip_re is not None:
+                        heading_text = self._title_strip_re.sub("", heading_text).strip()
                     # Empty section_num (docx_styles + TOC pair miss) is
                     # never deduplicated — every such heading creates its
                     # own Requirement. Numbered sections continue to

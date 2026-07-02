@@ -278,3 +278,29 @@ def test_id_label_extraction_ignores_bare_references():
     assert sec.req_id == "GP-SEC-99" and sec.is_requirement is False     # labeled section
     rn = _by_section(tree, "4.9")
     assert rn.req_id == "" and rn.is_requirement is False                # bare refs ignored
+
+
+def test_trailing_id_marker_with_inline_priority_clean_title():
+    """New MNO-C format '<title> ID: (Priority) <REQ-ID>' (trailing, priority
+    inside the marker): priority is mined BEFORE the id-marker is stripped, so the
+    title stays clean AND the priority is captured (mno-c-ingestion)."""
+    prof = _profile()
+    prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"
+    prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"
+    prof.requirement_id.id_label_pattern = \
+        r"ID:\s*(?:\([^)]*\)\s*)?(GP-(?:REQ|SEC)-\d+)"
+    prof.heading_detection.priority_requires_req_id = True
+    tree = _parse_prof(prof, [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1.2 TS 37.865 shall be supported ID: (Mandatory) GP-REQ-12345",
+               size=5.7),
+        _block(2, "4.1 Compliance ID: GP-SEC-99", size=7.3),   # section, no priority
+    ])
+    req = _by_section(tree, "4.1.2")
+    assert req.req_id == "GP-REQ-12345" and req.is_requirement is True
+    assert req.priority == "MANDATORY"                      # mined from inside the marker
+    assert req.title == "TS 37.865 shall be supported"      # marker + priority both peeled
+    assert "ID:" not in req.title and "Mandatory" not in req.title
+    sec = _by_section(tree, "4.1")
+    assert sec.req_id == "GP-SEC-99" and sec.priority == ""
+    assert sec.title == "Compliance"                        # marker stripped, no priority
