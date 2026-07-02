@@ -253,3 +253,28 @@ def test_is_requirement_backcompat_without_type_pattern():
     ])
     assert _by_section(tree, "4.1.2").is_requirement is True
     assert _by_section(tree, "4").is_requirement is False   # no req_id
+
+
+def test_id_label_extraction_ignores_bare_references():
+    """id_label_pattern: a heading's own req_id comes ONLY from the 'ID:' marker
+    (optional priority between). Bare req-id references elsewhere in a heading
+    (e.g. release-notes citations) are NOT captured — the fix for reference→
+    duplicate-requirement collisions (mno-c-ingestion)."""
+    prof = _profile()
+    prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"
+    prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"
+    prof.requirement_id.id_label_pattern = \
+        r"ID:\s*(?:\([^)]*\)\s*)?(GP-(?:REQ|SEC)-\d+)"
+    tree = _parse_prof(prof, [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1.2 TS 37.865 shall be supported ID: (Mandatory) GP-REQ-12345",
+               size=5.7),
+        _block(2, "4.1 Compliance ID: GP-SEC-99", size=7.3),        # no priority
+        _block(3, "4.9 Release notes: updated GP-REQ-12345 and GP-SEC-99", size=7.3),
+    ])
+    req = _by_section(tree, "4.1.2")
+    assert req.req_id == "GP-REQ-12345" and req.is_requirement is True   # labeled id
+    sec = _by_section(tree, "4.1")
+    assert sec.req_id == "GP-SEC-99" and sec.is_requirement is False     # labeled section
+    rn = _by_section(tree, "4.9")
+    assert rn.req_id == "" and rn.is_requirement is False                # bare refs ignored

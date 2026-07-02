@@ -561,6 +561,15 @@ class GenericStructuralParser:
             if profile.requirement_id.requirement_type_pattern
             else None
         )
+        # Labeled-id extraction (D-DRAFT): the heading's OWN req_id comes ONLY
+        # from the "ID:" marker (group 1), not any req-id-shaped match — so a
+        # bare reference in the heading (e.g. release-notes citations) isn't
+        # captured as the heading's id. None → fall back to `anchor`.
+        self._id_label_re = (
+            re.compile(profile.requirement_id.id_label_pattern)
+            if profile.requirement_id.id_label_pattern
+            else None
+        )
         # Revision/version-history heading detection (FR-34) — compiled
         # once; None if disabled. Drops the matching paragraph and the
         # immediately-following table block (within a small window).
@@ -3150,6 +3159,10 @@ class GenericStructuralParser:
             of the heading's live text.
           * ``"trailing_text"`` — return ``""`` (preserves OA semantics).
 
+        When ``requirement_id.id_label_pattern`` is set it takes precedence over
+        all anchor modes: the id is captured ONLY from the labeled marker
+        (group 1), so a bare req-id reference in the heading isn't captured.
+
         Returns ``""`` when no match or when the mode doesn't extract
         from the heading.
         """
@@ -3162,6 +3175,13 @@ class GenericStructuralParser:
         def _normalize(rid: str) -> str:
             rid = _canonicalize_req_id(rid)
             return rid.upper() if normalize == "upper" else rid
+
+        # Labeled-id extraction wins when configured: the heading's own id is
+        # ONLY the one behind the "ID:" marker (group 1). No fallback — a heading
+        # with no labeled id has no req_id (it's a section or a bare reference).
+        if self._id_label_re is not None:
+            m = self._id_label_re.search(block.live_text())
+            return _normalize(m.group(1)) if m else ""
 
         if anchor == "last_run":
             # Primary path: trailing run solo-matches the req_id pattern

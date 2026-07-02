@@ -116,6 +116,16 @@ class RequirementIdPattern:
     pattern. Empty (default) → any node with a req_id is a requirement
     (back-compat: the historical "req_id present ⇒ requirement" semantics)."""
 
+    id_label_pattern: str = ""
+    """Optional regex extracting a heading's OWN req_id from a labeled marker,
+    with the id in capture group 1. When set, it is the authoritative heading
+    req_id source (overrides `anchor`): a heading req_id is taken ONLY from this
+    marker, so a bare req_id REFERENCE elsewhere in the heading (e.g. a
+    release-notes entry citing another requirement's id) is not mistaken for the
+    heading's own id. Empty (default) → fall back to `anchor`. Example for a
+    corpus that labels ids as ``ID: (Priority) <id>`` (priority optional):
+    ``r"ID:\\s*(?:\\([^)]*\\)\\s*)?(<REQ-ID-PATTERN>)"``."""
+
     anchor: str = "trailing_text"
     """Where in a heading the req_id is anchored:
       - ``"last_run"``: take the last ``TextRun`` of the heading; treat its
