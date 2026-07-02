@@ -1930,9 +1930,17 @@ class GenericStructuralParser:
                 # Body text — append to current section
                 if current_section:
                     self._append_text(current_section, block.text)
-                    # Also check for inline req IDs in body text
+                    # Also check for inline req IDs in body text. When id_label is
+                    # configured the id must be behind "ID:" — a bare id in body
+                    # text is a REFERENCE (e.g. a change-log/release-note listing
+                    # changed ids), NOT this section's own id, so it must not be
+                    # scavenged as the section req_id.
                     if self._req_id_re and not current_section.req_id:
-                        ids = self._find_req_ids(block.text)
+                        if self._id_label_re is not None:
+                            _m = self._id_label_re.search(block.text)
+                            ids = [_m.group(1)] if _m else []
+                        else:
+                            ids = self._find_req_ids(block.text)
                         if ids:
                             current_section.req_id = ids[0]
                             _record_paragraph_anchor(ids[0])

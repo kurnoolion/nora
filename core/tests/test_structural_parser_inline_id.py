@@ -323,3 +323,25 @@ def test_trailing_id_marker_with_priority_clean_title():
     sec = _by_section(tree, "4.1")
     assert sec.req_id == "GP-SEC-99" and sec.priority == ""
     assert sec.title == "Compliance"                        # trailing marker stripped, no priority
+
+
+def test_body_text_bare_reqid_not_scavenged_with_id_label():
+    """A section whose heading carries no 'ID:' must NOT scavenge a bare req-id from
+    its BODY text (e.g. a change-log line listing changed ids) as its own id — that
+    body id is a reference, not the section's own id (mno-c-ingestion)."""
+    prof = _profile()
+    prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"
+    prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"
+    prof.requirement_id.id_label_pattern = r"ID:\s*(GP-(?:REQ|SEC)-\d+)"
+    blocks = [
+        _block(0, "9 Change log", size=9.8),
+        _block(1, "9.2 Quarterly change entry", size=7.3),
+        _block(2, "Added requirements GP-REQ-111, GP-REQ-222", size=5.0, bold=False),
+    ]
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    ir = DocumentIR(source_file="f.pdf", source_format="pdf", mno="MNOC",
+                    release="Mar2026", content_blocks=blocks)
+    tree = GenericStructuralParser(prof).parse(ir)
+    entry = _by_section(tree, "9.2")
+    assert entry.req_id == "" and entry.is_requirement is False   # bare body id not scavenged
