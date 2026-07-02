@@ -444,3 +444,36 @@ def test_filter_trees_by_only_fail_loud_on_missing_cell():
     msg = str(exc.value)
     assert "MNOA/Feb2026" in msg            # names the missing cell
     assert "MNOC/Mar2026" in msg           # lists what's available
+
+
+def test_print_skips_lists_section_and_duplicate_ids(tmp_path, capsys):
+    tree1 = {
+        "mno": "MNOC", "release": "Mar2026", "plan_id": "P", "plan_name": "P plan",
+        "requirements": [
+            {"req_id": "GP-REQ-1", "is_requirement": True, "title": "Req",
+             "text": "b", "section_number": "1.1"},
+            {"req_id": "GP-SEC-9", "is_requirement": False, "title": "Sec",
+             "text": "s", "section_number": "1"},
+        ],
+    }
+    tree2 = {  # repeats GP-REQ-1 → duplicate
+        "mno": "MNOC", "release": "Mar2026", "plan_id": "P", "plan_name": "P plan",
+        "requirements": [
+            {"req_id": "GP-REQ-1", "is_requirement": True, "title": "Req dup",
+             "text": "b2", "section_number": "1.1"},
+        ],
+    }
+    _emit_corpus([tree1, tree2], tmp_path / "corpus.jsonl", print_skips=True)
+    out = capsys.readouterr().out
+    assert "is_requirement=False" in out and "GP-SEC-9" in out   # section listed
+    assert "duplicate req_ids" in out and "GP-REQ-1" in out       # dup listed
+
+
+def test_print_skips_off_by_default(tmp_path, capsys):
+    tree = {
+        "mno": "MNOC", "release": "Mar2026", "plan_id": "P", "plan_name": "P plan",
+        "requirements": [{"req_id": "GP-SEC-9", "is_requirement": False,
+                          "title": "Sec", "text": "s", "section_number": "1"}],
+    }
+    _emit_corpus([tree], tmp_path / "corpus.jsonl")   # print_skips defaults False
+    assert "is_requirement=False" not in capsys.readouterr().out

@@ -523,16 +523,21 @@ def _emit_corpus(
     trees: list[dict[str, Any]],
     out_path: Path,
     section_max_depth: int = 2,
+    print_skips: bool = False,
 ) -> tuple[int, int, int]:
     """Emit corpus.jsonl with per-req + doc-level + section-level rows.
 
-    Returns (n_req_rows, n_doc_rows, n_section_rows).
+    Returns (n_req_rows, n_doc_rows, n_section_rows). When `print_skips`, also
+    dumps the req_ids that were dropped as sections (is_requirement=False) or as
+    duplicates — an audit aid for confirming the filters caught the right nodes.
     """
     seen_ids: set[str] = set()
     written = 0
     skipped_no_id = 0
     skipped_dup = 0
     skipped_section = 0
+    section_ids: list[tuple[str, str, str]] = []   # (req_id, section_number, title)
+    dup_ids: list[str] = []
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         # Per-requirement rows (existing behavior, unchanged shape)
@@ -561,12 +566,19 @@ def _emit_corpus(
                 # trees / no requirement_type_pattern) are unchanged.
                 if not req.get("is_requirement", bool(req_id)):
                     skipped_section += 1
+                    if print_skips:
+                        section_ids.append((
+                            req_id,
+                            (req.get("section_number") or "").strip(),
+                            (req.get("title") or "").strip()))
                     continue
                 if req_id in seen_ids:
                     # Same req_id reported by two trees: keep first.
                     # Cross-doc dedup avoids the corpus polluting itself
                     # with parser-stage hierarchy duplicates.
                     skipped_dup += 1
+                    if print_skips:
+                        dup_ids.append(req_id)
                     continue
                 seen_ids.add(req_id)
                 title = (
@@ -595,6 +607,15 @@ def _emit_corpus(
     print(f"  corpus.jsonl: wrote {written} per-req rows "
           f"(skipped: {skipped_no_id} no-id, {skipped_dup} duplicate, "
           f"{skipped_section} section)")
+    if print_skips:
+        if section_ids:
+            print(f"  -- {len(section_ids)} section req_ids (is_requirement=False):")
+            for rid, sn, title in section_ids:
+                print(f"       {rid}  [{sn}] {title}")
+        if dup_ids:
+            print(f"  -- {len(dup_ids)} duplicate req_ids (kept first occurrence):")
+            for rid in dup_ids:
+                print(f"       {rid}")
     print(f"  corpus.jsonl: wrote {n_doc} doc-level rows "
           f"+ {n_section} section-level rows "
           f"(section_max_depth={section_max_depth})")
@@ -750,6 +771,7 @@ def _emit_multi_cell(
     section_max_depth: int,
     wipe_index: bool,
     wipe_all: bool,
+    print_skips: bool = False,
 ) -> list[str]:
     """Multi-MNO mode: partition trees into (mno, release) cells and emit
     one corpus-only BEIR dataset per cell at `<db_root>/<mno>__<release>/raw/`.
@@ -774,6 +796,7 @@ def _emit_multi_cell(
         n_req, n_doc, n_section = _emit_corpus(
             cells[cell_key], raw / "corpus.jsonl",
             section_max_depth=section_max_depth,
+            print_skips=print_skips,
         )
         num_corpus = n_req + n_doc + n_section
         # Eval scaffolding — a single dummy query + qrel, NOT the
@@ -858,6 +881,13 @@ def main() -> int:
                        "no parsed trees. Lets you add one cell to an existing "
                        "multi-cell db_root without re-emitting or wiping others."
                    ))
+    p.add_argument("--print-skips", action="store_true",
+                   help=(
+                       "Print the req_ids dropped as sections "
+                       "(is_requirement=False) and as duplicates, so you can "
+                       "audit that the filters caught the right nodes. Off by "
+                       "default (the counts always print)."
+                   ))
     p.add_argument("--section-max-depth", type=int, default=2,
                    help=(
                        "Max section-prefix depth for section-level "
@@ -911,6 +941,7 @@ def main() -> int:
             section_max_depth=args.section_max_depth,
             wipe_index=args.wipe_stale_index,
             wipe_all=args.wipe_all_derived,
+            print_skips=args.print_skips,
         )
         print(f"done — point SIRA at db_root={out_dir}")
         print(f"       cells (use as data.name): {', '.join(names)}")
@@ -921,6 +952,7 @@ def main() -> int:
     n_req, n_doc, n_section = _emit_corpus(
         trees, raw_dir / "corpus.jsonl",
         section_max_depth=args.section_max_depth,
+        print_skips=args.print_skips,
     )
     num_corpus = n_req + n_doc + n_section
     print()
