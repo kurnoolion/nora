@@ -109,6 +109,9 @@ def substitute_placeholders(
     )
 
     out.requirement_id.pattern = sub(out.requirement_id.pattern)
+    out.requirement_id.requirement_type_pattern = sub(
+        out.requirement_id.requirement_type_pattern
+    )
 
     pm = out.plan_metadata
     for fld in (pm.plan_name, pm.plan_id, pm.version, pm.release_date):

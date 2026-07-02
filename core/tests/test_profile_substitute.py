@@ -44,6 +44,19 @@ class TestSubstituteSpecific:
         out = substitute_placeholders(p, {"MNO0": "V.Z"})
         assert out.requirement_id.pattern == "V\\.Z_REQ"
 
+    def test_requirement_type_pattern_is_substituted(self):
+        # The requirement-vs-section discriminator pattern must ALSO be
+        # substituted — else it stays literal ('<...>') and matches no real
+        # req_id, so is_requirement is False for every node.
+        p = DocumentProfile(
+            requirement_id=RequirementIdPattern(
+                pattern="<MNO0>-(?:<T2>|<T3>)-\\d+",
+                requirement_type_pattern="<MNO0>-<T3>-\\d+"),
+        )
+        out = substitute_placeholders(p, {"MNO0": "GP", "T2": "SEC", "T3": "REQ"})
+        assert out.requirement_id.pattern == "GP-(?:SEC|REQ)-\\d+"
+        assert out.requirement_id.requirement_type_pattern == "GP-REQ-\\d+"
+
     def test_longer_specific_keys_substitute_first(self):
         # `<MNO0_ALIAS>` must substitute before `<MNO0>` — otherwise the
         # short prefix consumes the inner string and leaves `_ALIAS>`
