@@ -123,8 +123,10 @@ class RequirementIdPattern:
     marker, so a bare req_id REFERENCE elsewhere in the heading (e.g. a
     release-notes entry citing another requirement's id) is not mistaken for the
     heading's own id. Empty (default) → fall back to `anchor`. Example for a
-    corpus that labels ids as ``ID: (Priority) <id>`` (priority optional):
-    ``r"ID:\\s*(?:\\([^)]*\\)\\s*)?(<REQ-ID-PATTERN>)"``."""
+    corpus that labels ids TRAILING as ``(Priority) ID: <id>`` (priority optional,
+    id last): ``r"ID:\\s*(<REQ-ID-PATTERN>)\\s*$"`` — the ``\\s*$`` anchor makes a
+    mid-line citation (e.g. a release-notes ``updated ID: <id> to ...``) not match,
+    so only the heading's own trailing id is captured."""
 
     anchor: str = "trailing_text"
     """Where in a heading the req_id is anchored:
