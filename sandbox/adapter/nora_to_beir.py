@@ -144,6 +144,52 @@ def _partition_trees_by_cell(
     return cells
 
 
+def _parse_only(spec: str) -> list[tuple[str, str]]:
+    """Parse a --only spec ('<MNO>/<REL>,<MNO>/<REL>') into (mno, release) pairs.
+    Whitespace-tolerant; matched case-insensitively against each tree later."""
+    out: list[tuple[str, str]] = []
+    for tok in spec.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "/" not in tok:
+            raise ValueError(
+                f"--only entry {tok!r} must be '<MNO>/<RELEASE>' "
+                f"(e.g. 'MNOC/Mar2026')")
+        mno, rel = tok.split("/", 1)
+        out.append((mno.strip(), rel.strip()))
+    return out
+
+
+def _filter_trees_by_only(
+    trees: list[dict[str, Any]], only: list[tuple[str, str]]
+) -> list[dict[str, Any]]:
+    """Keep only trees whose (mno, release) matches a --only entry
+    (case-insensitive). Fail-loud if a requested cell matches no tree — a typo
+    or a cell that wasn't parsed should stop the run, not silently emit nothing."""
+    # normalized (lower) key -> original (mno, release) as typed, for messages.
+    wanted = {(m.lower(), r.lower()): (m, r) for m, r in only}
+    kept: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for tree in trees:
+        key = ((tree.get("mno") or "").strip().lower(),
+               (tree.get("release") or "").strip().lower())
+        if key in wanted:
+            kept.append(tree)
+            seen.add(key)
+    missing = sorted(set(wanted) - seen)
+    if missing:
+        avail = sorted({
+            f"{(t.get('mno') or '').strip()}/{(t.get('release') or '').strip()}"
+            for t in trees
+        })
+        miss = ", ".join(f"{wanted[k][0]}/{wanted[k][1]}" for k in missing)
+        raise ValueError(
+            f"--only requested cell(s) with no parsed trees: {miss}\n"
+            f"available under out/parse: {', '.join(avail) or '(none)'}")
+    return kept
+
+
 def _hierarchy_path(req: dict[str, Any]) -> str:
     # Tree stores `hierarchy_path` as a list of strings (e.g. ["LTE OTA",
     # "Idle Mode", "T3402 timer"]). Joined with " > " for prose
@@ -802,6 +848,15 @@ def main() -> int:
                        "run fails loud. queries/qrels are NOT emitted "
                        "(eval ground truth deferred — OQ-2)."
                    ))
+    p.add_argument("--only", default=None,
+                   help=(
+                       "Restrict emission to specific cells: comma-separated "
+                       "'<MNO>/<RELEASE>' (e.g. 'MNOA/Mar2026,MNOB/Feb2026'). "
+                       "Matched case-insensitively; fails loud if a requested "
+                       "cell has no parsed trees. Lets you add one cell to an "
+                       "existing multi-cell db_root without re-emitting or "
+                       "wiping the others."
+                   ))
     p.add_argument("--section-max-depth", type=int, default=2,
                    help=(
                        "Max section-prefix depth for section-level "
@@ -841,6 +896,11 @@ def main() -> int:
 
     trees = _load_trees(env_dir)
     print(f"loaded {len(trees)} _tree.json file(s) from out/parse/")
+    if args.only:
+        only = _parse_only(args.only)
+        trees = _filter_trees_by_only(trees, only)
+        print(f"--only: kept {len(trees)} tree(s) for "
+              f"{', '.join(f'{m}/{r}' for m, r in only)}")
     print()
 
     if args.multi_cell:

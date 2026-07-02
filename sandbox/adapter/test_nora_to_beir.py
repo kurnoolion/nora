@@ -18,6 +18,8 @@ from sandbox.adapter.nora_to_beir import (
     _emit_corpus,
     _emit_multi_cell,
     _emit_multigranularity_rows,
+    _filter_trees_by_only,
+    _parse_only,
     _partition_trees_by_cell,
     _RELEASE_RE,
 )
@@ -406,3 +408,39 @@ def test_emit_corpus_backcompat_no_flag_keeps_reqid_rows(tmp_path):
     out = tmp_path / "corpus.jsonl"
     _emit_corpus([tree], out)
     assert "REQ-1" in _read_ids(out)
+
+
+# ── --only cell filter ────────────────────────────────────────────
+
+def test_parse_only_splits_mno_release_pairs():
+    assert _parse_only("MNOC/Mar2026, MNOA/Feb2026") == [
+        ("MNOC", "Mar2026"), ("MNOA", "Feb2026")]
+
+
+def test_parse_only_rejects_missing_slash():
+    with pytest.raises(ValueError, match="MNO./.RELEASE"):
+        _parse_only("MNOC_Mar2026")
+
+
+def test_filter_trees_by_only_keeps_requested_cells():
+    trees = [
+        _tree("MNOC", "Mar2026", "a"),
+        _tree("MNOA", "Feb2026", "b"),
+        _tree("MNOB", "Jan2026", "c"),
+    ]
+    kept = _filter_trees_by_only(trees, [("MNOC", "Mar2026")])
+    assert [t["mno"] for t in kept] == ["MNOC"]
+
+
+def test_filter_trees_by_only_case_insensitive():
+    trees = [_tree("MNOC", "Mar2026", "a")]
+    assert len(_filter_trees_by_only(trees, [("mnoc", "mar2026")])) == 1
+
+
+def test_filter_trees_by_only_fail_loud_on_missing_cell():
+    trees = [_tree("MNOC", "Mar2026", "a")]
+    with pytest.raises(ValueError) as exc:
+        _filter_trees_by_only(trees, [("MNOA", "Feb2026")])
+    msg = str(exc.value)
+    assert "MNOA/Feb2026" in msg            # names the missing cell
+    assert "MNOC/Mar2026" in msg           # lists what's available
