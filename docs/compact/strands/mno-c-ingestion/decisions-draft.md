@@ -86,3 +86,64 @@ distinguish a header at y≈40 from a requirement at y≈36 on the same page.
 **Consequences.** In `pattern_only`, a non-repeating margin artifact (e.g. a
 unique top-right date) may leak into the IR as a stray block (extend the patterns
 as needed). OA and other corpora are unaffected on the default `blanket`.
+
+## D-DRAFT-4 — Broadened req-id capture + `is_requirement` type discriminator
+
+**Context.** MNO-C structural sections carry their own ids (a section-type tag,
+`<PREFIX2>`) alongside actual requirements (`<PREFIX3>`). The original pattern was
+scoped to the requirement type only, so sections got empty `req_id` — breaking
+parent linking and hiding section identity. But simply broadening the pattern
+would make every downstream consumer (`if c.req_id` sites, SIRA per-req corpus)
+treat sections as requirements.
+
+**Decision.** Broaden `requirement_id.pattern` to a non-capturing alternation
+over both type tags, and add `requirement_id.requirement_type_pattern` (narrow,
+requirement tag only): a post-link parser pass sets
+`Requirement.is_requirement = bool(req_id matches the narrow pattern)`. The flag
+is serialized to tree JSON (back-compat load default `bool(req_id)`), carried
+into chunk metadata by the vectorstore, and honored by the SIRA adapter (nodes
+with `is_requirement=False` are excluded from per-req corpus rows and the
+multigranularity pointer lists; they still feed Context via `section_index`).
+
+**Why.** Sections need ids for linking/context; requirements need to stay the
+only retrievable/citable unit. A single broadened pattern + a narrow
+discriminator keeps both, profile-only (D-003), with legacy corpora unchanged
+via the empty-pattern/back-compat default. Alternative — separate section-id
+field — rejected: every consumer of `req_id` would need a parallel field.
+
+**Consequences.** Every new profile regex field MUST be added to
+`substitute_placeholders` (this one initially wasn't → every node
+`is_requirement=False`, 0 SIRA corpus rows) and re-runs must start from the
+`profile` stage (substituted profile is cached). Query-side `is_requirement`
+gating (synthesizer/query_cli/context_builder `if c.req_id` sites) is deferred
+until the NORA-native lane is exercised.
+
+## D-DRAFT-5 — Definitions are `ID:`-labeled; bare req-ids are references
+
+**Context.** MNO-C requirement headings end with `(PRIORITY) ID: <REQ-ID>`, but
+release-notes/change-log sections cite the same req-ids in headings and body
+text. The parser's three req-id paths (heading inline, standalone small-font
+block, body-text scavenge) all used broad `findall`-style matching, so citations
+became duplicate requirement nodes (90 real-requirement duplicates in the MNO-C
+corpus).
+
+**Decision.** New `requirement_id.id_label_pattern`: when set, a node's OWN
+req_id is captured ONLY from the `ID:`-labeled marker (group 1) — overriding
+`anchor` and gating all three id paths; a bare req-id anywhere is a reference.
+For the residual case a citation carries the `ID:` label too (indistinguishable
+by pattern), `exclude_section_pattern` gains `release notes`: the section is
+title-matched (its number varies per doc) and its whole subtree is dropped
+pre-serialization.
+
+**Why.** The label is the corpus's own definition marker — position-based
+alternatives failed in testing (an end-of-line anchor was tried and dropped:
+citations are bare, so label presence is the sole reliable discriminator, and
+the anchor only risked missing definitions). Whole-section exclusion beats
+pattern tweaks for `ID:`-cited citations because no lexical signal separates
+them from definitions. Result: requirement-duplicates 90 → 0, verified on the
+full MNO-C corpus.
+
+**Consequences.** Corpora with `id_label_pattern` set get NO req_id on unlabeled
+headings (strict by design). The Release Notes content is absent from the tree
+and all retrieval surfaces. Empty pattern = legacy anchor behavior, so other
+corpora are untouched.
