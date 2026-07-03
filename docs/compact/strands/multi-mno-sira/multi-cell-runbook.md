@@ -53,6 +53,12 @@ python -m sandbox.adapter.nora_to_beir \
 - `--wipe-all-derived` on the **first** ingest (clears any stale SIRA-derived
   `index/ enrichments/ runs/` per cell). Use `--wipe-stale-index` for incremental
   re-emits (keeps the `runs/` enrichment cache).
+- `--only <mno>__<rel>[,...]` — emit just the named cell(s), leaving every other
+  cell in `$DB` untouched (neither re-emitted nor wiped). Same cell-name format
+  as `sira_multi --only` (section B); use it when adding one cell to an existing
+  db_root whose `$ENV` also holds already-ingested MNOs. Audit flags:
+  `--print-skips` (dropped section/duplicate req_ids), `--print-noid` (sample of
+  id-less nodes).
 
 Verify:
 ```bash

@@ -1,6 +1,15 @@
 # Docling layout-provider integration — design sketch
 
-Status: proposed (spike validated — see `experiments/layout-bakeoff/`). Strand: mno-c-ingestion.
+Status: phase 1 implemented (2026-07 — protocol + DoclingProvider + IR fields +
+fusion + MNO-C profile opt-in shipped; spike validated in
+`experiments/layout-bakeoff/`). Strand: mno-c-ingestion.
+
+> Implementation note: the provider files landed **flat** in `core/src/extraction/`
+> (`layout_provider.py`, `docling_provider.py`) rather than the `extraction/layout/`
+> subpackage sketched below; `available()` reports a generic missing-dep reason, with
+> offline provisioning documented in the module docstring. The extractor also grew a
+> `provider_table_grid` toggle (skip the flat headers/rows grid when table-anchored
+> extraction is off — HTML is the lossless source). Otherwise as designed.
 
 ## Goal
 

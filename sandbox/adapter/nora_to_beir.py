@@ -35,6 +35,9 @@ per strand decision).
 Locked strand decisions reflected here:
   * acronym pre-expansion ON (D-032/D-043 inline format)
   * heading-only reqs INCLUDED (title becomes the text)
+  * structural section nodes EXCLUDED (is_requirement=False — sections that
+    carry a req_id feed Context via section_index, not per-req corpus rows;
+    back-compat: trees without the flag keep any node with a req_id)
   * struck reqs naturally absent (parser drops per D-031/D-037)
   * combined corpus across all parsed plans (18-Q eval spans plans)
   * `_id` = req_id so the qrels join works cleanly

@@ -204,7 +204,7 @@ If the crash left **failed** docs in a cell's trace (they'd otherwise count as
 
 1. Produce the new cell's NORA parse output (`$ENV/out/parse/<mno>/<rel>/`).
 2. Emit **only the new cell(s)** with the adapter's `--only` (comma-separated
-   `<mno>/<rel>`), so cells already in `$DB` are neither re-emitted nor wiped —
+   `<mno>__<rel>`), so cells already in `$DB` are neither re-emitted nor wiped —
    even when `$ENV` also holds them (e.g. a shared env that already ran other
    MNOs). `--wipe-stale-index` clears the new cell's stale index but KEEPS its
    enrichment cache:

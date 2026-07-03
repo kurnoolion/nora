@@ -328,11 +328,19 @@ Expect output like:
 
 ```
 loaded N _tree.json file(s) from out/parse/
-  corpus.jsonl: wrote N rows (skipped: 0 no-id, 0 duplicate)
+  corpus.jsonl: wrote N per-req rows (skipped: 0 no-id, 0 duplicate, 0 section)
+  corpus.jsonl: wrote N doc-level rows + N section-level rows (section_max_depth=2)
   queries-test.jsonl: wrote 18 queries (5 have no expected_req_ids → not in qrels)
   qrels-test.jsonl: wrote 44 qrel rows
 done — point SIRA at db_root=sandbox/adapter/out, data.name=nora
 ```
+
+The `section` skip counts structural section nodes that carry a req_id but are
+not actual requirements (`is_requirement=False` from the parser's type
+discriminator) — they feed each requirement's Context but are excluded from the
+per-req corpus. Two audit flags dump what was skipped: `--print-skips` lists the
+dropped section + duplicate req_ids, and `--print-noid` prints a strided sample
+of id-less nodes so you can confirm none are requirements that lost their id.
 
 Inspect a row to sanity-check acronym expansion and structure:
 
