@@ -75,11 +75,10 @@ or after `git -C sandbox/sira pull`):
     CLONE=sandbox/sira          # the SIRA clone (run_pipeline.py under scripts/)
     RUN=enrich-stable           # pinned run name — pick once, reuse forever
 
-`$ENV` is produced by NORA's extract + parse stages (per-cell layout,
-D-096). `$DB` cells (e.g. `VZW-OA__Feb2026`) are what the adapter emits
-and what `sira_multi` + the query service consume (D-107 / D-109). Pinning
-`$RUN` is what makes resume, prune, and retry work — never let SIRA pick a
-timestamped run name.
+`$ENV` comes from NORA's extract + parse stages (per-cell layout, D-096);
+`$DB` cells (e.g. `VZW-OA__Feb2026`) are what the adapter emits and what
+`sira_multi` + the query service consume (D-107 / D-109). Pinning `$RUN`
+is what makes resume, prune, and retry work.
 
 **Venv gotcha.** `sira_multi` shells out to SIRA's `run_pipeline.py`, which
 needs `bm25x` — run it (and the query service) under the SIRA venv:
@@ -138,7 +137,6 @@ the baseline commit becomes a loop:
 
     python -m sandbox.sira_preflight --env-dir "$ENV"
     python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" --multi-cell
-    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN" --dry-run
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
     for c in "$DB"/*__*/; do
         python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
@@ -173,9 +171,7 @@ Same flow as §2.3 — `--only` takes a comma-separated cell list:
         --only <MNO-C>__<REL1>,<MNO-C>__<REL2> --wipe-stale-index
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
         --run-name "$RUN" --only <MNO-C>__<REL1>,<MNO-C>__<REL2>
-    for c in "$DB/<MNO-C>__"*/; do
-        python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
-    done
+    # then commit each new cell with --full, as in §2.3
 
 Verify: restart the query service — §3; `/healthz` `cells` includes the new
 MNO's cells; a cross-MNO query shows its provenance badges (D-108).
@@ -206,12 +202,10 @@ changed `NORA_SIRA_ENRICH_LLM_MODEL`. This is the slow (~13h) path.
     python -m sandbox.adapter.nora_to_beir \
         --env-dir "$ENV" --output "$DB" --multi-cell --wipe-all-derived
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
-    for c in "$DB"/*__*/; do
-        python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
-    done
+    # then the §2.2 commit loop (--full)
 
 Verify: `sira_enrich_inspect` (§2.12) shows phrases in the new prompt's
-style; restart the service — §3.
+style; restart the query service — §3.
 
 ### 2.7 Crash / partial-run recovery
 
@@ -273,9 +267,7 @@ Preconditions: you accept a from-scratch re-enrich of every cell.
     rm -rf "$DB"
     python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" --multi-cell
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
-    for c in "$DB"/*__*/; do
-        python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
-    done
+    # then the §2.2 commit loop (--full)
 
 Verify: as §2.2; restart the query service — §3.
 
@@ -283,8 +275,7 @@ Verify: as §2.2; restart the query service — §3.
 
 Preconditions: an ingest finished (any of §2.1–§2.6). To audit the
 adapter's filtering, re-run your last adapter command with the two print
-flags added (`--wipe-stale-index` + a §2.10 index rebuild afterwards if
-you let it wipe):
+flags added (follow with a §2.10 index rebuild since it re-wipes):
 
     python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" \
         --multi-cell --only <MNO>__<REL> --wipe-stale-index --print-skips --print-noid
@@ -322,16 +313,15 @@ processed (see `SETUP.md` §"Verifying enrichment completeness").
 The service loads **every** cell under `$DB` at startup (RAM grows with
 cell count) and never re-scans — **any added / removed / re-ingested cell
 requires a service restart**. `/healthz` is the truth: expect
-`"mode": "multi-cell"`, the full `cells` list, and `cells_load_error:
-null`. Per query it resolves scope → retrieves per cell → merges → reranks
-the pooled candidates (D-105, D-110), balanced round-robin fusion (D-118)
-with the top_k cut scaled per cell (D-121); an MNO-only query hits that
-MNO's latest release (D-106). Query enrichment goes to
-`NORA_LLM_SHIM_URL` (default `http://127.0.0.1:8030` — the shim; any
-OpenAI-compatible base without `/v1` works). The rerank backend is
-pluggable via `NORA_SIRA_RERANK_BACKEND` = `chat` (default, pointwise
-LLM-as-judge) | `tei` | `openai-dedicated` (bulk cross-encoder calls,
-D-116; sub-batch/truncate resilience D-117), routed by
+`"mode": "multi-cell"`, the full `cells` list, `cells_load_error: null`.
+Per query: resolve scope → retrieve per cell → merge → rerank the pooled
+candidates (D-105, D-110), balanced fusion (D-118) with the top_k cut
+scaled per cell (D-121); an MNO-only query hits that MNO's latest release
+(D-106). Query enrichment goes to `NORA_LLM_SHIM_URL` (default
+`http://127.0.0.1:8030` — the shim; any OpenAI-compatible base without
+`/v1` works). Rerank backend: `NORA_SIRA_RERANK_BACKEND` = `chat`
+(default, pointwise LLM-as-judge) | `tei` | `openai-dedicated` (bulk
+cross-encoder calls, D-116; resilience D-117), routed by
 `NORA_SIRA_RERANK_LLM_URL/_MODEL/_API_KEY`. Full env list in §4.
 
 ### NORA web
