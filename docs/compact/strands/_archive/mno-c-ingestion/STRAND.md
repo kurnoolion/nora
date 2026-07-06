@@ -1,8 +1,8 @@
 # mno-c-ingestion
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-06-29
-**Landed:**
+**Landed:** 2026-07-03
 **Assignees:** kurnoolion
 **Target modules:** parser, profiler, extraction
 **Active phase:** development
@@ -33,3 +33,12 @@ images + API-spec/flow PDFs that plan requirements reference — designed in
 (extraction → asset entity → corpus → fan-out retrieval → synthesis → UI vision/
 image display); belongs in `references-handling` (or a new `asset-ingestion`
 strand) under an architecture-phase pass. XL asset files are ignored.
+Embedded-figure content analysis has since been picked up by the
+`image-ingestion` strand (opened 2026-07-02).
+
+Landed on 2026-07-03 with 5 promoted decisions: D-122, D-123, D-124, D-125,
+D-126. Landing condition met: MNO-C parses cleanly on the real corpus
+(reference-as-requirement duplicates 0) and fed multi-mno-sira's 3-way
+verification. Carried at landing: the Release-Notes shed-count sanity check
+(spot-check that only change-log entries left the tree) and the deferred
+query-side `is_requirement` gating (when the NORA-native lane runs).
