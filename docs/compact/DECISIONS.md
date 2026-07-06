@@ -3809,3 +3809,792 @@ they wanted an on/off switch, not a configurable string.
 - Renumbers to a canonical D-XXX at land.
 
 _Promoted from strand: multi-mno-nora on 2026-06-28._
+
+## D-105: Multi-MNO SIRA retrieval: per-MNO BM25 indexes + LLM-rerank fusion (design C)
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** SIRA's batch pipeline and runtime service are single-corpus —
+one BM25 index, one dataset loaded at service startup. Extending to multiple
+MNOs (each with multiple releases) and supporting cross-MNO comparison
+queries ("compare VoWiFi of A and B") forces a corpus-slicing decision.
+BM25's IDF is corpus-wide, and SIRA's doc-enrichment DF filter (the
+discriminative-term invariant, plan-aware-sira D-DRAFT-1) is also
+corpus-wide — so how the corpus is partitioned changes the retrieval
+statistics. Three options were weighed:
+
+- **A — Union index** (one BM25 over all MNO×release, MNO as metadata):
+  cross-MNO is natural, but IDF/DF blend across MNOs (a term discriminative
+  within MNO A but common across the union gets the wrong DF → enrichment
+  mis-fires, single-MNO precision degrades), and adding an MNO perturbs DF
+  for every existing doc → forces whole-union re-enrichment.
+- **B — Per-MNO indexes**: clean per-MNO IDF/DF, single-MNO precision
+  preserved, MNO-add doesn't perturb others — but cross-MNO comparison must
+  merge BM25 scores that aren't comparable across indexes (different IDF
+  scales).
+- **C — Per-MNO indexes + LLM-rerank fusion**: B's retrieval isolation,
+  with SIRA's existing LLM reranker (absolute 0-100 relevance scoring,
+  corpus-independent) as the cross-MNO merge layer.
+
+**Decision:** Adopt **design C**. Retrieval is per-MNO (clean stats,
+isolation); cross-MNO queries retrieve top-K per MNO, merge the candidate
+pools, and LLM-rerank the union to produce comparably-scored, balanced
+material for the synthesizer.
+
+**Why:** C isolates the BM25-statistics problem (B's win — no shared IDF/DF
+to blend or perturb) while solving B's score-incomparability problem with a
+mechanism SIRA already has. The LLM reranker scores `(query, doc)` relevance
+absolutely, not relative to a corpus, so its scores merge cleanly across
+MNOs where raw BM25 scores cannot. C also explains the "balanced retrieval"
+requirement (FR-multi-3) mechanically: retrieving top-K *per MNO before* the
+union guarantees neither MNO is starved by vocabulary skew. A and B both
+rejected — A for statistics-blending + re-enrichment cascade on MNO-add; B
+for unsolved cross-MNO score fusion.
+
+**Consequences:**
+- The LLM reranker becomes **load-bearing** for cross-MNO queries — it can
+  no longer be disabled (`NORA_SIRA_RERANK_ENABLED=false`) for that query
+  class, because rerank *is* the fusion mechanism. This raises the priority
+  of the parked dedicated-`/rerank` backend TODO (rerank latency was already
+  the bottleneck; now mandatory for a whole query class).
+- Score-fusion quality depends on rerank scores being genuinely
+  MNO-independent — ties directly to the score-normalization concern in the
+  dedicated-`/rerank` TODO.
+- Per-MNO indexes mean per-MNO enrichment runs (more orchestration in
+  `sandbox/sira_configs` + the adapter).
+- Open sub-questions deferred to architecture phase: per-MNO-index
+  granularity (per MNO, or per MNO×release?); whether query-scope extraction
+  reuses NORA's analyzer or is SIRA-local; the concrete merge-then-rerank
+  flow in `sandbox/sira_query`.
+- This is an architecture decision made during requirements phase —
+  re-confirmed at landing (2026-07-03).
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-106: Release resolution for multi-MNO queries: independent latest-of-each-MNO when unspecified
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** Multi-MNO queries can name a release or not. NORA's FR-10
+already resolves "latest → newest release in scope" for the single-corpus
+case, but cross-MNO comparison introduces a wrinkle: "compare A and B" with
+no release named could mean (i) global-latest release label across both,
+(ii) matching/aligned releases (both Q3-2025), or (iii) each MNO's own latest
+independently. Different MNOs publish on different cadences, so their
+"latest" release labels often differ.
+
+**Decision:** When no release is named, **each MNO in scope resolves
+independently to its own latest release** (so "compare A and B" → A-latest vs
+B-latest, which may be different release labels). When releases are named
+explicitly, use exactly those. FR-multi-5 additionally requires the resolved
+`(mno, release)` per lane to be **surfaced** in the /test response so the
+user can see when a comparison spans a release gap.
+
+**Why:** Comparing each MNO's *current* state is the most common analyst
+intent ("how does A's current spec compare to B's current spec?").
+Global-latest (option i) is incoherent across independent release-numbering
+schemes. Matching-release (option ii) is often impossible — B may have no
+release in the same quarter as A — and over-constrains the common case.
+Per-MNO-latest is the natural default; the surfacing requirement (FR-multi-5)
+mitigates the one real risk of this choice — that the user silently compares
+across a release gap (A's Q4-2025 vs B's Q1-2024) without realizing it.
+
+**Consequences:**
+- A comparison can span mismatched release vintages; correctness depends on
+  the user reading the surfaced `(mno, release)` labels. Accepted because
+  the alternative (forcing release-alignment) breaks the common case.
+- The runtime service must track each corpus's release ordering to compute
+  "latest" per MNO — a small metadata requirement on the adapter output
+  (release must be orderable, not just a free-form string).
+- If a future use case needs release-aligned comparison ("compare A and B as
+  of the same quarter"), it's an additive query mode, not a change to this
+  default.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-107: Index granularity: per-(MNO, release) cell, not per-MNO
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** Design C (D-105) settled on per-MNO BM25 indexes + LLM-rerank
+fusion. But "per-MNO" left the release axis unspecified — one index per MNO
+(all releases mixed) or one per (MNO, release) cell? BM25 IDF and the
+doc-enrichment DF filter are corpus-wide, so the release axis has the same
+statistics-blending exposure the MNO axis did.
+
+**Decision:** The unit of indexing is the **(MNO, release) cell** — one BM25
+index per cell, not per MNO.
+
+**Why:** FR-9 lists "release diff" as one of the 8 query types ("how did MNO
+A's VoWiFi change from R2 to R3?"). That is the same shape as cross-MNO
+comparison — balanced retrieval from each side, fused at rerank — but on the
+release axis. Per-MNO indexing (releases mixed in one index) would hit the
+exact vocabulary-skew-starvation problem design C was built to avoid, now
+between releases of one MNO; worse, R2 and R3 of the same spec are
+near-duplicates, so mixed IDF buries the low-frequency *diff* signal that a
+release-diff query is asking for. Per-(MNO, release) makes release-diff fall
+out of the same isolate-then-fuse machinery as cross-MNO — one mechanism,
+both query types. Per-MNO would be design C on the MNO axis but union-index
+on the release axis: internally inconsistent. Cost objection (N_MNO ×
+N_release indexes, each needing a ~13h doc-enrichment pass) is mitigated by
+the existing incremental-enrichment machinery (`sira_incremental.py`
+content-hash resume): releases are incremental (R3 ⊃ mostly-unchanged R2), so
+per-cell enrichment costs "enrich the delta," not full re-enrich per release.
+
+**Consequences:**
+- More indexes + enrichment runs than per-MNO, but cost scales with actual
+  change (incremental), not cell count.
+- The (MNO, release) cell becomes the consistent unit of layout, indexing,
+  enrichment, ordering (D-109), provenance (D-108), and citation.
+- "Latest release" resolution becomes structural (pick the max-ordered cell
+  per MNO), not a within-index metadata filter — see D-109.
+- Per-MNO-only queries that intentionally span all releases ("what has MNO B
+  ever supported?") must query all of B's cells and merge — same fusion
+  machinery, rare query, handled.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-108: Cross-cell chunk identity: composite `(MNO, release, doc_id)` with structural provenance
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** With per-(MNO, release) cells (D-107), cross-cell queries
+(cross-MNO comparison, release-diff) retrieve from multiple cells and merge
+into one candidate pool for LLM-rerank fusion. The corpus rows are
+`{_id, title, text}` with no metadata field, and BM25 doesn't read metadata —
+so provenance can't live in the row. Meanwhile the same `req_id` legitimately
+exists in multiple cells (VZW Feb2026 and a future VZW Aug2026 both have
+`req:LTEAT:5.1` — the same spec evolving across releases).
+
+**Decision:** The cross-cell chunk identity is the **composite
+`(MNO, release, doc_id)`**, not `doc_id` alone. Provenance is **structural** —
+a chunk's origin cell IS its provenance, attached to the chunk at retrieval
+time (the chunk came out of that cell's index). No `doc_id` prefixing; within
+a cell, `doc_id`s stay exactly as they are (`req:...`, `doc:<plan>`,
+`section:<plan>:<num>`). The composite identity only matters at and above the
+merge layer.
+
+**Why:** Merging on `doc_id` alone would collapse two genuinely distinct
+chunks (R2's vs R3's `req:LTEAT:5.1`), break citation resolution (which
+release did this answer come from?), and defeat release-diff at the identity
+layer — a release-diff query's entire point is comparing the same req_id
+across releases, which is impossible if they share one identity. Structural
+provenance (vs doc_id prefixing) keeps within-cell doc_ids untouched, so the
+existing doc:/section: fan-out composes unchanged: pointers are cell-local
+req_ids, fan-out happens within-cell, and fanned-out chunks inherit the cell
+provenance. The composite is also exactly what FR-multi-5 surfaces in the UI
+(`(mno, release)` per lane) and what cross-comparison citations need.
+
+**Consequences:**
+- The merge layer in `sandbox/sira_query` must carry `(mno, release)` on every
+  retrieved chunk and key dedup/citation on the composite.
+- Provenance is added at retrieval, not baked into persisted doc_ids — so a
+  cell can be re-indexed without rewriting ids, and a doc_id is only globally
+  meaningful when paired with its cell.
+- Any cross-cell merge structure (the candidate pool, the rerank input, the
+  returned results) must thread the composite through; a code path that drops
+  the cell tag silently corrupts cross-comparison answers.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-109: Release identity & ordering from the input directory convention `<MNO>/<MMMYYYY>`
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** "Latest release" resolution (D-106) requires release labels
+to be orderable. The parse tree carries three candidate fields: `release`
+(the input dir name, currently `OA-baseline`), and `release_date` (a
+free-form profile-regex capture of whatever the document author typed after
+"Release Date:", currently `"February 2026"`). Grounding showed
+`release_date` is unbounded — the capture group is `(.+?)`, normalized by no
+pipeline stage, so different MNOs/documents could write any date format.
+`infer_metadata_from_path` already derives `mno`/`release` from the input
+PATH, not document content.
+
+**Decision:** Release identity and ordering come from the **input directory
+name convention**: `<env_dir>/input/<MNO>/<MMMYYYY>/`, where MMM is a
+3-letter title-case month (Jan..Dec) and YYYY a 4-digit year (e.g. `Feb2026`).
+The directory name IS both the release identity (label) and the sort key:
+`Feb2026` → order key `(2026, 02)`, stored ISO as `2026-02`; "latest per MNO"
+= max order key. Non-matching directories are rejected **fail-loud at ingest**
+(in/beside `infer_metadata_from_path`). The document `release_date` field is
+**demoted to display-only** — it may appear as a human label in FR-multi-5's
+UI alongside the structured `Feb2026`, but it never drives ordering or
+resolution.
+
+**Why:** Three options were weighed. (a) Parse `release_date` → ISO: rejected
+— bets on robustly parsing an unbounded free-form input, the exact
+silent-mis-order failure mode we most want to avoid. (b) Explicit
+human-supplied order key in the per-MNO profile: workable (fits the existing
+profile→tree→adapter flow) but adds a profile field and parsing burden. (c)
+Input directory convention: chosen — the directory name constrains the format
+at the filesystem level (validated at ingest, earliest/clearest place),
+requires no new code (`infer_metadata_from_path` already reads the path), no
+profile change, and is orderable by construction. The operator who places the
+files knows the release date; encoding it in the dir name is the natural,
+already-required act. Resolves the open consequence left in D-106
+("release must be orderable, not just a free-form string").
+
+**Consequences:**
+- `release_date` is a trap for future code — the tree carries both it and the
+  dir-derived release, and the free-form one is the tempting-but-wrong sort
+  key. Ordering must strictly use the `MMMYYYY` directory name.
+- Operator burden: input dirs must follow `MMMYYYY` exactly; a typo
+  (`Feb-2026`, `February2026`) is rejected at ingest rather than silently
+  mis-sorted. Existing `input/VZW/OA-baseline/` must be renamed +
+  re-extracted on the work PC to become a valid cell (a one-time migration,
+  not design work).
+- Month-granularity ordering assumes ≤1 release per (MNO, month) — true for
+  these quarterly-cadence corpora. If an MNO ever ships twice in one month,
+  the convention needs a discriminator; YAGNI now.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-110: Orchestration: NORA-side cell-loop (batch) + service cell-dict (runtime), SIRA unchanged
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** Two consumers must iterate cells. The batch pipeline
+(`run_pipeline.py`) runs one dataset per invocation. The runtime service
+(`sandbox/sira_query/service.py`) loads a single module-global `_bm25`. Both
+need to become cell-aware.
+
+**Decision:** **Batch** — a thin NORA-side orchestrator enumerates cells under
+`db_root` and invokes `run_pipeline.py` once per cell with `data.name=<cell>`;
+`run_pipeline.py` itself is unchanged. **Runtime** — the service's `_bm25`
+global becomes a `dict[cell_key → CellState]`; the service enumerates cells
+from `db_root` at startup (dirs matching `<mno>__<MMMYYYY>`) and loads each
+cell's BM25 index + doc enrichments. Query-time scope resolution (FR-multi-6)
+selects the target cell set; retrieve→tag→merge→rerank (D-108) operates
+over them.
+
+**Why:** Keeping `run_pipeline.py` unchanged is consistent with the
+patch-don't-fork posture established for SIRA (the per-stage-routing patch) —
+a NORA-side loop shelling out per cell adds no upstream divergence and
+composes with incremental enrichment per cell. Patching `run_pipeline.py` to
+accept a cell list was the alternative — rejected as more invasive for no
+gain, since per-cell invocation already does exactly what's needed. The
+service cell-dict is the minimal change that makes multi-cell retrieval
+possible while keeping each cell's BM25 statistics isolated (the whole point
+of D-107).
+
+**Consequences:**
+- A new NORA-side orchestrator script (location TBD —
+  `sandbox/sira_multi.py`, or extend `sira_incremental.py`) becomes the batch
+  entry point for multi-cell ingestion.
+- The service's startup cost and memory scale with cell count (N indexes
+  loaded). Acceptable at expected cell counts (a few MNOs × a few releases);
+  revisit lazy-loading if it ever grows large.
+- The service's per-query path gains scope-resolution + multi-cell retrieval +
+  merge before the existing rerank — the concrete shape (and whether it leans
+  on the dedicated-/rerank backend TODO) is the next architecture question.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-111: SIRA sandbox modules stay informal (no MODULE.md) for now — Option 1
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** Three of this strand's four target modules
+(`sandbox/adapter`, `sandbox/sira_configs`, `sandbox/sira_query`) live under
+`sandbox/`, which `structure-conventions.md` does not cover — only
+`core/src/` and `customizations/` directories get MODULE.md contracts. The
+architecture-phase persona assumes doc-first MODULE.md curation with
+requirements traceability. So most of this strand's design work lands outside
+the formalism COMPACT's architecture rigor expects.
+
+**Decision (Option 1):** Keep the SIRA sandbox modules **informal** — capture
+their architecture as strand journal entries + draft decisions, not as
+MODULE.md contracts. Only `web` (a real `core/src/` module) gets MODULE.md
+treatment when its turn comes. Defer Option 2 (promote the SIRA sandbox
+modules to first-class with their own MODULE.md, extending
+`structure-conventions.md` to cover a `sandbox/` module class) until
+multi-MNO/multi-release SIRA ships and proves durable.
+
+**Why:** The SIRA sandbox is research/integration code tracking an upstream
+clone; it has deliberately avoided MODULE.md formalism so far. Forcing
+doc-first contracts onto a still-moving design (the granularity, fusion, and
+orchestration shapes are mid-spike) is premature — the contracts would churn
+faster than they'd stabilize. Designing in the journal/decisions-draft keeps
+the reasoning captured and auditable without paying contract-maintenance cost
+on a moving target. Promotion (Option 2) is the right graduation step once the
+subsystem is durable, not before.
+
+**Consequences:**
+- This strand's `sandbox/` design lives in the strand journal + decisions-draft,
+  not in MODULE.md — `drift-check design` won't audit it (acceptable; it's
+  not yet a contract).
+- Extending `structure-conventions.md` for a `sandbox/` module class is
+  deferred work, tracked as the eventual Option 2.
+- When Option 2 lands, the journal/decisions-draft become the source material
+  for the new MODULE.md contracts — so capturing them richly now pays off
+  later.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-112: Query-scope extraction: reuse NORA's analyzer with standard LLM-or-fallback selection
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** Multi-MNO SIRA needs to extract MNO + release scope + query type
+from the natural-language query (FR-9/FR-10) to drive cell resolution. NORA's
+`core/src/query/analyzer.py` already does this in two forms —
+`LLMQueryAnalyzer` (prompts an LLM, returns `mnos`/`releases` lists +
+`query_type` incl. `release_diff`, self-falls-back to Mock on parse failure,
+more accurate) and `MockQueryAnalyzer` (keyword/regex, no LLM; `_MNO_ALIASES`
+maps verizon/vzw/vz→VZW etc., matching our cell MNO identity). The SIRA query
+service currently has no NORA `LLMProvider` (rerank goes via raw httpx), and
+there is no central selector — `pipeline.py` defaults to `MockQueryAnalyzer()`
+and accepts injection.
+
+**Decision:** Reuse NORA's analyzer rather than building a SIRA-local parser,
+and select it by the standard rule: **LLM configured → `LLMQueryAnalyzer`;
+not configured → `MockQueryAnalyzer` fallback** — the same configured-LLM-or-
+mock posture as the rest of NORA, not a rule-based carve-out for query
+analysis. This requires (a) a small selection helper
+(`make_query_analyzer(llm_provider | None)`) in `core/src/query` — none exists
+today; (b) the SIRA service constructing a NORA `LLMProvider` from its
+**primary** LLM config (the shim / `NORA_LLM_*` endpoint used for enrichment,
+NOT the rerank-override LLM) to feed `LLMQueryAnalyzer`. Cell *resolution*
+(`_resolve_cells`, D-113) stays SIRA-local; only *extraction* is reused.
+
+**Why:** Single source of truth (the canonical MNO alias map → VZW/TMO/ATT
+matches cell identity; a 4th MNO is one edit benefiting both NORA and SIRA).
+Consistency + accuracy: when an LLM is available it should do analysis (the
+user's standing rule), and `LLMQueryAnalyzer` handles oblique MNO references
+and multi-release release-diff queries ("Oct 2025 to Feb 2026") that the Mock
+regex cannot. The earlier "keep the LLM out of the scope front to save
+latency" rationale was explicitly rejected by the user — analysis is one cheap
+call on the primary (enrich-quality) LLM, not the high-volume rerank path, so
+quality/consistency outweighs the saved call. A SIRA-local parser was rejected
+as duplicate-and-drift.
+
+**Consequences:**
+- New selection helper in `core/src/query` (a curated MODULE.md module) —
+  small, and benefits NORA's native path too (which currently defaults to Mock
+  even when an LLM is configured — a latent NORA gap this surfaces; flagged for
+  the NORA side to address separately, not fixed in this strand).
+- The SIRA service now uses **both** abstractions: NORA's `LLMProvider`
+  Protocol (analysis) and raw httpx (rerank). Minor inconsistency; a future
+  cleanup could route rerank through the Protocol, but out of scope here.
+- `.finditer` fix on `_extract_releases` is now **fallback-only** (Mock path),
+  no longer release-diff-blocking when an LLM is configured — lower urgency,
+  still a core change for fallback consistency.
+- Analysis quality now depends on the configured LLM's extraction reliability;
+  `LLMQueryAnalyzer`'s built-in Mock fallback on parse failure means a bad LLM
+  response degrades rather than breaks.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-113: Fusion code shape: cell-loop generalization with `(cell_key, idx)` identity + `_resolve_cells`
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** With per-(MNO, release) cells (D-107) each holding its own
+BM25 index, a cross-cell query (cross-MNO comparison, release-diff) must
+retrieve from multiple cells and combine the results into one ranking
+("fusion"). The current `/sira-query` flow is single-index: expand →
+`_bm25.search_with_expansion` → `hits[(idx, bm25)]` → LLM rerank → sort by
+rerank score → top_k, where `idx` is a corpus index into the one `_bm25`.
+BM25 scores from different cells aren't comparable (per-corpus IDF scales).
+
+**Decision:** Fusion is the **generalization of the single-index flow to a
+cell loop**, with the composite `(cell_key, idx)` threaded through as identity
+(D-108). `_resolve_cells(intent, available)` (FR-multi-6 cross-product)
+produces the target cell set; the handler retrieves per cell, tags each
+candidate with its `cell_key`, merges into one pool, LLM-reranks the pool, and
+sorts by rerank score. **Single-cell is N=1** — no separate cross-cell branch;
+the three query shapes (scoped / cross-MNO / release-diff) collapse to one code
+path differing only in what `_resolve_cells` returns. `_resolve_cells` returns
+`(resolved, unresolved)` so requested-but-unavailable cells are surfaced
+(fail-VISIBLE at query, mirroring D-109's fail-LOUD at ingest); the caller
+errors only if `resolved` is empty. It lives in `sandbox/sira_query`
+(cell concept is SIRA's), consuming the reused-from-core `QueryIntent`.
+
+**Why (five embedded calls):**
+1. **Fusion method = sort by rerank score, not RRF** — valid only because the
+   LLM-as-judge reranker emits absolute 0-100 relevance (corpus-independent).
+   RRF (rank-position fusion) was the obvious score-free alternative; rejected
+   because the reranker's absolute scores are higher-quality for comparison.
+   Coupling note: swapping to the dedicated cross-encoder `/rerank` backend
+   would require score normalization (those scores aren't 0-100 absolute).
+2. **Balanced retrieval = `per_cell_top_n` per cell, rerank the union**
+   (FR-multi-3) — each cell gets full representation so neither MNO is starved
+   by vocabulary skew. Cost: N_cells × per_cell_top_n rerank calls; make
+   `per_cell_top_n` a knob for latency tuning.
+3. **No cross-cell dedup** — the same `req_id` legitimately exists in two cells
+   (release-diff: R2's vs R3's `req:LTEAT:5.1`) and BOTH must reach top_k. The
+   composite `(cell_key, doc_id)` keeps them distinct; a naive doc_id dedup
+   would silently break release-diff. Dedup only within a cell (fan-out
+   handles it).
+4. **Expand once, DF-filter per cell** — query enrichment is one query-level
+   LLM call; the DF-filter of those phrases uses per-cell corpus statistics
+   (a phrase discriminative in VZW may be common in TMO), so filtering runs
+   per cell (cheap DF lookup, no extra LLM call).
+5. **`_rerank_pool` reuses the existing batch/per-call rerank verbatim,
+   re-keyed** on the `Candidate` (carrying `cell_key`) instead of a bare `idx`.
+   The reranker never knows about cells — it scores `(query, text)` pairs and
+   the pool threads provenance around it.
+
+**Consequences:**
+- The service's `_bm25` global becomes `dict[cell_key → CellState]`
+  (D-110); retrieval, fan-out, rerank, and results all thread the
+  composite identity. A code path that drops the `cell_key` silently corrupts
+  cross-comparison answers (wrong-release citations, collapsed release-diff).
+- Cross-cell rerank cost compounds (per-cell granularity × balanced retrieval)
+  — the highest-leverage perf item is the dedicated-`/rerank` backend TODO.
+- `_resolve_cells` ordering uses `_order_key` on the cell label (`MMMYYYY`),
+  never the tree's free-form `release_date` (D-109 trap).
+- Results carry `(mno, release, doc_id)` provenance for citation +
+  FR-multi-5 UI surfacing; `_resolve_cells`'s `unresolved` list feeds the
+  symmetric "requested but unavailable" surfacing.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-114: Multi-cell query routing: preserve the legacy single-dataset handler, add multi-cell as a separate path
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** D-110 specified the runtime `_bm25` global ->
+`dict[cell_key -> CellState]`. Implementation faced a choice: rewrite the
+235-line `/sira-query` handler so single-cell is just N=1 of the fusion
+path (the design's "single-cell = N=1" principle), or keep the existing
+single-dataset handler and add the multi-cell path beside it. The
+existing `nora` dataset has no valid `(mno, release)` — its release is
+the free-form `OA-baseline` — so it cannot be expressed as a cell, and
+the handler couldn't be exercised against real bm25x on this machine.
+
+**Decision:** Keep the legacy single-dataset handler **unchanged**; route
+to a new `_multi_cell_query` path only when `<db_root>` contains
+`<mno>__<MMMYYYY>` cells (`if _cells:`). The two paths coexist; a dataset
+without a valid cell key stays on the legacy path.
+
+**Why:** Zero regression risk for the current single-MNO setup — the
+working handler (with its fan-out, instrumentation, pinned-chunks logic)
+is untouched. A blind unified rewrite of a critical async handler that
+couldn't be run here (no bm25x) was exactly the "large untestable block"
+the dev persona warns against. The new path is built on the
+standalone-tested `resolve_cells`/`fuse` and exercised via FastAPI
+TestClient with fakes. The legacy dataset genuinely can't join the cell
+model (no MMMYYYY release), so a unified path would have needed a
+synthetic-cell-key hack for it anyway.
+
+**Consequences:** Two retrieval code paths coexist — the multi-cell path
+duplicates the retrieve/rerank shape rather than reusing the legacy
+inline logic, and the legacy path lacks the multi-cell follow-ups (it has
+fan-out; the multi-cell path doesn't yet — Follow-up 2). When the legacy
+single-MNO `nora` dataset is retired (everything migrated to cells), the
+legacy path becomes dead code and can be removed, leaving the unified
+N=1 path as the design intended. Until then, both must be maintained.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-115: Per-cell SIRA data config is generated, not a reused config with `data.name` override
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** An earlier draft (D-DRAFT-6, left unpromoted at landing — superseded by this entry; see the strand archive) assumed SIRA's pipeline could run each cell off **one
+reused `data/nora.yaml`** with `data.name=<cell>` overridden per cell — "no
+per-cell config files." The first work-PC multi-cell run falsified this: SIRA's
+`scripts/run_pipeline.py._with_dataset(cfg, ds_name)` **re-reads
+`configs/data/<ds_name>.yaml` from disk** for each dataset (the `data=` hydra
+group default is discarded), so every cell aborted with
+`FileNotFoundError: configs/data/<cell>.yaml`. The reused-config-with-override
+model is fundamentally incompatible with how `_with_dataset` resolves the
+dataset by name.
+
+**Decision:** The batch orchestrator **generates a per-cell data config** before
+invoking each cell. `sira_multi.ensure_cell_data_config(clone, cell)` reads the
+installed `configs/data/nora.yaml` template, sets only the `name:` field to the
+cell, and writes `configs/data/<cell>.yaml` into the clone — then
+`run_pipeline.py data.name=<cell>` resolves cleanly. Generated each run
+(idempotent), so a changed template propagates. All other fields (`split`,
+`k_values`, …) are cell-independent and copied verbatim. Keeps `run_pipeline.py`
+itself unchanged (patch-don't-fork posture, SIRA D-110).
+
+**Why:** Generation is the minimal fix that respects `_with_dataset`'s
+file-by-name contract without forking SIRA or hand-maintaining N YAMLs. The
+template-with-`name:`-substituted approach keeps cells identical apart from the
+one field that must differ (the dataset identity that routes outputs to
+`<db_root>/<cell>/`). Rejected: patching `run_pipeline._with_dataset` to accept
+an in-memory override (forks the upstream clone — violates patch-don't-fork);
+pre-generating all cell YAMLs in `install_configs.sh` (not automatic; drifts as
+cells are added); symlinking each cell YAML to `nora.yaml` (the `name:` field
+would be wrong, colliding all cells onto one dataset dir).
+
+**Consequences:**
+- New `sira_multi.ensure_cell_data_config`; `run_cells` calls it per cell before
+  the subprocess. Requires the `nora.yaml` template installed in the clone
+  (SETUP.md §4) — fail-loud if absent.
+- `build_pipeline_cmd` docstring corrected; runbook §B documents the
+  auto-generation. Supersedes the "no per-cell config files" clause of the
+  earlier draft (D-DRAFT-6, left unpromoted at landing — this entry is the
+  surviving record).
+- The generated `configs/data/<cell>.yaml` files live in the gitignored clone
+  (transient build artifacts), not the repo.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-116: Pluggable `/rerank` backend (chat | tei | openai-dedicated), bulk-call protocol
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** The cell-aware service reranks the merged cross-cell candidate pool
+live. The original path was `chat` — pointwise LLM-as-judge, one chat call per
+candidate, which is slow (N round-trips) and ties reranking to a generative LLM.
+The work-PC has dedicated cross-encoder rerankers available (TEI on the HP z620,
+vLLM on the DGX) that score a whole batch in one call. Different servers speak
+different wire shapes and emit different response envelopes.
+
+**Decision:** Add a `NORA_SIRA_RERANK_BACKEND` dispatch with three backends:
+- `chat` (default) — pointwise LLM-as-judge via the rerank prompt; one call per
+  candidate; failure scores that candidate 0 (graceful, per-candidate).
+- `tei` — one bulk `POST {RERANK_LLM_URL}/rerank` `{query, texts, raw_scores}`
+  → `[{index, score}]` (Hugging Face TEI cross-encoder).
+- `openai-dedicated` — one bulk `POST {RERANK_LLM_URL}/v1/rerank`
+  `{model, query, documents}` → `{results:[{index, relevance_score}]}` (vLLM
+  Cohere-style).
+Scores are scaled to 0-100 and are treated as absolute (cross-cell comparable
+for the fusion sort). Base URLs must NOT include `/v1` (the service appends the
+backend path). A **tolerant parser** reads bare-list / `results` / `data` /
+`scores` / positional-float shapes and reads `relevance_score` or `score`; an
+unrecognized shape logs the top-level keys and scores 0 rather than crashing.
+Upstream `{error:{message}}` envelopes are surfaced to the log; HTTP calls
+follow redirects (the rerank endpoint 308s).
+
+**Why:** A dedicated cross-encoder is far cheaper than N LLM calls and keeps
+reranking independent of the synthesis LLM. Dispatch (not a hard swap) keeps
+`chat` as a zero-dependency default and lets operators point at whichever
+endpoint their hardware serves. Tolerant parsing was forced by reality — vLLM
+returned an `{error}` envelope (model didn't support the Score API), TEI and
+Cohere-style differ in both request and response shape; a strict parser turned
+every shape mismatch into a 500. Rejected: committing to one server's schema
+(brittle across the two boxes); keeping `chat`-only (too slow at pool scale).
+
+**Consequences:**
+- New `_rerank_bulk` / `_rerank_candidates` dispatch, `_parse_rerank_response`,
+  `_candidate_doc_texts`; healthz surfaces `rerank_backend`, `rerank_llm_url`.
+- Operators must set base URLs WITHOUT `/v1` — documented in the runbook §C;
+  a `/v1`-suffixed URL double-paths and 404s.
+- Bulk backends score atomically per call — which created the 413 failure mode
+  that **D-117** hardens.
+- `openai-dedicated` requires a server that actually implements the rerank/score
+  API; a chat-only vLLM returns an error envelope (now surfaced, not swallowed).
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-117: Bulk rerank resilience: sub-batch + truncate + degenerate-score round-robin
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** With the D-116 `tei` backend, cross-MNO queries returned
+**only MNO-B** chunks. Root cause chain: the merged pool is `n_cells × top_n`
+(easily 40-100), sent to TEI in ONE request; TEI rejects it with **413** (pool >
+`--max-client-batch-size`, default 32, and/or over-long dense chunks past the
+model's max sequence length); `_rerank_bulk`'s `except` then scored the **whole
+pool 0**; with all scores equal, `rank_candidates`' stable score-sort preserved
+**pool order**, which is `sorted(target_cells)` (cell-alphabetical), so the
+first cell took every `top_k` slot and the other MNO silently vanished. Lowering
+`top_k`/batch size only narrowed which batch failed — the symptom persisted.
+
+**Decision:** Three coupled changes so a rerank hiccup degrades to *balanced*,
+never to *single-cell*:
+1. **HTTP sub-batching** — `_rerank_bulk` chunks the pool into sub-batches
+   honoring `NORA_RERANK_BATCH_SIZE` (else `NORA_SIRA_RERANK_BULK_BATCH_SIZE`,
+   default 16) via `_rerank_one_batch`, and merges; a failed sub-batch scores
+   ONLY its own candidates 0 (no longer poisons the whole pool).
+2. **`truncate: true`** on the TEI payload — over-long chunks (MNO-A's dense
+   band-tables run past the model window) are clipped server-side instead of
+   413-ing; sub-batching alone can't help a single over-long doc (it 413s at
+   batch size 1).
+3. **Degenerate-score round-robin fallback** in `fusion.rank_candidates` — when
+   rerank scores are all-equal / all-zero / none-present, fall back to
+   `_round_robin(per_cell)` instead of the cell-collapsing stable sort.
+
+**Why:** The failure is structural, not incidental — cross-cell fusion must not
+let a transient rerank failure erase an entire MNO from a multi-MNO query.
+Sub-batching addresses the count/payload limit, truncation the per-doc length
+limit, and the round-robin fallback the *consequence* if scoring still fails.
+Each is necessary: batch tuning alone still 413'd on dense single docs;
+truncate alone still overflows the batch count at scale; the fallback alone
+masks but doesn't fix the 413. Rejected: raising TEI server limits (per-box,
+brittle, breaks as cells/`top_k` grow); auto-bisecting a 413'd batch (a single
+over-long doc still 413s at size 1 — confirmed before building, so not built).
+
+**Consequences:**
+- A rerank-backend outage now yields balanced (round-robin) results with
+  `rerank_score` 0/None, not a single-MNO result — visible degradation, not
+  silent erasure.
+- `truncate: true` clips over-long chunks to the model window — rows past it are
+  invisible to the reranker, so table-heavy cells still need the upstream
+  chunking fix (tracked on multi-mno-nora). Truncation is a floor, not a cure.
+- The degenerate fallback does NOT fire on *partial* failure (one cell scored,
+  one cell 413'd-to-zero) — that still sinks the zeroed cell; the durable answer
+  is balanced packing (Path B / D-118 on multi-mno-nora), not this fallback.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-118: Balanced cross-cell fusion: round-robin the top_k for multi-MNO queries
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** A cross-MNO query (`"5G NR bands for both MNO-A and MNO-B"`)
+returned ~21 MNO-B / 4 MNO-A in the top 25. `rank_candidates` sorts the merged
+pool by the reranker's absolute 0-100 score and cuts at `top_k`. The premise
+(D-113 call 1) was that absolute scores are cross-cell comparable — but
+**chunk-granularity asymmetry breaks that**: MNO-B's sharper, smaller chunks
+systematically out-score MNO-A's large/diluted/truncated band tables, so the
+global sort + cut starves the lower-scoring MNO before it ever leaves SIRA (the
+downstream NORA pin can't balance what it never receives).
+
+**Decision:** Add `NORA_SIRA_FUSION_BALANCED` (default **off** = the global
+score-sort, correct for single-MNO and when scores are genuinely comparable).
+When **on and >1 cell**, `rank_candidates` sorts WITHIN each cell by rerank
+score then `_round_robin`-interleaves the per-cell lists before the `top_k` cut.
+Within-cell ordering stays score-ranked (reliable); cross-cell representation is
+enforced structurally rather than trusted to absolute scores. `fusion.py` stays
+I/O-free — the flag is a parameter; `service.py` reads the env var and passes
+`balanced=`. Pairs with NORA's balanced pin (multi-mno-nora D-DRAFT-16) for
+end-to-end balance: this fixes *what SIRA returns*, the pin fixes *what survives
+to synth*.
+
+**Why:** Cross-cell absolute-score comparability is the assumption that fails
+when corpora are chunked differently — and re-chunking is a larger, separate
+fix. Round-robin is the minimal structural guarantee that "show me both MNOs"
+returns both. Default-off preserves the single-MNO/ comparable-score path.
+Rejected: a per-cell *floor* + global fill (more knobs, less predictable);
+trusting rerank scores (the very thing that's skewed); fixing only at the NORA
+pin (starved by the SIRA cut, as observed).
+
+**Consequences:**
+- New `_rerank_sorted` helper + `balanced` param on `rank_candidates`/`fuse`;
+  `_FUSION_BALANCED` env in the service; `fusion_balanced` in `/healthz`.
+- Multi-cell results are no longer globally score-ordered when the flag is on —
+  they interleave by cell. Acceptable (and desired) for comparison queries.
+- Two strands now carry a **D-118** (this fusion balance + NORA's pin
+  balance) — a coordinated pair; reconcile the canonical IDs at land time.
+- Does not fix *answer quality* for table-heavy MNO-A chunks — that's the
+  upstream chunking/table work (D-119 + re-chunking).
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-119: Tables inlined into req.text at document position (faithful order), consumers read text
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** Band/frequency requirements keep their source-of-truth data in
+tables, but the parser stored tables in a SEPARATE `Requirement.tables` field
+and every consumer built searchable text from `req.text` alone — so tables were
+**silently dropped** from the BEIR corpus (and the band chunks looked empty,
+ranked low, and weren't selected by Path-B). A first fix appended tables in the
+SIRA adapter (`a220722`), but appending after the body **loses document order**:
+a requirement shaped intro → table → note became intro → note → table, which
+breaks the LLM synthesizer's reading of the table against its surrounding text.
+
+**Decision:** Inline each table's markdown into `req.text` **at its document
+position**, at parse time — the block loop already runs in order, so the table
+is appended to the section's text exactly where it appears (after preceding
+prose, before following prose). `req.text` becomes the faithful, self-contained
+content. A shared `render_table_markdown` is the single renderer:
+`ChunkBuilder._table_to_markdown` delegates to it (vectorstore→parser, correct
+layering) and **stops appending separately**; the SIRA adapter stops
+re-serializing `req.tables`. `Requirement.tables` is kept as structured metadata
+but is no longer the rendering source. Trailing traceability tables are already
+cleared at parse time by `content_end_marker` (D-115), so this only inlines
+legitimate content tables.
+
+**Why:** The prose/table split was the actual defect — `req.text` *should* be
+the full requirement content, in order. Inlining at the source makes BOTH lanes
+(NORA RAG, SIRA corpus) faithful for free and removes the duplication risk of
+two consumers each appending. Rejected: position markers in text (leak to
+context/eval consumers that don't render them); per-consumer interleaving from a
+new ordered-segments field (more model surface, req.text stays lossy for
+context/eval); keeping the adapter-append (loses order — the bug we hit).
+
+**Consequences:**
+- `req.text` now contains tables → NORA RAG chunks, `build_context`, and eval
+  text all see them (more faithful; larger context — capped by
+  `build_context_max_chars` / synth budgets).
+- `include_tables` config is now **vestigial** (tables are intrinsic to text;
+  the flag no longer suppresses them) — documented, kept for back-compat.
+- **Requires a re-parse** (cheap) → re-build NORA vectorstore / re-emit SIRA
+  corpus + rebuild BM25; re-enrich only the changed table-bearing docs.
+- Cross-cutting: the parser/chunk_builder mechanism is core (multi-mno-nora);
+  this strand owns the SIRA-corpus facet (adapter passthrough + the band-query
+  problem that drove it). `verify_tables` guards the invariant (no req with a
+  `tables` field may lack the inline table).
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-120: run_stack.sh: isolated parallel stacks with a pooled feedback DB for attributable LLM A/B
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** Comparing two synthesis LLMs (Qwen3 vs a proprietary model) under
+select-synth means running two full NORA stacks (SIRA service + web) at once
+without cross-talk, while keeping their outputs comparable. Each process reads
+its config at import time, so a stack is pinned to its launch env — but a naive
+two-stack launch would share ports/state/DBs and clobber each other, and a
+per-stack feedback DB would force a manual merge to compare results.
+
+**Decision:** `run_stack.sh` launches ONE isolated SIRA-service + web stack from
+positional args (label, db_root, ports, llm_base, model[, api_key]) plus flags;
+two invocations run in parallel. **Isolated per stack:** ports, state dir,
+`--config-db`/`--jobs-db`/`--metrics-db` (precedence flag > env >
+`<state>/<name>.db`), logs, per-process venv/python, and a
+`~/.nora-stacks/<label>` registry backing `--stop <label>`. **Shared
+deliberately:** the feedback DB — because `test_feedback` carries an `llm_model`
+column, both stacks write to one DB and the A/B becomes a single
+`GROUP BY llm_model` query instead of a cross-DB merge.
+
+**Why:** Parallel stacks need hard isolation (ports/state/DBs/venvs) or they
+corrupt each other's runtime; per-process env-at-import pinning is desirable here
+(one model per stack, fixed). Pooling ONLY the feedback DB is the deliberate
+exception: it is the comparison surface, and `llm_model` makes shared rows
+attributable, so analysis needs no join. Config/jobs/metrics stay per-stack —
+they're operational state, not comparison data. The operational tooling
+(`--stop` registry, per-process venvs, preflight error surfacing,
+options-anywhere parsing, NO_PROXY bypass) was hardened iteratively against real
+work-PC failures rather than designed up front.
+
+**Consequences:**
+- The feedback DB is a shared write target across two processes; `FeedbackStore`
+  uses per-op `aiosqlite.connect` (no WAL / busy_timeout) — fine for human-paced
+  eval, NOT high concurrency. Revisit if the A/B is ever automated/parallel-load.
+- `run_stack.sh` lives in `sandbox/` (not a core module) and encodes select-synth
+  A/B assumptions (rerank off, synth-mode select-synth). It is eval scaffolding,
+  not a production launcher.
+- Per-stack config-DB + env-at-import means a running stack can't be reconfigured
+  live — restart to change model/flags (acceptable for eval).
+- Renumbers to a canonical D-XXX at land.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
+
+## D-121: Per-cell top_k: scale the balanced cut by cell count (3-MNO readiness)
+**Status**: Active · **Date**: 2026-07-03.
+
+**Context:** A 3-MNO readiness audit found the stack is otherwise N-cell-general,
+but representation budgets are **global**: in balanced multi-cell mode the final
+fusion cut takes `[:top_k]` after round-robin, so each cell gets `top_k / N`.
+The per-cell retrieve pool (`top_n`) is already per-cell, so the dilution is
+entirely at that final cut. Going 2→3 cells shrinks every MNO's share ~33%,
+which can push a borderline-ranked chunk (the FR2 band case is exactly this
+shape) below the per-cell cut — structurally reproducing the "cross-MNO drops
+one MNO" symptom we'd already fought.
+
+**Decision:** Treat `top_k` as a **per-cell budget** in balanced multi-cell mode.
+`_multi_cell_query` computes `cut = top_k * n_cells` (n_cells = cells with
+candidates) and passes that to `rank_candidates`; round-robin order means the
+first `top_k * n_cells` items are exactly the top `top_k` from each cell, and
+unequal cells self-balance. Gated by `NORA_SIRA_SCALE_TOPK_BY_CELLS` (default on;
+off = legacy global cut, for A/B). The response surfaces `n_cells` +
+`effective_top_k`; `/healthz` reports the flag. `rank_candidates` stays a pure
+mechanism — the per-cell policy lives in its one caller.
+
+**Why:** The dilution is a budget-allocation problem, not a ranking problem, so
+the fix belongs at the cut, not in retrieval or rerank. Per-cell scaling makes
+adding an MNO *add* budget. Rejected alternatives: a **per-cell floor** with a
+global ceiling (more complex, and the ceiling is the same dilution deferred);
+**scaling the select-synth token budget** by N (it's bounded by the model's 128K
+window — you physically can't grow per-MNO context, and the round-robin packer is
+already fair, so retrieval quality is the right lever); **scaling `PIN_MAX`**
+(that's the rerank-pin lane, now owned by `nora-retrieval-quality`, not this
+strand). Default-on so MNO-C benefits without a remembered per-deploy bump.
+
+**Consequences:**
+- The service returns more candidates at higher cell counts (`top_k * N`); the
+  select-synth packer trims to the token budget round-robin, so each cell's
+  top-`top_k` are *available* even though not all are packed. Larger localhost
+  payloads at 3+ cells (acceptable for eval).
+- The per-MNO **context** share still shrinks with cell count (token budget is
+  context-bound) — this fix guarantees the right candidates *reach* the packer,
+  not that all fit. Retrieval/ranking quality is the complementary lever.
+- New flag + two response fields + healthz field are a small persistent surface.
+  Tests: per-cell budget preserved across 3 cells + the starvation counterfactual.
+- Renumbers to a canonical D-XXX at land.
+
+_Promoted from strand: multi-mno-sira on 2026-07-03._
