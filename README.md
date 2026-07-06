@@ -19,19 +19,11 @@ pip install pytest
 
 ### Source Documents
 
-For the simplest single-corpus demo (`--docs .`), the VZW Open Alliance PDFs
-must be present in the repo root:
-
-- `LTESMS.pdf`
-- `LTEAT.pdf`
-- `LTEB13NAC.pdf`
-- `LTEDATARETRY.pdf`
-- `LTEOTADM.pdf`
-
-> For real / multi-MNO / multi-release ingestion, use an **environment** with
-> the `input/<MNO>/<release>/` layout instead of the repo root — see
-> [Environment Management](#environment-management) → "Ingesting multiple MNOs /
-> releases" below.
+All ingestion reads from a per-environment runtime directory (`<env_dir>`)
+using the per-cell layout `input/<MNO>/<MMMYYYY>/` — see
+[Operations § Setup](#1-setup) below. For the simplest demo, place the VZW Open
+Alliance PDFs (`LTESMS.pdf`, `LTEAT.pdf`, `LTEB13NAC.pdf`, `LTEDATARETRY.pdf`,
+`LTEOTADM.pdf`) under `<env_dir>/input/VZW-OA/Feb2026/`.
 
 ### Local LLM (optional, recommended)
 
@@ -73,39 +65,180 @@ For full offline setup on a Work PC with no internet — Ollama runtime, Gemma m
 
 - **LibreOffice** — required for automatic DOC→DOCX conversion of 3GPP spec downloads. Install with `apt install libreoffice` or equivalent. If not available, the system will log a warning; you can manually convert DOC files.
 
-## Quick Start — Automated Pipeline Runner
+## Operations
 
-The pipeline runner chains all stages with a single command, generates compact reports, and supports multi-user environment configs.
+Day-to-day runbook for the NORA pipeline. The SIRA side (enrichment stacks,
+query service) has its own runbook in `sandbox/README.md`.
 
+### 1. Setup
+
+- **Dependencies** — `pip install -r requirements.txt` (Python 3.12+). Fully
+  offline / proxy-restricted machines: see `SETUP_OFFLINE.md`.
+- **Environment** — every run needs an `env_dir` (per-environment runtime
+  directory). Either pass `--env-dir <path>` / export `ENV_DIR=<path>`, or
+  create a named config `environments/<name>.json` (gitignored) that names an
+  `env_dir`, and select it with `--env <name>`.
+- **Input layout** — source documents live per **cell** at
+  `<env_dir>/input/<MNO>/<MMMYYYY>/` (e.g. `input/VZW-OA/Feb2026/`). MNO and
+  release are inferred from the path (D-023); the `MMMYYYY` release convention
+  is validated fail-loud at ingest, and per-cell stages (extract, profile,
+  parse, resolve, vectorstore) write to `out/<stage>/<mno>/<rel>/` while
+  global stages (taxonomy, standards, graph, eval) stay flat (D-096).
+- **Profiles** — document profiles live in `customizations/profiles/`.
+  Profiles for proprietary corpora are **placeholdered** (opaque
+  `bs_<hex>.json` names, `<MNO0>`/`<PLAN>` tokens in regexes); the real
+  placeholder→value mappings live in `customizations/mappings/` and are
+  substituted at runtime (D-062). Bind profiles to cells via
+  `<env_dir>/profiles.json` (exact cell → `(mno, "*")` → default; a bare
+  `--profile` acts as a one-run global override) (D-097).
+- **Optional: Docling layout provider** — corpora whose profile sets
+  `layout_provider: "docling"` need Docling installed separately (not in
+  `requirements.txt`) plus offline model provisioning: point
+  `DOCLING_ARTIFACTS` at the models dir and set `HF_HUB_OFFLINE=1` (D-122).
+  Without it, such profiles fail loud; other corpora are unaffected.
+- **LLM / embedding providers** — resolved CLI > env var > config file:
+  `NORA_LLM_PROVIDER` / `NORA_LLM_MODEL` / `NORA_LLM_BASE_URL` /
+  `NORA_LLM_API_KEY`, `NORA_EMBEDDING_PROVIDER` / `NORA_EMBEDDING_MODEL`.
+  Full table under [Configuration — 3-tier resolution](#configuration--3-tier-resolution).
+
+### 2. Scenario matrix (NORA pipeline)
+
+Stages (name or number with `--start`/`--end`): 1 extract · 2 profile ·
+3 parse · 4 resolve · 5 taxonomy · 6 standards · 7 graph · 8 vectorstore ·
+9 eval. All commands below assume `ENV_DIR` is exported (or add
+`--env-dir <path>` / `--env <name>`).
+
+**1. Full pipeline run for one cell**
+- *Preconditions:* docs under `input/<MNO>/<MMMYYYY>/`; profile binding in
+  `<env_dir>/profiles.json` (or `--profile`); Ollama up unless `--llm-provider mock`.
+- ```bash
+  python -m core.src.pipeline.run_cli --start extract --end vectorstore \
+      --mno <MNO> --release <MMMYYYY>
+  ```
+  Omit `--mno`/`--release` to ingest every cell; add `--end eval` to evaluate.
+- *Verify:* compact report printed and saved to `<env_dir>/reports/report_<ts>.txt`;
+  `out/<stage>/<mno>/<rel>/` populated for the per-cell stages; exit code 0.
+
+**2. Extract→parse only (iterating on a profile)**
+- *Preconditions:* as above; no LLM needed (extract/profile/parse are LLM-free).
+- ```bash
+  python -m core.src.pipeline.run_cli --start extract --end parse \
+      --mno <MNO> --release <MMMYYYY>
+  ```
+- *Verify:* `out/parse/<mno>/<rel>/*_tree.json`; per-doc parse logs at
+  `<env_dir>/reports/parse_log/`; `PRS` line in the compact report shows
+  expected req counts.
+
+**3. Re-run after a profile change**
+- *Preconditions:* edited `customizations/profiles/<id>.json` or a mapping.
+- **Start from `profile`, not `parse`** — the resolved, placeholder-substituted
+  profile is cached at `out/profile/<mno>/<rel>/profile.json` and parse reads
+  only that cached copy (see §4).
+- ```bash
+  python -m core.src.pipeline.run_cli --start profile --end parse \
+      --mno <MNO> --release <MMMYYYY>
+  ```
+- *Verify:* parse log shows documents re-parsed (not "skipped") — the profile
+  fingerprint change busts the incremental skip.
+
+**4. Re-run after corrections land in `<env_dir>/corrections/`**
+- *Preconditions:* `corrections/profile.json` and/or `corrections/taxonomy.json`
+  present (saved via Corrections UI or copied+edited by hand).
+- Profile correction: `--start profile` (it overrides the binding for the run).
+  Taxonomy correction: `--start taxonomy` (correction is copied over the
+  generated `taxonomy.json`; `TAX-W002` warning confirms pickup).
+- ```bash
+  python -m core.src.pipeline.run_cli --start profile --end vectorstore
+  ```
+- *Verify:* stage stats show `source=correction`; downstream artifacts rebuilt.
+
+**5. Add a new MNO/release cell**
+- *Preconditions:* create `input/<NEWMNO>/<MMMYYYY>/`, drop docs; add a binding
+  for the new MNO to `<env_dir>/profiles.json` (new corpus format → bootstrap a
+  new profile first).
+- ```bash
+  python -m core.src.pipeline.run_cli --start extract --end vectorstore
+  ```
+  Per-cell stages skip up-to-date cells (output mtime + profile fingerprint),
+  so only the new cell does real work; `--force` reprocesses in-scope cells.
+- *Verify:* new `out/<stage>/<newmno>/<rel>/` dirs; global graph stage (if run)
+  now includes the new cell.
+
+**6. Rebuild vectorstore only**
+- ```bash
+  python -m core.src.pipeline.run_cli --start vectorstore --end vectorstore \
+      --mno <MNO> --release <MMMYYYY> --force
+  ```
+  (`--force` rebuilds even when outputs look up-to-date; drop `--mno/--release`
+  for all cells.)
+- *Verify:* `out/vectorstore/<mno>/<rel>/` refreshed (ChromaDB data +
+  `build_stats.json`).
+
+**7. Audit a parse**
+- Parse logs land at `<env_dir>/reports/parse_log/<doc>_parse_log.json` on
+  every parse. Confidence + correction-template CSVs:
+  ```bash
+  python -m core.src.parser.parse_audit --env-dir $ENV_DIR   # optional --doc <stem>
+  ```
+  → `<env_dir>/reports/audit/<doc>_audit.csv`. Human review round-trip:
+  ```bash
+  python -m core.src.parser.parse_review_cli --create-all $ENV_DIR/reports/parse_log/
+  # edit *_parse_review.json, then:
+  python -m core.src.parser.parse_review_cli --report <review.json>
+  ```
+  The web UI's **Parse Review** page reads the consolidated
+  `reports/parse_summary.json`.
+
+**8. Hand off parse output to SIRA**
+- SIRA ingests NORA's parse trees (`out/parse/<mno>/<rel>/*_tree.json`).
+  Preconditions, ingestion commands, and multi-cell handling are in
+  `sandbox/README.md` (scenario matrix) and `sandbox/SETUP.md` →
+  "Multi-MNO / multi-release (multi-cell) runbook".
+
+### 3. Running services
+
+**NORA web app**
 ```bash
-# Run the full pipeline on documents in current directory
-python -m core.src.pipeline.run_cli --docs . --start extract --end eval
-
-# Run specific stages (by name or number)
-python -m core.src.pipeline.run_cli --docs . --start profile --end parse
-python -m core.src.pipeline.run_cli --docs . --start 1 --end 3
-
-# Run using an environment config (see Environment Management below)
-python -m core.src.pipeline.run_cli --env profiler-review
-
-# Use mock LLM (no Ollama required)
-python -m core.src.pipeline.run_cli --docs . --model mock --start taxonomy --end graph
-
-# Continue past failed stages
-python -m core.src.pipeline.run_cli --docs . --continue-on-error
-
-# List available stages
-python -m core.src.pipeline.run_cli --list-stages
-
-# Detect hardware and get model recommendation
-python -m core.src.pipeline.run_cli --detect-hw
-
-# Show quality check / correction feedback templates
-python -m core.src.pipeline.run_cli --qc-template profile
-python -m core.src.pipeline.run_cli --fix-template taxonomy
+python -m core.src.web.app        # host/port from config/web.json (default 0.0.0.0:8000)
+python -m core.src.web.app --host 127.0.0.1 --port 8001 --env-dir /path/to/env
 ```
+Host/port resolve CLI flag > `config/web.json`; `env_dir` resolves
+`config/web.json` > `--env-dir` > `$ENV_DIR`. DB paths (`--jobs-db`,
+`--metrics-db`, `--feedback-db`, `--config-db`) default under
+`<env_dir>/state/`. Set `root_path` in `config/web.json` when behind a reverse
+proxy.
 
-**Pipeline output** includes a compact report block (paste in chat for collaborative debugging):
+**SIRA lane in the web app** — the playground can pin SIRA-ranked chunks by
+calling the SIRA per-query probe service. Point `NORA_SIRA_QUERY_URL` at it
+(default `http://127.0.0.1:8040`); `NORA_SIRA_QUERY_TIMEOUT` (seconds,
+default 1200) bounds the call.
+
+**SIRA query service + enrichment stacks** — started and operated per
+`sandbox/README.md` §3 (Running services).
+
+### 4. Command reference
+
+**Pipeline runner** — `python -m core.src.pipeline.run_cli`
+
+| Flag | Meaning |
+|---|---|
+| `--env <name>` / `--env-dir <path>` | Named env config (`environments/<name>.json`) vs standalone `env_dir`; `$ENV_DIR` is the fallback for standalone. Mutually exclusive. |
+| `--start` / `--end` | Stage range, by name or number (1–9). Standalone default: `extract`→`eval`; `--env` default: the config's stage range. |
+| `--mno` / `--release` | Comma-separated cell scope for the per-cell stages (default: all cells); global stages still read the whole union. |
+| `--force` | Reprocess in-scope cells even when outputs look up-to-date. |
+| `--profile <path>` | One-run global profile override (synthesizes a one-cell wildcard binding, D-097). |
+| `--model` / `--model-timeout` | LLM model tag (`auto` picks by hardware) / per-call timeout (default 600 s). |
+| `--llm-provider {ollama,openai-compatible,mock}` | LLM backend; `openai-compatible` reads `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY`. |
+| `--embedding-provider {sentence-transformers,huggingface,ollama}` / `--embedding-model` | Embedding backend + model (`huggingface` aliases `sentence-transformers`). |
+| `--standards-source {huggingface,3gpp}` | 3GPP spec source for the standards stage (D-025). |
+| `--skip-taxonomy` / `--skip-graph` / `--skip-resolve` / `--skip-standards` | Drop a stage; each has a `--no-skip-X` form to force the stage ON over env/config skips. `--skip-resolve` implies `--skip-standards`. |
+| `--rag-only` | Convenience for `--skip-taxonomy --skip-graph`; query path runs pure-RAG on a stub graph. |
+| `--continue-on-error` | Keep running past failed stages. |
+| `--list-stages` / `--detect-hw` / `--qc-template <stage>` / `--fix-template <artifact>` | Info commands (stage table, hardware + model recommendation, QC/FIX templates). |
+| `-v` / `--verbose` | Debug logging. |
+
+Every run prints a compact report (pasteable in chat) and saves the verbose
+version to `<env_dir>/reports/report_<ts>.txt`:
 ```
 RPT standalone 2026-04-15T15:53
 HW CPU=Intel Core Ultra 9 185H(22c) RAM=15G GPU=none
@@ -115,6 +248,12 @@ PRS OK 0s req=711 dep=11 docs=5
 RES WARN 0s int=301 xp=1 std=320
 ERR none
 ```
+
+**Web app** — `python -m core.src.web.app`: `--host`, `--port`, `--env-dir`,
+`--jobs-db`, `--metrics-db`, `--feedback-db`, `--config-db` (enables the
+`/config` page; resolution CLI > env > DB > JSON > defaults). Everything else
+comes from `config/web.json` / `config/env.json` — see the
+[3-tier resolution table](#configuration--3-tier-resolution).
 
 ## Web UI (Browser-Based Access)
 

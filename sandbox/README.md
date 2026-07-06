@@ -54,278 +54,437 @@ Blocked until GPU env:
 - ⏸ Run SIRA's `scifact` example end-to-end against the shim (to validate the shim under SIRA's actual request volume + the LLM-pipeline's enrichment behavior)
 - ⏸ Run SIRA against the NORA-converted corpus (Phase 1 proper)
 
-## Running
 
-The recommended path uses **per-stage env-var routing** — no shim, no
-local sglang. Shim is the fallback for header-injection / model-rewrite
-cases (see `sira_patches/README.md` for when each applies).
+## 1. Setup
 
-**Step 1 — Adapter** (writes the SIRA-internal `raw/` layout):
+First-time install (Python 3.12 venv, `uv`, Rust toolchain for `bm25x`,
+trimmed vs. full dependency set) is step-by-step in [`SETUP.md`](SETUP.md)
+— do that once; this section is what every ingest run assumes.
 
-    python -m sandbox.adapter.nora_to_beir \
-        --env-dir /path/to/env_dir \
-        --output sandbox/adapter/out/nora
+**Code + configs.** Clone SIRA and install NORA's configs, prompts, and
+patches into the clone (idempotent; re-run after editing any config/prompt
+or after `git -C sandbox/sira pull`):
 
-**Step 2 — Install configs + patches into the SIRA clone**:
-
+    git clone --depth 1 https://github.com/facebookresearch/sira.git sandbox/sira
     bash sandbox/install_configs.sh
 
-(Idempotent. Copies the 3 hydra configs + 3 prompts; applies any
-patches under `sira_patches/`. Re-run after edits or fresh SIRA clones.)
+**Directory concepts** — the three paths every command below uses:
 
-**Step 3 — Configure LLM endpoints via env vars**:
+    ENV=/path/to/env_dir        # NORA env dir: $ENV/out/parse/<mno>/<rel>/*_tree.json
+    DB=/path/to/db_root         # SIRA db_root: one <MNO>__<MMMYYYY>/ cell dataset each
+    CLONE=sandbox/sira          # the SIRA clone (run_pipeline.py under scripts/)
+    RUN=enrich-stable           # pinned run name — pick once, reuse forever
 
-    # Enrichment endpoint (corpus + query both use these vars)
-    export NORA_SIRA_ENRICH_LLM_URL=http://<your-llm-host>:<port>/v1
-    export NORA_SIRA_ENRICH_LLM_MODEL=<your-model-name>
+`$ENV` is produced by NORA's extract + parse stages (per-cell layout,
+D-096). `$DB` cells (e.g. `VZW-OA__Feb2026`) are what the adapter emits
+and what `sira_multi` + the query service consume (D-107 / D-109). Pinning
+`$RUN` is what makes resume, prune, and retry work — never let SIRA pick a
+timestamped run name.
 
-    # Rerank endpoint (set to same as enrichment OR a faster local LLM)
-    export NORA_SIRA_RERANK_LLM_URL=http://<your-llm-host>:<port>/v1
-    export NORA_SIRA_RERANK_LLM_MODEL=<your-model-name>
+**Venv gotcha.** `sira_multi` shells out to SIRA's `run_pipeline.py`, which
+needs `bm25x` — run it (and the query service) under the SIRA venv:
+`source sandbox/activate.sh` (also sets `PYTHONPATH`, localhost `NO_PROXY`,
+HF-offline vars).
 
-    # Sanity probe before launching the pipeline
+**Ingestion-time dependency services.** Enrichment is LLM-driven. The
+recommended path is per-stage env routing (the
+`sira_patches/per-stage-routing.patch`, applied by `install_configs.sh`) —
+export these before any enrich run, then sanity-probe:
+
+    export NORA_SIRA_ENRICH_LLM_URL=http://127.0.0.1:PORT/v1
+    export NORA_SIRA_ENRICH_LLM_MODEL=<model-name>
+    export NORA_SIRA_ENRICH_LLM_TIMEOUT=300     # ≥3× measured per-call latency
+    export NORA_SIRA_RERANK_LLM_URL=http://127.0.0.1:PORT/v1
+    export NORA_SIRA_RERANK_LLM_MODEL=<model-name>
+
     python -m sandbox.sira_patches.test.probe_per_stage_endpoints
 
-Expect two `SPK ... OK ...` lines (one per stage) before continuing.
+Expect two `SPK ... OK` lines. The **shim** (`shim/openai_shim.py`,
+`uvicorn sandbox.shim.openai_shim:app --port 8030`) is the fallback when
+env routing can't reach your endpoint: it exposes `/v1/chat/completions`
+and either forwards to `NORA_LLM_BASE_URL` (pass-through — injects
+`Authorization: Bearer $NORA_LLM_API_KEY`, rewrites the model name to
+`$NORA_LLM_MODEL`) or calls `customizations/llm/proprietary_provider.py`
+(adapter mode, non-OpenAI APIs). Point `NORA_SIRA_*_LLM_URL` at the shim
+and the same pipeline commands work. Full env-var reference, timeout
+sizing, and troubleshooting: `SETUP.md` §5 and `sira_patches/README.md`.
 
-**Step 4 — Run SIRA against NORA** (assumes SIRA's env is set up per
-its own README and the bm25x crate is built):
+## 2. Scenario matrix
 
-    cd $REPO_ROOT
-    source sandbox/activate.sh
-    cd sandbox/sira
-    python scripts/run_pipeline.py \
-        data=nora \
-        enrich=nora \
-        rerank=nora \
-        db_root=$(realpath ../adapter/out)
+Every scenario assumes §1 is done (SIRA venv active, `$ENV/$DB/$CLONE/$RUN`
+set, enrichment env vars exported). Flags are explained once in §4 —
+scenarios are copy-paste.
 
-With the env vars set, the patched `run_pipeline.py` skips its
-localhost-sglang reachability check and spawn — see the log line
-`SIRA LLM stages routed via NORA_SIRA_*_LLM_URL env vars — skipping
-localhost sglang reachability check and spawn.` Each stage also logs
-which URL it resolved (`(env-routed via NORA_SIRA_*_LLM_URL)` vs.
-`(sglang config)`).
+### 2.1 First-ever ingest — single MNO, single release
 
-> **Shim fallback** — when you genuinely need header injection
-> (custom Bearer auth), model-name rewriting (SIRA sends one name,
-> endpoint expects another), or adapter mode (non-OpenAI provider via
-> `customizations/llm/proprietary_provider.py`): start the shim,
-> point env vars at it, and the same pipeline command works. See
-> `SETUP.md` for the shim setup.
+Preconditions: `$ENV/out/parse/<MNO>/<REL>/` has `*_tree.json`; `$DB` is
+empty or absent.
 
-## Running — multi-MNO (multi-cell)
+    python -m sandbox.sira_preflight --env-dir "$ENV"
+    python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" --multi-cell
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN" --dry-run
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
+    python -m sandbox.sira_incremental commit --dataset "$DB/<MNO>__<REL>" --run-name "$RUN" --full
 
-The flow above handles **one** corpus. For a **multi-MNO / multi-release**
-corpus, each `(mno, release)` is its own **cell** — a separate BEIR dataset
-under a shared `db_root`, built and enriched independently. `sira_multi` is the
-batch orchestrator that runs the single-cell pipeline once per cell. Full
-operational detail (cross-cell query checks, rerank backends, Path-B synthesis)
-lives in the **`multi-mno-sira` runbook**:
-`docs/compact/strands/multi-mno-sira/multi-cell-runbook.md`.
+One cell is still a cell (D-107) — always use `--multi-cell`. Verify: the
+adapter prints per-cell row/skip counts; run §2.12's checks; then start the
+query service — §3.
 
-Prereqs: NORA parse output exists for every cell
-(`<env_dir>/out/parse/<mno>/<rel>/*_tree.json`); configs + patches installed
-(`install_configs.sh`); enrichment LLM env vars set (Step 3 above).
+### 2.2 Full batch — multiple MNOs × releases
 
-**Step 1 — Emit one BEIR dataset per cell** (`--output` is the **db_root**):
+Preconditions: every cell parsed under `$ENV/out/parse/<mno>/<rel>/`.
+Identical to §2.1 — the adapter and `sira_multi` enumerate all cells; only
+the baseline commit becomes a loop:
+
+    python -m sandbox.sira_preflight --env-dir "$ENV"
+    python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" --multi-cell
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN" --dry-run
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
+    for c in "$DB"/*__*/; do
+        python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
+    done
+
+Cells run sequentially, continue-on-error (D-110). Verify: `sira_multi`'s
+per-cell summary; `curl /healthz` lists every cell after starting — §3.
+
+### 2.3 Add a new release of an existing MNO (incremental)
+
+Preconditions: the new cell is parsed in `$ENV`; existing cells in `$DB`
+must stay untouched.
 
     python -m sandbox.adapter.nora_to_beir \
-        --env-dir /path/to/env_dir --output sandbox/adapter/out-db --multi-cell \
-        --wipe-all-derived          # FIRST ingest: clears index/ enrichments/ runs/ per cell
-
-Use `--wipe-stale-index` instead for an **incremental re-emit** — rebuilds the
-BM25 index but KEEPS the `runs/` enrichment cache (so resume works). One dataset
-lands at `<db_root>/<mno>__<release>/raw/` per cell (double-underscore).
-
-**Step 2 — Build + enrich every cell** (batch orchestrator):
-
-    python -m sandbox.sira_multi \
-        --db-root sandbox/adapter/out-db --sira-clone sandbox/sira \
-        --run-name enrich-stable --stages prepare,bm25,enrich_corpus
-        # --only VZW__Feb2026,ATT__Nov2025   subset of cells
-        # --dry-run                          print per-cell commands, don't run
-
-**Pass `--run-name`** (e.g. `enrich-stable`) — it pins each cell's doc-enrich run
-dir (`<cell>/runs/doc-enrich/<name>/`) so SIRA's resume can accumulate across
-runs. Without it, `run_pipeline` uses a timestamped name and **a re-run can't
-resume**. Point the service's `NORA_SIRA_DOC_ENRICH_RUN` at the same name.
-
-Enrichment resumes by `doc_id`, so a new release re-enriches only its new docs.
-**Caveat — content changes under an existing doc_id** (e.g. a re-parse that adds
-tables) are NOT detected by SIRA's resume: the `bm25` stage re-indexes the new
-text, but to *re-enrich* the changed docs run `sira_incremental prune` per cell
-first, or re-emit with `--wipe-all-derived` for a full re-enrich (see
-**Operational scenarios** below).
-
-**Step 3 — Launch the cell-aware service**:
-
-    uvicorn sandbox.sira_query.service:app --port 8040
-    curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool   # mode: multi-cell, cells: [...]
-
-**Inspect / verify**:
-
-    # tables inlined into NORA parse text + reached the SIRA corpus (one command):
-    python -m sandbox.verify_tables --parse <env_dir>/out/parse --db-root sandbox/adapter/out-db
-
-    # the enrichment phrases + full text (tables inline) for one req:
-    python -m sandbox.sira_enrich_inspect <req_id> --text
-
-`verify_tables` reports per-(mno/rel) parse counts (and fails if any req has a
-`tables` field but no inline table — an inline regression), per-cell corpus
-table counts, and a cross-check that tables reached the corpus.
-
-## Operational scenarios (multi-MNO)
-
-All of these assume a **pinned `--run-name`** (e.g. `enrich-stable`) so SIRA's
-doc-enrich resume is stable. `$DB` = db_root, `$CLONE` = SIRA clone, `$ENV` =
-NORA env dir.
-
-### Continue after an abrupt stop / crash
-
-`sira_multi` is per-cell sequential and continue-on-error, so finished cells are
-intact. Just re-run the **same** command (same `--run-name`):
-
+        --env-dir "$ENV" --output "$DB" --multi-cell \
+        --only <MNO>__<NEWREL> --wipe-stale-index
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
-        --run-name enrich-stable --stages prepare,bm25,enrich_corpus
+        --run-name "$RUN" --only <MNO>__<NEWREL>
+    python -m sandbox.sira_incremental commit \
+        --dataset "$DB/<MNO>__<NEWREL>" --run-name "$RUN" --full
 
-- Completed cells: `prepare`/`bm25` re-run in seconds; `enrich` resumes from the
-  pinned trace and skips every done doc (no LLM calls).
-- The cell that was mid-enrich: resumes — only not-yet-enriched docs hit the LLM.
-- To skip finished cells entirely, add `--only <remaining cells>`.
+A new cell's first commit takes `--full` (sets its drift baseline). Verify:
+only the new cell's docs hit the LLM; restart the query service — §3 —
+and MNO-only queries now route to the new release (D-106).
 
-If the crash left **failed** docs in a cell's trace (they'd otherwise count as
-"seen" and be skipped), clear them first:
+### 2.4 Add a new MNO, one or many releases (incremental)
+
+Same flow as §2.3 — `--only` takes a comma-separated cell list:
+
+    python -m sandbox.adapter.nora_to_beir \
+        --env-dir "$ENV" --output "$DB" --multi-cell \
+        --only <MNO-C>__<REL1>,<MNO-C>__<REL2> --wipe-stale-index
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
+        --run-name "$RUN" --only <MNO-C>__<REL1>,<MNO-C>__<REL2>
+    for c in "$DB/<MNO-C>__"*/; do
+        python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
+    done
+
+Verify: restart the query service — §3; `/healthz` `cells` includes the new
+MNO's cells; a cross-MNO query shows its provenance badges (D-108).
+
+### 2.5 Re-ingest after a content change (re-parse / profile edit)
+
+Preconditions: the affected cell was re-parsed in `$ENV`; a prior `commit`
+baseline exists for it (no baseline → prune can't diff; use §2.6).
+
+    python -m sandbox.adapter.nora_to_beir \
+        --env-dir "$ENV" --output "$DB" --multi-cell \
+        --only <MNO>__<REL> --wipe-stale-index
+    python -m sandbox.sira_incremental prune --dataset "$DB/<MNO>__<REL>" --run-name "$RUN"
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
+        --run-name "$RUN" --only <MNO>__<REL>
+    python -m sandbox.sira_incremental commit --dataset "$DB/<MNO>__<REL>" --run-name "$RUN"
+
+Needed because SIRA's resume is doc_id-keyed and would wrongly skip changed
+text. Verify: the enrich log shows only changed/new docs calling the LLM;
+heed prune's CORPUS DRIFT WARNING if printed; restart the service — §3.
+
+### 2.6 Enrichment prompt or model change (full re-enrich)
+
+Preconditions: you edited `prompts/doc_requirement_v01.txt` (or friends) or
+changed `NORA_SIRA_ENRICH_LLM_MODEL`. This is the slow (~13h) path.
+
+    bash sandbox/install_configs.sh
+    python -m sandbox.adapter.nora_to_beir \
+        --env-dir "$ENV" --output "$DB" --multi-cell --wipe-all-derived
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
+    for c in "$DB"/*__*/; do
+        python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
+    done
+
+Verify: `sira_enrich_inspect` (§2.12) shows phrases in the new prompt's
+style; restart the service — §3.
+
+### 2.7 Crash / partial-run recovery
+
+Preconditions: a `sira_multi` run died mid-flight (power, OOM, ^C).
+Finished cells are intact; docs interrupted mid-enrich are in *neither*
+trace, so a plain re-run with the **same** `--run-name` picks them up:
+
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
+
+Completed cells re-run `prepare`/`bm25` in seconds and skip all enriched
+docs (no LLM calls); add `--only <remaining cells>` to skip them entirely.
+If the crash also *recorded* failed docs, chase with §2.8. If a later
+resume enriches 0 docs and `enrich_query` logs "No doc enrichments found",
+run `sira_incremental promote` — see §4 and `SETUP.md` §"Recovering a
+resume". Verify: resume log lines show skipped counts ≈ prior progress.
+
+### 2.8 Retry failed docs only
+
+Preconditions: a finished run left rows in `trace.failed.jsonl` (inspect
+`$DB/<MNO>__<REL>/runs/doc-enrich/$RUN/trace.failed.jsonl` first — retry
+genuine errors; `status: all_filtered` rows are NOT worth retrying).
 
     python -m sandbox.sira_incremental retry-failed \
-        --dataset "$DB/<cell>" --run-name enrich-stable --stage doc-enrich
+        --dataset "$DB/<MNO>__<REL>" --run-name "$RUN" --stage doc-enrich
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
+        --run-name "$RUN" --only <MNO>__<REL>
 
-### Add a new MNO and/or release (incremental)
+Verify: `retry-failed` prints per-file eviction counts; the resume
+re-enriches exactly those docs; `trace.failed.jsonl` shrinks.
 
-1. Produce the new cell's NORA parse output (`$ENV/out/parse/<mno>/<rel>/`).
-2. Emit **only the new cell(s)** with the adapter's `--only` (comma-separated
-   `<mno>__<rel>`), so cells already in `$DB` are neither re-emitted nor wiped —
-   even when `$ENV` also holds them (e.g. a shared env that already ran other
-   MNOs). `--wipe-stale-index` clears the new cell's stale index but KEEPS its
-   enrichment cache:
+### 2.9 Retire / remove a cell
 
-       python -m sandbox.adapter.nora_to_beir \
-           --env-dir "$ENV" --output "$DB" --multi-cell \
-           --only <mno>__<rel> --wipe-stale-index
+Preconditions: the cell exists in `$DB`; you no longer want it served.
 
-   `--only` takes comma-separated `<mno>__<rel>` cell names (same format as
-   `sira_multi --only`), matches case-insensitively, and **fails loud** on a cell
-   with no parsed trees (typo / not parsed). Omit it to (re-)emit every cell under
-   `$ENV/out/parse` — but then every emitted cell's index is wiped, so you must
-   rebuild them all in step 3 too.
-3. Build + enrich **only the new cell(s)** (`--only`); existing cells untouched:
+    rm -rf "$DB/<MNO>__<REL>"
+    # restart the query service — §3
+    curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 
-       python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
-           --run-name enrich-stable --only <mno>__<rel> \
-           --stages prepare,bm25,enrich_corpus
+Verify: `/healthz` `cells` no longer lists it and `corpus_size` dropped;
+queries scoped to it now return it under `unresolved`.
 
-4. Restart the service — it enumerates + loads the new cell at startup
-   (`curl /healthz` lists it). A new *release* of an existing MNO is the same
-   flow; latest-release routing then picks the newest cell for an MNO-only query.
+### 2.10 Rebuild the BM25 index only (no re-enrichment)
 
-### Re-ingest after a corpus CONTENT change (re-parse / table fix / profile edit)
+Preconditions: index is stale/corrupt (e.g. the `doc_id out of range`
+panic) but enrichments are good. No LLM needed — `--stages prepare,bm25`
+skips enrichment and `--wipe-stale-index` keeps the `runs/` cache:
 
-A re-parse changes existing docs' text under the same `doc_id`. SIRA's resume is
-`doc_id`-keyed, so it would wrongly **skip** them. The `bm25` stage re-indexes
-the new text regardless (so retrieval sees it), but to **re-enrich** the changed
-docs:
+    python -m sandbox.adapter.nora_to_beir \
+        --env-dir "$ENV" --output "$DB" --multi-cell --wipe-stale-index
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
+        --run-name "$RUN" --stages prepare,bm25
 
-- **Targeted** — evict changed/removed doc_ids from each cell's trace, then
-  re-run step 2 (only changed docs re-hit the LLM):
+Verify: each cell has a fresh `index/best`; restart the query service — §3.
 
-      python -m sandbox.sira_incremental prune --dataset "$DB/<cell>" --run-name enrich-stable
-      python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name enrich-stable ...
+### 2.11 Nuke-and-rebuild everything
 
-  `prune` needs a content-hash baseline from a prior `commit`; without one it
-  can't tell what changed (then use the full path).
-- **Full** — re-emit with `--wipe-all-derived` (clears the enrichment cache so
-  everything re-enriches — the ~13h path; reserve for prompt/model changes).
+Preconditions: you accept a from-scratch re-enrich of every cell.
 
-After a successful enrich, record the new baseline for next time:
+    rm -rf "$DB"
+    python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" --multi-cell
+    python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
+    for c in "$DB"/*__*/; do
+        python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
+    done
 
-    python -m sandbox.sira_incremental commit --dataset "$DB/<cell>" --run-name enrich-stable
-    #   add --full if this followed a --wipe-all-derived rebuild
+Verify: as §2.2; restart the query service — §3.
 
-### Change the enrichment prompt or model
+### 2.12 Audit / verify an ingest
 
-Edit `prompts/doc_requirement_v01.txt` (or the model env var), re-run
-`install_configs.sh`, then **force a re-enrich** — resume would otherwise skip
-done docs. Use the **Full** path above (`--wipe-all-derived`), since the change
-is corpus-wide.
+Preconditions: an ingest finished (any of §2.1–§2.6). To audit the
+adapter's filtering, re-run your last adapter command with the two print
+flags added (`--wipe-stale-index` + a §2.10 index rebuild afterwards if
+you let it wipe):
 
-### Run parallel stacks to A/B two LLMs / ingestions
+    python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" \
+        --multi-cell --only <MNO>__<REL> --wipe-stale-index --print-skips --print-noid
 
-Each stack is a SIRA service + NORA web pinned to one ingestion + one LLM
-(config is read at import, so parallel stacks need separate processes).
-`run_stack.sh` wires one from args; run it twice with different labels/ports:
+    # tables inlined into parse text AND present in the per-cell corpus (D-119):
+    python -m sandbox.verify_tables --parse "$ENV/out/parse" --db-root "$DB"
 
-    # shell 1 — Qwen3 stack on service :8040 / web :8080
-    sandbox/run_stack.sh qwen "$DB_QWEN"  8040 8080 http://<qwen-host>:<port>  <qwen-model>
-    # shell 2 — proprietary stack on service :8041 / web :8081
-    sandbox/run_stack.sh prop "$DB_PROP"  8041 8081 http://<prop-host>:<port>  <prop-model> <api-key>
+    # what enrichment attached to one requirement:
+    python -m sandbox.sira_enrich_inspect <req_id> --db-root "$DB" --text
 
-Then `:8080` = Qwen3, `:8081` = proprietary; same query in each, compare.
+    # corpus row counts per cell / per granularity:
+    wc -l "$DB/<MNO>__<REL>/raw/corpus.jsonl"
+    grep -c '"_id": "doc:'     "$DB/<MNO>__<REL>/raw/corpus.jsonl"
+    grep -c '"_id": "section:' "$DB/<MNO>__<REL>/raw/corpus.jsonl"
 
-The SIRA service and the NORA web usually live in **different venvs** (service:
-the trimmed SIRA venv with `bm25x`; web: the full NORA venv with `fastapi`).
-`run_stack.sh` handles this: **run it from the full NORA venv** (so the web
-inherits it), and the service auto-`source`s **`sandbox/activate.sh`** — which
-activates the SIRA venv, adds `sandbox/sira` to `PYTHONPATH`, and sets the
-localhost `NO_PROXY` + HF-offline vars the service needs:
+Skip-count interpretation: the adapter always prints counts of rows
+dropped as **sections** (`is_requirement=False` — the parser's type
+discriminator, D-125; ID-labeled definitions are the requirements, bare
+ids are references, D-126) and as **duplicates**; both are expected, and
+`--print-skips` lists the ids so you can confirm nothing real was dropped.
+`--print-noid` samples id-less nodes for the same check. Enrichment
+completeness = trace.kept ∪ trace.failed; `all_filtered` rows WERE
+processed (see `SETUP.md` §"Verifying enrichment completeness").
 
-    source ~/work/nora/.venv/bin/activate         # the NORA venv (has fastapi)
-    sandbox/run_stack.sh qwen "$DB_QWEN" 8040 8080 http://<qwen>:<port> <qwen-model>
+## 3. Running the serving stack
 
-Override the per-process env if your layout differs: `--service-activate PATH`
-(default `sandbox/activate.sh`; `none` to skip), `--web-activate PATH` (default:
-none — inherit the shell), and `--service-python` / `--web-python` to override
-just the interpreter. A preflight import-checks `uvicorn`/`fastapi`/`bm25x`
-(service) and `fastapi` (web) **in each activate env** before launching, so a
-wrong venv fails fast with a clear message instead of only in the log.
+### SIRA query service
 
-`--dry-run` prints the exact env + commands without launching; `--stop <label>`
-kills a stack. Per-stack web state (pids + jobs / metrics / feedback / config DBs)
-lives under `<state-dir>/<label>/`, where `<state-dir>` is `--state-dir DIR` (or
-`$NORA_STACK_STATE_DIR`, default `/tmp/nora-stacks`) — so the two webs don't
-lock-contend or conflate Q&A logs, and each gets its own `/config` page. Pass the
-same `--state-dir` to `--stop` so it finds the pids. `llm_base_url` is the base
-WITHOUT `/v1` (used as-is for the SIRA shim, `/v1` appended for synthesis).
+    source sandbox/activate.sh              # SIRA venv (bm25x) + NO_PROXY + HF-offline
+    export NORA_SIRA_DB_ROOT="$DB"
+    export NORA_SIRA_DOC_ENRICH_RUN="$RUN"  # must match the ingest --run-name
+    uvicorn sandbox.sira_query.service:app --port 8040
+    curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 
-To point any of those DBs elsewhere, `run_stack.sh` takes them as flags
-(`--feedback-db` / `--config-db` / `--jobs-db` / `--metrics-db`, before the
-positional args) or honors the matching env vars (`$NORA_FEEDBACK_DB` etc.),
-defaulting each to `<state>/…`. Precedence: **flag > env var > default**.
+The service loads **every** cell under `$DB` at startup (RAM grows with
+cell count) and never re-scans — **any added / removed / re-ingested cell
+requires a service restart**. `/healthz` is the truth: expect
+`"mode": "multi-cell"`, the full `cells` list, and `cells_load_error:
+null`. Per query it resolves scope → retrieves per cell → merges → reranks
+the pooled candidates (D-105, D-110), balanced round-robin fusion (D-118)
+with the top_k cut scaled per cell (D-121); an MNO-only query hits that
+MNO's latest release (D-106). Query enrichment goes to
+`NORA_LLM_SHIM_URL` (default `http://127.0.0.1:8030` — the shim; any
+OpenAI-compatible base without `/v1` works). The rerank backend is
+pluggable via `NORA_SIRA_RERANK_BACKEND` = `chat` (default, pointwise
+LLM-as-judge) | `tei` | `openai-dedicated` (bulk cross-encoder calls,
+D-116; sub-batch/truncate resilience D-117), routed by
+`NORA_SIRA_RERANK_LLM_URL/_MODEL/_API_KEY`. Full env list in §4.
 
-**Config DB vs feedback DB across two instances:**
-- **Feedback DB — pool it.** Each `test_feedback` row records `llm_model`, so a
-  single shared feedback DB stays attributable *and* makes A/B comparison a
-  one-liner. Point both stacks at one path:
+### NORA web
 
-      # as a flag on each run_stack call (or export NORA_FEEDBACK_DB once):
-      sandbox/run_stack.sh --feedback-db $HOME/nora-ab/feedback.db qwen "$DB_QWEN" 8040 8080 ...
-      sandbox/run_stack.sh --feedback-db $HOME/nora-ab/feedback.db prop "$DB_PROP" 8041 8081 ...
-      # then compare:
-      sqlite3 "$NORA_FEEDBACK_DB" \
-        "SELECT llm_model, vote, COUNT(*) FROM test_feedback GROUP BY llm_model, vote;"
+    python -m core.src.web.app --port 8080
 
-  (The store opens a fresh connection per write with no WAL/busy-timeout, so a
-  shared DB is fine for human-paced A/B voting; under heavy concurrent writes it
-  could occasionally hit `database is locked` — keep them separate + `UNION` the
-  two DBs at analysis time if that ever bites.)
-- **Config DB — keep it per-stack** (the default). Independent `/config` page per
-  instance, no write contention; and since the LLM is pinned via `NORA_LLM_*`
-  env (which outranks the config DB), the per-stack config never overrides the
-  model under test anyway.
+Static config in `config/web.json` (host, port, `env_dir`, path mappings);
+CLI `--host/--port/--env-dir` override it. The web reaches the SIRA
+service via `NORA_SIRA_QUERY_URL` (default `http://127.0.0.1:8040`).
+Which cells answer a query is decided **per query on the SIRA side**
+(`resolve_cells` over the MNOs/releases detected in the query text) — the
+web env config's `mnos`/`releases` lists only feed the corpus label shown
+in the UI, they are cosmetic, not a filter.
 
-**Logs:** each stack writes `service-<svc_port>-<ts>.log` and
-`web-<web_port>-<ts>.log` (`ts`=YYYYMMDD-HHMMSS), combining stdout+stderr.
-Default location is the stack's state dir; override with `--log-dir DIR` (or
-`$NORA_STACK_LOG_DIR`). Each log starts with a header dumping the script args
-(incl. the resolved DB paths) and every set `NORA_*`/`SIRA_*` env var (API keys
-redacted) — so a log is self-describing about exactly how that process was
-launched.
+### Parallel A/B stacks — `run_stack.sh` (D-120)
+
+One stack = one SIRA service (rerank off — Path-B) + one NORA web, pinned
+at launch to one db_root + one LLM, with isolated state DBs. Run it from
+the **full NORA venv** (the web inherits it); the service auto-sources
+`sandbox/activate.sh`:
+
+    source /path/to/nora-venv/bin/activate
+    sandbox/run_stack.sh stackA "$DB_A" 8040 8080 http://127.0.0.1:PORT1 <model-a>
+    sandbox/run_stack.sh stackB "$DB_B" 8041 8081 http://127.0.0.1:PORT2 <model-b> <api-key>
+
+    sandbox/run_stack.sh --dry-run stackA "$DB_A" 8040 8080 http://127.0.0.1:PORT1 <model-a>
+    sandbox/run_stack.sh --stop stackA
+
+`--dry-run` prints the exact env + commands without launching; `--stop
+<label>` tears a stack down (a registry remembers each label's state dir).
+For attributable A/B, pool feedback across stacks with a shared
+`--feedback-db` (rows carry `llm_model`); keep config DBs per-stack (the
+default). Logs are self-describing (args + `NORA_*`/`SIRA_*` env, keys
+redacted) under each stack's state dir.
+
+## 4. Command reference
+
+### `sandbox.adapter.nora_to_beir` — parse trees → per-cell BEIR datasets
+
+- `--env-dir PATH` (required) — NORA env dir; reads
+  `out/parse/**/*_tree.json` recursively.
+- `--output PATH` (required) — in `--multi-cell` mode this is the
+  **db_root**; one dataset lands at `<output>/<MNO>__<REL>/raw/` per cell
+  (D-096 layout; composite `(MNO, release, doc_id)` identity D-108).
+  Without `--multi-cell` it's a single dataset dir (legacy path, kept by
+  D-114).
+- `--multi-cell` — partition trees by `(mno, release)`; release must match
+  `MMMYYYY` or the run **fails loud** (D-109).
+- `--name NAME` — dataset name in `metadata.json` (single-dataset mode
+  only; defaults to the `--output` basename; ignored with `--multi-cell`).
+- `--only <MNO>__<REL>[,...]` — emit only these cells (case-insensitive;
+  fails loud on a cell with no parsed trees). Without it every cell under
+  `$ENV` is re-emitted — and wiped, if a wipe flag is set.
+- `--wipe-stale-index` vs `--wipe-all-derived` — both clear the
+  corpus-size-dependent `index/` + `enrichments/` (+ stale `eval/` /
+  `retrieval/` caches); `--wipe-all-derived` **also** clears `runs/` (the
+  enrichment cache) forcing a from-scratch re-enrich. Rule of thumb:
+  stale-index for growth with unchanged prompts, all-derived for
+  prompt/model changes or corpus-composition shifts.
+- `--print-skips` — list req_ids dropped as sections
+  (`is_requirement=False`, D-125/D-126) and as duplicates (counts always
+  print).
+- `--print-noid` — sample the id-less nodes (section_number + title).
+- `--section-max-depth N` — max section-prefix depth for section-level
+  multi-granularity rows (default 2: `5` and `5.1`, not `5.1.1`).
+
+### `sandbox.sira_multi` — run SIRA's pipeline once per cell (D-110)
+
+- `--db-root PATH` (required) — parent of the `<MNO>__<REL>/` cells.
+- `--sira-clone PATH` (required) — the SIRA clone
+  (`<clone>/scripts/run_pipeline.py`).
+- `--stages LIST` — default `prepare,bm25,enrich_corpus` (corpus-only;
+  cells have no real queries, the service enriches/reranks live).
+- `--only CELLS` — comma-separated subset (same format as the adapter's).
+- `--run-name NAME` — pins each cell's doc-enrich run dir
+  (`<cell>/runs/doc-enrich/<name>/`) so resume accumulates across runs;
+  without it SIRA timestamps the run and **a re-run can't resume**. Match
+  the service's `NORA_SIRA_DOC_ENRICH_RUN`.
+- `--sglang-port N` — `sglang.port` override; omit under per-stage env
+  routing.
+- `--dry-run` — print the per-cell commands (each cell gets a generated
+  `configs/data/<cell>.yaml` from the `nora.yaml` template, D-115).
+
+### `sandbox.sira_incremental` — content-hash resume helper
+
+All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
+`--run-name NAME` (both required; run-name must match the ingest's).
+
+- `prune` — pre-enrich: evict changed/removed doc_ids from the resume
+  trace by content-hash diff against the last `commit` baseline.
+  `--max-growth-ratio R` (default 1.5) prints a DRIFT WARNING past
+  cumulative growth R; `--strict-growth` turns it into a hard exit-2.
+- `commit [--full]` — post-enrich: record current corpus hashes as the new
+  baseline. `--full` marks a full rebuild (after `--wipe-all-derived` or a
+  cell's first ingest) and resets the drift baseline.
+- `promote` — reconstruct `enrichments/doc/<run>.jsonl` + `best.jsonl`
+  after a full-resume run left a dangling symlink (the "No doc enrichments
+  found" recovery).
+- `retry-failed [--stage doc-enrich|rerank|both] [--include-all-filtered]`
+  — evict *recorded-failed* entries so the next resume reprocesses them.
+  Default stage `both`; default scope errors-only (keeps `all_filtered` —
+  include them only after a prompt/LLM change).
+
+### Query-service env vars (`sandbox/sira_query/service.py`)
+
+- `NORA_SIRA_DB_ROOT` — the cell db_root (required for multi-cell mode).
+- `NORA_SIRA_DOC_ENRICH_RUN` — pinned doc-enrich run to load phrases from.
+- `NORA_LLM_SHIM_URL` / `NORA_LLM_MODEL` / `NORA_LLM_SHIM_API_KEY` (falls
+  back to `NORA_LLM_API_KEY`) — query-enrichment endpoint, base **without**
+  `/v1` (the service appends `/v1/chat/completions`).
+- `NORA_SIRA_RERANK_BACKEND` — `chat` | `tei` | `openai-dedicated`
+  (D-116); bulk backends post once to `{URL}/rerank` / `{URL}/v1/rerank`
+  and ignore the rerank prompt.
+- `NORA_SIRA_RERANK_LLM_URL/_MODEL/_API_KEY` — rerank endpoint override,
+  base **without** `/v1`. (Caution: the *batch-pipeline* env var of the
+  same name takes the base **with** `/v1` — see §1.)
+- `NORA_SIRA_RERANK_MAX_TOKENS` (256), `NORA_RERANK_BATCH_SIZE` (0 =
+  per-call; batch failures zero the whole batch — D-117 covers bulk-backend
+  resilience), `NORA_SIRA_RERANK_ENABLED` (`false` → round-robin balance).
+- `NORA_SIRA_FUSION_BALANCED` (D-118) + `NORA_SIRA_SCALE_TOPK_BY_CELLS`
+  (default on, D-121) — balanced cross-cell cut, top_k scaled per cell.
+- `NORA_SIRA_TOP_K` (10), `NORA_SIRA_RERANK_TOP_N` (20),
+  `NORA_SIRA_MAX_DF_RATIO` (0.05), `NORA_SIRA_EXPANSION_WEIGHT` (0.5),
+  `NORA_SIRA_QUERY_ENRICH_ENABLED` (true).
+
+Web-side: `NORA_SIRA_QUERY_URL` (default `http://127.0.0.1:8040`),
+`NORA_SIRA_QUERY_TIMEOUT` (1200s).
+
+### `run_stack.sh` args (D-120)
+
+    run_stack.sh [OPTIONS] <label> <db_root> <svc_port> <web_port> <llm_base_url> <llm_model> [api_key]
+    run_stack.sh --stop <label>
+
+`<llm_base_url>` is the base **without** `/v1` (used as-is for the
+service's query-enrich shim var, `/v1` appended for web synthesis).
+Options: `--state-dir` / `--log-dir`; `--feedback-db` / `--config-db` /
+`--jobs-db` / `--metrics-db` (flag > env var `$NORA_FEEDBACK_DB` etc. >
+default `<state>/<name>.db`); `--service-activate` / `--web-activate` and
+`--service-python` / `--web-python` (venv wiring; a preflight
+import-checks `uvicorn`/`fastapi`/`bm25x` per role); `--reasoning-sentinel`
+(web-only final-answer-marker mode for thinking LLMs); `--dry-run`.
+
+### Verification CLIs
+
+- `sandbox.sira_preflight --env-dir PATH` — fail loud on any non-`MMMYYYY`
+  release dir before extraction (D-109).
+- `sandbox.verify_tables [--parse DIR] [--db-root DIR]` — tables inlined in
+  parse text and present in each cell's corpus (D-119); `--db-root`
+  defaults to `$NORA_SIRA_DB_ROOT`.
+- `sandbox.sira_enrich_inspect <req_id> [--db-root DIR] [--cell NAME]
+  [--run NAME] [--text] [--trace]` — the enrichment phrases (and
+  optionally corpus text / raw trace row) for one requirement.
+
+Deeper narrative (design rationale, cross-cell query checks, Path-B
+synthesis) lives in the archived runbook:
+`docs/compact/strands/_archive/multi-mno-sira/multi-cell-runbook.md`.
