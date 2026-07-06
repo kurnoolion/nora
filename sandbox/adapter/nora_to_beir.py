@@ -927,11 +927,11 @@ def main() -> int:
     p.add_argument("--wipe-stale-index", action="store_true",
                    help=(
                        "Incremental-safe wipe: remove size-dependent "
-                       "index/ + enrichments/ under --output (cheap to "
-                       "rebuild) but KEEP runs/ (the enrichment cache), so "
-                       "the next SIRA run re-enriches only new/changed docs. "
-                       "Use for steady-state growth (added release / MNO, "
-                       "same enrichment prompts)."
+                       "index/ + enrichments/ + eval/ + retrieval/ under "
+                       "--output (cheap to rebuild) but KEEP runs/ (the "
+                       "enrichment cache), so the next SIRA run re-enriches "
+                       "only new/changed docs. Use for steady-state growth "
+                       "(added release / MNO, same enrichment prompts)."
                    ))
     p.add_argument("--wipe-all-derived", action="store_true",
                    help=(

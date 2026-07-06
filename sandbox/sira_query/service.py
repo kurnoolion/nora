@@ -10,7 +10,11 @@ Mirrors the same end-to-end pipeline SIRA's batch scripts run:
     4. LLM pointwise rerank of top_n candidates (uses `relevance_requirement_v01.txt`)
     5. Return top_k ranked results
 
-All LLM calls go through the existing FastAPI shim on port 8030.
+LLM calls go to any OpenAI-compatible endpoint: expansion/synthesis via
+`NORA_LLM_SHIM_URL` (the shim is one option, not required), rerank separately
+routable via `NORA_SIRA_RERANK_LLM_URL` (base URL WITHOUT `/v1` — the service
+appends `/v1/chat/completions` itself; note the batch pipeline's same-named
+env var expects it WITH `/v1`).
 
 Run (from the sandbox/sira/.venv):
 
