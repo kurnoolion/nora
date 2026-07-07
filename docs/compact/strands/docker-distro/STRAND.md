@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** unspecified
-**Active phase:**
+**Active phase:** architecture
 
 ## Summary
 
