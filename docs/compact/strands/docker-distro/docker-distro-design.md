@@ -26,10 +26,14 @@ differs. No separate dev images to drift.
   DGX / RTX A4600 boxes) — so `sira-batch` runs anywhere.
 - **LLM/vision endpoints are external** to the stack, env-configured. Never
   containerized here, never baked, never committed (D-062 discipline).
-- **Registry: internal GitHub** (container registry on the internal instance).
-  The registry hostname is configuration (`.env`), never committed — committed
-  compose references `${REGISTRY}/...` only. Public GitHub mirror never
-  receives images or registry names.
+- **Distribution: internal GitHub Release assets** (`docker save` tarballs
+  attached to releases on the internal `<team>/nora` repo; hosts download +
+  `docker load` via a small `pull.sh`). GitHub Packages / the container
+  registry is disabled on the internal GHES (the `read:packages` /
+  `write:packages` PAT scopes are absent — the tell). No layer dedup on this
+  channel → image layering is designed to keep routine transfers small (see
+  base-image split below). Hostname/org are configuration (`.env`), never
+  committed. Public GitHub mirror never receives images or internal names.
 - **Docling models / HF artifacts** are provisioned per host into a models
   volume (existing `fetch_docling_models.py` flow), not baked — images stay
   buildable/pullable without model downloads.
@@ -111,10 +115,23 @@ pooled volume** mounted into every stack (attributable A/B); the SIRA
 
 ## Build & distribution flow
 
-Build on the dev PC (unrestricted network) → push to the internal GitHub
-registry → work PC / other hosts `docker compose pull`. Tags: `:git-<sha>` +
-`:latest`; the compose pin is an env var. Fallback for a registry-less host:
-`docker save | load` tarballs. (CI builds on internal runners: later nicety.)
+Build on the dev PC (unrestricted network) → `docker save | gzip` per image →
+upload as **Release assets** on the internal `<team>/nora` repo (release tag =
+image version, e.g. `images-v3-<git-sha>`) → hosts run `pull.sh <tag>` (gh CLI
+or curl download + `docker load`). `push.sh` / `pull.sh` live in `docker/` and
+read `GHHOST`/org from `.env`.
+
+Mitigating no-layer-dedup (full-size transfer per update):
+- **Base/app split for the fat image**: `nora-pipeline-base` (CPU torch +
+  Docling + system deps, ~2-3 GB, rebuilt rarely) vs `nora-pipeline` (app layer
+  FROM base, ~100-300 MB, rebuilt often). Routine updates ship only the app
+  tarball; `pull.sh` fetches base only when the release notes flag a base bump.
+  Same split applies to `sira-batch` (venv+bm25x base vs configs/prompts app
+  layer) if its rebuild cadence warrants it.
+- GHES release assets cap at ~2 GB each (confirm with admins): the base tarball
+  ships as split archive parts (`split -b 1900m`), reassembled by `pull.sh`.
+- If admins later enable GitHub Packages, the container registry becomes a
+  drop-in upgrade (push/pull replace the scripts; layering already optimal).
 
 ## Phasing
 
@@ -144,8 +161,8 @@ registry → work PC / other hosts `docker compose pull`. Tags: `:git-<sha>` +
 
 ## Open questions
 
-- Does the internal GitHub registry allow pulls from every target host
-  (proxy/cert story), or is `save/load` the realistic day-1 channel?
+- GHES release-asset size limit (2 GB default — confirm) and proxy transfer
+  speed for GB-scale downloads (probe on the work PC).
 - `sira-query` reload-without-restart endpoint (nice-to-have; restart is fine
   for v1).
 - Web app assumes paths from `config/web.json` — confirm all paths it needs are
