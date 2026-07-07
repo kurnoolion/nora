@@ -71,3 +71,7 @@ sandbox/sira/
 # Both can be regenerated from the current env_dir + a re-run, so they
 # don't belong in the repo.
 sandbox/adapter/out*/
+
+# docker distro: per-host env files (real endpoints — never commit)
+docker/.env
+docker/.env.*
