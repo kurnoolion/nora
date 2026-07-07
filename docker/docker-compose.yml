@@ -1,0 +1,115 @@
+# NORA + SIRA stack — two views, one image set (docker-distro design).
+#
+#   OPS  serve:   docker compose --profile serve up -d
+#   OPS  ingest:  docker compose --profile ingest run --rm nora-pipeline <cmd>
+#                 docker compose --profile ingest run --rm sira-batch   <cmd>
+#                 docker compose restart sira-query
+#   A/B  stacks:  docker compose -p stack-a --env-file .env.stack-a --profile serve up -d
+#                 (per-stack ports/LLM/web-state via env; pooled feedback volume)
+#
+# Copy env.example -> .env and fill in host paths + endpoints first.
+# Run compose from this docker/ directory (build context is the repo root).
+
+name: ${STACK_NAME:-nora}
+
+services:
+  sira-query:
+    build:
+      context: ..
+      dockerfile: docker/sira.Dockerfile
+      target: sira-query
+      args:
+        SIRA_REF: ${SIRA_REF:-62ec59cfb0d76f28ceb3c3d80023ac58a98e4b7a}
+    image: ${IMAGE_PREFIX:-local}/sira-query:${IMAGE_TAG:-dev}
+    profiles: ["serve", "dev"]
+    ports:
+      - "${SIRA_QUERY_PORT:-8040}:8040"
+    volumes:
+      - ${SIRA_DB_ROOT:?set SIRA_DB_ROOT in .env}:/data/db
+    environment:
+      NORA_SIRA_DB_ROOT: /data/db
+      NORA_LLM_SHIM_URL: ${NORA_LLM_SHIM_URL:-}
+      NORA_LLM_SHIM_MODEL: ${NORA_LLM_SHIM_MODEL:-}
+      NORA_SIRA_RERANK_LLM_URL: ${NORA_SIRA_RERANK_LLM_URL:-}
+      NORA_SIRA_RERANK_LLM_MODEL: ${NORA_SIRA_RERANK_LLM_MODEL:-}
+      NORA_SIRA_RERANK_ENABLED: ${NORA_SIRA_RERANK_ENABLED:-}
+      NORA_RERANK_BATCH_SIZE: ${NORA_RERANK_BATCH_SIZE:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach host-side LLM endpoints
+    restart: unless-stopped
+
+  nora-web:
+    build:
+      context: ..
+      dockerfile: docker/nora.Dockerfile
+      target: nora-web
+    image: ${IMAGE_PREFIX:-local}/nora-web:${IMAGE_TAG:-dev}
+    profiles: ["serve", "dev"]
+    ports:
+      - "${NORA_WEB_PORT:-8000}:8000"
+    volumes:
+      - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env
+      - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
+      - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
+    environment:
+      ENV_DIR: /data/env
+      NORA_JOBS_DB: /data/web-state/nora_jobs.db
+      NORA_METRICS_DB: /data/web-state/nora_metrics.db
+      NORA_CONFIG_DB: /data/web-state/nora_config.db
+      NORA_FEEDBACK_DB: /data/feedback/nora_feedback.db
+      NORA_SIRA_QUERY_URL: http://sira-query:8040
+      NORA_LLM_PROVIDER: ${NORA_LLM_PROVIDER:-}
+      NORA_LLM_BASE_URL: ${NORA_LLM_BASE_URL:-}
+      NORA_LLM_MODEL: ${NORA_LLM_MODEL:-}
+      NORA_LLM_API_KEY: ${NORA_LLM_API_KEY:-}
+      NORA_EMBEDDING_PROVIDER: ${NORA_EMBEDDING_PROVIDER:-}
+      NORA_EMBEDDING_MODEL: ${NORA_EMBEDDING_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - sira-query
+    restart: unless-stopped
+
+  # ------------------------------------------------ ingest jobs (no daemon) --
+  nora-pipeline:
+    build:
+      context: ..
+      dockerfile: docker/nora.Dockerfile
+      target: nora-pipeline
+    image: ${IMAGE_PREFIX:-local}/nora-pipeline:${IMAGE_TAG:-dev}
+    profiles: ["ingest", "dev"]
+    volumes:
+      - ${NORA_ENV_DIR:?}:/data/env
+      - ${SIRA_DB_ROOT:?}:/data/db
+      - ${MODELS_DIR:-/tmp/nora-models}:/data/models
+    environment:
+      ENV_DIR: /data/env
+      DOCLING_ARTIFACTS: /data/models/docling
+      HF_HUB_OFFLINE: "1"
+      NORA_LLM_PROVIDER: ${NORA_LLM_PROVIDER:-}
+      NORA_LLM_BASE_URL: ${NORA_LLM_BASE_URL:-}
+      NORA_LLM_MODEL: ${NORA_LLM_MODEL:-}
+      NORA_LLM_API_KEY: ${NORA_LLM_API_KEY:-}
+      NORA_EMBEDDING_PROVIDER: ${NORA_EMBEDDING_PROVIDER:-}
+      NORA_EMBEDDING_MODEL: ${NORA_EMBEDDING_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  sira-batch:
+    build:
+      context: ..
+      dockerfile: docker/sira.Dockerfile
+      target: sira-batch
+      args:
+        SIRA_REF: ${SIRA_REF:-62ec59cfb0d76f28ceb3c3d80023ac58a98e4b7a}
+    image: ${IMAGE_PREFIX:-local}/sira-batch:${IMAGE_TAG:-dev}
+    profiles: ["ingest", "dev"]
+    volumes:
+      - ${SIRA_DB_ROOT:?}:/data/db
+    environment:
+      NORA_SIRA_ENRICH_LLM_URL: ${NORA_SIRA_ENRICH_LLM_URL:-}
+      NORA_SIRA_ENRICH_LLM_MODEL: ${NORA_SIRA_ENRICH_LLM_MODEL:-}
+      NORA_SIRA_RERANK_LLM_URL: ${NORA_SIRA_BATCH_RERANK_LLM_URL:-}
+      NORA_SIRA_RERANK_LLM_MODEL: ${NORA_SIRA_RERANK_LLM_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

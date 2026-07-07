@@ -1,0 +1,19 @@
+# Build-context excludes for docker/*.Dockerfile (context = repo root).
+.git
+.compact
+.venv
+venv
+**/__pycache__
+**/*.pyc
+sandbox/sira/          # the gitignored upstream clone — images get their own pinned clone
+sandbox/adapter/out/
+environments/*.json
+experiments/
+docs/
+presentations/
+cline-playbooks/
+visualizations/
+assets/
+*.md
+!*/MODULE.md
+docker/*.md
