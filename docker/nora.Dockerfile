@@ -11,8 +11,13 @@
 
 FROM python:3.12-slim AS nora-base
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
-# CPU-only torch FIRST so sentence-transformers doesn't drag the CUDA build in.
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
+# torch is installed FIRST so sentence-transformers doesn't drag its own pick in.
+# Default: the CPU-only index (small image). On proxy-restricted builders where
+# download.pytorch.org is blocked (work PC allowlist), override to PyPI:
+#   --build-arg TORCH_INDEX_URL=https://pypi.org/simple
+# (PyPI serves the default CUDA-bundled wheel — bigger image, same CPU behavior.)
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+RUN pip install --index-url "$TORCH_INDEX_URL" torch
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 

@@ -115,11 +115,19 @@ pooled volume** mounted into every stack (attributable A/B); the SIRA
 
 ## Build & distribution flow
 
-Build on the dev PC (unrestricted network) → `docker save | gzip` per image →
-upload as **Release assets** on the internal `<team>/nora` repo (release tag =
-image version, e.g. `images-v3-<git-sha>`) → hosts run `pull.sh <tag>` (gh CLI
-or curl download + `docker load`). `push.sh` / `pull.sh` live in `docker/` and
-read `GHHOST`/org from `.env`.
+**Build on the work PC** (revised 2026-07-07 — the dev PC cannot reach the
+internal GHES, and no file-transfer channel exists between the PCs; everything
+rides allowed network routes). Base images arrive via **skopeo**
+(`skopeo-pull-bases.sh` — `docker pull` is proxy-broken at work but
+`skopeo copy → docker load` is proven there, same as the dgx/spark stacks);
+torch comes from PyPI on the work PC (`--build-arg
+TORCH_INDEX_URL=https://pypi.org/simple`; the CPU index is allowlist-blocked
+there). Then `docker save | gzip` per image → upload as **Release assets** on
+the internal `<team>/nora` repo (release tag = image version,
+`images-vN-<git-sha>`) → other hosts run `pull.sh <tag>` (curl + `docker
+load`). `push.sh` / `pull.sh` live in `docker/`, read `GHHOST`/org from `.env`.
+The dev PC still builds for fast Dockerfile verification (default CPU-torch
+index), but its builds are never the release.
 
 Mitigating no-layer-dedup (full-size transfer per update):
 - **Base/app split for the fat image**: `nora-pipeline-base` (CPU torch +

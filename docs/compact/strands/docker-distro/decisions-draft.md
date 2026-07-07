@@ -46,6 +46,19 @@ against the GHES API so target hosts need no gh CLI. Release tag = image
 version (`images-vN-<git-sha>`). Verified by a 300 MB probe (upload +
 download) on the work PC.
 
+**Amended 2026-07-07 — build locus is the work PC.** The dev PC cannot reach
+the internal GHES and no file-transfer channel exists between the PCs, so
+images are BUILT on the work PC and pushed from there. Two proxy accommodations
+make work-PC builds viable: base images arrive via skopeo
+(`skopeo-pull-bases.sh` — `docker pull` is proxy-broken but `skopeo copy →
+docker load` is the proven pattern from the dgx/spark stacks), and torch
+installs from PyPI (`--build-arg TORCH_INDEX_URL=https://pypi.org/simple`;
+download.pytorch.org is allowlist-blocked). Dev-PC builds remain a fast
+verification loop only — never the release. Rejected at this step: publishing
+tarballs through the public github.com mirror (work PC could pull them, but
+binary artifacts on the public repo were not worth it when work-PC builds
+work).
+
 **Why.** Releases are core GHES (can't be disabled), asset storage is outside
 git history, and the flow mirrors the team's existing internal-GitHub habits.
 Rejected: container registry (disabled; becomes a drop-in upgrade if admins

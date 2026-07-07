@@ -35,14 +35,29 @@ N servers) and FEEDBACK_DIR (pooled feedback DB → attributable A/B, D-120).
 
 ## Build + distribute
 
-    # dev PC (network):
-    docker compose --profile serve --profile ingest build
+Builds happen **on the work PC** (the only host that can also publish to the
+internal GitHub). `docker pull` is broken through the corp proxy — fetch base
+images via skopeo first (same workaround as the dgx/spark stacks):
+
+    # work PC, one-time per base-image bump:
+    ./skopeo-pull-bases.sh                  # python:3.12-slim etc. via skopeo + docker load
+
+    # build (proxy: pip/github/rustup go through the proxy env; torch's CPU
+    # index is blocked on the allowlist -> override to PyPI):
+    docker compose --profile serve --profile ingest build \
+        --build-arg TORCH_INDEX_URL=https://pypi.org/simple
+
+    # publish to the internal GitHub release:
     ./push.sh images-v1-$(git -C .. rev-parse --short HEAD) \
         local/nora-web:dev local/sira-query:dev local/nora-pipeline:dev local/sira-batch:dev
 
-    # target host:
+    # any other internal host:
     ./pull.sh images-v1-<sha>
+
+The dev PC (unrestricted network) can also build — useful for verifying
+Dockerfile changes fast (default TORCH_INDEX_URL, smaller image) — but it
+cannot reach the internal GitHub; its builds are verification, not release.
 
 Images bake NO endpoints, models, mappings, or corpus data — those arrive via
 `.env` + `/data/*` volumes. The SIRA upstream clone IS baked (pinned by
-`SIRA_REF`) so a host never needs github.com access.
+`SIRA_REF`) so serving hosts never need github.com access.
