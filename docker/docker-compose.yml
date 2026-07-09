@@ -20,6 +20,9 @@ services:
       target: sira-query
       args:
         SIRA_REF: ${SIRA_REF:-62ec59cfb0d76f28ceb3c3d80023ac58a98e4b7a}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/sira-query:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
     ports:
@@ -43,6 +46,11 @@ services:
       context: ..
       dockerfile: docker/nora.Dockerfile
       target: nora-web
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/nora-web:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
     ports:
@@ -76,6 +84,11 @@ services:
       context: ..
       dockerfile: docker/nora.Dockerfile
       target: nora-pipeline
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/nora-pipeline:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
@@ -102,6 +115,9 @@ services:
       target: sira-batch
       args:
         SIRA_REF: ${SIRA_REF:-62ec59cfb0d76f28ceb3c3d80023ac58a98e4b7a}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/sira-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
