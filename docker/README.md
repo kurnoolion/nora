@@ -1,8 +1,10 @@
 # docker/ — NORA + SIRA distribution (strand: docker-distro, phase 1)
 
 Design: `docs/compact/strands/docker-distro/docker-distro-design.md`.
-Four CPU-only images, two views (dev/ops) via compose profiles; images ship as
-Release-asset tarballs on the internal GitHub (`push.sh` / `pull.sh`).
+Four CPU-only images, two views (dev/ops) via compose profiles (the `dev`
+profile — bind-mounts + dev-shell — lands in phase 4; `serve`/`ingest` are
+live); images ship as Release-asset tarballs on the internal GitHub
+(`push.sh` / `pull.sh`).
 
 ## Recommended host layout
 
@@ -57,6 +59,8 @@ root-owned, and the app then can't write its DBs). Then:
     docker compose --profile ingest run --rm sira-batch \
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
       --run-name enrich-stable --only <MNO>__<REL> --wipe-stale-index
+    # (standards downloads specs over the network — on proxied hosts put
+    #  HTTP_PROXY/HTTPS_PROXY in .env.nora-pipeline, or add --skip-standards)
     # (nora lane, when the native retrieval stack is wanted:)
     # docker compose --profile ingest run --rm nora-pipeline \
     #   python -m core.src.pipeline.run_cli --env-dir /data/env --lane nora
@@ -106,10 +110,11 @@ images via skopeo first (same workaround as the dgx/spark stacks):
     # work PC, one-time per base-image bump:
     ./skopeo-pull-bases.sh                  # python:3.12-slim etc. via skopeo + docker load
 
-    # build (proxy: pip/github/rustup go through the proxy env; torch's CPU
-    # index is blocked on the allowlist -> override to PyPI):
-    docker compose --profile serve --profile ingest build \
-        --build-arg TORCH_INDEX_URL=https://pypi.org/simple
+    # build — the build knobs come from .env (compose maps them into
+    # build.args): work PC sets TORCH_INDEX_URL=https://pypi.org/simple there
+    # (the CPU index is allowlist-blocked); HTTP(S)_PROXY are picked up from
+    # your shell or .env:
+    docker compose --profile serve --profile ingest build
 
     # publish to the internal GitHub release:
     ./push.sh images-v1-$(git -C .. rev-parse --short HEAD) \
