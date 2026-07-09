@@ -7,7 +7,11 @@ Release-asset tarballs on the internal GitHub (`push.sh` / `pull.sh`).
 ## Quick start (serve, on one host)
 
     cd docker
-    cp env.example .env          # fill in paths + endpoints (never commit)
+    cp env.example .env                        # build + stack wiring (paths, ports)
+    cp env.nora-web.example .env.nora-web      # per-service runtime knobs
+    cp env.sira-query.example .env.sira-query  #   (endpoints, tuning — never commit)
+    cp env.nora-pipeline.example .env.nora-pipeline   # for ingest jobs
+    cp env.sira-batch.example .env.sira-batch         # for enrichment jobs
     docker compose --profile serve up -d --build
     curl localhost:8040/healthz  # cells loaded
     open http://localhost:8000

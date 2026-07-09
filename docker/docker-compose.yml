@@ -5,9 +5,15 @@
 #                 docker compose --profile ingest run --rm sira-batch   <cmd>
 #                 docker compose restart sira-query
 #   A/B  stacks:  docker compose -p stack-a --env-file .env.stack-a --profile serve up -d
-#                 (per-stack ports/LLM/web-state via env; pooled feedback volume)
+#                 (per-stack ports/env-files via the stack .env; pooled feedback volume)
 #
-# Copy env.example -> .env and fill in host paths + endpoints first.
+# Config layout:
+#   .env               build + stack wiring (copy from env.example)
+#   .env.<service>     runtime knobs per container (copy from env.<service>.example)
+# Compose `environment:` below carries ONLY fixed container paths and
+# inter-service URLs — it always wins over the env files, so those can never
+# be overridden into breaking the container layout.
+#
 # Run compose from this docker/ directory (build context is the repo root).
 
 name: ${STACK_NAME:-nora}
@@ -30,16 +36,10 @@ services:
     volumes:
       - ${SIRA_DB_ROOT:?set SIRA_DB_ROOT in .env}:/data/db
     env_file:
-      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+      - path: ${SIRA_QUERY_ENV_FILE:-.env.sira-query}
         required: false
     environment:
       NORA_SIRA_DB_ROOT: /data/db
-      NORA_LLM_SHIM_URL: ${NORA_LLM_SHIM_URL:-}
-      NORA_LLM_SHIM_MODEL: ${NORA_LLM_SHIM_MODEL:-}
-      NORA_SIRA_RERANK_LLM_URL: ${NORA_SIRA_RERANK_LLM_URL:-}
-      NORA_SIRA_RERANK_LLM_MODEL: ${NORA_SIRA_RERANK_LLM_MODEL:-}
-      NORA_SIRA_RERANK_ENABLED: ${NORA_SIRA_RERANK_ENABLED:-}
-      NORA_RERANK_BATCH_SIZE: ${NORA_RERANK_BATCH_SIZE:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach host-side LLM endpoints
     restart: unless-stopped
@@ -63,7 +63,7 @@ services:
       - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
     env_file:
-      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+      - path: ${WEB_ENV_FILE:-.env.nora-web}
         required: false
     environment:
       ENV_DIR: /data/env
@@ -72,14 +72,6 @@ services:
       NORA_CONFIG_DB: /data/web-state/nora_config.db
       NORA_FEEDBACK_DB: /data/feedback/nora_feedback.db
       NORA_SIRA_QUERY_URL: http://sira-query:8040
-      NORA_WEB_TEAM_MODE: ${NORA_WEB_TEAM_MODE:-}
-      NORA_WEB_ADMIN_TOKEN: ${NORA_WEB_ADMIN_TOKEN:-}
-      NORA_LLM_PROVIDER: ${NORA_LLM_PROVIDER:-}
-      NORA_LLM_BASE_URL: ${NORA_LLM_BASE_URL:-}
-      NORA_LLM_MODEL: ${NORA_LLM_MODEL:-}
-      NORA_LLM_API_KEY: ${NORA_LLM_API_KEY:-}
-      NORA_EMBEDDING_PROVIDER: ${NORA_EMBEDDING_PROVIDER:-}
-      NORA_EMBEDDING_MODEL: ${NORA_EMBEDDING_MODEL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -102,20 +94,14 @@ services:
     volumes:
       - ${NORA_ENV_DIR:?}:/data/env
       - ${SIRA_DB_ROOT:?}:/data/db
-      - ${MODELS_DIR:-/tmp/nora-models}:/data/models
+      - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
     env_file:
-      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+      - path: ${PIPELINE_ENV_FILE:-.env.nora-pipeline}
         required: false
     environment:
       ENV_DIR: /data/env
       DOCLING_ARTIFACTS: /data/models/docling
       HF_HUB_OFFLINE: "1"
-      NORA_LLM_PROVIDER: ${NORA_LLM_PROVIDER:-}
-      NORA_LLM_BASE_URL: ${NORA_LLM_BASE_URL:-}
-      NORA_LLM_MODEL: ${NORA_LLM_MODEL:-}
-      NORA_LLM_API_KEY: ${NORA_LLM_API_KEY:-}
-      NORA_EMBEDDING_PROVIDER: ${NORA_EMBEDDING_PROVIDER:-}
-      NORA_EMBEDDING_MODEL: ${NORA_EMBEDDING_MODEL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -134,12 +120,7 @@ services:
     volumes:
       - ${SIRA_DB_ROOT:?}:/data/db
     env_file:
-      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+      - path: ${SIRA_BATCH_ENV_FILE:-.env.sira-batch}
         required: false
-    environment:
-      NORA_SIRA_ENRICH_LLM_URL: ${NORA_SIRA_ENRICH_LLM_URL:-}
-      NORA_SIRA_ENRICH_LLM_MODEL: ${NORA_SIRA_ENRICH_LLM_MODEL:-}
-      NORA_SIRA_RERANK_LLM_URL: ${NORA_SIRA_BATCH_RERANK_LLM_URL:-}
-      NORA_SIRA_RERANK_LLM_MODEL: ${NORA_SIRA_RERANK_LLM_MODEL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
