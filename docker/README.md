@@ -4,6 +4,26 @@ Design: `docs/compact/strands/docker-distro/docker-distro-design.md`.
 Four CPU-only images, two views (dev/ops) via compose profiles; images ship as
 Release-asset tarballs on the internal GitHub (`push.sh` / `pull.sh`).
 
+## Recommended host layout
+
+One dedicated data root for everything the stack mounts, plus your existing
+env_dir. All paths must be VISIBLE `$HOME` paths on snap-docker hosts (snap
+blocks `/tmp` and hidden dirs like `~/.cache`), and env files need absolute
+paths (`$HOME` does not expand there).
+
+    /home/<you>/env_dir/               # NORA env dir (wherever yours already lives)
+    /home/<you>/nora-data/
+    ├── sira-db/                       # SIRA db_root — NEVER inside the repo tree
+    │                                  #   (a `git clean -dx` would wipe indexes +
+    │                                  #    the ~13h enrichment cache)
+    ├── web-state-a/                   # per stack: nora_jobs/metrics/config.db
+    ├── web-state-b/                   #   (stack identity = directory, not filename)
+    ├── feedback/                      # ONE pooled dir for ALL stacks (D-120 —
+    │                                  #   attributable A/B lives in one DB)
+    └── models/
+        └── docling/                   # DOCLING_ARTIFACTS resolves to
+                                       #   /data/models/docling in-container
+
 ## Quick start (serve, on one host)
 
     cd docker
@@ -12,6 +32,18 @@ Release-asset tarballs on the internal GitHub (`push.sh` / `pull.sh`).
     cp env.sira-query.example .env.sira-query  #   (endpoints, tuning — never commit)
     cp env.nora-pipeline.example .env.nora-pipeline   # for ingest jobs
     cp env.sira-batch.example .env.sira-batch         # for enrichment jobs
+
+In `.env`, point the volume paths at the layout above:
+
+    NORA_ENV_DIR=/home/<you>/env_dir
+    SIRA_DB_ROOT=/home/<you>/nora-data/sira-db
+    WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
+    FEEDBACK_DIR=/home/<you>/nora-data/feedback
+    MODELS_DIR=/home/<you>/nora-data/models
+
+Create the directories before `up` (docker creates missing bind sources
+root-owned, and the app then can't write its DBs). Then:
+
     docker compose --profile serve up -d --build
     curl localhost:8040/healthz  # cells loaded
     open http://localhost:8000
@@ -32,20 +64,21 @@ Release-asset tarballs on the internal GitHub (`push.sh` / `pull.sh`).
 ## Two stacks, two LLMs (A/B)
 
 Same images; each stack gets its own wiring env + its own service runtime
-files. Per stack: STACK_NAME, ports, WEB_STATE_DIR, and the LLM-bearing
-runtime files. Shared (same values in both .env files): NORA_ENV_DIR,
-SIRA_DB_ROOT (one ingest serves both) and FEEDBACK_DIR (pooled feedback DB →
-attributable A/B, D-120).
+files. Per stack: STACK_NAME, ports, its `web-state-<x>/` directory, and the
+LLM-bearing runtime files. Shared (same values in both wiring envs):
+NORA_ENV_DIR, SIRA_DB_ROOT (one ingest serves both) and FEEDBACK_DIR (the
+pooled feedback DB → attributable A/B, D-120).
 
     # stack A
     cp env.example .env.stack-a            # STACK_NAME=stack-a, ports 8000/8040,
-                                           # WEB_STATE_DIR=.../web-state-a,
+                                           # WEB_STATE_DIR=/home/<you>/nora-data/web-state-a,
                                            # WEB_ENV_FILE=.env.nora-web.a,
                                            # SIRA_QUERY_ENV_FILE=.env.sira-query.a
     cp env.nora-web.example  .env.nora-web.a     # LLM A (+ its sentinel setting)
     cp env.sira-query.example .env.sira-query.a  # shim/rerank -> LLM A
 
-    # stack B — different STACK_NAME, ports (e.g. 8001/8041), web-state-b,
+    # stack B — STACK_NAME=stack-b, ports 8001/8041,
+    # WEB_STATE_DIR=/home/<you>/nora-data/web-state-b,
     # and .env.nora-web.b / .env.sira-query.b pointing at LLM B
     cp env.example .env.stack-b
     cp env.nora-web.example  .env.nora-web.b
@@ -55,7 +88,11 @@ attributable A/B, D-120).
     docker compose --env-file .env.stack-b --profile serve up -d
 
 STACK_NAME in each env file names the compose project — no `-p` flag needed.
-After ingesting a new cell (shared db_root), restart BOTH stacks' sira-query.
+All stack env files live in this same `docker/` directory (gitignored; only
+the `*.example` templates are committed). The pipeline/batch runtime files
+usually need no per-stack variants — ingest is stack-independent; run jobs
+with either wiring env. After ingesting a new cell (shared db_root), restart
+BOTH stacks' sira-query.
 
 ## Build + distribute
 
