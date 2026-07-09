@@ -15,9 +15,10 @@ paths (`$HOME` does not expand there).
 
     /home/<you>/env_dir/               # NORA env dir (wherever yours already lives)
     /home/<you>/nora-data/
-    ├── sira-db/                       # SIRA db_root — NEVER inside the repo tree
-    │                                  #   (a `git clean -dx` would wipe indexes +
-    │                                  #    the ~13h enrichment cache)
+    ├── sira/                          # SIRA db_roots, ONE PER BUILD — NEVER inside
+    │   ├── <build-1>/                 #   the repo tree (a `git clean -dx` would wipe
+    │   └── <build-2>/                 #   indexes + the ~13h enrichment cache).
+    │                                  #   SIRA_DB_ROOT points at ONE build.
     ├── web-state-a/                   # per stack: nora_jobs/metrics/config.db
     ├── web-state-b/                   #   (stack identity = directory, not filename)
     ├── feedback/                      # ONE pooled dir for ALL stacks (D-120 —
@@ -38,7 +39,7 @@ paths (`$HOME` does not expand there).
 In `.env`, point the volume paths at the layout above:
 
     NORA_ENV_DIR=/home/<you>/env_dir
-    SIRA_DB_ROOT=/home/<you>/nora-data/sira-db
+    SIRA_DB_ROOT=/home/<you>/nora-data/sira/<build>
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
     MODELS_DIR=/home/<you>/nora-data/models
@@ -74,7 +75,8 @@ Same images; each stack gets its own wiring env + its own service runtime
 files. Per stack: STACK_NAME, ports, its `web-state-<x>/` directory, and the
 LLM-bearing runtime files. Shared (same values in both wiring envs):
 NORA_ENV_DIR, SIRA_DB_ROOT (one ingest serves both) and FEEDBACK_DIR (the
-pooled feedback DB → attributable A/B, D-120).
+pooled feedback DB → attributable A/B, D-120). To A/B *ingestions* instead of
+LLMs, point each stack's SIRA_DB_ROOT at a different `sira/<build>`.
 
     # stack A
     cp env.example .env.stack-a            # STACK_NAME=stack-a, ports 8000/8040,
