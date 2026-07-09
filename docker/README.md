@@ -31,11 +31,31 @@ Release-asset tarballs on the internal GitHub (`push.sh` / `pull.sh`).
 
 ## Two stacks, two LLMs (A/B)
 
-    docker compose -p stack-a --env-file .env.stack-a --profile serve up -d
-    docker compose -p stack-b --env-file .env.stack-b --profile serve up -d
+Same images; each stack gets its own wiring env + its own service runtime
+files. Per stack: STACK_NAME, ports, WEB_STATE_DIR, and the LLM-bearing
+runtime files. Shared (same values in both .env files): NORA_ENV_DIR,
+SIRA_DB_ROOT (one ingest serves both) and FEEDBACK_DIR (pooled feedback DB →
+attributable A/B, D-120).
 
-Per-stack: ports, LLM env, WEB_STATE_DIR. Shared: SIRA_DB_ROOT (one ingest,
-N servers) and FEEDBACK_DIR (pooled feedback DB → attributable A/B, D-120).
+    # stack A
+    cp env.example .env.stack-a            # STACK_NAME=stack-a, ports 8000/8040,
+                                           # WEB_STATE_DIR=.../web-state-a,
+                                           # WEB_ENV_FILE=.env.nora-web.a,
+                                           # SIRA_QUERY_ENV_FILE=.env.sira-query.a
+    cp env.nora-web.example  .env.nora-web.a     # LLM A (+ its sentinel setting)
+    cp env.sira-query.example .env.sira-query.a  # shim/rerank -> LLM A
+
+    # stack B — different STACK_NAME, ports (e.g. 8001/8041), web-state-b,
+    # and .env.nora-web.b / .env.sira-query.b pointing at LLM B
+    cp env.example .env.stack-b
+    cp env.nora-web.example  .env.nora-web.b
+    cp env.sira-query.example .env.sira-query.b
+
+    docker compose --env-file .env.stack-a --profile serve up -d
+    docker compose --env-file .env.stack-b --profile serve up -d
+
+STACK_NAME in each env file names the compose project — no `-p` flag needed.
+After ingesting a new cell (shared db_root), restart BOTH stacks' sira-query.
 
 ## Build + distribute
 
