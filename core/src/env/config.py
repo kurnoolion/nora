@@ -438,6 +438,28 @@ DEFAULT_STANDARDS_SOURCE: str = "huggingface"
 STANDARDS_SOURCE_ENV_VAR: str = "NORA_STANDARDS_SOURCE"
 
 
+REQUIREMENTS_DIR_ENV_VAR = "NORA_REQUIREMENTS_DIR"
+
+
+def resolve_requirements_dir(
+    cli_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the source-documents root override.
+
+    Precedence: CLI flag > NORA_REQUIREMENTS_DIR env var > EnvironmentConfig
+    field > "" (empty = the classic <env_dir>/input/ default).
+    """
+    for value in (
+        cli_value,
+        os.environ.get(REQUIREMENTS_DIR_ENV_VAR),
+        env_config_value,
+    ):
+        if value:
+            return value
+    return ""
+
+
 def resolve_standards_source(
     cli_value: str | None = None,
     env_config_value: str | None = None,
@@ -1159,6 +1181,12 @@ class EnvironmentConfig:
     member: str
     env_dir: str
 
+    # Source-documents root override (docker-distro build/serve topology).
+    # "" (default) = the classic <env_dir>/input/. Set to an absolute path to
+    # read requirements from a shared canonical store (e.g.
+    # nora-data/requirements/) instead — layout <root>/<MNO>/<MMMYYYY>/ either way.
+    requirements_dir: str = ""
+
     # Stages to run
     stage_start: str = "extract"
     stage_end: str = "eval"
@@ -1299,9 +1327,17 @@ class EnvironmentConfig:
         """Get a standard subdirectory under env_dir (generic accessor)."""
         return self.env_dir_path / key
 
+    @property
+    def input_root(self) -> Path:
+        """Root of the source documents: `requirements_dir` when set (shared
+        canonical store), else the classic `<env_dir>/input/`."""
+        if self.requirements_dir:
+            return Path(self.requirements_dir).expanduser().resolve()
+        return self.env_dir_path / "input"
+
     def input_path(self, mno: str, release: str) -> Path:
         """Get input directory for a specific MNO and release (D-023)."""
-        return self.env_dir_path / "input" / mno / release
+        return self.input_root / mno / release
 
     def out_path(self, stage: str) -> Path:
         """Get output directory for a specific pipeline stage."""

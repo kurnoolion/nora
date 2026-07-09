@@ -93,6 +93,7 @@ services:
     profiles: ["ingest", "dev"]
     volumes:
       - ${NORA_ENV_DIR:?}:/data/env
+      - ${REQUIREMENTS_DIR:?set REQUIREMENTS_DIR in .env}:/data/requirements:ro
       - ${SIRA_DB_ROOT:?}:/data/db
       - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
     env_file:
@@ -100,6 +101,7 @@ services:
         required: false
     environment:
       ENV_DIR: /data/env
+      NORA_REQUIREMENTS_DIR: /data/requirements
       DOCLING_ARTIFACTS: /data/models/docling
       HF_HUB_OFFLINE: "1"
     extra_hosts:

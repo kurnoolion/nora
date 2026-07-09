@@ -206,7 +206,7 @@ class PipelineContext:
         """Create context from an EnvironmentConfig."""
         stage_dirs = {stage: env.out_path(stage) for stage in STAGE_NAMES}
         return cls(
-            documents_dir=env.env_dir_path / "input",
+            documents_dir=env.input_root,
             corrections_dir=env.corrections_path(),
             eval_dir=env.eval_path(),
             verbose=False,

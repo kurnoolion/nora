@@ -13,19 +13,22 @@ env_dir. All paths must be VISIBLE `$HOME` paths on snap-docker hosts (snap
 blocks `/tmp` and hidden dirs like `~/.cache`), and env files need absolute
 paths (`$HOME` does not expand there).
 
-    /home/<you>/env_dir/               # NORA env dir (wherever yours already lives)
     /home/<you>/nora-data/
-    ├── sira/                          # SIRA db_roots, ONE PER BUILD — NEVER inside
-    │   ├── <build-1>/                 #   the repo tree (a `git clean -dx` would wipe
-    │   └── <build-2>/                 #   indexes + the ~13h enrichment cache).
-    │                                  #   SIRA_DB_ROOT points at ONE build.
+    ├── requirements/<MNO>/<MMMYYYY>/  # THE source corpus — one canonical copy,
+    │                                  #   shared by all builds (requirements_dir
+    │                                  #   override; default is <env_dir>/input)
+    ├── nora-builds/<build>/           # env_dirs: out/, state/, corrections/, reports/
+    ├── sira-builds/<build>/           # SIRA db_roots (cells) — NEVER inside the repo
+    │                                  #   tree (git clean would wipe the enrichment cache)
+    ├── serve/<label>/                 # promoted hardlink snapshots (promote.sh):
+    │   ├── MANIFEST.json              #   nora/out/{vectorstore,graph,taxonomy} +
+    │   ├── nora/out/...               #   sira/<cells>. Stacks mount THESE — builds
+    │   └── sira/...                   #   can be rebuilt/wiped without touching serving.
     ├── web-state-a/                   # per stack: nora_jobs/metrics/config.db
     ├── web-state-b/                   #   (stack identity = directory, not filename)
-    ├── feedback/                      # ONE pooled dir for ALL stacks (D-120 —
-    │                                  #   attributable A/B lives in one DB)
+    ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)
     └── models/
-        └── docling/                   # DOCLING_ARTIFACTS resolves to
-                                       #   /data/models/docling in-container
+        └── docling/                   # DOCLING_ARTIFACTS -> /data/models/docling
 
 ## Quick start (serve, on one host)
 
@@ -38,8 +41,9 @@ paths (`$HOME` does not expand there).
 
 In `.env`, point the volume paths at the layout above:
 
-    NORA_ENV_DIR=/home/<you>/env_dir
-    SIRA_DB_ROOT=/home/<you>/nora-data/sira/<build>
+    REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
+    NORA_ENV_DIR=/home/<you>/nora-data/serve/<label>/nora     # or a nora-build while iterating
+    SIRA_DB_ROOT=/home/<you>/nora-data/serve/<label>/sira     # or a sira-build while iterating
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
     MODELS_DIR=/home/<you>/nora-data/models
@@ -51,7 +55,10 @@ root-owned, and the app then can't write its DBs). Then:
     curl localhost:8040/healthz  # cells loaded
     open http://localhost:8000
 
-## Ingest a new release (jobs, then restart)
+## Ingest a new release (build lanes → promote → restart)
+
+Ingest jobs run against the BUILD dirs (set `NORA_ENV_DIR`/`SIRA_DB_ROOT` to
+the build paths for these commands, or use a builds-oriented `.env`):
 
     # ingestion lane (extract..standards) for the new cell:
     docker compose --profile ingest run --rm nora-pipeline \
@@ -65,7 +72,13 @@ root-owned, and the app then can't write its DBs). Then:
     # (nora lane, when the native retrieval stack is wanted:)
     # docker compose --profile ingest run --rm nora-pipeline \
     #   python -m core.src.pipeline.run_cli --env-dir /data/env --lane nora
-    docker compose restart sira-query
+    # promote the serve-set (hardlink snapshot — instant, wipe-immune):
+    ./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
+        --nora-build /home/<you>/nora-data/nora-builds/<build> \
+        --sira-build /home/<you>/nora-data/sira-builds/<build>
+    # point the stack .env at serve/<label>/{nora,sira} and:
+    docker compose restart sira-query nora-web
+    # rollback = point .env back at the previous label + restart
 
 (Full scenario matrix: `sandbox/README.md` §2 — same commands, containerized.)
 

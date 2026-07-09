@@ -138,6 +138,11 @@ def main() -> None:
 
     # Pipeline options
     parser.add_argument("--profile", type=Path, default=None, help="Explicit profile path (standalone mode)")
+    parser.add_argument("--requirements-dir", default=None,
+                        help="Source-documents root override (layout "
+                             "<root>/<MNO>/<MMMYYYY>/). Default: <env_dir>/input. "
+                             "Also via NORA_REQUIREMENTS_DIR or the env-config "
+                             "requirements_dir field (CLI > env var > config).")
     # D-DRAFT-8 — per-cell ingestion scope (restrict the PER-CELL stages to
     # specific (mno, release) cells; global stages still read the whole union).
     parser.add_argument("--mno", default=None,
@@ -355,6 +360,16 @@ def main() -> None:
         ctx.standards_source = resolve_standards_source(
             args.standards_source, env.standards_source
         )
+
+    # --- Source-documents root override (docker-distro topology) ---
+    from core.src.env.config import resolve_requirements_dir
+    _req_dir = resolve_requirements_dir(
+        args.requirements_dir,
+        (env.requirements_dir if args.env else None),
+    )
+    if _req_dir:
+        from pathlib import Path as _P
+        ctx.documents_dir = _P(_req_dir).expanduser().resolve()
 
     # --- Resolve stage range ---
     from core.src.env.config import STAGE_NUM

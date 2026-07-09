@@ -969,3 +969,64 @@ def test_run_cli_lane_bounds():
     from core.src.pipeline.run_cli import lane_bounds
     assert lane_bounds("ingestion") == ("extract", "standards")
     assert lane_bounds("nora") == ("taxonomy", "eval")
+
+
+# ---------------------------------------------------------------------------
+# requirements_dir override (docker-distro build/serve topology)
+# ---------------------------------------------------------------------------
+
+def test_input_root_defaults_to_env_dir_input(tmp_path):
+    from core.src.env.config import EnvironmentConfig
+    env = EnvironmentConfig(name="x", description="", created_by="", member="",
+                            env_dir=str(tmp_path))
+    assert env.input_root == tmp_path.resolve() / "input"
+    assert env.input_path("MNOA", "Feb2026") == tmp_path.resolve() / "input" / "MNOA" / "Feb2026"
+
+
+def test_input_root_honors_requirements_dir(tmp_path):
+    from core.src.env.config import EnvironmentConfig
+    req = tmp_path / "requirements"
+    env = EnvironmentConfig(name="x", description="", created_by="", member="",
+                            env_dir=str(tmp_path / "build"),
+                            requirements_dir=str(req))
+    assert env.input_root == req.resolve()
+    assert env.input_path("MNOA", "Feb2026") == req.resolve() / "MNOA" / "Feb2026"
+
+
+def test_resolve_requirements_dir_precedence(monkeypatch):
+    from core.src.env.config import resolve_requirements_dir, REQUIREMENTS_DIR_ENV_VAR
+    monkeypatch.delenv(REQUIREMENTS_DIR_ENV_VAR, raising=False)
+    assert resolve_requirements_dir(None, None) == ""                 # default
+    assert resolve_requirements_dir(None, "/cfg") == "/cfg"           # config
+    monkeypatch.setenv(REQUIREMENTS_DIR_ENV_VAR, "/envvar")
+    assert resolve_requirements_dir(None, "/cfg") == "/envvar"        # env var beats config
+    assert resolve_requirements_dir("/cli", "/cfg") == "/cli"         # CLI beats all
+
+
+def test_from_env_context_uses_input_root(tmp_path):
+    from core.src.env.config import EnvironmentConfig
+    from core.src.pipeline.runner import PipelineContext
+    req = tmp_path / "requirements"
+    env = EnvironmentConfig(name="x", description="", created_by="", member="",
+                            env_dir=str(tmp_path / "build"),
+                            requirements_dir=str(req))
+    ctx = PipelineContext.from_env(env)
+    assert ctx.documents_dir == req.resolve()
+
+
+def test_old_env_json_without_requirements_dir_loads(tmp_path):
+    """Back-compat: environments/*.json written before the field must load."""
+    import json as _json
+    from core.src.env.config import EnvironmentConfig
+    p = tmp_path / "old.json"
+    cfg = EnvironmentConfig(name="x", description="", created_by="", member="",
+                            env_dir=str(tmp_path))
+    d = cfg.to_dict() if hasattr(cfg, "to_dict") else None
+    if d is None:
+        from dataclasses import asdict
+        d = asdict(cfg)
+    d.pop("requirements_dir", None)
+    p.write_text(_json.dumps(d))
+    loaded = EnvironmentConfig.load_json(p)
+    assert loaded.requirements_dir == ""
+    assert loaded.input_root == tmp_path.resolve() / "input"
