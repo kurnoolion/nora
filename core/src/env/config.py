@@ -1085,13 +1085,19 @@ def resolve_reranker_api_key(
 # Pipeline stage registry — single source of truth for names and ordering
 # ---------------------------------------------------------------------------
 
+# Lane model (docker-distro strand): standards sits AFTER resolve — it reads
+# only resolve manifests + parse trees (skip-resolve already implied
+# skip-standards). Stages 1-5 form the INGESTION lane (source acquisition +
+# structuring, common to the NORA and SIRA retrieval lanes); stages 6-9 are
+# the NORA lane. The SIRA lane (adapter -> index/enrich) lives sandbox-side
+# (sandbox/sira_lane.py) and consumes the ingestion lane's parse output.
 PIPELINE_STAGES: list[tuple[str, str]] = [
     ("extract", "Document content extraction"),
     ("profile", "Document profiling"),
     ("parse", "Structural parsing"),
     ("resolve", "Cross-reference resolution"),
-    ("taxonomy", "Feature taxonomy extraction"),
     ("standards", "Standards ingestion"),
+    ("taxonomy", "Feature taxonomy extraction"),
     ("graph", "Knowledge graph construction"),
     ("vectorstore", "Vector store construction"),
     ("eval", "Evaluation"),
@@ -1101,6 +1107,12 @@ STAGE_NAMES: list[str] = [s[0] for s in PIPELINE_STAGES]
 STAGE_NUM: dict[str, int] = {name: i + 1 for i, (name, _) in enumerate(PIPELINE_STAGES)}
 NUM_STAGE: dict[int, str] = {i + 1: name for i, (name, _) in enumerate(PIPELINE_STAGES)}
 STAGE_DESC: dict[str, str] = {name: desc for name, desc in PIPELINE_STAGES}
+
+# Lane aliases (run_cli --lane): name -> (start_stage, end_stage).
+PIPELINE_LANES: dict[str, tuple[str, str]] = {
+    "ingestion": ("extract", "standards"),
+    "nora": ("taxonomy", "eval"),
+}
 
 
 def resolve_stage(value: str) -> str:

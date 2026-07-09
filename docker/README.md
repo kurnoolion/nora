@@ -50,13 +50,16 @@ root-owned, and the app then can't write its DBs). Then:
 
 ## Ingest a new release (jobs, then restart)
 
+    # ingestion lane (extract..standards) for the new cell:
     docker compose --profile ingest run --rm nora-pipeline \
-      python -m core.src.pipeline.run_cli --env-dir /data/env --start extract --end parse --mno <MNO> --release <REL>
-    docker compose --profile ingest run --rm nora-pipeline \
-      python -m sandbox.adapter.nora_to_beir --env-dir /data/env --output /data/db \
-      --multi-cell --only <MNO>__<REL> --wipe-stale-index
+      python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --mno <MNO> --release <REL>
+    # sira lane (adapter + per-cell index/enrich) in one command:
     docker compose --profile ingest run --rm sira-batch \
-      python -m sandbox.sira_multi --db-root /data/db --sira-clone sandbox/sira --run-name enrich-stable --only <MNO>__<REL>
+      python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
+      --run-name enrich-stable --only <MNO>__<REL> --wipe-stale-index
+    # (nora lane, when the native retrieval stack is wanted:)
+    # docker compose --profile ingest run --rm nora-pipeline \
+    #   python -m core.src.pipeline.run_cli --env-dir /data/env --lane nora
     docker compose restart sira-query
 
 (Full scenario matrix: `sandbox/README.md` §2 — same commands, containerized.)

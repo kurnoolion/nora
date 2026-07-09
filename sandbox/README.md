@@ -359,6 +359,20 @@ redacted) under each stack's state dir.
 
 ## 4. Command reference
 
+### `sandbox.sira_lane` — the sira lane in one command
+
+    python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
+        [--run-name enrich-stable] [--only <MNO>__<REL>,...] \
+        [--wipe-stale-index | --wipe-all-derived] \
+        [--stages prepare,bm25,enrich_corpus] [--dry-run]
+
+Runs the adapter (`nora_to_beir --multi-cell`) then `sira_multi`, threading
+`--only` and the wipe flag through both — the single entrypoint for the sira
+retrieval lane, symmetric with `run_cli --lane ingestion|nora` (docker-distro
+lane model). The adapter stamps `$DB/SOURCE.json` (env_dir + repo git sha +
+timestamp) so every build is traceable to its ingestion. The individual
+commands below remain valid for surgical use.
+
 ### `sandbox.adapter.nora_to_beir` — parse trees → per-cell BEIR datasets
 
 - `--env-dir PATH` (required) — NORA env dir; reads

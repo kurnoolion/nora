@@ -497,3 +497,14 @@ def test_print_noid_off_by_default(tmp_path, capsys):
             "requirements": [{"req_id": "", "title": "x", "section_number": "1"}]}
     _emit_corpus([tree], tmp_path / "corpus.jsonl")
     assert "strided sample" not in capsys.readouterr().out
+
+
+# ── SOURCE.json provenance (docker-distro lane model) ─────────────
+
+def test_multi_cell_emits_source_json(tmp_path):
+    from sandbox.adapter.nora_to_beir import _write_source_json
+    _write_source_json(tmp_path, tmp_path / "env", ["MNOA__Feb2026"])
+    src = json.loads((tmp_path / "SOURCE.json").read_text())
+    assert src["cells_last_emitted"] == ["MNOA__Feb2026"]
+    assert src["env_dir"].endswith("/env")
+    assert "generated_at" in src and "repo_git_sha" in src

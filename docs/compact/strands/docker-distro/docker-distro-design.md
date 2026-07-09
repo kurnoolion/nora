@@ -177,3 +177,30 @@ Mitigating no-layer-dedup (full-size transfer per update):
   representable under the `/data/*` mounts (path_mappings feature may help).
 - Where do eval runs (`run_pipeline` eval stages / 18-Q) fit — `nora-pipeline`
   job or dev-shell-only?
+
+## Lanes (added 2026-07-07 — pipeline re-org shipped with this strand)
+
+The 9-stage pipeline splits into three lanes that map 1:1 onto the compose
+job types:
+
+    extract → profile → parse → resolve → standards │ taxonomy → graph → vectorstore → eval
+            └────────────── ingestion ─────────────┘└──────────── nora lane ────────────┘
+    sira lane: adapter → prepare/bm25/enrich (sandbox/sira_lane.py wrapper)
+
+- **Stage reorder**: `standards` moves to position 5 (after `resolve`).
+  Evidence: `run_standards` reads only resolve manifests + parse trees (never
+  taxonomy), and `skip-resolve ⇒ skip-standards` was already enforced. Numeric
+  `--start/--end` habits shift; stage NAMES are unchanged.
+- **Lanes are a runner concept, not a filesystem one**: `run_cli --lane
+  ingestion|nora` is sugar over `--start/--end`; `env_dir/out/<stage>/` layout
+  (D-096) is untouched. The sira lane stays sandbox-side (D-111 boundary —
+  core never imports sandbox); `sandbox/sira_lane.py` gives it a single
+  entrypoint symmetric with `run_cli --lane`, and the adapter stamps a
+  `SOURCE.json` provenance file into each db_root (env_dir + git sha + time).
+- After ingestion, the nora and sira lanes are independent and can run in
+  parallel (compose: one `nora-pipeline` job, one `sira-batch` job).
+- **Deferred to a future `hybrid-retrieval` strand**: replacing NORA's
+  rank_bm25 (D-041 hybrid) with SIRA's enriched BM25 behind a retriever
+  Protocol, fusing sira results with taxonomy/graph scoping. That is the
+  point where sira_query/fusion promote into core/src and D-111's informal
+  scope is superseded for those modules.

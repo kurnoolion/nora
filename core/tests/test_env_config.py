@@ -203,8 +203,8 @@ def test_load_old_json_without_skip_taxonomy_field(tmp_path):
 def test_stages_filter_drops_taxonomy_when_skip_set():
     """The CLI filter logic — `[s for s in stages if s != 'taxonomy']` —
     drops only taxonomy and preserves the rest of the stage order."""
-    stages = ["extract", "profile", "parse", "resolve", "taxonomy",
-              "standards", "graph", "vectorstore", "eval"]
+    stages = ["extract", "profile", "parse", "resolve", "standards",
+              "taxonomy", "graph", "vectorstore", "eval"]
     skip = True
     if skip and "taxonomy" in stages:
         stages = [s for s in stages if s != "taxonomy"]
@@ -217,8 +217,8 @@ def test_stages_filter_drops_taxonomy_when_skip_set():
 def test_stages_filter_no_op_when_skip_unset():
     """skip_taxonomy=False must NOT filter — taxonomy stays in the run
     list. Catches a regression where the default behavior changes."""
-    stages = ["extract", "profile", "parse", "resolve", "taxonomy",
-              "standards", "graph", "vectorstore", "eval"]
+    stages = ["extract", "profile", "parse", "resolve", "standards",
+              "taxonomy", "graph", "vectorstore", "eval"]
     skip = False
     if skip and "taxonomy" in stages:
         stages = [s for s in stages if s != "taxonomy"]
@@ -938,3 +938,34 @@ def test_config_store_seed_missing(tmp_path):
     n3 = cs.seed_missing(specs)
     assert n3 == 0
     assert cs.get("retrieval", "broad_query_top_k") == 99
+
+
+# ---------------------------------------------------------------------------
+# Lane model (docker-distro): stage order + lane aliases
+# ---------------------------------------------------------------------------
+
+def test_stage_order_standards_after_resolve():
+    """standards consumes resolve manifests + parse trees (never taxonomy) —
+    the lane re-org pins it at position 5, closing the ingestion lane."""
+    from core.src.env.config import STAGE_NAMES, STAGE_NUM
+    assert STAGE_NAMES == ["extract", "profile", "parse", "resolve",
+                           "standards", "taxonomy", "graph", "vectorstore", "eval"]
+    assert STAGE_NUM["standards"] == 5
+    assert STAGE_NUM["resolve"] < STAGE_NUM["standards"] < STAGE_NUM["taxonomy"]
+
+
+def test_pipeline_lanes_cover_all_stages_contiguously():
+    from core.src.env.config import PIPELINE_LANES, STAGE_NAMES, STAGE_NUM
+    ing_start, ing_end = PIPELINE_LANES["ingestion"]
+    nora_start, nora_end = PIPELINE_LANES["nora"]
+    ingestion = STAGE_NAMES[STAGE_NUM[ing_start] - 1:STAGE_NUM[ing_end]]
+    nora = STAGE_NAMES[STAGE_NUM[nora_start] - 1:STAGE_NUM[nora_end]]
+    assert ingestion == ["extract", "profile", "parse", "resolve", "standards"]
+    assert nora == ["taxonomy", "graph", "vectorstore", "eval"]
+    assert ingestion + nora == STAGE_NAMES     # contiguous, no gap/overlap
+
+
+def test_run_cli_lane_bounds():
+    from core.src.pipeline.run_cli import lane_bounds
+    assert lane_bounds("ingestion") == ("extract", "standards")
+    assert lane_bounds("nora") == ("taxonomy", "eval")

@@ -81,6 +81,14 @@ def _detect_hw() -> None:
     print(f"  {choice.reason}")
 
 
+
+
+def lane_bounds(lane: str) -> tuple[str, str]:
+    """Map a --lane alias to its (start, end) stage names (PIPELINE_LANES)."""
+    from core.src.env.config import PIPELINE_LANES
+    return PIPELINE_LANES[lane]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="NORA — Run the network operator requirements pipeline.",
@@ -107,6 +115,13 @@ def main() -> None:
     # Stage selection
     parser.add_argument("--start", default=None, help="Start stage (name or number)")
     parser.add_argument("--end", default=None, help="End stage (name or number)")
+    parser.add_argument("--lane", default=None, choices=["ingestion", "nora"],
+                        help="Stage-range alias (docker-distro lane model): "
+                             "'ingestion' = extract..standards (common to the "
+                             "NORA and SIRA retrieval lanes); 'nora' = "
+                             "taxonomy..eval. Mutually exclusive with "
+                             "--start/--end. The SIRA lane runs via "
+                             "sandbox/sira_lane.py.")
 
     # Pipeline options
     parser.add_argument("--profile", type=Path, default=None, help="Explicit profile path (standalone mode)")
@@ -199,6 +214,10 @@ def main() -> None:
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
+    if args.lane:
+        if args.start or args.end:
+            parser.error("--lane is mutually exclusive with --start/--end")
+        args.start, args.end = lane_bounds(args.lane)
 
     # --- Info commands ---
     if args.list_stages:

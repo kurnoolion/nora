@@ -860,6 +860,33 @@ def _emit_multi_cell(
     return names
 
 
+def _write_source_json(db_root: Path, env_dir: Path, cells: list[str]) -> None:
+    """Stamp db_root/SOURCE.json — which ingestion produced this build (lane
+    provenance: once the nora and sira lanes run independently, a db_root must
+    be traceable to its env_dir + repo state). Best-effort; never fails a run."""
+    import datetime
+    import subprocess
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=Path(__file__).resolve().parent,
+        ).stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        sha = "unknown"
+    payload = {
+        "env_dir": str(Path(env_dir).resolve()),
+        "repo_git_sha": sha,
+        "generated_at": datetime.datetime.now(datetime.timezone.utc)
+                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "cells_last_emitted": cells,
+    }
+    try:
+        (db_root / "SOURCE.json").write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError as e:
+        print(f"WARN: could not write SOURCE.json: {e}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         prog="nora_to_beir",
@@ -973,6 +1000,7 @@ def main() -> int:
             print_skips=args.print_skips,
             print_noid=args.print_noid,
         )
+        _write_source_json(out_dir, env_dir, names)
         print(f"done — point SIRA at db_root={out_dir}")
         print(f"       cells (use as data.name): {', '.join(names)}")
         return 0

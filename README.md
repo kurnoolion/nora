@@ -83,7 +83,14 @@ query service) has its own runbook in `sandbox/README.md`.
   release are inferred from the path (D-023); the `MMMYYYY` release convention
   is validated fail-loud at ingest, and per-cell stages (extract, profile,
   parse, resolve, vectorstore) write to `out/<stage>/<mno>/<rel>/` while
-  global stages (taxonomy, standards, graph, eval) stay flat (D-096).
+  global stages (standards, taxonomy, graph, eval) stay flat (D-096).
+- **Lanes** — the 9 stages split into an **ingestion lane** (1-5: extract,
+  profile, parse, resolve, standards — common source acquisition/structuring)
+  and the **nora lane** (6-9: taxonomy, graph, vectorstore, eval). Run them
+  with `--lane ingestion` / `--lane nora` (sugar over `--start/--end`). The
+  **sira lane** (BEIR adapter → per-cell BM25 index + enrichment) consumes the
+  ingestion lane's parse output and runs independently via
+  `python -m sandbox.sira_lane` (see `sandbox/README.md`).
 - **Profiles** — document profiles live in `customizations/profiles/`.
   Profiles for proprietary corpora are **placeholdered** (opaque
   `bs_<hex>.json` names, `<MNO0>`/`<PLAN>` tokens in regexes); the real
