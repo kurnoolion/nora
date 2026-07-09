@@ -48,11 +48,24 @@ logger = logging.getLogger(__name__)
 
 
 def _list_stages() -> None:
-    print("Pipeline stages (use name or number with --start / --end):\n")
-    print(f"  {'#':<4} {'Name':<14} Description")
-    print(f"  {'─'*4} {'─'*14} {'─'*40}")
+    from core.src.env.config import PIPELINE_LANES, STAGE_NUM
+    # stage name -> lane label
+    lane_of: dict[str, str] = {}
+    for lane, (lstart, lend) in PIPELINE_LANES.items():
+        for num in range(STAGE_NUM[lstart], STAGE_NUM[lend] + 1):
+            lane_of[PIPELINE_STAGES[num - 1][0]] = lane
+    print("Pipeline stages (use name or number with --start / --end,"
+          " or a lane with --lane):\n")
+    print(f"  {'#':<4} {'Name':<14} {'Lane':<11} Description")
+    print(f"  {'─'*4} {'─'*14} {'─'*11} {'─'*40}")
     for i, (name, desc) in enumerate(PIPELINE_STAGES, 1):
-        print(f"  {i:<4} {name:<14} {desc}")
+        print(f"  {i:<4} {name:<14} {lane_of.get(name, ''):<11} {desc}")
+    print("\n  Lanes:")
+    for lane, (lstart, lend) in PIPELINE_LANES.items():
+        print(f"    --lane {lane:<10} = stages {STAGE_NUM[lstart]}-{STAGE_NUM[lend]}"
+              f"  ({lstart}..{lend})")
+    print("    sira lane        = python -m sandbox.sira_lane"
+          "  (adapter + per-cell index/enrich; consumes out/parse)")
 
 
 def _detect_hw() -> None:
