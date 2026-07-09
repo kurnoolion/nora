@@ -66,6 +66,8 @@ services:
       NORA_CONFIG_DB: /data/web-state/nora_config.db
       NORA_FEEDBACK_DB: /data/feedback/nora_feedback.db
       NORA_SIRA_QUERY_URL: http://sira-query:8040
+      NORA_WEB_TEAM_MODE: ${NORA_WEB_TEAM_MODE:-}
+      NORA_WEB_ADMIN_TOKEN: ${NORA_WEB_ADMIN_TOKEN:-}
       NORA_LLM_PROVIDER: ${NORA_LLM_PROVIDER:-}
       NORA_LLM_BASE_URL: ${NORA_LLM_BASE_URL:-}
       NORA_LLM_MODEL: ${NORA_LLM_MODEL:-}
