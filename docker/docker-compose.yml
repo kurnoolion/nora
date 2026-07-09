@@ -29,6 +29,9 @@ services:
       - "${SIRA_QUERY_PORT:-8040}:8040"
     volumes:
       - ${SIRA_DB_ROOT:?set SIRA_DB_ROOT in .env}:/data/db
+    env_file:
+      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+        required: false
     environment:
       NORA_SIRA_DB_ROOT: /data/db
       NORA_LLM_SHIM_URL: ${NORA_LLM_SHIM_URL:-}
@@ -59,6 +62,9 @@ services:
       - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env
       - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
+    env_file:
+      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+        required: false
     environment:
       ENV_DIR: /data/env
       NORA_JOBS_DB: /data/web-state/nora_jobs.db
@@ -97,6 +103,9 @@ services:
       - ${NORA_ENV_DIR:?}:/data/env
       - ${SIRA_DB_ROOT:?}:/data/db
       - ${MODELS_DIR:-/tmp/nora-models}:/data/models
+    env_file:
+      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+        required: false
     environment:
       ENV_DIR: /data/env
       DOCLING_ARTIFACTS: /data/models/docling
@@ -124,6 +133,9 @@ services:
     profiles: ["ingest", "dev"]
     volumes:
       - ${SIRA_DB_ROOT:?}:/data/db
+    env_file:
+      - path: ${RUNTIME_ENV_FILE:-.env.runtime}
+        required: false
     environment:
       NORA_SIRA_ENRICH_LLM_URL: ${NORA_SIRA_ENRICH_LLM_URL:-}
       NORA_SIRA_ENRICH_LLM_MODEL: ${NORA_SIRA_ENRICH_LLM_MODEL:-}
