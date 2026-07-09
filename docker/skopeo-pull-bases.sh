@@ -15,7 +15,11 @@
 #   MAX_RETRIES=N   per-image retries (default 3)
 set -uo pipefail
 cd "$(dirname "$0")"
-TMP="${TMP:-/tmp}"; MAX_RETRIES="${MAX_RETRIES:-3}"
+# Default scratch under $HOME, not /tmp: snap-packaged docker cannot read /tmp
+# (confinement), so `docker load -i /tmp/...` fails with "no such file or
+# directory" even though skopeo wrote the tar there.
+TMP="${TMP:-$HOME/.cache/nora-image-tars}"; MAX_RETRIES="${MAX_RETRIES:-3}"
+mkdir -p "$TMP"
 command -v skopeo >/dev/null || { echo "ERROR: skopeo not installed (sudo apt install skopeo)" >&2; exit 1; }
 command -v docker >/dev/null || { echo "ERROR: docker not installed" >&2; exit 1; }
 
