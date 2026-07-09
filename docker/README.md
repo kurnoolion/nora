@@ -67,8 +67,9 @@ the build paths for these commands, or use a builds-oriented `.env`):
     docker compose --profile ingest run --rm sira-batch \
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
       --run-name enrich-stable --only <MNO>__<REL> --wipe-stale-index
-    # (standards downloads specs over the network — on proxied hosts put
-    #  HTTP_PROXY/HTTPS_PROXY in .env.nora-pipeline, or add --skip-standards)
+    # (standards downloads specs over the PUBLIC network at run time — on
+    #  agent-guarded hosts container egress is blocked: add --skip-standards,
+    #  or run the standards stage bare-metal)
     # (nora lane, when the native retrieval stack is wanted:)
     # docker compose --profile ingest run --rm nora-pipeline \
     #   python -m core.src.pipeline.run_cli --env-dir /data/env --lane nora
@@ -119,29 +120,42 @@ BOTH stacks' sira-query.
 ## Build + distribute
 
 Builds happen **on the work PC** (the only host that can also publish to the
-internal GitHub). `docker pull` is broken through the corp proxy — fetch base
-images via skopeo first (same workaround as the dgx/spark stacks):
+internal GitHub). Two container-network facts shape the flow there:
+`docker pull` is proxy-broken (skopeo is the workaround), and the endpoint
+agent **resets ALL egress from container processes** (even `--network=host`) —
+so image builds must not touch the network at all. Host processes are allowed,
+which is what the offline-prep flow exploits:
 
-    # work PC, one-time per base-image bump:
-    ./skopeo-pull-bases.sh                  # python:3.12-slim etc. via skopeo + docker load
+    # one-time per base-image bump (host process — allowed):
+    ./skopeo-pull-bases.sh
 
-    # build — the build knobs come from .env (compose maps them into
-    # build.args): work PC sets TORCH_INDEX_URL=https://pypi.org/simple there
-    # (the CPU index is allowlist-blocked); HTTP(S)_PROXY are picked up from
-    # your shell or .env:
+    # whenever dependencies / SIRA_REF change (host processes — allowed):
+    ./prep-offline.sh              # wheels + patched SIRA clone -> docker/vendor/
+                                   # (needs host python3.12, git, rust+maturin —
+                                   #  the same toolchain SETUP.md §2/3 installs)
+
+    # build with OFFLINE=1 in .env — zero in-container network:
     docker compose --profile serve --profile ingest build
 
-    # publish to the internal GitHub release:
+    # publish to the internal GitHub release (host process — allowed):
     ./push.sh images-v1-$(git -C .. rev-parse --short HEAD) \
         local/nora-web:dev local/sira-query:dev local/nora-pipeline:dev local/sira-batch:dev
 
     # any other internal host:
     ./pull.sh images-v1-<sha>
 
-The dev PC (unrestricted network) can also build — useful for verifying
-Dockerfile changes fast (default TORCH_INDEX_URL, smaller image) — but it
-cannot reach the internal GitHub; its builds are verification, not release.
+Runtime note for agent-guarded hosts: containers CAN reach internal endpoints
+(LLMs, internal GitHub) but NOT the public internet — so the `standards` stage
+(which downloads specs at run time) needs `--skip-standards` in-container, or
+run that one stage bare-metal.
+
+The dev PC (unrestricted network) builds ONLINE (`OFFLINE=0`, the default):
+rustup + clone + PyPI happen in-container, with `TORCH_INDEX_URL` defaulting
+to the small CPU index. Dev-PC builds are Dockerfile verification only — the
+release is always built and pushed from the work PC.
 
 Images bake NO endpoints, models, mappings, or corpus data — those arrive via
 `.env` + `/data/*` volumes. The SIRA upstream clone IS baked (pinned by
-`SIRA_REF`) so serving hosts never need github.com access.
+`SIRA_REF`, pre-patched by prep-offline in OFFLINE builds) so serving hosts
+never need github.com access. Vendored wheels are bind-mounted during build
+(never COPY'd) — they add nothing to image size.

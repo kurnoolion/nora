@@ -1,25 +1,39 @@
-# NORA images — build context is the REPO ROOT:
-#   docker build -f docker/nora.Dockerfile --target nora-web      -t nora-web      .
-#   docker build -f docker/nora.Dockerfile --target nora-pipeline -t nora-pipeline .
+# NORA images — build context is the REPO ROOT, plus a named `vendor` context
+# (docker/vendor — see docker-compose.yml additional_contexts):
+#   docker build -f docker/nora.Dockerfile --build-context vendor=docker/vendor \
+#       --target nora-web -t nora-web .
 #
-# nora-base     shared dependency layer (requirements.txt, CPU torch)
+# nora-base     shared dependency layer (requirements.txt, torch)
 # nora-web      the web app (serving)
 # nora-pipeline batch pipeline + SIRA adapter + Docling (ingest jobs / dev toolbox)
+#
+# OFFLINE=1 (agent-guarded build hosts, e.g. the work PC where container egress
+# is reset): every dependency installs from the vendored wheels prepared by
+# docker/prep-offline.sh — zero in-container network. The vendor wheels are
+# BIND-MOUNTED during RUN (never COPY'd), so they add nothing to image layers.
 #
 # No endpoints, models, mappings, or corpus data are baked in — all arrive via
 # env vars and /data/* volume mounts (see docker/docker-compose.yml).
 
 FROM python:3.12-slim AS nora-base
-ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
-# torch is installed FIRST so sentence-transformers doesn't drag its own pick in.
-# Default: the CPU-only index (small image). On proxy-restricted builders where
-# download.pytorch.org is blocked (work PC allowlist), override to PyPI:
-#   --build-arg TORCH_INDEX_URL=https://pypi.org/simple
-# (PyPI serves the default CUDA-bundled wheel — bigger image, same CPU behavior.)
+ARG OFFLINE=0
+# Default: the CPU-only torch index (small image, unrestricted builders).
+# Online proxy-restricted builders: --build-arg TORCH_INDEX_URL=https://pypi.org/simple
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
-RUN pip install --index-url "$TORCH_INDEX_URL" torch
+ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
+RUN --mount=type=bind,from=vendor,target=/vendor \
+    if [ "$OFFLINE" = "1" ]; then \
+        pip install --no-index --find-links=/vendor/wheels torch; \
+    else \
+        pip install --index-url "$TORCH_INDEX_URL" torch; \
+    fi
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+RUN --mount=type=bind,from=vendor,target=/vendor \
+    if [ "$OFFLINE" = "1" ]; then \
+        pip install --no-index --find-links=/vendor/wheels -r /tmp/requirements.txt; \
+    else \
+        pip install -r /tmp/requirements.txt; \
+    fi
 
 # ---------------------------------------------------------------- nora-web --
 FROM nora-base AS nora-web
@@ -36,10 +50,16 @@ CMD ["uvicorn", "core.src.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # ----------------------------------------------------------- nora-pipeline --
 FROM nora-base AS nora-pipeline
+ARG OFFLINE=0
 # Docling (CPU): table+figure layout provider for opt-in corpora (D-122).
 # Models are NOT baked — provision into the models volume and set
 # DOCLING_ARTIFACTS=/data/models/docling + HF_HUB_OFFLINE=1 at run time.
-RUN pip install docling
+RUN --mount=type=bind,from=vendor,target=/vendor \
+    if [ "$OFFLINE" = "1" ]; then \
+        pip install --no-index --find-links=/vendor/wheels docling; \
+    else \
+        pip install docling; \
+    fi
 WORKDIR /app
 COPY core/ core/
 COPY customizations/ customizations/
@@ -47,6 +67,6 @@ COPY config/ config/
 COPY sandbox/ sandbox/
 ENV ENV_DIR=/data/env
 # Toolbox by default; ingest jobs pass their own command, e.g.
-#   python -m core.src.pipeline.run_cli --env-dir /data/env --start extract --end parse ...
-#   python -m sandbox.adapter.nora_to_beir --env-dir /data/env --output /data/db --multi-cell ...
+#   python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion ...
+#   python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db ...
 CMD ["bash"]

@@ -22,7 +22,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SIRA_CLONE="$REPO_ROOT/sandbox/sira"
+# Overridable for out-of-tree clones (docker/prep-offline.sh vendors one).
+SIRA_CLONE="${SIRA_CLONE:-$REPO_ROOT/sandbox/sira}"
 
 if [ ! -d "$SIRA_CLONE" ]; then
     echo "error: $SIRA_CLONE not found — run 'git clone --depth 1 https://github.com/facebookresearch/sira.git sandbox/sira' first" >&2
