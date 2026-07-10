@@ -8,7 +8,8 @@
 #              wheel, apply install_configs in-container (network needed).
 #   OFFLINE=1  sira-src-1: take the pre-patched clone + pre-built bm25x wheel
 #              from the vendor context (docker/prep-offline.sh) — zero network,
-#              no apt/rustup/git in any stage (agent-guarded build hosts).
+#              no apt/rustup/git in any stage (hosts without container egress,
+#              or deterministic fully-vendored builds).
 #
 # sira-base    trimmed runtime (SETUP.md §2a): no torch/sglang; BM25 + HTTP
 #              LLM routing only. NORA repo at /app, SIRA clone at
@@ -25,9 +26,20 @@ ARG SIRA_REPO=https://github.com/facebookresearch/sira.git
 # Bump deliberately: new ref -> re-verify install_configs.sh patches apply.
 ARG SIRA_REF=62ec59cfb0d76f28ceb3c3d80023ac58a98e4b7a
 
+# ------------------------------------------------------ shared python base --
+# Some corporate DPI/firewall devices reset the large post-quantum ClientHello
+# that this image's OpenSSL 3.5+ sends by default (host tools on older OpenSSL
+# 3.0 pass, so only container TLS appears "blocked"). Pin classical key-exchange
+# groups — universally supported — so pip/git/https work behind such middleboxes.
+FROM python:3.12-slim AS py-classical
+RUN printf '%s\n' 'openssl_conf = openssl_init' '[openssl_init]' \
+    'ssl_conf = ssl_sect' '[ssl_sect]' 'system_default = system_default_sect' \
+    '[system_default_sect]' 'Groups = X25519:P-256:P-384' > /etc/openssl-classical.cnf
+ENV OPENSSL_CONF=/etc/openssl-classical.cnf
+
 # ---------------------------------------------- source: ONLINE (OFFLINE=0) --
 # Based on the SAME python as the runtime stage so the wheel tag matches.
-FROM python:3.12-slim AS sira-src-0
+FROM py-classical AS sira-src-0
 ARG SIRA_REPO
 ARG SIRA_REF
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -54,7 +66,7 @@ RUN --mount=type=bind,from=vendor,target=/vendor \
 FROM sira-src-${OFFLINE} AS sira-src
 
 # ---------------------------------------------------------------- sira-base --
-FROM python:3.12-slim AS sira-base
+FROM py-classical AS sira-base
 ARG OFFLINE=0
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
 # Trimmed dependency set (sandbox/SETUP.md §2a) — deliberately NO torch/sglang.

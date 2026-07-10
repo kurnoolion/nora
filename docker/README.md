@@ -120,16 +120,26 @@ BOTH stacks' sira-query.
 ## Build + distribute
 
 Builds happen **on the work PC** (the only host that can also publish to the
-internal GitHub). Two container-network facts shape the flow there:
-`docker pull` is proxy-broken (skopeo is the workaround), and the endpoint
-agent **resets ALL egress from container processes** (even `--network=host`) —
-so image builds must not touch the network at all. Host processes are allowed,
-which is what the offline-prep flow exploits:
+internal GitHub).
 
-    # one-time per base-image bump (host process — allowed):
+**Corporate-network note.** Some perimeter DPI devices reset TLS handshakes
+that use post-quantum key exchange — which OpenSSL 3.5+ (bundled inside the
+python base image) sends by default, while typical host tools on OpenSSL 3.0
+pass. The symptom is misleading: TCP connects, then every in-container HTTPS
+attempt dies with "connection reset" (bridge AND `--network=host`), so it
+looks like "containers have no network." Both Dockerfiles bake an
+`OPENSSL_CONF` that pins classical key-exchange groups, so **ONLINE builds
+(`OFFLINE=0`, the default) work behind such devices**. `docker pull` of base
+images may still fail there (the docker daemon uses a different TLS stack) —
+`./skopeo-pull-bases.sh` covers that:
+
+    # one-time per base-image bump (host process):
     ./skopeo-pull-bases.sh
 
-    # whenever dependencies / SIRA_REF change (host processes — allowed):
+`OFFLINE=1` remains supported — for hosts where container egress is truly
+unavailable, or as a deterministic fully-vendored build:
+
+    # whenever dependencies / SIRA_REF change (host processes):
     ./prep-offline.sh              # wheels + patched SIRA clone -> docker/vendor/
                                    # (needs host python3.12, git, rust+maturin —
                                    #  the same toolchain SETUP.md §2/3 installs)
@@ -137,17 +147,20 @@ which is what the offline-prep flow exploits:
     # build with OFFLINE=1 in .env — zero in-container network:
     docker compose --profile serve --profile ingest build
 
-    # publish to the internal GitHub release (host process — allowed):
+Publish + fetch (either build mode):
+
+    # publish to the internal GitHub release (host process):
     ./push.sh images-v1-$(git -C .. rev-parse --short HEAD) \
         local/nora-web:dev local/sira-query:dev local/nora-pipeline:dev local/sira-batch:dev
 
     # any other internal host:
     ./pull.sh images-v1-<sha>
 
-Runtime note for agent-guarded hosts: containers CAN reach internal endpoints
-(LLMs, internal GitHub) but NOT the public internet — so the `standards` stage
-(which downloads specs at run time) needs `--skip-standards` in-container, or
-run that one stage bare-metal.
+Runtime note: the baked classical-groups config also applies at run time, so
+in-container outbound HTTPS (e.g. the `standards` stage downloading specs)
+works behind the same middleboxes. If a host still blocks container egress
+entirely, run the ingestion lane with `--skip-standards` in-container, or run
+that one stage bare-metal.
 
 The dev PC (unrestricted network) builds ONLINE (`OFFLINE=0`, the default):
 rustup + clone + PyPI happen in-container, with `TORCH_INDEX_URL` defaulting

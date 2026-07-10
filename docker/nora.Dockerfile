@@ -7,8 +7,8 @@
 # nora-web      the web app (serving)
 # nora-pipeline batch pipeline + SIRA adapter + Docling (ingest jobs / dev toolbox)
 #
-# OFFLINE=1 (agent-guarded build hosts, e.g. the work PC where container egress
-# is reset): every dependency installs from the vendored wheels prepared by
+# OFFLINE=1 (hosts with no container egress at all, or deterministic vendored
+# builds): every dependency installs from the vendored wheels prepared by
 # docker/prep-offline.sh — zero in-container network. The vendor wheels are
 # BIND-MOUNTED during RUN (never COPY'd), so they add nothing to image layers.
 #
@@ -16,6 +16,15 @@
 # env vars and /data/* volume mounts (see docker/docker-compose.yml).
 
 FROM python:3.12-slim AS nora-base
+# Some corporate DPI/firewall devices reset the large post-quantum ClientHello
+# that this image's OpenSSL 3.5+ sends by default (host tools on older OpenSSL
+# 3.0 pass, so only container TLS appears "blocked"). Pin classical key-exchange
+# groups — universally supported — so pip at build time and outbound HTTPS at
+# run time (e.g. the standards stage) work behind such middleboxes.
+RUN printf '%s\n' 'openssl_conf = openssl_init' '[openssl_init]' \
+    'ssl_conf = ssl_sect' '[ssl_sect]' 'system_default = system_default_sect' \
+    '[system_default_sect]' 'Groups = X25519:P-256:P-384' > /etc/openssl-classical.cnf
+ENV OPENSSL_CONF=/etc/openssl-classical.cnf
 ARG OFFLINE=0
 # Default: the CPU-only torch index (small image, unrestricted builders).
 # Online proxy-restricted builders: --build-arg TORCH_INDEX_URL=https://pypi.org/simple
