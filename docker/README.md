@@ -39,6 +39,11 @@ paths (`$HOME` does not expand there).
     cp env.nora-pipeline.example .env.nora-pipeline   # for ingest jobs
     cp env.sira-batch.example .env.sira-batch         # for enrichment jobs
 
+Edit the per-service files with your LLM endpoints. Gotcha: when
+`NORA_LLM_SHIM_URL` points at a real OpenAI-compatible endpoint (not the
+local shim), `NORA_LLM_MODEL` is REQUIRED — unset, query enrichment fails
+with model_not_found (`curl <endpoint>/v1/models` lists valid names).
+
 In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
@@ -67,8 +72,9 @@ the build paths for these commands, or use a builds-oriented `.env`):
     docker compose --profile ingest run --rm sira-batch \
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
       --run-name enrich-stable --only <MNO>__<REL> --wipe-stale-index
-    # (standards downloads specs over the PUBLIC network at run time — on
-    #  agent-guarded hosts container egress is blocked: add --skip-standards,
+    # (standards downloads specs over the PUBLIC network at run time — the
+    #  baked classical-TLS config gets python HTTPS through PQ-hello-resetting
+    #  DPI, but if a host truly has no container egress: add --skip-standards,
     #  or run the standards stage bare-metal)
     # (nora lane, when the native retrieval stack is wanted:)
     # docker compose --profile ingest run --rm nora-pipeline \
@@ -77,9 +83,15 @@ the build paths for these commands, or use a builds-oriented `.env`):
     ./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
         --nora-build /home/<you>/nora-data/nora-builds/<build> \
         --sira-build /home/<you>/nora-data/sira-builds/<build>
-    # point the stack .env at serve/<label>/{nora,sira} and:
-    docker compose restart sira-query nora-web
-    # rollback = point .env back at the previous label + restart
+    # point the stack .env at serve/<label>/{nora,sira} and RECREATE (a plain
+    # `restart` does NOT re-read .env or the env_files — recreate does):
+    docker compose --env-file <stack .env> --profile serve up -d
+    # rollback = point .env back at the previous label + `up -d` again
+
+First promotion note: `--nora-build` / `--sira-build` accept ANY dir in build
+shape — including pre-docker bare-metal artifacts (an env_dir with
+`out/{vectorstore,graph,taxonomy}`, a db_root with `<MNO>__<MMMYYYY>` cells) —
+so existing deployments promote their current data as the first label.
 
 (Full scenario matrix: `sandbox/README.md` §2 — same commands, containerized.)
 
@@ -115,7 +127,8 @@ All stack env files live in this same `docker/` directory (gitignored; only
 the `*.example` templates are committed). The pipeline/batch runtime files
 usually need no per-stack variants — ingest is stack-independent; run jobs
 with either wiring env. After ingesting a new cell (shared db_root), restart
-BOTH stacks' sira-query.
+BOTH stacks' sira-query — a plain `restart` suffices here (data reload, same
+config); only env-file/.env CHANGES need an `up -d` recreate.
 
 ## Build + distribute
 
@@ -129,9 +142,11 @@ pass. The symptom is misleading: TCP connects, then every in-container HTTPS
 attempt dies with "connection reset" (bridge AND `--network=host`), so it
 looks like "containers have no network." Both Dockerfiles bake an
 `OPENSSL_CONF` that pins classical key-exchange groups, so **ONLINE builds
-(`OFFLINE=0`, the default) work behind such devices**. `docker pull` of base
-images may still fail there (the docker daemon uses a different TLS stack) —
-`./skopeo-pull-bases.sh` covers that:
+(`OFFLINE=0`, the default) work behind such devices**. On a new host with
+container-network trouble, `sudo ./debug-egress.sh` pinpoints the blocking
+layer (DNS/TCP/TLS × bare-metal/host-net/bridge, plus packet capture).
+`docker pull` of base images may still fail there (the docker daemon uses a
+different TLS stack) — `./skopeo-pull-bases.sh` covers that:
 
     # one-time per base-image bump (host process):
     ./skopeo-pull-bases.sh
@@ -147,14 +162,26 @@ unavailable, or as a deterministic fully-vendored build:
     # build with OFFLINE=1 in .env — zero in-container network:
     docker compose --profile serve --profile ingest build
 
-Publish + fetch (either build mode):
+Publish + fetch (either build mode). Both scripts read `GHHOST` / `GHORG` /
+`GHREPO` / `GHTOKEN` (a PAT with `repo` scope) from `./.env`:
 
-    # publish to the internal GitHub release (host process):
-    ./push.sh images-v1-$(git -C .. rev-parse --short HEAD) \
-        local/nora-web:dev local/sira-query:dev local/nora-pipeline:dev local/sira-batch:dev
+    # optional rehearsal — stages tarballs in ./push-staging/, uploads nothing,
+    # needs no token:
+    DRY_RUN=1 ./push.sh images-$(git -C .. rev-parse --short HEAD) \
+        <prefix>/nora-web:<tag> <prefix>/sira-query:<tag>
+
+    # publish to the internal GitHub release (host process; image names per
+    # your IMAGE_PREFIX/IMAGE_TAG — `docker image ls` shows them):
+    ./push.sh images-$(git -C .. rev-parse --short HEAD) \
+        <prefix>/nora-web:<tag> <prefix>/sira-query:<tag> \
+        <prefix>/nora-pipeline:<tag> <prefix>/sira-batch:<tag>
 
     # any other internal host:
-    ./pull.sh images-v1-<sha>
+    ./pull.sh images-<sha>
+
+Assets over `SPLIT_MB` (default 1900) upload as `.partNN` chunks; `pull.sh`
+reassembles them transparently. If the GHES per-asset cap turns out lower,
+pass a smaller threshold: `SPLIT_MB=900 ./push.sh …`.
 
 Runtime note: the baked classical-groups config also applies at run time, so
 in-container outbound HTTPS (e.g. the `standards` stage downloading specs)
