@@ -75,3 +75,5 @@ sandbox/adapter/out*/
 # docker distro: per-host env files (real endpoints — never commit)
 docker/.env
 docker/.env.*
+# push.sh DRY_RUN staging area (image tarballs)
+docker/push-staging/
