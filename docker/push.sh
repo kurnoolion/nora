@@ -55,8 +55,11 @@ upload_one() {  # <path> — upload a single file as a release asset
         return 0
     fi
     echo "==> uploading $name"
+    # -T streams from disk (--data-binary buffers the whole file in RAM and
+    # dies with 'out of memory' on multi-GB assets); -X POST because -T
+    # defaults to PUT and the upload API wants POST.
     curl -sf "${AUTH[@]}" -H "Content-Type: application/gzip" \
-        --data-binary @"$path" "$upload_url?name=$name" > /dev/null
+        -X POST -T "$path" "$upload_url?name=$name" > /dev/null
 }
 
 for img in "$@"; do
