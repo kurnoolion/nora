@@ -70,8 +70,12 @@ root-owned, and the app then can't write its DBs). Then:
 
 ## Ingest a new release (build lanes → promote → restart)
 
-Ingest jobs run against the BUILD dirs (set `NORA_ENV_DIR`/`SIRA_DB_ROOT` to
-the build paths for these commands, or use a builds-oriented `.env`):
+Ingest jobs run against the BUILD dirs — never against a promoted serve
+label. Make a builds-oriented wiring env once: `cp .env.stack-a .env.builds`
+(a FULL copy — compose validates every required path var in the whole file
+even for ingest-only runs, so all six must be present), then repoint only
+`NORA_ENV_DIR`/`SIRA_DB_ROOT` at `nora-builds/<build>` / `sira-builds/<build>`
+and pass `--env-file .env.builds` to the commands below:
 
     # ingestion lane (extract..standards) for the new cell:
     docker compose --profile ingest run --rm nora-pipeline \
