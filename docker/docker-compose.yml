@@ -41,6 +41,8 @@ services:
     env_file:
       - path: ${SIRA_QUERY_ENV_FILE:-.env.sira-query}
         required: false
+      - path: ${SECRETS_ENV_FILE:-.env.secrets}   # creds only; never committed
+        required: false                           # (later file wins on overlap)
     environment:
       NORA_SIRA_DB_ROOT: /data/db
     extra_hosts:
@@ -70,6 +72,8 @@ services:
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
     env_file:
       - path: ${WEB_ENV_FILE:-.env.nora-web}
+        required: false
+      - path: ${SECRETS_ENV_FILE:-.env.secrets}
         required: false
     environment:
       ENV_DIR: /data/env
@@ -108,6 +112,8 @@ services:
     env_file:
       - path: ${PIPELINE_ENV_FILE:-.env.nora-pipeline}
         required: false
+      - path: ${SECRETS_ENV_FILE:-.env.secrets}
+        required: false
     environment:
       ENV_DIR: /data/env
       NORA_REQUIREMENTS_DIR: /data/requirements
@@ -135,6 +141,8 @@ services:
       - ${SIRA_DB_ROOT:?}:/data/db
     env_file:
       - path: ${SIRA_BATCH_ENV_FILE:-.env.sira-batch}
+        required: false
+      - path: ${SECRETS_ENV_FILE:-.env.secrets}
         required: false
     extra_hosts:
       - "host.docker.internal:host-gateway"

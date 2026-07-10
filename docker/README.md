@@ -44,6 +44,14 @@ Edit the per-service files with your LLM endpoints. Gotcha: when
 local shim), `NORA_LLM_MODEL` is REQUIRED — unset, query enrichment fails
 with model_not_found (`curl <endpoint>/v1/models` lists valid names).
 
+Sharing/committing the per-service env files somewhere? Keep credentials out
+of them: every service also loads an optional overlay (`SECRETS_ENV_FILE`,
+default `.env.secrets`) AFTER its own env file — later file wins on overlap.
+Put API keys/tokens there and gitignore it wherever the configs are tracked.
+Note: `${VAR}` inside env files is NOT expanded (compose passes them to the
+container verbatim), so referencing shell vars from within them can't work —
+the overlay file is the supported mechanism.
+
 In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
