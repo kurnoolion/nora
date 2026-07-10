@@ -204,3 +204,14 @@ job types:
   Protocol, fusing sira results with taxonomy/graph scoping. That is the
   point where sira_query/fusion promote into core/src and D-111's informal
   scope is superseded for those modules.
+
+## Offline-build validation record (2026-07-10, dev PC)
+
+All three OFFLINE=1 images built under `--network=none` (exact simulation of
+the agent-guarded work PC) from a 184-wheel / 3.0 GB vendor prep, and the serve
+stack came up healthy (sira-query /healthz graceful on empty db_root, nora-web
+HTTP 200). Sizes: sira-query 951 MB (smaller than the online build — no
+apt/git), nora-web 9.06 GB, nora-pipeline 9.67 GB (the PyPI-torch nvidia-wheel
+tax vs 2.5 GB on the CPU index — raises the base/app split priority and makes
+GHES asset-limit/split-archive handling in push.sh likely necessary for the
+nora tarballs).
