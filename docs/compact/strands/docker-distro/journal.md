@@ -52,3 +52,84 @@
   makes the 2.5 GB nora tarball annoying.
 - docker/ deliberately has no MODULE.md (infra concern, mirrors the sandbox
   informal-scope precedent D-111) — revisit if it grows real code.
+
+## 2026-07-10 — Env architecture, host topology, lanes, and the offline-build pivot
+
+### Done this session (20 commits, 2026-07-07→10)
+- Build locus moved to the WORK PC (D-DRAFT-2 amended in place): dev PC cannot
+  reach the internal GHES and no inter-PC file channel exists; base images via
+  `skopeo-pull-bases.sh` (mirrors the proven dgx/spark workaround);
+  TORCH_INDEX_URL build arg for the allowlist-blocked CPU index.
+- Work-PC bring-up traps fixed + encoded: git exec bits (WSL working tree shows
+  777 — set mode in the index), snap-docker cannot read /tmp ("no such file")
+  NOR hidden top-level dirs like ~/.cache ("permission denied"), docker group
+  needs a session re-login. skopeo scratch → visible $HOME default.
+- Env-config architecture: build knobs driven from .env (compose build.args);
+  env audit found ~65 vars read vs ~30 forwarded (incl. sentinel D-104, pin/
+  synth group, rerank backend D-116/117) → brief shared .env.runtime → replaced
+  by the PER-SERVICE split: env.<service>.example → .env.<service>, compose
+  env_file per service (${*_ENV_FILE:-…}, per-stack overridable), environment:
+  carries ONLY fixed container paths and always wins — which also fixed empty
+  ${VAR:-} interpolations silently overriding file values. A/B recipe: per-stack
+  wiring env + per-stack web/query files; pipeline/batch files shared.
+- Host data topology (user's build/serve design): nora-data/ root with
+  requirements/ (ONE canonical source store — new core requirements_dir
+  override, default env_dir/input, back-compat tested), nora-builds/,
+  sira-builds/ (user migrated all builds; symlink check clean), serve/<label>/
+  hardlink snapshots via promote.sh (verified: instant, wipe-immune, immutable
+  labels, env-shaped nora/ mounts as /data/env with zero web change; rollback =
+  repoint .env). Parse Review/corrections being phased out made the serve-set
+  small (vectorstore/graph/taxonomy + sira cells; query lane needs no out/parse).
+- Lane model shipped: standards → stage 5 (reads only resolve manifests + parse
+  trees; skip-resolve already implied skip-standards), lanes ingestion(1-5) /
+  nora(6-9) as `run_cli --lane` sugar (PIPELINE_LANES), sira lane via new
+  sandbox/sira_lane.py (adapter+sira_multi, --only/wipe threaded), SOURCE.json
+  provenance stamped into db_roots, lane-grouped --list-stages. Filesystem
+  layout unchanged (lanes are a runner concept). Suite 1555-1560 green.
+- Template hardening from the user's line-by-line env review: /v1 conventions
+  now stated in every file that has one (openai-compatible WITH /v1; service
+  WITHOUT; batch WITH); sira-batch rerank vars marked eval-flow-only;
+  NORA_LLM_SHIM_MODEL exposed as a PHANTOM VAR (nothing reads it — the service
+  reads NORA_LLM_MODEL) and fixed; five default-on knobs confirmed
+  (scale-topk/fanout/enrich/expansion-weight/query-enrich) = "unset == bare-
+  metal behavior".
+- THE discovery: the work-PC endpoint-security agent RESETS ALL network egress
+  from container processes (even --network=host; host processes allowed —
+  skopeo/pip/git work bare-metal), but containers CAN reach internal endpoints
+  (user probe: 200) → serving viable, builds must be offline. Shipped
+  prep-offline.sh (host-side: pip-wheels everything incl. pytrec_eval + bm25x
+  via host maturin; clones SIRA @ pin and applies install_configs on the HOST
+  via new SIRA_CLONE override; PREP.json) + OFFLINE=1 Dockerfile branches
+  (vendor wheels BIND-MOUNTED during RUN — zero layer cost; ARG-selected
+  sira-src stage; no apt/git/gcc anywhere in offline mode) + compose vendor
+  additional_context.
+
+### In progress
+- Offline-build validation on the dev PC: vendor harvest 30 wheels/2.6GB done
+  (incl. torch cp312 + bm25x cp312 extracted from the online builder stage);
+  interrupted by shutdown. Resume: SKIP_BM25X=1 ./prep-offline.sh →
+  --network=none builds of sira-query + nora-web → serve smoke.
+
+### Next
+- Work-PC pass: git pull → prep-offline (host rust/maturin) → OFFLINE=1 build →
+  compose up over real serve/<label> data → /healthz → first push.sh release.
+- Ask IT whether the endpoint agent can permit container egress on the work PC
+  (a policy fix would delete the offline machinery).
+- GHES release-asset size limit (admins) — decides split archives.
+- Phases 3 (A/B live), 4 (dev profile + dev-shell), 5 (README §1/§3 → compose;
+  run_stack.sh fate).
+
+### Flags
+- SETUP.md §2 clone still unpinned (fresh bare-metal clones break) +
+  install_configs.sh still swallows git-apply stderr — both small, still open.
+- standards stage downloads specs at RUN time — blocked in containers on
+  agent-guarded hosts: --skip-standards there, or run that stage bare-metal.
+- Base/app image split still deferred (matters more now: PyPI torch pulls
+  nvidia wheels — vendor is 2.6GB+, images will be bigger than the CPU-index
+  dev builds).
+- OFFLINE validation pending — 0808b2b commit message records exactly what was
+  and wasn't verified at commit time.
+- env/pipeline MODULE.md now lag the code: PIPELINE_LANES, requirements_dir/
+  input_root, resolve_requirements_dir, --lane/lane_bounds are new public
+  surface; Structure sections also stale. Fold into the next regen-map +
+  MODULE.md pass (or land-time drift-check dev-full).
