@@ -6,6 +6,44 @@ profile — bind-mounts + dev-shell — lands in phase 4; `serve`/`ingest` are
 live); images ship as Release-asset tarballs on the internal GitHub
 (`push.sh` / `pull.sh`).
 
+## The four images
+
+| Image | Profile | Runs | Purpose | Reads (mounts) | Writes (mounts) |
+|---|---|---|---|---|---|
+| **nora-web** | serve | uvicorn `:8000`, long-lived | Web UI + API: query, compare, compliance views; jobs/metrics/config; feedback capture | `/data/env` (promoted nora label: vectorstore, graph, taxonomy) | `/data/web-state` (per stack), `/data/feedback` (pooled) |
+| **sira-query** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells) | — |
+| **nora-pipeline** | ingest | `run --rm` jobs | Batch lanes over the corpus: **ingestion** lane (extract → parse → resolve → standards) and **nora** lane (taxonomy → graph → vectorstore → eval); Docling layout for opt-in corpora | `/data/requirements` (ro, the corpus), `/data/models` | `/data/env` (a nora-BUILD dir: `out/`, images incl.) |
+| **sira-batch** | ingest | `run --rm` jobs | SIRA lane: NORA→BEIR adapter, per-cell index build, batch doc-enrichment, incremental retries | `/data/env` outputs via adapter | `/data/db` (a sira-BUILD dir: cells) |
+
+Lineage: nora-web / nora-pipeline share the `nora-base` dependency layer
+(`nora.Dockerfile`); sira-query / sira-batch share `sira-base` with the
+pinned SIRA clone baked in (`sira.Dockerfile`, `SIRA_REF`).
+
+How they connect (build → promote → serve, and the query path):
+
+    requirements/ corpus (ro)
+        │  ingestion lane                 sira lane
+        ▼                                    ▼
+    [nora-pipeline] ──► nora-builds/<b> ─► [sira-batch] ──► sira-builds/<b>
+        │   (also nora lane:                     │
+        │    taxonomy/graph/vectorstore)         │
+        └────────────┬───────────────────────────┘
+                     ▼  promote.sh (hardlink snapshot, immutable label)
+              serve/<label>/{nora,sira}
+                     │ mounted ro-by-convention
+        ┌────────────┴────────────┐
+        ▼                         ▼
+    [nora-web :8000] ───────► [sira-query :8040]
+        │      NORA_SIRA_QUERY_URL (compose network)
+        ▼                         ▼
+     browser              LLM endpoints (env files;
+                          host.docker.internal for host-local)
+
+The serve pair talks over the compose-internal network (`nora-web` reaches
+`sira-query` by service name); everything else connects through the shared
+host directories — there is no other coupling between images. LLM endpoints
+are never baked in; each service gets them from its env file at run time.
+
 ## Recommended host layout
 
 One dedicated data root for everything the stack mounts, plus your existing

@@ -139,6 +139,8 @@ services:
     profiles: ["ingest", "dev"]
     volumes:
       - ${SIRA_DB_ROOT:?}:/data/db
+      # sira_lane's adapter step reads the nora build's out/ tree
+      - ${NORA_ENV_DIR:?}:/data/env
     env_file:
       - path: ${SIRA_BATCH_ENV_FILE:-.env.sira-batch}
         required: false
