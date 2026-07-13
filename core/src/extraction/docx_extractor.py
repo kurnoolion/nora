@@ -63,13 +63,19 @@ class DOCXExtractor(BaseExtractor):
         header_footer_margin_mode: str = "blanket",  # PDF-only hint; ignored here
         layout_provider: str = "",  # PDF-only hint; ignored here
         provider_table_grid: bool = True,  # PDF-only hint; ignored here
+        images_root: "Path | None" = None,
     ) -> DocumentIR:
         file_path = Path(file_path)
         logger.info(f"Extracting DOCX: {file_path.name}")
 
         doc = DocxDocument(str(file_path))
 
-        images_dir = file_path.parent / "extracted_images" / file_path.stem
+        # images_root keeps image artifacts in the BUILD output (the input
+        # corpus may be a read-only mount); legacy next-to-source otherwise.
+        images_dir = (
+            Path(images_root) / file_path.stem if images_root
+            else file_path.parent / "extracted_images" / file_path.stem
+        )
         all_blocks: list[ContentBlock] = []
         page = 1
         image_counter = 0
@@ -132,7 +138,7 @@ class DOCXExtractor(BaseExtractor):
             extraction_metadata={
                 "page_count": page,
                 "images_dir": (
-                    str(images_dir.relative_to(file_path.parent))
+                    str(images_dir.relative_to(images_dir.parent.parent))
                     if images_dir.exists()
                     else None
                 ),

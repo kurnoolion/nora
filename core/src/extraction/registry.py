@@ -45,8 +45,15 @@ def extract_document(
     header_footer_margin_mode: str = "blanket",
     layout_provider: str = "",
     provider_table_grid: bool = True,
+    images_root: "Path | None" = None,
 ) -> DocumentIR:
-    """Extract a document using the appropriate format extractor."""
+    """Extract a document using the appropriate format extractor.
+
+    `images_root` redirects extracted-image artifacts into the build output
+    (the pipeline passes the cell's `out/extract/<mno>/<rel>/images`) — the
+    input corpus may be a read-only mount. Unset = legacy next-to-source
+    `extracted_images/` (ad-hoc CLI use only).
+    """
     extractor = get_extractor(file_path)
     return extractor.extract(
         file_path, mno=mno, release=release, doc_type=doc_type,
@@ -54,6 +61,7 @@ def extract_document(
         header_footer_margin_mode=header_footer_margin_mode,
         layout_provider=layout_provider,
         provider_table_grid=provider_table_grid,
+        images_root=images_root,
     )
 
 

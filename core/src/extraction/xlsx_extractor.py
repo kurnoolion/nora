@@ -103,6 +103,7 @@ class XLSXExtractor(BaseExtractor):
         header_footer_margin_mode: str = "blanket",  # PDF-only hint; ignored here
         layout_provider: str = "",  # PDF-only hint; ignored here
         provider_table_grid: bool = True,  # PDF-only hint; ignored here
+        images_root: "Path | None" = None,  # no image extraction in XLSX; ignored
     ) -> DocumentIR:
         file_path = Path(file_path)
         logger.info(f"Extracting XLSX: {file_path.name}")

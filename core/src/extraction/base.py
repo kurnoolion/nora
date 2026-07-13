@@ -24,6 +24,7 @@ class BaseExtractor(ABC):
         header_footer_margin_mode: str = "blanket",
         layout_provider: str = "",
         provider_table_grid: bool = True,
+        images_root: "Path | None" = None,
     ) -> DocumentIR:
         """Extract content from a document file.
 
@@ -43,6 +44,10 @@ class BaseExtractor(ABC):
             provider_table_grid: when False, layout-provider tables carry HTML only
                 (skip the flat headers/rows the anchoring path would use). PDF-only;
                 other extractors ignore it.
+            images_root: directory for extracted-image artifacts (the pipeline
+                passes the cell's `out/extract/<mno>/<rel>/images` — the input
+                corpus may be a read-only mount). None = legacy next-to-source
+                `extracted_images/`. Extractors without images ignore it.
 
         Returns:
             Normalized DocumentIR ready for the DocumentProfiler or structural parser.

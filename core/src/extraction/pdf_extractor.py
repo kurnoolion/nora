@@ -335,6 +335,7 @@ class PDFExtractor(BaseExtractor):
         header_footer_margin_mode: str = "blanket",
         layout_provider: str = "",
         provider_table_grid: bool = True,
+        images_root: "Path | None" = None,
     ) -> DocumentIR:
         if fitz is None or pdfplumber is None:
             raise ImportError(
@@ -357,6 +358,7 @@ class PDFExtractor(BaseExtractor):
                 header_footer_margin_mode=header_footer_margin_mode,
                 layout_provider=layout_provider,
                 provider_table_grid=provider_table_grid,
+                images_root=images_root,
             )
         finally:
             fitz_doc.close()
@@ -374,6 +376,7 @@ class PDFExtractor(BaseExtractor):
         header_footer_margin_mode: str = "blanket",
         layout_provider: str = "",
         provider_table_grid: bool = True,
+        images_root: "Path | None" = None,
     ) -> DocumentIR:
         # First pass: detect repeating header/footer text across pages
         header_footer_patterns = self._detect_header_footer_patterns(fitz_doc)
@@ -382,9 +385,16 @@ class PDFExtractor(BaseExtractor):
         )
 
         all_blocks: list[ContentBlock] = []
+        # images_root (the pipeline passes out/extract/<mno>/<rel>/images)
+        # keeps image artifacts in the BUILD output — the input corpus may be
+        # a read-only mount. Legacy next-to-source layout only for ad-hoc use.
         images_dir = (
-            file_path.parent / "extracted_images" / file_path.stem
+            Path(images_root) / file_path.stem if images_root
+            else file_path.parent / "extracted_images" / file_path.stem
         )
+        # image_path values are stored relative to this base: the doc dir in
+        # the legacy layout, the cell out dir when images_root is supplied.
+        img_base = images_dir.parent.parent
 
         # Optional layout provider (e.g. Docling): parse the whole PDF once for
         # tables + figures, keyed by page. When set, the geometric table/image
@@ -415,7 +425,7 @@ class PDFExtractor(BaseExtractor):
                 # their bboxes suppress the pymupdf text beneath them. The
                 # geometric pdfplumber / get_images paths are skipped.
                 self._emit_provider_blocks(
-                    page_num, file_path, prov_tables, prov_figures,
+                    page_num, img_base, prov_tables, prov_figures,
                     all_blocks, table_bboxes)
                 plumber_tables = []
             else:
@@ -683,7 +693,7 @@ class PDFExtractor(BaseExtractor):
                                 index=0,
                                 bbox=None,
                             ),
-                            image_path=str(img_path.relative_to(file_path.parent)),
+                            image_path=str(img_path.relative_to(img_base)),
                             surrounding_text=surrounding,
                         )
                     )
@@ -716,7 +726,7 @@ class PDFExtractor(BaseExtractor):
             extraction_metadata={
                 "page_count": total_pages,
                 "header_footer_patterns": header_footer_patterns,
-                "images_dir": str(images_dir.relative_to(file_path.parent))
+                "images_dir": str(images_dir.relative_to(img_base))
                 if images_dir.exists()
                 else None,
             },
@@ -766,7 +776,7 @@ class PDFExtractor(BaseExtractor):
                 pass
 
     def _emit_provider_blocks(
-        self, page_num, file_path, prov_tables, prov_figures,
+        self, page_num, img_base, prov_tables, prov_figures,
         all_blocks, table_bboxes
     ) -> None:
         """Turn this page's provider tables/figures into TABLE / IMAGE blocks and
@@ -785,9 +795,9 @@ class PDFExtractor(BaseExtractor):
             if f.bbox:
                 table_bboxes.append(f.bbox)
             img_path = f.image_path
-            try:  # match the get_images convention: path relative to the doc dir
+            try:  # match the get_images convention: relative to img_base
                 if img_path:
-                    img_path = str(Path(img_path).relative_to(file_path.parent))
+                    img_path = str(Path(img_path).relative_to(img_base))
             except Exception:
                 pass
             all_blocks.append(ContentBlock(

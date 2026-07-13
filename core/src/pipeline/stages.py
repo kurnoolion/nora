@@ -155,6 +155,9 @@ def run_extract(ctx: PipelineContext) -> StageResult:
                 header_footer_margin_mode=margin_mode,
                 layout_provider=layout_prov,
                 provider_table_grid=grid,
+                # Image artifacts belong in the cell's BUILD output — the
+                # corpus mount is read-only in containers (Errno 30 otherwise).
+                images_root=cell_dir / "images",
             )
             # Path-derived plan (per-plan input dir), if any — the extractors
             # don't see the path, so stamp it here for the parser to consume.
