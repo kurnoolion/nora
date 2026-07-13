@@ -100,3 +100,44 @@ class TestInferMetadataEnforcesConvention:
     def test_no_plan_for_flat_layout(self):
         # file directly under <release> → no plan dir
         assert infer_metadata_from_path(Path("/data/env/input/VZW-OA/Feb2026/x.pdf"))["plan"] == ""
+
+
+class TestInferMetadataRootAnchored:
+    """`root=` anchoring — required when the documents root is a
+    requirements_dir override with no "input" path segment (e.g. the
+    container mount /data/requirements)."""
+
+    def test_flat_layout_under_root(self):
+        md = infer_metadata_from_path(
+            Path("/data/requirements/VZW-OA/Feb2026/x.pdf"),
+            root=Path("/data/requirements"))
+        assert md["mno"] == "VZW-OA" and md["release"] == "Feb2026"
+        assert md["plan"] == ""
+
+    def test_plan_dir_under_root(self):
+        # THE container regression: without root, the legacy fallback read
+        # the plan dir as the release and failed EXT-E004.
+        md = infer_metadata_from_path(
+            Path("/data/requirements/MNOC/Mar2026/PlanFoo/doc.pdf"),
+            root=Path("/data/requirements"))
+        assert md["mno"] == "MNOC" and md["release"] == "Mar2026"
+        assert md["plan"] == "PlanFoo"
+
+    def test_root_takes_precedence_over_input_segment(self):
+        # a root that itself contains an "input" segment anchors on root
+        md = infer_metadata_from_path(
+            Path("/data/env/input/VZW-OA/Feb2026/PlanBar/x.pdf"),
+            root=Path("/data/env/input"))
+        assert md["release"] == "Feb2026" and md["plan"] == "PlanBar"
+
+    def test_file_outside_root_falls_back_to_legacy(self):
+        md = infer_metadata_from_path(
+            Path("/elsewhere/input/VZW-OA/Feb2026/x.pdf"),
+            root=Path("/data/requirements"))
+        assert md["mno"] == "VZW-OA" and md["release"] == "Feb2026"
+
+    def test_non_mmmyyyy_still_fails_loud_with_root(self):
+        with pytest.raises(ValueError, match="EXT-E004"):
+            infer_metadata_from_path(
+                Path("/data/requirements/VZW/OA-baseline/x.pdf"),
+                root=Path("/data/requirements"))

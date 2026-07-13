@@ -125,7 +125,9 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     for f in files:
         # infer_metadata_from_path enforces the MMMYYYY cell convention
         # fail-loud (EXT-E004); a mis-named release dir aborts the stage here.
-        metadata = infer_metadata_from_path(f)
+        # Root-anchored: documents_dir may be a requirements_dir override
+        # with no "input" segment (e.g. /data/requirements in containers).
+        metadata = infer_metadata_from_path(f, root=ctx.documents_dir)
         # D-DRAFT-8: honor the --mno/--release cell scope.
         if not ctx.cell_in_scope(metadata["mno"], metadata["release"]):
             continue

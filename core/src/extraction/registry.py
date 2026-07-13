@@ -59,11 +59,18 @@ def extract_document(
 
 def infer_metadata_from_path(
     file_path: Path,
+    root: Path | None = None,
 ) -> dict[str, str]:
     """Infer mno and release from folder structure (D-023, FR-30).
 
-    Expected layout: <env_dir>/input/<MNO>/<MMMYYYY>/filename.ext
-    e.g., /data/vzw-feb2026/input/VZW-OA/Feb2026/LTEDATARETRY.pdf
+    Expected layout: <root>/<MNO>/<MMMYYYY>/filename.ext where `root` is the
+    documents root (default `<env_dir>/input`; overridable via
+    `requirements_dir`, e.g. mounted at /data/requirements in containers).
+
+    When `root` is given, segments are taken RELATIVE TO IT — the reliable
+    anchor. Without it (ad-hoc callers), fall back to locating a literal
+    "input" segment, then to "last two dirs are MNO/release" (which cannot
+    see per-plan subdirs — pass `root` whenever it is known).
 
     The release directory follows the MMMYYYY convention (D-DRAFT-6 — the
     `(MNO, release)` cell key, mirroring multi-mno-sira D-DRAFT-5). A
@@ -77,8 +84,22 @@ def infer_metadata_from_path(
     parts = file_path.resolve().parts
     metadata = {"mno": "", "release": "", "doc_type": "requirement", "plan": ""}
 
+    rel_parts: "tuple[str, ...] | None" = None
+    if root is not None:
+        try:
+            rel_parts = file_path.resolve().relative_to(Path(root).resolve()).parts
+        except ValueError:
+            rel_parts = None  # not under root — fall back to legacy inference
+
+    if rel_parts is not None:
+        # <MNO>/<release>/[<plan>/]<file> relative to the documents root.
+        if len(rel_parts) >= 3:
+            metadata["mno"] = rel_parts[0].upper()
+            metadata["release"] = rel_parts[1]
+            if len(rel_parts) >= 4:
+                metadata["plan"] = rel_parts[2]
     # Look for the "input" anchor; the two segments immediately after it are MNO/release.
-    if "input" in parts:
+    elif "input" in parts:
         idx = parts.index("input")
         if idx + 2 < len(parts):
             metadata["mno"] = parts[idx + 1].upper()
