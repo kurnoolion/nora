@@ -75,7 +75,13 @@ label. Make a builds-oriented wiring env once: `cp .env.stack-a .env.builds`
 (a FULL copy — compose validates every required path var in the whole file
 even for ingest-only runs, so all six must be present), then repoint only
 `NORA_ENV_DIR`/`SIRA_DB_ROOT` at `nora-builds/<build>` / `sira-builds/<build>`
-and pass `--env-file .env.builds` to the commands below:
+and pass `--env-file .env.builds` to the commands below.
+
+A NEW build env dir needs its per-cell profile bindings before the profile
+stage: copy `profiles.json` from the previous build (or author one mapping
+each `<MNO>/<MMMYYYY>` cell to a repo-relative `customizations/profiles/*.json`
+path — those are baked into the image). Without it the lane fails loud with
+PIP-E003; a single-profile run can bypass via `--profile <path>`.
 
     # ingestion lane (extract..standards) for the new cell:
     docker compose --profile ingest run --rm nora-pipeline \
