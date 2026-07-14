@@ -121,9 +121,13 @@ each `<MNO>/<MMMYYYY>` cell to a repo-relative `customizations/profiles/*.json`
 path — those are baked into the image). Without it the lane fails loud with
 PIP-E003; a single-profile run can bypass via `--profile <path>`.
 
-    # ingestion lane (extract..standards) for the new cell:
-    docker compose --profile ingest run --rm nora-pipeline \
-      python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --mno <MNO> --release <REL>
+    # ingestion lane (extract..standards) for the new cell — the helper runs
+    # it detached with the console log landing in <build-env>/reports/:
+    ./ingest.sh <MNO> <MMMYYYY>              # options: -f force, -l nora,
+                                             #   -e <env-file>, --fg, DRY_RUN=1
+    # (equivalent raw command:)
+    # docker compose --env-file .env.builds --profile ingest run --rm nora-pipeline \
+    #   python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --mno <MNO> --release <REL>
     # sira lane (adapter + per-cell index/enrich) in one command:
     docker compose --profile ingest run --rm sira-batch \
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
