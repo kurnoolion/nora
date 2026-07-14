@@ -30,11 +30,14 @@ ARG OFFLINE=0
 # Online proxy-restricted builders: --build-arg TORCH_INDEX_URL=https://pypi.org/simple
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
+# torch AND torchvision from the same index in one resolve — docling needs
+# torchvision, and a PyPI torchvision on top of index-installed torch loads
+# with broken compiled ops ('operator torchvision::nms does not exist').
 RUN --mount=type=bind,from=vendor,target=/vendor \
     if [ "$OFFLINE" = "1" ]; then \
-        pip install --no-index --find-links=/vendor/wheels torch; \
+        pip install --no-index --find-links=/vendor/wheels torch torchvision; \
     else \
-        pip install --index-url "$TORCH_INDEX_URL" torch; \
+        pip install --index-url "$TORCH_INDEX_URL" torch torchvision; \
     fi
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=bind,from=vendor,target=/vendor \
@@ -68,7 +71,11 @@ RUN --mount=type=bind,from=vendor,target=/vendor \
         pip install --no-index --find-links=/vendor/wheels docling; \
     else \
         pip install docling; \
-    fi
+    fi \
+    # build-time canary: a torch/torchvision/transformers mismatch must fail
+    # HERE, not degrade the parse at run time (docling needs this chain).
+ && python -c "import torch, torchvision; from transformers import AutoProcessor; \
+print('docling dep chain OK:', torch.__version__, torchvision.__version__)"
 WORKDIR /app
 COPY core/ core/
 COPY customizations/ customizations/
