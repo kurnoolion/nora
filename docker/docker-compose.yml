@@ -109,6 +109,10 @@ services:
       - ${REQUIREMENTS_DIR:?set REQUIREMENTS_DIR in .env}:/data/requirements:ro
       - ${SIRA_DB_ROOT:?}:/data/db
       - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
+    # Run ingest jobs as the calling user so build artifacts on the mounts
+    # aren't root-owned on the host (set JOB_UID/JOB_GID in the wiring env:
+    # JOB_UID=1000 / `id -u`). Default 0 = root (current behavior).
+    user: "${JOB_UID:-0}:${JOB_GID:-0}"
     env_file:
       - path: ${PIPELINE_ENV_FILE:-.env.nora-pipeline}
         required: false
@@ -119,6 +123,8 @@ services:
       NORA_REQUIREMENTS_DIR: /data/requirements
       DOCLING_ARTIFACTS: /data/models/docling
       HF_HUB_OFFLINE: "1"
+      # non-root has no home in the image; libs that write caches need one
+      HOME: /tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -141,10 +147,13 @@ services:
       - ${SIRA_DB_ROOT:?}:/data/db
       # sira_lane's adapter step reads the nora build's out/ tree
       - ${NORA_ENV_DIR:?}:/data/env
+    user: "${JOB_UID:-0}:${JOB_GID:-0}"
     env_file:
       - path: ${SIRA_BATCH_ENV_FILE:-.env.sira-batch}
         required: false
       - path: ${SECRETS_ENV_FILE:-.env.secrets}
         required: false
+    environment:
+      HOME: /tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
