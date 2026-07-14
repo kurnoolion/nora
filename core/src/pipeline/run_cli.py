@@ -279,6 +279,9 @@ def main() -> None:
 
         ctx = PipelineContext.from_env(env)
         env_name = env.name
+        # Reports always land in <env_dir>/reports — captured here because
+        # documents_dir may be repointed by the requirements_dir override.
+        reports_root = env.reports_path
 
         # Use env's stage range as default, allow CLI override
         start = resolve_stage(args.start) if args.start else env.stage_start
@@ -323,6 +326,7 @@ def main() -> None:
         )
         start = resolve_stage(args.start) if args.start else "extract"
         end = resolve_stage(args.end) if args.end else "eval"
+        reports_root = Path(env_dir) / "reports"
 
     ctx.verbose = args.verbose
     # D-DRAFT-8 — per-cell ingestion scope (applies to both env + standalone modes).
@@ -482,8 +486,10 @@ def main() -> None:
     verbose_report = format_verbose_report(results, hw_summary, model_display, env_name)
     print(verbose_report)
 
-    # Save report to <env_dir>/reports/ (documents_dir is <env_dir>/input, so parent = env_dir)
-    report_dir = Path(ctx.documents_dir).parent / "reports"
+    # Save report to <env_dir>/reports/. NOT derived from documents_dir —
+    # the requirements_dir override repoints it (e.g. /data/requirements in
+    # containers), whose parent is outside the env dir entirely.
+    report_dir = reports_root
     report_dir.mkdir(parents=True, exist_ok=True)
 
     from datetime import datetime
