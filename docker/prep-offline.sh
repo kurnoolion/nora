@@ -34,8 +34,11 @@ mkdir -p "$WHEELS"
 
 echo "== [1/4] wheels: nora set (torch + requirements.txt + docling) =="
 # pip wheel: downloads wheels where published, builds from sdist where not.
-$PY -m pip wheel -w "$WHEELS" torch
+# torchvision rides with torch (same index/resolve — mismatched pairs fail
+# to load); opencv-python-headless replaces docling's full opencv in-image.
+$PY -m pip wheel -w "$WHEELS" torch torchvision
 $PY -m pip wheel -w "$WHEELS" -r "$REPO_ROOT/requirements.txt" docling
+$PY -m pip wheel -w "$WHEELS" opencv-python-headless
 
 echo "== [2/4] wheels: sira trimmed set (SETUP.md §2a) =="
 $PY -m pip wheel -w "$WHEELS" \

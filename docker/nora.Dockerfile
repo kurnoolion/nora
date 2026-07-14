@@ -66,16 +66,24 @@ ARG OFFLINE=0
 # Docling (CPU): table+figure layout provider for opt-in corpora (D-122).
 # Models are NOT baked — provision into the models volume and set
 # DOCLING_ARTIFACTS=/data/models/docling + HF_HUB_OFFLINE=1 at run time.
+# docling's chain pulls the full opencv-python, which links X11 libs absent
+# from slim images (libxcb.so.1 etc.) — swap it for the headless build.
 RUN --mount=type=bind,from=vendor,target=/vendor \
     if [ "$OFFLINE" = "1" ]; then \
-        pip install --no-index --find-links=/vendor/wheels docling; \
+        pip install --no-index --find-links=/vendor/wheels docling \
+     && { pip uninstall -y opencv-python || true; } \
+     && pip install --no-index --find-links=/vendor/wheels opencv-python-headless; \
     else \
-        pip install docling; \
+        pip install docling \
+     && { pip uninstall -y opencv-python || true; } \
+     && pip install opencv-python-headless; \
     fi \
-    # build-time canary: a torch/torchvision/transformers mismatch must fail
-    # HERE, not degrade the parse at run time (docling needs this chain).
- && python -c "import torch, torchvision; from transformers import AutoProcessor; \
-print('docling dep chain OK:', torch.__version__, torchvision.__version__)"
+    # build-time canary: a torch/torchvision/transformers/cv2 problem must
+    # fail HERE, not degrade the parse at run time (docling needs this chain).
+ && python -c "import torch, torchvision, cv2; \
+from transformers import AutoProcessor; \
+from docling.document_converter import DocumentConverter; \
+print('docling dep chain OK:', torch.__version__, torchvision.__version__, cv2.__version__)"
 WORKDIR /app
 COPY core/ core/
 COPY customizations/ customizations/
