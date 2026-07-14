@@ -74,19 +74,28 @@ class DoclingProvider:
         want_table_grid: bool = True,
     ) -> LayoutStructures:
         out = LayoutStructures()
+        # FAIL LOUD on a convert failure (D-122): when a profile names this
+        # provider, the geometric table path is skipped — returning empty
+        # structures here would silently parse table-heavy docs with NO
+        # tables (missing tables, empty req ids downstream). The most common
+        # cause is missing models: DOCLING_ARTIFACTS not pointing at the
+        # artifacts dir while HF_HUB_OFFLINE blocks the download.
         try:
             doc = self._converter().convert(str(pdf_path)).document
-        except Exception as e:  # noqa: BLE001 — fall back to the geometric path
-            logger.warning("docling parse failed for %s: %s", Path(pdf_path).name, e)
-            return out
+        except Exception as e:
+            raise RuntimeError(
+                f"docling parse failed for {Path(pdf_path).name}: {e} "
+                f"(DOCLING_ARTIFACTS={self._artifacts or '(unset)'} — do the "
+                f"models exist there?)"
+            ) from e
 
         out.page_sizes = _page_sizes(doc)
         order = 0
         try:
             items = list(doc.iterate_items())
-        except Exception as e:  # noqa: BLE001
-            logger.warning("docling iterate_items failed: %s", e)
-            return out
+        except Exception as e:
+            raise RuntimeError(f"docling iterate_items failed for "
+                               f"{Path(pdf_path).name}: {e}") from e
 
         for entry in items:
             item = entry[0] if isinstance(entry, tuple) else entry
