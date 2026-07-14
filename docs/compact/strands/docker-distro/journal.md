@@ -133,3 +133,52 @@
   input_root, resolve_requirements_dir, --lane/lane_bounds are new public
   surface; Structure sections also stale. Fold into the next regen-map +
   MODULE.md pass (or land-time drift-check dev-full).
+
+## 2026-07-14 — Work-PC validation: DPI root cause, online builds restored, both goals green
+
+### Done this session
+- **Container-egress mystery solved** (debug-egress.sh, packet capture): the
+  perimeter DPI resets large post-quantum TLS ClientHellos (image OpenSSL 3.5,
+  ~1545B); host tools on OpenSSL 3.0 (~315B) pass. IT's IP-whitelist theory
+  refuted (bridge TCP connects; host-net also failed); the endpoint-agent
+  theory retired. Fix: classical-groups OPENSSL_CONF baked into both
+  Dockerfiles → ONLINE builds work on the work PC; nora-pipeline 3.13GB vs
+  9.67GB offline. OFFLINE=1 demoted from required to optional.
+- **Goal 1 (serve) validated on the work PC**: promote.sh over pre-docker
+  artifacts → serve up → healthz → query → enrichment (NORA_LLM_MODEL required
+  against real endpoints — template + README fixed).
+- **Goal 2 (incremental ingest) validated**: ingestion lane extract→parse in
+  docker with parse parity vs the bare-metal reference build.
+- **Five silent-corruption bugs flushed out by containerization**, all fixed
+  loud + tested: (1) infer_metadata_from_path root-anchored for
+  requirements_dir overrides; (2) extracted images → build output (images_root;
+  read-only corpus safe); (3) docling convert failures now fail loud (were
+  producing tableless parses); (4) torch/torchvision same-index pairing +
+  build-time dep-chain canary + headless opencv; (5) reports → <env_dir>/reports
+  (were lost to the container overlay).
+- **Ops/DX**: push.sh streams uploads (curl -T; OOM fix); SECRETS_ENV_FILE
+  overlay (committable per-service envs); JOB_UID/JOB_GID non-root ingest jobs
+  (host-owned artifacts); sira-batch /data/env mount gap fixed; ingest.sh
+  detached lane launcher; README "The four images" reference + data-flow
+  diagram; env.example GH vars commented (empty values clobbered exports).
+
+### In progress
+- First push.sh release: classic PAT obtained; upload OOM fixed; user retrying.
+
+### Next
+- sira lane in docker (sira-batch first run — exercises the new /data/env mount).
+- Stack-b bring-up (env copies + its model name); promote the new build → flip serve.
+- Update D-DRAFT-8's premise at land time (offline: required → optional).
+- regen-map + env/pipeline/extraction MODULE.md refresh (new public surface:
+  images_root, requirements_dir/lanes — see Flags).
+
+### Flags
+- The "endpoint agent resets container egress" claim in older journal entries /
+  D-DRAFT-8 is superseded by the DPI/PQ-hello root cause (this entry).
+- extraction MODULE.md now also lags: images_root param on the extract surface.
+- One flaky core test observed (failed once, passed twice on rerun) — unidentified.
+- docker pull still broken work-PC side (daemon's TLS stack; likely same DPI
+  cause via Go's PQ hello) — skopeo-pull-bases.sh remains the workaround; a
+  GODEBUG=tlsmlkem=0 daemon-env experiment is untried.
+- Standards-stage note: with classical-TLS baked in, in-container external
+  fetches should now pass the DPI — untested; --skip-standards fallback stands.

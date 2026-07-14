@@ -260,3 +260,113 @@ stage) stay blocked in containers on such hosts: --skip-standards or run that
 stage bare-metal. Validation status at capture: online path green, vendor
 harvest done, --network=none build + serve smoke pending (recorded in 0808b2b).
 An IT policy change permitting container egress would obsolete this machinery.
+
+## D-DRAFT-9 — Classical TLS key-exchange groups baked into all images
+
+**Context.** Work-PC container egress failed with connection resets at the TLS
+ClientHello (bridge AND --network=host), while host tools passed. Packet capture
++ an E1/E2 discriminator proved the perimeter DPI resets large post-quantum
+hellos: the python image's OpenSSL 3.5 sends ~1545B ML-KEM hellos; host OpenSSL
+3.0 sends ~315B classical ones. Earlier theories (endpoint agent: ours;
+IP whitelist: IT's) were both refuted by the capture — TCP connected from the
+bridge, and host-net failed despite sharing the host IP.
+
+**Decision.** Bake /etc/openssl-classical.cnf (Groups = X25519:P-256:P-384) +
+ENV OPENSSL_CONF into nora-base and a shared py-classical stage (sira-src-0,
+sira-base). Applies at build time (pip) and run time (e.g. standards fetches).
+
+**Why.** Alternatives: (a) IT reconfigures the DPI — correct long-term, out of
+our control, timeline unknown; (b) offline-only builds — worked but froze
+dependency updates behind a manual vendor pipeline and produced 3x-larger
+images (PyPI torch). Classical groups are universally supported; the only cost
+is forgoing PQ key exchange for image-originated TLS, acceptable for package
+fetches and internal endpoints.
+
+**Consequences.** ONLINE builds work on DPI-guarded hosts; OFFLINE=1 demoted
+from required to optional (amends D-DRAFT-8's premise — reconcile at land
+time). Image TLS is non-PQ until the DPI vendor fix lands (revisit trigger:
+IT confirms PQ-hello compatibility). docker pull (Go TLS in the daemon) is NOT
+covered — skopeo-pull-bases.sh remains the base-image path.
+
+## D-DRAFT-10 — Extraction image artifacts belong to the build output, never the corpus
+
+**Context.** Extractors wrote extracted_images/ next to the source document —
+silently polluting writable input trees for months, and failing per-image
+(Errno 30) against the container's read-only /data/requirements mount.
+
+**Decision.** New images_root parameter on the extractor public surface
+(BaseExtractor.extract, extract_document, all three extractors); the pipeline
+extract stage passes the cell's out/extract/<mno>/<rel>/images. Recorded
+image_path/images_dir values are relative to the cell out dir. Legacy
+next-to-source layout retained only for the ad-hoc extract CLI. Corpus mounts
+stay :ro.
+
+**Why.** Matches the build/serve topology rule (D-DRAFT-6: build dirs hold all
+build artifacts); keeps the corpus a clean, shared, read-only input; hardlink
+promotion picks images up with the rest of the cell.
+
+**Consequences.** IRs produced before this change carry stale relative paths;
+image-ingestion strand tooling must resolve paths against the cell out dir.
+Public-surface addition → extraction MODULE.md update pending (flagged).
+
+## D-DRAFT-11 — Layout-provider failures fail loud, never degrade silently
+
+**Context.** When a profile names a layout provider, the geometric table path
+is skipped by design. DoclingProvider caught convert failures and returned
+empty structures — so missing models (DOCLING_ARTIFACTS mispointed +
+HF_HUB_OFFLINE) produced parses with NO tables and empty req ids, with only a
+log warning. Discovered when the first containerized parse diverged wildly
+from the bare-metal reference.
+
+**Decision.** Convert/iterate failures raise (with a DOCLING_ARTIFACTS hint);
+the extract stage surfaces them as per-doc EXT-E001 failures.
+
+**Why.** A tableless parse of a table-heavy requirements doc is corrupt data
+that flows silently into graph/vectorstore/SIRA; a skipped doc with a loud
+error is honest and diagnosable. Consistent with D-122's fail-loud intent for
+explicitly-requested providers.
+
+**Consequences.** Environment problems (models, deps) now abort docs instead
+of degrading them — deployments must provision docling artifacts correctly
+(README documents the MODELS_DIR/docling convention).
+
+## D-DRAFT-12 — SECRETS_ENV_FILE overlay: committable service envs, uncommitted creds
+
+**Context.** Team wants per-service env files committed to the internal repo;
+credentials must not ride along. compose does not expand ${VAR} inside
+env_file contents, so shell-var references in committed files cannot work.
+
+**Decision.** Every service loads an optional second env file
+(${SECRETS_ENV_FILE:-.env.secrets}, required:false) AFTER its own env file;
+later file wins on overlap. Credentials live only there; the file is
+gitignored everywhere.
+
+**Why.** Alternatives: bare `environment: - VAR` passthrough (depends on the
+invoking shell — fragile for services/cron); docker secrets (swarm-oriented,
+heavier). The overlay is declarative, per-stack overridable, and inert when
+absent. Verified: override precedence, absence harmless, fixed container
+paths still win.
+
+**Consequences.** Compose-level convention all future services must follow;
+stale keys left in committed files are silently overridden by the overlay
+(by design — the overlay is authoritative for creds).
+
+## D-DRAFT-13 — Ingest jobs run as the host user; serve services stay root
+
+**Context.** Containers default to root; lane runs left build artifacts
+root-owned on the bind mounts — host cleanup/GC needed sudo, and the
+root-owned reports dir broke non-root redirects.
+
+**Decision.** nora-pipeline and sira-batch honor user:
+${JOB_UID:-0}:${JOB_GID:-0} (id -u / id -g in the wiring env; unset = root)
+with HOME=/tmp. Serve services stay root (they write only their own state
+dirs; embedding-model cache behavior under non-root is unvalidated there).
+
+**Why.** Alternatives: post-run chown (manual, forgettable); userns-remap
+(daemon-global, invasive on snap docker). Per-service user: is scoped and
+declarative.
+
+**Consequences.** Wiring envs must set JOB_UID/JOB_GID; one-time chown of
+pre-existing root-owned build dirs; non-root exposed the /data/reports bug
+(good) — any future in-container write path outside the mounts will fail
+loudly rather than silently landing in the overlay.
