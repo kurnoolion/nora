@@ -68,7 +68,11 @@ FROM sira-src-${OFFLINE} AS sira-src
 # ---------------------------------------------------------------- sira-base --
 FROM py-classical AS sira-base
 ARG OFFLINE=0
-ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
+# PYTHONPATH stands in for bare-metal's `pip install --no-deps -e .` on the
+# clone (SETUP.md §2): SIRA's run_pipeline imports the `sira` package from
+# the clone's src/ layout. An editable install would need a PEP-660 build
+# backend fetch — not OFFLINE-safe; PYTHONPATH is equivalent and free.
+ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/sandbox/sira/src
 # Trimmed dependency set (sandbox/SETUP.md §2a) — deliberately NO torch/sglang.
 # ONLINE: git stays in the image (install_configs.sh needs `git apply`); gcc/g++
 # only for pytrec_eval's C extension, purged in-layer.
