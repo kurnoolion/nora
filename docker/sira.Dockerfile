@@ -98,11 +98,17 @@ COPY core/ core/
 COPY customizations/ customizations/
 COPY config/ config/
 COPY sandbox/ sandbox/
-COPY --from=sira-src /sira/ sandbox/sira/
+# --chmod=0777: ingest jobs run as the host user (JOB_UID, no passwd entry);
+# the sira lane writes per-cell data configs into the clone
+# (scripts/configs/data/<cell>.yaml) and SIRA's run_pipeline runs with
+# cwd=clone — the baked clone must be writable for non-root. Container-
+# ephemeral content, so wide perms carry no risk.
+COPY --from=sira-src --chmod=0777 /sira/ sandbox/sira/
 # ONLINE: apply configs+prompts+patches now. OFFLINE: prep-offline.sh already
-# did this on the host against the vendored clone.
+# did this on the host against the vendored clone. The trailing chmod keeps
+# files CREATED by install_configs (root umask) writable for JOB_UID too.
 RUN if [ "$OFFLINE" = "1" ]; then echo "offline: clone pre-patched by prep-offline.sh"; \
-    else bash sandbox/install_configs.sh; fi
+    else bash sandbox/install_configs.sh && chmod -R go+w sandbox/sira/scripts/configs; fi
 
 # --------------------------------------------------------------- sira-query --
 FROM sira-base AS sira-query
