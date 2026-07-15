@@ -345,3 +345,34 @@ class TestMakeQueryAnalyzer:
             def complete(self, *a, **k): return "{}"
         analyzer = make_query_analyzer(_StubProvider())
         assert isinstance(analyzer, LLMQueryAnalyzer)
+
+
+# ── MNO alias extraction (token-boundary, not substring) ────────
+
+
+class TestMnoAliasBoundaries:
+    """Short aliases ('att', 'vz', 'tmo') must only match as standalone
+    tokens — substring matching falsely scoped 'all MNOs' queries to a
+    subset of cells when ordinary words (attach, pattern, attribute)
+    contained an alias."""
+    a = MockQueryAnalyzer()
+
+    def test_attach_does_not_extract_att(self):
+        assert self.a.analyze("Compare attach procedure for all MNOs").mnos == []
+
+    def test_pattern_attribute_battery_do_not_extract(self):
+        assert self.a.analyze("pattern matching for battery attribute attempts").mnos == []
+
+    def test_standalone_short_aliases_extract(self):
+        got = self.a.analyze("compare att and tmo SMS retry").mnos
+        assert sorted(got) == ["ATT", "TMO"]
+
+    def test_ampersand_and_hyphen_aliases_extract(self):
+        assert self.a.analyze("AT&T eSIM requirements").mnos == ["ATT"]
+        assert self.a.analyze("t-mobile wifi calling").mnos == ["TMO"]
+
+    def test_alias_followed_by_punctuation_extracts(self):
+        assert self.a.analyze("requirements for vzw, latest release").mnos == ["VZW"]
+
+    def test_unscoped_query_extracts_nothing(self):
+        assert self.a.analyze("Compare SMS retry for all MNOs").mnos == []

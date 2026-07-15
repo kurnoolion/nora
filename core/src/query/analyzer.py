@@ -36,6 +36,16 @@ _MNO_ALIASES: dict[str, str] = {
     "att": "ATT",
 }
 
+# Token-boundary patterns per alias: short aliases ("att", "vz", "tmo") are
+# substrings of ordinary words (attach, pattern, attribute...) — a bare
+# `alias in query` check silently scoped queries to the wrong MNO cell set.
+# Boundaries are "not adjacent to [a-z0-9]" rather than \b so "at&t" and
+# "t-mobile" still match as written.
+_MNO_ALIAS_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])"), mno)
+    for alias, mno in _MNO_ALIASES.items()
+]
+
 # ── Plan name aliases ───────────────────────────────────────────
 
 _PLAN_ALIASES: dict[str, str] = {
@@ -175,10 +185,12 @@ class MockQueryAnalyzer:
         return concepts
 
     def _extract_mnos(self, q_lower: str) -> list[str]:
-        """Extract MNO references."""
+        """Extract MNO references (token-boundary match — see
+        _MNO_ALIAS_PATTERNS; substring matching falsely scoped queries
+        containing e.g. 'attach'/'pattern' to an MNO)."""
         mnos = []
-        for alias, mno in _MNO_ALIASES.items():
-            if alias in q_lower and mno not in mnos:
+        for pattern, mno in _MNO_ALIAS_PATTERNS:
+            if mno not in mnos and pattern.search(q_lower):
                 mnos.append(mno)
         return mnos
 
