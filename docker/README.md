@@ -129,9 +129,12 @@ PIP-E003; a single-profile run can bypass via `--profile <path>`.
     # docker compose --env-file .env.builds --profile ingest run --rm nora-pipeline \
     #   python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --mno <MNO> --release <REL>
     # sira lane (adapter + per-cell index/enrich) in one command:
-    docker compose --profile ingest run --rm sira-batch \
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
       --run-name enrich-stable --only <MNO>__<REL> --wipe-stale-index
+    # (needs the ENRICH LLM routing in .env.sira-batch — URL WITH /v1 + model
+    #  name; unset vars make SIRA try to launch a local sglang server, which
+    #  the trimmed images deliberately do not carry)
     # (standards downloads specs over the PUBLIC network at run time — the
     #  baked classical-TLS config gets python HTTPS through PQ-hello-resetting
     #  DPI, but if a host truly has no container egress: add --skip-standards,
@@ -152,6 +155,34 @@ First promotion note: `--nora-build` / `--sira-build` accept ANY dir in build
 shape — including pre-docker bare-metal artifacts (an env_dir with
 `out/{vectorstore,graph,taxonomy}`, a db_root with `<MNO>__<MMMYYYY>` cells) —
 so existing deployments promote their current data as the first label.
+
+### Retrying failed enrichments
+
+Doc-enrichment resumes by doc_id inside the pinned run dir
+(`<cell>/runs/doc-enrich/<run-name>/`), so failures never mean starting over.
+When a lane finishes with N failed docs:
+
+    # 1. WHY did they fail? Histogram the failure statuses first:
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+      python -c "import json,collections; print(dict(collections.Counter( \
+        json.loads(l).get('status','?') for l in \
+        open('/data/db/<MNO>__<REL>/runs/doc-enrich/<run-name>/trace.failed.jsonl'))))"
+
+    # 2. evict genuine failures from the resume trace:
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+      python -m sandbox.sira_incremental retry-failed \
+      --dataset /data/db/<MNO>__<REL> --run-name <run-name> --stage doc-enrich
+
+    # 3. re-run the sira lane EXACTLY as before — SAME --run-name. Resume
+    #    skips every kept doc; only the evicted ones hit the LLM again.
+
+Reading the step-1 histogram: timeout / connection / HTTP statuses are
+transient endpoint trouble — retry fixes them. `all_filtered` rows are NOT
+errors (the enrichment filter kept nothing for that doc); retrying reproduces
+them identically, so `retry-failed` excludes them by default — pass
+`--include-all-filtered` only after changing the prompt or the LLM. If the
+same docs fail repeatedly with the same status, inspect their trace lines —
+oversized docs vs endpoint token limits are the usual culprits.
 
 (Full scenario matrix: `sandbox/README.md` §2 — same commands, containerized.)
 
