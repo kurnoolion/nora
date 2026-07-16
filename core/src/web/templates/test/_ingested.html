@@ -19,7 +19,10 @@
       {% for r in rows %}
       <tr>
         <td>{{ r.mno }}</td>
-        <td>{{ r.release }}</td>
+        <td>
+          {{ r.release }}
+          {% if r.latest %}<span class="badge bg-primary ms-1">Latest</span>{% endif %}
+        </td>
         <td class="text-end">{{ r.plans }}</td>
         <td class="text-end">{{ r.requirements }}</td>
         <td>{{ r.ingested }}</td>

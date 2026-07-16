@@ -485,3 +485,42 @@ def test_ingested_rows_per_cell_layout(tmp_path, monkeypatch):
     assert len(r["ingested"]) == 10  # YYYY-MM-DD
     # second call hits the cache (same key, monkeypatched loader gone would fail otherwise)
     assert pg._ingested_rows() is rows
+
+
+def test_ingested_rows_latest_tag_per_mno(tmp_path, monkeypatch):
+    """Each MNO's newest MMMYYYY release gets latest=True; MMMYYYY ordering
+    (Nov2025 < Feb2026), independent per MNO."""
+    import core.src.web.routes.playground as pg
+
+    class _FakeStore:
+        def __init__(self, metas):
+            self._metas = metas
+
+        def get_all(self):
+            class R:
+                pass
+            r = R()
+            r.metadatas = self._metas
+            return r
+
+    root = tmp_path / "out" / "vectorstore"
+    for mno, rel in [("GP", "Nov2025"), ("GP", "Feb2026"), ("XY", "Jul2026")]:
+        (root / mno / rel).mkdir(parents=True)
+        (root / mno / rel / "config.json").write_text("{}")
+
+    meta = [{"plan_id": "P", "req_id": "REQ_1", "is_requirement": True}]
+    fake_cells = {("GP", "Nov2025"): _FakeStore(meta),
+                  ("GP", "Feb2026"): _FakeStore(meta),
+                  ("XY", "Jul2026"): _FakeStore(meta)}
+    monkeypatch.setattr("core.src.vectorstore.cell_loader.load_cell_stores",
+                        lambda r: fake_cells)
+
+    class _Cfg:
+        def env_dir_path(self):
+            return tmp_path
+    monkeypatch.setattr("core.src.web.app.config", _Cfg(), raising=False)
+
+    pg._INGESTED_CACHE.update(key=None, rows=None)
+    tags = {(r["mno"], r["release"]): r["latest"] for r in pg._ingested_rows()}
+    assert tags == {("GP", "Nov2025"): False, ("GP", "Feb2026"): True,
+                    ("XY", "Jul2026"): True}

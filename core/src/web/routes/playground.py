@@ -967,7 +967,19 @@ def _ingested_rows() -> "list[dict[str, Any]]":
             ingested = datetime.fromtimestamp(mtime_src.stat().st_mtime).strftime("%Y-%m-%d")
             rows.append({"mno": g_mno, "release": g_rel, "plans": plans,
                          "requirements": reqs, "ingested": ingested})
-    rows.sort(key=lambda r: (r["mno"], r["release"]))
+    # Tag each MNO's latest release (MMMYYYY ordering — same rule the query
+    # side uses for unscoped-release resolution, so the badge shows exactly
+    # which cell absorbs "latest"/unscoped queries).
+    from core.src.extraction.release_key import release_order_key
+    latest: dict[str, tuple] = {}
+    for r in rows:
+        k = release_order_key(r["release"])
+        if k is not None and (r["mno"] not in latest or k > latest[r["mno"]][0]):
+            latest[r["mno"]] = (k, r["release"])
+    for r in rows:
+        r["latest"] = latest.get(r["mno"], (None, None))[1] == r["release"]
+
+    rows.sort(key=lambda r: (r["mno"], release_order_key(r["release"]) or (0, 0)))
     _INGESTED_CACHE.update(key=key, rows=rows)
     return rows
 
