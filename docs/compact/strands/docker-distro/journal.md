@@ -182,3 +182,31 @@
   GODEBUG=tlsmlkem=0 daemon-env experiment is untried.
 - Standards-stage note: with classical-TLS baked in, in-container external
   fetches should now pass the DPI — untested; --skip-standards fallback stands.
+
+## 2026-07-16 — Addendum: post-close fixes + scope spillover
+
+Work continued past the 07-14 close while validating on the work PC; all in
+this strand's spirit (first-run gauntlet of containerized sira-batch) except
+where noted as spillover:
+
+- sira-batch gauntlet cleared, one loud failure at a time: builds/stack env
+  file discipline (ingest commands take .env.builds*, never a stack env —
+  the label mount has no out/parse by design, which protected the snapshot);
+  writable baked clone for JOB_UID (per-cell data configs are written INTO
+  the clone — SIRA reads configs/data/<cell>.yaml by name); PYTHONPATH to
+  the clone src (bare-metal's editable install has no image equivalent);
+  ENRICH routing vars must be set or SIRA tries to launch local sglang
+  (absent from trimmed images by design). README runbook added for
+  retry-failed enrichments.
+- **Spillover (query/web feature work, committed under this session but
+  belonging to nora-retrieval-quality / team-eval-pilot scope):**
+  - MNO alias extraction token-boundary fix (2939cc7) — substring aliases
+    ('att' in 'attach') silently mis-scoped multi-MNO queries; regression
+    tests added. Also identified the order-dependent glossary-pin test
+    flake (test_query_intent before test_query).
+  - Test-page ingested-corpus table (5a1e0e9, e902457, 7070d68): per-cell
+    MNO/release/plans/requirements/ingested + Latest badge + Lane column;
+    sira-query gained GET /cells so SIRA-only cells (no nora vectorstore)
+    are visible — inventory merges both lanes over NORA_SIRA_QUERY_URL.
+  Consider folding these into those strands' narratives at their next
+  close, or noting at land time.
