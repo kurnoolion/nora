@@ -13,6 +13,7 @@
         <th class="text-end">Plans</th>
         <th class="text-end">Requirements</th>
         <th>Ingested</th>
+        <th>Lane</th>
       </tr>
     </thead>
     <tbody>
@@ -26,6 +27,10 @@
         <td class="text-end">{{ r.plans }}</td>
         <td class="text-end">{{ r.requirements }}</td>
         <td>{{ r.ingested }}</td>
+        <td>
+          {% if r.lane in ("nora", "both") %}<span class="badge bg-success">NORA</span>{% endif %}
+          {% if r.lane in ("sira", "both") %}<span class="badge bg-info text-dark">SIRA</span>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

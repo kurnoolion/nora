@@ -911,6 +911,44 @@ def _startup() -> None:
         _load_error = f"unexpected: {exc}"
 
 
+@app.get("/cells")
+def cells_inventory() -> dict[str, Any]:
+    """Per-cell corpus inventory for UI surfaces (the web test page's
+    ingested-corpus table): requirements = corpus rows (the adapter emits
+    one row per requirement, _id = req_id); plans = distinct `**plan**:`
+    lines in the corpus text (the adapter stamps one per doc); ingested =
+    dataset dir mtime (hardlink promotion preserves the build time).
+    Cached per cell for the process life — cells load once at startup."""
+    import re as _re
+    from datetime import datetime as _dt
+
+    plan_re = _re.compile(r"^\*\*plan\*\*: *(.+?) *$", _re.MULTILINE)
+    out: list[dict[str, Any]] = []
+    for cell in sorted(_cells):
+        cached = _CELL_STATS_CACHE.get(cell)
+        if cached is None:
+            st = _cells[cell]
+            plans: set[str] = set()
+            for doc in st.corpus_by_id.values():
+                m = plan_re.search(doc.get("text", "") or "")
+                if m:
+                    plans.add(m.group(1))
+            try:
+                base = Path(_DB_ROOT) / cell_dirname(cell)
+                ingested = _dt.fromtimestamp(base.stat().st_mtime).strftime("%Y-%m-%d")
+            except OSError:
+                ingested = ""
+            cached = {"mno": cell[0], "release": cell[1],
+                      "requirements": len(st.doc_ids), "plans": len(plans),
+                      "ingested": ingested}
+            _CELL_STATS_CACHE[cell] = cached
+        out.append(cached)
+    return {"cells": out}
+
+
+_CELL_STATS_CACHE: dict[CellKey, dict[str, Any]] = {}
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
     # Multi-cell (D-DRAFT-7): aggregate health across loaded cells. A pure

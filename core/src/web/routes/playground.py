@@ -942,10 +942,28 @@ def _ingested_rows() -> "list[dict[str, Any]]":
 
     root = config.env_dir_path() / "out" / "vectorstore"
     key = _ingested_cache_key(root) if root.is_dir() else "absent"
-    if _INGESTED_CACHE["key"] == key and _INGESTED_CACHE["rows"] is not None:
+    # TTL besides the mtime fingerprint: the SIRA half of the table comes
+    # from the query service, which can be redeployed independently of the
+    # web env — the fingerprint alone would never notice.
+    fresh = (time.monotonic() - _INGESTED_CACHE.get("at", 0.0)) < 300
+    if _INGESTED_CACHE["key"] == key and _INGESTED_CACHE["rows"] is not None and fresh:
         return _INGESTED_CACHE["rows"]
 
     rows: list[dict[str, Any]] = []
+
+    # SIRA lane: the query service owns the sira db mount; its /cells
+    # endpoint reports per-cell counts. Deployments often serve some MNOs
+    # SIRA-only (no nora vectorstore built) — without this merge those
+    # cells are invisible here.
+    sira_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    try:
+        resp = httpx.get(f"{_SIRA_QUERY_URL}/cells", timeout=10.0)
+        resp.raise_for_status()
+        for c in resp.json().get("cells", []):
+            sira_rows[(c.get("mno", ""), c.get("release", ""))] = c
+    except Exception as e:
+        logger.warning("ingested-inventory: sira /cells unavailable: %s", e)
+
     for (mno, rel), store in load_cell_stores(root).items():
         try:
             metadatas = store.get_all().metadatas
@@ -965,8 +983,17 @@ def _ingested_rows() -> "list[dict[str, Any]]":
         for (g_mno, g_rel), metas in cell_iter:
             plans, reqs = _count_cell(metas)
             ingested = datetime.fromtimestamp(mtime_src.stat().st_mtime).strftime("%Y-%m-%d")
+            lane = "both" if sira_rows.pop((g_mno, g_rel), None) else "nora"
             rows.append({"mno": g_mno, "release": g_rel, "plans": plans,
-                         "requirements": reqs, "ingested": ingested})
+                         "requirements": reqs, "ingested": ingested,
+                         "lane": lane})
+
+    # cells served ONLY by the SIRA lane (no nora vectorstore built)
+    for (s_mno, s_rel), c in sira_rows.items():
+        rows.append({"mno": s_mno, "release": s_rel,
+                     "plans": int(c.get("plans", 0)),
+                     "requirements": int(c.get("requirements", 0)),
+                     "ingested": c.get("ingested", ""), "lane": "sira"})
     # Tag each MNO's latest release (MMMYYYY ordering — same rule the query
     # side uses for unscoped-release resolution, so the badge shows exactly
     # which cell absorbs "latest"/unscoped queries).
@@ -980,7 +1007,7 @@ def _ingested_rows() -> "list[dict[str, Any]]":
         r["latest"] = latest.get(r["mno"], (None, None))[1] == r["release"]
 
     rows.sort(key=lambda r: (r["mno"], release_order_key(r["release"]) or (0, 0)))
-    _INGESTED_CACHE.update(key=key, rows=rows)
+    _INGESTED_CACHE.update(key=key, rows=rows, at=time.monotonic())
     return rows
 
 

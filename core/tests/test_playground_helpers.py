@@ -524,3 +524,49 @@ def test_ingested_rows_latest_tag_per_mno(tmp_path, monkeypatch):
     tags = {(r["mno"], r["release"]): r["latest"] for r in pg._ingested_rows()}
     assert tags == {("GP", "Nov2025"): False, ("GP", "Feb2026"): True,
                     ("XY", "Jul2026"): True}
+
+
+def test_ingested_rows_merges_sira_cells(tmp_path, monkeypatch):
+    """Cells served only by the SIRA lane (no nora vectorstore) appear in
+    the table from the query service's /cells; overlapping cells are
+    tagged lane=both."""
+    import core.src.web.routes.playground as pg
+
+    class _FakeStore:
+        def get_all(self):
+            class R:
+                pass
+            r = R()
+            r.metadatas = [{"plan_id": "P", "req_id": "REQ_1", "is_requirement": True}]
+            return r
+
+    root = tmp_path / "out" / "vectorstore"
+    (root / "GP" / "Feb2026").mkdir(parents=True)
+    (root / "GP" / "Feb2026" / "config.json").write_text("{}")
+    monkeypatch.setattr("core.src.vectorstore.cell_loader.load_cell_stores",
+                        lambda r: {("GP", "Feb2026"): _FakeStore()})
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"cells": [
+                {"mno": "GP", "release": "Feb2026", "plans": 1,
+                 "requirements": 1, "ingested": "2026-07-01"},
+                {"mno": "ZZ", "release": "Jul2026", "plans": 3,
+                 "requirements": 42, "ingested": "2026-07-14"},
+            ]}
+    monkeypatch.setattr(pg.httpx, "get", lambda url, timeout: _Resp())
+
+    class _Cfg:
+        def env_dir_path(self):
+            return tmp_path
+    monkeypatch.setattr("core.src.web.app.config", _Cfg(), raising=False)
+
+    pg._INGESTED_CACHE.update(key=None, rows=None, at=0.0)
+    rows = {(r["mno"], r["release"]): r for r in pg._ingested_rows()}
+    assert rows[("GP", "Feb2026")]["lane"] == "both"
+    sira_only = rows[("ZZ", "Jul2026")]
+    assert (sira_only["lane"], sira_only["plans"], sira_only["requirements"],
+            sira_only["ingested"], sira_only["latest"]) == ("sira", 3, 42, "2026-07-14", True)
