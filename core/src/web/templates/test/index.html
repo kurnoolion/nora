@@ -24,6 +24,16 @@
   </p>
   {% endif %}
 
+  <div class="card mb-3">
+    <div class="card-header py-2"><strong>Ingested corpus</strong></div>
+    <div class="card-body p-2"
+         hx-get="{{ root_path }}/api/test/ingested"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+      <span class="text-muted">Loading corpus inventory…</span>
+    </div>
+  </div>
+
   <div class="card">
     <div class="card-body">
 

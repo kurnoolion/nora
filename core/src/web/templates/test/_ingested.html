@@ -1,0 +1,31 @@
+{# Ingested-corpus inventory table — served by /api/test/ingested #}
+{% if error %}
+<span class="text-muted">{{ error }}</span>
+{% elif not rows %}
+<span class="text-muted">No cells found in this environment's vector store.</span>
+{% else %}
+<div class="table-responsive">
+  <table class="table table-sm table-striped mb-0 align-middle">
+    <thead>
+      <tr>
+        <th>MNO</th>
+        <th>Release</th>
+        <th class="text-end">Plans</th>
+        <th class="text-end">Requirements</th>
+        <th>Ingested</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.mno }}</td>
+        <td>{{ r.release }}</td>
+        <td class="text-end">{{ r.plans }}</td>
+        <td class="text-end">{{ r.requirements }}</td>
+        <td>{{ r.ingested }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

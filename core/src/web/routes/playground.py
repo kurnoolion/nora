@@ -898,6 +898,95 @@ _SECTION_IDS: set[str] = {
 }
 
 
+# -- Ingested-corpus inventory ------------------------------------------------
+#
+# One row per (MNO, release) cell served by the web env: distinct plans,
+# distinct requirements, ingestion date. Computed from the per-cell vector
+# stores (out/vectorstore/<mno>/<rel>/ — the parse trees are NOT part of a
+# promoted serve label, so the store metadata is the authority here).
+# Metadata scans are cached keyed on the cell dirs' mtimes: hardlink-promoted
+# labels preserve build mtimes, so "date of ingestion" is the build time and
+# the cache only refreshes when the served label actually changes.
+
+_INGESTED_CACHE: dict[str, Any] = {"key": None, "rows": None}
+
+
+def _ingested_cache_key(root) -> str:
+    from pathlib import Path
+    cells = sorted(str(p) + str(p.stat().st_mtime_ns)
+                   for p in Path(root).glob("*/*/config.json"))
+    return f"{root}|{len(cells)}|{hash(tuple(cells))}"
+
+
+def _count_cell(metadatas: "list[dict[str, Any]]") -> tuple[int, int]:
+    """(distinct plans, distinct requirements) from chunk metadata."""
+    plans: set[str] = set()
+    reqs: set[str] = set()
+    for m in metadatas:
+        plan = m.get("plan_id") or ""
+        if plan:
+            plans.add(plan)
+        rid = m.get("req_id") or ""
+        # back-compat: trees without the flag treat any req_id as a requirement
+        if rid and m.get("is_requirement", True):
+            reqs.add(rid)
+    return len(plans), len(reqs)
+
+
+def _ingested_rows() -> "list[dict[str, Any]]":
+    from datetime import datetime
+    from pathlib import Path
+
+    from core.src.vectorstore.cell_loader import FLAT_CELL, load_cell_stores
+    from core.src.web.app import config
+
+    root = config.env_dir_path() / "out" / "vectorstore"
+    key = _ingested_cache_key(root) if root.is_dir() else "absent"
+    if _INGESTED_CACHE["key"] == key and _INGESTED_CACHE["rows"] is not None:
+        return _INGESTED_CACHE["rows"]
+
+    rows: list[dict[str, Any]] = []
+    for (mno, rel), store in load_cell_stores(root).items():
+        try:
+            metadatas = store.get_all().metadatas
+        except Exception as e:  # a broken cell shouldn't blank the table
+            logger.warning("ingested-inventory: cell %s/%s unreadable: %s", mno, rel, e)
+            continue
+        if (mno, rel) == FLAT_CELL:
+            # legacy flat store: partition by chunk metadata instead
+            groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+            for m in metadatas:
+                groups.setdefault((m.get("mno", ""), m.get("release", "")), []).append(m)
+            cell_iter = groups.items()
+            mtime_src = root
+        else:
+            cell_iter = [((mno, rel), metadatas)]
+            mtime_src = root / mno / rel
+        for (g_mno, g_rel), metas in cell_iter:
+            plans, reqs = _count_cell(metas)
+            ingested = datetime.fromtimestamp(mtime_src.stat().st_mtime).strftime("%Y-%m-%d")
+            rows.append({"mno": g_mno, "release": g_rel, "plans": plans,
+                         "requirements": reqs, "ingested": ingested})
+    rows.sort(key=lambda r: (r["mno"], r["release"]))
+    _INGESTED_CACHE.update(key=key, rows=rows)
+    return rows
+
+
+@router.get("/api/test/ingested", response_class=HTMLResponse)
+async def ingested_inventory(request: Request):
+    """The ingested-corpus table partial (HTMX, loaded on page load)."""
+    from core.src.web.app import _template_response
+
+    try:
+        rows = await asyncio.to_thread(_ingested_rows)
+        error = ""
+    except Exception as e:
+        logger.warning("ingested-inventory failed: %s", e)
+        rows, error = [], "Corpus inventory unavailable (no vectorstore in this env?)."
+    return _template_response(request, "test/_ingested.html",
+                              {"rows": rows, "error": error})
+
+
 # -- Pages ------------------------------------------------------------------
 
 

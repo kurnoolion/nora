@@ -428,3 +428,60 @@ def test_filter_sira_notes_keeps_all_when_not_select_synth(monkeypatch):
     monkeypatch.setattr(pg, "_SELECT_SYNTH_ENABLED", False)
     notes = ["rerank disabled — round-robin per-cell balance (...)", "other"]
     assert pg._filter_sira_notes(notes) == notes
+
+
+# ── Ingested-corpus inventory (/api/test/ingested) ─────────────────
+
+
+def test_count_cell_distinct_plans_and_requirements():
+    from core.src.web.routes.playground import _count_cell
+    metas = [
+        {"plan_id": "GP1", "req_id": "REQ_1", "is_requirement": True},
+        {"plan_id": "GP1", "req_id": "REQ_1", "is_requirement": True},   # dup chunk
+        {"plan_id": "GP2", "req_id": "REQ_2", "is_requirement": True},
+        {"plan_id": "GP2", "req_id": "SEC_9", "is_requirement": False},  # section node
+        {"plan_id": "",    "req_id": "",     "is_requirement": True},    # structural
+        {"plan_id": "GP3", "req_id": "REQ_3"},                            # legacy: no flag
+    ]
+    assert _count_cell(metas) == (3, 3)
+
+
+def test_ingested_rows_per_cell_layout(tmp_path, monkeypatch):
+    """Per-cell store dirs -> one row per (mno, release) with counts + date."""
+    import core.src.web.routes.playground as pg
+
+    class _FakeStore:
+        def __init__(self, metas):
+            self._metas = metas
+
+        def get_all(self):
+            class R:  # duck-typed QueryResult
+                pass
+            r = R()
+            r.metadatas = self._metas
+            return r
+
+    root = tmp_path / "out" / "vectorstore"
+    (root / "GP" / "Feb2026").mkdir(parents=True)
+    (root / "GP" / "Feb2026" / "config.json").write_text("{}")
+
+    fake_cells = {("GP", "Feb2026"): _FakeStore([
+        {"plan_id": "P1", "req_id": "REQ_1", "is_requirement": True},
+        {"plan_id": "P2", "req_id": "REQ_2", "is_requirement": True},
+    ])}
+    monkeypatch.setattr("core.src.vectorstore.cell_loader.load_cell_stores",
+                        lambda r: fake_cells)
+
+    class _Cfg:
+        def env_dir_path(self):
+            return tmp_path
+    monkeypatch.setattr("core.src.web.app.config", _Cfg(), raising=False)
+
+    pg._INGESTED_CACHE.update(key=None, rows=None)
+    rows = pg._ingested_rows()
+    assert len(rows) == 1
+    r = rows[0]
+    assert (r["mno"], r["release"], r["plans"], r["requirements"]) == ("GP", "Feb2026", 2, 2)
+    assert len(r["ingested"]) == 10  # YYYY-MM-DD
+    # second call hits the cache (same key, monkeypatched loader gone would fail otherwise)
+    assert pg._ingested_rows() is rows
