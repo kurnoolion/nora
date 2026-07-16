@@ -24,8 +24,18 @@
           {{ r.release }}
           {% if r.latest %}<span class="badge bg-primary ms-1">Latest</span>{% endif %}
         </td>
-        <td class="text-end">{{ r.plans }}</td>
-        <td class="text-end">{{ r.requirements }}</td>
+        <td class="text-end">
+          {% if r.mismatch %}
+            <span class="badge bg-success" title="NORA vectorstore">{{ r.plans }}</span>
+            <span class="badge bg-info text-dark" title="SIRA corpus">{{ r.sira_plans }}</span>
+          {% else %}{{ r.plans }}{% endif %}
+        </td>
+        <td class="text-end">
+          {% if r.mismatch %}
+            <span class="badge bg-success" title="NORA vectorstore">{{ r.requirements }}</span>
+            <span class="badge bg-info text-dark" title="SIRA corpus">{{ r.sira_requirements }}</span>
+          {% else %}{{ r.requirements }}{% endif %}
+        </td>
         <td>{{ r.ingested }}</td>
         <td>
           {% if r.lane in ("nora", "both") %}<span class="badge bg-success">NORA</span>{% endif %}

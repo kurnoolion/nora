@@ -983,10 +983,20 @@ def _ingested_rows() -> "list[dict[str, Any]]":
         for (g_mno, g_rel), metas in cell_iter:
             plans, reqs = _count_cell(metas)
             ingested = datetime.fromtimestamp(mtime_src.stat().st_mtime).strftime("%Y-%m-%d")
-            lane = "both" if sira_rows.pop((g_mno, g_rel), None) else "nora"
-            rows.append({"mno": g_mno, "release": g_rel, "plans": plans,
-                         "requirements": reqs, "ingested": ingested,
-                         "lane": lane})
+            sira = sira_rows.pop((g_mno, g_rel), None)
+            row = {"mno": g_mno, "release": g_rel, "plans": plans,
+                   "requirements": reqs, "ingested": ingested,
+                   "lane": "both" if sira else "nora"}
+            if sira:
+                # Keep BOTH lanes' numbers: the lanes are built independently
+                # (a stale/partial vectorstore vs a fresh SIRA corpus is a
+                # real state worth seeing); the template renders per-lane
+                # values when they disagree.
+                row["sira_plans"] = int(sira.get("plans", 0))
+                row["sira_requirements"] = int(sira.get("requirements", 0))
+                row["mismatch"] = (row["sira_plans"] != plans
+                                   or row["sira_requirements"] != reqs)
+            rows.append(row)
 
     # cells served ONLY by the SIRA lane (no nora vectorstore built)
     for (s_mno, s_rel), c in sira_rows.items():

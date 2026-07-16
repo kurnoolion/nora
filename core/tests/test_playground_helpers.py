@@ -570,3 +570,43 @@ def test_ingested_rows_merges_sira_cells(tmp_path, monkeypatch):
     sira_only = rows[("ZZ", "Jul2026")]
     assert (sira_only["lane"], sira_only["plans"], sira_only["requirements"],
             sira_only["ingested"], sira_only["latest"]) == ("sira", 3, 42, "2026-07-14", True)
+
+
+def test_ingested_rows_both_lane_mismatch_keeps_both_counts(tmp_path, monkeypatch):
+    """When NORA and SIRA counts disagree for the same cell (stale/partial
+    vectorstore vs fresh SIRA corpus), both numbers survive to the row."""
+    import core.src.web.routes.playground as pg
+
+    class _FakeStore:
+        def get_all(self):
+            class R:
+                pass
+            r = R()
+            r.metadatas = [{"plan_id": "", "req_id": "REQ_1", "is_requirement": True}]
+            return r
+
+    root = tmp_path / "out" / "vectorstore"
+    (root / "GP" / "Feb2026").mkdir(parents=True)
+    (root / "GP" / "Feb2026" / "config.json").write_text("{}")
+    monkeypatch.setattr("core.src.vectorstore.cell_loader.load_cell_stores",
+                        lambda r: {("GP", "Feb2026"): _FakeStore()})
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"cells": [{"mno": "GP", "release": "Feb2026", "plans": 87,
+                               "requirements": 1200, "ingested": "2026-07-15"}]}
+    monkeypatch.setattr(pg.httpx, "get", lambda url, timeout: _Resp())
+
+    class _Cfg:
+        def env_dir_path(self):
+            return tmp_path
+    monkeypatch.setattr("core.src.web.app.config", _Cfg(), raising=False)
+
+    pg._INGESTED_CACHE.update(key=None, rows=None, at=0.0)
+    (row,) = pg._ingested_rows()
+    assert row["lane"] == "both" and row["mismatch"] is True
+    assert (row["plans"], row["sira_plans"]) == (0, 87)
+    assert (row["requirements"], row["sira_requirements"]) == (1, 1200)
