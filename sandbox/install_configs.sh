@@ -86,6 +86,11 @@ apply_patch \
     "NORA_SIRA_ENRICH_LLM_URL" \
     "scripts/add_doc_index_adapter.py"
 
+apply_patch \
+    "$REPO_ROOT/sandbox/sira_patches/extra-config-dir.patch" \
+    "SIRA_EXTRA_CONFIG_DIR" \
+    "scripts/run_pipeline.py"
+
 echo
 echo "OK — installed 3 hydra configs + 3 prompts into $SIRA_CLONE/scripts/configs/"
 echo "     plus patches under sandbox/sira_patches/ (idempotent — re-run any time)."

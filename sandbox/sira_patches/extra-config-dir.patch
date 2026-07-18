@@ -1,0 +1,43 @@
+diff --git a/scripts/run_pipeline.py b/scripts/run_pipeline.py
+index 18a4c19..f5869d1 100644
+--- a/scripts/run_pipeline.py
++++ b/scripts/run_pipeline.py
+@@ -56,6 +56,21 @@ LLM_STAGES = {"enrich_corpus", "enrich_query", "greprag", "iterative", "rerank"}
+ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+ CONFIGS_DIR = os.path.join(SCRIPTS_DIR, "configs")
+ 
++# SIRA_EXTRA_CONFIG_DIR: external directory searched FIRST for per-dataset
++# config files (data/<name>.yaml + per-dataset section overrides) so callers
++# can supply generated configs without writing into this source tree.
++EXTRA_CONFIG_DIR = os.environ.get("SIRA_EXTRA_CONFIG_DIR", "")
++
++
++def _cfg_path(*parts: str) -> str:
++    """Resolve a config file: EXTRA_CONFIG_DIR first (if set and present),
++    else the in-tree CONFIGS_DIR."""
++    if EXTRA_CONFIG_DIR:
++        cand = os.path.join(EXTRA_CONFIG_DIR, *parts)
++        if os.path.exists(cand):
++            return cand
++    return os.path.join(CONFIGS_DIR, *parts)
++
+ 
+ # ---------------------------------------------------------------------------
+ # Config helpers
+@@ -68,14 +83,14 @@ def _with_dataset(cfg: DictConfig, ds_name: str) -> DictConfig:
+     Also applies per-dataset enrich/rerank overrides if they exist
+     (e.g. configs/enrich/quora.yaml, configs/rerank/quora.yaml).
+     """
+-    data_path = os.path.join(CONFIGS_DIR, "data", f"{ds_name}.yaml")
++    data_path = _cfg_path("data", f"{ds_name}.yaml")
+     with open(data_path) as f:
+         data_cfg = yaml.safe_load(f)
+     cfg = OmegaConf.to_container(cfg, resolve=True)
+     cfg["data"] = data_cfg
+ 
+     for section in ("enrich", "greprag", "iterative", "rerank"):
+-        override_path = os.path.join(CONFIGS_DIR, section, f"{ds_name}.yaml")
++        override_path = _cfg_path(section, f"{ds_name}.yaml")
+         if os.path.exists(override_path):
+             with open(override_path) as f:
+                 override_cfg = yaml.safe_load(f)

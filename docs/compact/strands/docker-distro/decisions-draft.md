@@ -399,7 +399,18 @@ dependency web → sira-query (/cells) — MODULE.md / MAP edges must record it
 fingerprint since sira-query redeploys independently. Table degrades
 gracefully to nora-only rows when the service is unreachable.
 
-## D-DRAFT-15 — Baked SIRA clone: PYTHONPATH import, world-writable tree
+## D-DRAFT-15 — Baked SIRA clone: PYTHONPATH import, read-only tree via SIRA_EXTRA_CONFIG_DIR
+
+> **Amended 2026-07-18 pre-landing:** the world-writable-clone mechanism
+> below was replaced the same week by `extra-config-dir.patch` +
+> `SIRA_EXTRA_CONFIG_DIR`: per-cell data YAMLs are generated under
+> `<db_root>/.hydra-configs/` (writable mount) and SIRA's `_with_dataset`
+> consults that dir FIRST (its read is a literal path, NOT Hydra compose —
+> so Hydra's `--config-dir` could not work). The clone is copied with
+> default (read-only for non-root) permissions; SIRA's own Hydra outputs
+> were already disabled by its run_pipeline.yaml. PYTHONPATH import
+> mechanism unchanged. Historical context below records the interim
+> writable-clone step and the alternatives weighed.
 
 **Context.** First containerized sira-batch run: SIRA's run_pipeline imports
 the `sira` package (bare metal: `pip install --no-deps -e .` + PYTHONPATH,

@@ -26,6 +26,7 @@ port is irrelevant. See sandbox/sira_patches/README.md.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -34,8 +35,24 @@ from pathlib import Path
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells, parse_cell_dirname
 
 
-def ensure_cell_data_config(sira_clone: Path, cell_name: str, template: str = "nora") -> Path:
-    """Write `configs/data/<cell_name>.yaml` for a cell; return its path.
+def cell_config_root(db_root: Path) -> Path:
+    """The out-of-clone Hydra config dir for generated per-cell data YAMLs.
+
+    Lives under the db root (always writable — a mounted volume in
+    containers) so the SIRA clone itself is never written at run time.
+    The dot-name keeps it out of cell enumeration (`<mno>__<MMMYYYY>`
+    pattern) and out of promote.sh's cell glob.
+    """
+    return Path(db_root) / ".hydra-configs"
+
+
+def ensure_cell_data_config(
+    sira_clone: Path,
+    cell_name: str,
+    template: str = "nora",
+    config_root: "Path | None" = None,
+) -> Path:
+    """Write the per-cell data YAML; return its path.
 
     SIRA's `run_pipeline.py._with_dataset(cfg, ds_name)` re-reads
     `configs/data/<ds_name>.yaml` from disk for each dataset — it does NOT
@@ -45,6 +62,12 @@ def ensure_cell_data_config(sira_clone: Path, cell_name: str, template: str = "n
     (`nora.yaml`) with only the `name:` field set to the cell — every other
     field (split, k_values, …) is cell-independent. Idempotent: rewritten each
     run so a changed template propagates.
+
+    With `config_root` set (the normal path — see `cell_config_root`), the
+    YAML lands OUTSIDE the clone at `<config_root>/data/<cell>.yaml` and the
+    pipeline command carries `--config-dir <config_root>` so Hydra finds it;
+    the template is still read from the clone (read-only). Without it, the
+    legacy write-into-the-clone layout is used (requires a writable clone).
     """
     cfg_dir = sira_clone / "scripts" / "configs" / "data"
     tmpl_path = cfg_dir / f"{template}.yaml"
@@ -58,7 +81,12 @@ def ensure_cell_data_config(sira_clone: Path, cell_name: str, template: str = "n
         text = re.sub(r"(?m)^name:.*$", f"name: {cell_name}", text)
     else:
         text = f"name: {cell_name}\n" + text
-    out = cfg_dir / f"{cell_name}.yaml"
+    if config_root is not None:
+        out_dir = Path(config_root) / "data"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{cell_name}.yaml"
+    else:
+        out = cfg_dir / f"{cell_name}.yaml"
     out.write_text(text, encoding="utf-8")
     return out
 
@@ -82,7 +110,10 @@ def build_pipeline_cmd(
     `ensure_cell_data_config` (SIRA's pipeline re-reads the file by name — it
     does NOT honor `data.name` as an override on a reused config, correcting the
     SIRA D-DRAFT-6 assumption). `db_root` is passed absolute so the command is
-    cwd-independent of the clone.
+    cwd-independent of the clone. NOTE: `config_root` does NOT go on the
+    argv — SIRA's `_with_dataset` reads the file via a literal path, not
+    Hydra compose, so the external dir is passed via the
+    `SIRA_EXTRA_CONFIG_DIR` env var (extra-config-dir.patch) by `run_cells`.
     """
     name = cell_dirname(cell)
     cmd = [
@@ -134,6 +165,11 @@ def run_cells(
     print(f"{len(cells)} cell(s): {', '.join(cell_dirname(c) for c in cells)}")
     print()
     results: dict[CellKey, int] = {}
+    config_root = cell_config_root(db_root)
+    # SIRA's _with_dataset reads per-dataset configs via a literal path;
+    # extra-config-dir.patch makes it consult this env var FIRST, so the
+    # generated cell YAMLs live OUT-OF-CLONE (the clone stays read-only).
+    child_env = {**os.environ, "SIRA_EXTRA_CONFIG_DIR": str(config_root.resolve())}
     for cell in cells:
         cmd = build_pipeline_cmd(
             cell, db_root, sglang_port=sglang_port, stages=stages,
@@ -141,14 +177,12 @@ def run_cells(
         )
         name = cell_dirname(cell)
         print(f"=== cell {name} ===")
-        print("  " + " ".join(cmd))
+        print(f"  SIRA_EXTRA_CONFIG_DIR={config_root} " + " ".join(cmd))
         if dry_run:
             results[cell] = 0
             continue
-        # SIRA's _with_dataset re-reads configs/data/<name>.yaml — generate it
-        # per cell from the nora.yaml template (see ensure_cell_data_config).
-        ensure_cell_data_config(sira_clone, name)
-        proc = subprocess.run(cmd, cwd=str(sira_clone))
+        ensure_cell_data_config(sira_clone, name, config_root=config_root)
+        proc = subprocess.run(cmd, cwd=str(sira_clone), env=child_env)
         results[cell] = proc.returncode
         print(f"  cell {name}: exit {proc.returncode}")
         print()

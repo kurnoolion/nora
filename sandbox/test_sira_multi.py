@@ -145,7 +145,7 @@ def test_run_cells_continue_on_error(tmp_path, monkeypatch):
 
     calls = []
 
-    def _fake_run(cmd, cwd=None):
+    def _fake_run(cmd, cwd=None, env=None):
         calls.append(cmd)
         rc = 1 if "data.name=VZW__Feb2026" in cmd else 0
         return _FakeProc(rc)
@@ -155,3 +155,67 @@ def test_run_cells_continue_on_error(tmp_path, monkeypatch):
     assert results[("VZW", "Feb2026")] == 1
     assert results[("TMO", "Jan2026")] == 0
     assert len(calls) == 2                            # both attempted despite VZW failure
+
+
+# ── out-of-clone config root (read-only clone contract) ────────────
+
+
+def test_ensure_cell_data_config_external_root(tmp_path):
+    """config_root -> YAML lands OUTSIDE the clone; clone untouched."""
+    from sandbox.sira_multi import cell_config_root, ensure_cell_data_config
+    clone = tmp_path / "clone"
+    cfg = clone / "scripts" / "configs" / "data"
+    cfg.mkdir(parents=True)
+    (cfg / "nora.yaml").write_text("name: nora\nsplit: test\n")
+    db_root = tmp_path / "db"
+    db_root.mkdir()
+    root = cell_config_root(db_root)
+
+    out = ensure_cell_data_config(clone, "GP__Feb2026", config_root=root)
+    assert out == root / "data" / "GP__Feb2026.yaml"
+    assert "name: GP__Feb2026" in out.read_text()
+    # the clone's config dir gained nothing
+    assert list(cfg.iterdir()) == [cfg / "nora.yaml"]
+
+
+def test_cell_config_root_not_a_cell_dir(tmp_path):
+    """.hydra-configs must never be mistaken for a <MNO>__<REL> cell."""
+    from sandbox.sira_cells import parse_cell_dirname
+    from sandbox.sira_multi import cell_config_root
+    name = cell_config_root(tmp_path).name
+    assert parse_cell_dirname(name) is None
+
+
+def test_run_cells_passes_extra_config_dir_env(tmp_path, monkeypatch):
+    """The child process gets SIRA_EXTRA_CONFIG_DIR pointing at db_root's
+    config root (the patch reads it; the clone stays read-only)."""
+    import subprocess as sp
+
+    from sandbox.sira_multi import cell_config_root, run_cells
+
+    clone = tmp_path / "clone"
+    cfg = clone / "scripts" / "configs" / "data"
+    cfg.mkdir(parents=True)
+    (cfg / "nora.yaml").write_text("name: nora\n")
+    db_root = tmp_path / "db"
+    (db_root / "GP__Feb2026" / "raw").mkdir(parents=True)
+    (db_root / "GP__Feb2026" / "raw" / "metadata.json").write_text("{}")
+
+    seen = {}
+
+    def fake_run(cmd, cwd=None, env=None):
+        seen["env"] = env
+        class P:
+            returncode = 0
+        return P()
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    import sandbox.sira_multi as sm
+    monkeypatch.setattr(sm, "subprocess", sp)
+
+    run_cells(db_root, clone)
+    expected = str(cell_config_root(db_root).resolve())
+    assert seen["env"]["SIRA_EXTRA_CONFIG_DIR"] == expected
+    # and the cell YAML was generated externally, not in the clone
+    assert (cell_config_root(db_root) / "data" / "GP__Feb2026.yaml").is_file()
+    assert not (cfg / "GP__Feb2026.yaml").exists()
