@@ -210,3 +210,40 @@ where noted as spillover:
     are visible — inventory merges both lanes over NORA_SIRA_QUERY_URL.
   Consider folding these into those strands' narratives at their next
   close, or noting at land time.
+
+## 2026-07-18 — Full lifecycle confirmed; per-lane mismatch display
+
+### Done this session
+- **Promote-and-flip validated end-to-end on the work PC**: new release
+  promoted (nora + sira builds → fresh label), stacks recreated, healthz
+  lists the new cell, test-page corpus table shows ALL MNOs — including
+  SIRA-only cells — with Latest + Lane badges. The full docker lifecycle
+  (ingest → build → promote → serve) is now proven on real data.
+- Per-lane mismatch display (87bcc26): both-lane cells whose NORA/SIRA
+  counts diverge render both numbers as lane-colored badges — surfaced by
+  a real case (stale/planless vectorstore vs fresh SIRA corpus reporting
+  0 vs 87 plans). Doubles as a lane-staleness indicator.
+- (Everything between the 07-14 close and this entry — sira-batch
+  gauntlet, retry-failed runbook, alias fix, corpus table + /cells — is
+  recorded in the 07-16 addendum above.)
+
+### In progress
+- push.sh release: still pending retry (PAT ready, streaming upload fixed).
+
+### Next
+- Stale-vectorstore cleanup: rebuild or delete the nora-lane cells that
+  disagree with SIRA (the mismatch badges point at them) — table collapses
+  to single numbers once lanes agree.
+- Landing sequence when architect-ready: /drift-check dev-full → regen-map
+  + MODULE.md refresh (extraction/env/pipeline/web + sira_query surface) →
+  /land-strand docker-distro (13 drafts).
+- Stack-b bring-up remains untouched.
+
+### Flags
+- sira_query service gained public surface (GET /cells) consumed by the
+  web test page — a NEW cross-service dependency (web → sira-query) that
+  MODULE.md / MAP dependency edges don't yet record. Fold into the
+  pre-land refresh.
+- Glossary-pin test flake: identified as order-dependent (test_query_intent
+  before test_query; passes alone) — root cause (shared retriever state)
+  still unchased.

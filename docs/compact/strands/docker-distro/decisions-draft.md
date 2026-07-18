@@ -370,3 +370,59 @@ declarative.
 pre-existing root-owned build dirs; non-root exposed the /data/reports bug
 (good) — any future in-container write path outside the mounts will fail
 loudly rather than silently landing in the overlay.
+
+## D-DRAFT-14 — Two-lane corpus inventory: sira-query /cells + merged web table
+
+**Context.** Deployments serve some MNOs SIRA-only (ingestion lane to parse +
+sira lane; no nora vectorstore). The test-page corpus table read only
+out/vectorstore, so those cells were invisible — and for cells present in
+both lanes, showing one lane's counts hid real divergence (a stale/planless
+vectorstore next to a fresh SIRA corpus: 0 vs 87 plans).
+
+**Decision.** sira-query exposes GET /cells (per-cell requirements = corpus
+rows — one per requirement by adapter contract; plans = distinct **plan**
+stamps; ingested = dataset dir mtime; cached for process life). The web
+inventory merges it over NORA_SIRA_QUERY_URL: SIRA-only cells appear from
+service data, a Lane column (NORA/SIRA badges) names the serving stack per
+cell, and both-lane cells with diverging counts render BOTH numbers as
+lane-colored badges — no lane is silently preferred.
+
+**Why.** nora-web cannot read the sira db (it doesn't mount /data/db);
+the service that owns the mount reports on it. Showing both diverging counts
+was chosen over preferring either lane because the divergence is
+information — independently-built lanes drift, and the mismatch badge is a
+staleness indicator that points at rebuild candidates.
+
+**Consequences.** New public surface on sira_query and a new runtime
+dependency web → sira-query (/cells) — MODULE.md / MAP edges must record it
+(flagged; pre-land refresh). Inventory cache needs a TTL besides the mtime
+fingerprint since sira-query redeploys independently. Table degrades
+gracefully to nora-only rows when the service is unreachable.
+
+## D-DRAFT-15 — Baked SIRA clone: PYTHONPATH import, world-writable tree
+
+**Context.** First containerized sira-batch run: SIRA's run_pipeline imports
+the `sira` package (bare metal: `pip install --no-deps -e .` + PYTHONPATH,
+SETUP.md §2) and writes per-cell data configs INTO its own clone
+(scripts/configs/data/<cell>.yaml — SIRA re-reads them by name and does not
+honor data.name overrides). The image did neither: ModuleNotFoundError, then
+Permission denied under JOB_UID.
+
+**Decision.** sira-base sets ENV PYTHONPATH=/app/sandbox/sira/src (no
+editable install), and the clone is copied with --chmod=0777 (plus a
+trailing chmod on scripts/configs for files install_configs creates in
+online builds).
+
+**Why.** An editable install triggers a PEP-660 build-backend fetch — not
+OFFLINE-safe; PYTHONPATH is equivalent for a src-layout clone and identical
+in both build modes. For the writes: patching SIRA to accept a config path
+adds upstream-drift patch burden; hydra --config-dir needs unverified SIRA
+wiring; a tmpfs overlay is compose complexity for 1KB files. The clone is
+container-ephemeral content, so wide permissions carry no risk, and the
+generated YAMLs are disposable derived shims.
+
+**Consequences.** The clone tree is writable scratch by contract — nothing
+in it may be treated as immutable at run time. If a strictly read-only
+image ever becomes a requirement, the hydra --config-dir route is the first
+alternative to explore (noted, not planned). Future SIRA version bumps must
+re-verify both mechanisms (src layout; config-by-name behavior).
