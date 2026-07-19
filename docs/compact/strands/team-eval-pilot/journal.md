@@ -446,3 +446,29 @@ Two distinct waves landed today plus the morning's TODO pointer:
   the web restarted on current code.
 - Strand still carries the `nora_test_feedback.db` schema overlaps (citations_json
   vs cited_ids etc.) noted in earlier drafts — reconcile at land.
+
+## 2026-07-18 — Scope reframe + landing prep
+
+### Done this session
+- Scope clarified for landing: this strand's deliverable is the eval
+  INFRASTRUCTURE (merged two-lane test page, 0-9+category feedback capture,
+  SSE per-lane progress, rerank/TEI integration, SIRA per-stage routing
+  patches, team-mode access gate) — all live and stable since 06-29. The
+  eval round itself is ongoing team OPERATIONS, tracked outside this strand;
+  its outcomes feed next-round priorities wherever they land.
+- web MODULE.md FeedbackStore description aligned to the shipped surface
+  (record_user_feedback: 0-9 score + categories per lane; legacy thumbs
+  vote retained) — closes the drift-check finding deferred here on 07-18.
+
+### Next
+- (post-land) Feedback-outcome summarization when the team round wraps —
+  query nora_test_feedback.db; drives next-round priorities.
+
+### Flags — explicit defers at landing
+- feedback DB schema overlaps (citations_json vs cited_ids) — deferred:
+  additive columns are harmless; reconcile when the outcome summarization
+  work touches the schema anyway.
+- NORA progress row spins in team view (cosmetic; NORA does NOT run —
+  server force-locks lanes) — deferred with diagnosis recorded 06-29.
+- Parked TODOs stay parked: rule-based eval KPI tracking (06-01); SIRA
+  dedicated /rerank backend (06-12) — candidates for future strands.
