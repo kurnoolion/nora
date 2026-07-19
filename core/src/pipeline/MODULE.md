@@ -15,7 +15,7 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
   - `ErrorDef` (code, message, hint), `PipelineError` (raised by stages)
   - `CODES` dict — every EXT-, PRF-, PRS-, RES-, TAX-, STD-, GRF-, VEC-, EVL-, PIP-, ENV-, MDL- code with human-readable hint
 - Reporting (report.py): `format_compact_report()`, `format_verbose_report()`, `print_qc_template()`, `print_fix_template()`
-- CLI: `run_cli.main` — `stages | detect-hw | run ...`
+- CLI: `run_cli.main` — `stages | detect-hw | run ...`; `--lane {ingestion,nora}` (`lane_bounds()` — resolves a `PIPELINE_LANES` named range to start/end; mutually exclusive with `--start`/`--end`, D-DRAFT-5 docker-distro); `--requirements-dir` (documents-root override — repoints `ctx.documents_dir` via `env.resolve_requirements_dir`, D-DRAFT-6 docker-distro; reports stay at `<env_dir>/reports` regardless)
 
 **Invariants**
 - **Every failure surfaces a stable prefixed code** registered in `error_codes.CODES`. Ad-hoc strings are a D-012 violation — the user can't diagnose chat-pasted logs without the code.

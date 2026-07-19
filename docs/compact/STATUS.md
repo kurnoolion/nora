@@ -4,7 +4,7 @@
 
 **Active phase**: architecture
 **Last updated**: 2026-07-03
-**Last drift-check**: 2026-06-19 — mode: dev-full — 0 drifts resolved (session-touched modules extraction/pipeline/env/parser/resolver all aligned; new imports within already-declared dependency edges), 0 deferred surfaced
+**Last drift-check**: 2026-07-18 — mode: dev-full — 4 drifts resolved (all [a] MODULE.md → implementation: env/pipeline requirements_dir + lanes, extraction images_root + fail-loud providers, web inventory + sira-query runtime edge; anchored by docker-distro D-DRAFT-5/6/10/11/14), 1 deferred surfaced (web FeedbackStore 0-9 scoring wording → team-eval-pilot)
 
 ## Done
 

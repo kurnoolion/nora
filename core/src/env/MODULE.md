@@ -4,10 +4,10 @@
 Per-environment scoped workspace configuration. An environment names a workspace (one team member × one `env_dir` × a stage range × MNO/release scope × objectives) so multiple contributors can run partial pipelines in parallel without stepping on each other's outputs. Serves FR-28 (env_dir CLI/config/UI parameterization), FR-29 (single-root partition layout); implements D-022 (per-env directory layout).
 
 **Public surface**
-- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`, `embedding_provider/model`, `standards_source`, `skip_taxonomy`, `skip_graph`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path(key)`, `input_path(mno, release)`, `out_path(stage)`, `state_path()`, `corrections_path()`, `correction_file(artifact)`, `reports_path()`, `eval_path()`, `init_directories()`
+- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `requirements_dir` (documents-root override, D-DRAFT-6 docker-distro), `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`, `embedding_provider/model`, `standards_source`, `skip_taxonomy`, `skip_graph`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path(key)`, `input_path(mno, release)`, `input_root` (the effective documents root: `requirements_dir` when set, else `<env_dir>/input`), `out_path(stage)`, `state_path()`, `corrections_path()`, `correction_file(artifact)`, `reports_path()`, `eval_path()`, `init_directories()`
 - `ProfileBindings` (profile_bindings.py, D-DRAFT-7) — per-cell profile resolution from `<env_dir>/profiles.json`. `ProfileBinding(mno, release, profile)` rows; `load_profile_bindings(env_dir, override=None) -> ProfileBindings`; `resolve(mno, release) -> Path` with precedence `--profile override > exact (mno,release) > (mno,"*") > default > fail-loud (PIP-E003)`; `covers(mno, release)` / `uncovered(cells)` for coverage validation. MNO match case-insensitive; release exact with `"*"` wildcard. Lives in `env` (not `pipeline`) to avoid the `pipeline → env` import cycle
 - `LLMConfigFile` (config.py) — schema for `config/llm.json`: `llm_provider`, `llm_model`, `llm_timeout`, `llm_base_url`, `llm_api_key`, `embedding_provider`, `embedding_model`, `ollama_url`, `ollama_timeout_s`, `skip_taxonomy`, `skip_graph`. Empty/zero values fall through. `load(path=None)` with malformed/missing tolerance.
-- Registry constants: `PIPELINE_STAGES`, `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`, `DEFAULT_LLM_CONFIG_PATH`
+- Registry constants: `PIPELINE_STAGES`, `PIPELINE_LANES` (D-DRAFT-5 docker-distro — named stage ranges: `ingestion` = extract..standards, `nora` = taxonomy..eval; consumed by `run_cli --lane`), `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`, `DEFAULT_LLM_CONFIG_PATH`
 - Resolvers (3-tier — CLI > env var > config/llm.json > env-config back-compat > default):
   - `resolve_llm_provider(cli, env_cfg)` — `--llm-provider` / `NORA_LLM_PROVIDER` / `llm_provider`
   - `resolve_embedding_provider(cli, env_cfg)` — `--embedding-provider` / `NORA_EMBEDDING_PROVIDER` / `embedding_provider`
@@ -15,12 +15,13 @@ Per-environment scoped workspace configuration. An environment names a workspace
   - `resolve_standards_source(cli, env_cfg)` — `--standards-source` / `NORA_STANDARDS_SOURCE` / env config
   - `resolve_skip_taxonomy(cli, env_cfg)` — `--skip-taxonomy` or `--rag-only` / `NORA_SKIP_TAXONOMY` or `NORA_RAG_ONLY` / `skip_taxonomy`
   - `resolve_skip_graph(cli, env_cfg)` — `--skip-graph` or `--rag-only` / `NORA_SKIP_GRAPH` or `NORA_RAG_ONLY` / `skip_graph`
+- `resolve_requirements_dir(cli, env_cfg)` — documents-root override (D-DRAFT-6 docker-distro): `--requirements-dir` / `NORA_REQUIREMENTS_DIR` (`REQUIREMENTS_DIR_ENV_VAR`) / env-config `requirements_dir` / default `<env_dir>/input`
 - `resolve_stage(value)` — accepts either stage name or 1-based number, returns canonical name
 - `env_cli.main` — CLI: `stages | create | list | show | init | delete`
 
 **Invariants**
 - `PIPELINE_STAGES` is the **single source of truth** for stage names and ordering across the project; any other module listing stages must import from here.
-- `env_dir` layout is fixed (D-022): `input/<MNO>/<release>/`, `out/<stage>/`, `state/`, `corrections/`, `reports/`, `eval/` (see `ENV_DIR_DIRS`). Other modules find artifacts by this convention, not by ad-hoc paths.
+- `env_dir` layout is fixed (D-022): `input/<MNO>/<release>/`, `out/<stage>/`, `state/`, `corrections/`, `reports/`, `eval/` (see `ENV_DIR_DIRS`). Other modules find artifacts by this convention, not by ad-hoc paths. One sanctioned exception (D-DRAFT-6 docker-distro): the **documents root** may be repointed outside the env_dir via `requirements_dir` (`input_root` is the authority; containers mount the shared corpus read-only at a fixed path) — every OUTPUT path (`out/`, `state/`, `reports/`, …) stays under `env_dir` unconditionally.
 - `correction_file(artifact)` returns `None` when missing — callers must handle absence; this is how the "optional override" semantics of corrections is enforced.
 - `validate()` returns errors as a list (never raises) so CLI and Web UI can surface all problems at once.
 - Environment configs live at `environments/<name>.json` (gitignored except `.gitkeep`) — they are per-user, not committed.
