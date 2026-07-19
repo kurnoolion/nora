@@ -3,7 +3,7 @@
 > **Strands active from 2026-05-16.** Mid-session journal entries land in `docs/compact/strands/<name>/journal.md`. Content below this line is historical and is no longer updated by `close-session` when a strand is bound. Architect-only writes (project-wide status, decisions promoted via `/land-strand`) continue to land here.
 
 **Active phase**: architecture
-**Last updated**: 2026-07-03
+**Last updated**: 2026-07-18
 **Last drift-check**: 2026-07-18 — mode: dev-full — 4 drifts resolved (all [a] MODULE.md → implementation: env/pipeline requirements_dir + lanes, extraction images_root + fail-loud providers, web inventory + sira-query runtime edge; anchored by docker-distro D-DRAFT-5/6/10/11/14), 1 deferred surfaced (web FeedbackStore 0-9 scoring wording → team-eval-pilot)
 
 ## Done
@@ -131,6 +131,20 @@
   - Cumulative: 7 new tests (2 parser, 5 extractor); suite 1160 passed, 52 skipped, 0 failed. Strand `glossary-scoring` landed with 3 promoted decisions; scope pivoted from "build full `GlossaryDetection` scorer" to this narrower density+extractor fix.
 - 2026-07-03 Landed strand `multi-mno-sira` — D-105..D-121 promoted (design-C per-cell retrieval + LLM-rerank fusion, latest-per-MNO release resolution, cell conventions D-107..D-109, generated per-cell configs D-115, pluggable /rerank D-116, balanced fusion D-118, run_stack A/B D-120). Landing gate passed: 3rd MNO ingested + 3-way cross-MNO query verified end-to-end.
 - 2026-07-03 Landed strand `mno-c-ingestion` — D-122..D-126 promoted (LayoutProvider/Docling, borderless text-preservation, pattern_only margins, is_requirement discriminator, ID:-labeled definitions). MNO-C fully ingested through SIRA; reference-as-requirement duplicates 0.
+- 2026-07-18 Landed strand `docker-distro` — D-127..D-141 promoted (four-image set,
+  release-asset distribution, SIRA_REF pin, volumes/env-file boundary, lane model,
+  build/serve hardlink topology, per-service env files, offline-as-option, classical
+  TLS vs PQ-hello DPI, images-to-build-output, fail-loud providers, secrets overlay,
+  non-root ingest jobs, two-lane corpus inventory, read-only SIRA clone). Full
+  lifecycle validated on the work PC (ingest → build → promote → serve, SIRA-only
+  cells included); FIRST image release published to the internal GitHub. Deferred at
+  landing: stack-b A/B, dev-profile phase 4, README-consolidation phase 5, base/app
+  image split, standards-in-container verification.
+- 2026-07-18 Landed strand `team-eval-pilot` — D-142..D-159 promoted (feedback
+  schema/lane capture, merged-tab UX, SSE progress, rerank/TEI provider family,
+  SIRA patches-not-fork posture, team-mode access gate). Scope at landing: eval
+  INFRASTRUCTURE delivered; the team eval round continues as operations. Defers in
+  the strand's final journal entry.
 - 2026-07-03 NORA + SIRA READMEs restructured (setup / scenario matrix / services / command reference; 12 SIRA + 8 NORA scenarios); all commands argparse-verified; NORA Quick Start's removed `--docs` flag fixed; two doc-drift code fixes (adapter wipe-scope help, service LLM-routing docstring). New strand `docker-distro` opened.
 
 ## In progress
@@ -181,6 +195,11 @@
 
 ## Flags
 
+- 2026-07-18 [process] **Stale-strand triage due** — 3 active strands >50d idle:
+  `plan-aware-sira` (5 drafts — land or fold), `nora-retrieval-parent-displacement`
+  and `references-handling` (0 drafts — keep-or-abandon). Remaining active board:
+  those three + `nora-retrieval-quality` (2 drafts) + `image-ingestion` (PoC
+  verdicts pending; journal still empty per the 07-03 flag).
 - 2026-07-03 [process] **image-analysis PoC un-journaled** — `experiments/image-analysis/` (commit 28b853a, 2026-07-02) landed after that day's close-session; `image-ingestion`'s journal is still empty. Bank it at that strand's first bound close-session.
 - 2026-07-03 [development] **`NORA_SIRA_RERANK_LLM_URL` shape mismatch** — batch pipeline expects the value WITH `/v1`; the query service appends `/v1/chat/completions` itself so it must be WITHOUT. Documented (sandbox/README §4 caution + service docstring); consider normalizing both consumers to accept either.
 - 2026-07-03 [docs] **NORA README legacy sections pending cleanup** — "Quick Start — Run Individual Steps" / "Step-by-Step Details" still show pre-D-096 flat paths; "Environment Management" shows old `--scope VZW/Feb2026` naming. Modernize or delete in a docs pass.
