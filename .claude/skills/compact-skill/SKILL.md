@@ -1,5 +1,5 @@
 ---
-name: compact
+name: compact-skill
 description: Orient yourself in a COMPACT-equipped project. Shows the methodology overview, lists the sub-skills, and points to the standard flow. Read-only — modifies no files. Invoke when onboarding or when you want a refresher.
 ---
 
