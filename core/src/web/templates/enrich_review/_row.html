@@ -1,13 +1,14 @@
-{# One requirement row. Every form: stamped from #stamp-bar, swaps itself. #}
+{# One requirement row. Edits are stamped from the global #stamp-bar
+   (label, name) plus THIS row's reason/note fields. #}
 {% set base_fields %}
   <input type="hidden" name="cell" value="{{ cell }}">
   <input type="hidden" name="plan" value="{{ plan }}">
   <input type="hidden" name="req_id" value="{{ row.req_id }}">
 {% endset %}
 {% set hx %}hx-post="{{ root_path }}/api/enrich-review/row-edit"
-  hx-target="#row-{{ row.req_id }}" hx-swap="outerHTML"
-  hx-include="#stamp-bar input, #stamp-bar select"{% endset %}
-<tr id="row-{{ row.req_id }}">
+  hx-target="#row-{{ row.dom_id }}" hx-swap="outerHTML"
+  hx-include="#stamp-bar input, #reason-{{ row.dom_id }}, #note-{{ row.dom_id }}"{% endset %}
+<tr id="row-{{ row.dom_id }}">
   <td><code>{{ row.req_id }}</code>
     {% if row.suppressed %}<br><span class="badge bg-danger">suppressed</span>{% endif %}
   </td>
@@ -34,7 +35,7 @@
     {% endif %}
 
     {% if row.suppressed %}
-    <span class="text-muted small">all {{ row.n_llm }} SIRA words suppressed</span>
+    <span class="text-muted small">all {{ row.n_llm }} SIRA enrichments suppressed</span>
     <form class="d-inline" {{ hx }}>{{ base_fields }}
       <input type="hidden" name="op" value="unsuppress">
       <button class="btn btn-sm btn-outline-secondary py-0">Undo</button></form>
@@ -54,7 +55,7 @@
         <input type="hidden" name="word" value="{{ chip.word }}">
         <span class="badge bg-secondary">{{ chip.word }}
           <button class="btn btn-sm p-0 border-0 bg-transparent text-white"
-                  title="remove word">×</button>
+                  title="remove enrichment">×</button>
         </span></form>
       {% endif %}
     {% endfor %}
@@ -70,18 +71,31 @@
       </span></form>
     {% endfor %}
 
-    <div class="d-flex gap-1 mt-1">
+    <div class="d-flex flex-wrap gap-1 mt-1 align-items-center">
       <form class="d-flex gap-1" {{ hx }}>{{ base_fields }}
         <input type="hidden" name="op" value="add">
+        {# ONE enrichment per Add — free-form phrase, spaces/punctuation OK #}
         <input name="words" class="form-control form-control-sm"
-               placeholder="add words, comma-separated" style="width: 16rem">
+               placeholder="add one enrichment (free-form)" style="width: 16rem">
         <button class="btn btn-sm btn-outline-success">Add</button></form>
       {% if not row.suppressed and row.n_llm %}
-      <form {{ hx }}>{{ base_fields }}
+      <form {{ hx }}
+        hx-confirm="Are you sure you want to remove all enrichments for this requirement?">
+        {{ base_fields }}
         <input type="hidden" name="op" value="suppress">
         <button class="btn btn-sm btn-outline-danger"
-                title="suppress every SIRA word for this requirement">Suppress all</button></form>
+                title="suppress every SIRA enrichment for this requirement">Suppress all</button></form>
       {% endif %}
+      <select id="reason-{{ row.dom_id }}" name="reason_category"
+              class="form-select form-select-sm row-reason" style="width: 12rem"
+              title="reason stamped on this row's next edit">
+        <option value="">reason…</option>
+        {% for c in categories %}<option>{{ c }}</option>{% endfor %}
+        <option value="__new__">+ new category…</option>
+      </select>
+      <input id="note-{{ row.dom_id }}" name="reason_note"
+             class="form-control form-control-sm row-note" style="width: 14rem"
+             placeholder="note (optional)">
     </div>
   </td>
 </tr>

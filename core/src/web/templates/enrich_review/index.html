@@ -53,25 +53,11 @@
   <div id="stamp-bar" class="card mb-3 sticky-top" style="top: .5rem; z-index: 10;">
     <div class="card-body py-2">
       <div class="row g-2 align-items-end">
-        <div class="col-auto">
+        <div class="col">
           <label class="form-label mb-0 small">Label (campaign)</label>
           <input name="label" class="form-control form-control-sm"
                  list="labels-list" placeholder="e.g. handover-noise">
           <datalist id="labels-list"></datalist>
-        </div>
-        <div class="col-auto">
-          <label class="form-label mb-0 small">Reason</label>
-          <select name="reason_category" class="form-select form-select-sm"
-                  id="reason-category">
-            <option value=""></option>
-            {% for c in categories %}<option>{{ c }}</option>{% endfor %}
-            <option value="__new__">+ new category…</option>
-          </select>
-        </div>
-        <div class="col">
-          <label class="form-label mb-0 small">Note (optional)</label>
-          <input name="reason_note" class="form-control form-control-sm"
-                 placeholder="free-form clue for prompt tuning">
         </div>
         <div class="col-auto">
           <label class="form-label mb-0 small">You</label>
@@ -140,8 +126,9 @@
               {target: "#table-container", swap: "innerHTML"});
   });
 
-  $("reason-category").addEventListener("change", async (e) => {
-    if (e.target.value !== "__new__") return;
+  // per-row reason selects (delegated — rows re-render on every edit)
+  document.addEventListener("change", async (e) => {
+    if (!e.target.matches(".row-reason") || e.target.value !== "__new__") return;
     const name = prompt("New reason category (kebab-case):");
     e.target.value = "";
     if (!name) return;
@@ -149,7 +136,7 @@
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({category: name})})).json();
     const sel = e.target;
-    sel.innerHTML = '<option value=""></option>' +
+    sel.innerHTML = '<option value="">reason…</option>' +
       data.categories.map(c => `<option>${c}</option>`).join("") +
       '<option value="__new__">+ new category…</option>';
     sel.value = name;

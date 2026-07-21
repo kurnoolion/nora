@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -89,6 +90,9 @@ def _row_view(service_row: dict, entry: dict | None,
             and (h.get("origin") or {}).get("release", "") != viewed_release]
 
     return {"req_id": service_row.get("req_id", ""),
+            # ids like "doc:..." / "section:..." are invalid in CSS selectors
+            # (hx-target) — sanitize for DOM use, keep req_id verbatim in forms
+            "dom_id": re.sub(r"[^A-Za-z0-9_-]", "_", service_row.get("req_id", "")),
             "text": service_row.get("text", ""),
             "plan": service_row.get("plan", ""),
             "chips": chips,
@@ -145,6 +149,7 @@ async def table(request: Request, cell: str, plan: str = ""):
             for r in data.get("rows", [])]
     return _template_response(request, "enrich_review/_table.html", {
         "cell": cell, "plan": plan, "rows": rows,
+        "categories": store.reason_categories(),
         **_pending_ctx(cell, store, data.get("loaded_at", 0.0)),
     })
 
@@ -164,7 +169,10 @@ async def row_edit(request: Request,
     store = _store()
     mno, release = _cell_mno_release(cell)
 
-    word_list = [w.strip() for w in (words or word).split(",") if w.strip()]
+    # an enrichment is ONE free-form phrase (spaces/punctuation legal —
+    # "attach retry timer, per plan" is a single enrichment); never split
+    phrase = (words or word).strip()
+    word_list = [phrase] if phrase else []
     pairs = ([{"direction": direction or "remove", "word": word}]
              if op in ("reaffirm", "discard") else [])
     if op in ("reaffirm", "discard") and direction == "__all_held__":
@@ -187,6 +195,7 @@ async def row_edit(request: Request,
                      store.disabled_labels(), release)
     return _template_response(request, "enrich_review/_row.html", {
         "cell": cell, "plan": plan, "row": view, "oob_pending": True,
+        "categories": store.reason_categories(),
         **_pending_ctx(cell, store, svc.get("loaded_at", 0.0))})
 
 

@@ -253,12 +253,15 @@ Chip grammar:
   undo (removed words stay visible; undo is one click on the thing itself)
 - Added word: green chip, x un-adds
 - Suppress all: row button; suppressed rows collapse to a summary line
-  with Undo
+  with Undo. Confirm dialog before suppressing (accidental-click guard).
 - Held records (cross-release guard): per-req banner "N corrections held —
   requirement changed since <origin>" with [Re-affirm]/[Discard]
-- Add box per row: comma-separated words + Add (Enter submits)
-Every mutation stamps label/reason/name from the sticky bar into a word
-record — no per-click dialogs; sweep-friendly.
+- Add box per row: free-form text + Add — the WHOLE input is ONE enrichment
+  (SIRA enrichments are phrases: spaces, commas, periods, colons all legal
+  inside one). Repeat type+Add for multiple enrichments. Never split.
+Every mutation stamps label/name from the sticky bar plus reason/note from
+THIS ROW's fields (reason is a per-requirement judgment, not a sweep-global
+one) into a word record — no per-click dialogs; sweep-friendly.
 
 State model (stateless): edits write the overlay immediately (no save
 button). Pending = overlay mtime > cell loaded_at (sira-query reports

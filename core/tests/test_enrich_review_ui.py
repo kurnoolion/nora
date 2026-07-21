@@ -59,7 +59,9 @@ class TestPage:
         r = client.get("/enrichment-review")
         assert r.status_code == 200
         assert "stamp-bar" in r.text and "Enrichment Review" in r.text
-        assert "misleading-enrichment" in r.text  # seeded categories
+        # reason/note moved into the rows — stamp bar keeps label + name only
+        assert "misleading-enrichment" not in r.text
+        assert 'name="label"' in r.text and 'name="by"' in r.text
 
     def test_team_gate_allows_review_surface(self):
         from core.src.web.team_mode import path_allowed_for_team
@@ -103,17 +105,36 @@ class TestRowEdit:
         assert "retry" in r.text                     # untouched chip
         assert "corrections pending" in r.text       # OOB banner flipped
 
-    def test_add_then_unadd(self, client):
-        r = self._edit(client, op="add", words="t3402, t3410")
-        assert "t3402" in r.text and "t3410" in r.text
-        r = self._edit(client, op="unadd", word="t3402")
-        assert "t3402" not in r.text and "t3410" in r.text
+    def test_add_is_one_freeform_phrase(self, client):
+        # commas/spaces/punctuation do NOT split — one Add = one enrichment
+        r = self._edit(client, op="add", words="attach retry, per timer T3402")
+        assert "attach retry, per timer T3402" in r.text
+        r = self._edit(client, op="add", words="t3410")
+        assert "t3410" in r.text
+        r = self._edit(client, op="unadd", word="attach retry, per timer T3402")
+        assert "attach retry, per timer" not in r.text and "t3410" in r.text
 
     def test_suppress_and_undo(self, client):
         r = self._edit(client, op="suppress")
         assert "suppressed" in r.text and "Undo" in r.text
         r = self._edit(client, op="unsuppress")
         assert "Suppress all" in r.text
+        # accidental-click guard: the suppress form asks for confirmation
+        assert "hx-confirm" in r.text and "Are you sure" in r.text
+
+    def test_per_row_reason_and_note(self, client):
+        r = client.get("/api/enrich-review/table",
+                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+        # one reason select + note input PER row (stamp bar no longer has them)
+        assert r.text.count("row-reason") >= 3 and r.text.count("row-note") >= 3
+        assert "misleading-enrichment" in r.text   # categories rendered in rows
+
+    def test_dom_id_sanitized_for_composite_ids(self):
+        from core.src.web.routes.enrich_review import _row_view
+        view = _row_view({"req_id": "doc: spec.pdf §2", "llm_words": [],
+                          "held": []}, None, set(), "Feb2026")
+        assert view["dom_id"] == "doc__spec_pdf__2"
+        assert view["req_id"] == "doc: spec.pdf §2"
 
     def test_unknown_op_422(self, client):
         assert self._edit(client, op="nuke").status_code == 422
