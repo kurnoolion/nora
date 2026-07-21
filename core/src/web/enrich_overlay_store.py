@@ -108,6 +108,13 @@ class EnrichOverlayStore:
     def get_entry(self, mno: str, req_id: str) -> dict[str, Any] | None:
         return self.get_overlay(mno).get(req_id)
 
+    def list_mnos(self) -> list[str]:
+        """MNOs with an overlay file (sorted)."""
+        if not self.enabled or not self.dir.is_dir():
+            return []
+        skip = ("labels.json", "reason-categories.json")
+        return sorted(p.stem for p in self.dir.glob("*.json") if p.name not in skip)
+
     def overlay_mtime(self, mno: str) -> float:
         """0.0 when absent — pending = mtime > cell loaded_at."""
         try:

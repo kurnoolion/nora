@@ -29,6 +29,17 @@
           <select id="sel-plan" class="form-select form-select-sm"></select>
         </div>
         <div class="col-auto ms-auto">
+          <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button"
+                    data-bs-toggle="dropdown">
+              <i class="bi bi-download"></i> Export
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              {# scoped to the stamping-bar label + selected MNO (blank = all) #}
+              <li><a class="dropdown-item export-link" href="#" data-mode="report">Review report</a></li>
+              <li><a class="dropdown-item export-link" href="#" data-mode="scorecard">Prompt-fix scorecard</a></li>
+            </ul>
+          </div>
           <button class="btn btn-outline-secondary btn-sm" type="button"
                   data-bs-toggle="collapse" data-bs-target="#labels-drawer">
             <i class="bi bi-tags"></i> Labels
@@ -183,6 +194,16 @@
   });
   document.getElementById("labels-drawer")
     .addEventListener("show.bs.collapse", renderLabels);
+
+  document.querySelectorAll(".export-link").forEach(a =>
+    a.addEventListener("click", e => {
+      e.preventDefault();
+      const q = new URLSearchParams({mode: a.dataset.mode, download: "1"});
+      const label = document.querySelector('#stamp-bar [name="label"]').value.trim();
+      if (label) q.set("label", label);
+      if ($("sel-mno").value) q.set("mno", $("sel-mno").value);
+      window.open(api + "/export?" + q, "_blank");
+    }));
 
   loadCells().then(renderLabels);
 })();

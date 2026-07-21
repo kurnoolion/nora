@@ -190,6 +190,65 @@ async def row_edit(request: Request,
         **_pending_ctx(cell, store, svc.get("loaded_at", 0.0))})
 
 
+@api.get("/export")
+def export(label: str = "", mno: str = "", mode: str = "report",
+           download: int = 0):
+    """The label x category pivot report / prompt-fix scorecard
+    (D-DRAFT-5). Plans + current LLM words come from each MNO's LATEST
+    loaded release; report mode degrades gracefully when sira-query is
+    down, scorecard mode requires it (it measures against live output)."""
+    from datetime import datetime, timezone
+
+    from fastapi.responses import PlainTextResponse
+
+    from core.src.extraction.release_key import release_order_key
+    from core.src.web.enrich_report import build_report, build_scorecard
+
+    if mode not in ("report", "scorecard"):
+        raise HTTPException(status_code=422, detail=f"unknown mode: {mode}")
+    store = _store()
+    mnos = [mno] if mno else store.list_mnos()
+    overlays = {m: store.get_overlay(m) for m in mnos}
+
+    # latest loaded release per MNO -> plans + current llm words
+    plans: dict = {}
+    current_llm: dict = {}
+    service_note = ""
+    try:
+        cells = _service_get("/cells").get("cells", [])
+        latest: dict[str, str] = {}
+        for c in cells:
+            m, rel = c.get("mno", ""), c.get("release", "")
+            if m in overlays and (m not in latest or
+                    (release_order_key(rel) or (0, 0)) >
+                    (release_order_key(latest[m]) or (0, 0))):
+                latest[m] = rel
+        for m, rel in latest.items():
+            data = _service_get(f"/cells/{m}__{rel}/enrichments")
+            for row in data.get("rows", []):
+                key = (m, row["req_id"])
+                plans[key] = row.get("plan", "")
+                current_llm[key] = set(row.get("llm_words", []))
+    except HTTPException as exc:
+        if mode == "scorecard":
+            raise
+        service_note = f"sira-query unavailable — plan counts omitted ({exc.detail})"
+
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+    if mode == "report":
+        text = build_report(overlays, label=label, mno=mno,
+                            disabled=store.disabled_labels(), plans=plans,
+                            generated=generated, service_note=service_note)
+    else:
+        text = build_scorecard(overlays, label=label, mno=mno,
+                               current_llm=current_llm, generated=generated)
+    headers = {}
+    if download:
+        fname = f"enrich-{mode}-{generated[:10]}.txt"
+        headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+    return PlainTextResponse(text, headers=headers)
+
+
 @api.get("/pending", response_class=HTMLResponse)
 async def pending(request: Request, cell: str):
     from core.src.web.app import _template_response
