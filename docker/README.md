@@ -10,8 +10,8 @@ live); images ship as Release-asset tarballs on the internal GitHub
 
 | Image | Profile | Runs | Purpose | Reads (mounts) | Writes (mounts) |
 |---|---|---|---|---|---|
-| **nora-web** | serve | uvicorn `:8000`, long-lived | Web UI + API: query, compare, compliance views; jobs/metrics/config; feedback capture | `/data/env` (promoted nora label: vectorstore, graph, taxonomy) | `/data/web-state` (per stack), `/data/feedback` (pooled) |
-| **sira-query** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells) | — |
+| **nora-web** | serve | uvicorn `:8000`, long-lived | Web UI + API: query, compare, compliance views; jobs/metrics/config; feedback capture | `/data/env` (promoted nora label: vectorstore, graph, taxonomy) | `/data/web-state` (per stack), `/data/feedback` + `/data/corrections` (pooled) |
+| **sira-query** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells), `/data/corrections` (ro — overlay applied at cell load) | — |
 | **nora-pipeline** | ingest | `run --rm` jobs | Batch lanes over the corpus: **ingestion** lane (extract → parse → resolve → standards) and **nora** lane (taxonomy → graph → vectorstore → eval); Docling layout for opt-in corpora | `/data/requirements` (ro, the corpus), `/data/models` | `/data/env` (a nora-BUILD dir: `out/`, images incl.) |
 | **sira-batch** | ingest | `run --rm` jobs | SIRA lane: NORA→BEIR adapter, per-cell index build, batch doc-enrichment, incremental retries | `/data/env` outputs via adapter | `/data/db` (a sira-BUILD dir: cells) |
 
@@ -65,6 +65,8 @@ paths (`$HOME` does not expand there).
     ├── web-state-a/                   # per stack: nora_jobs/metrics/config.db
     ├── web-state-b/                   #   (stack identity = directory, not filename)
     ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)
+    ├── corrections/                   # ONE pooled dir: enrichment-review overlay
+    │                                  #   (web writes, sira-query reads at load)
     └── models/
         └── docling/                   # DOCLING_ARTIFACTS -> /data/models/docling
 
@@ -97,6 +99,7 @@ In `.env`, point the volume paths at the layout above:
     SIRA_DB_ROOT=/home/<you>/nora-data/serve/<label>/sira     # or a sira-build while iterating
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
+    CORRECTIONS_DIR=/home/<you>/nora-data/corrections
     MODELS_DIR=/home/<you>/nora-data/models
 
 Create the directories before `up` (docker creates missing bind sources
@@ -111,7 +114,7 @@ root-owned, and the app then can't write its DBs). Then:
 Ingest jobs run against the BUILD dirs — never against a promoted serve
 label. Make a builds-oriented wiring env once: `cp .env.stack-a .env.builds`
 (a FULL copy — compose validates every required path var in the whole file
-even for ingest-only runs, so all six must be present), then repoint only
+even for ingest-only runs, so all SEVEN path vars must be present), then repoint only
 `NORA_ENV_DIR`/`SIRA_DB_ROOT` at `nora-builds/<build>` / `sira-builds/<build>`
 and pass `--env-file .env.builds` to the commands below.
 
@@ -220,6 +223,18 @@ usually need no per-stack variants — ingest is stack-independent; run jobs
 with either wiring env. After ingesting a new cell (shared db_root), restart
 BOTH stacks' sira-query — a plain `restart` suffices here (data reload, same
 config); only env-file/.env CHANGES need an `up -d` recreate.
+
+## Enrichment review (domain experts)
+
+`/enrichment-review` on nora-web lets domain experts browse SIRA's
+per-requirement enrichment keywords (MNO → Release → Plan), delete/add
+words (with campaign labels + reasons), and hit **Apply** — which reloads
+the affected cell on the serving sira-query so they can immediately
+re-test queries on the Test page. Corrections live as a delta overlay
+under `CORRECTIONS_DIR` (never inside builds or serve labels; they survive
+re-enrichment and re-promotion). With both a/b stacks live, set
+`NORA_SIRA_QUERY_URLS` in `.env.nora-web.<x>` so one Apply reloads both
+(see env.nora-web.example). Team-mode gate admits the page.
 
 ## Build + distribute
 

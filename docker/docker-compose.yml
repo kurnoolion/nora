@@ -38,6 +38,9 @@ services:
       - "${SIRA_QUERY_PORT:-8040}:8040"
     volumes:
       - ${SIRA_DB_ROOT:?set SIRA_DB_ROOT in .env}:/data/db
+      # enrichment-corrections overlay — web writes, this service READS
+      # (applied at cell load; POST /cells/<cell>/reload re-applies)
+      - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections:ro
     env_file:
       - path: ${SIRA_QUERY_ENV_FILE:-.env.sira-query}
         required: false
@@ -45,6 +48,7 @@ services:
         required: false                           # (later file wins on overlap)
     environment:
       NORA_SIRA_DB_ROOT: /data/db
+      NORA_SIRA_CORRECTIONS_ROOT: /data/corrections
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach host-side LLM endpoints
     restart: unless-stopped
@@ -70,6 +74,8 @@ services:
       - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env
       - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
+      # enrichment-corrections overlay — this app is the sole WRITER
+      - ${CORRECTIONS_DIR:?}:/data/corrections
     env_file:
       - path: ${WEB_ENV_FILE:-.env.nora-web}
         required: false
@@ -81,6 +87,7 @@ services:
       NORA_METRICS_DB: /data/web-state/nora_metrics.db
       NORA_CONFIG_DB: /data/web-state/nora_config.db
       NORA_FEEDBACK_DB: /data/feedback/nora_feedback.db
+      NORA_CORRECTIONS_ROOT: /data/corrections
       NORA_SIRA_QUERY_URL: http://sira-query:8040
     extra_hosts:
       - "host.docker.internal:host-gateway"
