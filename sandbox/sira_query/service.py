@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 # ── Config from env ─────────────────────────────────────────────────
 
 _DB_ROOT = os.getenv("NORA_SIRA_DB_ROOT", "")
+# Enrichment-corrections overlay root (strand sira-enrichment-review):
+# mounted ro in containers; unset = overlay machinery inert (vanilla behavior).
+_CORR_ROOT = os.getenv("NORA_SIRA_CORRECTIONS_ROOT", "")
 _DATASET = os.getenv("NORA_SIRA_DATASET", "nora")
 _SHIM_URL = os.getenv("NORA_LLM_SHIM_URL", "http://127.0.0.1:8030").rstrip("/")
 _SHIM_MODEL = os.getenv("NORA_LLM_MODEL", "")
@@ -276,7 +279,14 @@ _rerank_prompt_source: str | None = None
 # for back-compat — a dataset without a valid (mno, release) can't join
 # the cell model. See D-DRAFT-7/10.
 
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+
+from sandbox.sira_query.enrich_overlay import (  # noqa: E402
+    apply_overlay_to_req,
+    load_disabled_labels,
+    load_overlay,
+    make_verdict_fn,
+)
 
 from core.src.query.analyzer import make_query_analyzer  # noqa: E402
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
@@ -295,6 +305,32 @@ class CellState:
     max_df: int
     doc_enrich_source: str | None = None
     doc_enrich_applied_docs: int = 0
+    # --- enrichment-review (strand sira-enrichment-review) ---
+    # LLM output per req (pre-overlay); what enrich_batch applied is the
+    # EFFECTIVE set (overlay folded in). held = records not applied due to
+    # the cross-release guard. loaded_at drives the review UI's pending
+    # state; _token_cache backs the vanilla-token fingerprint verdicts.
+    llm_words: dict[str, list[str]] = field(default_factory=dict)
+    effective_words: dict[str, list[str]] = field(default_factory=dict)
+    held_by_id: dict[str, list[dict]] = field(default_factory=dict)
+    suppressed_ids: set[str] = field(default_factory=set)
+    loaded_at: float = 0.0
+    overlay_applied: dict[str, int] = field(default_factory=dict)
+    _token_cache: dict[str, frozenset] = field(default_factory=dict)
+
+    def vanilla_tokens(self, req_id: str) -> "frozenset | None":
+        """VANILLA index token set for a req (the fingerprint basis —
+        bm25.tokenize is the index's own tokenizer; corpus text is
+        pre-enrichment by construction). Cached per req."""
+        cached = self._token_cache.get(req_id)
+        if cached is not None:
+            return cached
+        doc = self.corpus_by_id.get(req_id)
+        if doc is None:
+            return None
+        toks = frozenset(self.bm25.tokenize(doc.get("text", "") or ""))
+        self._token_cache[req_id] = toks
+        return toks
 
 
 _cells: dict[CellKey, CellState] = {}
@@ -563,15 +599,68 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
                 phrases = row.get("phrases") or []
                 if did and phrases and did in doc_id_to_idx:
                     enrichments.setdefault(did, []).extend(phrases)
-        items = [(doc_id_to_idx[did], ph) for did, ph in enrichments.items()]
-        try:
-            bm25.enrich_batch(items)
-            cstate.doc_enrich_applied_docs = len(items)
-            cstate.doc_enrich_source = str(phrases_path)
-        except Exception as exc:
-            logger.error("cell %s enrich_batch failed (%s) — vanilla BM25",
-                         cell_dirname(cell), exc)
+        cstate.llm_words = enrichments
+        cstate.doc_enrich_source = str(phrases_path)
+    # NOTE: enrichment is NOT applied here anymore — _apply_overlay_and_enrich
+    # folds the corrections overlay in and calls enrich_batch. It runs as a
+    # second pass (after ALL cells load) because cross-release fingerprint
+    # verdicts need peer cells' corpora (strand sira-enrichment-review).
     return cstate
+
+
+def _apply_overlay_and_enrich(cstate: CellState) -> None:
+    """Fold the corrections overlay into the cell's enrichments and apply
+    the EFFECTIVE sets to the in-memory index. No corrections root (or no
+    overlay file) degrades to exactly the legacy behavior. Peer cells must
+    already be in `_cells` for cross-release verdicts."""
+    mno, release = cstate.cell
+
+    if _CORR_ROOT:
+        overlay = load_overlay(_CORR_ROOT, mno)
+        disabled = load_disabled_labels(_CORR_ROOT)
+    else:
+        overlay, disabled = {}, set()
+
+    def token_sets(rel: str, req_id: str):
+        peer = _cells.get((mno, rel)) if rel != release else cstate
+        return peer.vanilla_tokens(req_id) if peer is not None else None
+
+    verdict = make_verdict_fn(token_sets, release)
+
+    effective: dict[str, list[str]] = {}
+    held_by_id: dict[str, list[dict]] = {}
+    suppressed: set[str] = set()
+    n_rem = n_add = 0
+    # union of reqs with LLM output or overlay entries (an overlay can add
+    # words to a req the LLM left un-enriched)
+    req_ids = set(cstate.llm_words) | {r for r in overlay if r in cstate.doc_id_to_idx}
+    for rid in req_ids:
+        res = apply_overlay_to_req(
+            cstate.llm_words.get(rid, []), overlay.get(rid), disabled, verdict, rid)
+        if res.effective:
+            effective[rid] = res.effective
+        if res.held:
+            held_by_id[rid] = res.held
+        if res.suppressed:
+            suppressed.add(rid)
+        n_rem += len(res.applied_removes)
+        n_add += len(res.applied_adds)
+
+    items = [(cstate.doc_id_to_idx[rid], ph) for rid, ph in effective.items()]
+    try:
+        if items:
+            cstate.bm25.enrich_batch(items)
+        cstate.doc_enrich_applied_docs = len(items)
+    except Exception as exc:
+        logger.error("cell %s enrich_batch failed (%s) — vanilla BM25",
+                     cell_dirname(cstate.cell), exc)
+    cstate.effective_words = effective
+    cstate.held_by_id = held_by_id
+    cstate.suppressed_ids = suppressed
+    cstate.overlay_applied = {"removes": n_rem, "adds": n_add,
+                              "suppressed": len(suppressed),
+                              "held": sum(len(v) for v in held_by_id.values())}
+    cstate.loaded_at = time.time()
 
 
 def _load_cells() -> None:
@@ -595,6 +684,10 @@ def _load_cells() -> None:
             _cells[cell] = _load_one_cell(base, cell)
         except Exception as exc:
             errors.append(f"{cell_dirname(cell)}: {exc}")
+    # second pass: overlay + enrichment application (cross-release verdicts
+    # need every peer's corpus present first)
+    for cstate in _cells.values():
+        _apply_overlay_and_enrich(cstate)
     _cells_load_error = "; ".join(errors) if errors else None
     if _cells:
         logger.info(
@@ -942,11 +1035,101 @@ def cells_inventory() -> dict[str, Any]:
                       "requirements": len(st.doc_ids), "plans": len(plans),
                       "ingested": ingested}
             _CELL_STATS_CACHE[cell] = cached
-        out.append(cached)
+        # live (non-cached) per-cell state for the enrichment-review UI:
+        st = _cells[cell]
+        out.append({**cached, "loaded_at": st.loaded_at,
+                    "corrections": st.overlay_applied})
     return {"cells": out}
 
 
 _CELL_STATS_CACHE: dict[CellKey, dict[str, Any]] = {}
+
+# ── Enrichment review (strand sira-enrichment-review) ───────────────
+#
+# Read surface + per-cell hot reload for the /enrichment-review web UI.
+# The overlay itself is written by nora-web (file owner); this service
+# only reads it (NORA_SIRA_CORRECTIONS_ROOT, mounted ro) and applies it
+# at cell load. Reload is idempotent re-read-from-disk; per-cell locks
+# stop stampedes, and in-flight queries finish on the old CellState.
+
+import re as _plan_re_mod  # noqa: E402
+import threading  # noqa: E402
+
+_PLAN_LINE_RE = _plan_re_mod.compile(r"^\*\*plan\*\*: *(.+?) *$", _plan_re_mod.MULTILINE)
+_reload_locks: dict[CellKey, threading.Lock] = {}
+_reload_locks_guard = threading.Lock()
+
+
+def _parse_cell_or_404(cell_name: str) -> CellKey:
+    from sandbox.sira_cells import parse_cell_dirname
+    ck = parse_cell_dirname(cell_name)
+    if ck is None or ck not in _cells:
+        raise HTTPException(status_code=404, detail=f"unknown cell: {cell_name}")
+    return ck
+
+
+def _plan_of(st: CellState, req_id: str) -> str:
+    doc = st.corpus_by_id.get(req_id) or {}
+    m = _PLAN_LINE_RE.search(doc.get("text", "") or "")
+    return m.group(1) if m else ""
+
+
+@app.get("/cells/{cell_name}/plans")
+def cell_plans(cell_name: str) -> dict[str, Any]:
+    st = _cells[_parse_cell_or_404(cell_name)]
+    plans = sorted({p for rid in st.doc_ids if (p := _plan_of(st, rid))})
+    return {"cell": cell_name, "plans": plans}
+
+
+@app.get("/cells/{cell_name}/enrichments")
+def cell_enrichments(cell_name: str, plan: str = "") -> dict[str, Any]:
+    """Per-req enrichment data for the review UI: LLM output, the applied
+    effective set, held records (cross-release guard), suppression state."""
+    st = _cells[_parse_cell_or_404(cell_name)]
+    rows: list[dict[str, Any]] = []
+    for rid in st.doc_ids:
+        p = _plan_of(st, rid)
+        if plan and p != plan:
+            continue
+        llm = st.llm_words.get(rid, [])
+        held = st.held_by_id.get(rid, [])
+        if not llm and not held and rid not in st.suppressed_ids \
+                and rid not in st.effective_words:
+            continue  # nothing enrichment-related to review
+        rows.append({
+            "req_id": rid,
+            "text": (st.corpus_by_id.get(rid) or {}).get("text", ""),
+            "plan": p,
+            "llm_words": llm,
+            "effective": st.effective_words.get(rid, []),
+            "suppressed": rid in st.suppressed_ids,
+            "held": held,
+        })
+    return {"cell": cell_name, "plan": plan, "loaded_at": st.loaded_at,
+            "rows": rows}
+
+
+@app.post("/cells/{cell_name}/reload")
+def cell_reload(cell_name: str) -> dict[str, Any]:
+    """Re-read the cell from disk (vanilla index + corpus + enrichments +
+    corrections overlay) and swap it in atomically. The expert's Apply
+    button — no operator needed (D-DRAFT-4, strand sira-enrichment-review)."""
+    ck = _parse_cell_or_404(cell_name)
+    with _reload_locks_guard:
+        lock = _reload_locks.setdefault(ck, threading.Lock())
+    with lock:
+        base = Path(_DB_ROOT) / cell_dirname(ck)
+        try:
+            fresh = _load_one_cell(base, ck)
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"reload failed: {exc}") from exc
+        _cells[ck] = fresh          # peers see the new corpus from here on
+        _apply_overlay_and_enrich(fresh)
+        _CELL_STATS_CACHE.pop(ck, None)
+    return {"cell": cell_name, "loaded_at": fresh.loaded_at,
+            "corrections": fresh.overlay_applied,
+            "requirements": len(fresh.doc_ids)}
 
 
 @app.get("/healthz")
