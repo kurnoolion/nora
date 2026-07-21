@@ -7,7 +7,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - App (app.py):
   - `app: FastAPI` — the ASGI application; wires middleware, static mounts, routers, templates
 - Config (config.py):
-  - `WebConfig` — host, port, root_path, path_mappings, ollama_url, default_model, env_dir, plus DB-path overrides `jobs_db` / `metrics_db` / `feedback_db`; `from_dict()`, `env_dir_path()`, `state_path()`, `jobs_db_path()`, `metrics_db_path()`, `feedback_db_path()` (per D-022; override-aware)
+  - `WebConfig` — host, port, root_path, path_mappings, ollama_url, default_model, env_dir, plus DB-path overrides `jobs_db` / `metrics_db` / `feedback_db` and `corrections_root` (enrichment-corrections volume, strand sira-enrichment-review; resolution web.json > $NORA_CORRECTIONS_ROOT > env.json; "" = surface disabled); `from_dict()`, `env_dir_path()`, `state_path()`, `jobs_db_path()`, `metrics_db_path()`, `feedback_db_path()` (per D-022; override-aware)
   - `PathMapping` — `(windows, linux, label)` entry
   - `EnvJsonConfig` — schema for the optional `config/env.json` layer (env-related fields: `env_dir`, `jobs_db`, `metrics_db`, `feedback_db`); `load(path=None)` with malformed/missing tolerance
   - `load_config(path=None) -> WebConfig` — resolves env_dir (web.json > $ENV_DIR > env.json) and per-DB overrides (CLI / env var > env.json > computed default) in one call
@@ -18,6 +18,9 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - Metrics (metrics.py):
   - `MetricRecord` — timestamp, category (`request | llm | pipeline | resource | eval`), name, value, unit, tags
   - `MetricsStore(db_path)` — aiosqlite store with indexes on category / name / timestamp; `init_db()`, `record()`, query helpers
+- Enrichment-corrections overlay (enrich_overlay_store.py + routes/enrich_review.py, strand sira-enrichment-review):
+  - `EnrichOverlayStore(corrections_root)` — sole WRITER of `<root>/sira-enrich/` (sira-query mounts ro): word-record edits (`edit(mno, req_id, op, words|pairs, label, reason, by, origin_release)` with ops remove/unremove/add/unadd/suppress/unsuppress/reaffirm/discard; one active record per (word, direction)), label ops (`disabled_labels`, `set_label_disabled`, `delete_label`, `label_counts`), reason categories (seeded, extensible), `overlay_mtime` (the review UI's pending signal). flock'd read-modify-write, atomic tmp+rename, last-writer-wins per record.
+  - `POST /api/enrich-review/edit`, `GET/POST /api/enrich-review/labels[.../toggle|delete]`, `GET/POST /api/enrich-review/reasons` — JSON edit API; missing corrections_root -> 503 (fail-loud, not silent no-op). Record semantics validated against the service-side fold (`sandbox/sira_query/enrich_overlay.py`) by a cross-side test.
 - Ingested-corpus inventory (routes/playground.py, D-DRAFT-14 docker-distro):
   - `GET /api/test/ingested` — HTMX partial for the Test page's corpus table: one row per served `(MNO, release)` cell with distinct plans, distinct requirements, ingestion date, Latest badge (MMMYYYY order — mirrors query-side latest resolution), Lane badges. Merges the nora vectorstore scan with the sira-query service's `GET /cells` (SIRA-only cells appear from service data; both-lane cells with diverging counts render BOTH numbers — lane staleness indicator). Cached on a cell-dir mtime fingerprint + 5-min TTL.
 - Feedback (feedback_db.py):

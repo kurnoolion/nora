@@ -50,6 +50,7 @@ class EnvJsonConfig:
     jobs_db: str = ""
     metrics_db: str = ""
     feedback_db: str = ""
+    corrections_root: str = ""
 
     @classmethod
     def load(cls, path: Path | None = None) -> EnvJsonConfig:
@@ -68,6 +69,7 @@ class EnvJsonConfig:
             jobs_db=str(data.get("jobs_db", "") or "").strip(),
             metrics_db=str(data.get("metrics_db", "") or "").strip(),
             feedback_db=str(data.get("feedback_db", "") or "").strip(),
+            corrections_root=str(data.get("corrections_root", "") or "").strip(),
         )
 
 
@@ -98,6 +100,10 @@ class WebConfig:
     jobs_db: str = ""
     metrics_db: str = ""
     feedback_db: str = ""
+    # Enrichment-corrections volume root (strand sira-enrichment-review):
+    # <corrections_root>/sira-enrich/ holds the per-MNO overlay files the
+    # review UI writes and sira-query reads. "" = surface disabled.
+    corrections_root: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> WebConfig:
@@ -112,6 +118,7 @@ class WebConfig:
             ollama_url=data.get("ollama_url", cls.ollama_url),
             default_model=data.get("default_model", cls.default_model),
             env_dir=data.get("env_dir", cls.env_dir),
+            corrections_root=data.get("corrections_root", cls.corrections_root),
         )
 
     # --- Derived paths (D-022) ---
@@ -187,6 +194,11 @@ def load_config(path: Path | None = None) -> WebConfig:
     cfg.jobs_db = _resolve_db_path(_ENV_VAR_JOBS_DB, env_json.jobs_db, "jobs")
     cfg.metrics_db = _resolve_db_path(_ENV_VAR_METRICS_DB, env_json.metrics_db, "metrics")
     cfg.feedback_db = _resolve_db_path(_ENV_VAR_FEEDBACK_DB, env_json.feedback_db, "feedback")
+
+    # corrections_root: web.json > $NORA_CORRECTIONS_ROOT > env.json
+    if not cfg.corrections_root:
+        env_val = os.environ.get("NORA_CORRECTIONS_ROOT", "").strip()
+        cfg.corrections_root = env_val or env_json.corrections_root
 
     return cfg
 
