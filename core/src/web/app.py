@@ -237,6 +237,10 @@ app.include_router(config_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["duration"] = _duration_filter
+# nav gating: base.html hides admin-only pages from gated team members
+# (name differs from the routes' `team_restricted` bool context var)
+from core.src.web.team_mode import team_restricted as _team_restricted  # noqa: E402
+templates.env.globals["is_team_restricted"] = _team_restricted
 # Markdown-rendering filter for LLM answer text — converts the
 # model's markdown (headers, bullets, tables, fenced code, **bold**,
 # *italic*) to HTML. Returns Jinja-safe Markup so the template can

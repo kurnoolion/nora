@@ -1096,10 +1096,8 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "") -> dict[s
             continue
         llm = st.llm_words.get(rid, [])
         held = st.held_by_id.get(rid, [])
-        if not req_id and not llm and not held \
-                and rid not in st.suppressed_ids \
-                and rid not in st.effective_words:
-            continue  # nothing enrichment-related to review (unless asked by id)
+        # every corpus row is reviewable — even with zero LLM words the
+        # expert may ADD words, so unenriched requirements must show up
         rows.append({
             "req_id": rid,
             "text": (st.corpus_by_id.get(rid) or {}).get("text", ""),

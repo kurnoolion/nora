@@ -24,6 +24,10 @@ SERVICE_ROWS = {
          "effective": ["roaming"], "suppressed": False,
          "held": [{"word": "oldword", "direction": "remove",
                    "label": "", "origin": {"release": "Nov2025"}}]},
+        # sira produced nothing for R3 — row still shown, add box usable
+        {"req_id": "R3", "text": "**req_id**: R3\n**plan**: PlanA\nbody three",
+         "plan": "PlanA", "llm_words": [],
+         "effective": [], "suppressed": False, "held": []},
     ],
 }
 
@@ -69,6 +73,7 @@ class TestTable:
                        params={"cell": "GP__Feb2026", "plan": "PlanA"})
         assert r.status_code == 200
         assert "handover" in r.text and "roaming" in r.text
+        assert "R3" in r.text                      # unenriched row still listed
         assert "in sync with serving" in r.text     # no overlay yet
         # R2's held record references a word no longer in the overlay -> hidden
         assert "correction(s) held" not in r.text

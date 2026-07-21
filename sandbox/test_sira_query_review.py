@@ -44,7 +44,8 @@ def two_release_cells(tmp_path, monkeypatch):
     same = "**plan**: PlanA\nthe device shall retry attach after timer expiry"
     feb = _cell("GP", "Feb2026",
                 {"R1": same,
-                 "R2": "**plan**: PlanB\ncompletely different requirement now"},
+                 "R2": "**plan**: PlanB\ncompletely different requirement now",
+                 "R3": "**plan**: PlanA\nrequirement sira gave no words for"},
                 {"R1": ["handover", "retry"], "R2": ["roaming"]})
     nov = _cell("GP", "Nov2025",
                 {"R1": same,
@@ -103,10 +104,15 @@ class TestEndpoints:
         c = TestClient(svc.app)
         assert c.get("/cells/GP__Feb2026/plans").json()["plans"] == ["PlanA", "PlanB"]
         data = c.get("/cells/GP__Feb2026/enrichments", params={"plan": "PlanA"}).json()
-        assert len(data["rows"]) == 1
+        # ALL corpus rows of the plan are listed — R3 has no enrichments but
+        # must still appear (the expert may add words to it)
+        assert [r["req_id"] for r in data["rows"]] == ["R1", "R3"]
         row = data["rows"][0]
         assert row["req_id"] == "R1" and row["llm_words"] == ["handover", "retry"]
         assert row["effective"] == ["retry"] and not row["suppressed"]
+        bare = data["rows"][1]
+        assert bare["llm_words"] == [] and bare["effective"] == []
+        assert not bare["suppressed"] and not bare["held"]
         assert data["loaded_at"] == feb.loaded_at
 
     def test_cells_carries_loaded_at_and_corrections(self, two_release_cells):

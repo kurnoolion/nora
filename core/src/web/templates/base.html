@@ -36,8 +36,10 @@
 
     <!-- Sidebar -->
     <nav class="sidebar">
+        {% set team = is_team_restricted(request) %}
         <div class="sidebar-heading">Navigation</div>
         <ul class="nav flex-column">
+            {% if not team %}
             <li class="nav-item">
                 <a class="nav-link {% block nav_dashboard %}{% endblock %}"
                    href="{{ root_path }}/">
@@ -86,20 +88,22 @@
                     <i class="bi bi-journal-text"></i>Req Browser
                 </a>
             </li>
+            {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% block nav_test %}{% endblock %}"
                    href="{{ root_path }}/test">
-                    <i class="bi bi-flask"></i>Test
+                    <i class="bi bi-chat-left-text"></i>Ask Requirement Questions
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_enrich_review %}{% endblock %}"
                    href="{{ root_path }}/enrichment-review">
-                    <i class="bi bi-pencil-square"></i>Enrichment Review
+                    <i class="bi bi-pencil-square"></i>SIRA Enrichment Review
                 </a>
             </li>
         </ul>
 
+        {% if not team %}
         <div class="sidebar-heading">Settings</div>
         <ul class="nav flex-column">
             <li class="nav-item">
@@ -127,6 +131,7 @@
                 </a>
             </li>
         </ul>
+        {% endif %}
     </nav>
 
     <!-- Main content -->
