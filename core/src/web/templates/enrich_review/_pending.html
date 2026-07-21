@@ -1,0 +1,19 @@
+{# Pending/apply state — rendered inline (table load) and OOB (after edits/apply) #}
+<div id="pending-banner" {% if oob %}hx-swap-oob="true"{% endif %}>
+  {% if pending %}
+  <form hx-post="{{ root_path }}/api/enrich-review/apply"
+        hx-target="#pending-banner" hx-swap="outerHTML">
+    <input type="hidden" name="cell" value="{{ cell }}">
+    <button class="btn btn-warning btn-sm">
+      ⚠ corrections pending — Apply to serving
+    </button>
+  </form>
+  {% elif loaded_at %}
+  <span class="badge bg-success">in sync with serving</span>
+  {% endif %}
+  {% if apply_results %}
+  <div class="small text-muted mt-1">
+    {% for r in apply_results %}<div>{{ r }}</div>{% endfor %}
+  </div>
+  {% endif %}
+</div>

@@ -13,16 +13,39 @@ a silent no-op (fail-loud house rule)."""
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+import httpx
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from core.src.web.enrich_overlay_store import EDIT_OPS, EnrichOverlayStore
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/enrich-review")
+router = APIRouter()
+api = APIRouter(prefix="/api/enrich-review")
+
+# sira-query endpoints (same wiring as the test page's SIRA lane). Apply
+# loops over every URL in NORA_SIRA_QUERY_URLS (comma-separated, e.g. both
+# a/b stacks); reads use the first.
+_SIRA_URLS = [u.strip().rstrip("/") for u in os.getenv(
+    "NORA_SIRA_QUERY_URLS",
+    os.getenv("NORA_SIRA_QUERY_URL", "http://127.0.0.1:8040"),
+).split(",") if u.strip()]
+
+
+def _service_get(path: str, params: dict | None = None) -> dict:
+    """GET from the primary sira-query; service errors surface as 502."""
+    try:
+        r = httpx.get(f"{_SIRA_URLS[0]}{path}", params=params or {}, timeout=15.0)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502,
+                            detail=f"sira-query unreachable: {exc}") from exc
 
 
 def _store() -> EnrichOverlayStore:
@@ -37,6 +60,165 @@ def _store() -> EnrichOverlayStore:
     return store
 
 
+# ── Page + HTMX partials ───────────────────────────────────────────
+
+
+def _row_view(service_row: dict, entry: dict | None,
+              disabled: set[str], viewed_release: str) -> dict:
+    """Merge a service row with the CURRENT overlay entry into template
+    state. The web side always renders its own latest edits (the service's
+    effective view lags until Apply/reload) — D-DRAFT-4."""
+    entry = entry or {}
+    active = lambda rec: (rec.get("label") or "") not in disabled or not rec.get("label")  # noqa: E731
+    removes = {r["word"]: r for r in entry.get("remove", []) if active(r)}
+    adds = [r for r in entry.get("add", []) if active(r)]
+    sup = entry.get("suppress_all")
+    suppressed = bool(isinstance(sup, dict) and sup.get("value") and active(sup))
+
+    llm_words = service_row.get("llm_words", [])
+    chips = [{"word": w, "removed": w in removes,
+              "record": removes.get(w)} for w in llm_words]
+    add_words = {r["word"] for r in adds}
+    # held: service verdicts, filtered to records still present with a
+    # non-current origin (discard/reaffirm must vanish instantly)
+    still = {("remove", w) for w in removes} \
+        | {("add", r["word"]) for r in adds} \
+        | ({("suppress_all", "")} if isinstance(sup, dict) else set())
+    held = [h for h in service_row.get("held", [])
+            if (h.get("direction"), h.get("word", "")) in still
+            and (h.get("origin") or {}).get("release", "") != viewed_release]
+
+    return {"req_id": service_row.get("req_id", ""),
+            "text": service_row.get("text", ""),
+            "plan": service_row.get("plan", ""),
+            "chips": chips,
+            "adds": [r for r in adds if r["word"] not in removes],
+            "suppressed": suppressed,
+            "held": held,
+            "n_llm": len(llm_words),
+            "n_added": len(add_words - set(removes))}
+
+
+def _cell_mno_release(cell: str) -> tuple[str, str]:
+    if "__" not in cell:
+        raise HTTPException(status_code=422, detail=f"bad cell name: {cell}")
+    mno, release = cell.split("__", 1)
+    return mno, release
+
+
+def _pending_ctx(cell: str, store: EnrichOverlayStore,
+                 loaded_at: float) -> dict:
+    mno, _ = _cell_mno_release(cell)
+    pending = store.overlay_mtime(mno) > loaded_at > 0
+    return {"cell": cell, "pending": pending, "loaded_at": loaded_at}
+
+
+@router.get("/enrichment-review", response_class=HTMLResponse)
+async def page(request: Request):
+    from core.src.web.app import _template_response
+    return _template_response(request, "enrich_review/index.html", {
+        "categories": _store().reason_categories(),
+    })
+
+
+@api.get("/cells")
+def cells() -> dict[str, Any]:
+    """Proxied cell list for the MNO/Release cascade."""
+    return _service_get("/cells")
+
+
+@api.get("/plans")
+def plans(cell: str) -> dict[str, Any]:
+    return _service_get(f"/cells/{cell}/plans")
+
+
+@api.get("/table", response_class=HTMLResponse)
+async def table(request: Request, cell: str, plan: str = ""):
+    """Server-rendered rows: service data ⊕ current overlay."""
+    from core.src.web.app import _template_response
+    store = _store()
+    mno, release = _cell_mno_release(cell)
+    data = _service_get(f"/cells/{cell}/enrichments", {"plan": plan})
+    overlay = store.get_overlay(mno)
+    disabled = store.disabled_labels()
+    rows = [_row_view(r, overlay.get(r["req_id"]), disabled, release)
+            for r in data.get("rows", [])]
+    return _template_response(request, "enrich_review/_table.html", {
+        "cell": cell, "plan": plan, "rows": rows,
+        **_pending_ctx(cell, store, data.get("loaded_at", 0.0)),
+    })
+
+
+@api.post("/row-edit", response_class=HTMLResponse)
+async def row_edit(request: Request,
+                   cell: str = Form(...), plan: str = Form(""),
+                   req_id: str = Form(...), op: str = Form(...),
+                   word: str = Form(""), words: str = Form(""),
+                   direction: str = Form(""),
+                   label: str = Form(""), reason_category: str = Form(""),
+                   reason_note: str = Form(""), by: str = Form("")):
+    """One chip/box interaction → store edit → re-rendered row partial."""
+    from core.src.web.app import _template_response
+    if op not in EDIT_OPS:
+        raise HTTPException(status_code=422, detail=f"unknown op: {op}")
+    store = _store()
+    mno, release = _cell_mno_release(cell)
+
+    word_list = [w.strip() for w in (words or word).split(",") if w.strip()]
+    pairs = ([{"direction": direction or "remove", "word": word}]
+             if op in ("reaffirm", "discard") else [])
+    if op in ("reaffirm", "discard") and direction == "__all_held__":
+        # act on every held record of the req (the banner's bulk buttons):
+        svc = _service_get(f"/cells/{cell}/enrichments",
+                           {"req_id": req_id})
+        rows = svc.get("rows", [])
+        pairs = [{"direction": h.get("direction"), "word": h.get("word", "")}
+                 for h in (rows[0].get("held", []) if rows else [])]
+
+    store.edit(mno, req_id, op, words=word_list, pairs=pairs, label=label,
+               reason={"category": reason_category, "note": reason_note},
+               by=by, origin_release=release)
+
+    svc = _service_get(f"/cells/{cell}/enrichments", {"req_id": req_id})
+    rows = svc.get("rows", [])
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"unknown req: {req_id}")
+    view = _row_view(rows[0], store.get_entry(mno, req_id),
+                     store.disabled_labels(), release)
+    return _template_response(request, "enrich_review/_row.html", {
+        "cell": cell, "plan": plan, "row": view, "oob_pending": True,
+        **_pending_ctx(cell, store, svc.get("loaded_at", 0.0))})
+
+
+@api.get("/pending", response_class=HTMLResponse)
+async def pending(request: Request, cell: str):
+    from core.src.web.app import _template_response
+    store = _store()
+    data = _service_get(f"/cells/{cell}/enrichments", {"req_id": "__none__"})
+    return _template_response(request, "enrich_review/_pending.html",
+                              _pending_ctx(cell, store, data.get("loaded_at", 0.0)))
+
+
+@api.post("/apply", response_class=HTMLResponse)
+async def apply(request: Request, cell: str = Form(...)):
+    """The expert's Apply: reload the cell on EVERY configured sira-query
+    (both stacks when a/b are live) — D-DRAFT-4 self-service loop."""
+    from core.src.web.app import _template_response
+    store = _store()
+    results, loaded_at = [], 0.0
+    for base in _SIRA_URLS:
+        try:
+            r = httpx.post(f"{base}/cells/{cell}/reload", timeout=120.0)
+            r.raise_for_status()
+            loaded_at = max(loaded_at, r.json().get("loaded_at", 0.0))
+            results.append(f"{base}: ok")
+        except httpx.HTTPError as exc:
+            results.append(f"{base}: FAILED ({exc})")
+    ctx = _pending_ctx(cell, store, loaded_at)
+    ctx["apply_results"] = results
+    return _template_response(request, "enrich_review/_pending.html", ctx)
+
+
 class EditRequest(BaseModel):
     mno: str
     req_id: str
@@ -49,7 +231,7 @@ class EditRequest(BaseModel):
     origin_release: str = ""                          # release being VIEWED
 
 
-@router.post("/edit")
+@api.post("/edit")
 def edit(req: EditRequest) -> dict[str, Any]:
     if req.op not in EDIT_OPS:
         raise HTTPException(status_code=422, detail=f"unknown op: {req.op}")
@@ -64,7 +246,7 @@ def edit(req: EditRequest) -> dict[str, Any]:
             "overlay_mtime": store.overlay_mtime(req.mno)}
 
 
-@router.get("/labels")
+@api.get("/labels")
 def labels() -> dict[str, Any]:
     store = _store()
     return {"disabled": sorted(store.disabled_labels()),
@@ -76,7 +258,7 @@ class LabelToggle(BaseModel):
     disabled: bool
 
 
-@router.post("/labels/toggle")
+@api.post("/labels/toggle")
 def label_toggle(req: LabelToggle) -> dict[str, Any]:
     store = _store()
     disabled = store.set_label_disabled(req.label, req.disabled)
@@ -87,7 +269,7 @@ class LabelDelete(BaseModel):
     label: str
 
 
-@router.post("/labels/delete")
+@api.post("/labels/delete")
 def label_delete(req: LabelDelete) -> dict[str, Any]:
     """Bulk cleanup once a prompt fix lands (D-DRAFT-5)."""
     store = _store()
@@ -96,7 +278,7 @@ def label_delete(req: LabelDelete) -> dict[str, Any]:
             "counts": store.label_counts()}
 
 
-@router.get("/reasons")
+@api.get("/reasons")
 def reasons() -> dict[str, Any]:
     return {"categories": _store().reason_categories()}
 
@@ -105,8 +287,10 @@ class ReasonAdd(BaseModel):
     category: str
 
 
-@router.post("/reasons")
+@api.post("/reasons")
 def reason_add(req: ReasonAdd) -> dict[str, Any]:
     if not req.category.strip():
         raise HTTPException(status_code=422, detail="category is required")
     return {"categories": _store().add_reason_category(req.category)}
+
+router.include_router(api)

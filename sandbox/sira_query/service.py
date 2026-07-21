@@ -1082,20 +1082,24 @@ def cell_plans(cell_name: str) -> dict[str, Any]:
 
 
 @app.get("/cells/{cell_name}/enrichments")
-def cell_enrichments(cell_name: str, plan: str = "") -> dict[str, Any]:
+def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "") -> dict[str, Any]:
     """Per-req enrichment data for the review UI: LLM output, the applied
-    effective set, held records (cross-release guard), suppression state."""
+    effective set, held records (cross-release guard), suppression state.
+    `req_id` narrows to one row (the web row-edit re-render path)."""
     st = _cells[_parse_cell_or_404(cell_name)]
     rows: list[dict[str, Any]] = []
     for rid in st.doc_ids:
+        if req_id and rid != req_id:
+            continue
         p = _plan_of(st, rid)
         if plan and p != plan:
             continue
         llm = st.llm_words.get(rid, [])
         held = st.held_by_id.get(rid, [])
-        if not llm and not held and rid not in st.suppressed_ids \
+        if not req_id and not llm and not held \
+                and rid not in st.suppressed_ids \
                 and rid not in st.effective_words:
-            continue  # nothing enrichment-related to review
+            continue  # nothing enrichment-related to review (unless asked by id)
         rows.append({
             "req_id": rid,
             "text": (st.corpus_by_id.get(rid) or {}).get("text", ""),

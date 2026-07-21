@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}NORA — Enrichment Review{% endblock %}
+{% block nav_enrich_review %}active{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+  <h1 class="mb-2">Enrichment Review</h1>
+  <p class="text-muted">
+    Review and correct SIRA's per-requirement enrichment keywords. Edits save
+    immediately to the corrections overlay; <strong>Apply</strong> reloads the
+    serving index so you can re-test queries on the Test page. Deleted words
+    stay visible as struck chips (click ↺ to undo); additions are green.
+  </p>
+
+  <div class="card mb-3">
+    <div class="card-body py-2">
+      <div class="row g-2 align-items-end">
+        <div class="col-auto">
+          <label class="form-label mb-0 small">MNO</label>
+          <select id="sel-mno" class="form-select form-select-sm"></select>
+        </div>
+        <div class="col-auto">
+          <label class="form-label mb-0 small">Release</label>
+          <select id="sel-release" class="form-select form-select-sm"></select>
+        </div>
+        <div class="col-auto">
+          <label class="form-label mb-0 small">Plan</label>
+          <select id="sel-plan" class="form-select form-select-sm"></select>
+        </div>
+        <div class="col-auto ms-auto">
+          <button class="btn btn-outline-secondary btn-sm" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#labels-drawer">
+            <i class="bi bi-tags"></i> Labels
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# Sticky stamping bar — every edit is stamped from these fields #}
+  <div id="stamp-bar" class="card mb-3 sticky-top" style="top: .5rem; z-index: 10;">
+    <div class="card-body py-2">
+      <div class="row g-2 align-items-end">
+        <div class="col-auto">
+          <label class="form-label mb-0 small">Label (campaign)</label>
+          <input name="label" class="form-control form-control-sm"
+                 list="labels-list" placeholder="e.g. handover-noise">
+          <datalist id="labels-list"></datalist>
+        </div>
+        <div class="col-auto">
+          <label class="form-label mb-0 small">Reason</label>
+          <select name="reason_category" class="form-select form-select-sm"
+                  id="reason-category">
+            <option value=""></option>
+            {% for c in categories %}<option>{{ c }}</option>{% endfor %}
+            <option value="__new__">+ new category…</option>
+          </select>
+        </div>
+        <div class="col">
+          <label class="form-label mb-0 small">Note (optional)</label>
+          <input name="reason_note" class="form-control form-control-sm"
+                 placeholder="free-form clue for prompt tuning">
+        </div>
+        <div class="col-auto">
+          <label class="form-label mb-0 small">You</label>
+          <input name="by" class="form-control form-control-sm"
+                 placeholder="name" style="width: 9rem">
+        </div>
+        <div class="col-auto" id="pending-slot">
+          <div id="pending-banner"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="collapse mb-3" id="labels-drawer">
+    <div class="card card-body py-2" id="labels-drawer-body">
+      <span class="text-muted">Loading labels…</span>
+    </div>
+  </div>
+
+  <div id="table-container">
+    <p class="text-muted">Select MNO → Release → Plan to load enrichments.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const api = "{{ root_path }}/api/enrich-review";
+  let cells = [];
+
+  function opt(sel, values, placeholder) {
+    sel.innerHTML = "";
+    const p = document.createElement("option");
+    p.value = ""; p.textContent = placeholder || "—";
+    sel.appendChild(p);
+    values.forEach(v => {
+      const o = document.createElement("option");
+      o.value = v; o.textContent = v; sel.appendChild(o);
+    });
+  }
+
+  async function loadCells() {
+    const data = await (await fetch(api + "/cells")).json();
+    cells = data.cells || [];
+    opt($("sel-mno"), [...new Set(cells.map(c => c.mno))], "select…");
+  }
+
+  function releasesFor(mno) {
+    return cells.filter(c => c.mno === mno).map(c => c.release);
+  }
+  const cellName = () => $("sel-mno").value + "__" + $("sel-release").value;
+
+  $("sel-mno").addEventListener("change", () => {
+    opt($("sel-release"), releasesFor($("sel-mno").value), "select…");
+    opt($("sel-plan"), [], "—");
+  });
+  $("sel-release").addEventListener("change", async () => {
+    if (!$("sel-release").value) return;
+    const data = await (await fetch(api + "/plans?cell=" + cellName())).json();
+    opt($("sel-plan"), data.plans || [], "select…");
+  });
+  $("sel-plan").addEventListener("change", () => {
+    if (!$("sel-plan").value) return;
+    htmx.ajax("GET", api + "/table?cell=" + cellName() +
+              "&plan=" + encodeURIComponent($("sel-plan").value),
+              {target: "#table-container", swap: "innerHTML"});
+  });
+
+  $("reason-category").addEventListener("change", async (e) => {
+    if (e.target.value !== "__new__") return;
+    const name = prompt("New reason category (kebab-case):");
+    e.target.value = "";
+    if (!name) return;
+    const data = await (await fetch(api + "/reasons", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({category: name})})).json();
+    const sel = e.target;
+    sel.innerHTML = '<option value=""></option>' +
+      data.categories.map(c => `<option>${c}</option>`).join("") +
+      '<option value="__new__">+ new category…</option>';
+    sel.value = name;
+  });
+
+  async function renderLabels() {
+    const data = await (await fetch(api + "/labels")).json();
+    const disabled = new Set(data.disabled || []);
+    const rows = Object.entries(data.counts || {}).sort();
+    $("labels-drawer-body").innerHTML = rows.length ? rows.map(([l, n]) => `
+      <div class="d-flex gap-2 align-items-center py-1">
+        <code>${l || "(no label)"}</code>
+        <span class="badge bg-secondary">${n}</span>
+        ${l ? `
+        <button class="btn btn-sm btn-outline-secondary lbl-toggle" data-label="${l}"
+                data-disabled="${disabled.has(l)}">
+          ${disabled.has(l) ? "enable" : "disable"}</button>
+        <button class="btn btn-sm btn-outline-danger lbl-delete" data-label="${l}">
+          delete all</button>` : ""}
+        ${disabled.has(l) ? '<span class="badge bg-warning text-dark">disabled</span>' : ""}
+      </div>`).join("") : '<span class="text-muted">No labeled corrections yet.</span>';
+    // populate the stamping bar datalist too
+    $("labels-list").innerHTML =
+      rows.filter(([l]) => l).map(([l]) => `<option value="${l}">`).join("");
+  }
+  document.addEventListener("click", async (e) => {
+    const t = e.target.closest(".lbl-toggle, .lbl-delete");
+    if (!t) return;
+    const label = t.dataset.label;
+    if (t.classList.contains("lbl-delete")) {
+      if (!confirm(`Delete ALL records labeled "${label}"? (the prompt-fix cleanup — cannot be undone)`)) return;
+      await fetch(api + "/labels/delete", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({label})});
+    } else {
+      await fetch(api + "/labels/toggle", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({label, disabled: t.dataset.disabled !== "true"})});
+    }
+    await renderLabels();
+    if ($("sel-plan").value) $("sel-plan").dispatchEvent(new Event("change"));
+  });
+  document.getElementById("labels-drawer")
+    .addEventListener("show.bs.collapse", renderLabels);
+
+  loadCells().then(renderLabels);
+})();
+</script>
+{% endblock %}

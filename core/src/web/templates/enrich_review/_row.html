@@ -1,0 +1,88 @@
+{# One requirement row. Every form: stamped from #stamp-bar, swaps itself. #}
+{% set base_fields %}
+  <input type="hidden" name="cell" value="{{ cell }}">
+  <input type="hidden" name="plan" value="{{ plan }}">
+  <input type="hidden" name="req_id" value="{{ row.req_id }}">
+{% endset %}
+{% set hx %}hx-post="{{ root_path }}/api/enrich-review/row-edit"
+  hx-target="#row-{{ row.req_id }}" hx-swap="outerHTML"
+  hx-include="#stamp-bar input, #stamp-bar select"{% endset %}
+<tr id="row-{{ row.req_id }}">
+  <td><code>{{ row.req_id }}</code>
+    {% if row.suppressed %}<br><span class="badge bg-danger">suppressed</span>{% endif %}
+  </td>
+  <td>
+    <details><summary class="text-truncate" style="max-width: 26rem">
+      {{ row.text[:140] }}{% if row.text|length > 140 %}…{% endif %}</summary>
+      <pre class="small mb-0" style="white-space: pre-wrap">{{ row.text }}</pre>
+    </details>
+  </td>
+  <td>
+    {% if row.held %}
+    <div class="alert alert-warning py-1 px-2 mb-2 small">
+      ⚠ {{ row.held|length }} correction(s) held — requirement changed since
+      {{ (row.held[0].origin or {}).release or "?" }}
+      <form class="d-inline" {{ hx }}>{{ base_fields }}
+        <input type="hidden" name="op" value="reaffirm">
+        <input type="hidden" name="direction" value="__all_held__">
+        <button class="btn btn-sm btn-outline-primary py-0">Re-affirm</button></form>
+      <form class="d-inline" {{ hx }}>{{ base_fields }}
+        <input type="hidden" name="op" value="discard">
+        <input type="hidden" name="direction" value="__all_held__">
+        <button class="btn btn-sm btn-outline-danger py-0">Discard</button></form>
+    </div>
+    {% endif %}
+
+    {% if row.suppressed %}
+    <span class="text-muted small">all {{ row.n_llm }} SIRA words suppressed</span>
+    <form class="d-inline" {{ hx }}>{{ base_fields }}
+      <input type="hidden" name="op" value="unsuppress">
+      <button class="btn btn-sm btn-outline-secondary py-0">Undo</button></form>
+    {% else %}
+    {% for chip in row.chips %}
+      {% if chip.removed %}
+      <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
+        <input type="hidden" name="op" value="unremove">
+        <input type="hidden" name="word" value="{{ chip.word }}">
+        <span class="badge bg-light text-muted border">
+          <s>{{ chip.word }}</s>
+          <button class="btn btn-sm p-0 border-0 bg-transparent" title="undo removal">↺</button>
+        </span></form>
+      {% else %}
+      <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
+        <input type="hidden" name="op" value="remove">
+        <input type="hidden" name="word" value="{{ chip.word }}">
+        <span class="badge bg-secondary">{{ chip.word }}
+          <button class="btn btn-sm p-0 border-0 bg-transparent text-white"
+                  title="remove word">×</button>
+        </span></form>
+      {% endif %}
+    {% endfor %}
+    {% endif %}
+
+    {% for rec in row.adds %}
+    <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
+      <input type="hidden" name="op" value="unadd">
+      <input type="hidden" name="word" value="{{ rec.word }}">
+      <span class="badge bg-success">{{ rec.word }}
+        <button class="btn btn-sm p-0 border-0 bg-transparent text-white"
+                title="undo addition">×</button>
+      </span></form>
+    {% endfor %}
+
+    <div class="d-flex gap-1 mt-1">
+      <form class="d-flex gap-1" {{ hx }}>{{ base_fields }}
+        <input type="hidden" name="op" value="add">
+        <input name="words" class="form-control form-control-sm"
+               placeholder="add words, comma-separated" style="width: 16rem">
+        <button class="btn btn-sm btn-outline-success">Add</button></form>
+      {% if not row.suppressed and row.n_llm %}
+      <form {{ hx }}>{{ base_fields }}
+        <input type="hidden" name="op" value="suppress">
+        <button class="btn btn-sm btn-outline-danger"
+                title="suppress every SIRA word for this requirement">Suppress all</button></form>
+      {% endif %}
+    </div>
+  </td>
+</tr>
+{% if oob_pending %}{% with oob=True %}{% include "enrich_review/_pending.html" %}{% endwith %}{% endif %}

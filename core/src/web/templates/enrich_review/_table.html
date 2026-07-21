@@ -1,0 +1,22 @@
+{# Enrichment-review table — served by /api/enrich-review/table #}
+{% include "enrich_review/_pending.html" %}
+{% if not rows %}
+<p class="text-muted">No enrichment data for {{ cell }}{% if plan %} / {{ plan }}{% endif %}.</p>
+{% else %}
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th style="width: 14rem">req_id</th>
+        <th style="width: 30%">requirement</th>
+        <th>enrichments <span class="text-muted small">({{ rows|length }} reqs)</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      {% include "enrich_review/_row.html" %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
