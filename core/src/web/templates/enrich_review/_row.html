@@ -45,9 +45,10 @@
       <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
         <input type="hidden" name="op" value="unremove">
         <input type="hidden" name="word" value="{{ chip.word }}">
-        <span class="badge bg-light text-muted border">
+        <span class="badge" style="background-color: #fd7e14">
           <s>{{ chip.word }}</s>
-          <button class="btn btn-sm p-0 border-0 bg-transparent" title="undo removal">↺</button>
+          <button class="btn btn-sm p-0 border-0 bg-transparent text-white"
+                  title="undo removal">↺</button>
         </span></form>
       {% else %}
       <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
@@ -67,7 +68,7 @@
       <input type="hidden" name="word" value="{{ rec.word }}">
       <span class="badge bg-success">{{ rec.word }}
         <button class="btn btn-sm p-0 border-0 bg-transparent text-white"
-                title="undo addition">×</button>
+                title="undo addition">↺</button>
       </span></form>
     {% endfor %}
 

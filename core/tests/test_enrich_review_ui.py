@@ -101,7 +101,9 @@ class TestRowEdit:
     def test_remove_renders_ghost_and_pending(self, client):
         r = self._edit(client, op="remove", word="handover")
         assert r.status_code == 200
-        assert "<s>handover</s>" in r.text          # ghost chip
+        assert "<s>handover</s>" in r.text          # struck chip
+        assert "#fd7e14" in r.text                   # orange box
+        assert "undo removal" in r.text
         assert "retry" in r.text                     # untouched chip
         assert "corrections pending" in r.text       # OOB banner flipped
 
@@ -111,6 +113,7 @@ class TestRowEdit:
         assert "attach retry, per timer T3402" in r.text
         r = self._edit(client, op="add", words="t3410")
         assert "t3410" in r.text
+        assert "undo addition" in r.text and "↺" in r.text
         r = self._edit(client, op="unadd", word="attach retry, per timer T3402")
         assert "attach retry, per timer" not in r.text and "t3410" in r.text
 

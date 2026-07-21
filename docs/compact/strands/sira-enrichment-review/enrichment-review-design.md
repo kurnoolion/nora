@@ -249,9 +249,9 @@ name) + pending counter + [Apply to serving]; table req_id | text
 (truncated, click-expand) | enrichment chips.
 
 Chip grammar:
-- LLM word active: plain chip, x removes -> becomes struck GHOST chip with
+- LLM word active: plain chip, x removes -> becomes struck ORANGE chip with
   undo (removed words stay visible; undo is one click on the thing itself)
-- Added word: green chip, x un-adds
+- Added word: green chip, undo (same icon) un-adds
 - Suppress all: row button; suppressed rows collapse to a summary line
   with Undo. Confirm dialog before suppressing (accidental-click guard).
 - Held records (cross-release guard): per-req banner "N corrections held —
