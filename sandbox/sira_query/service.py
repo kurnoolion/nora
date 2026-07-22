@@ -1074,10 +1074,21 @@ def _plan_of(st: CellState, req_id: str) -> str:
     return m.group(1) if m else ""
 
 
+def _plan_matches(p: str, plan: str) -> bool:
+    """`doc:`/`section:` composite rows stamp `plan_id / plan_name` (a
+    deliberate BM25 bridge, see nora_to_beir), while requirement rows stamp
+    a single value — so a plan filter must match either part."""
+    return plan == p or plan in {s.strip() for s in p.split(" / ")}
+
+
 @app.get("/cells/{cell_name}/plans")
 def cell_plans(cell_name: str) -> dict[str, Any]:
     st = _cells[_parse_cell_or_404(cell_name)]
-    plans = sorted({p for rid in st.doc_ids if (p := _plan_of(st, rid))})
+    # composite rows' `plan_id / plan_name` stamp must not surface as a
+    # selectable plan — the dropdown lists requirement-row values only
+    plans = sorted({p for rid in st.doc_ids
+                    if not rid.startswith(("doc:", "section:"))
+                    and (p := _plan_of(st, rid))})
     return {"cell": cell_name, "plans": plans}
 
 
@@ -1092,7 +1103,7 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "") -> dict[s
         if req_id and rid != req_id:
             continue
         p = _plan_of(st, rid)
-        if plan and p != plan:
+        if plan and not _plan_matches(p, plan):
             continue
         llm = st.llm_words.get(rid, [])
         held = st.held_by_id.get(rid, [])

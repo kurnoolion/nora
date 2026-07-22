@@ -45,7 +45,9 @@ def two_release_cells(tmp_path, monkeypatch):
     feb = _cell("GP", "Feb2026",
                 {"R1": same,
                  "R2": "**plan**: PlanB\ncompletely different requirement now",
-                 "R3": "**plan**: PlanA\nrequirement sira gave no words for"},
+                 "R3": "**plan**: PlanA\nrequirement sira gave no words for",
+                 # composite rows stamp `plan_id / plan_name` (BM25 bridge)
+                 "doc:PlanA": "**plan**: PlanA / Alpha Plan Doc\n# Alpha plan"},
                 {"R1": ["handover", "retry"], "R2": ["roaming"]})
     nov = _cell("GP", "Nov2025",
                 {"R1": same,
@@ -102,11 +104,13 @@ class TestEndpoints:
         feb, _ = two_release_cells
         svc._apply_overlay_and_enrich(feb)
         c = TestClient(svc.app)
+        # composite rows' `plan_id / plan_name` stamp is NOT a selectable plan
         assert c.get("/cells/GP__Feb2026/plans").json()["plans"] == ["PlanA", "PlanB"]
         data = c.get("/cells/GP__Feb2026/enrichments", params={"plan": "PlanA"}).json()
         # ALL corpus rows of the plan are listed — R3 has no enrichments but
-        # must still appear (the expert may add words to it)
-        assert [r["req_id"] for r in data["rows"]] == ["R1", "R3"]
+        # must still appear (the expert may add words to it), and the doc:
+        # composite matches PlanA via the plan_id part of its stamp
+        assert [r["req_id"] for r in data["rows"]] == ["R1", "R3", "doc:PlanA"]
         row = data["rows"][0]
         assert row["req_id"] == "R1" and row["llm_words"] == ["handover", "retry"]
         assert row["effective"] == ["retry"] and not row["suppressed"]
@@ -114,6 +118,14 @@ class TestEndpoints:
         assert bare["llm_words"] == [] and bare["effective"] == []
         assert not bare["suppressed"] and not bare["held"]
         assert data["loaded_at"] == feb.loaded_at
+
+    def test_plan_matches_either_composite_part(self):
+        # heading-mode reqs stamp plan_name, leading-mode reqs stamp plan_id;
+        # the composite `plan_id / plan_name` stamp must match both filters
+        assert svc._plan_matches("PA1 / Alpha Plan Doc", "PA1")
+        assert svc._plan_matches("PA1 / Alpha Plan Doc", "Alpha Plan Doc")
+        assert not svc._plan_matches("PA1 / Alpha Plan Doc", "PB2")
+        assert svc._plan_matches("PlanA", "PlanA")
 
     def test_cells_carries_loaded_at_and_corrections(self, two_release_cells):
         feb, nov = two_release_cells
