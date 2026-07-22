@@ -122,6 +122,27 @@ class TestEndpoints:
         assert data["overlay_digest"] == feb.overlay_digest
         assert len(feb.overlay_digest) == 64
 
+    def test_pending_plans_flags_edited_plans_only(self, two_release_cells,
+                                                   tmp_path):
+        feb, _ = two_release_cells
+        svc._apply_overlay_and_enrich(feb)
+        c = TestClient(svc.app)
+        # applied == on-disk -> nothing pending
+        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == []
+        # edit R1 (PlanA) on disk; R999 is unknown to this cell -> ignored
+        p = tmp_path / "sira-enrich" / "GP.json"
+        overlay = json.loads(p.read_text())
+        overlay["R1"]["add"] = [{"word": "extra", "label": "", "by": "t",
+                                 "at": "y", "origin": {"release": "Feb2026"}}]
+        overlay["R999"] = {"add": [{"word": "x"}]}
+        p.write_text(json.dumps(overlay))
+        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
+        # a disabled-labels change affects every plan
+        (tmp_path / "sira-enrich" / "labels.json").write_text(
+            json.dumps({"disabled": ["some-label"]}))
+        assert (c.get("/cells/GP__Feb2026/plans").json()["pending_plans"]
+                == ["PlanA", "PlanB"])
+
     def test_plan_matches_either_composite_part(self):
         # heading-mode reqs stamp plan_name, leading-mode reqs stamp plan_id;
         # the composite `plan_id / plan_name` stamp must match both filters

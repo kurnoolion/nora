@@ -114,11 +114,31 @@
     opt($("sel-release"), releasesFor($("sel-mno").value), "select…");
     opt($("sel-plan"), [], "—");
   });
+  // ● marks plans whose overlay edits aren't applied to serving yet
+  function markPendingPlans(pendingPlans) {
+    const pend = new Set(pendingPlans || []);
+    [...$("sel-plan").options].forEach(o => {
+      if (o.value) o.textContent = pend.has(o.value) ? o.value + " ●" : o.value;
+    });
+  }
+  async function refreshPlanMarkers() {
+    if (!$("sel-release").value) return;
+    const data = await (await fetch(api + "/plans?cell=" + cellName())).json();
+    markPendingPlans(data.pending_plans);
+  }
   $("sel-release").addEventListener("change", async () => {
     if (!$("sel-release").value) return;
     const data = await (await fetch(api + "/plans?cell=" + cellName())).json();
     opt($("sel-plan"), data.plans || [], "select…");
+    markPendingPlans(data.pending_plans);
   });
+  // every edit / Apply re-renders #pending-banner (inline or OOB) — piggyback
+  // on that swap to keep the dropdown's pending dots current
+  ["htmx:afterSwap", "htmx:oobAfterSwap"].forEach(ev =>
+    document.body.addEventListener(ev, e => {
+      if (e.detail && e.detail.target && e.detail.target.id === "pending-banner")
+        refreshPlanMarkers();
+    }));
   $("sel-plan").addEventListener("change", () => {
     if (!$("sel-plan").value) return;
     $("table-container").innerHTML =

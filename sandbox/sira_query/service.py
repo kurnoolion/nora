@@ -317,6 +317,10 @@ class CellState:
     loaded_at: float = 0.0
     overlay_applied: dict[str, int] = field(default_factory=dict)
     overlay_digest: str = ""
+    # the overlay/disabled content AS APPLIED at load — /plans diffs the
+    # live overlay file against these to flag plans with pending edits
+    overlay_snapshot: dict = field(default_factory=dict)
+    disabled_snapshot: set = field(default_factory=set)
     _token_cache: dict[str, frozenset] = field(default_factory=dict)
 
     def vanilla_tokens(self, req_id: str) -> "frozenset | None":
@@ -634,6 +638,8 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
     else:
         overlay, disabled = {}, set()
     cstate.overlay_digest = _overlay_digest(overlay, disabled)
+    cstate.overlay_snapshot = overlay
+    cstate.disabled_snapshot = set(disabled)
 
     def token_sets(rel: str, req_id: str):
         peer = _cells.get((mno, rel)) if rel != release else cstate
@@ -1103,7 +1109,29 @@ def cell_plans(cell_name: str) -> dict[str, Any]:
     plans = sorted({p for rid in st.doc_ids
                     if not rid.startswith(("doc:", "section:"))
                     and (p := _plan_of(st, rid))})
-    return {"cell": cell_name, "plans": plans}
+    return {"cell": cell_name, "plans": plans,
+            "pending_plans": _pending_plans(st, plans)}
+
+
+def _pending_plans(st: CellState, plans: list[str]) -> list[str]:
+    """Plans whose reqs have overlay edits not yet applied to serving:
+    diff the LIVE overlay file against the load-time snapshot per req and
+    attribute changed reqs to their plan stamp. A disabled-labels change
+    affects every plan, so it marks all of them."""
+    if not _CORR_ROOT:
+        return []
+    mno, _release = st.cell
+    if load_disabled_labels(_CORR_ROOT) != st.disabled_snapshot:
+        return plans
+    cur = load_overlay(_CORR_ROOT, mno)
+    snap = st.overlay_snapshot
+    pending: set[str] = set()
+    for rid in set(cur) | set(snap):
+        if cur.get(rid) == snap.get(rid) or rid not in st.doc_id_to_idx:
+            continue
+        p = _plan_of(st, rid)
+        pending.update(pl for pl in plans if _plan_matches(p, pl))
+    return sorted(pending)
 
 
 @app.get("/cells/{cell_name}/enrichments")
