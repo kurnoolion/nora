@@ -121,6 +121,8 @@
   });
   $("sel-plan").addEventListener("change", () => {
     if (!$("sel-plan").value) return;
+    $("table-container").innerHTML =
+      '<p class="text-muted py-3"><span class="spinner-border spinner-border-sm"></span> Loading enrichments…</p>';
     htmx.ajax("GET", api + "/table?cell=" + cellName() +
               "&plan=" + encodeURIComponent($("sel-plan").value),
               {target: "#table-container", swap: "innerHTML"});

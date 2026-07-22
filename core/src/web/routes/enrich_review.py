@@ -136,21 +136,37 @@ def plans(cell: str) -> dict[str, Any]:
     return _service_get(f"/cells/{cell}/plans")
 
 
+# rows rendered per chunk — the next chunk lazy-loads when its sentinel
+# scrolls into view, so 400+-req plans never freeze the browser
+_TABLE_PAGE = 100
+
+
 @api.get("/table", response_class=HTMLResponse)
-async def table(request: Request, cell: str, plan: str = ""):
-    """Server-rendered rows: service data ⊕ current overlay."""
+async def table(request: Request, cell: str, plan: str = "", offset: int = 0):
+    """Server-rendered rows: service data ⊕ current overlay. `offset` > 0
+    returns a rows-only fragment (the infinite-scroll continuation)."""
     from core.src.web.app import _template_response
     store = _store()
     mno, release = _cell_mno_release(cell)
     data = _service_get(f"/cells/{cell}/enrichments", {"plan": plan})
+    all_rows = data.get("rows", [])
+    total = len(all_rows)
+    offset = max(0, offset)
     overlay = store.get_overlay(mno)
     disabled = store.disabled_labels()
     rows = [_row_view(r, overlay.get(r["req_id"]), disabled, release)
-            for r in data.get("rows", [])]
-    return _template_response(request, "enrich_review/_table.html", {
+            for r in all_rows[offset:offset + _TABLE_PAGE]]
+    ctx = {
         "cell": cell, "plan": plan, "rows": rows,
         "categories": store.reason_categories(),
-        **_pending_ctx(cell, store, data.get("loaded_at", 0.0)),
+        "total": total, "shown": offset + len(rows),
+        "next_offset": (offset + _TABLE_PAGE
+                        if offset + _TABLE_PAGE < total else None),
+    }
+    if offset:
+        return _template_response(request, "enrich_review/_rows_page.html", ctx)
+    return _template_response(request, "enrich_review/_table.html", {
+        **ctx, **_pending_ctx(cell, store, data.get("loaded_at", 0.0)),
     })
 
 

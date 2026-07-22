@@ -80,6 +80,21 @@ class TestTable:
         # R2's held record references a word no longer in the overlay -> hidden
         assert "correction(s) held" not in r.text
 
+    def test_table_chunks_with_revealed_sentinel(self, client, monkeypatch):
+        monkeypatch.setattr(er, "_TABLE_PAGE", 2)
+        r = client.get("/api/enrich-review/table",
+                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+        # first chunk: R1+R2, header shows the full total, sentinel present
+        assert "R1" in r.text and "R2" in r.text and "R3" not in r.text
+        assert "3 reqs" in r.text
+        assert 'hx-trigger="revealed"' in r.text and "offset=2" in r.text
+        # continuation: rows-only fragment, remaining row, no more sentinel
+        r2 = client.get("/api/enrich-review/table",
+                        params={"cell": "GP__Feb2026", "plan": "PlanA",
+                                "offset": 2})
+        assert "R3" in r2.text and "er-head" not in r2.text
+        assert 'hx-trigger="revealed"' not in r2.text
+
     def test_held_banner_shows_when_record_still_present(self, client, tmp_path):
         from core.src.web.enrich_overlay_store import EnrichOverlayStore
         store = EnrichOverlayStore(tmp_path)

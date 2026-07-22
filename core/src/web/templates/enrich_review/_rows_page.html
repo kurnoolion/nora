@@ -1,0 +1,13 @@
+{# One chunk of rows + the infinite-scroll sentinel. The sentinel replaces
+   itself (outerHTML) with the next chunk when scrolled into view. #}
+{% for row in rows %}
+{% include "enrich_review/_row.html" %}
+{% endfor %}
+{% if next_offset is not none %}
+<div class="text-muted small py-3"
+     hx-get="{{ root_path }}/api/enrich-review/table?cell={{ cell|urlencode }}&plan={{ plan|urlencode }}&offset={{ next_offset }}"
+     hx-trigger="revealed" hx-swap="outerHTML">
+  <span class="spinner-border spinner-border-sm"></span>
+  Loading more… ({{ shown }} of {{ total }} loaded)
+</div>
+{% endif %}

@@ -8,17 +8,17 @@
 {% set hx %}hx-post="{{ root_path }}/api/enrich-review/row-edit"
   hx-target="#row-{{ row.dom_id }}" hx-swap="outerHTML"
   hx-include="#stamp-bar input, #reason-{{ row.dom_id }}, #note-{{ row.dom_id }}"{% endset %}
-<tr id="row-{{ row.dom_id }}">
-  <td style="overflow-wrap: anywhere"><code>{{ row.req_id }}</code>
+<div id="row-{{ row.dom_id }}" class="er-row">
+  <div style="overflow-wrap: anywhere"><code>{{ row.req_id }}</code>
     {% if row.suppressed %}<br><span class="badge bg-danger">suppressed</span>{% endif %}
-  </td>
-  <td>
+  </div>
+  <div>
     <details><summary class="text-truncate" style="max-width: 100%">
       {{ row.text[:140] }}{% if row.text|length > 140 %}…{% endif %}</summary>
       <pre class="small mb-0" style="white-space: pre-wrap; max-height: 18rem; overflow-y: auto">{{ row.text }}</pre>
     </details>
-  </td>
-  <td>
+  </div>
+  <div>
     {% if row.held %}
     <div class="alert alert-warning py-1 px-2 mb-2 small">
       ⚠ {{ row.held|length }} correction(s) held — requirement changed since
@@ -98,6 +98,6 @@
              class="form-control form-control-sm row-note" style="width: 14rem"
              placeholder="note (optional)">
     </div>
-  </td>
-</tr>
+  </div>
+</div>
 {% if oob_pending %}{% with oob=True %}{% include "enrich_review/_pending.html" %}{% endwith %}{% endif %}
