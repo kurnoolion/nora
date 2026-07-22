@@ -118,6 +118,9 @@ class TestEndpoints:
         assert bare["llm_words"] == [] and bare["effective"] == []
         assert not bare["suppressed"] and not bare["held"]
         assert data["loaded_at"] == feb.loaded_at
+        # applied-overlay content digest for the web's pending detection
+        assert data["overlay_digest"] == feb.overlay_digest
+        assert len(feb.overlay_digest) == 64
 
     def test_plan_matches_either_composite_part(self):
         # heading-mode reqs stamp plan_name, leading-mode reqs stamp plan_id;

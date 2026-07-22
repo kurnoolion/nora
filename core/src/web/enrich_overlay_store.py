@@ -122,6 +122,19 @@ class EnrichOverlayStore:
         except OSError:
             return 0.0
 
+    def overlay_digest(self, mno: str) -> str:
+        """Canonical content digest of the MNO overlay + disabled labels.
+        Pending detection compares this against the digest sira-query
+        reports for its APPLIED overlay — edits that are fully undone
+        digest back to the served state, so no false 'pending'. Formula
+        must match sira-query's `_overlay_digest`."""
+        import hashlib
+        payload = json.dumps(
+            {"overlay": self.get_overlay(mno),
+             "disabled": sorted(self.disabled_labels())},
+            sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode()).hexdigest()
+
     def disabled_labels(self) -> set[str]:
         if not self.enabled:
             return set()

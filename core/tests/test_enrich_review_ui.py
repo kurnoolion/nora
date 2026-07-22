@@ -116,7 +116,7 @@ class TestRowEdit:
     def test_remove_renders_ghost_and_pending(self, client):
         r = self._edit(client, op="remove", word="handover")
         assert r.status_code == 200
-        assert "<s>handover</s>" in r.text          # struck chip
+        assert ">handover</s>" in r.text            # struck chip
         assert "#fd7e14" in r.text                   # orange box
         assert "undo removal" in r.text
         assert "retry" in r.text                     # untouched chip
@@ -139,6 +139,24 @@ class TestRowEdit:
         assert "Suppress all" in r.text
         # accidental-click guard: the suppress form asks for confirmation
         assert "hx-confirm" in r.text and "Are you sure" in r.text
+
+    def test_pending_clears_when_all_edits_undone(self, client, tmp_path,
+                                                  monkeypatch):
+        # serving applied the (empty) overlay at load — its digest is the
+        # store's digest before any edit
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        served = EnrichOverlayStore(tmp_path).overlay_digest("GP")
+        base = er._service_get
+        monkeypatch.setattr(
+            er, "_service_get",
+            lambda path, params=None: {**base(path, params),
+                                       "overlay_digest": served})
+        r = self._edit(client, op="remove", word="handover")
+        assert "corrections pending" in r.text
+        r = self._edit(client, op="unremove", word="handover")
+        # everything undone → content matches serving → no Apply button
+        assert "corrections pending" not in r.text
+        assert "in sync with serving" in r.text
 
     def test_per_row_reason_and_note(self, client):
         r = client.get("/api/enrich-review/table",

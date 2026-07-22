@@ -316,6 +316,7 @@ class CellState:
     suppressed_ids: set[str] = field(default_factory=set)
     loaded_at: float = 0.0
     overlay_applied: dict[str, int] = field(default_factory=dict)
+    overlay_digest: str = ""
     _token_cache: dict[str, frozenset] = field(default_factory=dict)
 
     def vanilla_tokens(self, req_id: str) -> "frozenset | None":
@@ -608,6 +609,18 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
     return cstate
 
 
+def _overlay_digest(overlay: dict, disabled: "set[str]") -> str:
+    """Canonical content digest of the APPLIED overlay + disabled labels.
+    The review UI compares it against the web store's current digest for
+    pending detection (fully-undone edits digest back to this value).
+    Formula must match EnrichOverlayStore.overlay_digest."""
+    import hashlib
+    import json as _json
+    payload = _json.dumps({"overlay": overlay, "disabled": sorted(disabled)},
+                          sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def _apply_overlay_and_enrich(cstate: CellState) -> None:
     """Fold the corrections overlay into the cell's enrichments and apply
     the EFFECTIVE sets to the in-memory index. No corrections root (or no
@@ -620,6 +633,7 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
         disabled = load_disabled_labels(_CORR_ROOT)
     else:
         overlay, disabled = {}, set()
+    cstate.overlay_digest = _overlay_digest(overlay, disabled)
 
     def token_sets(rel: str, req_id: str):
         peer = _cells.get((mno, rel)) if rel != release else cstate
@@ -1119,7 +1133,7 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "") -> dict[s
             "held": held,
         })
     return {"cell": cell_name, "plan": plan, "loaded_at": st.loaded_at,
-            "rows": rows}
+            "overlay_digest": st.overlay_digest, "rows": rows}
 
 
 @app.post("/cells/{cell_name}/reload")
@@ -1141,6 +1155,7 @@ def cell_reload(cell_name: str) -> dict[str, Any]:
         _apply_overlay_and_enrich(fresh)
         _CELL_STATS_CACHE.pop(ck, None)
     return {"cell": cell_name, "loaded_at": fresh.loaded_at,
+            "overlay_digest": fresh.overlay_digest,
             "corrections": fresh.overlay_applied,
             "requirements": len(fresh.doc_ids)}
 

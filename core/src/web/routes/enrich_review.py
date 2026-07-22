@@ -110,10 +110,17 @@ def _cell_mno_release(cell: str) -> tuple[str, str]:
     return mno, release
 
 
-def _pending_ctx(cell: str, store: EnrichOverlayStore,
-                 loaded_at: float) -> dict:
+def _pending_ctx(cell: str, store: EnrichOverlayStore, svc: dict) -> dict:
+    """Pending = overlay CONTENT differs from what serving applied (fully
+    undone edits are not pending). Falls back to the mtime heuristic when
+    the service predates overlay_digest."""
     mno, _ = _cell_mno_release(cell)
-    pending = store.overlay_mtime(mno) > loaded_at > 0
+    loaded_at = svc.get("loaded_at", 0.0)
+    served = svc.get("overlay_digest")
+    if served is not None:
+        pending = bool(loaded_at) and served != store.overlay_digest(mno)
+    else:
+        pending = store.overlay_mtime(mno) > loaded_at > 0
     return {"cell": cell, "pending": pending, "loaded_at": loaded_at}
 
 
@@ -166,7 +173,7 @@ async def table(request: Request, cell: str, plan: str = "", offset: int = 0):
     if offset:
         return _template_response(request, "enrich_review/_rows_page.html", ctx)
     return _template_response(request, "enrich_review/_table.html", {
-        **ctx, **_pending_ctx(cell, store, data.get("loaded_at", 0.0)),
+        **ctx, **_pending_ctx(cell, store, data),
     })
 
 
@@ -212,7 +219,7 @@ async def row_edit(request: Request,
     return _template_response(request, "enrich_review/_row.html", {
         "cell": cell, "plan": plan, "row": view, "oob_pending": True,
         "categories": store.reason_categories(),
-        **_pending_ctx(cell, store, svc.get("loaded_at", 0.0))})
+        **_pending_ctx(cell, store, svc)})
 
 
 @api.get("/export")
@@ -280,7 +287,7 @@ async def pending(request: Request, cell: str):
     store = _store()
     data = _service_get(f"/cells/{cell}/enrichments", {"req_id": "__none__"})
     return _template_response(request, "enrich_review/_pending.html",
-                              _pending_ctx(cell, store, data.get("loaded_at", 0.0)))
+                              _pending_ctx(cell, store, data))
 
 
 @api.post("/apply", response_class=HTMLResponse)
@@ -289,16 +296,18 @@ async def apply(request: Request, cell: str = Form(...)):
     (both stacks when a/b are live) — D-DRAFT-4 self-service loop."""
     from core.src.web.app import _template_response
     store = _store()
-    results, loaded_at = [], 0.0
+    results, freshest = [], {"loaded_at": 0.0}
     for base in _SIRA_URLS:
         try:
             r = httpx.post(f"{base}/cells/{cell}/reload", timeout=120.0)
             r.raise_for_status()
-            loaded_at = max(loaded_at, r.json().get("loaded_at", 0.0))
+            j = r.json()
+            if j.get("loaded_at", 0.0) >= freshest["loaded_at"]:
+                freshest = j
             results.append(f"{base}: ok")
         except httpx.HTTPError as exc:
             results.append(f"{base}: FAILED ({exc})")
-    ctx = _pending_ctx(cell, store, loaded_at)
+    ctx = _pending_ctx(cell, store, freshest)
     ctx["apply_results"] = results
     return _template_response(request, "enrich_review/_pending.html", ctx)
 
