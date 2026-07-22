@@ -4,7 +4,10 @@
 <p class="text-muted">No enrichment data for {{ cell }}{% if plan %} / {{ plan }}{% endif %}.</p>
 {% else %}
 <div class="table-responsive">
-  <table class="table table-sm align-middle">
+  {# fixed layout: column widths come from the header only, so expanding /
+     collapsing one row never re-measures every cell (browser hang at 400+
+     rows under auto layout) #}
+  <table class="table table-sm align-middle" style="table-layout: fixed">
     <thead>
       <tr>
         <th style="width: 14rem">req_id</th>

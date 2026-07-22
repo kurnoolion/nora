@@ -9,13 +9,13 @@
   hx-target="#row-{{ row.dom_id }}" hx-swap="outerHTML"
   hx-include="#stamp-bar input, #reason-{{ row.dom_id }}, #note-{{ row.dom_id }}"{% endset %}
 <tr id="row-{{ row.dom_id }}">
-  <td><code>{{ row.req_id }}</code>
+  <td style="overflow-wrap: anywhere"><code>{{ row.req_id }}</code>
     {% if row.suppressed %}<br><span class="badge bg-danger">suppressed</span>{% endif %}
   </td>
   <td>
-    <details><summary class="text-truncate" style="max-width: 26rem">
+    <details><summary class="text-truncate" style="max-width: 100%">
       {{ row.text[:140] }}{% if row.text|length > 140 %}…{% endif %}</summary>
-      <pre class="small mb-0" style="white-space: pre-wrap">{{ row.text }}</pre>
+      <pre class="small mb-0" style="white-space: pre-wrap; max-height: 18rem; overflow-y: auto">{{ row.text }}</pre>
     </details>
   </td>
   <td>
