@@ -122,6 +122,30 @@ class TestPendingSignal:
         assert store.overlay_mtime("GP") > 0.0
 
 
+class TestMergeLog:
+    def test_merge_and_unmerge(self, store):
+        assert store.accepted_labels() == set()
+        assert store.set_label_merged("camp1", True) == {"camp1"}
+        assert store.accepted_labels() == {"camp1"}
+        assert store.set_label_merged("camp1", False) == set()
+
+    def test_delete_label_clears_merge_log(self, store):
+        _edit(store, "remove", ["a"])
+        store.set_label_merged("camp1", True)
+        store.delete_label("camp1")
+        assert store.accepted_labels() == set()
+
+    def test_digest_is_label_view_scoped(self, store):
+        # an un-merged label's edits change ITS view digest, not main's
+        base_main = store.overlay_digest("GP")
+        _edit(store, "remove", ["a"])                    # label camp1
+        assert store.overlay_digest("GP") == base_main   # main unaffected
+        assert store.overlay_digest("GP", "camp1") != base_main
+        # merging folds it into main's digest
+        store.set_label_merged("camp1", True)
+        assert store.overlay_digest("GP") != base_main
+
+
 class TestServiceCompatibility:
     """The store's output must be consumable by the service-side fold."""
 
@@ -130,8 +154,8 @@ class TestServiceCompatibility:
         _edit(store, "remove", ["handover"])
         _edit(store, "add", ["t3402"])
         entry = store.get_entry("GP", "R1")
-        res = apply_overlay_to_req(["handover", "retry"], entry, set(),
-                                   lambda o, r: "ok", "R1")
+        res = apply_overlay_to_req(["handover", "retry"], entry,
+                                   {"", "camp1"}, lambda o, r: "ok", "R1")
         assert res.effective == ["retry", "t3402"]
 
 
@@ -171,9 +195,9 @@ class TestEditApi:
                           "words": ["w"], "label": "c1",
                           "origin_release": "Feb2026"})
         assert client.get("/api/enrich-review/labels").json()["counts"] == {"c1": 1}
-        client.post("/api/enrich-review/labels/toggle",
-                    json={"label": "c1", "disabled": True})
-        assert client.get("/api/enrich-review/labels").json()["disabled"] == ["c1"]
+        client.post("/api/enrich-review/labels/merge",
+                    json={"label": "c1", "merged": True})
+        assert client.get("/api/enrich-review/labels").json()["accepted"] == ["c1"]
         d = client.post("/api/enrich-review/labels/delete",
                         json={"label": "c1"}).json()
         assert d["records_removed"] == 1 and d["counts"] == {}

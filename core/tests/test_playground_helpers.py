@@ -249,7 +249,7 @@ def test_sira_lane_runner_emits_progress_at_stage_boundaries():
     async def emit(m: str) -> None:
         msgs.append(m)
 
-    async def _fake_sira_call(question, top_k=None):
+    async def _fake_sira_call(question, top_k=None, label=""):
         return {
             "results": [
                 {"req_id": "R-1", "rerank_score": 90, "bm25_score": 0.5},

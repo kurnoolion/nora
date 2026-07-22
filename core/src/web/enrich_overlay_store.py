@@ -5,7 +5,8 @@ Owns read-modify-write of the per-MNO overlay files under
 `<corrections_root>/sira-enrich/`:
 
     <MNO>.json                # {req_id: entry} — word records
-    labels.json               # {"disabled": [...]}
+    accepted-labels.json      # {"accepted": [...]} — labels merged into main
+    labels.json               # {"disabled": [...]} (legacy; report annotation)
     reason-categories.json    # extensible category list
 
 The web app is the SOLE writer (sira-query mounts the volume ro and applies
@@ -31,6 +32,10 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# stdlib-only by design so the web side can share the exact label-view
+# projection the service applies (see its module docstring)
+from sandbox.sira_query.enrich_overlay import allowed_labels, filter_overlay
 
 DEFAULT_REASON_CATEGORIES = [
     "misleading-enrichment",
@@ -112,7 +117,7 @@ class EnrichOverlayStore:
         """MNOs with an overlay file (sorted)."""
         if not self.enabled or not self.dir.is_dir():
             return []
-        skip = ("labels.json", "reason-categories.json")
+        skip = ("labels.json", "accepted-labels.json", "reason-categories.json")
         return sorted(p.stem for p in self.dir.glob("*.json") if p.name not in skip)
 
     def overlay_mtime(self, mno: str) -> float:
@@ -122,18 +127,28 @@ class EnrichOverlayStore:
         except OSError:
             return 0.0
 
-    def overlay_digest(self, mno: str) -> str:
-        """Canonical content digest of the MNO overlay + disabled labels.
-        Pending detection compares this against the digest sira-query
-        reports for its APPLIED overlay — edits that are fully undone
-        digest back to the served state, so no false 'pending'. Formula
-        must match sira-query's `_overlay_digest`."""
+    def overlay_digest(self, mno: str, label: str = "") -> str:
+        """Canonical content digest of the `label` VIEW of the MNO overlay
+        (main = accepted + unlabeled, plus `label`'s own records) and the
+        accepted-labels merge log. Pending detection compares this against
+        the digest sira-query reports for its APPLIED view — edits that
+        are fully undone digest back to the served state, so no false
+        'pending'. Formula must match sira-query's `_overlay_digest`."""
         import hashlib
+        accepted = self.accepted_labels()
+        filtered = filter_overlay(self.get_overlay(mno),
+                                  allowed_labels(accepted, label))
         payload = json.dumps(
-            {"overlay": self.get_overlay(mno),
-             "disabled": sorted(self.disabled_labels())},
+            {"overlay": filtered, "accepted": sorted(accepted)},
             sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()
+
+    def accepted_labels(self) -> set[str]:
+        """Labels merged into main (the default view). File = merge log."""
+        if not self.enabled:
+            return set()
+        data = self._read_json(self.dir / "accepted-labels.json", {})
+        return set(data.get("accepted", []))
 
     def disabled_labels(self) -> set[str]:
         if not self.enabled:
@@ -149,7 +164,8 @@ class EnrichOverlayStore:
         paths = ([self._mno_path(m) for m in mnos] if mnos is not None
                  else sorted(self.dir.glob("*.json")))
         for p in paths:
-            if p.name in ("labels.json", "reason-categories.json"):
+            if p.name in ("labels.json", "accepted-labels.json",
+                          "reason-categories.json"):
                 continue
             for entry in (self._read_json(p, {}) or {}).values():
                 for rec in (entry.get("remove") or []) + (entry.get("add") or []):
@@ -250,6 +266,20 @@ class EnrichOverlayStore:
             self._write_json(path, overlay)
         return result
 
+    def set_label_merged(self, label: str, merged: bool) -> set[str]:
+        """Merge a label into main (or un-merge it) — the admin's
+        branch-landing action. Only mutates the merge log; records keep
+        their label, so provenance survives and un-merge is exact."""
+        if not self.enabled:
+            raise RuntimeError("corrections_root not configured")
+        with self._locked():
+            p = self.dir / "accepted-labels.json"
+            data = self._read_json(p, {})
+            cur = set(data.get("accepted", []))
+            (cur.add if merged else cur.discard)(label)
+            self._write_json(p, {"accepted": sorted(cur)})
+        return cur
+
     def set_label_disabled(self, label: str, disabled: bool) -> set[str]:
         if not self.enabled:
             raise RuntimeError("corrections_root not configured")
@@ -269,7 +299,8 @@ class EnrichOverlayStore:
         removed = 0
         with self._locked():
             for p in sorted(self.dir.glob("*.json")):
-                if p.name in ("labels.json", "reason-categories.json"):
+                if p.name in ("labels.json", "accepted-labels.json",
+                          "reason-categories.json"):
                     continue
                 overlay = self._read_json(p, {})
                 changed = False
@@ -294,12 +325,17 @@ class EnrichOverlayStore:
                         overlay.pop(rid)
                 if changed:
                     self._write_json(p, overlay)
-            # a deleted label needn't linger in the disabled list
+            # a deleted label needn't linger in the disabled/accepted lists
             lp = self.dir / "labels.json"
             data = self._read_json(lp, {})
             if label in data.get("disabled", []):
                 self._write_json(lp, {"disabled": sorted(
                     set(data["disabled"]) - {label})})
+            ap = self.dir / "accepted-labels.json"
+            data = self._read_json(ap, {})
+            if label in data.get("accepted", []):
+                self._write_json(ap, {"accepted": sorted(
+                    set(data["accepted"]) - {label})})
         return removed
 
     def add_reason_category(self, category: str) -> list[str]:

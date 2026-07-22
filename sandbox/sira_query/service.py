@@ -282,8 +282,10 @@ _rerank_prompt_source: str | None = None
 from dataclasses import dataclass, field  # noqa: E402
 
 from sandbox.sira_query.enrich_overlay import (  # noqa: E402
+    allowed_labels,
     apply_overlay_to_req,
-    load_disabled_labels,
+    filter_overlay,
+    load_accepted_labels,
     load_overlay,
     make_verdict_fn,
 )
@@ -317,10 +319,13 @@ class CellState:
     loaded_at: float = 0.0
     overlay_applied: dict[str, int] = field(default_factory=dict)
     overlay_digest: str = ""
-    # the overlay/disabled content AS APPLIED at load — /plans diffs the
-    # live overlay file against these to flag plans with pending edits
+    # label = "" is the default (main) view; a non-empty label is a branch
+    # variant serving main + that label's records (label-scoped serving)
+    label: str = ""
+    # the overlay content AS APPLIED at load (already filtered to this
+    # view's allowed labels) — /plans diffs the live file against it
     overlay_snapshot: dict = field(default_factory=dict)
-    disabled_snapshot: set = field(default_factory=set)
+    accepted_snapshot: set = field(default_factory=set)
     _token_cache: dict[str, frozenset] = field(default_factory=dict)
 
     def vanilla_tokens(self, req_id: str) -> "frozenset | None":
@@ -339,6 +344,10 @@ class CellState:
 
 
 _cells: dict[CellKey, CellState] = {}
+# label-branch serving variants (lazy-built): (cell, label) -> CellState.
+# The default view in _cells is untouched by them — an expert applying /
+# querying their label never changes what everyone else sees.
+_label_cells: dict[tuple[CellKey, str], CellState] = {}
 _cells_load_error: str | None = None
 
 
@@ -613,14 +622,16 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
     return cstate
 
 
-def _overlay_digest(overlay: dict, disabled: "set[str]") -> str:
-    """Canonical content digest of the APPLIED overlay + disabled labels.
-    The review UI compares it against the web store's current digest for
+def _overlay_digest(filtered_overlay: dict, accepted: "set[str]") -> str:
+    """Canonical content digest of the APPLIED view: the overlay filtered
+    to the view's allowed labels, plus the accepted-labels merge log. The
+    review UI compares it against the web store's current digest for
     pending detection (fully-undone edits digest back to this value).
     Formula must match EnrichOverlayStore.overlay_digest."""
     import hashlib
     import json as _json
-    payload = _json.dumps({"overlay": overlay, "disabled": sorted(disabled)},
+    payload = _json.dumps({"overlay": filtered_overlay,
+                           "accepted": sorted(accepted)},
                           sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -633,13 +644,16 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
     mno, release = cstate.cell
 
     if _CORR_ROOT:
-        overlay = load_overlay(_CORR_ROOT, mno)
-        disabled = load_disabled_labels(_CORR_ROOT)
+        accepted = load_accepted_labels(_CORR_ROOT)
+        # project the overlay onto this view: main (accepted + unlabeled)
+        # plus this variant's own label — other labels are invisible here
+        overlay = filter_overlay(load_overlay(_CORR_ROOT, mno),
+                                 allowed_labels(accepted, cstate.label))
     else:
-        overlay, disabled = {}, set()
-    cstate.overlay_digest = _overlay_digest(overlay, disabled)
+        overlay, accepted = {}, set()
+    cstate.overlay_digest = _overlay_digest(overlay, accepted)
     cstate.overlay_snapshot = overlay
-    cstate.disabled_snapshot = set(disabled)
+    cstate.accepted_snapshot = set(accepted)
 
     def token_sets(rel: str, req_id: str):
         peer = _cells.get((mno, rel)) if rel != release else cstate
@@ -656,7 +670,7 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
     req_ids = set(cstate.llm_words) | {r for r in overlay if r in cstate.doc_id_to_idx}
     for rid in req_ids:
         res = apply_overlay_to_req(
-            cstate.llm_words.get(rid, []), overlay.get(rid), disabled, verdict, rid)
+            cstate.llm_words.get(rid, []), overlay.get(rid), None, verdict, rid)
         if res.effective:
             effective[rid] = res.effective
         if res.held:
@@ -716,15 +730,16 @@ def _load_cells() -> None:
         )
 
 
-def _build_retrieve_fn(query: str, raw_phrases: list[str]):
+def _build_retrieve_fn(query: str, raw_phrases: list[str], label: str = ""):
     """retrieve_fn(cell, k) -> [(doc_id, bm25)] for `merge_candidates`.
 
     Dispatches on the cell; the shared raw expansion phrases are
     DF-filtered + tokenized against THAT cell's own statistics (a phrase
     discriminative in one cell may be common in another — D-DRAFT-10
-    call 4: expand once, filter per cell)."""
+    call 4: expand once, filter per cell). `label` retrieves from that
+    branch variant's index (built by the caller) instead of the default."""
     def _retrieve(cell: CellKey, k: int) -> list[tuple[str, float]]:
-        cstate = _cells[cell]
+        cstate = _get_variant(cell, label) or _cells[cell]
         expansion = ""
         if raw_phrases:
             kept, _ = cstate.bm25.filter_query_expansion(
@@ -910,6 +925,14 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
     notes: list[str] = []
     timings: dict[str, int] = {}
 
+    # Label-branch view: retrieve from each resolved cell's label variant
+    # (lazily built — first labeled query after an edit pays the build).
+    label = (req.label or "").strip()
+    if label:
+        for ck in resolved:
+            _get_variant(ck, label, build=True)
+        notes.append(f"overlay label view: {label} (+ main)")
+
     async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client:
         # 2. Expand the query ONCE (raw phrases; per-cell DF-filter
         #    happens inside the retrieve closure — D-DRAFT-10 call 4).
@@ -931,7 +954,7 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
 
         # 3. Retrieve per cell (balanced), merge into the pool.
         t0 = time.time()
-        retrieve_fn = _build_retrieve_fn(req.query, raw_phrases)
+        retrieve_fn = _build_retrieve_fn(req.query, raw_phrases, label)
         per_cell = merge_candidates(resolved, retrieve_fn, top_n)
         pool = [c for cl in per_cell for c in cl]
         timings["search_ms"] = int((time.time() - t0) * 1000)
@@ -976,6 +999,7 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
         "top_k": top_k,
         "n_cells": n_cells,
         "effective_top_k": cut,
+        "label": label or None,
         "mode": "multi-cell",
         "resolved_cells": [cell_dirname(c) for c in sorted(resolved)],
         "unresolved": [list(u) for u in unresolved],   # FR-multi-5 surfacing
@@ -994,6 +1018,11 @@ app = FastAPI(title="NORA SIRA per-query probe")
 class _SiraQueryRequest(BaseModel):
     query: str
     top_k: int | None = None
+    # Overlay label view (branching): retrieve from the main + <label>
+    # corrections variant instead of the default (main-only) view. Only
+    # honored on the multi-cell path; the legacy single-dataset path has
+    # no overlay machinery.
+    label: str | None = None
     # When set, each result carries a `text` field with the full chunk text
     # (newlines preserved, capped at this many chars) in addition to the short
     # `text_preview`. Used by NORA's Path-B synth, which feeds whole chunks
@@ -1102,28 +1131,35 @@ def _plan_matches(p: str, plan: str) -> bool:
 
 
 @app.get("/cells/{cell_name}/plans")
-def cell_plans(cell_name: str) -> dict[str, Any]:
-    st = _cells[_parse_cell_or_404(cell_name)]
+def cell_plans(cell_name: str, label: str = "") -> dict[str, Any]:
+    label = label.strip()
+    ck = _parse_cell_or_404(cell_name)
+    st = _get_variant(ck, label) or _cells[ck]
     # composite rows' `plan_id / plan_name` stamp must not surface as a
     # selectable plan — the dropdown lists requirement-row values only
     plans = sorted({p for rid in st.doc_ids
                     if not rid.startswith(("doc:", "section:"))
                     and (p := _plan_of(st, rid))})
-    return {"cell": cell_name, "plans": plans,
-            "pending_plans": _pending_plans(st, plans)}
+    return {"cell": cell_name, "plans": plans, "label": label,
+            "pending_plans": _pending_plans(st, plans, label)}
 
 
-def _pending_plans(st: CellState, plans: list[str]) -> list[str]:
-    """Plans whose reqs have overlay edits not yet applied to serving:
-    diff the LIVE overlay file against the load-time snapshot per req and
-    attribute changed reqs to their plan stamp. A disabled-labels change
-    affects every plan, so it marks all of them."""
+def _pending_plans(st: CellState, plans: list[str], label: str) -> list[str]:
+    """Plans whose reqs have overlay edits not yet applied to the `label`
+    view's serving state: diff the LIVE overlay file (filtered to the
+    view) against the load-time snapshot per req and attribute changed
+    reqs to their plan stamp. `st` may be the default cell when the label
+    variant isn't built yet — then every visible label record is pending
+    by definition. An accepted-labels (merge log) change affects every
+    plan, so it marks all of them."""
     if not _CORR_ROOT:
         return []
     mno, _release = st.cell
-    if load_disabled_labels(_CORR_ROOT) != st.disabled_snapshot:
+    accepted = load_accepted_labels(_CORR_ROOT)
+    if accepted != st.accepted_snapshot:
         return plans
-    cur = load_overlay(_CORR_ROOT, mno)
+    cur = filter_overlay(load_overlay(_CORR_ROOT, mno),
+                         allowed_labels(accepted, label))
     snap = st.overlay_snapshot
     pending: set[str] = set()
     for rid in set(cur) | set(snap):
@@ -1134,12 +1170,41 @@ def _pending_plans(st: CellState, plans: list[str]) -> list[str]:
     return sorted(pending)
 
 
+def _get_variant(ck: CellKey, label: str,
+                 build: bool = False) -> "CellState | None":
+    """Resolve the serving state for a label view. "" -> the default
+    cell; a label -> its branch variant, lazily rebuilt from disk on
+    `build` (Apply / first labeled query). Building a variant never
+    touches the default cell, so other users' serving is unaffected."""
+    if not label:
+        return _cells.get(ck)
+    st = _label_cells.get((ck, label))
+    if st is not None or not build:
+        return st
+    with _reload_locks_guard:
+        lock = _reload_locks.setdefault(ck, threading.Lock())
+    with lock:
+        st = _label_cells.get((ck, label))
+        if st is None:
+            st = _load_one_cell(Path(_DB_ROOT) / cell_dirname(ck), ck)
+            st.label = label
+            _apply_overlay_and_enrich(st)
+            _label_cells[(ck, label)] = st
+    return st
+
+
 @app.get("/cells/{cell_name}/enrichments")
-def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "") -> dict[str, Any]:
+def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "",
+                     label: str = "") -> dict[str, Any]:
     """Per-req enrichment data for the review UI: LLM output, the applied
     effective set, held records (cross-release guard), suppression state.
-    `req_id` narrows to one row (the web row-edit re-render path)."""
-    st = _cells[_parse_cell_or_404(cell_name)]
+    `req_id` narrows to one row (the web row-edit re-render path).
+    `label` serves the branch variant's applied state when built; before
+    the first labeled Apply it falls back to the default view — whose
+    digest then honestly reports the label's edits as pending."""
+    label = label.strip()
+    ck = _parse_cell_or_404(cell_name)
+    st = _get_variant(ck, label) or _cells[ck]
     rows: list[dict[str, Any]] = []
     for rid in st.doc_ids:
         if req_id and rid != req_id:
@@ -1160,15 +1225,21 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "") -> dict[s
             "suppressed": rid in st.suppressed_ids,
             "held": held,
         })
-    return {"cell": cell_name, "plan": plan, "loaded_at": st.loaded_at,
+    return {"cell": cell_name, "plan": plan, "label": label,
+            "loaded_at": st.loaded_at,
             "overlay_digest": st.overlay_digest, "rows": rows}
 
 
 @app.post("/cells/{cell_name}/reload")
-def cell_reload(cell_name: str) -> dict[str, Any]:
+def cell_reload(cell_name: str, label: str = "") -> dict[str, Any]:
     """Re-read the cell from disk (vanilla index + corpus + enrichments +
     corrections overlay) and swap it in atomically. The expert's Apply
-    button — no operator needed (D-DRAFT-4, strand sira-enrichment-review)."""
+    button — no operator needed (D-DRAFT-4, strand sira-enrichment-review).
+    With `label`, only that branch variant is (re)built — the default view
+    everyone else queries is untouched. A default reload also drops the
+    cell's label variants (their main content went stale); they lazily
+    rebuild on next labeled use."""
+    label = label.strip()
     ck = _parse_cell_or_404(cell_name)
     with _reload_locks_guard:
         lock = _reload_locks.setdefault(ck, threading.Lock())
@@ -1179,10 +1250,17 @@ def cell_reload(cell_name: str) -> dict[str, Any]:
         except Exception as exc:
             raise HTTPException(status_code=500,
                                 detail=f"reload failed: {exc}") from exc
-        _cells[ck] = fresh          # peers see the new corpus from here on
-        _apply_overlay_and_enrich(fresh)
-        _CELL_STATS_CACHE.pop(ck, None)
-    return {"cell": cell_name, "loaded_at": fresh.loaded_at,
+        fresh.label = label
+        if label:
+            _apply_overlay_and_enrich(fresh)
+            _label_cells[(ck, label)] = fresh
+        else:
+            _cells[ck] = fresh      # peers see the new corpus from here on
+            _apply_overlay_and_enrich(fresh)
+            _CELL_STATS_CACHE.pop(ck, None)
+            for key in [k for k in _label_cells if k[0] == ck]:
+                _label_cells.pop(key, None)
+    return {"cell": cell_name, "label": label, "loaded_at": fresh.loaded_at,
             "overlay_digest": fresh.overlay_digest,
             "corrections": fresh.overlay_applied,
             "requirements": len(fresh.doc_ids)}

@@ -7,10 +7,13 @@
 <div class="container-fluid py-3">
   <h1 class="mb-2">SIRA Enrichment Review</h1>
   <p class="text-muted">
-    Review and correct SIRA's per-requirement enrichment keywords. Edits save
-    immediately to the corrections overlay; <strong>Apply</strong> reloads the
-    serving index so you can re-test queries on the Test page. Deleted enrichments
-    stay visible as struck chips (click ↺ to undo); additions are green.
+    Review and correct SIRA's per-requirement enrichment keywords. Corrections
+    belong to a <strong>label</strong> (a branch): set one in the stamp bar, edit,
+    then <strong>Apply</strong> — only <em>your label's</em> serving view updates,
+    and you can test it on the Ask page by selecting the same label there.
+    Everyone else keeps the default (main) view until the admin merges your label.
+    Deleted enrichments are struck chips (↺ to undo); additions are green; muted
+    chips are already in main.
   </p>
 
   <div class="card mb-3">
@@ -54,8 +57,8 @@
     <div class="card-body py-2">
       <div class="row g-2 align-items-end">
         <div class="col">
-          <label class="form-label mb-0 small">Label (campaign)</label>
-          <input name="label" class="form-control form-control-sm"
+          <label class="form-label mb-0 small">Label (your correction branch — required to edit)</label>
+          <input name="label" id="stamp-label" class="form-control form-control-sm"
                  list="labels-list" placeholder="e.g. handover-noise">
           <datalist id="labels-list"></datalist>
         </div>
@@ -114,7 +117,9 @@
     opt($("sel-release"), releasesFor($("sel-mno").value), "select…");
     opt($("sel-plan"), [], "—");
   });
-  // ● marks plans whose overlay edits aren't applied to serving yet
+  const labelVal = () => $("stamp-label").value.trim();
+
+  // ● marks plans whose overlay edits aren't applied to this view yet
   function markPendingPlans(pendingPlans) {
     const pend = new Set(pendingPlans || []);
     [...$("sel-plan").options].forEach(o => {
@@ -123,12 +128,14 @@
   }
   async function refreshPlanMarkers() {
     if (!$("sel-release").value) return;
-    const data = await (await fetch(api + "/plans?cell=" + cellName())).json();
+    const data = await (await fetch(api + "/plans?cell=" + cellName() +
+                                    "&label=" + encodeURIComponent(labelVal()))).json();
     markPendingPlans(data.pending_plans);
   }
   $("sel-release").addEventListener("change", async () => {
     if (!$("sel-release").value) return;
-    const data = await (await fetch(api + "/plans?cell=" + cellName())).json();
+    const data = await (await fetch(api + "/plans?cell=" + cellName() +
+                                    "&label=" + encodeURIComponent(labelVal()))).json();
     opt($("sel-plan"), data.plans || [], "select…");
     markPendingPlans(data.pending_plans);
   });
@@ -139,13 +146,33 @@
       if (e.detail && e.detail.target && e.detail.target.id === "pending-banner")
         refreshPlanMarkers();
     }));
-  $("sel-plan").addEventListener("change", () => {
+  function loadTable() {
     if (!$("sel-plan").value) return;
     $("table-container").innerHTML =
       '<p class="text-muted py-3"><span class="spinner-border spinner-border-sm"></span> Loading enrichments…</p>';
     htmx.ajax("GET", api + "/table?cell=" + cellName() +
-              "&plan=" + encodeURIComponent($("sel-plan").value),
+              "&plan=" + encodeURIComponent($("sel-plan").value) +
+              "&label=" + encodeURIComponent(labelVal()),
               {target: "#table-container", swap: "innerHTML"});
+  }
+  $("sel-plan").addEventListener("change", loadTable);
+  // the label defines which view (main vs main+label) is rendered — switching
+  // it re-projects the table and the pending dots
+  $("stamp-label").addEventListener("change", () => {
+    loadTable();
+    refreshPlanMarkers();
+  });
+
+  // corrections belong to a label — block record-creating edits without one
+  const needsLabel = new Set(["remove", "add", "suppress", "reaffirm"]);
+  document.body.addEventListener("htmx:configRequest", (e) => {
+    if (!(e.detail.path || "").endsWith("/row-edit")) return;
+    if (needsLabel.has(e.detail.parameters.op) && !labelVal()) {
+      e.preventDefault();
+      alert("Set a label first — corrections belong to a label (your branch). " +
+            "Pick one in the stamp bar, e.g. handover-noise.");
+      $("stamp-label").focus();
+    }
   });
 
   // per-row reason selects (delegated — rows re-render on every edit)
@@ -166,26 +193,26 @@
 
   async function renderLabels() {
     const data = await (await fetch(api + "/labels")).json();
-    const disabled = new Set(data.disabled || []);
+    const accepted = new Set(data.accepted || []);
     const rows = Object.entries(data.counts || {}).sort();
     $("labels-drawer-body").innerHTML = rows.length ? rows.map(([l, n]) => `
       <div class="d-flex gap-2 align-items-center py-1">
         <code>${l || "(no label)"}</code>
         <span class="badge bg-secondary">${n}</span>
-        ${l ? `
-        <button class="btn btn-sm btn-outline-secondary lbl-toggle" data-label="${l}"
-                data-disabled="${disabled.has(l)}">
-          ${disabled.has(l) ? "enable" : "disable"}</button>
+        ${accepted.has(l) ? '<span class="badge bg-success">merged into main</span>' : ""}
+        ${l && data.admin ? `
+        <button class="btn btn-sm btn-outline-primary lbl-merge" data-label="${l}"
+                data-merged="${accepted.has(l)}">
+          ${accepted.has(l) ? "un-merge" : "merge into main"}</button>
         <button class="btn btn-sm btn-outline-danger lbl-delete" data-label="${l}">
           delete all</button>` : ""}
-        ${disabled.has(l) ? '<span class="badge bg-warning text-dark">disabled</span>' : ""}
       </div>`).join("") : '<span class="text-muted">No labeled corrections yet.</span>';
     // populate the stamping bar datalist too
     $("labels-list").innerHTML =
       rows.filter(([l]) => l).map(([l]) => `<option value="${l}">`).join("");
   }
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest(".lbl-toggle, .lbl-delete");
+    const t = e.target.closest(".lbl-merge, .lbl-delete");
     if (!t) return;
     const label = t.dataset.label;
     if (t.classList.contains("lbl-delete")) {
@@ -194,12 +221,19 @@
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({label})});
     } else {
-      await fetch(api + "/labels/toggle", {method: "POST",
+      const merging = t.dataset.merged !== "true";
+      if (!confirm(merging
+          ? `Merge label "${label}" into main? Everyone's default view will include it after the next Apply.`
+          : `Un-merge label "${label}" from main? Its corrections leave the default view after the next Apply.`)) return;
+      await fetch(api + "/labels/merge", {method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({label, disabled: t.dataset.disabled !== "true"})});
+        body: JSON.stringify({label, merged: merging})});
     }
     await renderLabels();
-    if ($("sel-plan").value) $("sel-plan").dispatchEvent(new Event("change"));
+    // the merge log changed → default view content changed → re-render the
+    // table + pending state so the Apply button surfaces the rebuild
+    loadTable();
+    refreshPlanMarkers();
   });
   document.getElementById("labels-drawer")
     .addEventListener("show.bs.collapse", renderLabels);

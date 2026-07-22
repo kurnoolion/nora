@@ -156,7 +156,7 @@ class TestRowEdit:
         r = self._edit(client, op="unremove", word="handover")
         # everything undone → content matches serving → no Apply button
         assert "corrections pending" not in r.text
-        assert "in sync with serving" in r.text
+        assert "in sync with" in r.text
 
     def test_per_row_reason_and_note(self, client):
         r = client.get("/api/enrich-review/table",
@@ -168,12 +168,59 @@ class TestRowEdit:
     def test_dom_id_sanitized_for_composite_ids(self):
         from core.src.web.routes.enrich_review import _row_view
         view = _row_view({"req_id": "doc: spec.pdf §2", "llm_words": [],
-                          "held": []}, None, set(), "Feb2026")
+                          "held": []}, None, {""}, "", "Feb2026")
         assert view["dom_id"] == "doc__spec_pdf__2"
         assert view["req_id"] == "doc: spec.pdf §2"
 
     def test_unknown_op_422(self, client):
         assert self._edit(client, op="nuke").status_code == 422
+
+    def test_record_creating_ops_require_label(self, client):
+        # corrections belong to a label (branch) — no label, no new record
+        r = self._edit(client, op="remove", word="handover", label="")
+        assert r.status_code == 422 and "label is required" in r.text
+        assert self._edit(client, op="add", words="x", label="").status_code == 422
+        # undo ops only delete records — they stay label-free
+        self._edit(client, op="remove", word="handover")   # label c1
+        r = self._edit(client, op="unremove", word="handover", label="")
+        assert r.status_code == 200
+
+
+class TestLabelBranches:
+    def test_unmerged_label_hidden_from_main_view(self, client, tmp_path):
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        EnrichOverlayStore(tmp_path).edit("GP", "R1", "remove",
+                                          words=["handover"], label="c9", by="e")
+        # main view (no label): c9's un-merged edit is invisible
+        r = client.get("/api/enrich-review/table",
+                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+        assert "</s>" not in r.text
+        # c9's own view: the removal renders bright + undoable
+        r = client.get("/api/enrich-review/table",
+                       params={"cell": "GP__Feb2026", "plan": "PlanA",
+                               "label": "c9"})
+        assert ">handover</s>" in r.text and "undo removal" in r.text
+
+    def test_merged_label_renders_muted_readonly(self, client, tmp_path):
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        store = EnrichOverlayStore(tmp_path)
+        store.edit("GP", "R1", "remove", words=["handover"], label="c9", by="e")
+        store.set_label_merged("c9", True)
+        r = client.get("/api/enrich-review/table",
+                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+        # visible in main now — struck but muted and with no undo button
+        assert ">handover</s>" in r.text and "in main" in r.text
+        assert "undo removal" not in r.text
+
+    def test_merge_endpoint_is_admin_only(self, client, monkeypatch):
+        r = client.post("/api/enrich-review/labels/merge",
+                        json={"label": "c1", "merged": True})
+        assert r.status_code == 200 and r.json()["accepted"] == ["c1"]
+        monkeypatch.setattr(er, "is_admin", lambda req: False)
+        assert client.post("/api/enrich-review/labels/merge",
+                           json={"label": "c1", "merged": False}).status_code == 403
+        assert client.post("/api/enrich-review/labels/delete",
+                           json={"label": "c1"}).status_code == 403
 
 
 class TestApply:
@@ -188,7 +235,8 @@ class TestApply:
                 return {"loaded_at": time.time() + 60}
 
         monkeypatch.setattr(er.httpx, "post",
-                            lambda url, timeout: calls.append(url) or _R())
+                            lambda url, params=None, timeout=None:
+                            calls.append(url) or _R())
         monkeypatch.setattr(er, "_SIRA_URLS", ["http://a:8040", "http://b:8041"])
         r = client.post("/api/enrich-review/apply", data={"cell": "GP__Feb2026"})
         assert r.status_code == 200

@@ -55,6 +55,7 @@ def two_release_cells(tmp_path, monkeypatch):
                 {"R1": ["handover"]})
     monkeypatch.setattr(svc, "_cells", {("GP", "Feb2026"): feb,
                                         ("GP", "Nov2025"): nov})
+    monkeypatch.setattr(svc, "_label_cells", {})
     monkeypatch.setattr(svc, "_CELL_STATS_CACHE", {})
 
     d = tmp_path / "sira-enrich"
@@ -137,11 +138,58 @@ class TestEndpoints:
         overlay["R999"] = {"add": [{"word": "x"}]}
         p.write_text(json.dumps(overlay))
         assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
-        # a disabled-labels change affects every plan
-        (tmp_path / "sira-enrich" / "labels.json").write_text(
-            json.dumps({"disabled": ["some-label"]}))
+        # an accepted-labels (merge log) change affects every plan
+        (tmp_path / "sira-enrich" / "accepted-labels.json").write_text(
+            json.dumps({"accepted": ["some-label"]}))
         assert (c.get("/cells/GP__Feb2026/plans").json()["pending_plans"]
                 == ["PlanA", "PlanB"])
+
+    def test_label_records_invisible_to_default_view(self, two_release_cells,
+                                                     tmp_path):
+        # an exp1-labeled (un-merged) remove of R1's "retry" must NOT
+        # affect the default (main) serving view
+        feb, _ = two_release_cells
+        p = tmp_path / "sira-enrich" / "GP.json"
+        overlay = json.loads(p.read_text())
+        overlay["R1"]["remove"].append(
+            {"word": "retry", "label": "exp1", "by": "t", "at": "x",
+             "origin": {"release": "Feb2026"}})
+        p.write_text(json.dumps(overlay))
+        svc._apply_overlay_and_enrich(feb)
+        # unlabeled remove of "handover" applies (main); exp1's doesn't
+        assert feb.effective_words.get("R1") == ["retry"]
+
+    def test_label_variant_isolated_from_default(self, two_release_cells,
+                                                 tmp_path, monkeypatch):
+        feb, _ = two_release_cells
+        svc._apply_overlay_and_enrich(feb)
+        p = tmp_path / "sira-enrich" / "GP.json"
+        overlay = json.loads(p.read_text())
+        overlay["R1"]["remove"].append(
+            {"word": "retry", "label": "exp1", "by": "t", "at": "x",
+             "origin": {"release": "Feb2026"}})
+        p.write_text(json.dumps(overlay))
+        # variant (re)builds read the cell from disk — fake with a twin
+        monkeypatch.setattr(
+            svc, "_load_one_cell",
+            lambda base, ck: _cell(
+                "GP", "Feb2026",
+                {rid: d["text"] for rid, d in feb.corpus_by_id.items()},
+                feb.llm_words))
+        c = TestClient(svc.app)
+        r = c.post("/cells/GP__Feb2026/reload", params={"label": "exp1"})
+        assert r.status_code == 200 and r.json()["label"] == "exp1"
+        # exp1 view: BOTH removes applied -> R1 has no effective words
+        data = c.get("/cells/GP__Feb2026/enrichments",
+                     params={"req_id": "R1", "label": "exp1"}).json()
+        assert data["rows"][0]["effective"] == []
+        # default view untouched by the labeled apply
+        data = c.get("/cells/GP__Feb2026/enrichments",
+                     params={"req_id": "R1"}).json()
+        assert data["rows"][0]["effective"] == ["retry"]
+        # a default (main) reload drops the cell's label variants
+        c.post("/cells/GP__Feb2026/reload")
+        assert svc._label_cells == {}
 
     def test_plan_matches_either_composite_part(self):
         # heading-mode reqs stamp plan_name, leading-mode reqs stamp plan_id;

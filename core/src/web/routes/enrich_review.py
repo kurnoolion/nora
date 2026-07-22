@@ -23,6 +23,12 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from core.src.web.enrich_overlay_store import EDIT_OPS, EnrichOverlayStore
+from core.src.web.team_mode import is_admin
+from sandbox.sira_query.enrich_overlay import allowed_labels
+
+# edit ops that CREATE records — these must carry a label (branch); undo
+# ops only delete records and stay label-free
+_LABELED_OPS = ("remove", "add", "suppress", "reaffirm")
 
 logger = logging.getLogger(__name__)
 
@@ -65,20 +71,28 @@ def _store() -> EnrichOverlayStore:
 
 
 def _row_view(service_row: dict, entry: dict | None,
-              disabled: set[str], viewed_release: str) -> dict:
+              allowed: set[str], label: str, viewed_release: str) -> dict:
     """Merge a service row with the CURRENT overlay entry into template
     state. The web side always renders its own latest edits (the service's
-    effective view lags until Apply/reload) — D-DRAFT-4."""
+    effective view lags until Apply/reload) — D-DRAFT-4.
+
+    Label views: only records whose label is in `allowed` render (main +
+    the viewer's own label). Each visible record carries a tier — "mine"
+    (this label's work-in-progress, bright + undoable) vs "main" (already
+    merged/unlabeled, muted + read-only in the row UI)."""
     entry = entry or {}
-    active = lambda rec: (rec.get("label") or "") not in disabled or not rec.get("label")  # noqa: E731
+    active = lambda rec: (rec.get("label") or "") in allowed  # noqa: E731
+    tier = lambda rec: ("mine" if label and (rec.get("label") or "") == label  # noqa: E731
+                        else "main")
     removes = {r["word"]: r for r in entry.get("remove", []) if active(r)}
     adds = [r for r in entry.get("add", []) if active(r)]
     sup = entry.get("suppress_all")
     suppressed = bool(isinstance(sup, dict) and sup.get("value") and active(sup))
 
     llm_words = service_row.get("llm_words", [])
-    chips = [{"word": w, "removed": w in removes,
-              "record": removes.get(w)} for w in llm_words]
+    chips = [{"word": w, "removed": w in removes, "record": removes.get(w),
+              "tier": tier(removes[w]) if w in removes else ""}
+             for w in llm_words]
     add_words = {r["word"] for r in adds}
     # held: service verdicts, filtered to records still present with a
     # non-current origin (discard/reaffirm must vanish instantly)
@@ -96,8 +110,10 @@ def _row_view(service_row: dict, entry: dict | None,
             "text": service_row.get("text", ""),
             "plan": service_row.get("plan", ""),
             "chips": chips,
-            "adds": [r for r in adds if r["word"] not in removes],
+            "adds": [{**r, "tier": tier(r)} for r in adds
+                     if r["word"] not in removes],
             "suppressed": suppressed,
+            "suppress_tier": tier(sup) if suppressed else "",
             "held": held,
             "n_llm": len(llm_words),
             "n_added": len(add_words - set(removes))}
@@ -110,18 +126,20 @@ def _cell_mno_release(cell: str) -> tuple[str, str]:
     return mno, release
 
 
-def _pending_ctx(cell: str, store: EnrichOverlayStore, svc: dict) -> dict:
-    """Pending = overlay CONTENT differs from what serving applied (fully
-    undone edits are not pending). Falls back to the mtime heuristic when
-    the service predates overlay_digest."""
+def _pending_ctx(cell: str, store: EnrichOverlayStore, svc: dict,
+                 label: str = "") -> dict:
+    """Pending = the label VIEW's overlay content differs from what its
+    serving variant applied (fully undone edits are not pending). Falls
+    back to the mtime heuristic when the service predates overlay_digest."""
     mno, _ = _cell_mno_release(cell)
     loaded_at = svc.get("loaded_at", 0.0)
     served = svc.get("overlay_digest")
     if served is not None:
-        pending = bool(loaded_at) and served != store.overlay_digest(mno)
+        pending = bool(loaded_at) and served != store.overlay_digest(mno, label)
     else:
         pending = store.overlay_mtime(mno) > loaded_at > 0
-    return {"cell": cell, "pending": pending, "loaded_at": loaded_at}
+    return {"cell": cell, "label": label, "pending": pending,
+            "loaded_at": loaded_at}
 
 
 @router.get("/enrichment-review", response_class=HTMLResponse)
@@ -139,8 +157,8 @@ def cells() -> dict[str, Any]:
 
 
 @api.get("/plans")
-def plans(cell: str) -> dict[str, Any]:
-    return _service_get(f"/cells/{cell}/plans")
+def plans(cell: str, label: str = "") -> dict[str, Any]:
+    return _service_get(f"/cells/{cell}/plans", {"label": label})
 
 
 # rows rendered per chunk — the next chunk lazy-loads when its sentinel
@@ -149,22 +167,26 @@ _TABLE_PAGE = 100
 
 
 @api.get("/table", response_class=HTMLResponse)
-async def table(request: Request, cell: str, plan: str = "", offset: int = 0):
-    """Server-rendered rows: service data ⊕ current overlay. `offset` > 0
+async def table(request: Request, cell: str, plan: str = "", offset: int = 0,
+                label: str = ""):
+    """Server-rendered rows: service data ⊕ current overlay, projected
+    onto the `label` view (main + that label's records). `offset` > 0
     returns a rows-only fragment (the infinite-scroll continuation)."""
     from core.src.web.app import _template_response
     store = _store()
     mno, release = _cell_mno_release(cell)
-    data = _service_get(f"/cells/{cell}/enrichments", {"plan": plan})
+    label = label.strip()
+    data = _service_get(f"/cells/{cell}/enrichments",
+                        {"plan": plan, "label": label})
     all_rows = data.get("rows", [])
     total = len(all_rows)
     offset = max(0, offset)
     overlay = store.get_overlay(mno)
-    disabled = store.disabled_labels()
-    rows = [_row_view(r, overlay.get(r["req_id"]), disabled, release)
+    allowed = allowed_labels(store.accepted_labels(), label)
+    rows = [_row_view(r, overlay.get(r["req_id"]), allowed, label, release)
             for r in all_rows[offset:offset + _TABLE_PAGE]]
     ctx = {
-        "cell": cell, "plan": plan, "rows": rows,
+        "cell": cell, "plan": plan, "label": label, "rows": rows,
         "categories": store.reason_categories(),
         "total": total, "shown": offset + len(rows),
         "next_offset": (offset + _TABLE_PAGE
@@ -173,7 +195,7 @@ async def table(request: Request, cell: str, plan: str = "", offset: int = 0):
     if offset:
         return _template_response(request, "enrich_review/_rows_page.html", ctx)
     return _template_response(request, "enrich_review/_table.html", {
-        **ctx, **_pending_ctx(cell, store, data),
+        **ctx, **_pending_ctx(cell, store, data, label),
     })
 
 
@@ -189,6 +211,12 @@ async def row_edit(request: Request,
     from core.src.web.app import _template_response
     if op not in EDIT_OPS:
         raise HTTPException(status_code=422, detail=f"unknown op: {op}")
+    label = label.strip()
+    if op in _LABELED_OPS and not label:
+        raise HTTPException(
+            status_code=422,
+            detail="label is required — corrections belong to a label "
+                   "(branch); set one in the stamp bar")
     store = _store()
     mno, release = _cell_mno_release(cell)
 
@@ -201,7 +229,7 @@ async def row_edit(request: Request,
     if op in ("reaffirm", "discard") and direction == "__all_held__":
         # act on every held record of the req (the banner's bulk buttons):
         svc = _service_get(f"/cells/{cell}/enrichments",
-                           {"req_id": req_id})
+                           {"req_id": req_id, "label": label})
         rows = svc.get("rows", [])
         pairs = [{"direction": h.get("direction"), "word": h.get("word", "")}
                  for h in (rows[0].get("held", []) if rows else [])]
@@ -210,16 +238,18 @@ async def row_edit(request: Request,
                reason={"category": reason_category, "note": reason_note},
                by=by, origin_release=release)
 
-    svc = _service_get(f"/cells/{cell}/enrichments", {"req_id": req_id})
+    svc = _service_get(f"/cells/{cell}/enrichments",
+                       {"req_id": req_id, "label": label})
     rows = svc.get("rows", [])
     if not rows:
         raise HTTPException(status_code=404, detail=f"unknown req: {req_id}")
+    allowed = allowed_labels(store.accepted_labels(), label)
     view = _row_view(rows[0], store.get_entry(mno, req_id),
-                     store.disabled_labels(), release)
+                     allowed, label, release)
     return _template_response(request, "enrich_review/_row.html", {
         "cell": cell, "plan": plan, "row": view, "oob_pending": True,
         "categories": store.reason_categories(),
-        **_pending_ctx(cell, store, svc)})
+        **_pending_ctx(cell, store, svc, label)})
 
 
 @api.get("/export")
@@ -282,24 +312,31 @@ def export(label: str = "", mno: str = "", mode: str = "report",
 
 
 @api.get("/pending", response_class=HTMLResponse)
-async def pending(request: Request, cell: str):
+async def pending(request: Request, cell: str, label: str = ""):
     from core.src.web.app import _template_response
     store = _store()
-    data = _service_get(f"/cells/{cell}/enrichments", {"req_id": "__none__"})
+    label = label.strip()
+    data = _service_get(f"/cells/{cell}/enrichments",
+                        {"req_id": "__none__", "label": label})
     return _template_response(request, "enrich_review/_pending.html",
-                              _pending_ctx(cell, store, data))
+                              _pending_ctx(cell, store, data, label))
 
 
 @api.post("/apply", response_class=HTMLResponse)
-async def apply(request: Request, cell: str = Form(...)):
+async def apply(request: Request, cell: str = Form(...),
+                label: str = Form("")):
     """The expert's Apply: reload the cell on EVERY configured sira-query
-    (both stacks when a/b are live) — D-DRAFT-4 self-service loop."""
+    (both stacks when a/b are live) — D-DRAFT-4 self-service loop. With a
+    label, only that branch variant rebuilds — the default view everyone
+    else queries is untouched (branching, D-DRAFT merge workflow)."""
     from core.src.web.app import _template_response
     store = _store()
+    label = label.strip()
     results, freshest = [], {"loaded_at": 0.0}
     for base in _SIRA_URLS:
         try:
-            r = httpx.post(f"{base}/cells/{cell}/reload", timeout=120.0)
+            r = httpx.post(f"{base}/cells/{cell}/reload",
+                           params={"label": label}, timeout=120.0)
             r.raise_for_status()
             j = r.json()
             if j.get("loaded_at", 0.0) >= freshest["loaded_at"]:
@@ -307,7 +344,7 @@ async def apply(request: Request, cell: str = Form(...)):
             results.append(f"{base}: ok")
         except httpx.HTTPError as exc:
             results.append(f"{base}: FAILED ({exc})")
-    ctx = _pending_ctx(cell, store, freshest)
+    ctx = _pending_ctx(cell, store, freshest, label)
     ctx["apply_results"] = results
     return _template_response(request, "enrich_review/_pending.html", ctx)
 
@@ -340,22 +377,31 @@ def edit(req: EditRequest) -> dict[str, Any]:
 
 
 @api.get("/labels")
-def labels() -> dict[str, Any]:
+def labels(request: Request) -> dict[str, Any]:
     store = _store()
-    return {"disabled": sorted(store.disabled_labels()),
-            "counts": store.label_counts()}
+    return {"accepted": sorted(store.accepted_labels()),
+            "counts": store.label_counts(),
+            "admin": is_admin(request)}
 
 
-class LabelToggle(BaseModel):
+class LabelMerge(BaseModel):
     label: str
-    disabled: bool
+    merged: bool
 
 
-@api.post("/labels/toggle")
-def label_toggle(req: LabelToggle) -> dict[str, Any]:
+@api.post("/labels/merge")
+def label_merge(request: Request, req: LabelMerge) -> dict[str, Any]:
+    """Merge a label into main (or un-merge) — admin only. This edits the
+    merge log only; press Apply (no label) afterwards to rebuild the
+    default serving view."""
+    if not is_admin(request):
+        raise HTTPException(status_code=403,
+                            detail="merging labels into main is admin-only")
+    if not req.label.strip():
+        raise HTTPException(status_code=422, detail="label is required")
     store = _store()
-    disabled = store.set_label_disabled(req.label, req.disabled)
-    return {"disabled": sorted(disabled)}
+    accepted = store.set_label_merged(req.label.strip(), req.merged)
+    return {"accepted": sorted(accepted)}
 
 
 class LabelDelete(BaseModel):
@@ -363,8 +409,12 @@ class LabelDelete(BaseModel):
 
 
 @api.post("/labels/delete")
-def label_delete(req: LabelDelete) -> dict[str, Any]:
-    """Bulk cleanup once a prompt fix lands (D-DRAFT-5)."""
+def label_delete(request: Request, req: LabelDelete) -> dict[str, Any]:
+    """Bulk cleanup once a prompt fix lands (D-DRAFT-5). Admin only —
+    deletes records across every MNO file, cannot be undone."""
+    if not is_admin(request):
+        raise HTTPException(status_code=403,
+                            detail="deleting a label's records is admin-only")
     store = _store()
     removed = store.delete_label(req.label)
     return {"label": req.label, "records_removed": removed,

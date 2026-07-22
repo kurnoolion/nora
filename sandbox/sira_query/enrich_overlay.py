@@ -3,8 +3,8 @@
 Domain-expert corrections to SIRA's per-requirement enrichments live OUTSIDE
 builds and serve labels, per MNO, as word-level records:
 
-    <corrections-root>/sira-enrich/<MNO>.json          # {req_id: entry}
-    <corrections-root>/sira-enrich/labels.json         # {"disabled": [...]}
+    <corrections-root>/sira-enrich/<MNO>.json            # {req_id: entry}
+    <corrections-root>/sira-enrich/accepted-labels.json  # {"accepted": [...]}
     <corrections-root>/sira-enrich/reason-categories.json
 
 Entry shape (see strand design doc):
@@ -15,7 +15,11 @@ Entry shape (see strand design doc):
       "suppress_all": {value, label, reason, by, at, origin{release}} }
 
 Semantics implemented here (D-DRAFT-1/2/3 of strand sira-enrichment-review):
-- A record participates only when its label is not disabled ("" = always).
+- Labels are branches: a record participates in a view only when its label
+  is ALLOWED there — allowed = unlabeled ∪ accepted labels ("main") ∪ the
+  view's own label. Merging a label into main = adding it to
+  accepted-labels.json; records are never rewritten, so provenance
+  (label / by / reason) survives merging.
 - Cross-release guard: a record applies to the viewed/loaded release only
   when the requirement is still "the same" as at origin — token-set Jaccard
   over VANILLA index tokens >= threshold. Verdicts are supplied by the
@@ -26,7 +30,8 @@ Semantics implemented here (D-DRAFT-1/2/3 of strand sira-enrichment-review):
   remove of the same word.
 - Records that do NOT apply because the guard failed (or origin is
   unknowable) are returned as HELD — the UI surfaces them for
-  re-affirm/discard. Disabled-label records are neither applied nor held.
+  re-affirm/discard. Records outside the view's allowed labels are
+  neither applied nor held — they are invisible to that view.
 
 This module is dependency-free (stdlib only) so the web side can reuse it.
 """
@@ -58,13 +63,46 @@ def load_overlay(corrections_root: Path | str, mno: str) -> dict[str, Any]:
         return {}
 
 
-def load_disabled_labels(corrections_root: Path | str) -> set[str]:
-    p = sira_enrich_dir(corrections_root) / "labels.json"
+def load_accepted_labels(corrections_root: Path | str) -> set[str]:
+    """Labels merged into "main" — the default view everyone gets. The
+    file is the merge log: appending a label merges it, removing it
+    un-merges. Records themselves are never rewritten."""
+    p = sira_enrich_dir(corrections_root) / "accepted-labels.json"
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        return set(data.get("disabled", []))
+        return set(data.get("accepted", []))
     except (OSError, json.JSONDecodeError):
         return set()
+
+
+def allowed_labels(accepted: set[str], label: str = "") -> set[str]:
+    """The labels visible in a view: unlabeled legacy records ("") always
+    count as main; `label` is the branch the viewer opted into."""
+    allowed = {""} | set(accepted)
+    if label:
+        allowed.add(label)
+    return allowed
+
+
+def filter_overlay(overlay: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
+    """Project an overlay onto a label view: keep only records whose label
+    is allowed, pruning emptied directions/entries. Canonical basis for
+    view digests — the web store must filter identically (it imports this
+    function) so served-vs-current comparisons are content-exact."""
+    out: dict[str, Any] = {}
+    for rid, entry in overlay.items():
+        kept: dict[str, Any] = {}
+        for direction in ("remove", "add"):
+            recs = [r for r in (entry.get(direction) or [])
+                    if (r.get("label") or "") in allowed]
+            if recs:
+                kept[direction] = recs
+        sup = entry.get("suppress_all")
+        if isinstance(sup, dict) and (sup.get("label") or "") in allowed:
+            kept["suppress_all"] = sup
+        if kept:
+            out[rid] = kept
+    return out
 
 
 def jaccard(a: set[str], b: set[str]) -> float:
@@ -86,11 +124,13 @@ class OverlayResult:
     applied_adds: list[str] = field(default_factory=list)
 
 
-def _record_state(rec: dict[str, Any], disabled: set[str],
+def _record_state(rec: dict[str, Any], allowed: "set[str] | None",
                   verdict_fn: VerdictFn, req_id: str) -> str:
-    """'applied' | 'held' | 'disabled' for one record."""
-    if (rec.get("label") or "") in disabled and (rec.get("label") or "") != "":
-        return "disabled"
+    """'applied' | 'held' | 'excluded' for one record. `allowed` is the
+    view's label allowlist (None = every label participates — callers
+    that pre-filter with `filter_overlay` pass None)."""
+    if allowed is not None and (rec.get("label") or "") not in allowed:
+        return "excluded"
     origin = (rec.get("origin") or {}).get("release", "")
     if not origin:
         return "applied"  # no origin recorded: legacy/manual entry — apply
@@ -101,7 +141,7 @@ def _record_state(rec: dict[str, Any], disabled: set[str],
 def apply_overlay_to_req(
     llm_words: list[str],
     entry: dict[str, Any] | None,
-    disabled: set[str],
+    allowed: "set[str] | None",
     verdict_fn: VerdictFn,
     req_id: str,
 ) -> OverlayResult:
@@ -115,7 +155,7 @@ def apply_overlay_to_req(
 
     for direction in ("remove", "add"):
         for rec in entry.get(direction) or []:
-            state = _record_state(rec, disabled, verdict_fn, req_id)
+            state = _record_state(rec, allowed, verdict_fn, req_id)
             if state == "applied":
                 (removes if direction == "remove" else adds).append(rec["word"])
             elif state == "held":
@@ -124,7 +164,7 @@ def apply_overlay_to_req(
     suppressed = False
     sup = entry.get("suppress_all")
     if isinstance(sup, dict) and sup.get("value"):
-        state = _record_state(sup, disabled, verdict_fn, req_id)
+        state = _record_state(sup, allowed, verdict_fn, req_id)
         if state == "applied":
             suppressed = True
         elif state == "held":

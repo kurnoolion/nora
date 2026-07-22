@@ -36,12 +36,16 @@
 
     {% if row.suppressed %}
     <span class="text-muted small">all {{ row.n_llm }} SIRA enrichments suppressed</span>
+    {% if row.suppress_tier == "mine" %}
     <form class="d-inline" {{ hx }}>{{ base_fields }}
       <input type="hidden" name="op" value="unsuppress">
       <button class="btn btn-sm btn-outline-secondary py-0">Undo</button></form>
     {% else %}
+    <span class="badge bg-light text-muted border" title="in main — suppressed by an accepted correction">main</span>
+    {% endif %}
+    {% else %}
     {% for chip in row.chips %}
-      {% if chip.removed %}
+      {% if chip.removed and chip.tier == "mine" %}
       <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
         <input type="hidden" name="op" value="unremove">
         <input type="hidden" name="word" value="{{ chip.word }}">
@@ -50,6 +54,11 @@
           <button class="btn btn-sm p-0 border-0 bg-transparent text-white"
                   title="undo removal">↺</button>
         </span></form>
+      {% elif chip.removed %}
+      {# removed by an accepted (main) correction — muted, read-only #}
+      <span class="badge m-1" style="background-color: #fd7e14; opacity: .5"
+            title="in main — removed by label “{{ chip.record.label or 'unlabeled' }}” ({{ chip.record.by }})">
+        <s style="text-decoration-thickness: 2px">{{ chip.word }}</s></span>
       {% else %}
       <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
         <input type="hidden" name="op" value="remove">
@@ -63,6 +72,7 @@
     {% endif %}
 
     {% for rec in row.adds %}
+    {% if rec.tier == "mine" %}
     <form class="d-inline-block m-1" {{ hx }}>{{ base_fields }}
       <input type="hidden" name="op" value="unadd">
       <input type="hidden" name="word" value="{{ rec.word }}">
@@ -70,6 +80,11 @@
         <button class="btn btn-sm p-0 border-0 bg-transparent text-white"
                 title="undo addition">↺</button>
       </span></form>
+    {% else %}
+    {# added by an accepted (main) correction — muted, read-only #}
+    <span class="badge bg-success m-1" style="opacity: .5"
+          title="in main — added by label “{{ rec.label or 'unlabeled' }}” ({{ rec.by }})">{{ rec.word }}</span>
+    {% endif %}
     {% endfor %}
 
     <div class="d-flex flex-wrap gap-1 mt-1 align-items-center">

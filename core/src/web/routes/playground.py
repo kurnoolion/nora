@@ -342,6 +342,7 @@ async def _run_nora_lane_for_merged(
 async def _run_sira_lane_for_merged(
     question: str, request: Request,
     *,
+    label: str = "",
     emit_progress: "Callable[[str], Awaitable[None]] | None" = None,
 ) -> dict[str, Any]:
     """Run SIRA's BM25→rerank pipeline + NORA's synthesizer pinned to
@@ -360,10 +361,10 @@ async def _run_sira_lane_for_merged(
 
     start = time.time()
     if _SELECT_SYNTH_ENABLED:
-        return await _run_select_synth_lane(question, _say, start)
+        return await _run_select_synth_lane(question, _say, start, label=label)
     await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
-        sira_result = await _call_sira_query(question)
+        sira_result = await _call_sira_query(question, label=label)
     except Exception as exc:
         logger.exception("SIRA service call failed in merged tab")
         await _say(f"SIRA service error: {exc}")
@@ -715,6 +716,7 @@ def _select_synth_synthesize(question: str, packed: list[dict[str, Any]]) -> dic
 
 async def _run_select_synth_lane(
     question: str, _say: "Callable[[str], Awaitable[None]]", start: float,
+    label: str = "",
 ) -> dict[str, Any]:
     """select-synth lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
     that selects relevant chunks + synthesizes. Same dict shape as the default
@@ -725,7 +727,8 @@ async def _run_select_synth_lane(
     )
     try:
         sira_result = await _call_sira_query(
-            question, top_k=_SELECT_SYNTH_TOP_K, text_chars=_SELECT_SYNTH_TEXT_CHARS,
+            question, top_k=_SELECT_SYNTH_TOP_K,
+            text_chars=_SELECT_SYNTH_TEXT_CHARS, label=label,
         )
     except Exception as exc:
         logger.exception("SIRA service call failed (select-synth)")
@@ -778,6 +781,7 @@ async def _run_select_synth_lane(
 
 async def _call_sira_query(
     question: str, top_k: int | None = None, text_chars: int | None = None,
+    label: str = "",
 ) -> dict[str, Any]:
     """POST the question to the SIRA per-query probe service and
     return its JSON response.
@@ -793,6 +797,10 @@ async def _call_sira_query(
         payload["top_k"] = top_k
     if text_chars:
         payload["text_chars"] = text_chars
+    if label:
+        # corrections-overlay branch view (enrichment review labels):
+        # retrieval runs against the main + <label> variant index
+        payload["label"] = label
     async with httpx.AsyncClient(timeout=_SIRA_QUERY_TIMEOUT) as client:
         resp = await client.post(
             f"{_SIRA_QUERY_URL}/sira-query", json=payload,
@@ -1071,6 +1079,8 @@ async def playground_ask(request: Request):
     form = await request.form()
     question = (form.get("question") or "").strip()
     section = (form.get("section") or "requirement_bot").strip()
+    # corrections-overlay label view (branching) — SIRA lane only
+    label = (form.get("label") or "").strip()
 
     if not question:
         return _template_response(request, "test/_answer.html", {
@@ -1098,7 +1108,8 @@ async def playground_ask(request: Request):
         if "nora" in lanes_checked:
             runners["nora"] = _run_nora_lane_for_merged(question, request)
         if "sira" in lanes_checked:
-            runners["sira"] = _run_sira_lane_for_merged(question, request)
+            runners["sira"] = _run_sira_lane_for_merged(question, request,
+                                                        label=label)
         outputs = dict(zip(runners.keys(),
                            await asyncio.gather(*runners.values(),
                                                 return_exceptions=False)))
@@ -1119,7 +1130,7 @@ async def playground_ask(request: Request):
         # lane (NORA hybrid vs. SIRA BM25+enrich+rerank) differs.
         start = time.time()
         try:
-            sira_result = await _call_sira_query(question)
+            sira_result = await _call_sira_query(question, label=label)
         except Exception as exc:
             logger.exception("SIRA query failed")
             return _template_response(request, "test/_answer.html", {
@@ -1309,6 +1320,8 @@ async def playground_ask_stream(request: Request):
     if team_restricted(request):
         lanes_checked = ["sira"]   # gated team eval: SIRA only, server-enforced
     user_name = (form.get("user_name") or "").strip() or None
+    # corrections-overlay label view (branching) — SIRA lane only
+    label = (form.get("label") or "").strip()
 
     if section != "merged":
         return JSONResponse(
@@ -1343,7 +1356,8 @@ async def playground_ask_stream(request: Request):
         )
     if "sira" in lanes_checked:
         runners["sira"] = _run_sira_lane_for_merged(
-            question, request, emit_progress=_make_emitter("sira"),
+            question, request, label=label,
+            emit_progress=_make_emitter("sira"),
         )
 
     async def event_stream():

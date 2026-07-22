@@ -4,12 +4,13 @@
   <form hx-post="{{ root_path }}/api/enrich-review/apply"
         hx-target="#pending-banner" hx-swap="outerHTML">
     <input type="hidden" name="cell" value="{{ cell }}">
+    <input type="hidden" name="label" value="{{ label }}">
     <button class="btn btn-warning btn-sm">
-      ⚠ corrections pending — Apply to serving
+      ⚠ corrections pending — Apply to {% if label %}“{{ label }}” {% endif %}serving
     </button>
   </form>
   {% elif loaded_at %}
-  <span class="badge bg-success">in sync with serving</span>
+  <span class="badge bg-success">in sync with {% if label %}“{{ label }}” {% endif %}serving</span>
   {% endif %}
   {% if apply_results %}
   <div class="small text-muted mt-1">
