@@ -115,6 +115,10 @@ class TestEndpoints:
         row = data["rows"][0]
         assert row["req_id"] == "R1" and row["llm_words"] == ["handover", "retry"]
         assert row["effective"] == ["retry"] and not row["suppressed"]
+        # base BM25 layer: the req's own tokens (sorted, deduped)
+        assert "retry" in row["index_words"] and "timer" in row["index_words"]
+        assert row["index_words"] == sorted(set(row["index_words"]))
+        assert data["enrich_model"] == ""      # fixture cells carry no run dir
         bare = data["rows"][1]
         assert bare["llm_words"] == [] and bare["effective"] == []
         assert not bare["suppressed"] and not bare["held"]
@@ -200,6 +204,16 @@ class TestEndpoints:
         # a default (main) reload drops the cell's label variants
         c.post("/cells/GP__Feb2026/reload")
         assert svc._label_cells == {}
+
+    def test_enrich_model_of_run(self, tmp_path):
+        run = tmp_path / "run1"
+        run.mkdir()
+        assert svc._enrich_model_of_run(run) == ""            # no config.json
+        (run / "config.json").write_text(json.dumps(
+            {"sglang": {"model": "/srv/models/fooBar-32B/"}}))
+        assert svc._enrich_model_of_run(run) == "fooBar-32B"  # basename only
+        (run / "config.json").write_text("not json")
+        assert svc._enrich_model_of_run(run) == ""
 
     def test_plan_matches_either_composite_part(self):
         # heading-mode reqs stamp plan_name, leading-mode reqs stamp plan_id;

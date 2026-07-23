@@ -10,7 +10,7 @@
 <style>
   .er-head, .er-row {
     display: grid;
-    grid-template-columns: 12rem minmax(16rem, 28%) 1fr;
+    grid-template-columns: 12rem minmax(14rem, 24%) minmax(10rem, 16%) 1fr;
     gap: .75rem;
     padding: .35rem .25rem;
     border-bottom: 1px solid #dee2e6;
@@ -25,7 +25,10 @@
 <div class="er-head">
   <div>req_id</div>
   <div>requirement</div>
-  <div>enrichments <span class="text-muted small">({{ total }} reqs)</span>
+  <div>index words <span class="text-muted small"
+        title="the requirement's own tokens in the BM25 index — always matchable, regardless of enrichment corrections">ⓘ</span></div>
+  <div>{% if enrich_model %}{{ enrich_model }} enrichments{% else %}enrichments{% endif %}
+    <span class="text-muted small">({{ total }} reqs)</span>
     {% if label %}<span id="view-badge" class="badge bg-info text-dark" title="you are viewing main + this label's corrections">label: {{ label }}</span>
     {% else %}<span id="view-badge" class="badge bg-light text-muted border" title="accepted corrections only — set a label in the stamp bar to make edits">main view</span>{% endif %}
   </div>

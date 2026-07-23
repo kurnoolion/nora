@@ -18,6 +18,15 @@
       <pre class="small mb-0" style="white-space: pre-wrap; max-height: 18rem; overflow-y: auto">{{ row.text }}</pre>
     </details>
   </div>
+  <div class="small">
+    {% if row.index_words %}
+    <details><summary class="text-truncate text-muted" style="max-width: 100%">
+      {{ row.index_words|length }} words — {{ row.index_words[:4]|join(", ") }}{% if row.index_words|length > 4 %}…{% endif %}</summary>
+      <div style="max-height: 18rem; overflow-y: auto; overflow-wrap: anywhere">
+        {{ row.index_words|join(", ") }}</div>
+    </details>
+    {% else %}<span class="text-muted">—</span>{% endif %}
+  </div>
   <div>
     {% if row.held %}
     <div class="alert alert-warning py-1 px-2 mb-2 small">

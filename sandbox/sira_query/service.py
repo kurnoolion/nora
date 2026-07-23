@@ -307,6 +307,9 @@ class CellState:
     max_df: int
     doc_enrich_source: str | None = None
     doc_enrich_applied_docs: int = 0
+    # LLM that produced this cell's doc enrichments (doc-enrich run
+    # config.json, basename of sglang.model) — review UI column header
+    enrich_model: str = ""
     # --- enrichment-review (strand sira-enrichment-review) ---
     # LLM output per req (pre-overlay); what enrich_batch applied is the
     # EFFECTIVE set (overlay folded in). held = records not applied due to
@@ -550,6 +553,18 @@ def _load_state() -> None:
 # ── Multi-cell loading + fusion query path (multi-mno-sira) ────────
 
 
+def _enrich_model_of_run(run_dir: Path) -> str:
+    """Model name recorded in a doc-enrich run's config.json (the full
+    pipeline config; sglang.model is a serving path — display only its
+    basename). Empty when the run predates config capture."""
+    try:
+        cfg = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+        model = str((cfg.get("sglang") or {}).get("model") or "")
+        return model.rstrip("/").rsplit("/", 1)[-1]
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def _load_one_cell(base: Path, cell: CellKey) -> CellState:
     """Load one cell's BM25 index + corpus + doc-enrichment into a
     CellState. Mirrors the legacy single-dataset load, scoped to one
@@ -594,6 +609,7 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
     doc_run = _resolve_run_dir(base / "runs" / "doc-enrich", _DOC_ENRICH_RUN)
     phrases_path: Path | None = None
     if doc_run is not None:
+        cstate.enrich_model = _enrich_model_of_run(doc_run)
         cand = doc_run / "enrichments.kept.jsonl"
         if cand.exists():
             phrases_path = cand
@@ -1213,19 +1229,23 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "",
             continue
         llm = st.llm_words.get(rid, [])
         held = st.held_by_id.get(rid, [])
+        text = (st.corpus_by_id.get(rid) or {}).get("text", "")
         # every corpus row is reviewable — even with zero LLM words the
         # expert may ADD words, so unenriched requirements must show up
         rows.append({
             "req_id": rid,
-            "text": (st.corpus_by_id.get(rid) or {}).get("text", ""),
+            "text": text,
             "plan": p,
+            # the base BM25 layer: the requirement's own tokens, which
+            # stay matchable regardless of enrichment corrections
+            "index_words": sorted(set(st.bm25.tokenize(text))),
             "llm_words": llm,
             "effective": st.effective_words.get(rid, []),
             "suppressed": rid in st.suppressed_ids,
             "held": held,
         })
     return {"cell": cell_name, "plan": plan, "label": label,
-            "loaded_at": st.loaded_at,
+            "loaded_at": st.loaded_at, "enrich_model": st.enrich_model,
             "overlay_digest": st.overlay_digest, "rows": rows}
 
 

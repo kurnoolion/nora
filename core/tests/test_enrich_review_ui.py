@@ -15,9 +15,11 @@ from core.src.web.app import app
 
 SERVICE_ROWS = {
     "cell": "GP__Feb2026", "plan": "PlanA", "loaded_at": time.time(),
+    "enrich_model": "fooBar-32B",
     "rows": [
         {"req_id": "R1", "text": "**req_id**: R1\n**plan**: PlanA\nbody one",
          "plan": "PlanA", "llm_words": ["handover", "retry"],
+         "index_words": ["body", "one", "planbase"],
          "effective": ["handover", "retry"], "suppressed": False, "held": []},
         {"req_id": "R2", "text": "**req_id**: R2\n**plan**: PlanA\nbody two",
          "plan": "PlanA", "llm_words": ["roaming"],
@@ -77,6 +79,9 @@ class TestTable:
         assert "handover" in r.text and "roaming" in r.text
         assert "R3" in r.text                      # unenriched row still listed
         assert "in sync with serving" in r.text     # no overlay yet
+        # base-layer column: model-named header + expandable index words
+        assert "fooBar-32B enrichments" in r.text
+        assert "planbase" in r.text and "3 words" in r.text
         # R2's held record references a word no longer in the overlay -> hidden
         assert "correction(s) held" not in r.text
 
@@ -211,6 +216,23 @@ class TestLabelBranches:
         # visible in main now — struck but muted and with no undo button
         assert ">handover</s>" in r.text and "in main" in r.text
         assert "undo removal" not in r.text
+
+    def test_readd_countermand_renders_add_chip(self):
+        from core.src.web.routes.enrich_review import _row_view
+        older = {"word": "x", "label": "c1", "by": "e",
+                 "at": "2026-07-20T00:00:00+00:00"}
+        newer = {"word": "x", "label": "c2", "by": "e",
+                 "at": "2026-07-21T00:00:00+00:00"}
+        # newer add countermands the merged remove -> green chip renders
+        v = _row_view({"req_id": "R", "llm_words": ["x"], "held": []},
+                      {"remove": [older], "add": [newer]},
+                      {"", "c1", "c2"}, "c2", "Feb2026")
+        assert [a["word"] for a in v["adds"]] == ["x"] and v["n_added"] == 1
+        # older (or tied) add loses -> hidden, as before
+        v = _row_view({"req_id": "R", "llm_words": ["x"], "held": []},
+                      {"remove": [newer], "add": [older]},
+                      {"", "c1", "c2"}, "c2", "Feb2026")
+        assert v["adds"] == [] and v["n_added"] == 0
 
     def test_merge_endpoint_is_admin_only(self, client, monkeypatch):
         r = client.post("/api/enrich-review/labels/merge",

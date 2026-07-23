@@ -93,7 +93,12 @@ def _row_view(service_row: dict, entry: dict | None,
     chips = [{"word": w, "removed": w in removes, "record": removes.get(w),
               "tier": tier(removes[w]) if w in removes else ""}
              for w in llm_words]
-    add_words = {r["word"] for r in adds}
+    # mirror the fold: a remove hides the same word's add UNLESS the add
+    # is strictly newer (re-add countermanding a merged removal)
+    countermanded = lambda r: (r["word"] in removes and  # noqa: E731
+                               (removes[r["word"]].get("at") or "")
+                               >= (r.get("at") or ""))
+    visible_adds = [r for r in adds if not countermanded(r)]
     # held: service verdicts, filtered to records still present with a
     # non-current origin (discard/reaffirm must vanish instantly)
     still = {("remove", w) for w in removes} \
@@ -109,14 +114,14 @@ def _row_view(service_row: dict, entry: dict | None,
             "dom_id": re.sub(r"[^A-Za-z0-9_-]", "_", service_row.get("req_id", "")),
             "text": service_row.get("text", ""),
             "plan": service_row.get("plan", ""),
+            "index_words": service_row.get("index_words") or [],
             "chips": chips,
-            "adds": [{**r, "tier": tier(r)} for r in adds
-                     if r["word"] not in removes],
+            "adds": [{**r, "tier": tier(r)} for r in visible_adds],
             "suppressed": suppressed,
             "suppress_tier": tier(sup) if suppressed else "",
             "held": held,
             "n_llm": len(llm_words),
-            "n_added": len(add_words - set(removes))}
+            "n_added": len(visible_adds)}
 
 
 def _cell_mno_release(cell: str) -> tuple[str, str]:
@@ -187,6 +192,7 @@ async def table(request: Request, cell: str, plan: str = "", offset: int = 0,
             for r in all_rows[offset:offset + _TABLE_PAGE]]
     ctx = {
         "cell": cell, "plan": plan, "label": label, "rows": rows,
+        "enrich_model": data.get("enrich_model") or "",
         "categories": store.reason_categories(),
         "total": total, "shown": offset + len(rows),
         "next_offset": (offset + _TABLE_PAGE
