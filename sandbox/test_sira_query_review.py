@@ -138,11 +138,21 @@ class TestEndpoints:
         overlay["R999"] = {"add": [{"word": "x"}]}
         p.write_text(json.dumps(overlay))
         assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
-        # an accepted-labels (merge log) change affects every plan
+        # an un-merged labeled record on R2 (PlanB) is invisible to main
+        overlay["R2"]["remove"] = [{"word": "roaming", "label": "camp1",
+                                    "by": "t", "at": "z",
+                                    "origin": {"release": "Feb2026"}}]
+        p.write_text(json.dumps(overlay))
+        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
+        # merging camp1 flags ONLY the plans its records touch — not all
         (tmp_path / "sira-enrich" / "accepted-labels.json").write_text(
-            json.dumps({"accepted": ["some-label"]}))
+            json.dumps({"accepted": ["camp1"]}))
         assert (c.get("/cells/GP__Feb2026/plans").json()["pending_plans"]
                 == ["PlanA", "PlanB"])
+        # un-merge reverts to the pre-merge pending set the same way
+        (tmp_path / "sira-enrich" / "accepted-labels.json").write_text(
+            json.dumps({"accepted": []}))
+        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
 
     def test_label_records_invisible_to_default_view(self, two_release_cells,
                                                      tmp_path):

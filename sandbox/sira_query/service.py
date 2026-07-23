@@ -1150,14 +1150,13 @@ def _pending_plans(st: CellState, plans: list[str], label: str) -> list[str]:
     view) against the load-time snapshot per req and attribute changed
     reqs to their plan stamp. `st` may be the default cell when the label
     variant isn't built yet — then every visible label record is pending
-    by definition. An accepted-labels (merge log) change affects every
-    plan, so it marks all of them."""
+    by definition. An accepted-labels (merge log) change needs no special
+    case: the newly (un)accepted label's records enter/leave the filtered
+    live overlay, so the per-req diff flags exactly the plans they touch."""
     if not _CORR_ROOT:
         return []
     mno, _release = st.cell
     accepted = load_accepted_labels(_CORR_ROOT)
-    if accepted != st.accepted_snapshot:
-        return plans
     cur = filter_overlay(load_overlay(_CORR_ROOT, mno),
                          allowed_labels(accepted, label))
     snap = st.overlay_snapshot
