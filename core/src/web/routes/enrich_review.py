@@ -332,19 +332,24 @@ async def apply(request: Request, cell: str = Form(...),
     from core.src.web.app import _template_response
     store = _store()
     label = label.strip()
-    results, freshest = [], {"loaded_at": 0.0}
+    results, primary, freshest = [], None, {"loaded_at": 0.0}
     for base in _SIRA_URLS:
         try:
             r = httpx.post(f"{base}/cells/{cell}/reload",
                            params={"label": label}, timeout=120.0)
             r.raise_for_status()
             j = r.json()
+            if base == _SIRA_URLS[0]:
+                primary = j
             if j.get("loaded_at", 0.0) >= freshest["loaded_at"]:
                 freshest = j
             results.append(f"{base}: ok")
         except httpx.HTTPError as exc:
             results.append(f"{base}: FAILED ({exc})")
-    ctx = _pending_ctx(cell, store, freshest, label)
+    # the banner must reflect the PRIMARY service — the one every read
+    # path queries. A secondary on an older image (stale digest formula)
+    # must not win the freshest race and wedge the banner on "pending".
+    ctx = _pending_ctx(cell, store, primary or freshest, label)
     ctx["apply_results"] = results
     return _template_response(request, "enrich_review/_pending.html", ctx)
 

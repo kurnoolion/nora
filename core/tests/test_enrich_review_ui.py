@@ -244,3 +244,29 @@ class TestApply:
                          "http://b:8041/cells/GP__Feb2026/reload"]
         assert "in sync with serving" in r.text
         assert "ok" in r.text
+
+    def test_apply_banner_reflects_primary_not_stale_secondary(
+            self, client, tmp_path, monkeypatch):
+        # a secondary sira-query on an older image reports a digest from a
+        # stale formula with a LATER loaded_at — it must not wedge the
+        # banner on "pending" when the primary reloaded in sync
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        good = EnrichOverlayStore(tmp_path).overlay_digest("GP")
+
+        def fake_post(url, params=None, timeout=None):
+            stale = url.startswith("http://b:")
+
+            class _R:
+                status_code = 200
+                def raise_for_status(self):
+                    pass
+                def json(self):
+                    return {"loaded_at": time.time() + (120 if stale else 60),
+                            "overlay_digest": "0" * 64 if stale else good}
+            return _R()
+
+        monkeypatch.setattr(er.httpx, "post", fake_post)
+        monkeypatch.setattr(er, "_SIRA_URLS", ["http://a:8040", "http://b:8041"])
+        r = client.post("/api/enrich-review/apply", data={"cell": "GP__Feb2026"})
+        assert "in sync with serving" in r.text
+        assert "corrections pending" not in r.text
