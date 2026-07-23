@@ -150,14 +150,17 @@ def apply_overlay_to_req(
         return OverlayResult(effective=list(llm_words))
 
     held: list[dict[str, Any]] = []
-    removes: list[str] = []
-    adds: list[str] = []
+    removed_at: dict[str, str] = {}
+    add_recs: list[dict[str, Any]] = []
 
     for direction in ("remove", "add"):
         for rec in entry.get(direction) or []:
             state = _record_state(rec, allowed, verdict_fn, req_id)
             if state == "applied":
-                (removes if direction == "remove" else adds).append(rec["word"])
+                if direction == "remove":
+                    removed_at[rec["word"]] = rec.get("at") or ""
+                else:
+                    add_recs.append(rec)
             elif state == "held":
                 held.append({**rec, "direction": direction})
 
@@ -170,15 +173,24 @@ def apply_overlay_to_req(
         elif state == "held":
             held.append({**sup, "direction": "suppress_all"})
 
-    remove_set = set(removes)
+    remove_set = set(removed_at)
+    # remove wins over add for the same word, unless the add is strictly
+    # NEWER — a later correction (e.g. a new label, after an earlier
+    # label's remove was merged into main) re-adds the word without
+    # touching the original record. Ties keep the legacy remove-wins bias.
+    adds = [r["word"] for r in add_recs
+            if r["word"] not in removed_at
+            or (r.get("at") or "") > removed_at[r["word"]]]
+    countermanded = remove_set & set(adds)
+
     if suppressed:
         base: list[str] = []
     else:
-        base = [w for w in llm_words if w not in remove_set]
-    # remove wins over add; preserve order, no duplicates
+        base = [w for w in llm_words
+                if w not in remove_set or w in countermanded]
     seen = set(base)
     for w in adds:
-        if w not in remove_set and w not in seen:
+        if w not in seen:
             base.append(w)
             seen.add(w)
 
@@ -186,8 +198,9 @@ def apply_overlay_to_req(
         effective=base,
         held=held,
         suppressed=suppressed,
-        applied_removes=sorted(remove_set & set(llm_words)) if not suppressed else [],
-        applied_adds=[w for w in adds if w not in remove_set],
+        applied_removes=sorted((remove_set - countermanded) & set(llm_words))
+        if not suppressed else [],
+        applied_adds=adds,
     )
 
 

@@ -146,8 +146,10 @@
       if (e.detail && e.detail.target && e.detail.target.id === "pending-banner")
         refreshPlanMarkers();
     }));
+  let loadedLabel = "";   // label the current table render was projected with
   function loadTable() {
     if (!$("sel-plan").value) return;
+    loadedLabel = labelVal();
     $("table-container").innerHTML =
       '<p class="text-muted py-3"><span class="spinner-border spinner-border-sm"></span> Loading enrichments…</p>';
     htmx.ajax("GET", api + "/table?cell=" + cellName() +
@@ -156,11 +158,31 @@
               {target: "#table-container", swap: "innerHTML"});
   }
   $("sel-plan").addEventListener("change", loadTable);
-  // the label defines which view (main vs main+label) is rendered — switching
-  // it re-projects the table and the pending dots
-  $("stamp-label").addEventListener("change", () => {
-    loadTable();
+  // the label defines which view (main vs main+label) is rendered. The input's
+  // change event fires on blur — i.e. exactly when the user clicks into a row
+  // to edit — so only reload when the projection actually differs: a label
+  // with no records yet (or one already merged into main) renders the same
+  // rows, and a reload would wipe the edit the user just started typing.
+  $("stamp-label").addEventListener("change", async () => {
     refreshPlanMarkers();
+    const prev = loadedLabel, cur = labelVal();
+    if (cur === prev) return;
+    try {
+      const d = await (await fetch(api + "/labels")).json();
+      const acc = new Set(d.accepted || []);
+      const distinct = (l) => !!l && !!(d.counts || {})[l] && !acc.has(l);
+      if (!distinct(prev) && !distinct(cur)) {
+        loadedLabel = cur;
+        const badge = document.getElementById("view-badge");
+        if (badge) {   // keep the header badge honest without a re-render
+          badge.className = cur ? "badge bg-info text-dark"
+                                : "badge bg-light text-muted border";
+          badge.textContent = cur ? "label: " + cur : "main view";
+        }
+        return;
+      }
+    } catch (e) { /* can't tell — fall through to a full reload */ }
+    loadTable();
   });
 
   // corrections belong to a label — block record-creating edits without one

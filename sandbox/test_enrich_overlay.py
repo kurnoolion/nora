@@ -42,7 +42,24 @@ class TestFold:
         assert r.applied_removes == ["b"] and r.applied_adds == ["z"]
 
     def test_remove_wins_over_add(self):
+        # same timestamp -> tie -> legacy remove-wins bias
         entry = {"remove": [_rec("x", label="g1")], "add": [_rec("x", label="g2")]}
+        r = apply_overlay_to_req(["a", "x"], entry, None, ALWAYS_OK, "R1")
+        assert "x" not in r.effective
+
+    def test_newer_add_countermands_older_remove(self):
+        # an earlier (merged) label removed "x"; a later correction re-adds
+        # it — the newer record wins; the original remove stays in the
+        # overlay (read-only in branches) but no longer takes effect
+        entry = {"remove": [_rec("x", label="g1")],
+                 "add": [_rec("x", label="g2", at="2026-07-21T00:00:00Z")]}
+        r = apply_overlay_to_req(["a", "x"], entry, None, ALWAYS_OK, "R1")
+        assert r.effective == ["a", "x"]          # original position kept
+        assert r.applied_removes == [] and r.applied_adds == ["x"]
+
+    def test_newer_remove_still_beats_older_add(self):
+        entry = {"remove": [_rec("x", at="2026-07-21T00:00:00Z")],
+                 "add": [_rec("x")]}
         r = apply_overlay_to_req(["a", "x"], entry, None, ALWAYS_OK, "R1")
         assert "x" not in r.effective
 

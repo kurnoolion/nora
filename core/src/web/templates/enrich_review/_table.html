@@ -26,8 +26,8 @@
   <div>req_id</div>
   <div>requirement</div>
   <div>enrichments <span class="text-muted small">({{ total }} reqs)</span>
-    {% if label %}<span class="badge bg-info text-dark" title="you are viewing main + this label's corrections">label: {{ label }}</span>
-    {% else %}<span class="badge bg-light text-muted border" title="accepted corrections only — set a label in the stamp bar to make edits">main view</span>{% endif %}
+    {% if label %}<span id="view-badge" class="badge bg-info text-dark" title="you are viewing main + this label's corrections">label: {{ label }}</span>
+    {% else %}<span id="view-badge" class="badge bg-light text-muted border" title="accepted corrections only — set a label in the stamp bar to make edits">main view</span>{% endif %}
   </div>
 </div>
 <div id="er-rows">
