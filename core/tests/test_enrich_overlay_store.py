@@ -98,6 +98,15 @@ class TestLabelsAndReasons:
         counts = store.label_counts()
         assert counts == {"camp1": 2, "camp2": 1}
 
+    def test_label_req_counts_are_distinct_reqs(self, store):
+        # two records on R1 + one on R2 -> camp1 touched 2 reqs (not 3)
+        _edit(store, "remove", ["a", "b"])                       # R1
+        store.edit("GP", "R2", "add", words=["c"], label="camp1",
+                   by="expert", origin_release="Feb2026")
+        _edit(store, "add", ["d"], label="camp2")                # R1
+        assert store.label_req_counts() == {"camp1": 2, "camp2": 1}
+        assert store.label_counts() == {"camp1": 3, "camp2": 1}
+
     def test_delete_label_strips_records_everywhere(self, store):
         _edit(store, "remove", ["a"])
         _edit(store, "add", ["c"], label="camp2")
@@ -194,7 +203,8 @@ class TestEditApi:
                     json={"mno": "GP", "req_id": "R1", "op": "add",
                           "words": ["w"], "label": "c1",
                           "origin_release": "Feb2026"})
-        assert client.get("/api/enrich-review/labels").json()["counts"] == {"c1": 1}
+        data = client.get("/api/enrich-review/labels").json()
+        assert data["counts"] == {"c1": 1} and data["req_counts"] == {"c1": 1}
         client.post("/api/enrich-review/labels/merge",
                     json={"label": "c1", "merged": True})
         assert client.get("/api/enrich-review/labels").json()["accepted"] == ["c1"]

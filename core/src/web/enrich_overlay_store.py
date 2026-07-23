@@ -175,6 +175,26 @@ class EnrichOverlayStore:
                     counts[sup.get("label") or ""] = counts.get(sup.get("label") or "", 0) + 1
         return counts
 
+    def label_req_counts(self, mnos: "list[str] | None" = None) -> dict[str, int]:
+        """Distinct requirements touched per label across MNO files
+        (drawer display renders reqs:records)."""
+        reqs: dict[str, set] = {}
+        if not self.enabled:
+            return {}
+        paths = ([self._mno_path(m) for m in mnos] if mnos is not None
+                 else sorted(self.dir.glob("*.json")))
+        for p in paths:
+            if p.name in ("labels.json", "accepted-labels.json",
+                          "reason-categories.json"):
+                continue
+            for rid, entry in (self._read_json(p, {}) or {}).items():
+                for rec in (entry.get("remove") or []) + (entry.get("add") or []):
+                    reqs.setdefault(rec.get("label") or "", set()).add((p.name, rid))
+                sup = entry.get("suppress_all")
+                if isinstance(sup, dict) and sup.get("value"):
+                    reqs.setdefault(sup.get("label") or "", set()).add((p.name, rid))
+        return {label: len(rids) for label, rids in reqs.items()}
+
     def reason_categories(self) -> list[str]:
         if not self.enabled:
             return list(DEFAULT_REASON_CATEGORIES)

@@ -381,6 +381,7 @@ def labels(request: Request) -> dict[str, Any]:
     store = _store()
     return {"accepted": sorted(store.accepted_labels()),
             "counts": store.label_counts(),
+            "req_counts": store.label_req_counts(),
             "admin": is_admin(request)}
 
 

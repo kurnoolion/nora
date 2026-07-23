@@ -220,7 +220,8 @@
     $("labels-drawer-body").innerHTML = rows.length ? rows.map(([l, n]) => `
       <div class="d-flex gap-2 align-items-center py-1">
         <code>${l || "(no label)"}</code>
-        <span class="badge bg-secondary">${n}</span>
+        <span class="badge bg-secondary" title="requirements touched : correction records">
+          ${(data.req_counts || {})[l] || 0}:${n}</span>
         ${accepted.has(l) ? '<span class="badge bg-success">merged into main</span>' : ""}
         ${l && data.admin ? `
         <button class="btn btn-sm btn-outline-primary lbl-merge" data-label="${l}"
