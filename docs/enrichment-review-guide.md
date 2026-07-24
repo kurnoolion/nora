@@ -57,14 +57,18 @@ you do is visible to others until an admin merges it — so edit freely.
 
 ## Admin: step by step
 
-1. Open the **Labels** drawer. Each label shows `reqs:records`
-   (requirements touched : correction records) — click through the
-   label's rows in the table to review before merging.
+1. Open the **Labels** drawer (the *Labels* button in the top
+   toolbar). Each label shows `reqs:records` (requirements touched :
+   correction records) — click through the label's rows in the table
+   to review before merging.
 2. **merge into main** — the label's corrections become part of
    everyone's default view *on disk*.
-3. Press **Apply all pending (N releases)** — this reloads every
-   affected release so live queries actually serve the merged
-   corrections. Until this press, the merge exists only on disk.
+3. Press **Apply all pending (N releases)** — it appears at the
+   bottom of the Labels drawer whenever at least one release lags,
+   and disappears once everything is in sync (hover it to see which
+   releases it covers). This reloads every affected release so live
+   queries actually serve the merged corrections. Until this press,
+   the merge exists only on disk.
 4. **un-merge** retracts a label from main the same way (again followed
    by Apply all). **delete all** permanently deletes the label's
    records — the sanctioned cleanup *after* a prompt fix is confirmed
@@ -81,7 +85,7 @@ you do is visible to others until an admin merges it — so edit freely.
 | `main view` / `label: X` badge | which view the table is showing |
 | **●** next to a plan | that plan has corrections not yet applied to serving |
 | yellow *corrections pending* banner | the open release's serving lags your view's saved edits — press to sync |
-| *Apply all pending (N releases)* (Labels drawer) | N releases across the fleet lag — one press syncs them all |
+| *Apply all pending (N releases)* (bottom of the Labels drawer; only visible when something lags) | N releases across the fleet lag — one press syncs them all |
 | *held — requirement changed* banner | a correction from another release didn't auto-apply here (see below); Re-affirm or Discard |
 
 ## Under the hood
