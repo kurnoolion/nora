@@ -106,9 +106,26 @@ trace unchanged otherwise; resume semantics identical to today.
 
 The taxonomy is now enrichment INPUT, so its quality compounds. No
 curation layer exists (confirmed) → regenerating taxonomies is safe and
-cheap. Design: update NORA's taxonomy-generation prompt to include the
-same per-MNO corpus overview, regenerate per MNO, then re-run
-enrichment against the improved taxonomies.
+cheap.
+
+Mechanism (NORA's taxonomy prompt is CODE, not a file —
+`core/src/taxonomy/extractor.py` SYSTEM_PROMPT +
+EXTRACTION_PROMPT_TEMPLATE, fed only TOC headings + plan metadata):
+- The derive-sira-prompts skill additionally writes the per-MNO
+  overview as a standalone artifact
+  (`sandbox/prompts/corpus_overview_<MNO>_<version>.txt`) — derived
+  once per MNO, consumed by BOTH the SIRA doc prompt and NORA's
+  taxonomy extractor.
+- `FeatureExtractor` gains an optional corpus-overview input (config
+  knob → per-MNO overview file resolved by the doc's MNO); when
+  present it is inserted as a "Corpus context" section in the
+  extraction prompt; absent → exactly today's behavior (fail-soft).
+  Core `taxonomy` module change + MODULE.md update; taxonomy stage
+  cache note: the corpus fingerprint does NOT include the overview
+  file, so regeneration after adding an overview needs `--force` (or
+  the fingerprint gains the overview hash — decide at implementation).
+- Then regenerate taxonomies per MNO and re-run enrichment against
+  the improved files.
 
 **Staging decision: COMBINED** (user decision, 2026-07-24). Both levers
 (enrichment prompt + regenerated taxonomies) ship in ONE re-enrichment;

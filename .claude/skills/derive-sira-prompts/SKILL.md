@@ -289,6 +289,13 @@ Output paths (MNO infix present whenever the MNO argument was given):
 - `sandbox/prompts/doc_requirement_<MNO>_<version>.txt`
 - `sandbox/prompts/query_requirement_<MNO>_<version>.txt`
 - `sandbox/prompts/relevance_requirement_<MNO>_<version>.txt`
+- `sandbox/prompts/corpus_overview_<MNO>_<version>.txt` — the distilled
+  per-MNO corpus overview as a STANDALONE artifact: the same overview
+  text embedded in the doc prompt, written separately so NORA's
+  taxonomy extractor can consume it as its optional corpus-context
+  section (strand sira-enrichment-pe section 6 — derived once per
+  MNO, consumed by both pipelines). Plain prose, no placeholders,
+  no subdomain tables — just the corpus description.
 
 Refuse to overwrite an existing version unless `--force` is passed.
 

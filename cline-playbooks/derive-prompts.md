@@ -95,6 +95,8 @@ After completion, three files exist at (MNO infix when scoped):
 - `sandbox/prompts/doc_requirement_<MNO>_<version>.txt`
 - `sandbox/prompts/query_requirement_<MNO>_<version>.txt`
 - `sandbox/prompts/relevance_requirement_<MNO>_<version>.txt`
+- `sandbox/prompts/corpus_overview_<MNO>_<version>.txt` (standalone
+  overview — consumed by NORA's taxonomy extractor as corpus context)
 
 Each has a derivation-header comment naming the corpus, subdomain distribution,
 and source paths.
