@@ -1,8 +1,9 @@
-# Enrichment Review — Expert Guide
+# Enrichment Review Guide
 
 A short guide to reviewing and correcting the LLM-generated enrichment
-keywords that power requirement search. Written for domain experts; the
-last section explains what happens under the hood.
+keywords that power requirement search. One guide for both roles —
+domain experts (review and correct) and admins (merge and publish);
+the last section explains what happens under the hood.
 
 ## Why this exists
 
@@ -20,7 +21,7 @@ terms. Your corrections do two jobs:
 
 ```mermaid
 flowchart LR
-    A[Expert edits<br>under a label] --> B[Preview: Apply<br>in label view]
+    A[Domain expert edits<br>under a label] --> B[Preview: Apply<br>in label view]
     B --> C{Happy?}
     C -- no --> A
     C -- yes --> D[Admin merges<br>label into main]
@@ -31,7 +32,7 @@ flowchart LR
 Your **label** (e.g. `handover-noise`) is your private branch. Nothing
 you do is visible to others until an admin merges it — so edit freely.
 
-## Expert: step by step
+## Domain expert: step by step
 
 1. **Open** the Enrichment Review page. Pick MNO → Release → Plan.
 2. **Fill the stamp bar**: your label and your name. Every edit is
