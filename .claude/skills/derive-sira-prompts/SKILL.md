@@ -23,12 +23,19 @@ prompts automatically.
 - As the first step when adopting SIRA on a brand-new corpus that
   doesn't resemble the corpus the existing prompts were tuned to.
 
-## Argument
+## Arguments
 
-1. **Version slug** (optional, default `v02`) — written as the suffix
-   on the three output files. Example: `v02` → produces
-   `sandbox/prompts/doc_requirement_v02.txt` etc. Refuses to overwrite
-   an existing version unless `--force` is passed.
+1. **MNO** (recommended; strand sira-enrichment-pe) — scope the entire
+   derivation to ONE MNO: only that MNO's cells are inventoried,
+   sampled, classified, and harvested, and the output files carry the
+   MNO in their name (`doc_requirement_<MNO>_<version>.txt`). Run the
+   skill once per MNO. When omitted, legacy corpus-wide behavior and
+   naming apply (all cells pooled — produces the old single-prompt
+   shape; only appropriate for single-MNO corpora).
+2. **Version slug** (optional, default `v02`) — written as the suffix
+   on the three output files. Example: `--mno MNOA v03` → produces
+   `sandbox/prompts/doc_requirement_MNOA_v03.txt` etc. Refuses to
+   overwrite an existing version unless `--force` is passed.
 
 ## Procedure
 
@@ -36,16 +43,26 @@ prompts automatically.
 
 Look for parsed `_tree.json` files in this order:
 
-1. `<env_dir>/out/parse/*/tree.json` — canonical NORA parser output.
-   `env_dir` is resolved from `environments/<env>.json` or the
-   `ENV_DIR` env var. If multiple envs are configured, ask the user
-   which one to read.
+1. `<env_dir>/out/parse/**/*_tree.json` — canonical NORA parser output
+   (nested per-cell in multi-MNO envs). `env_dir` is resolved from
+   `environments/<env>.json` or the `ENV_DIR` env var. If multiple
+   envs are configured, ask the user which one to read.
 2. If no parsed trees are available, fall back to the BEIR-shape
-   corpus at `sandbox/adapter/out/<dataset>/raw/corpus.jsonl`. Note
+   corpus at `<db_root>/<MNO__Release>/raw/corpus.jsonl` (or the
+   legacy `sandbox/adapter/out/<dataset>/raw/corpus.jsonl`). Note
    that this loses hierarchy and definitions but still works for
    subdomain detection.
 
-Abort if neither source is present.
+**MNO scoping:** when the MNO argument is given, keep only sources
+belonging to that MNO — tree paths whose cell component matches
+`<MNO>__*` (or `input/<MNO>/` provenance), corpus dirs named
+`<MNO>__<Release>`. Every subsequent step (inventory, sampling,
+classification, harvesting, weights) sees ONLY that MNO's
+requirements — the point is that each MNO's prompt patterns the LLM
+after that MNO's actual subdomain mix and vocabulary, not the pooled
+corpus average.
+
+Abort if neither source is present (or none matches the MNO).
 
 ### 2. Inventory the corpus
 
@@ -204,14 +221,44 @@ generated prompts:
 ### 7. Generate the three prompts
 
 Open the **current v01 files** in `sandbox/prompts/` as templates.
-Preserve their structure exactly:
 
-- Same Jinja-style placeholders: `{doc_text}`, `{query}`,
-  `{document}`, `{max_n}`.
-- Same JSON output shape: `{{"keywords": [...]}}` for doc + query;
+**Query + relevance prompts** — preserve their structure exactly:
+
+- Same Jinja-style placeholders: `{query}`, `{document}`, `{max_n}`.
+- Same JSON output shape: `{{"keywords": [...]}}` for query;
   `{{"score": <int>}}` for relevance.
 - Same step-numbered procedure (`STEP 1`, `STEP 2`, etc.) shape.
 - Same `Rules:` section style.
+
+**Doc prompt — BATCHED shape** (strand sira-enrichment-pe; replaces
+the single-req `{doc_text}` shape). The generated file is a template
+the batch composer fills at enrichment time; its placeholder contract:
+
+- `{taxonomy_block}` — replaced per batch with the plan's feature
+  taxonomy (prologue + the plan's `<plan_id>_features.json` content),
+  or with an empty string when the plan has no taxonomy file.
+- `{requirements}` — replaced per batch with the packed requirements,
+  each introduced by a `### req_id: <id>` header line followed by its
+  verbatim text.
+- `{max_n}` — unchanged (max words per phrase).
+- `{doc_text}` MUST NOT appear.
+
+Required content around the placeholders (keep the v01 structure
+otherwise — role line, LANGUAGE rule, STEP 1 subdomain inference,
+STEP 2 term priorities, Rules):
+
+- The role line states the batch shape: multiple requirements from ONE
+  plan of the <MNO> corpus, generate NEW search terms per requirement.
+- `{taxonomy_block}` sits before the requirements, after STEP 1.
+- The output spec becomes strict JSON keyed by req_id — one key per
+  packed requirement, EVERY req_id present even if its list is empty:
+  `{{"<req_id>": ["...", ...], "<req_id>": [...]}}`.
+- The per-req phrase cap stays at 10 (this is what makes the batch
+  creator's response-size bound enforceable).
+- Rules gain: phrases for a requirement must be derived from THAT
+  requirement (and the shared taxonomy/subdomain context) — never from
+  a neighboring requirement in the batch; never emit any req_id as a
+  phrase.
 
 Replace ONLY the **example content**:
 
@@ -237,13 +284,19 @@ Append a header comment to each file noting the derivation:
 
 ### 8. Write the files
 
-Output paths:
+Output paths (MNO infix present whenever the MNO argument was given):
 
-- `sandbox/prompts/doc_requirement_<version>.txt`
-- `sandbox/prompts/query_requirement_<version>.txt`
-- `sandbox/prompts/relevance_requirement_<version>.txt`
+- `sandbox/prompts/doc_requirement_<MNO>_<version>.txt`
+- `sandbox/prompts/query_requirement_<MNO>_<version>.txt`
+- `sandbox/prompts/relevance_requirement_<MNO>_<version>.txt`
 
 Refuse to overwrite an existing version unless `--force` is passed.
+
+Note on deployment (wiring lands in the sira-enrichment-pe batch
+integration, not this skill): the per-MNO DOC prompt is resolved per
+cell at ingestion; per-MNO query/relevance prompts are generated for
+consistency but the query-time service currently loads a single
+prompt pair — per-cell selection there is a separate, deferred change.
 
 If the version is bumped (e.g., `v02`), also update
 `sandbox/install_configs.sh` to copy the new files, and
@@ -309,10 +362,11 @@ After writing, suggest the user run these as sanity checks:
 - **Never silently mis-classify a plan.** If the taxonomy table
   doesn't fit, propose a new subdomain in the summary and ask the
   user to confirm before writing the prompts.
-- **Preserve placeholders byte-exactly.** `{doc_text}`, `{query}`,
+- **Preserve placeholders byte-exactly.** Query/relevance: `{query}`,
   `{document}`, `{max_n}`, `{{"keywords": [...]}}`, `{{"score":
-  <integer>}}` — break any of these and SIRA's hydra template
-  expansion will fail at runtime.
+  <integer>}}`. Batched doc prompt: `{taxonomy_block}`,
+  `{requirements}`, `{max_n}`, and the req_id-keyed JSON output spec.
+  Break any of these and template expansion fails at runtime.
 - **Don't auto-install.** Writing the prompt files is the contract;
   copying them into the SIRA clone is the user's `install_configs.sh`
   invocation. Surface the next-step command instead of running it.

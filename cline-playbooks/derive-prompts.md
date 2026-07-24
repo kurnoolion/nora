@@ -10,8 +10,16 @@ Replaces the manual prompt-writing loop that produced LTE-EMM-biased v01 prompts
 Corpus-derived prompts pattern the LLM after what's actually present — so a
 VoWiFi-heavy or Android-API-heavy corpus produces matching prompts automatically.
 
-**Input**: optional version slug (default `v02`). Refuses to overwrite an
-existing version unless `--force` is passed.
+**Input**: an MNO to scope to (recommended — run once per MNO; strand
+sira-enrichment-pe), plus an optional version slug (default `v02`).
+Refuses to overwrite an existing version unless `--force` is passed.
+
+**Per-MNO mode**: with an MNO given, only that MNO's cells are scanned
+and the outputs are named `<stage>_requirement_<MNO>_<version>.txt`.
+The DOC prompt is generated in the BATCHED shape (placeholders
+`{taxonomy_block}` + `{requirements}`, req_id-keyed JSON output) —
+see the SKILL.md step 7 contract. To cover the whole deployment, run
+this playbook once per ingested MNO.
 
 ## Step 0 — resolve `env_dir` before reading the corpus
 
@@ -82,11 +90,11 @@ The SKILL.md covers:
 
 ## Output paths
 
-After completion, three files exist at:
+After completion, three files exist at (MNO infix when scoped):
 
-- `sandbox/prompts/doc_requirement_<version>.txt`
-- `sandbox/prompts/query_requirement_<version>.txt`
-- `sandbox/prompts/relevance_requirement_<version>.txt`
+- `sandbox/prompts/doc_requirement_<MNO>_<version>.txt`
+- `sandbox/prompts/query_requirement_<MNO>_<version>.txt`
+- `sandbox/prompts/relevance_requirement_<MNO>_<version>.txt`
 
 Each has a derivation-header comment naming the corpus, subdomain distribution,
 and source paths.

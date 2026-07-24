@@ -2,8 +2,8 @@
 
 > **Strands active from 2026-05-16.** Mid-session journal entries land in `docs/compact/strands/<name>/journal.md`. Content below this line is historical and is no longer updated by `close-session` when a strand is bound. Architect-only writes (project-wide status, decisions promoted via `/land-strand`) continue to land here.
 
-**Active phase**: development
-**Last updated**: 2026-07-20
+**Active phase**: architecture
+**Last updated**: 2026-07-24
 **Last drift-check**: 2026-07-18 — mode: dev-full — 4 drifts resolved (all [a] MODULE.md → implementation: env/pipeline requirements_dir + lanes, extraction images_root + fail-loud providers, web inventory + sira-query runtime edge; anchored by docker-distro D-DRAFT-5/6/10/11/14), 1 deferred surfaced (web FeedbackStore 0-9 scoring wording → team-eval-pilot)
 
 ## Done
