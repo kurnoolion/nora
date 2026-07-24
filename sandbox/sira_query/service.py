@@ -644,16 +644,18 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
     return cstate
 
 
-def _overlay_digest(filtered_overlay: dict, accepted: "set[str]") -> str:
+def _overlay_digest(filtered_overlay: dict) -> str:
     """Canonical content digest of the APPLIED view: the overlay filtered
-    to the view's allowed labels, plus the accepted-labels merge log. The
-    review UI compares it against the web store's current digest for
-    pending detection (fully-undone edits digest back to this value).
+    to the view's allowed labels. The filtered records fully determine
+    what the view serves, so the merge log itself stays OUT of the
+    formula — hashing it flagged every MNO pending on any merge-log
+    change, even MNOs the (un)merged label never touched. The review UI
+    compares this against the web store's current digest for pending
+    detection (fully-undone edits digest back to this value).
     Formula must match EnrichOverlayStore.overlay_digest."""
     import hashlib
     import json as _json
-    payload = _json.dumps({"overlay": filtered_overlay,
-                           "accepted": sorted(accepted)},
+    payload = _json.dumps({"overlay": filtered_overlay},
                           sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -673,7 +675,7 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
                                  allowed_labels(accepted, cstate.label))
     else:
         overlay, accepted = {}, set()
-    cstate.overlay_digest = _overlay_digest(overlay, accepted)
+    cstate.overlay_digest = _overlay_digest(overlay)
     cstate.overlay_snapshot = overlay
     cstate.accepted_snapshot = set(accepted)
 

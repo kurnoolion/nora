@@ -129,18 +129,19 @@ class EnrichOverlayStore:
 
     def overlay_digest(self, mno: str, label: str = "") -> str:
         """Canonical content digest of the `label` VIEW of the MNO overlay
-        (main = accepted + unlabeled, plus `label`'s own records) and the
-        accepted-labels merge log. Pending detection compares this against
-        the digest sira-query reports for its APPLIED view — edits that
-        are fully undone digest back to the served state, so no false
-        'pending'. Formula must match sira-query's `_overlay_digest`."""
+        (main = accepted + unlabeled, plus `label`'s own records). The
+        filtered records fully determine what the view serves — the merge
+        log itself stays OUT of the formula, so a merge/un-merge flags
+        only the MNOs the label actually touches. Pending detection
+        compares this against the digest sira-query reports for its
+        APPLIED view — edits that are fully undone digest back to the
+        served state, so no false 'pending'. Formula must match
+        sira-query's `_overlay_digest`."""
         import hashlib
-        accepted = self.accepted_labels()
         filtered = filter_overlay(self.get_overlay(mno),
-                                  allowed_labels(accepted, label))
-        payload = json.dumps(
-            {"overlay": filtered, "accepted": sorted(accepted)},
-            sort_keys=True, separators=(",", ":"))
+                                  allowed_labels(self.accepted_labels(), label))
+        payload = json.dumps({"overlay": filtered},
+                             sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def accepted_labels(self) -> set[str]:

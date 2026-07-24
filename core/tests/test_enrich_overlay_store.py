@@ -154,6 +154,26 @@ class TestMergeLog:
         store.set_label_merged("camp1", True)
         assert store.overlay_digest("GP") != base_main
 
+    def test_merge_log_change_leaves_untouched_mno_digest_alone(self, store):
+        # camp1 has records only in GP — (un)merging it must not flag the
+        # other MNOs' cells pending (their served content cannot change)
+        other = store.overlay_digest("XX")
+        _edit(store, "remove", ["a"])                    # GP, label camp1
+        store.set_label_merged("camp1", True)
+        assert store.overlay_digest("XX") == other
+        store.set_label_merged("camp1", False)
+        assert store.overlay_digest("XX") == other
+
+    def test_digest_formula_matches_service_side(self, store):
+        from sandbox.sira_query.enrich_overlay import (allowed_labels,
+                                                       filter_overlay)
+        from sandbox.sira_query.service import _overlay_digest
+        _edit(store, "remove", ["a"])
+        store.set_label_merged("camp1", True)
+        filtered = filter_overlay(store.get_overlay("GP"),
+                                  allowed_labels(store.accepted_labels(), ""))
+        assert store.overlay_digest("GP") == _overlay_digest(filtered)
+
 
 class TestServiceCompatibility:
     """The store's output must be consumable by the service-side fold."""
