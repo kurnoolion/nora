@@ -84,6 +84,9 @@ class TestTable:
         assert "planbase" in r.text and "3 words" in r.text
         # R2's held record references a word no longer in the overlay -> hidden
         assert "correction(s) held" not in r.text
+        # the ONE #pending-banner lives in the sticky stamp bar: the table
+        # response updates it OOB rather than rendering a duplicate inline
+        assert 'id="pending-banner" hx-swap-oob="true"' in r.text
 
     def test_table_chunks_with_revealed_sentinel(self, client, monkeypatch):
         monkeypatch.setattr(er, "_TABLE_PAGE", 2)

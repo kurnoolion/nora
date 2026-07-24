@@ -3,7 +3,9 @@
    layout/paint of off-screen rows, and fixed grid tracks mean expanding /
    collapsing one row never re-measures the rest — no UI hangs at 400+
    rows. Chunks beyond the first lazy-load via _rows_page.html. #}
-{% include "enrich_review/_pending.html" %}
+{# OOB: the ONE #pending-banner lives in the sticky stamp bar — table loads
+   update it there rather than rendering a duplicate above the rows #}
+{% with oob=True %}{% include "enrich_review/_pending.html" %}{% endwith %}
 {% if not rows %}
 <p class="text-muted">No enrichment data for {{ cell }}{% if plan %} / {{ plan }}{% endif %}.</p>
 {% else %}
