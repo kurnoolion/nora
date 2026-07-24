@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** unspecified (sandbox/sira scripts — outside the module system, like sira-query)
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 

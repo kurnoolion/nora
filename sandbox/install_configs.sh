@@ -17,6 +17,7 @@
 # Re-run after editing any of:
 #   sandbox/sira_configs/{data,enrich,rerank}/nora.yaml
 #   sandbox/prompts/{doc,query,relevance}_requirement_v*.txt
+#   sandbox/enrich_batching.py
 #   sandbox/sira_patches/*.patch
 
 set -euo pipefail
@@ -41,6 +42,12 @@ cp "$REPO_ROOT/sandbox/sira_configs/rerank/nora.yaml" "$SIRA_CLONE/scripts/confi
 cp "$REPO_ROOT/sandbox/prompts/doc_requirement_v01.txt"       "$SIRA_CLONE/scripts/configs/enrich/prompts/doc_requirement_v01.txt"
 cp "$REPO_ROOT/sandbox/prompts/query_requirement_v01.txt"     "$SIRA_CLONE/scripts/configs/enrich/prompts/query_requirement_v01.txt"
 cp "$REPO_ROOT/sandbox/prompts/relevance_requirement_v01.txt" "$SIRA_CLONE/scripts/configs/rerank/prompts/relevance_requirement_v01.txt"
+
+# Batched doc-enrichment logic (strand sira-enrichment-pe) — imported by
+# the batched-enrich.patch below. Per-MNO doc prompts are NOT copied:
+# the adapter resolves them from $NORA_SIRA_DOC_PROMPT_DIR at run time
+# (point it at sandbox/prompts/ or wherever the per-MNO files live).
+cp "$REPO_ROOT/sandbox/enrich_batching.py" "$SIRA_CLONE/scripts/enrich_batching.py"
 
 set +x
 
@@ -90,6 +97,11 @@ apply_patch \
     "$REPO_ROOT/sandbox/sira_patches/extra-config-dir.patch" \
     "SIRA_EXTRA_CONFIG_DIR" \
     "scripts/run_pipeline.py"
+
+apply_patch \
+    "$REPO_ROOT/sandbox/sira_patches/batched-enrich.patch" \
+    "enrich_batching" \
+    "scripts/add_doc_index_adapter.py"
 
 echo
 echo "OK — installed 3 hydra configs + 3 prompts into $SIRA_CLONE/scripts/configs/"

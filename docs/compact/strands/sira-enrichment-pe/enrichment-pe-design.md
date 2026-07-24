@@ -143,9 +143,19 @@ scorecard attributes each change.
    the contract); per-MNO prompt regeneration itself runs on the work
    PC (once per MNO) after slice 4 lands, so the generated templates
    are consumed by real composer code, not ahead of it.
-3. Taxonomy wiring + prompt composer (sections 1–2).
+3. Taxonomy wiring + prompt composer (sections 1–2) — DONE
+   (`sandbox/enrich_batching.py`: taxonomy block loader, per-MNO prompt
+   resolver, composer).
 4. Batch creator + adapter integration + response parsing/retry
-   (sections 3–4) + observability (section 5).
+   (sections 3–4) + observability (section 5) — DONE: dual-budget
+   packer + strict parser + run_batched orchestration in
+   `sandbox/enrich_batching.py` (19 unit tests, no clone needed);
+   `sandbox/sira_patches/batched-enrich.patch` wires the adapter
+   (auto-activates on batched-shape template; legacy path untouched;
+   per-req trace rows + `batches.jsonl` in the run dir; applies
+   cleanly after per-stage-routing.patch — verified); knobs in
+   `docker/env.sira-batch.example` (NORA_SIRA_DOC_PROMPT_DIR,
+   NORA_SIRA_TAXONOMY_DIR, NORA_SIRA_BATCH_*).
 5. Taxonomy-prompt update + regeneration (section 6, staging decision
    applied), then full re-enrichment across cells.
 

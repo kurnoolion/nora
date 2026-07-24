@@ -1,0 +1,130 @@
+--- a/scripts/add_doc_index_adapter.py
++++ b/scripts/add_doc_index_adapter.py
+@@ -49,6 +49,8 @@
+     read_queries,
+ )
+ 
++import enrich_batching  # NORA batched-enrich (strand sira-enrichment-pe)
++
+ logger = logging.getLogger(__name__)
+ 
+ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+@@ -56,6 +58,22 @@
+ 
+ 
+ def _load_prompt(cfg: DictConfig) -> str:
++    # NORA batched-enrich: per-MNO doc prompt resolution. When
++    # NORA_SIRA_DOC_PROMPT_DIR is set, pick the highest-version
++    # doc_requirement_<MNO>_*.txt for this cell's MNO (data.name is
++    # "<MNO>__<Release>"); fall back to the config's prompt file.
++    _prompt_dir = os.getenv("NORA_SIRA_DOC_PROMPT_DIR", "")
++    if _prompt_dir:
++        _mno = str(cfg.data.name).split("__", 1)[0]
++        _per_mno = enrich_batching.resolve_doc_prompt(_prompt_dir, _mno)
++        if _per_mno:
++            logger.info("Per-MNO doc prompt: %s", _per_mno)
++            with open(_per_mno) as f:
++                return f.read()
++        logger.warning(
++            "NORA_SIRA_DOC_PROMPT_DIR set but no doc_requirement_%s_*.txt "
++            "found -- using %s", _mno, cfg.enrich.doc_prompt_file,
++        )
+     prompt_path = os.path.join(SCRIPTS_DIR, cfg.enrich.doc_prompt_file)
+     with open(prompt_path) as f:
+         return f.read()
+@@ -353,12 +371,91 @@
+ 
+     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+         items = list(zip(target_ids, target_texts))
+-        for batch_start in range(0, len(items), GATHER_BATCH_SIZE):
+-            batch = items[batch_start : batch_start + GATHER_BATCH_SIZE]
+-            await asyncio.gather(
+-                *[_enrich_one(session, did, txt) for did, txt in batch]
++        if enrich_batching.is_batched_template(prompt_template):
++            # NORA batched-enrich: one LLM call per (plan) batch. Packing,
++            # parsing, and re-queue live in enrich_batching (installed by
++            # install_configs.sh); per-req trace rows stay the resume unit.
++            batches_file = open(
++                os.path.join(run_dir, f"batches{shard_suffix}.jsonl"), "a"
+             )
+ 
++            async def _b_llm(prompt: str, max_tokens: int) -> str:
++                payload: dict = {
++                    "model": model,
++                    "messages": [{"role": "user", "content": prompt}],
++                    "max_tokens": max_tokens,
++                    "temperature": enrich_cfg.temperature,
++                }
++                if enrich_cfg.seed is not None:
++                    payload["seed"] = enrich_cfg.seed
++                if chat_template_kwargs:
++                    payload["chat_template_kwargs"] = chat_template_kwargs
++                data = await post_chat(session, llm_url, payload)
++                return data["choices"][0]["message"]["content"] or ""
++
++            def _b_filter(phrases):
++                kept, fstats, _ = ngram_index.filter_candidates(
++                    phrases, "", [], max_df, max_n,
++                    require_in_vocab=False, collect_verdicts=False,
++                )
++                return kept, dict(fstats)
++
++            async def _b_enrich(doc_id, kept):
++                await _write_line(
++                    enrich_file,
++                    json.dumps(
++                        {"doc_id": doc_id, "phrases": kept}, ensure_ascii=False
++                    ),
++                )
++
++            async def _b_kept(row):
++                await _write_line(
++                    trace_kept_file, json.dumps(row, ensure_ascii=False)
++                )
++
++            async def _b_failed(row):
++                await _write_line(
++                    trace_failed_file, json.dumps(row, ensure_ascii=False)
++                )
++
++            async def _b_batch(row):
++                await _write_line(batches_file, json.dumps(row, ensure_ascii=False))
++
++            _b_summary = await enrich_batching.run_batched(
++                items=items,
++                template=prompt_template,
++                max_n=max_n,
++                taxonomy_dir=os.getenv("NORA_SIRA_TAXONOMY_DIR", ""),
++                cfg=enrich_batching.BatchConfig.from_env(dict(os.environ)),
++                llm_call=_b_llm,
++                filter_fn=_b_filter,
++                write_enrich=_b_enrich,
++                write_kept=_b_kept,
++                write_failed=_b_failed,
++                write_batch=_b_batch,
++                logger=logger,
++            )
++            batches_file.close()
++            stats["proposed"] += _b_summary["proposed"]
++            stats["kept"] += _b_summary["kept"]
++            stats["filtered"] += _b_summary["filtered"]
++            stats["errors"] += _b_summary["errors"]
++            enriched_count += _b_summary["enriched"]
++            failed_count += _b_summary["failed"]
++            done_count += _b_summary["enriched"] + _b_summary["failed"]
++            logger.info(
++                "Batched enrich: %d batches (%d oversized), %d requeued",
++                _b_summary["batches"],
++                _b_summary["oversized"],
++                _b_summary["requeued"],
++            )
++        else:
++            for batch_start in range(0, len(items), GATHER_BATCH_SIZE):
++                batch = items[batch_start : batch_start + GATHER_BATCH_SIZE]
++                await asyncio.gather(
++                    *[_enrich_one(session, did, txt) for did, txt in batch]
++                )
++
+     # Apply enrichments to BM25 index (single-node only)
+     if num_shards <= 1 and enriched_count > 0:
+         enrich_file.close()
