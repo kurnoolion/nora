@@ -292,3 +292,55 @@ class TestApply:
         r = client.post("/api/enrich-review/apply", data={"cell": "GP__Feb2026"})
         assert "in sync with serving" in r.text
         assert "corrections pending" not in r.text
+
+
+class TestApplyAll:
+    def _with_cells(self, monkeypatch, cells):
+        base = er._service_get
+
+        def fake(path, params=None):
+            if path == "/cells":
+                return {"cells": cells}
+            return base(path, params)
+
+        monkeypatch.setattr(er, "_service_get", fake)
+
+    def test_pending_cells_lists_only_stale(self, client, tmp_path,
+                                            monkeypatch):
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        good = EnrichOverlayStore(tmp_path).overlay_digest("GP")
+        self._with_cells(monkeypatch, [
+            {"mno": "GP", "release": "Feb2026", "overlay_digest": good},
+            {"mno": "GP", "release": "Nov2025", "overlay_digest": "0" * 64},
+            # image predating the per-cell digest — skipped, never pending
+            {"mno": "ZZ", "release": "Feb2026"},
+        ])
+        r = client.get("/api/enrich-review/pending-cells")
+        assert r.json() == {"pending": ["GP__Nov2025"]}
+
+    def test_apply_all_reloads_each_stale_cell_on_every_service(
+            self, client, monkeypatch):
+        # corrections are per-MNO: a merge stales every release at once,
+        # and one Apply-all press must sweep them all on both stacks
+        self._with_cells(monkeypatch, [
+            {"mno": "GP", "release": "Feb2026", "overlay_digest": "1" * 64},
+            {"mno": "GP", "release": "Nov2025", "overlay_digest": "2" * 64},
+        ])
+        calls = []
+
+        class _R:
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return {}
+
+        monkeypatch.setattr(er.httpx, "post",
+                            lambda url, params=None, timeout=None:
+                            calls.append(url) or _R())
+        monkeypatch.setattr(er, "_SIRA_URLS", ["http://a:8040", "http://b:8041"])
+        r = client.post("/api/enrich-review/apply-all", json={"label": ""})
+        assert r.json()["applied"] == ["GP__Feb2026", "GP__Nov2025"]
+        assert calls == ["http://a:8040/cells/GP__Feb2026/reload",
+                         "http://b:8041/cells/GP__Feb2026/reload",
+                         "http://a:8040/cells/GP__Nov2025/reload",
+                         "http://b:8041/cells/GP__Nov2025/reload"]

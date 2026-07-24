@@ -217,7 +217,14 @@
     const data = await (await fetch(api + "/labels")).json();
     const accepted = new Set(data.accepted || []);
     const rows = Object.entries(data.counts || {}).sort();
-    $("labels-drawer-body").innerHTML = rows.length ? rows.map(([l, n]) => `
+    // corrections are per-MNO: one merge stales EVERY release of that MNO.
+    // Apply-all sweeps them in one press; hidden when everything is in sync.
+    let pend = [];
+    try {
+      pend = (await (await fetch(api + "/pending-cells?label=" +
+        encodeURIComponent(labelVal()))).json()).pending || [];
+    } catch (e) { /* service down — the per-cell banner still covers it */ }
+    let body = rows.length ? rows.map(([l, n]) => `
       <div class="d-flex gap-2 align-items-center py-1">
         <code>${l || "(no label)"}</code>
         <span class="badge bg-secondary" title="requirements touched : correction records">
@@ -230,10 +237,30 @@
         <button class="btn btn-sm btn-outline-danger lbl-delete" data-label="${l}">
           delete all</button>` : ""}
       </div>`).join("") : '<span class="text-muted">No labeled corrections yet.</span>';
+    if (pend.length) body += `
+      <div class="d-flex gap-2 align-items-center border-top pt-2 mt-1">
+        <button id="apply-all-btn" class="btn btn-sm btn-warning"
+                title="${pend.join(", ")}">
+          ⚠ Apply all pending (${pend.length} release${pend.length > 1 ? "s" : ""})</button>
+        <span class="small text-muted">reloads every release with un-applied corrections</span>
+      </div>`;
+    $("labels-drawer-body").innerHTML = body;
     // populate the stamping bar datalist too
     $("labels-list").innerHTML =
       rows.filter(([l]) => l).map(([l]) => `<option value="${l}">`).join("");
   }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("#apply-all-btn");
+    if (!b) return;
+    b.disabled = true;
+    b.textContent = "Applying…";
+    await fetch(api + "/apply-all", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({label: labelVal()})});
+    await renderLabels();     // button disappears once everything is in sync
+    loadTable();              // re-render the open cell's banner ("in sync")
+    refreshPlanMarkers();
+  });
   document.addEventListener("click", async (e) => {
     const t = e.target.closest(".lbl-merge, .lbl-delete");
     if (!t) return;

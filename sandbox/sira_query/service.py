@@ -1076,13 +1076,17 @@ def _startup() -> None:
 
 
 @app.get("/cells")
-def cells_inventory() -> dict[str, Any]:
+def cells_inventory(label: str = "") -> dict[str, Any]:
     """Per-cell corpus inventory for UI surfaces (the web test page's
     ingested-corpus table): requirements = corpus rows (the adapter emits
     one row per requirement, _id = req_id); plans = distinct `**plan**:`
     lines in the corpus text (the adapter stamps one per doc); ingested =
     dataset dir mtime (hardlink promotion preserves the build time).
-    Cached per cell for the process life — cells load once at startup."""
+    Cached per cell for the process life — cells load once at startup.
+    `label` selects which view's overlay_digest each row reports (the
+    review UI's apply-all pending sweep); before the first labeled Apply
+    the variant falls back to the default state, whose digest honestly
+    reports the label's edits as pending."""
     import re as _re
     from datetime import datetime as _dt
 
@@ -1108,8 +1112,10 @@ def cells_inventory() -> dict[str, Any]:
             _CELL_STATS_CACHE[cell] = cached
         # live (non-cached) per-cell state for the enrichment-review UI:
         st = _cells[cell]
+        vst = _get_variant(cell, label.strip()) or st
         out.append({**cached, "loaded_at": st.loaded_at,
-                    "corrections": st.overlay_applied})
+                    "corrections": st.overlay_applied,
+                    "overlay_digest": vst.overlay_digest})
     return {"cells": out}
 
 

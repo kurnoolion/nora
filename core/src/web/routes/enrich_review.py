@@ -360,6 +360,52 @@ async def apply(request: Request, cell: str = Form(...),
     return _template_response(request, "enrich_review/_pending.html", ctx)
 
 
+def _stale_cells(store: EnrichOverlayStore, label: str) -> list[str]:
+    """Cells whose `label`-view serving digest lags the live overlay.
+    Corrections are per-MNO, so one merge stales every release of that
+    MNO at once — this is the sweep behind the drawer's Apply-all.
+    Rows from a service image predating the per-cell digest are skipped
+    (their per-cell banner still covers them)."""
+    stale = []
+    for row in _service_get("/cells", {"label": label}).get("cells", []):
+        served = row.get("overlay_digest")
+        if served is not None and served != store.overlay_digest(row["mno"],
+                                                                 label):
+            stale.append(f"{row['mno']}__{row['release']}")
+    return stale
+
+
+@api.get("/pending-cells")
+def pending_cells(label: str = "") -> dict[str, Any]:
+    """Feeds the labels drawer's Apply-all button (shown only when
+    at least one cell is stale for the current view)."""
+    return {"pending": _stale_cells(_store(), label.strip())}
+
+
+class ApplyAllRequest(BaseModel):
+    label: str = ""
+
+
+@api.post("/apply-all")
+def apply_all(req: ApplyAllRequest) -> dict[str, Any]:
+    """Apply for every stale cell of the current view, on EVERY
+    configured sira-query. Like /apply it is not admin-gated: a reload
+    can only sync serving to what the overlay already contains."""
+    label = req.label.strip()
+    cells = _stale_cells(_store(), label)
+    results = []
+    for cell in cells:
+        for base in _SIRA_URLS:
+            try:
+                r = httpx.post(f"{base}/cells/{cell}/reload",
+                               params={"label": label}, timeout=120.0)
+                r.raise_for_status()
+                results.append(f"{cell} @ {base}: ok")
+            except httpx.HTTPError as exc:
+                results.append(f"{cell} @ {base}: FAILED ({exc})")
+    return {"applied": cells, "results": results}
+
+
 class EditRequest(BaseModel):
     mno: str
     req_id: str

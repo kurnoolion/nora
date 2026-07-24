@@ -244,6 +244,12 @@ class TestEndpoints:
         rows = {(r["mno"], r["release"]): r for r in c.get("/cells").json()["cells"]}
         assert rows[("GP", "Feb2026")]["corrections"]["removes"] == 1
         assert rows[("GP", "Feb2026")]["loaded_at"] == feb.loaded_at
+        # per-cell view digest (the web's apply-all stale sweep); an unbuilt
+        # label variant falls back to the default state's digest
+        assert rows[("GP", "Feb2026")]["overlay_digest"] == feb.overlay_digest
+        labeled = {(r["mno"], r["release"]): r
+                   for r in c.get("/cells", params={"label": "exp1"}).json()["cells"]}
+        assert labeled[("GP", "Feb2026")]["overlay_digest"] == feb.overlay_digest
 
     def test_unknown_cell_404(self, two_release_cells):
         c = TestClient(svc.app)
