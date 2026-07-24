@@ -128,3 +128,94 @@ exports diffable in chat (FIX precedent).
 rule); bulk-delete by label is the sanctioned cleanup once a fix is
 confirmed. Export generation needs service data (plans, current llm_words)
 joined with the overlay — web-side, over the proxied reads.
+
+## D-DRAFT-6 — Labels are branches: merge-log main, per-label serving variants, ungated Apply
+
+**Context.** The original design had labels as toggleable tags inside one
+shared view. In team use that meant an expert's in-progress corrections
+hit everyone's default view immediately — no review gate between an edit
+and production serving, and no way to preview a campaign in isolation.
+
+**Decision.** A label IS a branch. Main = unlabeled records + labels
+listed in `accepted-labels.json` (the merge log). A label view = main +
+that label's records, served as a separate per-(cell,label) in-memory
+variant built on demand. Admin-gated (team-mode `is_admin`): merge into
+main, un-merge, delete-all — all merge-log or record-set operations;
+records are NEVER rewritten on merge. Apply — and Apply-all, the
+per-MNO staleness sweep in the Labels drawer (visible only when a
+cell's view digest lags; reloads every stale cell on every configured
+service) — is deliberately NOT admin-gated.
+
+**Why.** Branch/merge is the mental model experts already have.
+Merge-log-only merges are instant, reversible, and provenance-preserving
+(every record keeps its label/author/reason forever — the evaluation
+signal the strand exists for). Ungated Apply is safe by construction: a
+reload can only sync serving to what the overlay + merge log already
+contain — it can never publish an unmerged label. Rejected: rewriting
+records' labels on merge (destroys provenance and the scorecard's
+measuring stick); gating Apply on admin (blocks the expert self-service
+loop D-DRAFT-4 established).
+
+**Consequences.** Every read/serving path is view-parameterized
+(allowed = unlabeled ∪ accepted ∪ viewer's label). A main reload drops
+a cell's label variants — experts re-Apply after someone else's merge,
+surfaced honestly by the pending banner (fallback state's digest
+mismatches). A merged label's view is content-identical to main. A
+merge stales every loaded release of the MNO at once — Apply-all is
+the one-press answer to that fan-out.
+
+## D-DRAFT-7 — Pending = view-scoped content digest, formula-locked across web and sira-query
+
+**Context.** The designed pending signal was `overlay mtime > loaded_at`
+(D-DRAFT-4). Field use showed its flaws: false positives (fully-undone
+edits, touch-without-change), and no view scoping once labels became
+branches. A later bug showed a subtler trap: hashing the merge log
+flagged every MNO pending on any merge/un-merge — even MNOs the label
+never touched.
+
+**Decision.** Pending = sha256 over the view's FILTERED overlay records
+(canonical JSON; the merge log itself is EXCLUDED from the hash),
+compared between the web store's live disk state and the digest
+sira-query reports for its applied state. The formula is duplicated on
+both sides and must byte-match (cross-side parity test). All
+pending/banner decisions read from the PRIMARY configured service
+(`NORA_SIRA_QUERY_URLS[0]`) — the service every read path queries.
+
+**Why.** Content comparison means fully-undone edits digest back to
+in-sync — zero false pending. Merge-log exclusion: the filtered records
+fully determine served content, so hashing the global log added only
+false positives. Primary-service rule: a stale secondary (e.g. older
+image, different formula) must not win a freshest-responder race and
+wedge the banner. Rejected: mtime (false positives), per-record dirty
+flags (server-side state to maintain; digest is stateless).
+
+**Consequences.** Digest formula changes must ship in BOTH images
+together. Service `/cells` reports per-cell view digests (feeds the
+Apply-all sweep). Supersedes D-DRAFT-4's "pending = overlay mtime >
+loaded_at" sentence — correct at promotion time.
+
+## D-DRAFT-8 — Fold countermand: newer add beats older remove, ties keep remove-wins
+
+**Context.** The fold's absolute remove-wins-over-add made a merged
+label's removes permanent: a later expert's add record for the same
+word existed on disk but never applied — no path to restore a word
+short of un-merging the whole label (admin, all-or-nothing).
+
+**Decision.** Per word: an applied remove suppresses an add UNLESS the
+add's `at` stamp is strictly newer (ISO-8601 lexicographic compare).
+Ties and missing stamps keep legacy remove-wins. Countermanded words
+keep their original position; `applied_removes` excludes countermanded
+words. Implemented identically in the service fold
+(`apply_overlay_to_req`) and the web chip rendering (`_row_view`).
+
+**Why.** "Latest human judgment wins" matches editing intuition and
+makes every serving state reachable without admin intervention.
+Tie-bias to remove preserves the behavior of historical stampless
+records and fixtures. Rejected: deleting the remove record on re-add
+(destroys the audit trail and the scorecard's evidence); requiring
+un-merge (blocks on admin, punishes unrelated words in the label).
+
+**Consequences.** `at` stamps become semantically load-bearing
+(ordering, not just provenance). Both sides must mirror the rule
+(covered by the cross-side test). A merged remove is no longer a
+guarantee the word stays gone — reports/scorecard reflect latest state.

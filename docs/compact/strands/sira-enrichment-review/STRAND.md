@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** web
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 
