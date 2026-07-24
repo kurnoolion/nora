@@ -250,6 +250,12 @@ _DOC_ENRICH_RUN = os.getenv("NORA_SIRA_DOC_ENRICH_RUN", "")
 _QUERY_ENRICH_RUN = os.getenv("NORA_SIRA_QUERY_ENRICH_RUN", "")
 _RERANK_RUN = os.getenv("NORA_SIRA_RERANK_RUN", "")
 _USE_LATEST = os.getenv("NORA_SIRA_USE_LATEST_RUNS", "").lower() in ("1", "true", "yes")
+# Display name of the LLM that produced the doc enrichments, shown in the
+# review UI header. Overrides the run-dir config.json derivation: config.json
+# snapshots the CONFIGURED sglang.model, not the model actually serving the
+# port (server reuse / tunneled endpoints), so the operator's word is the
+# only reliable source when they differ.
+_ENRICH_MODEL_NAME = os.getenv("NORA_SIRA_ENRICH_MODEL_NAME", "")
 
 
 # ── Lazy-loaded state ──────────────────────────────────────────────
@@ -1244,8 +1250,11 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "",
             "suppressed": rid in st.suppressed_ids,
             "held": held,
         })
+    # operator override beats the run-config-derived name (config.json can
+    # name a model the serving port never actually hosted)
     return {"cell": cell_name, "plan": plan, "label": label,
-            "loaded_at": st.loaded_at, "enrich_model": st.enrich_model,
+            "loaded_at": st.loaded_at,
+            "enrich_model": _ENRICH_MODEL_NAME or st.enrich_model,
             "overlay_digest": st.overlay_digest, "rows": rows}
 
 
@@ -1352,6 +1361,7 @@ def healthz() -> dict[str, Any]:
         "query_prompt_source": _query_prompt_source or "(none)",
         "rerank_prompt_source": _rerank_prompt_source or "(none)",
         "doc_enrich_run_pinned": _DOC_ENRICH_RUN or "(unset)",
+        "enrich_model_name_override": _ENRICH_MODEL_NAME or "(unset)",
         "query_enrich_run_pinned": _QUERY_ENRICH_RUN or "(unset)",
         "rerank_run_pinned": _RERANK_RUN or "(unset)",
         "use_latest_runs": _USE_LATEST,

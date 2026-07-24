@@ -205,6 +205,19 @@ class TestEndpoints:
         c.post("/cells/GP__Feb2026/reload")
         assert svc._label_cells == {}
 
+    def test_enrich_model_env_override_beats_config(self, two_release_cells,
+                                                    monkeypatch):
+        # NORA_SIRA_ENRICH_MODEL_NAME wins over the run-config-derived name
+        # (config.json can name a model the serving port never hosted)
+        feb, _ = two_release_cells
+        svc._apply_overlay_and_enrich(feb)
+        feb.enrich_model = "config-derived"
+        monkeypatch.setattr(svc, "_ENRICH_MODEL_NAME", "trueModel-7B")
+        c = TestClient(svc.app)
+        data = c.get("/cells/GP__Feb2026/enrichments",
+                     params={"plan": "PlanA"}).json()
+        assert data["enrich_model"] == "trueModel-7B"
+
     def test_enrich_model_of_run(self, tmp_path):
         run = tmp_path / "run1"
         run.mkdir()
