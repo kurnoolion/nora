@@ -1,8 +1,8 @@
 # sira-enrichment-review
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-07-20
-**Landed:**
+**Landed:** 2026-07-24
 **Assignees:** kurnoolion
 **Target modules:** web
 **Active phase:** development
@@ -21,3 +21,5 @@ prompt.
 ## Notes
 
 <!-- appended to over the strand's lifetime -->
+
+Landed on 2026-07-24 with 8 promoted decisions: D-160, D-161, D-162, D-163, D-164, D-165, D-166, D-167
