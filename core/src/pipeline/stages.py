@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -434,12 +435,19 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
 # Stage 5: taxonomy
 # ---------------------------------------------------------------------------
 
-def _corpus_fingerprint(tree_files: list[Path], parse_dir: Path) -> str:
+def _corpus_fingerprint(
+    tree_files: list[Path], parse_dir: Path,
+    overview_files: list[Path] | None = None,
+) -> str:
     """Hash of the contributing tree set (D-DRAFT-9).
 
     Captures additions, removals, and edits — each tree's path (relative to
     `parse_dir`, so it's cell-stable) plus a hash of its bytes. A change in
     any tree flips the fingerprint and busts the taxonomy cache.
+
+    Per-MNO corpus-overview files (strand sira-enrichment-pe) are prompt
+    inputs, so they participate too: adding, editing, or removing one
+    busts the cache without requiring `--force`.
     """
     h = hashlib.sha256()
     for f in sorted(tree_files):
@@ -448,6 +456,9 @@ def _corpus_fingerprint(tree_files: list[Path], parse_dir: Path) -> str:
         except ValueError:
             rel = f.name
         h.update(rel.encode("utf-8"))
+        h.update(hashlib.sha256(f.read_bytes()).digest())
+    for f in sorted(overview_files or []):
+        h.update(f.name.encode("utf-8"))
         h.update(hashlib.sha256(f.read_bytes()).digest())
     return h.hexdigest()[:16]
 
@@ -488,9 +499,21 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     # expensive, and non-deterministic across runs — so re-derive the (global,
     # union) taxonomy only when the contributing tree set changed; otherwise
     # reuse the cached taxonomy.json. `--force` busts the cache.
+    # Optional per-MNO corpus-overview prompt context (strand
+    # sira-enrichment-pe). Files: corpus_overview_<MNO>_<version>.txt.
+    overview_dir = os.getenv("NORA_TAXONOMY_OVERVIEW_DIR", "").strip()
+    overview_files: list[Path] = []
+    if overview_dir:
+        overview_files = sorted(Path(overview_dir).glob("corpus_overview_*.txt"))
+        if not overview_files:
+            logger.warning(
+                f"TAX-W003: NORA_TAXONOMY_OVERVIEW_DIR={overview_dir} has no "
+                "corpus_overview_*.txt files — extracting without corpus context"
+            )
+
     taxonomy_path = out_dir / "taxonomy.json"
     fp_path = out_dir / ".corpus_fingerprint"
-    corpus_fp = _corpus_fingerprint(tree_files, parse_dir)
+    corpus_fp = _corpus_fingerprint(tree_files, parse_dir, overview_files)
     if (not ctx.force and taxonomy_path.exists() and fp_path.exists()
             and fp_path.read_text(encoding="utf-8").strip() == corpus_fp):
         ctx.state["taxonomy_path"] = str(taxonomy_path)
@@ -502,7 +525,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     # Create LLM provider (extraction runs at temperature=0 — see
     # FeatureExtractor — for reproducible feature mappings).
     llm = ctx.create_llm_provider()
-    extractor = FeatureExtractor(llm)
+    extractor = FeatureExtractor(llm, overview_dir=overview_dir or None)
     all_doc_features = []
 
     for f in tree_files:

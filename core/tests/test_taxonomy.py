@@ -21,7 +21,7 @@ from core.src.parser.structural_parser import (
     RequirementTree,
 )
 from core.src.taxonomy.consolidator import TaxonomyConsolidator
-from core.src.taxonomy.extractor import FeatureExtractor
+from core.src.taxonomy.extractor import FeatureExtractor, resolve_corpus_overview
 from core.src.taxonomy.schema import (
     DocumentFeatures,
     Feature,
@@ -256,6 +256,68 @@ class TestFeatureExtractor:
         assert isinstance(result, DocumentFeatures)
         assert len(result.primary_features) == 0
         assert len(result.referenced_features) == 0
+
+
+# ── Corpus-overview prompt context (strand sira-enrichment-pe) ────
+
+
+class _RecordingProvider:
+    """LLMProvider fake that records prompts and returns empty JSON."""
+
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def complete(self, prompt, system=None, temperature=0.0, max_tokens=4096):
+        self.prompts.append(prompt)
+        return json.dumps({"primary_features": [], "referenced_features": [],
+                           "key_concepts": []})
+
+
+class TestCorpusOverview:
+    TREE_SECTIONS = [("T-001", "3.1", "SMS MO Procedures")]
+
+    def test_resolve_picks_highest_version(self, tmp_path):
+        for name in ("corpus_overview_VZW_v01.txt", "corpus_overview_VZW_v02.txt",
+                     "corpus_overview_MNOB_v09.txt"):
+            (tmp_path / name).write_text("x", encoding="utf-8")
+        picked = resolve_corpus_overview(tmp_path, "VZW")
+        assert picked is not None and picked.name.endswith("_v02.txt")
+        assert resolve_corpus_overview(tmp_path, "MNOC") is None
+        assert resolve_corpus_overview(None, "VZW") is None
+        assert resolve_corpus_overview(tmp_path, "") is None
+        assert resolve_corpus_overview(tmp_path / "missing", "VZW") is None
+
+    def test_overview_reaches_prompt(self, tmp_path):
+        (tmp_path / "corpus_overview_VZW_v01.txt").write_text(
+            "Corpus spans SMS and data-retry plans.", encoding="utf-8")
+        llm = _RecordingProvider()
+        tree = _make_tree("TEST", "Test Plan", self.TREE_SECTIONS)
+        FeatureExtractor(llm, overview_dir=tmp_path).extract(tree)
+        assert "Corpus context" in llm.prompts[0]
+        assert "Corpus spans SMS and data-retry plans." in llm.prompts[0]
+
+    def test_no_overview_dir_prompt_unchanged(self):
+        llm = _RecordingProvider()
+        tree = _make_tree("TEST", "Test Plan", self.TREE_SECTIONS)
+        FeatureExtractor(llm).extract(tree)
+        assert "Corpus context" not in llm.prompts[0]
+        # placeholder collapses to the original blank line
+        assert "features it covers.\n\nDocument metadata:" in llm.prompts[0]
+
+    def test_missing_mno_file_fails_soft(self, tmp_path):
+        (tmp_path / "corpus_overview_MNOB_v01.txt").write_text("y", encoding="utf-8")
+        llm = _RecordingProvider()
+        tree = _make_tree("TEST", "Test Plan", self.TREE_SECTIONS)  # mno=VZW
+        result = FeatureExtractor(llm, overview_dir=tmp_path).extract(tree)
+        assert isinstance(result, DocumentFeatures)
+        assert "Corpus context" not in llm.prompts[0]
+
+    def test_empty_overview_file_skipped(self, tmp_path):
+        (tmp_path / "corpus_overview_VZW_v01.txt").write_text("   \n", encoding="utf-8")
+        llm = _RecordingProvider()
+        tree = _make_tree("TEST", "Test Plan", self.TREE_SECTIONS)
+        FeatureExtractor(llm, overview_dir=tmp_path).extract(tree)
+        assert "Corpus context" not in llm.prompts[0]
 
 
 # ── TaxonomyConsolidator ──────────────────────────────────────────

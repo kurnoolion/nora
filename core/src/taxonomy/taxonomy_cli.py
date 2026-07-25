@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -48,6 +49,12 @@ def main():
     parser.add_argument(
         "--output-dir", type=Path, default=Path("data/taxonomy"),
         help="Output directory for taxonomy JSON files. Default: data/taxonomy",
+    )
+    parser.add_argument(
+        "--overview-dir", type=Path,
+        default=os.getenv("NORA_TAXONOMY_OVERVIEW_DIR") or None,
+        help="Directory with per-MNO corpus_overview_<MNO>_<version>.txt files "
+             "inserted as prompt context. Default: $NORA_TAXONOMY_OVERVIEW_DIR",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
 
@@ -81,7 +88,7 @@ def main():
     # Step 1: Per-document feature extraction
     logging.info("\n--- Step 1: Per-document feature extraction ---")
     llm = MockLLMProvider()
-    extractor = FeatureExtractor(llm)
+    extractor = FeatureExtractor(llm, overview_dir=args.overview_dir)
 
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)

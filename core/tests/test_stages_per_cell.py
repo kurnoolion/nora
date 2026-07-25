@@ -166,6 +166,22 @@ class TestTaxonomyCache:
         ctx.force = True
         assert run_taxonomy(ctx).stats["source"] == "derived"
 
+    def test_overview_change_busts_cache(self, tmp_path, monkeypatch):
+        """Corpus-overview files are prompt inputs — adding or editing one
+        flips the fingerprint (strand sira-enrichment-pe, no --force needed)."""
+        self._seed_tree(tmp_path, "MNO-A", "Feb2026", "PLANX")
+        ov_dir = tmp_path / "overviews"
+        ov_dir.mkdir()
+        monkeypatch.setenv("NORA_TAXONOMY_OVERVIEW_DIR", str(ov_dir))
+        ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+        assert run_taxonomy(ctx).stats["source"] == "derived"
+        ov = ov_dir / "corpus_overview_MNO-A_v01.txt"
+        ov.write_text("Corpus covers X.", encoding="utf-8")   # add
+        assert run_taxonomy(ctx).stats["source"] == "derived"
+        assert run_taxonomy(ctx).stats["source"] == "cache"    # stable
+        ov.write_text("Corpus covers X and Y.", encoding="utf-8")  # edit
+        assert run_taxonomy(ctx).stats["source"] == "derived"
+
 
 class TestProfileCoverageFailLoud:
     def test_uncovered_cell_fails_pip_e003(self, tmp_path):

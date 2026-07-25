@@ -157,7 +157,16 @@ scorecard attributes each change.
    `docker/env.sira-batch.example` (NORA_SIRA_DOC_PROMPT_DIR,
    NORA_SIRA_TAXONOMY_DIR, NORA_SIRA_BATCH_*).
 5. Taxonomy-prompt update + regeneration (section 6, staging decision
-   applied), then full re-enrichment across cells.
+   applied), then full re-enrichment across cells — NORA half DONE:
+   `FeatureExtractor(llm, overview_dir=)` + `resolve_corpus_overview`
+   (highest-version glob, fail-soft TAX-W003); `{corpus_context}`
+   section in the extraction prompt (byte-identical when absent);
+   `run_taxonomy` reads `NORA_TAXONOMY_OVERVIEW_DIR` and hashes the
+   overview files into the corpus fingerprint (cache decision:
+   fingerprint gains overview hash — no `--force` needed);
+   `taxonomy_cli --overview-dir` parity; taxonomy + pipeline MODULE.md
+   updated; 6 new tests (suite 1541 green). Remaining: the work-PC
+   regeneration + combined re-enrichment run (user-driven).
 
 ## Open inputs
 

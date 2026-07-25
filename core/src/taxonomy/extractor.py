@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from core.src.llm.base import LLMProvider
 from core.src.parser.structural_parser import RequirementTree
@@ -28,7 +29,7 @@ fencing, no commentary outside the JSON."""
 EXTRACTION_PROMPT_TEMPLATE = """\
 Analyze the following {mno} requirement document and extract the telecom \
 features it covers.
-
+{corpus_context}
 Document metadata:
 - Plan ID: {plan_id}
 - Plan Name: {plan_name}
@@ -78,14 +79,37 @@ Respond with this exact JSON structure:
 }}"""
 
 
+def resolve_corpus_overview(overview_dir: str | Path | None, mno: str) -> Path | None:
+    """Resolve the per-MNO corpus-overview file, highest version wins.
+
+    Looks for `corpus_overview_<MNO>_<version>.txt` under `overview_dir`
+    (the artifact the derive-sira-prompts skill writes once per MNO).
+    Returns None when the dir is unset/missing, the MNO is empty, or no
+    file matches — callers treat that as "no corpus context" (fail-soft).
+    """
+    if not overview_dir or not mno:
+        return None
+    d = Path(overview_dir)
+    if not d.is_dir():
+        return None
+    matches = sorted(d.glob(f"corpus_overview_{mno}_*.txt"))
+    return matches[-1] if matches else None
+
+
 class FeatureExtractor:
     """Extract telecom features from requirement documents using an LLM.
 
     Uses the LLMProvider protocol — any conforming provider works.
+
+    `overview_dir` optionally points at per-MNO corpus-overview files
+    (`corpus_overview_<MNO>_<version>.txt`); when the document's MNO has
+    one, its text is inserted as a "Corpus context" section in the
+    extraction prompt. Absent dir or file → prompt identical to before.
     """
 
-    def __init__(self, llm: LLMProvider):
+    def __init__(self, llm: LLMProvider, overview_dir: str | Path | None = None):
         self._llm = llm
+        self._overview_dir = overview_dir
 
     def extract(self, tree: RequirementTree) -> DocumentFeatures:
         """Extract features from a single parsed requirement tree."""
@@ -97,6 +121,7 @@ class FeatureExtractor:
             release=tree.release,
             version=tree.version,
             toc=toc,
+            corpus_context=self._build_corpus_context(tree.mno),
         )
 
         logger.info(f"Extracting features from {tree.plan_id}")
@@ -119,6 +144,27 @@ class FeatureExtractor:
             f"{len(features.key_concepts)} concepts"
         )
         return features
+
+    def _build_corpus_context(self, mno: str) -> str:
+        """Corpus-context prompt section for the doc's MNO, or ""."""
+        if not self._overview_dir:
+            return ""
+        path = resolve_corpus_overview(self._overview_dir, mno)
+        if path is None:
+            logger.warning(
+                f"TAX-W003: No corpus overview for MNO '{mno}' under "
+                f"{self._overview_dir} — extracting without corpus context"
+            )
+            return ""
+        text = path.read_text(encoding="utf-8").strip()
+        if not text:
+            logger.warning(f"TAX-W003: Corpus overview {path.name} is empty — skipped")
+            return ""
+        logger.info(f"  Corpus context: {path.name} ({len(text)} chars)")
+        return (
+            "\nCorpus context — an overview of the full requirement corpus "
+            "this document belongs to:\n" + text + "\n"
+        )
 
     @staticmethod
     def _build_toc(tree: RequirementTree) -> str:

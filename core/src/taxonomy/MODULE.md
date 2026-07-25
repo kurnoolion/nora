@@ -4,7 +4,8 @@
 Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). Per-document extraction surfaces telecom features from section headings and plan metadata; consolidation merges them into a unified taxonomy with MNO coverage, primary/referenced attribution, and dependency hints. Serves FR-6 (bottom-up feature taxonomy with required human review). Implements D-005: the taxonomy is not pre-defined — it emerges from the documents, and human review is a required curation step, not optional.
 
 **Public surface**
-- `FeatureExtractor(provider: LLMProvider)` (extractor.py) — per-document extraction: consumes `RequirementTree`, prompts the LLM, returns `DocumentFeatures`
+- `FeatureExtractor(provider: LLMProvider, overview_dir: str | Path | None = None)` (extractor.py) — per-document extraction: consumes `RequirementTree`, prompts the LLM, returns `DocumentFeatures`; when `overview_dir` holds a `corpus_overview_<MNO>_<version>.txt` for the doc's MNO, its text is inserted as a "Corpus context" prompt section
+- `resolve_corpus_overview(overview_dir, mno) -> Path | None` (extractor.py) — per-MNO overview file resolution, highest version wins; None on any miss (fail-soft)
 - `TaxonomyConsolidator` (consolidator.py) — `consolidate(doc_features: list[DocumentFeatures]) -> FeatureTaxonomy`; dedupes by `feature_id`, builds `mno_coverage` and `is_primary_in` / `is_referenced_in` attribution
 - Schema: `Feature`, `DocumentFeatures`, `TaxonomyFeature`, `FeatureTaxonomy` (all dataclasses with `to_dict`/`save_json`/`load_json` on the two top-level ones)
 - `taxonomy_cli.main` — CLI: extract | consolidate | review
@@ -21,6 +22,7 @@ Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). Per-document
 - LLM used only where it earns its keep — inferring feature names and keywords from heading text is exactly the kind of fuzzy clustering that heuristics struggle with.
 - Text-input/text-output LLM interface (via `LLMProvider.complete()`) — caller parses JSON from the response. Avoids forcing structured-output modes that some offline models lack.
 - Taxonomy sorted by `is_primary_in` count then name — review order prioritizes features that matter across the corpus.
+- **Optional per-MNO corpus context** (strand sira-enrichment-pe): extraction can be grounded with an AI-derived overview of the MNO's whole corpus (`corpus_overview_<MNO>_<version>.txt`, produced by the derive-sira-prompts skill; runtime artifact — per-MNO instances may carry real corpus vocabulary and are committed only if free of proprietary identifiers). Strictly fail-soft: unset dir, missing/empty file → prompt byte-identical to the no-context form (logged as TAX-W003). Wired via `NORA_TAXONOMY_OVERVIEW_DIR` (pipeline `run_taxonomy` + `taxonomy_cli --overview-dir`); overview files are hashed into the pipeline's taxonomy corpus fingerprint so changing one re-derives without `--force`.
 - `DocumentFeatures` persisted as JSON per document — review can happen incrementally, and re-consolidation is cheap when one document changes.
 
 **Non-goals**
