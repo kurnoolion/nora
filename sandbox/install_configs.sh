@@ -46,7 +46,9 @@ cp "$REPO_ROOT/sandbox/prompts/relevance_requirement_v01.txt" "$SIRA_CLONE/scrip
 # Batched doc-enrichment logic (strand sira-enrichment-pe) — imported by
 # the batched-enrich.patch below. Per-MNO doc prompts are NOT copied:
 # the adapter resolves them from $NORA_SIRA_DOC_PROMPT_DIR at run time
-# (point it at sandbox/prompts/ or wherever the per-MNO files live).
+# (they live in customizations/prompts/ — /app/customizations/prompts
+# in-container; committed to the internal remote only, see that dir's
+# README).
 cp "$REPO_ROOT/sandbox/enrich_batching.py" "$SIRA_CLONE/scripts/enrich_batching.py"
 
 set +x

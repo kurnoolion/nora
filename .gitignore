@@ -43,13 +43,14 @@ assets/hf_cache/
 
 # Local environment definitions (keep .gitkeep only)
 environments/*.json
-# customizations/mappings/ is NOT gitignored [D-062]:
-# the directory carries proprietary mapping snapshots that DO get
-# committed + pushed to the company-internal git remote (so team
-# members share a single source of truth). Public-mirror leak is
-# prevented by the work-PC pre-push hook installed by
-# ~/work/utils/git-sync/sync-work.sh — it blocks any push whose
-# remote URL points at github.com unless NORA_ALLOW_PUBLIC_PUSH=1.
+# customizations/mappings/ and customizations/prompts/ are NOT
+# gitignored [D-062]: they carry proprietary mapping snapshots and
+# per-MNO prompt files that DO get committed + pushed to the
+# company-internal git remote (so team members share a single source
+# of truth). Public-mirror leak is prevented by the work-PC pre-push
+# hook installed by ~/work/utils/git-sync/sync-work.sh — it blocks any
+# push whose remote URL points at github.com unless
+# NORA_ALLOW_PUBLIC_PUSH=1.
 
 
 # Vim swap files

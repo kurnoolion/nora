@@ -90,16 +90,26 @@ The SKILL.md covers:
 
 ## Output paths
 
-After completion, three files exist at (MNO infix when scoped):
+Per-MNO runs write to **`customizations/prompts/`** (committed
+customization tier; see commit policy below). After completion, four
+files exist:
 
-- `sandbox/prompts/doc_requirement_<MNO>_<version>.txt`
-- `sandbox/prompts/query_requirement_<MNO>_<version>.txt`
-- `sandbox/prompts/relevance_requirement_<MNO>_<version>.txt`
-- `sandbox/prompts/corpus_overview_<MNO>_<version>.txt` (standalone
+- `customizations/prompts/doc_requirement_<MNO>_<version>.txt`
+- `customizations/prompts/query_requirement_<MNO>_<version>.txt`
+- `customizations/prompts/relevance_requirement_<MNO>_<version>.txt`
+- `customizations/prompts/corpus_overview_<MNO>_<version>.txt` (standalone
   overview — consumed by NORA's taxonomy extractor as corpus context)
+
+Legacy corpus-wide runs (no MNO) keep writing generic
+`sandbox/prompts/<stage>_requirement_<version>.txt` files.
 
 Each has a derivation-header comment naming the corpus, subdomain distribution,
 and source paths.
+
+**Commit policy (D-062 precedent):** per-MNO prompt files carry real MNO
+names and harvested corpus vocabulary. Commit them ONLY on the work PC,
+pushed to the company-internal remote — never from a checkout whose
+remote is the public mirror.
 
 ## After this playbook finishes
 

@@ -63,8 +63,13 @@ One-plan-per-batch keeps the prompt contract simple (one taxonomy,
 one plan context). Rejected: multi-plan batches with multiple
 taxonomy blocks (packing gain not yet proven needed).
 
-**Consequences.** Per-MNO prompts contain real MNO vocabulary —
-runtime artifacts unless verified clean for commit. New-MNO
+**Consequences.** Per-MNO prompts contain real MNO vocabulary — they
+live in `customizations/prompts/`, committed to the company-internal
+remote only under the D-062 pre-push-hook trust boundary (amended
+2026-07-24; supersedes the original "runtime artifact, never
+committed" posture — both docker images COPY customizations/ at
+build, so containers resolve them at /app/customizations/prompts and
+a prompt update requires an image rebuild). New-MNO
 ingestion gains a standard step: run the skill for that MNO.
 Query/relevance prompts are also generated per MNO but the
 query-time service loads a single pair — per-cell selection there is

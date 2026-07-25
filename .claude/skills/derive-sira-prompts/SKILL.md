@@ -34,8 +34,8 @@ prompts automatically.
    shape; only appropriate for single-MNO corpora).
 2. **Version slug** (optional, default `v02`) — written as the suffix
    on the three output files. Example: `--mno MNOA v03` → produces
-   `sandbox/prompts/doc_requirement_MNOA_v03.txt` etc. Refuses to
-   overwrite an existing version unless `--force` is passed.
+   `customizations/prompts/doc_requirement_MNOA_v03.txt` etc. Refuses
+   to overwrite an existing version unless `--force` is passed.
 
 ## Procedure
 
@@ -284,20 +284,32 @@ Append a header comment to each file noting the derivation:
 
 ### 8. Write the files
 
-Output paths (MNO infix present whenever the MNO argument was given):
+Output paths. **Per-MNO runs write to `customizations/prompts/`** —
+the committed customization tier (D-024). Per-MNO instances carry
+real MNO names and harvested corpus vocabulary, so they follow the
+D-062 mapping-snapshot rules: commit them ONLY on the work PC to the
+company-internal remote; never commit them from a checkout whose
+remote is the public mirror. Legacy corpus-wide runs (no MNO
+argument) keep writing the generic files to `sandbox/prompts/`.
 
-- `sandbox/prompts/doc_requirement_<MNO>_<version>.txt`
-- `sandbox/prompts/query_requirement_<MNO>_<version>.txt`
-- `sandbox/prompts/relevance_requirement_<MNO>_<version>.txt`
-- `sandbox/prompts/corpus_overview_<MNO>_<version>.txt` — the distilled
-  per-MNO corpus overview as a STANDALONE artifact: the same overview
-  text embedded in the doc prompt, written separately so NORA's
-  taxonomy extractor can consume it as its optional corpus-context
-  section (strand sira-enrichment-pe section 6 — derived once per
-  MNO, consumed by both pipelines). Plain prose, no placeholders,
-  no subdomain tables — just the corpus description.
+- `customizations/prompts/doc_requirement_<MNO>_<version>.txt`
+- `customizations/prompts/query_requirement_<MNO>_<version>.txt`
+- `customizations/prompts/relevance_requirement_<MNO>_<version>.txt`
+- `customizations/prompts/corpus_overview_<MNO>_<version>.txt` — the
+  distilled per-MNO corpus overview as a STANDALONE artifact: the same
+  overview text embedded in the doc prompt, written separately so
+  NORA's taxonomy extractor can consume it as its optional
+  corpus-context section (strand sira-enrichment-pe section 6 —
+  derived once per MNO, consumed by both pipelines). Plain prose, no
+  placeholders, no subdomain tables — just the corpus description.
 
 Refuse to overwrite an existing version unless `--force` is passed.
+
+Deployment note: both docker images `COPY customizations/` at build,
+so after an image rebuild the files are visible in-container at
+`/app/customizations/prompts` — point `NORA_SIRA_DOC_PROMPT_DIR`
+(sira-batch) and `NORA_TAXONOMY_OVERVIEW_DIR` (nora-pipeline) there.
+A prompt update requires rebuilding both images.
 
 Note on deployment (wiring lands in the sira-enrichment-pe batch
 integration, not this skill): the per-MNO DOC prompt is resolved per
@@ -305,10 +317,12 @@ cell at ingestion; per-MNO query/relevance prompts are generated for
 consistency but the query-time service currently loads a single
 prompt pair — per-cell selection there is a separate, deferred change.
 
-If the version is bumped (e.g., `v02`), also update
-`sandbox/install_configs.sh` to copy the new files, and
+Legacy corpus-wide runs only: if the version is bumped (e.g., `v02`),
+also update `sandbox/install_configs.sh` to copy the new files, and
 `sandbox/sira_configs/{enrich,rerank}/nora.yaml` to reference the new
-prompt paths. Surface the diff to the user before writing.
+prompt paths. Surface the diff to the user before writing. (Per-MNO
+files are NOT copied by install_configs.sh — they are resolved at
+runtime from `NORA_SIRA_DOC_PROMPT_DIR` / `NORA_TAXONOMY_OVERVIEW_DIR`.)
 
 ### 9. Report
 
@@ -333,9 +347,11 @@ Harvested vocabulary (per subdomain):
   ...
 
 Wrote:
-  sandbox/prompts/doc_requirement_v02.txt
-  sandbox/prompts/query_requirement_v02.txt
-  sandbox/prompts/relevance_requirement_v02.txt
+  customizations/prompts/doc_requirement_<MNO>_v02.txt
+  customizations/prompts/query_requirement_<MNO>_v02.txt
+  customizations/prompts/relevance_requirement_<MNO>_v02.txt
+  customizations/prompts/corpus_overview_<MNO>_v02.txt
+  (legacy corpus-wide run: sandbox/prompts/<stage>_requirement_v02.txt)
 
 Next steps:
   bash sandbox/install_configs.sh
@@ -348,8 +364,9 @@ Next steps:
 
 After writing, suggest the user run these as sanity checks:
 
-1. **Visual diff** — `git diff sandbox/prompts/` to confirm the
-   subdomain coverage matches the inventory.
+1. **Visual diff** — `git diff customizations/prompts/` (or
+   `sandbox/prompts/` for a legacy run) to confirm the subdomain
+   coverage matches the inventory.
 2. **Sample a few VOWIFI / LTE / 5G reqs** through the prompts by
    hand (the user can paste a req into a chat and see what the LLM
    proposes) — confirms the prompt teaches the right shape before
