@@ -195,6 +195,7 @@
 
 ## Flags
 
+- 2026-07-25 [process] **Fresh-env work-PC run follows `docs/runbook-fresh-env.md`** — the committed runbook for strand `sira-enrichment-pe`'s combined-staging cycle (image snapshot → one-shot/incremental ingestion → Cline per-MNO prompts into `customizations/prompts/` → rebake → overview-primed taxonomy → batched enrichment, smallest cell first → promote/serve). Next session starts from wherever that run stopped.
 - 2026-07-18 [process] **Stale-strand triage due** — 3 active strands >50d idle:
   `plan-aware-sira` (5 drafts — land or fold), `nora-retrieval-parent-displacement`
   and `references-handling` (0 drafts — keep-or-abandon). Remaining active board:
