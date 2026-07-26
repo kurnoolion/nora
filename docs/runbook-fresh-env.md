@@ -156,23 +156,42 @@ NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy
 # 90 resp-tokens/req / 3.5 chars-per-token / 2 retries / 2 concurrent)
 ```
 
-## Phase 4 — taxonomy + NORA retrieval stack (per cell)
+## Phase 4 — taxonomy (SIRA-only path: this is the ONLY NORA stage left)
 
-Taxonomy now derives WITH corpus context. It is a global stage — it runs on
-the first cell's lane and hits cache on the rest. The rest of the `nora`
-lane (graph, vectorstore, eval) builds the native retrieval stack that
-nora-web's query lanes serve.
+Taxonomy now derives WITH corpus context. It is a **global** stage — one
+run derives the union feature set over every cell's trees; there is no
+per-cell taxonomy step. When serving SIRA lanes only, taxonomy is the sole
+remaining NORA stage: resolve/standards/graph/vectorstore feed the
+NORA-native retrieval lanes and can be skipped entirely.
 
 ```bash
-./ingest.sh -l nora <MNO> <MMMYYYY>                 # repeat per cell
-# sanity: per-plan taxonomy files exist and are non-trivial:
-ls /home/<you>/nora-data/nora-builds/<build>/out/taxonomy/*_features.json
-# expect "Corpus context: corpus_overview_<MNO>_v02.txt" lines in the lane log
+TS=$(date +%Y%m%d_%H%M%S)
+docker compose --env-file .env.builds --profile ingest run -d --rm -T nora-pipeline \
+  sh -c "mkdir -p /data/env/reports && exec python -m core.src.pipeline.run_cli \
+    --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy \
+    > /data/env/reports/stage-taxonomy-$TS.log 2>&1"
 ```
 
-Notes: the eval stage no-ops/warns without user eval questions in the fresh
-env — expected. If a host has no container egress for the standards stage,
-that already happened in Phase 1 (`--skip-standards` there if needed).
+`--no-skip-taxonomy` is load-bearing: `config/llm.json` has shipped with
+`skip_taxonomy: true` — the explicit flag wins over any config/env skip,
+so the run can't silently no-op.
+
+Verify:
+
+```bash
+E=/home/<you>/nora-data/nora-builds/<build>
+grep "Corpus context" $E/reports/stage-taxonomy-*.log | head  # one per doc, right MNO's overview
+grep "TAX-W003" $E/reports/stage-taxonomy-*.log               # must be EMPTY
+ls $E/out/taxonomy/*_features.json | wc -l                    # ≈ total plan count, all MNOs
+```
+
+**Variant — full NORA retrieval stack wanted** (nora-web native query
+lanes): run the whole `nora` lane per cell instead — `./ingest.sh -l nora
+<MNO> <MMMYYYY>` — which adds standards/graph/vectorstore/eval. Taxonomy
+runs on the first cell's lane and hits cache on the rest. The eval stage
+no-ops/warns without user eval questions in a fresh env — expected. This
+can also be done LATER: parse output persists, one `--lane nora` run
+backfills the stack, and taxonomy hits its cache (fingerprint unchanged).
 
 ## Phase 5 — SIRA batched enrichment (per cell, smallest first)
 
@@ -186,33 +205,48 @@ docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
   --run-name enrich-pe-v1 --only <MNO>__<MMMYYYY> --wipe-stale-index
 ```
 
-Inspect the pilot cell before continuing:
+Inspect the pilot cell before continuing (host paths — the sira-build dir
+is directly visible):
 
 ```bash
-RUN=/data/db/<MNO>__<MMMYYYY>/runs/doc-enrich/enrich-pe-v1
+D=/home/<you>/nora-data/sira-builds/<build>/<MNO>__<MMMYYYY>/runs/doc-enrich/enrich-pe-v1
+grep -c '{taxonomy_block}' $D/prompt.txt   # 1 -> per-MNO BATCHED template resolved
+                                           # (0 -> fell back to generic v01: check
+                                           #  NORA_SIRA_DOC_PROMPT_DIR + image rebake)
 # batch shapes: n_reqs, prompt_tokens_est, closed_by (prompt|response|end),
 # oversized, status per batch:
-docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
-  sh -c "head -5 $RUN/batches*.jsonl; wc -l $RUN/batches*.jsonl"
+head -5 $D/batches*.jsonl; wc -l $D/batches*.jsonl
 # failure histogram (statuses: batch_error / missing_in_batch_response / ...):
-docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
-  python -c "import json,collections,glob; print(dict(collections.Counter( \
-    json.loads(l).get('status','?') for f in glob.glob('$RUN/trace.failed*.jsonl') \
-    for l in open(f))))"
+python3 -c "import json,collections,glob; print(dict(collections.Counter( \
+  json.loads(l).get('status','?') for f in glob.glob('$D/trace.failed*.jsonl') \
+  for l in open(f))))"
 ```
 
 Healthy pilot: batches mostly `closed_by=response` (~150 reqs/batch at
 defaults), few/no `missing_in_batch_response` after retries, phrase quality
 spot-check via `sira_debug phrases --filter <SUBDOMAIN>` shows
-subdomain-appropriate vocab. Then run the remaining cells with the SAME
-`--run-name`. Failed docs: `docker/README.md §Retrying failed enrichments`
-(same commands, `--run-name enrich-pe-v1`).
+subdomain-appropriate vocab. Then run ALL remaining cells in one shot —
+drop `--only`, keep the SAME `--run-name` (the pilot cell resumes by
+doc_id and skips everything already enriched):
+
+```bash
+docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+  python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
+  --run-name enrich-pe-v1 --wipe-stale-index
+```
+
+Failed docs: `docker/README.md §Retrying failed enrichments` (same
+commands, `--run-name enrich-pe-v1`).
 
 ## Phase 6 — promote + serve
 
 ```bash
+# SIRA-only path: promote the sira build alone (out/ has no vectorstore/
+# graph to snapshot; taxonomy already did its job feeding enrichment —
+# serving doesn't read it). NORA-native query lanes will have no data on
+# this label — consistent with the standing flag excluding them from
+# team-eval. Add --nora-build only after the Phase-4 full-stack variant.
 ./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
-    --nora-build /home/<you>/nora-data/nora-builds/<build> \
     --sira-build /home/<you>/nora-data/sira-builds/<build>
 
 # stack .env: NORA_ENV_DIR/SIRA_DB_ROOT -> serve/<label>/{nora,sira};
