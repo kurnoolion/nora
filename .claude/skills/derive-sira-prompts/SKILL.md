@@ -380,6 +380,23 @@ After writing, suggest the user run these as sanity checks:
 - **Read-only on the parsed corpus.** Never modify `_tree.json` files
   or anything under `<env_dir>/out/parse/`. The corpus is upstream of
   this skill.
+- **The corpus is `out/parse/**/*_tree.json` — never `out/extract/`.**
+  `*_ir.json` files are pre-parse extraction IR (raw blocks, no
+  requirements); an inventory built from them is garbage.
+- **Never read a `*_tree.json` into context.** Tree files are
+  multi-MB. All corpus access goes through small scripts that print
+  compact results only (inventory: one `plan_id, plan_name,
+  req_count` line per plan; sampling: 5-10 `(req_id, section_number,
+  title, text[:300])` per plan; harvest: matched terms with counts).
+  Keep every script's printed output under ~100 lines.
+- **Scratch files live under
+  `<env_dir>/reports/prompt-derivation/<MNO>/`** — never inside the
+  repo. The ONLY repo writes are the four deliverables in
+  `customizations/prompts/` (legacy corpus-wide runs:
+  `sandbox/prompts/`).
+- **Version convention: `v01` is reserved for the generic committed
+  templates.** Per-MNO runs start at `v02`; bump on re-derivation
+  (resolvers pick the highest version per MNO automatically).
 - **Never invent vocabulary.** Every term in the generated prompts
   must trace back to the harvested vocab list. No speculative spec
   numbers, no procedure names that aren't in the corpus.

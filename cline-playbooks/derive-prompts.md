@@ -50,6 +50,31 @@ wants to use the adapter output instead.)
 Surface the resolved path in your first response so the user can correct it
 before you spend time scanning hundreds of trees against the wrong corpus.
 
+## Working rules (operational — learned from real runs, 2026-07)
+
+1. **Corpus = `<env_dir>/out/parse/**/*_tree.json`.** Never probe
+   `out/extract/*_ir.json` — that's pre-parse extraction IR with no
+   requirements; any inventory built from it is wrong.
+2. **Script-only corpus access.** Never open a `*_tree.json` in the
+   editor or read one into context (multi-MB each — one file can blow
+   the whole context window). Every inventory / sampling / harvest
+   step is a small python script that prints compact results
+   (≤~100 lines per script run).
+3. **Redirect every command's output to a file and read the file
+   back** instead of trusting terminal capture, e.g.
+   `python3 script.py > <env_dir>/reports/prompt-derivation/<MNO>/step2.txt 2>&1`
+   then read that file. VS Code terminal-output capture intermittently
+   fails and leaves the task hung on "Thinking…" while the command has
+   actually finished.
+4. **Scratch location.** All intermediate files (scripts, dumps,
+   notes) go under `<env_dir>/reports/prompt-derivation/<MNO>/` —
+   NEVER inside the repo. The only repo writes are the four
+   deliverables in `customizations/prompts/`. Scratch dumps contain
+   sampled requirement text (proprietary) — keeping them out of the
+   source tree keeps them out of accidental commits.
+5. **Version `v02+` for per-MNO runs** — `v01` is the generic
+   committed template set in `sandbox/prompts/`.
+
 ## Implementation reference
 
 The procedure (read sources, classify plans, harvest vocab per subdomain,
