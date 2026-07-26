@@ -126,3 +126,35 @@ of SIRA-side artifacts.
 regeneration cadence (on material corpus change) now affects BOTH
 enrichment and taxonomy quality. Taxonomy MODULE.md must document
 the new optional input when slice 5 lands.
+
+## D-DRAFT-5 — Taxonomy cache fingerprint includes corpus-overview hash
+
+**Context.** Slice 5 made per-MNO corpus overviews an input to the
+taxonomy stage's extraction prompt. The stage is cached on a corpus
+fingerprint (D-DRAFT-9, strand multi-mno-nora lineage) that hashed
+only the contributing parse trees — so adding or editing an overview
+would NOT flip the fingerprint, and a re-run would silently serve the
+cached, context-less taxonomy. The design doc left the choice open:
+require `--force` after overview changes, or fold the overview into
+the fingerprint.
+
+**Decision.** `_corpus_fingerprint` additionally hashes every
+`corpus_overview_*.txt` (name + bytes) under
+`$NORA_TAXONOMY_OVERVIEW_DIR`. Adding, editing, or removing an
+overview re-derives the taxonomy on the next run; `--force` remains
+available but is never required for correctness.
+
+**Why.** Prompt inputs are cache inputs — a cache key that omits one
+of them serves stale output by construction. The combined-staging
+plan (D-DRAFT-3) depends on regenerated taxonomies actually being
+regenerated; an operator forgetting `--force` would invalidate the
+whole re-enrichment baseline without any error surfacing.
+
+**Consequences.** Any overview-file touch triggers a full (LLM-driven,
+non-deterministic) taxonomy re-derivation — deliberate: overviews
+change rarely and only when regeneration is wanted. Hashing is
+slightly over-broad (an overview for an MNO absent from the corpus
+still busts the cache) — accepted for simplicity. The fingerprint
+now depends on an env var's contents: same trees + different
+`NORA_TAXONOMY_OVERVIEW_DIR` ⇒ different fingerprint, which is the
+correct reading (different prompt inputs, different taxonomy).
