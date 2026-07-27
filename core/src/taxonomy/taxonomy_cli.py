@@ -30,7 +30,7 @@ from pathlib import Path
 from core.src.llm.mock_provider import MockLLMProvider
 from core.src.parser.structural_parser import RequirementTree
 from core.src.taxonomy.consolidator import TaxonomyConsolidator
-from core.src.taxonomy.extractor import FeatureExtractor
+from core.src.taxonomy.extractor import FeatureExtractor, LLMParseError
 
 
 def main():
@@ -94,9 +94,16 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     doc_features_list = []
+    failed = 0
     for tree in trees:
         t0 = time.time()
-        doc_features = extractor.extract(tree)
+        try:
+            doc_features = extractor.extract(tree)
+        except (LLMParseError, RuntimeError) as e:
+            # Fail-soft: keep going so one flaky call doesn't waste the run.
+            logging.warning(f"  {tree.plan_id}: extraction failed — {e}")
+            failed += 1
+            continue
         elapsed = time.time() - t0
 
         # Save per-document features
@@ -130,6 +137,8 @@ def main():
     logging.info(f"Source documents: {len(taxonomy.source_documents)}")
     logging.info(f"Total features: {len(taxonomy.features)}")
     logging.info(f"LLM calls: {llm.call_count} (MockLLMProvider)")
+    if failed:
+        logging.warning(f"Extraction failures: {failed} (re-run to retry)")
     logging.info(f"")
     logging.info(f"{'Feature ID':<25s}  {'Name':<35s}  {'Primary In':>10s}  {'Ref In':>8s}")
     logging.info(f"{'-'*25}  {'-'*35}  {'-'*10}  {'-'*8}")

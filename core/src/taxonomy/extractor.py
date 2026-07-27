@@ -20,6 +20,16 @@ from core.src.taxonomy.schema import DocumentFeatures, Feature
 
 logger = logging.getLogger(__name__)
 
+
+class LLMParseError(RuntimeError):
+    """LLM response could not be parsed as feature JSON.
+
+    Raised instead of returning empty DocumentFeatures so callers can
+    distinguish "extraction failed" (retry later) from "document genuinely
+    has no features" — an empty success would poison the taxonomy cache.
+    """
+
+
 SYSTEM_PROMPT = """\
 You are a telecom domain expert specializing in 3GPP LTE/5G device \
 requirements and MNO (Mobile Network Operator) compliance specifications.
@@ -230,7 +240,11 @@ class FeatureExtractor:
 
     @staticmethod
     def _parse_response(response: str, plan_id: str) -> DocumentFeatures:
-        """Parse the LLM JSON response into DocumentFeatures."""
+        """Parse the LLM JSON response into DocumentFeatures.
+
+        Raises LLMParseError when no JSON object can be recovered — never
+        returns an empty-success for an unparseable response.
+        """
         # Strip markdown fencing if present
         text = response.strip()
         if text.startswith("```"):
@@ -250,7 +264,9 @@ class FeatureExtractor:
             if data is None:
                 logger.warning(f"Failed to parse LLM response for {plan_id}: {e}")
                 logger.debug(f"Raw response: {text[:500]}")
-                return DocumentFeatures()
+                raise LLMParseError(
+                    f"unparseable LLM response for {plan_id}: {e}"
+                ) from e
 
         primary = [
             Feature(**f)

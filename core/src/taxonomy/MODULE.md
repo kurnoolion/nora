@@ -6,6 +6,7 @@ Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). Per-document
 **Public surface**
 - `FeatureExtractor(provider: LLMProvider, overview_dir: str | Path | None = None)` (extractor.py) — per-document extraction: consumes `RequirementTree`, prompts the LLM, returns `DocumentFeatures`; when `overview_dir` holds a `corpus_overview_<MNO>_<version>.txt` for the doc's MNO, its text is inserted as a "Corpus context" prompt section
 - `resolve_corpus_overview(overview_dir, mno) -> Path | None` (extractor.py) — per-MNO overview file resolution, highest version wins; None on any miss (fail-soft)
+- `LLMParseError` (extractor.py) — raised by extraction when the LLM response yields no parseable JSON object; callers treat it as a retryable per-document failure
 - `TaxonomyConsolidator` (consolidator.py) — `consolidate(doc_features: list[DocumentFeatures]) -> FeatureTaxonomy`; dedupes by `feature_id`, builds `mno_coverage` and `is_primary_in` / `is_referenced_in` attribution
 - Schema: `Feature`, `DocumentFeatures`, `TaxonomyFeature`, `FeatureTaxonomy` (all dataclasses with `to_dict`/`save_json`/`load_json` on the two top-level ones)
 - `taxonomy_cli.main` — CLI: extract | consolidate | review
@@ -17,6 +18,7 @@ Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). Per-document
 - Consolidation is deterministic and LLM-free. The LLM is only used in Step 1 (per-document extraction). Step 2 (merge) is a dict union with attribution bookkeeping. Cross-MNO alignment (which might use an LLM) is deferred until multi-MNO data is available.
 - `feature_id` is the merge key. Extractor implementations must produce stable, prefix-matchable IDs (e.g., `DATA_RETRY`, `IMS_REGISTRATION`) — a feature renamed across documents won't merge.
 - `primary_features` vs `referenced_features` is a confidence split: a feature with multiple keyword matches in a doc is primary; single-match is referenced. Consolidation promotes a feature to `is_primary_in` as soon as any doc lists it as primary.
+- **No empty successes.** An unparseable LLM response raises `LLMParseError` rather than returning an empty `DocumentFeatures` — an empty success would be persisted, cached, and consolidated as if the document genuinely had no features. Failure is signalled to the caller, which decides retry policy (the pipeline stage records it in `extraction_state.json` and retries on re-run; the CLI logs and continues).
 
 **Key choices**
 - LLM used only where it earns its keep — inferring feature names and keywords from heading text is exactly the kind of fuzzy clustering that heuristics struggle with.

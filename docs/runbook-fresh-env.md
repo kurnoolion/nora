@@ -164,6 +164,23 @@ per-cell taxonomy step. When serving SIRA lanes only, taxonomy is the sole
 remaining NORA stage: resolve/standards/graph/vectorstore feed the
 NORA-native retrieval lanes and can be skipped entirely.
 
+Multi-release + resilience semantics:
+
+- **Newest release wins.** When a plan appears in several releases of one
+  MNO, only the newest release's copy is extracted — MMMYYYY release dir
+  names are parsed to `YYYYMM` (`Jul2026` → `202607`) so comparison is
+  chronological, not alphabetical. Older copies count as `superseded` in
+  the stage stats and cost no LLM calls. Expect `*_features.json` count
+  ≈ distinct plans, not plans × releases.
+- **Sporadic LLM/server errors don't kill the run.** A failed doc is
+  recorded in `out/taxonomy/extraction_state.json` and the run continues
+  (stage ends `WARN` with `TAX-W004: N of M docs failed`).
+- **Re-running the same command IS the retry.** A re-run skips docs already
+  extracted (unchanged tree + unchanged overviews) and re-attempts only
+  failed/new ones. No `--force` needed after a degraded or killed run — a
+  run with failures never stamps the cache fingerprint. `--force` remains
+  the full-redo hammer.
+
 ```bash
 TS=$(date +%Y%m%d_%H%M%S)
 docker compose --env-file .env.builds --profile ingest run -d --rm -T nora-pipeline \
@@ -182,8 +199,15 @@ Verify:
 E=/home/<you>/nora-data/nora-builds/<build>
 grep "Corpus context" $E/reports/stage-taxonomy-*.log | head  # one per doc, right MNO's overview
 grep "TAX-W003" $E/reports/stage-taxonomy-*.log               # must be EMPTY
-ls $E/out/taxonomy/*_features.json | wc -l                    # ≈ total plan count, all MNOs
+grep "TAX-W004\|TAX-E001" $E/reports/stage-taxonomy-*.log     # failures -> re-run same command to retry
+ls $E/out/taxonomy/*_features.json | wc -l                    # ≈ DISTINCT plan count (newest release only)
+# per-doc ledger: ok/failed + error per doc
+python3 -c "import json; d=json.load(open('$E/out/taxonomy/extraction_state.json'))['docs']; \
+  print({s: sum(1 for v in d.values() if v['status']==s) for s in ('ok','failed')})"
 ```
+
+Repeat run + verify until the `failed` count is 0 (sporadic server errors
+are expected; each re-run only retries what failed).
 
 **Variant — full NORA retrieval stack wanted** (nora-web native query
 lanes): run the whole `nora` lane per cell instead — `./ingest.sh -l nora

@@ -21,7 +21,11 @@ from core.src.parser.structural_parser import (
     RequirementTree,
 )
 from core.src.taxonomy.consolidator import TaxonomyConsolidator
-from core.src.taxonomy.extractor import FeatureExtractor, resolve_corpus_overview
+from core.src.taxonomy.extractor import (
+    FeatureExtractor,
+    LLMParseError,
+    resolve_corpus_overview,
+)
 from core.src.taxonomy.schema import (
     DocumentFeatures,
     Feature,
@@ -250,12 +254,11 @@ class TestFeatureExtractor:
         result = FeatureExtractor._parse_response(raw, "TEST")
         assert len(result.primary_features) == 1
 
-    def test_parse_response_invalid_json(self):
-        """Invalid JSON returns empty DocumentFeatures."""
-        result = FeatureExtractor._parse_response("not json at all", "TEST")
-        assert isinstance(result, DocumentFeatures)
-        assert len(result.primary_features) == 0
-        assert len(result.referenced_features) == 0
+    def test_parse_response_invalid_json_raises(self):
+        """Unparseable response raises LLMParseError — never an empty success
+        (an empty DocumentFeatures would be cached/consolidated as valid)."""
+        with pytest.raises(LLMParseError):
+            FeatureExtractor._parse_response("not json at all", "TEST")
 
     def test_parse_response_prose_preamble(self):
         """Reasoning prose around the JSON is tolerated (first balanced {...})."""

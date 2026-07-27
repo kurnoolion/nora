@@ -84,6 +84,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("TAX-W001", "Feature count ({count}) unusually high for {file}", "May indicate over-segmentation"),
     ErrorDef("TAX-W002", "Using correction file for taxonomy", "corrections/taxonomy.json overrides auto-generated"),
     ErrorDef("TAX-W003", "No usable corpus overview for MNO {mno}", "Extraction proceeds without corpus context; check NORA_TAXONOMY_OVERVIEW_DIR contents"),
+    ErrorDef("TAX-W004", "{failed} of {total} docs failed extraction", "Re-run the taxonomy stage to retry failed docs; details in out/taxonomy/extraction_state.json"),
 
     # --- Standards (STD) ---
     ErrorDef("STD-E001", "Failed to download spec {spec}: {reason}", "Check network connectivity and 3GPP FTP availability"),

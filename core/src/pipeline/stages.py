@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -463,8 +464,78 @@ def _corpus_fingerprint(
     return h.hexdigest()[:16]
 
 
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_RELEASE_RE = re.compile(r"^([A-Za-z]{3})(\d{4})$")
+
+
+def _release_sort_key(release: str) -> str:
+    """Chronological sort key for MMMYYYY release names.
+
+    'Mar2026' → '202603', 'Jul2026' → '202607', so numeric-string
+    comparison orders by (year, month) — plain lexicographic comparison
+    of the raw names would rank Jul2026 before Mar2025. Names not in
+    MMMYYYY form fall back to themselves (lexicographic order).
+    """
+    m = _RELEASE_RE.match(release.strip())
+    if m and m.group(1).lower() in _MONTHS:
+        return f"{m.group(2)}{_MONTHS[m.group(1).lower()]:02d}"
+    return release
+
+
+def _select_newest_trees(
+    tree_files: list[Path], parse_dir: Path,
+) -> tuple[list[tuple[Path, str]], int]:
+    """Newest instance of each (MNO, plan_id) across releases.
+
+    Releases of one MNO re-publish largely the same plans, and both the
+    taxonomy output layout (out/taxonomy/<plan_id>_features.json) and the
+    downstream per-plan lookup key on plan_id alone — so only the newest
+    copy of each plan is extracted. "Newest" = greatest release directory
+    name under out/parse/<MNO>/<REL>/ per `_release_sort_key` (MMMYYYY
+    names compare chronologically); ties broken by file name. Trees
+    outside a cell layout never dedupe.
+
+    Returns (selected, superseded): a path-sorted list of
+    (tree_path, plan_id) plus the count of older copies skipped.
+    """
+    best: dict[tuple[str, str], tuple[str, str, Path, str]] = {}
+    for f in sorted(tree_files):
+        plan_id = f.stem[:-5] if f.stem.endswith("_tree") else f.stem
+        try:
+            plan_id = json.loads(f.read_text(encoding="utf-8")).get("plan_id") or plan_id
+        except Exception:
+            pass  # unreadable tree — fall back to the filename stem
+        try:
+            parts = f.relative_to(parse_dir).parts
+        except ValueError:
+            parts = (f.name,)
+        if len(parts) >= 3:  # <MNO>/<REL>/<file>
+            key = (parts[0], plan_id)
+            release = _release_sort_key(parts[-2])
+        else:  # flat layout — no release axis, keep every file
+            key = (str(f), plan_id)
+            release = ""
+        cur = best.get(key)
+        if cur is None or (release, f.name) > (cur[0], cur[1]):
+            best[key] = (release, f.name, f, plan_id)
+    selected = sorted(((v[2], v[3]) for v in best.values()), key=lambda t: str(t[0]))
+    return selected, len(tree_files) - len(selected)
+
+
 def run_taxonomy(ctx: PipelineContext) -> StageResult:
-    """Extract feature taxonomy from parsed trees."""
+    """Extract feature taxonomy from parsed trees.
+
+    Resilient by design: extraction is per-doc fail-soft (a flaky LLM call
+    or unparseable response marks that doc failed and the run continues),
+    per-doc resumable (extraction_state.json records each doc's status +
+    source-tree hash; unchanged OK docs are skipped on re-run), and failed
+    docs retry automatically on the next run — "re-run the same command"
+    is the retry mechanism. The stage fingerprint is stamped only on a
+    zero-failure run so a degraded run can never cache-lock itself.
+    """
     t0 = time.time()
     stage = "taxonomy"
     out_dir = ctx.stage_output(stage)
@@ -485,6 +556,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
         from core.src.parser.structural_parser import RequirementTree
         from core.src.taxonomy.extractor import FeatureExtractor
         from core.src.taxonomy.consolidator import TaxonomyConsolidator
+        from core.src.taxonomy.schema import DocumentFeatures
     except ImportError as e:
         return _fail(stage, "TAX-E001", f"Import error: {e}", time.time() - t0)
 
@@ -494,6 +566,9 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     tree_files = sorted(parse_dir.rglob("*_tree.json"))
     if not tree_files:
         return _fail(stage, "PIP-E002", f"No tree files in {parse_dir}", time.time() - t0)
+    # Newest release wins per (MNO, plan_id) — older copies are never sent
+    # to the LLM (they'd only be overwritten in the flat output layout).
+    selected, n_superseded = _select_newest_trees(tree_files, parse_dir)
 
     # D-DRAFT-9: corpus-fingerprint cache. The taxonomy is LLM-derived,
     # expensive, and non-deterministic across runs — so re-derive the (global,
@@ -513,37 +588,125 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
 
     taxonomy_path = out_dir / "taxonomy.json"
     fp_path = out_dir / ".corpus_fingerprint"
-    corpus_fp = _corpus_fingerprint(tree_files, parse_dir, overview_files)
+    corpus_fp = _corpus_fingerprint([f for f, _ in selected], parse_dir, overview_files)
     if (not ctx.force and taxonomy_path.exists() and fp_path.exists()
             and fp_path.read_text(encoding="utf-8").strip() == corpus_fp):
         ctx.state["taxonomy_path"] = str(taxonomy_path)
         return StageResult(
             stage=stage, status="OK", elapsed_seconds=time.time() - t0,
-            stats={"source": "cache", "trees": len(tree_files)},
+            stats={"source": "cache", "trees": len(selected)},
         )
+
+    # Prompt inputs participate in per-doc reuse: an overview edit must
+    # invalidate every cached extraction, not just the stage fingerprint.
+    ph = hashlib.sha256()
+    for f in overview_files:
+        ph.update(f.name.encode("utf-8"))
+        ph.update(hashlib.sha256(f.read_bytes()).digest())
+    prompt_fp = ph.hexdigest()[:16]
+
+    state_path = out_dir / "extraction_state.json"
+    prev_docs: dict[str, dict] = {}
+    if not ctx.force and state_path.exists():
+        try:
+            st = json.loads(state_path.read_text(encoding="utf-8"))
+            if st.get("prompt_fp") == prompt_fp:
+                prev_docs = st.get("docs", {})
+        except Exception:
+            prev_docs = {}
+
+    # Drop per-plan outputs that no longer correspond to a selected plan
+    # (removed plans, or empty files from failed runs pre-dating fail-soft).
+    expected = {f"{plan_id}_features.json" for _, plan_id in selected}
+    for stale in out_dir.glob("*_features.json"):
+        if stale.name not in expected:
+            stale.unlink()
 
     # Create LLM provider (extraction runs at temperature=0 — see
     # FeatureExtractor — for reproducible feature mappings).
     llm = ctx.create_llm_provider()
     extractor = FeatureExtractor(llm, overview_dir=overview_dir or None)
     all_doc_features = []
+    new_docs: dict[str, dict] = {}
+    n_extracted = n_cached = 0
+    failures: list[str] = []
 
-    for f in tree_files:
+    def _save_state() -> None:
+        # Written after every doc so a hard kill (docker stop, OOM) still
+        # leaves a resumable state file behind.
+        state_path.write_text(
+            json.dumps({"prompt_fp": prompt_fp, "docs": new_docs}, indent=2),
+            encoding="utf-8",
+        )
+
+    for f, plan_id in selected:
+        try:
+            rel_key = f.relative_to(parse_dir).as_posix()
+        except ValueError:
+            rel_key = f.name
+        tree_sha = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+        feat_path = out_dir / f"{plan_id}_features.json"
+        ent = prev_docs.get(rel_key)
+        if (ent and ent.get("status") == "ok" and ent.get("tree_sha") == tree_sha
+                and feat_path.exists()):
+            all_doc_features.append(DocumentFeatures.load_json(feat_path))
+            new_docs[rel_key] = ent
+            n_cached += 1
+            continue
         tree = RequirementTree.load_json(f)
-        doc_features = extractor.extract(tree)
-        doc_out = out_dir / f"{tree.plan_id}_features.json"
-        doc_features.save_json(doc_out)
+        try:
+            doc_features = extractor.extract(tree)
+        except Exception as e:
+            logger.warning(f"TAX-E001: extraction failed for {plan_id}: {e}")
+            feat_path.unlink(missing_ok=True)
+            new_docs[rel_key] = {
+                "status": "failed", "tree_sha": tree_sha, "error": str(e)[:200],
+            }
+            failures.append(plan_id)
+            _save_state()
+            continue
+        doc_features.save_json(feat_path)
         all_doc_features.append(doc_features)
+        new_docs[rel_key] = {
+            "status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name,
+        }
+        n_extracted += 1
+        _save_state()
+
+    if not all_doc_features:
+        return _fail(
+            stage, "TAX-E001",
+            f"All {len(selected)} extractions failed — LLM endpoint down? "
+            "Re-run the taxonomy stage to retry.",
+            time.time() - t0,
+        )
 
     consolidator = TaxonomyConsolidator()
     taxonomy = consolidator.consolidate(all_doc_features)
     taxonomy.save_json(taxonomy_path)
-    # D-DRAFT-9: stamp the corpus fingerprint so an unchanged re-run hits cache.
-    fp_path.write_text(corpus_fp, encoding="utf-8")
+
+    warnings: list[str] = []
+    if failures:
+        warnings.append(
+            f"TAX-W004: {len(failures)} of {len(selected)} docs failed "
+            f"extraction — re-run the taxonomy stage to retry "
+            f"(details in {state_path.name})"
+        )
+        # A degraded run must never cache-lock itself.
+        fp_path.unlink(missing_ok=True)
+    else:
+        # D-DRAFT-9: stamp the corpus fingerprint so an unchanged re-run hits cache.
+        fp_path.write_text(corpus_fp, encoding="utf-8")
 
     ctx.state["taxonomy_path"] = str(taxonomy_path)
-    stats = {"features": len(taxonomy.features), "docs": len(all_doc_features), "source": "derived"}
-    return StageResult(stage=stage, status="OK", elapsed_seconds=time.time() - t0, stats=stats)
+    stats = {
+        "features": len(taxonomy.features), "docs": n_extracted,
+        "cached_docs": n_cached, "failed": len(failures),
+        "superseded": n_superseded, "source": "derived",
+    }
+    return StageResult(stage=stage, status="WARN" if failures else "OK",
+                       elapsed_seconds=time.time() - t0, stats=stats,
+                       warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
