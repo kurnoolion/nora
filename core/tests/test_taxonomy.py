@@ -257,6 +257,35 @@ class TestFeatureExtractor:
         assert len(result.primary_features) == 0
         assert len(result.referenced_features) == 0
 
+    def test_parse_response_prose_preamble(self):
+        """Reasoning prose around the JSON is tolerated (first balanced {...})."""
+        inner = json.dumps({
+            "primary_features": [
+                {"feature_id": "SMS", "name": "SMS", "description": "d",
+                 "keywords": ["sms"], "confidence": 0.9}
+            ],
+            "referenced_features": [],
+            "key_concepts": [],
+        })
+        raw = f"Okay, let me think about this document.\n{inner}\nHope that helps!"
+        result = FeatureExtractor._parse_response(raw, "TEST")
+        assert len(result.primary_features) == 1
+        assert result.primary_features[0].feature_id == "SMS"
+
+    def test_parse_response_braces_in_strings(self):
+        """Braces inside JSON string values don't break the balanced scan."""
+        inner = json.dumps({
+            "primary_features": [
+                {"feature_id": "A", "name": "uses {curly} text", "description": "d",
+                 "keywords": [], "confidence": 0.8}
+            ],
+            "referenced_features": [],
+            "key_concepts": [],
+        })
+        result = FeatureExtractor._parse_response(f"preamble {{not json\n{inner}", "TEST")
+        assert len(result.primary_features) == 1
+        assert result.primary_features[0].name == "uses {curly} text"
+
 
 # ── Corpus-overview prompt context (strand sira-enrichment-pe) ────
 

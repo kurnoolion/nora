@@ -11,6 +11,10 @@ import logging
 from pathlib import Path
 
 from core.src.llm.base import LLMProvider
+from core.src.llm.openai_provider import (
+    FINAL_ANSWER_MARKER,
+    REASONING_SENTINEL_ENABLED,
+)
 from core.src.parser.structural_parser import RequirementTree
 from core.src.taxonomy.schema import DocumentFeatures, Feature
 
@@ -25,6 +29,18 @@ telecom features and capabilities covered by each document.
 
 Always respond with valid JSON matching the requested schema. No markdown \
 fencing, no commentary outside the JSON."""
+
+# Sentinel instruction — appended only for models whose untagged
+# chain-of-thought leaks into the answer (NORA_LLM_REASONING_SENTINEL=1);
+# _strip_reasoning in the provider drops everything up to the marker.
+# Same opt-in pattern as web/routes/playground.py.
+if REASONING_SENTINEL_ENABLED:
+    SYSTEM_PROMPT += (
+        "\n\nOUTPUT FORMAT: You may reason first if needed, but you MUST then "
+        f"print a line containing exactly {FINAL_ANSWER_MARKER} and put ONLY "
+        f"the JSON object after it. Anything before {FINAL_ANSWER_MARKER} is "
+        "discarded."
+    )
 
 EXTRACTION_PROMPT_TEMPLATE = """\
 Analyze the following {mno} requirement document and extract the telecom \
@@ -77,6 +93,39 @@ Respond with this exact JSON structure:
   ],
   "key_concepts": ["concept1", "concept2", "..."]
 }}"""
+
+
+def _first_json_object(text: str) -> dict | None:
+    """First balanced, parseable {...} in `text`, or None.
+
+    String-aware brace scan so braces inside JSON strings don't miscount.
+    """
+    start = text.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(text)):
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+                    return obj if isinstance(obj, dict) else None
+        start = text.find("{", start + 1)
+    return None
 
 
 def resolve_corpus_overview(overview_dir: str | Path | None, mno: str) -> Path | None:
@@ -193,9 +242,15 @@ class FeatureExtractor:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse LLM response for {plan_id}: {e}")
-            logger.debug(f"Raw response: {text[:500]}")
-            return DocumentFeatures()
+            # Tolerant fallback: chatty/reasoning models may wrap the JSON in
+            # prose the provider-level strip didn't catch. Take the first
+            # balanced {...} that parses (same posture as profile_debug and
+            # sandbox/enrich_batching).
+            data = _first_json_object(text)
+            if data is None:
+                logger.warning(f"Failed to parse LLM response for {plan_id}: {e}")
+                logger.debug(f"Raw response: {text[:500]}")
+                return DocumentFeatures()
 
         primary = [
             Feature(**f)
