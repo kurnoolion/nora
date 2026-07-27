@@ -150,27 +150,59 @@ def split_tree_by_plan(tree: RequirementTree) -> list[RequirementTree]:
     distinct plan, each carrying only that plan's requirements, plan_name
     taken from the group's first section heading (the chapter title).
 
+    Heading nodes carry no req_id (hence no per-req plan) but they ARE the
+    feature-indicative lines the extraction outline is built from, so they
+    are attached to the plan whose requirements they enclose: the majority
+    plan among plan-bearing reqs whose ``parent_section`` sits at or under
+    the heading's ``section_number``. Nodes enclosing no plan-bearing req
+    (front matter, empty reference sections) are dropped with a logged
+    count.
+
     Single-plan trees (≤1 distinct non-empty per-req plan_id) pass through
     unchanged, except that a blank tree-level plan_id is promoted to the
-    one plan its requirements declare. In a multi-plan tree, requirements
-    with an empty plan_id (front matter, un-prefixed chapters) belong to
-    no plan and are dropped with a logged count.
+    one plan its requirements declare.
     """
-    groups: dict[str, list[Requirement]] = {}
-    for r in tree.requirements:
-        groups.setdefault(r.plan_id, []).append(r)
-    plan_ids = [p for p in groups if p]
+    plans_present = sorted({r.plan_id for r in tree.requirements if r.plan_id})
 
-    if len(plan_ids) <= 1:
-        if plan_ids and not tree.plan_id:
-            return [dataclasses.replace(tree, plan_id=plan_ids[0])]
+    if len(plans_present) <= 1:
+        if plans_present and not tree.plan_id:
+            return [dataclasses.replace(tree, plan_id=plans_present[0])]
         return [tree]
 
-    n_unplanned = len(groups.get("", []))
-    if n_unplanned:
+    # parent_section → {plan: leaf count}, from the plan-bearing reqs.
+    sec_plans: dict[str, dict[str, int]] = {}
+    for r in tree.requirements:
+        if r.plan_id and r.parent_section:
+            d = sec_plans.setdefault(r.parent_section, {})
+            d[r.plan_id] = d.get(r.plan_id, 0) + 1
+
+    def _enclosed_plan(section: str) -> str | None:
+        """Majority plan among leaves at or under `section`, or None."""
+        if not section:
+            return None
+        counts: dict[str, int] = {}
+        prefix = section + "."
+        for ps, d in sec_plans.items():
+            if ps == section or ps.startswith(prefix):
+                for p, c in d.items():
+                    counts[p] = counts.get(p, 0) + c
+        if not counts:
+            return None
+        return min(counts, key=lambda p: (-counts[p], p))
+
+    groups: dict[str, list[Requirement]] = {}
+    n_dropped = 0
+    for r in tree.requirements:
+        pid = r.plan_id or _enclosed_plan(r.section_number or r.parent_section)
+        if not pid:
+            n_dropped += 1
+            continue
+        groups.setdefault(pid, []).append(r)
+    if n_dropped:
         logger.warning(
-            f"  {tree.plan_id or '<multi-plan doc>'}: dropping {n_unplanned} "
-            "requirement(s) with no plan_id from taxonomy extraction"
+            f"  {tree.plan_id or '<multi-plan doc>'}: dropping {n_dropped} "
+            "node(s) that neither carry a plan_id nor enclose any "
+            "plan-bearing requirement"
         )
     return [
         dataclasses.replace(
@@ -179,7 +211,7 @@ def split_tree_by_plan(tree: RequirementTree) -> list[RequirementTree]:
             plan_name=(groups[pid][0].title or pid),
             requirements=groups[pid],
         )
-        for pid in sorted(plan_ids)
+        for pid in sorted(groups)
     ]
 
 

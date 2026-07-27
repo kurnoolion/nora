@@ -14,6 +14,7 @@ Test categories:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -72,7 +73,10 @@ class MockEmbedder:
         return "mock"
 
     def _hash(self, text):
-        h = hash(text)
+        # NOT builtin hash(): str hashing is salted per process
+        # (PYTHONHASHSEED), which made retrieval rankings — and the tests
+        # asserting on them — vary run to run.
+        h = int.from_bytes(hashlib.md5(text.encode("utf-8")).digest()[:8], "big")
         vec = [((h >> (i * 4)) & 0xF) / 15.0 - 0.5 for i in range(self._dim)]
         norm = math.sqrt(sum(v * v for v in vec)) or 1
         return [v / norm for v in vec]

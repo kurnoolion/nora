@@ -295,9 +295,10 @@ class TestSplitTreeByPlan:
     """Multi-plan trees (one doc, chapter-per-plan) split per plan_id."""
 
     @staticmethod
-    def _req(plan: str, sec: str, title: str) -> Requirement:
+    def _req(plan: str, sec: str, title: str, parent: str = "") -> Requirement:
         return Requirement(req_id=f"{plan}-{sec}" if plan else "",
                            plan_id=plan, section_number=sec, title=title,
+                           parent_section=parent,
                            text="Device shall support X.")
 
     def test_single_plan_tree_unchanged(self):
@@ -337,7 +338,7 @@ class TestSplitTreeByPlan:
         assert subs[1].plan_name == "Chapter B"
 
     def test_multi_plan_drops_unplanned_reqs(self):
-        """Front-matter reqs with no plan_id belong to no plan."""
+        """Front-matter reqs enclosing no plan-bearing req belong nowhere."""
         tree = RequirementTree(
             mno="MNO-B", release="Jul2026", plan_id="",
             requirements=[
@@ -349,6 +350,48 @@ class TestSplitTreeByPlan:
         subs = split_tree_by_plan(tree)
         assert [s.plan_id for s in subs] == ["PLANA", "PLANB"]
         assert all(r.plan_id for s in subs for r in s.requirements)
+
+    def test_headings_inherit_enclosing_plan(self):
+        """Heading nodes (no req_id/plan) attach to the plan whose leaves
+        their section encloses — chapter-per-plan docs where leaves carry
+        parent_section but no section_number of their own."""
+        tree = RequirementTree(
+            mno="MNO-B", release="Jul2026", plan_id="",
+            requirements=[
+                self._req("", "3", "Chapter A"),          # chapter heading
+                self._req("", "3.1", "A procedures"),     # subheading
+                self._req("PLANA", "", "a req", parent="3.1"),
+                self._req("PLANA", "", "a req", parent="3.1"),
+                self._req("", "4", "Chapter B"),
+                self._req("PLANB", "", "b req", parent="4.2"),
+            ],
+        )
+        subs = split_tree_by_plan(tree)
+        assert [s.plan_id for s in subs] == ["PLANA", "PLANB"]
+        # headings landed with their chapter's plan, document order kept
+        assert [r.title for r in subs[0].requirements] == [
+            "Chapter A", "A procedures", "a req", "a req"]
+        assert [r.title for r in subs[1].requirements] == ["Chapter B", "b req"]
+        # plan_name is now the chapter heading title
+        assert subs[0].plan_name == "Chapter A"
+        assert subs[1].plan_name == "Chapter B"
+
+    def test_heading_majority_when_chapter_spans_plans(self):
+        """A chapter holding several plans: its top heading goes to the
+        majority plan of the leaves it encloses."""
+        tree = RequirementTree(
+            mno="MNO-B", release="Jul2026", plan_id="",
+            requirements=[
+                self._req("", "3", "Chapter"),
+                self._req("PLANA", "", "a", parent="3.1"),
+                self._req("PLANB", "", "b", parent="3.2"),
+                self._req("PLANB", "", "b", parent="3.2"),
+            ],
+        )
+        subs = split_tree_by_plan(tree)
+        by_plan = {s.plan_id: [r.title for r in s.requirements] for s in subs}
+        assert by_plan["PLANB"] == ["Chapter", "b", "b"]
+        assert by_plan["PLANA"] == ["a"]
 
 
 # ── Corpus-overview prompt context (strand sira-enrichment-pe) ────
