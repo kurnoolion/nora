@@ -528,13 +528,19 @@ def _select_newest_trees(
 def run_taxonomy(ctx: PipelineContext) -> StageResult:
     """Extract feature taxonomy from parsed trees.
 
-    Resilient by design: extraction is per-doc fail-soft (a flaky LLM call
-    or unparseable response marks that doc failed and the run continues),
-    per-doc resumable (extraction_state.json records each doc's status +
-    source-tree hash; unchanged OK docs are skipped on re-run), and failed
-    docs retry automatically on the next run — "re-run the same command"
-    is the retry mechanism. The stage fingerprint is stamped only on a
-    zero-failure run so a degraded run can never cache-lock itself.
+    The unit of extraction is a PLAN, not a file: multi-plan trees (one
+    doc whose chapters are each a plan) are split via split_tree_by_plan
+    into per-plan subtrees, and units are deduped by (MNO, plan_id) with
+    the newest release winning.
+
+    Resilient by design: extraction is per-plan fail-soft (a flaky LLM
+    call or unparseable response marks that plan failed and the run
+    continues), per-plan resumable (extraction_state.json records each
+    unit's status + source-tree hash; unchanged OK units are skipped on
+    re-run), and failed units retry automatically on the next run —
+    "re-run the same command" is the retry mechanism. The stage
+    fingerprint is stamped only on a zero-failure run so a degraded run
+    can never cache-lock itself.
     """
     t0 = time.time()
     stage = "taxonomy"
@@ -554,7 +560,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
 
     try:
         from core.src.parser.structural_parser import RequirementTree
-        from core.src.taxonomy.extractor import FeatureExtractor
+        from core.src.taxonomy.extractor import FeatureExtractor, split_tree_by_plan
         from core.src.taxonomy.consolidator import TaxonomyConsolidator
         from core.src.taxonomy.schema import DocumentFeatures
     except ImportError as e:
@@ -615,9 +621,41 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
         except Exception:
             prev_docs = {}
 
+    # Split multi-plan trees (one doc, chapter-per-plan) into per-plan
+    # extraction units, then dedupe units by (MNO, plan_id) with newest
+    # release winning. This second, unit-level supersession pass is needed
+    # because a chapter-per-plan doc has an empty tree-level plan_id, so
+    # file-level selection can't dedupe its plans across releases.
+    best_unit: dict[tuple[str, str], tuple[str, str, str, object]] = {}
+    n_unit_superseded = 0
+    for f, _pid in selected:
+        try:
+            rel_key = f.relative_to(parse_dir).as_posix()
+        except ValueError:
+            rel_key = f.name
+        tree_sha = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+        subs = split_tree_by_plan(RequirementTree.load_json(f))
+        for sub in subs:
+            # Ledger key: per-file for single-plan trees, per-(file, plan)
+            # for split multi-plan trees — each plan fails/resumes/retries
+            # independently.
+            lkey = f"{rel_key}#{sub.plan_id}" if len(subs) > 1 else rel_key
+            ukey = (sub.mno, sub.plan_id)
+            rkey = _release_sort_key(sub.release)
+            cur = best_unit.get(ukey)
+            if cur is None or (rkey, lkey) > (cur[0], cur[1]):
+                if cur is not None:
+                    n_unit_superseded += 1
+                best_unit[ukey] = (rkey, lkey, tree_sha, sub)
+            else:
+                n_unit_superseded += 1
+    units = sorted(best_unit.values(), key=lambda u: u[1])
+    n_superseded += n_unit_superseded
+
     # Drop per-plan outputs that no longer correspond to a selected plan
-    # (removed plans, or empty files from failed runs pre-dating fail-soft).
-    expected = {f"{plan_id}_features.json" for _, plan_id in selected}
+    # (removed plans, empty files from failed runs pre-dating fail-soft,
+    # or a multi-plan doc's old empty-prefix "_features.json").
+    expected = {f"{u[3].plan_id}_features.json" for u in units}
     for stale in out_dir.glob("*_features.json"):
         if stale.name not in expected:
             stale.unlink()
@@ -632,42 +670,36 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     failures: list[str] = []
 
     def _save_state() -> None:
-        # Written after every doc so a hard kill (docker stop, OOM) still
+        # Written after every unit so a hard kill (docker stop, OOM) still
         # leaves a resumable state file behind.
         state_path.write_text(
             json.dumps({"prompt_fp": prompt_fp, "docs": new_docs}, indent=2),
             encoding="utf-8",
         )
 
-    for f, plan_id in selected:
-        try:
-            rel_key = f.relative_to(parse_dir).as_posix()
-        except ValueError:
-            rel_key = f.name
-        tree_sha = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
-        feat_path = out_dir / f"{plan_id}_features.json"
-        ent = prev_docs.get(rel_key)
+    for _rkey, lkey, tree_sha, sub in units:
+        feat_path = out_dir / f"{sub.plan_id}_features.json"
+        ent = prev_docs.get(lkey)
         if (ent and ent.get("status") == "ok" and ent.get("tree_sha") == tree_sha
                 and feat_path.exists()):
             all_doc_features.append(DocumentFeatures.load_json(feat_path))
-            new_docs[rel_key] = ent
+            new_docs[lkey] = ent
             n_cached += 1
             continue
-        tree = RequirementTree.load_json(f)
         try:
-            doc_features = extractor.extract(tree)
+            doc_features = extractor.extract(sub)
         except Exception as e:
-            logger.warning(f"TAX-E001: extraction failed for {plan_id}: {e}")
+            logger.warning(f"TAX-E001: extraction failed for {sub.plan_id}: {e}")
             feat_path.unlink(missing_ok=True)
-            new_docs[rel_key] = {
+            new_docs[lkey] = {
                 "status": "failed", "tree_sha": tree_sha, "error": str(e)[:200],
             }
-            failures.append(plan_id)
+            failures.append(sub.plan_id)
             _save_state()
             continue
         doc_features.save_json(feat_path)
         all_doc_features.append(doc_features)
-        new_docs[rel_key] = {
+        new_docs[lkey] = {
             "status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name,
         }
         n_extracted += 1
@@ -676,7 +708,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     if not all_doc_features:
         return _fail(
             stage, "TAX-E001",
-            f"All {len(selected)} extractions failed — LLM endpoint down? "
+            f"All {len(units)} extractions failed — LLM endpoint down? "
             "Re-run the taxonomy stage to retry.",
             time.time() - t0,
         )
@@ -688,7 +720,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     warnings: list[str] = []
     if failures:
         warnings.append(
-            f"TAX-W004: {len(failures)} of {len(selected)} docs failed "
+            f"TAX-W004: {len(failures)} of {len(units)} plans failed "
             f"extraction — re-run the taxonomy stage to retry "
             f"(details in {state_path.name})"
         )

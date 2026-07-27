@@ -166,12 +166,21 @@ NORA-native retrieval lanes and can be skipped entirely.
 
 Multi-release + resilience semantics:
 
-- **Newest release wins.** When a plan appears in several releases of one
-  MNO, only the newest release's copy is extracted — MMMYYYY release dir
-  names are parsed to `YYYYMM` (`Jul2026` → `202607`) so comparison is
-  chronological, not alphabetical. Older copies count as `superseded` in
-  the stage stats and cost no LLM calls. Expect `*_features.json` count
-  ≈ distinct plans, not plans × releases.
+- **The unit of extraction is a plan, not a file.** A doc whose chapters
+  are each a plan (single-doc MNOs) is split into per-plan subtrees before
+  extraction: one focused LLM call per plan (the prompt outline is capped
+  at 200 lines — unsplit, everything past the cap was invisible), one
+  `<plan_id>_features.json` per plan (what SIRA's taxonomy-block lookup
+  needs). Any old empty-prefix `_features.json` is cleaned up
+  automatically.
+- **Newest release wins — per plan.** When a plan appears in several
+  releases of one MNO, only the newest release's copy is extracted —
+  MMMYYYY release dir names are parsed to `YYYYMM` (`Jul2026` → `202607`)
+  so comparison is chronological, not alphabetical. This applies to
+  chapter-plans inside multi-plan docs too. Older copies count as
+  `superseded` in the stage stats and cost no LLM calls. Expect
+  `*_features.json` count ≈ distinct plans across all MNOs (chapter-plans
+  included), not plans × releases.
 - **Sporadic LLM/server errors don't kill the run.** A failed doc is
   recorded in `out/taxonomy/extraction_state.json` and the run continues
   (stage ends `WARN` with `TAX-W004: N of M docs failed`).

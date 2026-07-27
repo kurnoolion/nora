@@ -144,6 +144,22 @@ def _seed_plan_tree(env: Path, mno: str, rel: str, plan: str) -> None:
     ).save_json(d / f"{plan}_tree.json")
 
 
+def _seed_multiplan_tree(env: Path, mno: str, rel: str, fname: str,
+                         plans: list[str]) -> None:
+    """One doc whose chapters are each a plan: empty tree-level plan_id,
+    per-requirement plan_id set (D-DRAFT-1)."""
+    d = env / "out" / "parse" / mno / rel
+    d.mkdir(parents=True, exist_ok=True)
+    RequirementTree(
+        mno=mno, release=rel, plan_id="",
+        requirements=[
+            Requirement(req_id=f"{p}-1", plan_id=p, section_number=str(i + 2),
+                        title=f"Chapter {p}", text="Device shall support X.")
+            for i, p in enumerate(plans)
+        ],
+    ).save_json(d / f"{fname}_tree.json")
+
+
 class _ScriptedProvider:
     """LLM stub: valid feature JSON, except plans scripted to error/garble."""
 
@@ -302,6 +318,64 @@ class TestTaxonomyResilience:
         assert res.status == "OK"
         assert not (out / "GHOST_features.json").exists()
         assert (out / "PLANA_features.json").is_file()
+
+
+class TestTaxonomyMultiPlan:
+    """Chapter-per-plan docs: per-plan split, output naming, cross-release
+    unit supersession, and per-plan retry."""
+
+    def _ctx(self, env: Path, monkeypatch, provider) -> PipelineContext:
+        ctx = PipelineContext.standalone(env_dir=env, model_provider="mock")
+        monkeypatch.setattr(ctx, "create_llm_provider", lambda *a, **k: provider)
+        return ctx
+
+    def test_multiplan_doc_splits_per_plan(self, tmp_path, monkeypatch):
+        """One doc, two chapter-plans → two focused LLM calls, two per-plan
+        features files, and no empty-prefix '_features.json'."""
+        _seed_multiplan_tree(tmp_path, "MNO-B", "Jul2026", "onedoc",
+                             ["PLANA", "PLANB"])
+        prov = _ScriptedProvider()
+        res = run_taxonomy(self._ctx(tmp_path, monkeypatch, prov))
+        assert res.status == "OK", res
+        assert res.stats["docs"] == 2
+        out = tmp_path / "out" / "taxonomy"
+        assert (out / "PLANA_features.json").is_file()
+        assert (out / "PLANB_features.json").is_file()
+        assert not (out / "_features.json").exists()
+        assert len(prov.prompts) == 2
+        assert any("Plan ID: PLANA" in p and "Plan ID: PLANB" not in p
+                   for p in prov.prompts)
+
+    def test_multiplan_cross_release_newest_wins(self, tmp_path, monkeypatch):
+        """Different file names across releases mean file-level selection
+        can't dedupe (empty tree plan_id) — unit-level supersession must
+        pick each plan's newest-release copy."""
+        _seed_multiplan_tree(tmp_path, "MNO-B", "Mar2026", "doc_mar",
+                             ["PLANA", "PLANB"])
+        _seed_multiplan_tree(tmp_path, "MNO-B", "Jul2026", "doc_jul",
+                             ["PLANA", "PLANB"])
+        prov = _ScriptedProvider()
+        res = run_taxonomy(self._ctx(tmp_path, monkeypatch, prov))
+        assert res.status == "OK", res
+        assert res.stats["docs"] == 2 and res.stats["superseded"] == 2
+        assert len(prov.prompts) == 2
+        assert all("Release: Jul2026" in p for p in prov.prompts)
+
+    def test_multiplan_per_plan_retry(self, tmp_path, monkeypatch):
+        """One chapter-plan fails → only that plan retries on re-run; the
+        sibling plan from the SAME tree file is reused."""
+        _seed_multiplan_tree(tmp_path, "MNO-B", "Jul2026", "onedoc",
+                             ["PLANA", "PLANB"])
+        prov = _ScriptedProvider(fail_plans={"PLANB"})
+        ctx = self._ctx(tmp_path, monkeypatch, prov)
+        r1 = run_taxonomy(ctx)
+        assert r1.status == "WARN"
+        assert r1.stats["docs"] == 1 and r1.stats["failed"] == 1
+        prov.fail_plans.clear()
+        r2 = run_taxonomy(ctx)
+        assert r2.status == "OK"
+        assert r2.stats["docs"] == 1 and r2.stats["cached_docs"] == 1
+        assert run_taxonomy(ctx).stats["source"] == "cache"
 
 
 class TestProfileCoverageFailLoud:

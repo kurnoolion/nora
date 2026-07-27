@@ -6,6 +6,7 @@ telecom features and concepts from each requirement document.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from pathlib import Path
@@ -15,7 +16,7 @@ from core.src.llm.openai_provider import (
     FINAL_ANSWER_MARKER,
     REASONING_SENTINEL_ENABLED,
 )
-from core.src.parser.structural_parser import RequirementTree
+from core.src.parser.structural_parser import Requirement, RequirementTree
 from core.src.taxonomy.schema import DocumentFeatures, Feature
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,50 @@ def _first_json_object(text: str) -> dict | None:
                     return obj if isinstance(obj, dict) else None
         start = text.find("{", start + 1)
     return None
+
+
+def split_tree_by_plan(tree: RequirementTree) -> list[RequirementTree]:
+    """Split a multi-plan tree into one subtree per requirement plan_id.
+
+    Some MNOs publish ONE document whose chapters are each a plan; the
+    parser keeps that as a single tree with an empty tree-level plan_id but
+    a correct per-requirement plan_id (D-DRAFT-1). Taxonomy is per-plan —
+    its output files, downstream lookup, and consolidation all key on
+    plan_id — so such a tree is split before extraction: one subtree per
+    distinct plan, each carrying only that plan's requirements, plan_name
+    taken from the group's first section heading (the chapter title).
+
+    Single-plan trees (≤1 distinct non-empty per-req plan_id) pass through
+    unchanged, except that a blank tree-level plan_id is promoted to the
+    one plan its requirements declare. In a multi-plan tree, requirements
+    with an empty plan_id (front matter, un-prefixed chapters) belong to
+    no plan and are dropped with a logged count.
+    """
+    groups: dict[str, list[Requirement]] = {}
+    for r in tree.requirements:
+        groups.setdefault(r.plan_id, []).append(r)
+    plan_ids = [p for p in groups if p]
+
+    if len(plan_ids) <= 1:
+        if plan_ids and not tree.plan_id:
+            return [dataclasses.replace(tree, plan_id=plan_ids[0])]
+        return [tree]
+
+    n_unplanned = len(groups.get("", []))
+    if n_unplanned:
+        logger.warning(
+            f"  {tree.plan_id or '<multi-plan doc>'}: dropping {n_unplanned} "
+            "requirement(s) with no plan_id from taxonomy extraction"
+        )
+    return [
+        dataclasses.replace(
+            tree,
+            plan_id=pid,
+            plan_name=(groups[pid][0].title or pid),
+            requirements=groups[pid],
+        )
+        for pid in sorted(plan_ids)
+    ]
 
 
 def resolve_corpus_overview(overview_dir: str | Path | None, mno: str) -> Path | None:

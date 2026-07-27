@@ -25,6 +25,7 @@ from core.src.taxonomy.extractor import (
     FeatureExtractor,
     LLMParseError,
     resolve_corpus_overview,
+    split_tree_by_plan,
 )
 from core.src.taxonomy.schema import (
     DocumentFeatures,
@@ -288,6 +289,66 @@ class TestFeatureExtractor:
         result = FeatureExtractor._parse_response(f"preamble {{not json\n{inner}", "TEST")
         assert len(result.primary_features) == 1
         assert result.primary_features[0].name == "uses {curly} text"
+
+
+class TestSplitTreeByPlan:
+    """Multi-plan trees (one doc, chapter-per-plan) split per plan_id."""
+
+    @staticmethod
+    def _req(plan: str, sec: str, title: str) -> Requirement:
+        return Requirement(req_id=f"{plan}-{sec}" if plan else "",
+                           plan_id=plan, section_number=sec, title=title,
+                           text="Device shall support X.")
+
+    def test_single_plan_tree_unchanged(self):
+        tree = RequirementTree(
+            mno="MNO-A", release="Jul2026", plan_id="PLANX",
+            requirements=[self._req("PLANX", "1", "Intro"),
+                          self._req("PLANX", "2", "SMS")],
+        )
+        assert split_tree_by_plan(tree) == [tree]
+
+    def test_blank_tree_plan_id_promoted(self):
+        """One distinct per-req plan + empty tree plan_id → plan_id set so
+        the features file isn't named '_features.json'."""
+        tree = RequirementTree(
+            mno="MNO-A", release="Jul2026", plan_id="",
+            requirements=[self._req("PLANX", "1", "SMS")],
+        )
+        (sub,) = split_tree_by_plan(tree)
+        assert sub.plan_id == "PLANX"
+        assert sub.requirements == tree.requirements
+
+    def test_multi_plan_split(self):
+        tree = RequirementTree(
+            mno="MNO-B", release="Jul2026", plan_id="",
+            requirements=[
+                self._req("PLANA", "2", "Chapter A"),
+                self._req("PLANA", "2.1", "A detail"),
+                self._req("PLANB", "3", "Chapter B"),
+            ],
+        )
+        subs = split_tree_by_plan(tree)
+        assert [s.plan_id for s in subs] == ["PLANA", "PLANB"]
+        assert [len(s.requirements) for s in subs] == [2, 1]
+        # metadata inherited; plan_name = first section heading (chapter title)
+        assert all(s.mno == "MNO-B" and s.release == "Jul2026" for s in subs)
+        assert subs[0].plan_name == "Chapter A"
+        assert subs[1].plan_name == "Chapter B"
+
+    def test_multi_plan_drops_unplanned_reqs(self):
+        """Front-matter reqs with no plan_id belong to no plan."""
+        tree = RequirementTree(
+            mno="MNO-B", release="Jul2026", plan_id="",
+            requirements=[
+                self._req("", "1", "Introduction"),
+                self._req("PLANA", "2", "Chapter A"),
+                self._req("PLANB", "3", "Chapter B"),
+            ],
+        )
+        subs = split_tree_by_plan(tree)
+        assert [s.plan_id for s in subs] == ["PLANA", "PLANB"]
+        assert all(r.plan_id for s in subs for r in s.requirements)
 
 
 # ── Corpus-overview prompt context (strand sira-enrichment-pe) ────

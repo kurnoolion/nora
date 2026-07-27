@@ -30,7 +30,11 @@ from pathlib import Path
 from core.src.llm.mock_provider import MockLLMProvider
 from core.src.parser.structural_parser import RequirementTree
 from core.src.taxonomy.consolidator import TaxonomyConsolidator
-from core.src.taxonomy.extractor import FeatureExtractor, LLMParseError
+from core.src.taxonomy.extractor import (
+    FeatureExtractor,
+    LLMParseError,
+    split_tree_by_plan,
+)
 
 
 def main():
@@ -84,6 +88,11 @@ def main():
             f"({time.time() - t0:.1f}s)"
         )
         trees.append(tree)
+
+    # Multi-plan trees (one doc, chapter-per-plan) split into per-plan
+    # subtrees so extraction, output naming, and consolidation stay
+    # plan-keyed; single-plan trees pass through unchanged.
+    trees = [sub for t in trees for sub in split_tree_by_plan(t)]
 
     # Step 1: Per-document feature extraction
     logging.info("\n--- Step 1: Per-document feature extraction ---")
