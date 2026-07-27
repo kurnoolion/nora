@@ -158,3 +158,130 @@ still busts the cache) — accepted for simplicity. The fingerprint
 now depends on an env var's contents: same trees + different
 `NORA_TAXONOMY_OVERVIEW_DIR` ⇒ different fingerprint, which is the
 correct reading (different prompt inputs, different taxonomy).
+
+## D-DRAFT-6 — Taxonomy extracts each plan from its newest release only
+
+**Context.** Taxonomy is a global stage over every cell's parse trees,
+but its output layout (`out/taxonomy/<plan_id>_features.json`) and the
+downstream per-plan lookup are release-blind. With multiple releases
+ingested, the same plan was LLM-extracted once per release and the
+copies silently overwrote each other in incidental lexicographic path
+order — which copy survived was accidental (observed on the work PC as
+a March/July mix after a crashed run). Options: (a) extract only the
+newest instance of each plan; (b) per-cell output
+`out/taxonomy/<MNO>/<REL>/` plus a cell-aware SIRA lookup; (c) keep
+extracting everything with deterministic oldest→newest overwrite.
+
+**Decision.** (a): dedupe to the newest instance of each
+`(MNO, plan_id)` before extraction — file-level in
+`_select_newest_trees`, then again at plan-unit level after
+`split_tree_by_plan` (chapter-per-plan docs have an empty tree-level
+plan_id, invisible to file-level dedup). "Newest" = release directory
+name parsed MMMYYYY → `YYYYMM` (`Jul2026` → `202607`) for chronological
+comparison, lexicographic fallback for other naming, file-name
+tiebreak. Superseded copies are counted in stage stats and never sent
+to the LLM. The cache fingerprint hashes the selected set only.
+
+**Why.** Releases of one MNO are near-duplicates and the consumer keys
+on plan_id alone, so per-cell fidelity (b) isn't consumable without
+SIRA-side changes, and (c) pays full LLM cost for outputs that get
+overwritten. (a) halves LLM calls where releases overlap — fewer
+chances to hit a flaky endpoint — and makes the surviving copy correct
+by construction. Plain lexicographic name comparison was rejected
+after the user's correction: month-name prefixes sort Jul2026 before
+Mar2025.
+
+**Consequences.** Older releases contribute nothing to the taxonomy —
+acceptable while releases are near-duplicates; revisit if a plan's old
+release diverges materially from its newest. An edit to a superseded
+tree does not re-derive (fingerprint covers selected files only).
+Release dirs not in MMMYYYY form fall back to alphabetical comparison,
+which may not be chronological — new naming conventions must extend
+`_release_sort_key`.
+
+## D-DRAFT-7 — Taxonomy resilience: per-unit ledger, retry = re-run, no empty successes
+
+**Context.** The taxonomy stage ran one unguarded loop over all trees:
+a single sporadic LLM/server error killed the whole run,
+`taxonomy.json` and the cache fingerprint were only written at the
+end (a crash lost all progress), and an unparseable LLM response was
+saved as an empty-but-valid features file. SIRA's enrichment side
+already had a retry mechanism; the user asked for equivalent
+capabilities: proceed-past-errors, resume, and failed-entry cleanup
+with "some kind of retry-failed flag".
+
+**Decision.** Per-unit fail-soft + resume via
+`out/taxonomy/extraction_state.json`: each unit records status
+(`ok`/`failed`), source-tree hash, and error; the file is rewritten
+after every unit so a hard kill (docker stop, OOM) still resumes.
+On re-run, unchanged `ok` units are reused and `failed` units retry
+automatically — re-running the same command IS the retry mechanism;
+no `--retry-failed` flag exists. A partial run consolidates what
+succeeded and returns WARN (`TAX-W004`); the corpus fingerprint is
+stamped only on a zero-failure run; all-units-failed is a FAIL.
+Unparseable responses raise `LLMParseError` (extractor) instead of
+returning empty `DocumentFeatures`; stale/orphaned features files are
+deleted on re-derive. Prompt inputs (corpus overviews) are hashed into
+the per-unit reuse key, not just the stage fingerprint.
+
+**Why.** A failed unit has no valid output to protect, so retrying it
+by default is always correct — a flag would just be a way to forget
+it. Stamping the fingerprint on a degraded run would cache-lock the
+degraded taxonomy (the exact failure mode that motivated D-DRAFT-5's
+"prompt inputs are cache inputs" rule). Empty-success responses
+poisoned both the cache and consolidation with silently-missing
+features.
+
+**Consequences.** `extraction_state.json` is a persistent stage
+artifact operators may inspect (ok/failed histogram is in the runbook)
+and occasionally surgically edit (done once: invalidating heading-less
+mno-b units by dropping `#`-keyed entries). "Re-run until failed=0" is
+now the documented operating loop for sporadic endpoint errors.
+`_parse_response` raising instead of returning empty is a behavior
+change for any future caller — callers must treat it as retryable.
+
+## D-DRAFT-8 — Plan-unit taxonomy: split chapter-per-plan docs, headings join by ancestry
+
+**Context.** One MNO publishes a single requirement doc where each
+chapter is a plan: tree-level plan_id is empty, per-req plan_id is set
+(D-DRAFT-1 lineage), 87 plans in one file. Unsplit, taxonomy produced
+one `_features.json` (empty prefix — unfindable by SIRA's per-plan
+lookup) from one whole-doc LLM call whose 200-line outline cap dropped
+everything past the first ~200 headings. Extraction sends only
+section-number + title outline lines, so heading nodes are the main
+feature signal; but headings carry no req_id (hence no per-req plan),
+and leaves in this corpus carry `parent_section` but no
+`section_number`. Dropping unplanned nodes discarded 870 of 4942
+nodes. Two attachment strategies were considered: document-order
+backward-fill vs. an ancestry join.
+
+**Decision.** The unit of taxonomy extraction is a plan, not a file.
+`split_tree_by_plan` (taxonomy public surface) splits multi-plan trees
+into per-plan subtrees; single-plan trees pass through unchanged (a
+blank tree plan_id is promoted from its requirements). Headings attach
+to the majority plan among plan-bearing reqs whose `parent_section`
+sits at or under the heading's `section_number`; only nodes enclosing
+no plan-bearing requirement drop (logged). Document order is preserved
+per group; `plan_name` becomes the chapter heading title. The pipeline
+stage dedupes units by `(MNO, plan_id)` (D-DRAFT-6) and ledgers them
+as `<tree-relpath>#<plan_id>` so chapter-plans fail/resume/retry
+independently; single-plan trees keep plain `<tree-relpath>` keys
+(existing ledgers carry over).
+
+**Why.** Per-plan calls fix all three failures at once: findable
+output names, focused outlines under the 200-line cap, correct
+consolidation attribution. The ancestry join was chosen over
+document-order backward-fill after run-length diagnostics on the real
+tree: chapters interleave multiple plans and trailing headings precede
+the next chapter's leaves, so order-based fill misattributes at every
+chapter boundary, while the `parent_section` join is position-independent
+and was fully populated (4072/4072 leaves). Verified on the work PC:
+drops fell 870 → 115, all requirement-free tail sections.
+
+**Consequences.** mno-b yields ~87 LLM calls instead of one (that cost
+is the fix). Heading attachment requires populated `parent_section` —
+a profile that omits it degrades to leaf-only outlines (headings drop,
+logged). Prose sections without req_ids remain invisible to
+taxonomy/enrichment by design; their text stays reachable via section
+nodes / `build_context_string`. A multi-plan chapter's top heading
+goes to its majority plan only.

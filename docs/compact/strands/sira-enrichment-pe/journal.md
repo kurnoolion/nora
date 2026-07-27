@@ -84,3 +84,63 @@
   start with one small cell (carried from 07-24).
 - Per-MNO query/relevance prompt selection in the query-time service still
   deferred (carried from 07-24).
+
+## 2026-07-27 — taxonomy hardening: resilience, multi-release semantics, plan-unit split
+
+### Done this session
+- (interim, unjournaled 07-25 commits) Fresh-env runbook `docs/runbook-fresh-env.md`
+  (Phases 0–6: one-shot + incremental ingestion, SIRA-only Phase 4–6 path);
+  derive-sira-prompts skill/playbook operational hardening (parse-layer-only,
+  script-only reads, output-to-file capture, scratch location, v01/v02);
+  reasoning-model support (sentinel opt-in via NORA_LLM_REASONING_SENTINEL +
+  tolerant first-balanced-JSON fallback) — fixed all "Failed to parse" warnings
+  on the proprietary endpoint.
+- Resilient taxonomy extraction (344e095): per-unit fail-soft (LLM error /
+  unparseable response marks the unit failed, run continues, WARN + TAX-W004);
+  resumable `out/taxonomy/extraction_state.json` ledger written after every
+  unit (survives hard kills); failed units retry automatically on re-run —
+  re-running the same command IS the retry mechanism; fingerprint stamped only
+  on zero-failure runs; `LLMParseError` replaces silent empty-success;
+  stale features-file cleanup.
+- Multi-release semantics made explicit (344e095, user decisions): newest
+  release wins per (MNO, plan_id); MMMYYYY release names parsed to YYYYMM
+  (user correction — Jul2026 sorts before Mar2025 alphabetically); superseded
+  copies cost no LLM calls; fingerprint hashes the selected set only.
+- Plan-unit extraction (8a30095, user's mno-b finding): chapter-per-plan docs
+  (one doc, empty tree plan_id, 87 plans) previously produced one empty-prefix
+  `_features.json` + one whole-doc call truncated at the 200-line TOC cap.
+  `split_tree_by_plan` + unit-level newest-release supersession + per-plan
+  ledger keys `<path>#<plan>` (independent fail/resume/retry per chapter-plan).
+- Heading inheritance (4a7b8e6): two paste-safe diagnostics on the real tree
+  showed the 870 dropped nodes were heading nodes (leaves carry parent_section
+  but no section_number). Headings now join the majority plan of the leaves
+  they enclose (ancestry join, immune to chapter-boundary misattribution).
+  Work-PC verified: drops 870 → 115, residue confirmed as requirement-free
+  tail sections (references/prose-without-req-id). plan_name is now the
+  chapter title.
+- Flaky-test root cause (4a7b8e6): test_query MockEmbedder used salted builtin
+  hash() — glossary-pin ranking test was a per-process coin flip; now md5.
+- Work-PC state: taxonomy complete for all 3 MNOs (mno-b = 87 per-plan files);
+  ledger-cleanup one-liner used to invalidate heading-less mno-b extractions.
+
+### In progress
+- (nothing mid-flight in the repo — taxonomy stage settled; next work is the
+  user-run Phase 5 pilot)
+
+### Next
+- Phase 5 pilot: smallest cell, `--run-name enrich-pe-v1 --only <cell>`,
+  verify `{taxonomy_block}` resolution in prompt.txt (mno-b plans now
+  resolvable), batches.jsonl shapes, failure histogram → fan out → Phase 6
+  promote `--sira-build` → serve.
+- Eval loop as a separate strand (carried).
+
+### Flags
+- Taxonomy last-write-wins across releases is RESOLVED (newest-release-per-plan
+  selection); the earlier per-cell-layout idea is superseded — no longer needed.
+- Un-req-id'd prose sections in chapter-per-plan docs are invisible to
+  taxonomy/enrichment by design (no req_id to key on); content remains
+  available via section nodes / build_context_string. Accepted 2026-07-27.
+- Batched enrichment path still unit-tested only; Phase 5 must start with one
+  small cell (carried).
+- Per-MNO query/relevance prompt selection in the query-time service still
+  deferred (carried).
