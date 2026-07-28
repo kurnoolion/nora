@@ -218,6 +218,17 @@ python3 -c "import json; d=json.load(open('$E/out/taxonomy/extraction_state.json
 Repeat run + verify until the `failed` count is 0 (sporadic server errors
 are expected; each re-run only retries what failed).
 
+If the same units stay `failed` across re-runs, replay their exact prompts
+and capture the raw LLM responses (refusal prose, truncation, endpoint
+errors) with the taxonomy debug CLI — outputs under
+`<env_dir>/reports/tax_debug/` contain corpus content, so review locally
+and redact before sharing:
+
+```bash
+python -m core.src.taxonomy.tax_debug --env-dir /data/env --dry-run  # prompts only
+python -m core.src.taxonomy.tax_debug --env-dir /data/env            # + raw responses
+```
+
 **Variant — full NORA retrieval stack wanted** (nora-web native query
 lanes): run the whole `nora` lane per cell instead — `./ingest.sh -l nora
 <MNO> <MMMYYYY>` — which adds standards/graph/vectorstore/eval. Taxonomy
