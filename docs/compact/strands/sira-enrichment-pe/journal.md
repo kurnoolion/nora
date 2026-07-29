@@ -194,3 +194,52 @@
   log-verified); prompt-framing recovery stays optional/deferred.
 - Batched path is now real-LLM-exposed at scale — the "unit-tested only"
   flag can drop once round-2 verification passes.
+
+## 2026-07-29 (evening) — Reasoning sentinel for batched enrichment; unknown-req_id warnings root-caused cosmetic
+
+### Done this session
+- `6baa307` batch-path reasoning sentinel (D-DRAFT-10):
+  `NORA_SIRA_BATCH_REASONING_SENTINEL=1` code-appends the
+  `===FINAL_ANSWER===` instruction in `compose_prompt` (per-batch — no
+  per-MNO prompt-file edits, header token estimate includes it);
+  `parse_batch_response` keeps only post-marker text. Plus parser
+  hardening for tagged/fenced reasoning: `<think>` spans stripped, fenced
+  JSON candidates tried LAST-first so a thinking-draft never shadows the
+  final answer (pre-fix, a fenced draft could silently win — real bug
+  exposed by the debug prints).
+- `c4dd3ff`..`1dad89b` DEBUG_RAW observability suite, iterated live
+  against the work-PC run: response head+tail, marker PRESENT/ABSENT,
+  plan name, requested-vs-unknown ids side by side (first 20). Opt-in;
+  outputs carry corpus content — local-only, redact before sharing.
+- Debugging arc CLOSED on the work-PC round-2 fan-out:
+  - sentinel honored (`marker PRESENT`), `missing ≈ 0`, `failed {}`;
+  - unknown-req_id warnings root-caused COSMETIC — batches carrying
+    coarse-granularity rows (`doc:<plan>`, `section:<…>`) embed real
+    req_ids in their text and the model itemizes them; strict discard is
+    correct (each req enriches in its own batch, no double-writes);
+  - granularity check: kept `{req: 3474, doc: 47, section: 314}`,
+    failed `{}` — all three levels enriching;
+  - `RESP_TOKENS_PER_REQ=400` validated in production (≤35-req batches,
+    parse_error ≈ 0).
+
+### In progress
+- Work-PC fan-out running healthy across remaining cells (sentinel +
+  400/req knobs live; env knobs apply per `compose run`).
+
+### Next
+- On fan-out completion: per-cell `trace.failed` histograms (accept only
+  `all_filtered`/`no_phrases` residue), `grep "No taxonomy for plan"` =
+  exactly the 5 refused plans → Phase 6: `promote.sh --sira-build`, pin
+  `NORA_SIRA_DOC_ENRICH_RUN=enrich-pe-v1` in `.env.sira-query`, recreate
+  serve stack, `/healthz`.
+- Optional token-cost follow-up (NOT correctness): "EXACTLY one key per
+  listed req_id" instruction next to the sentinel — coarse-granularity
+  rows trigger the itemization waste.
+- Eval loop as a separate strand (carried).
+
+### Flags
+- Cells enriched BEFORE the sentinel/parse-order fix may hold
+  draft-quality phrases (pre-fix, a fenced thinking-draft could win the
+  parse); only revisit via targeted re-enrich if eval shows weak cells.
+- The "batched path unit-tested only" flag is now DROPPED — real-LLM
+  exposure at scale verified this session.

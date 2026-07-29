@@ -325,3 +325,43 @@ repairing). `heal_run_dir` must track any future change to the kept/
 enrichment write pairing in `enrich_batching`. One-command recovery
 (`sira_lane --heal-torn --retry-failed`) applies to incremental runs only;
 full rebuilds ignore the flags by design.
+
+## D-DRAFT-10 — Batch-path reasoning sentinel: code-appended marker instruction, opt-in env knob
+
+**Status**: Draft · **Date**: 2026-07-29.
+
+**Context:** The enrichment endpoint's chain-of-thought leaks UNTAGGED
+into `content` — no `<think>` delimiters to strip — and reasoning
+sometimes includes draft JSON, which defeats both tag-stripping and
+brace-scanning. The batch path never touches NORA's `openai_provider`
+(raw aiohttp in the patch), so `NORA_LLM_REASONING_SENTINEL` cannot
+cover it. Live symptom: unknown-req_id warnings and (pre-hardening) a
+fenced thinking-draft could win the parse over the final answer.
+
+**Decision:** Mirror NORA's sentinel pattern sandbox-side, opt-in via
+`NORA_SIRA_BATCH_REASONING_SENTINEL=1`: (1) `compose_prompt` appends the
+`===FINAL_ANSWER===` instruction to every batch prompt in CODE — per-MNO
+prompt files stay untouched; the per-plan header token estimate includes
+the suffix so packing stays honest. (2) `parse_batch_response` keeps only
+what follows the LAST marker occurrence; marker absent → no-op
+(fail-soft, byte-identical legacy behavior). (3) `FINAL_ANSWER_MARKER`
+is duplicated in `enrich_batching.py` rather than imported.
+
+**Why:** Code-appending beats prompt-file edits: one change covers every
+MNO, needs no re-derivation or per-MNO review, and toggles per
+environment (only the endpoint that thinks untagged pays the prompt
+tokens). The constant is duplicated because sandbox never imports core
+(D-111 boundary); the string is stable and cross-referenced in comments
+both sides. Marker-absent no-op mirrors `_strip_reasoning`, so the knob
+being off — or a model ignoring the instruction — degrades to prior
+behavior rather than failing. Alternatives: endpoint-side
+`enable_thinking: false` via `chat_template_kwargs` (kept as a
+complementary lever; not all serving stacks honor it), per-MNO prompt
+edits (rejected: rebake + re-derive churn per MNO, no per-env toggle).
+
+**Consequences:** Sentinel-on changes prompt bytes → enrichments differ
+from pre-sentinel cells (flagged in journal; uniformity re-enrich only
+if eval motivates it). The sentinel does NOT stop thinking — response
+budget must still absorb reasoning tokens (`RESP_TOKENS_PER_REQ` raised
+to 400 on this endpoint, validated). Two sentinel constants now exist
+(core + sandbox) that must stay string-identical if ever changed.
