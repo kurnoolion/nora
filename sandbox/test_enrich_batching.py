@@ -238,7 +238,9 @@ class TestDebugRaw:
                  cfg=eb.BatchConfig(max_retries=1, debug_raw=True))
         joined = "\n".join(r.getMessage() for r in caplog.records)
         assert "1 unknown req_ids in response" in joined
-        assert "PROSE LINE ONE\nPROSE LINE TWO" in joined
+        assert "PROSE LINE ONE\nPROSE LINE TWO" in joined   # head
+        assert "marker ABSENT" in joined                     # no sentinel here
+
 
     def test_head_not_logged_by_default(self, caplog):
         async def llm(prompt, max_tokens):
@@ -328,3 +330,18 @@ class TestReasoningSentinel:
             cfg=eb.BatchConfig(max_retries=1, reasoning_sentinel=True))
         assert dict(sink.enrich) == {"R1": ["alpha"], "R2": ["beta"]}
         assert summary["enriched"] == 2 and summary["failed"] == 0
+
+
+    def test_debug_raw_reports_marker_present_and_tail(self, caplog):
+        async def llm(prompt, max_tokens):
+            return ('thinking prose here\nmore thinking\n'
+                    f'{eb.FINAL_ANSWER_MARKER}\n'
+                    + json.dumps({"R1": ["a"], "R2": ["b"], "RX": ["x"]}))
+
+        with caplog.at_level(logging.WARNING, logger="test"):
+            _run(TestRunBatched.ITEMS, llm,
+                 cfg=eb.BatchConfig(max_retries=1, debug_raw=True,
+                                    reasoning_sentinel=True))
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "marker PRESENT" in joined
+        assert '"RX": ["x"]' in joined      # tail shows the actual JSON

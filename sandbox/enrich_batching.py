@@ -350,9 +350,15 @@ async def run_batched(
             logger.warning("batch %s: %d unknown req_ids in response",
                            batch_id, len(res.extra))
             if cfg.debug_raw:
-                head = "\n".join((raw or "").splitlines()[:2])[:400]
-                logger.warning("batch %s: response head (NORA_SIRA_BATCH_"
-                               "DEBUG_RAW):\n%s", batch_id, head)
+                lines = (raw or "").splitlines()
+                head = "\n".join(lines[:2])[:400]
+                tail = "\n".join(lines[-2:])[:400]
+                logger.warning(
+                    "batch %s (NORA_SIRA_BATCH_DEBUG_RAW) marker %s — "
+                    "head:\n%s\n--- tail:\n%s",
+                    batch_id,
+                    "PRESENT" if FINAL_ANSWER_MARKER in (raw or "") else "ABSENT",
+                    head, tail)
         texts_by_id = dict(zip(batch.ids, batch.texts))
         for rid, phrases in res.phrases_by_id.items():
             if not phrases:
