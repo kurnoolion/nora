@@ -678,10 +678,18 @@ Two gotchas:
 - **`run_name` must match the failed run** — it's the key the trace is stored
   under. If the original run didn't pin `+run_name=`, the trace won't line up.
   Always pin a stable `$RUN`.
-- **If the run *crashed* partway** (process died) rather than recording per-doc
-  failures, those docs are in *neither* trace → step 2 alone (plain resume)
-  already re-processes them. `retry-failed` is only for docs **recorded as
-  failed**; running it then resuming covers both cases safely.
+- **If the run *crashed* partway** (process died, power loss) rather than
+  recording per-doc failures, those docs are in *neither* trace → step 2 alone
+  (plain resume) already re-processes them. But a hard kill can also leave
+  torn half-written trailing JSONL lines and a broken kept/enrichment pairing
+  (the per-file buffers flush independently) — repair the run dir first:
+
+  ```bash
+  python -m sandbox.sira_incremental heal-torn --dataset "$DS" --run-name $RUN
+  ```
+
+  then `retry-failed` + resume as above. `retry-failed` is only for docs
+  **recorded as failed**; heal-torn → retry-failed → resume covers all cases.
 - **`--include-all-filtered`** — only after you change the prompt or swap the
   LLM and want the `all_filtered` rows reprocessed too. Default leaves them.
 

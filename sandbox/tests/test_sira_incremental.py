@@ -19,8 +19,11 @@ from sandbox.sira_incremental import (
     compute_evictions,
     corpus_hashes,
     growth_assessment,
+    heal_run_dir,
+    heal_torn_lines,
     load_hash_store,
     load_meta,
+    main,
     merge_kept_enrichments,
     prune_run_files,
     retry_failed_in_run,
@@ -597,3 +600,166 @@ def test_full_incremental_cycle(tmp_path):
     # Commit new baseline
     save_hash_store(store, current)
     assert set(load_hash_store(store)) == {"A", "B"} | {f"N{i}" for i in range(10)}
+
+
+# ── heal-torn: post-interruption run-dir repair ─────────────────────
+
+
+def _write_lines(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(l + "\n" for l in lines), encoding="utf-8")
+
+
+def test_heal_torn_lines_drops_only_unparseable(tmp_path):
+    p = tmp_path / "trace.kept.jsonl"
+    _write_lines(p, [
+        json.dumps({"doc_id": "A", "status": "ok"}),
+        json.dumps({"doc_id": "B", "status": "ok"}),
+        '{"doc_id": "C", "sta',  # torn tail
+    ])
+    kept, dropped = heal_torn_lines(p)
+    assert (kept, dropped) == (2, 1)
+    remaining = [json.loads(l)["doc_id"]
+                 for l in p.read_text().splitlines() if l.strip()]
+    assert remaining == ["A", "B"]
+
+
+def test_heal_torn_lines_healthy_file_untouched(tmp_path):
+    p = tmp_path / "trace.kept.jsonl"
+    _write_lines(p, [json.dumps({"doc_id": "A"})])
+    before = p.read_text()
+    kept, dropped = heal_torn_lines(p)
+    assert (kept, dropped) == (1, 0)
+    assert p.read_text() == before
+
+
+def test_heal_torn_lines_missing_file_noop(tmp_path):
+    assert heal_torn_lines(tmp_path / "absent.jsonl") == (0, 0)
+
+
+def test_heal_run_dir_evicts_kept_without_enrichment(tmp_path):
+    """Interruption case: trace.kept row survived, its enrichment row was
+    lost with the buffer. The doc must re-enrich — evict it from kept."""
+    rd = tmp_path / "runs" / "doc-enrich" / "r1"
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": "A", "status": "ok"}),
+        json.dumps({"doc_id": "B", "status": "ok"}),  # enrichment lost
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "A", "phrases": ["x"]}),
+    ])
+    s = heal_run_dir(rd)
+    assert s["evicted_kept"] == 1
+    remaining = {json.loads(l)["doc_id"] for l in
+                 (rd / "trace.kept.jsonl").read_text().splitlines() if l.strip()}
+    assert remaining == {"A"}
+
+
+def test_heal_run_dir_drops_orphan_enrichment(tmp_path):
+    """Reverse case: enrichment row survived, trace.kept row lost. The doc
+    re-enriches — drop the orphan so phrases don't merge twice."""
+    rd = tmp_path / "runs" / "doc-enrich" / "r1"
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": "A", "status": "ok"}),
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "A", "phrases": ["x"]}),
+        json.dumps({"doc_id": "B", "phrases": ["y"]}),  # kept row lost
+    ])
+    s = heal_run_dir(rd)
+    assert s["orphan_enrichments"] == 1
+    remaining = {json.loads(l)["doc_id"] for l in
+                 (rd / "enrichments.kept.jsonl").read_text().splitlines() if l.strip()}
+    assert remaining == {"A"}
+
+
+def test_heal_run_dir_torn_then_invariant(tmp_path):
+    """A torn enrichment line IS the lost enrichment: after the torn drop,
+    its (complete) kept row must be evicted too."""
+    rd = tmp_path / "runs" / "doc-enrich" / "r1"
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": "A", "status": "ok"}),
+        json.dumps({"doc_id": "B", "status": "ok"}),
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "A", "phrases": ["x"]}),
+        '{"doc_id": "B", "phras',  # torn
+    ])
+    s = heal_run_dir(rd)
+    assert s["torn"] == {"enrichments.kept.jsonl": 1}
+    assert s["evicted_kept"] == 1
+    remaining = {json.loads(l)["doc_id"] for l in
+                 (rd / "trace.kept.jsonl").read_text().splitlines() if l.strip()}
+    assert remaining == {"A"}
+
+
+def test_heal_run_dir_failed_rows_not_touched_by_invariant(tmp_path):
+    """trace.failed rows have no enrichment by design — the invariant
+    repair must not evict them (they'd lose their retry-failed history)."""
+    rd = tmp_path / "runs" / "doc-enrich" / "r1"
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": "A", "status": "ok"}),
+    ])
+    _write_lines(rd / "trace.failed.jsonl", [
+        json.dumps({"doc_id": "F", "status": "batch_error"}),
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "A", "phrases": ["x"]}),
+    ])
+    s = heal_run_dir(rd)
+    assert s == {"torn": {}, "evicted_kept": 0, "orphan_enrichments": 0}
+    assert "F" in (rd / "trace.failed.jsonl").read_text()
+
+
+def test_heal_run_dir_shard_files_cross_checked(tmp_path):
+    """Shard-suffixed files participate: torn drop and the invariant run
+    over the union of shards, evicting from whichever file holds the row."""
+    rd = tmp_path / "runs" / "doc-enrich" / "r1"
+    _write_lines(rd / "trace.kept.shard0.jsonl", [
+        json.dumps({"doc_id": "A", "status": "ok"}),
+    ])
+    _write_lines(rd / "trace.kept.shard1.jsonl", [
+        json.dumps({"doc_id": "B", "status": "ok"}),  # enrichment lost
+    ])
+    _write_lines(rd / "enrichments.kept.shard0.jsonl", [
+        json.dumps({"doc_id": "A", "phrases": ["x"]}),
+    ])
+    _write_lines(rd / "enrichments.kept.shard1.jsonl", [
+        '{"doc',  # torn
+    ])
+    s = heal_run_dir(rd)
+    assert s["torn"] == {"enrichments.kept.shard1.jsonl": 1}
+    assert s["evicted_kept"] == 1
+    assert (rd / "trace.kept.shard1.jsonl").read_text() == ""
+
+
+def test_heal_run_dir_rerank_torn_only(tmp_path):
+    """rerank has no enrichments file — heal drops torn lines but runs no
+    kept/enrichment cross-check."""
+    rd = tmp_path / "runs" / "rerank" / "r1"
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"query_id": "Q1", "doc_id": "A"}),
+        '{"query_id": "Q2", "doc',  # torn
+    ])
+    s = heal_run_dir(rd, stage="rerank")
+    assert s["torn"] == {"trace.kept.jsonl": 1}
+    assert s["evicted_kept"] == 0 and s["orphan_enrichments"] == 0
+
+
+def test_cmd_heal_torn_via_main(tmp_path, capsys):
+    """End-to-end via the CLI: default --stage both, missing rerank dir
+    skips gracefully, doc-enrich gets repaired."""
+    ds = tmp_path / "ds"
+    rd = ds / "runs" / "doc-enrich" / "r1"
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": "A", "status": "ok"}),
+        '{"doc_id": "B"',  # torn
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "A", "phrases": ["x"]}),
+    ])
+    rc = main(["heal-torn", "--dataset", str(ds), "--run-name", "r1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "doc-enrich (r1): 1 torn line(s) dropped" in out
+    assert "rerank: no run dir" in out

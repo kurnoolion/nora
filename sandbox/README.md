@@ -25,7 +25,7 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`. | ✅ |
 | `verify_tables.py` | Verifies parsed tables are inlined into NORA parse text (fails on any `tables`-field req missing its inline table) and reached the per-cell SIRA corpus, with a cross-check. `--parse` and/or `--db-root`. | ✅ |
 | `run_stack.sh` | Launch one isolated SIRA-service + NORA-web stack (Path-B) from args — own ports, own LLM, own web state DBs — so several can run in parallel to A/B different LLMs / ingestions. `--dry-run` to preview, `--stop <label>` to tear down. | ✅ |
-| `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
+| `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed` / `heal-torn`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
 | `prompts/doc_requirement_v01.txt` | Telecom-tuned doc-enrichment prompt (replaces SIRA's Wikipedia-tuned `doc_v07.txt`). | ✅ |
 | `prompts/query_requirement_v01.txt` | Mirror query-enrichment prompt. | ✅ |
 | `prompts/relevance_requirement_v01.txt` | LLM-reranker prompt. | ✅ |
@@ -233,6 +233,12 @@ genuine errors; `status: all_filtered` rows are NOT worth retrying).
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
         --run-name "$RUN" --only <MNO>__<REL>
 
+One-command form via the lane (evict + re-run; add `--heal-torn` too if
+the previous run was killed mid-write — power loss, SIGKILL):
+
+    python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
+        --run-name "$RUN" --only <MNO>__<REL> --wipe-stale-index --retry-failed
+
 Verify: `retry-failed` prints per-file eviction counts; the resume
 re-enriches exactly those docs; `trace.failed.jsonl` shrinks.
 
@@ -364,10 +370,16 @@ redacted) under each stack's state dir.
     python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
         [--run-name enrich-stable] [--only <MNO>__<REL>,...] \
         [--wipe-stale-index | --wipe-all-derived] \
+        [--heal-torn] [--retry-failed [--include-all-filtered]] \
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
 Runs the adapter (`nora_to_beir --multi-cell`) then `sira_multi`, threading
-`--only` and the wipe flag through both — the single entrypoint for the sira
+`--only` and the wipe flag through both. `--heal-torn` / `--retry-failed`
+first run the matching `sira_incremental` repairs over each cell's
+`runs/doc-enrich/<run-name>/` (heal before retry) — resume-after-power-loss
+and retry-old-failures in one command. Incremental runs only: under
+`--wipe-all-derived` the adapter wipes `runs/`, so both are skipped with a
+note (the full rebuild supersedes them) — the single entrypoint for the sira
 retrieval lane, symmetric with `run_cli --lane ingestion|nora` (docker-distro
 lane model). The adapter stamps `$DB/SOURCE.json` (env_dir + repo git sha +
 timestamp) so every build is traceable to its ingestion. The individual
@@ -438,6 +450,13 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   — evict *recorded-failed* entries so the next resume reprocesses them.
   Default stage `both`; default scope errors-only (keeps `all_filtered` —
   include them only after a prompt/LLM change).
+- `heal-torn [--stage doc-enrich|rerank|both]` — after a hard interruption
+  (power loss, SIGKILL): drop torn half-written trailing lines from every
+  `*.jsonl` in the run dir, then repair the doc-enrich resume invariant —
+  a `trace.kept` row whose enrichment row was lost is evicted (re-enrich),
+  an enrichment row whose kept row was lost is dropped (no duplicate
+  phrases on re-enrich). `sira_lane --heal-torn` runs it inline per cell
+  before the lane.
 
 ### Query-service env vars (`sandbox/sira_query/service.py`)
 

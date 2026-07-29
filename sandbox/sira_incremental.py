@@ -44,6 +44,18 @@ so the trace accumulates):
                   --include-all-filtered after a prompt or LLM swap to
                   also retry the all_filtered rows.
 
+  heal-torn     — RECOVERY, after a hard interruption (power loss, killed
+                  container). Drops torn (half-written) trailing lines
+                  from every *.jsonl in the run dir, then repairs the
+                  doc-enrich resume invariant the interruption may have
+                  broken: a trace.kept row whose enrichment row was lost
+                  is evicted (else the doc stays 'done' with its
+                  enrichment silently gone), and an enrichment row whose
+                  trace.kept row was lost is dropped (else the re-enriched
+                  doc merges duplicate phrases). Then resume as usual —
+                  same command, same run_name. (`sira_lane --heal-torn`
+                  runs this inline before the lane.)
+
 Usage (work-PC flow, run_name pinned):
   RUN=enrich-stable
   DS=$NORA_SIRA_DB_ROOT/$NORA_SIRA_DATASET
@@ -315,6 +327,99 @@ def retry_failed_in_run(
     return len(evict_keys), counts
 
 
+# ── heal-torn: post-interruption run-dir repair ──────────────────────────
+#
+# A hard interruption (power loss, SIGKILL) loses each open file's buffered
+# tail independently, so a run dir can be left with (a) torn half-written
+# trailing lines in any *.jsonl, and (b) a broken resume invariant: for
+# doc-enrich, every trace.kept doc_id must have an enrichments.kept row
+# (write_enrich runs first, but the two buffers flush independently — either
+# side's row can survive without the other).
+
+
+def heal_torn_lines(path: Path) -> tuple[int, int]:
+    """Drop unparseable (torn) lines from a JSONL file. Returns
+    (kept, dropped); rewrites the file only when something was dropped.
+    No-op if the file is absent."""
+    if not path.exists():
+        return 0, 0
+    kept_lines: list[str] = []
+    dropped = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                json.loads(stripped)
+            except json.JSONDecodeError:
+                dropped += 1
+                continue
+            kept_lines.append(stripped)
+    if dropped:
+        with open(path, "w", encoding="utf-8") as f:
+            for ln in kept_lines:
+                f.write(ln + "\n")
+    return len(kept_lines), dropped
+
+
+def _jsonl_doc_ids(paths: list[Path]) -> set[str]:
+    """Union of doc_ids across JSONL files (missing files, blank or
+    unparseable lines, and rows without doc_id are skipped)."""
+    ids: set[str] = set()
+    for p in paths:
+        if not p.exists():
+            continue
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    did = json.loads(line).get("doc_id")
+                except json.JSONDecodeError:
+                    continue
+                if did is not None:
+                    ids.add(did)
+    return ids
+
+
+def heal_run_dir(run_dir: Path, stage: str = "doc-enrich") -> dict:
+    """Repair one SIRA stage run dir after a hard interruption.
+
+    1. Drop torn lines from every *.jsonl (shard-suffixed files included).
+    2. doc-enrich only — restore the resume invariant (kept ids ==
+       enrichment ids, both directions):
+         - trace.kept row without an enrichment row → evicted, so the doc
+           re-enriches instead of staying 'done' with its enrichment lost;
+         - enrichment row without a trace.kept row → dropped, so the
+           re-enriched doc doesn't merge duplicate phrases.
+
+    Returns {"torn": {filename: dropped}, "evicted_kept": n,
+    "orphan_enrichments": n}. Safe on a healthy dir (all zeros, no writes).
+    """
+    torn: dict[str, int] = {}
+    for p in sorted(run_dir.glob("*.jsonl")):
+        _, dropped = heal_torn_lines(p)
+        if dropped:
+            torn[p.name] = dropped
+
+    evicted_kept = orphan_enrichments = 0
+    if stage == "doc-enrich":
+        kept_files = sorted(run_dir.glob("trace.kept*.jsonl"))
+        enrich_files = sorted(run_dir.glob("enrichments.kept*.jsonl"))
+        kept_ids = _jsonl_doc_ids(kept_files)
+        enrich_ids = _jsonl_doc_ids(enrich_files)
+        lost_enrichment = kept_ids - enrich_ids
+        orphans = enrich_ids - kept_ids
+        for p in kept_files:
+            evicted_kept += _prune_jsonl(p, lost_enrichment)
+        for p in enrich_files:
+            orphan_enrichments += _prune_jsonl(p, orphans)
+
+    return {"torn": torn, "evicted_kept": evicted_kept,
+            "orphan_enrichments": orphan_enrichments}
+
+
 def merge_kept_enrichments(
     kept_path: Path,
 ) -> "collections.OrderedDict[str, list]":
@@ -562,6 +667,30 @@ def cmd_retry_failed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_heal_torn(args: argparse.Namespace) -> int:
+    """Post-interruption repair: torn-line drop + resume-invariant fix,
+    per stage run dir. Resume the lane afterwards with the same run_name."""
+    dataset_dir = Path(args.dataset)
+    stages = ("doc-enrich", "rerank") if args.stage == "both" else (args.stage,)
+
+    for stage in stages:
+        run_dir = dataset_dir / "runs" / stage / args.run_name
+        if not run_dir.is_dir():
+            print(f"{stage}: no run dir at {run_dir} — skipping.")
+            continue
+        s = heal_run_dir(run_dir, stage)
+        n_torn = sum(s["torn"].values())
+        print(f"{stage} ({args.run_name}): {n_torn} torn line(s) dropped"
+              + "".join(f"\n  {name}: {n}" for name, n in s["torn"].items()))
+        if stage == "doc-enrich":
+            print(f"  kept-without-enrichment evicted: {s['evicted_kept']}")
+            print(f"  orphan enrichments dropped:      {s['orphan_enrichments']}")
+
+    print(f"\n→ Resume with the SAME command / `+run_name={args.run_name}`; "
+          f"repaired docs re-enrich, everything else skips.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="sira_incremental",
@@ -580,7 +709,8 @@ def main(argv: list[str] | None = None) -> int:
     pc = sub.add_parser("commit", help="Post-enrich: record current corpus hashes as the new baseline.")
     pr = sub.add_parser("promote", help="Reconstruct enrichments/doc/<run>.jsonl + best.jsonl from a full-resume run.")
     rf = sub.add_parser("retry-failed", help="Evict failed entries from a stage's resume trace so the next run reprocesses them.")
-    for parser in (pp, pc, pr, rf):
+    ht = sub.add_parser("heal-torn", help="Post-interruption: drop torn JSONL lines and repair the kept/enrichment resume invariant.")
+    for parser in (pp, pc, pr, rf, ht):
         for a, kw in common_args:
             parser.add_argument(*a, **kw)
 
@@ -623,12 +753,21 @@ def main(argv: list[str] | None = None) -> int:
                         "a clean shot at those docs."
                     ))
 
+    ht.add_argument("--stage", choices=["doc-enrich", "rerank", "both"],
+                    default="both",
+                    help=(
+                        "Which SIRA stage's run dir to heal. Default 'both'. "
+                        "The kept/enrichment invariant repair applies to "
+                        "doc-enrich only; rerank gets the torn-line drop."
+                    ))
+
     args = p.parse_args(argv)
     return {
         "prune": cmd_prune,
         "commit": cmd_commit,
         "promote": cmd_promote,
         "retry-failed": cmd_retry_failed,
+        "heal-torn": cmd_heal_torn,
     }[args.cmd](args)
 
 

@@ -14,6 +14,7 @@ Usage:
         [--sira-clone sandbox/sira] [--run-name enrich-stable] \\
         [--only <MNO>__<REL>[,...]] \\
         [--wipe-stale-index | --wipe-all-derived] \\
+        [--heal-torn] [--retry-failed [--include-all-filtered]] \\
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
 `--only` restricts BOTH steps to the named cells (same <MNO>__<REL> format
@@ -56,6 +57,64 @@ def build_commands(args: argparse.Namespace) -> list[list[str]]:
     return [adapter, multi]
 
 
+def heal_targets(db_root: Path, run_name: str, only: str | None) -> list[Path]:
+    """Existing doc-enrich run dirs the pre-lane repairs operate on, one
+    per cell under db_root (restricted to --only cells when given)."""
+    if not db_root.is_dir():
+        return []
+    cells = sorted(d for d in db_root.iterdir() if d.is_dir())
+    if only:
+        wanted = {c.strip() for c in only.split(",") if c.strip()}
+        cells = [d for d in cells if d.name in wanted]
+    run_dirs = [d / "runs" / "doc-enrich" / run_name for d in cells]
+    return [rd for rd in run_dirs if rd.is_dir()]
+
+
+def run_repairs(args: argparse.Namespace) -> None:
+    """--heal-torn / --retry-failed: repair each target cell's doc-enrich
+    run dir before the lane runs. Heal first (restores file structure so
+    retry-failed can parse every row), then retry-failed.
+
+    Mode interplay: meaningful for incremental runs (no wipe, or
+    --wipe-stale-index, which KEEPS runs/). Under --wipe-all-derived the
+    adapter deletes runs/ before enriching — the repairs are superseded,
+    so they're skipped with a note instead of pretending to matter.
+    """
+    if not (args.heal_torn or args.retry_failed):
+        return
+    if args.wipe_all_derived:
+        print("sira-lane: --wipe-all-derived wipes runs/ — skipping "
+              "--heal-torn/--retry-failed (the full rebuild supersedes them).")
+        return
+    targets = heal_targets(args.db_root, args.run_name, args.only)
+    if not targets:
+        print(f"sira-lane: no runs/doc-enrich/{args.run_name} dirs under "
+              f"{args.db_root} — nothing to repair.")
+        return
+    from sandbox.sira_incremental import heal_run_dir, retry_failed_in_run
+
+    for rd in targets:
+        cell = rd.parents[2].name
+        if args.dry_run:
+            verbs = " + ".join(v for v, on in (("heal-torn", args.heal_torn),
+                                               ("retry-failed", args.retry_failed)) if on)
+            print(f"sira-lane: would {verbs}: {rd}")
+            continue
+        if args.heal_torn:
+            s = heal_run_dir(rd)
+            print(f"sira-lane: healed {cell}/{args.run_name}: "
+                  f"{sum(s['torn'].values())} torn line(s), "
+                  f"{s['evicted_kept']} kept-without-enrichment, "
+                  f"{s['orphan_enrichments']} orphan enrichment(s)")
+        if args.retry_failed:
+            evicted, _ = retry_failed_in_run(
+                rd, "doc-enrich",
+                include_all_filtered=args.include_all_filtered,
+            )
+            print(f"sira-lane: retry-failed {cell}/{args.run_name}: "
+                  f"evicted {evicted} doc(s) for retry")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         prog="sira_lane",
@@ -74,10 +133,25 @@ def main() -> int:
                    help="Incremental-safe wipe (keep runs/ enrichment cache)")
     p.add_argument("--wipe-all-derived", action="store_true",
                    help="Full-rebuild wipe (re-enriches everything)")
+    p.add_argument("--heal-torn", action="store_true",
+                   help="Before running: repair each cell's doc-enrich run "
+                        "dir after a hard interruption (drop torn JSONL "
+                        "lines, fix the kept/enrichment resume invariant). "
+                        "No-op under --wipe-all-derived (runs/ is wiped)")
+    p.add_argument("--retry-failed", action="store_true",
+                   help="Before running: evict recorded-failed docs from "
+                        "each cell's doc-enrich resume trace so this run "
+                        "retries them (errors only; all_filtered rows kept). "
+                        "No-op under --wipe-all-derived (runs/ is wiped)")
+    p.add_argument("--include-all-filtered", action="store_true",
+                   help="With --retry-failed: also retry status=all_filtered "
+                        "rows (only useful after a prompt or LLM change)")
     p.add_argument("--stages", default="prepare,bm25,enrich_corpus")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the two commands, run nothing")
     args = p.parse_args()
+
+    run_repairs(args)
 
     cmds = build_commands(args)
     for cmd in cmds:

@@ -455,13 +455,14 @@ N failed docs:
         json.loads(l).get('status','?') for l in \
         open('/data/db/<MNO>__<REL>/runs/doc-enrich/<run-name>/trace.failed.jsonl'))))"
 
-    # 2. evict genuine failures from the resume trace:
+    # 2. evict genuine failures + re-run in ONE command — SAME --run-name.
+    #    Resume skips every kept doc; only the evicted ones hit the LLM:
     docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
-      python -m sandbox.sira_incremental retry-failed \
-      --dataset /data/db/<MNO>__<REL> --run-name <run-name> --stage doc-enrich
-
-    # 3. re-run the sira lane EXACTLY as before — SAME --run-name. Resume
-    #    skips every kept doc; only the evicted ones hit the LLM again.
+      python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
+      --run-name <run-name> --wipe-stale-index --retry-failed
+    # (per-cell standalone form: `python -m sandbox.sira_incremental
+    #  retry-failed --dataset /data/db/<MNO>__<REL> --run-name <run-name>
+    #  --stage doc-enrich`, then re-run the lane exactly as before)
 
 Reading the step-1 histogram: timeout / connection / HTTP statuses are
 transient endpoint trouble — retry fixes them. `all_filtered` rows are NOT
@@ -471,10 +472,20 @@ them identically, so `retry-failed` excludes them by default — pass
 same docs fail repeatedly with the same status, inspect their trace lines —
 oversized docs vs endpoint token limits are the usual culprits.
 
-After a hard interruption (power loss), also check the run dir's `*.jsonl`
-files for a torn (half-written) last line before resuming — the resume
-filter tolerates them, but the end-of-run merge of `enrichments.kept.jsonl`
-does not.
+After a hard interruption (power loss, killed container), add `--heal-torn`
+to the sira_lane resume command — before the lane runs, it repairs each
+cell's run dir: torn (half-written) trailing JSONL lines are dropped, a
+kept row whose enrichment row was lost is evicted so the doc re-enriches,
+and orphan enrichment rows are dropped so phrases don't merge twice.
+`--heal-torn` and `--retry-failed` compose (heal runs first) — one command
+covers "power loss mid-run AND old failures to retry". Standalone form,
+per cell: `python -m sandbox.sira_incremental heal-torn --dataset
+/data/db/<MNO>__<REL> --run-name <run-name>`.
+
+Both flags are for INCREMENTAL runs (no wipe, or `--wipe-stale-index`,
+which keeps the `runs/` cache). Under `--wipe-all-derived` the adapter
+deletes `runs/` before enriching, so the lane skips them with a note —
+a full rebuild re-enriches everything anyway.
 
 (Full scenario matrix: `sandbox/README.md` §2 — same commands, containerized.)
 
