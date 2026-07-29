@@ -355,10 +355,10 @@ async def run_batched(
                 tail = "\n".join(lines[-2:])[:400]
                 logger.warning(
                     "batch %s (NORA_SIRA_BATCH_DEBUG_RAW) marker %s — "
-                    "head:\n%s\n--- tail:\n%s",
+                    "head:\n%s\n--- tail:\n%s\n--- unknown ids (first 10): %s",
                     batch_id,
                     "PRESENT" if FINAL_ANSWER_MARKER in (raw or "") else "ABSENT",
-                    head, tail)
+                    head, tail, res.extra[:10])
         texts_by_id = dict(zip(batch.ids, batch.texts))
         for rid, phrases in res.phrases_by_id.items():
             if not phrases:

@@ -345,3 +345,4 @@ class TestReasoningSentinel:
         joined = "\n".join(r.getMessage() for r in caplog.records)
         assert "marker PRESENT" in joined
         assert '"RX": ["x"]' in joined      # tail shows the actual JSON
+        assert "unknown ids (first 10): ['RX']" in joined
