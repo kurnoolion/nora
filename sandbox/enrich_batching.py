@@ -85,11 +85,28 @@ def format_requirements(ids: list[str], texts: list[str]) -> str:
     return "\n".join(parts)
 
 
+# Reasoning-sentinel — for endpoints whose UNTAGGED chain-of-thought leaks
+# into `content` (no <think> tags to strip, and un-fenced draft JSON defeats
+# brace-scanning). Same marker + opt-in pattern as NORA's
+# core/src/llm/openai_provider.py (NORA_LLM_REASONING_SENTINEL); duplicated
+# here because sandbox never imports core (D-111 boundary).
+FINAL_ANSWER_MARKER = "===FINAL_ANSWER==="
+
+SENTINEL_INSTRUCTION = (
+    "\n\nOUTPUT FORMAT: You may reason first if needed, but you MUST then "
+    f"print a line containing exactly {FINAL_ANSWER_MARKER} and put ONLY "
+    f"the JSON object after it. Anything before {FINAL_ANSWER_MARKER} is "
+    "discarded."
+)
+
+
 def compose_prompt(template: str, taxonomy_block: str,
-                   ids: list[str], texts: list[str], max_n: int) -> str:
-    return template.format(taxonomy_block=taxonomy_block,
-                           requirements=format_requirements(ids, texts),
-                           max_n=max_n)
+                   ids: list[str], texts: list[str], max_n: int,
+                   sentinel: bool = False) -> str:
+    prompt = template.format(taxonomy_block=taxonomy_block,
+                             requirements=format_requirements(ids, texts),
+                             max_n=max_n)
+    return prompt + SENTINEL_INSTRUCTION if sentinel else prompt
 
 
 @dataclass
@@ -106,6 +123,9 @@ class BatchConfig:
     debug_raw: bool = False             # opt-in: log response head on anomalies
                                         # (raw text carries corpus content — keep
                                         # such logs local, never in shared reports)
+    reasoning_sentinel: bool = False    # opt-in: append the FINAL_ANSWER_MARKER
+                                        # instruction + parse only after the marker
+                                        # (untagged-thinking endpoints)
 
     @property
     def response_reserve(self) -> int:
@@ -129,6 +149,10 @@ class BatchConfig:
             debug_raw=_get("DEBUG_RAW",
                            lambda s: s.strip().lower() not in ("", "0", "false"),
                            False),
+            reasoning_sentinel=_get(
+                "REASONING_SENTINEL",
+                lambda s: s.strip().lower() not in ("", "0", "false"),
+                False),
         )
 
 
@@ -195,11 +219,20 @@ class ParseResult:
     error: str = ""
 
 
+_THINK_SPAN_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
+
+
 def _json_candidates(raw: str) -> list[str]:
-    """Candidate JSON substrings, most-specific first: fenced blocks,
-    then the outermost brace span (models often prefix reasoning)."""
+    """Candidate JSON substrings, most-likely-final-answer first.
+
+    Reasoning models emit thinking into `content` — sometimes including a
+    fenced DRAFT JSON — before the real answer. So: strip complete
+    <think>…</think> spans, then prefer fenced blocks LAST-first (the
+    final answer follows the reasoning), then the outermost brace span
+    (catches bare JSON after un-tagged reasoning prose)."""
+    raw = _THINK_SPAN_RE.sub("", raw)
     out = [m.group(1) for m in
-           re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.S)]
+           re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.S)][::-1]
     first, last = raw.find("{"), raw.rfind("}")
     if 0 <= first < last:
         out.append(raw[first:last + 1])
@@ -210,8 +243,12 @@ def parse_batch_response(raw: str, expected_ids: list[str]) -> ParseResult:
     """Strict req_id-keyed JSON per the template's output spec. Unknown
     keys are surfaced (not applied); expected ids absent from the
     response come back in `missing` for the re-queue path."""
+    raw = raw or ""
+    marker_at = raw.rfind(FINAL_ANSWER_MARKER)
+    if marker_at != -1:                 # sentinel present → answer follows it
+        raw = raw[marker_at + len(FINAL_ANSWER_MARKER):]
     obj = None
-    for cand in _json_candidates(raw or ""):
+    for cand in _json_candidates(raw):
         try:
             parsed = json.loads(cand)
         except ValueError:
@@ -273,7 +310,8 @@ async def run_batched(
                                plan_id)
             tax_cache[plan_id] = block
             header_cache[plan_id] = est_tokens(
-                compose_prompt(template, block, [], [], max_n),
+                compose_prompt(template, block, [], [], max_n,
+                               sentinel=cfg.reasoning_sentinel),
                 cfg.chars_per_token)
         return tax_cache[plan_id], header_cache[plan_id]
 
@@ -286,7 +324,8 @@ async def run_batched(
                        requeue: list[tuple[str, str]],
                        attempt: int) -> None:
         block, _ = _header(batch.plan_id)
-        prompt = compose_prompt(template, block, batch.ids, batch.texts, max_n)
+        prompt = compose_prompt(template, block, batch.ids, batch.texts, max_n,
+                                sentinel=cfg.reasoning_sentinel)
         t0 = time.time()
         try:
             async with sem:

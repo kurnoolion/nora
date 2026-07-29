@@ -306,7 +306,11 @@ NORA_TAXONOMY_OVERVIEW_DIR=/app/customizations/prompts
 NORA_SIRA_DOC_PROMPT_DIR=/app/customizations/prompts
 NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy
 # NORA_SIRA_BATCH_* only if deviating from defaults (cap 50k / ctx 64k /
-# 90 resp-tokens/req / 3.5 chars-per-token / 2 retries / 2 concurrent)
+# 90 resp-tokens/req / 3.5 chars-per-token / 2 retries / 2 concurrent).
+# For reasoning models whose untagged thinking leaks into responses:
+# NORA_SIRA_BATCH_REASONING_SENTINEL=1 (===FINAL_ANSWER=== instruction +
+# marker-aware parsing; raise RESP_TOKENS_PER_REQ too — thinking consumes
+# response budget)
 ```
 
 ### Phase 4 — taxonomy

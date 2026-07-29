@@ -249,3 +249,82 @@ class TestDebugRaw:
         joined = "\n".join(r.getMessage() for r in caplog.records)
         assert "unknown req_ids" in joined
         assert "response head" not in joined
+
+
+class TestReasoningResponses:
+    """Thinking-model responses: draft JSON during reasoning must not
+    shadow the final answer; think-tag spans are stripped."""
+
+    def test_last_fenced_block_wins_over_thinking_draft(self):
+        raw = ('Let me draft this first:\n'
+               '```json\n{"R1": ["draft-wrong"], "RX": ["noise"]}\n```\n'
+               'Reconsidering the vocabulary...\n'
+               '```json\n{"R1": ["final-right"]}\n```')
+        res = eb.parse_batch_response(raw, ["R1"])
+        assert res.phrases_by_id["R1"] == ["final-right"]
+        assert res.extra == []
+
+    def test_think_tag_span_stripped(self):
+        raw = ('<think>I could answer {"R1": ["from-thinking"], "RZ": ["x"]}'
+               ' but let me check.</think>\n{"R1": ["real"]}')
+        res = eb.parse_batch_response(raw, ["R1"])
+        assert res.phrases_by_id["R1"] == ["real"]
+        assert res.extra == []
+
+    def test_untagged_prose_before_bare_json_still_parses(self):
+        raw = 'Okay so the plan covers retry timers.\n{"R1": ["timer"]}'
+        res = eb.parse_batch_response(raw, ["R1"])
+        assert res.phrases_by_id["R1"] == ["timer"]
+
+    def test_unclosed_think_with_no_json_is_parse_error(self):
+        res = eb.parse_batch_response("<think>truncated mid-thought", ["R1"])
+        assert res.error == "no JSON object in response"
+        assert res.missing == ["R1"]
+
+
+class TestReasoningSentinel:
+    """Opt-in FINAL_ANSWER_MARKER for untagged-thinking endpoints: prompt
+    instruction appended, parse keeps only what follows the marker."""
+
+    def test_from_env_parses_sentinel(self):
+        env = {"NORA_SIRA_BATCH_REASONING_SENTINEL": "1"}
+        assert eb.BatchConfig.from_env(env).reasoning_sentinel
+        assert not eb.BatchConfig.from_env({}).reasoning_sentinel
+
+    def test_compose_prompt_appends_instruction_only_when_enabled(self):
+        base = eb.compose_prompt(TEMPLATE, "", ["R1"], ["t"], 3)
+        on = eb.compose_prompt(TEMPLATE, "", ["R1"], ["t"], 3, sentinel=True)
+        assert eb.FINAL_ANSWER_MARKER not in base
+        assert on.startswith(base) and eb.FINAL_ANSWER_MARKER in on
+
+    def test_parse_keeps_only_post_marker_answer(self):
+        raw = ('So R1 concerns retry timers and I could also cover RZ... '
+               'a first draft: {"R1": ["draft"], "RZ": ["noise"]} '
+               'but let me finalize.\n'
+               f'{eb.FINAL_ANSWER_MARKER}\n'
+               '{"R1": ["timer backoff"]}')
+        res = eb.parse_batch_response(raw, ["R1"])
+        assert res.phrases_by_id["R1"] == ["timer backoff"]
+        assert res.extra == [] and res.missing == []
+
+    def test_parse_without_marker_unchanged(self):
+        res = eb.parse_batch_response('{"R1": ["plain"]}', ["R1"])
+        assert res.phrases_by_id["R1"] == ["plain"]
+
+    def test_truncated_after_marker_is_parse_error(self):
+        raw = f'reasoning... {eb.FINAL_ANSWER_MARKER}\n{{"R1": ["cut'
+        res = eb.parse_batch_response(raw, ["R1"])
+        assert res.error == "no JSON object in response"
+
+    def test_run_batched_end_to_end_with_sentinel(self):
+        async def llm(prompt, max_tokens):
+            assert eb.FINAL_ANSWER_MARKER in prompt
+            return ('thinking about {"R1": ["draft"]} and such\n'
+                    f'{eb.FINAL_ANSWER_MARKER}\n'
+                    + json.dumps({"R1": ["alpha"], "R2": ["beta"]}))
+
+        sink, summary = _run(
+            TestRunBatched.ITEMS, llm,
+            cfg=eb.BatchConfig(max_retries=1, reasoning_sentinel=True))
+        assert dict(sink.enrich) == {"R1": ["alpha"], "R2": ["beta"]}
+        assert summary["enriched"] == 2 and summary["failed"] == 0
