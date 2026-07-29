@@ -346,3 +346,4 @@ class TestReasoningSentinel:
         assert "marker PRESENT" in joined
         assert '"RX": ["x"]' in joined      # tail shows the actual JSON
         assert "unknown ids (first 10): ['RX']" in joined
+        assert "plan PA" in joined          # plan named next to the batch id

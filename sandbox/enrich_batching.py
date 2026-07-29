@@ -347,16 +347,16 @@ async def run_batched(
         ms = int((time.time() - t0) * 1000)
         res = parse_batch_response(raw, batch.ids)
         if res.extra:
-            logger.warning("batch %s: %d unknown req_ids in response",
-                           batch_id, len(res.extra))
+            logger.warning("batch %s (plan %s): %d unknown req_ids in response",
+                           batch_id, batch.plan_id, len(res.extra))
             if cfg.debug_raw:
                 lines = (raw or "").splitlines()
                 head = "\n".join(lines[:2])[:400]
                 tail = "\n".join(lines[-2:])[:400]
                 logger.warning(
-                    "batch %s (NORA_SIRA_BATCH_DEBUG_RAW) marker %s — "
+                    "batch %s plan %s (NORA_SIRA_BATCH_DEBUG_RAW) marker %s — "
                     "head:\n%s\n--- tail:\n%s\n--- unknown ids (first 10): %s",
-                    batch_id,
+                    batch_id, batch.plan_id,
                     "PRESENT" if FINAL_ANSWER_MARKER in (raw or "") else "ABSENT",
                     head, tail, res.extra[:10])
         texts_by_id = dict(zip(batch.ids, batch.texts))
