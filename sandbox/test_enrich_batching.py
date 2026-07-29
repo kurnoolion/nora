@@ -216,3 +216,36 @@ class TestRunBatched:
         assert summary["batches"] == 2
         plans = {b["plan"] for b in sink.batches}
         assert plans == {"PA", "PB"}
+
+
+class TestDebugRaw:
+    """Opt-in response-head logging on the unknown-req_ids anomaly."""
+
+    def test_from_env_parses_debug_raw(self):
+        assert eb.BatchConfig.from_env({"NORA_SIRA_BATCH_DEBUG_RAW": "1"}).debug_raw
+        assert eb.BatchConfig.from_env({"NORA_SIRA_BATCH_DEBUG_RAW": "true"}).debug_raw
+        assert not eb.BatchConfig.from_env({"NORA_SIRA_BATCH_DEBUG_RAW": "0"}).debug_raw
+        assert not eb.BatchConfig.from_env({"NORA_SIRA_BATCH_DEBUG_RAW": "false"}).debug_raw
+        assert not eb.BatchConfig.from_env({}).debug_raw
+
+    def test_unknown_ids_log_response_head_when_enabled(self, caplog):
+        async def llm(prompt, max_tokens):
+            return ('PROSE LINE ONE\nPROSE LINE TWO\n'
+                    + json.dumps({"R1": ["a"], "R2": ["b"], "RX": ["x"]}))
+
+        with caplog.at_level(logging.WARNING, logger="test"):
+            _run(TestRunBatched.ITEMS, llm,
+                 cfg=eb.BatchConfig(max_retries=1, debug_raw=True))
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "1 unknown req_ids in response" in joined
+        assert "PROSE LINE ONE\nPROSE LINE TWO" in joined
+
+    def test_head_not_logged_by_default(self, caplog):
+        async def llm(prompt, max_tokens):
+            return json.dumps({"R1": ["a"], "R2": ["b"], "RX": ["x"]})
+
+        with caplog.at_level(logging.WARNING, logger="test"):
+            _run(TestRunBatched.ITEMS, llm)
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "unknown req_ids" in joined
+        assert "response head" not in joined

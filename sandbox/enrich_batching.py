@@ -103,6 +103,9 @@ class BatchConfig:
     chars_per_token: float = 3.5
     max_retries: int = 2                # re-queue rounds for missing/errored reqs
     batch_concurrency: int = 2
+    debug_raw: bool = False             # opt-in: log response head on anomalies
+                                        # (raw text carries corpus content — keep
+                                        # such logs local, never in shared reports)
 
     @property
     def response_reserve(self) -> int:
@@ -123,6 +126,9 @@ class BatchConfig:
             chars_per_token=_get("CHARS_PER_TOKEN", float, 3.5),
             max_retries=_get("RETRIES", int, 2),
             batch_concurrency=_get("CONCURRENCY", int, 2),
+            debug_raw=_get("DEBUG_RAW",
+                           lambda s: s.strip().lower() not in ("", "0", "false"),
+                           False),
         )
 
 
@@ -304,6 +310,10 @@ async def run_batched(
         if res.extra:
             logger.warning("batch %s: %d unknown req_ids in response",
                            batch_id, len(res.extra))
+            if cfg.debug_raw:
+                head = "\n".join((raw or "").splitlines()[:2])[:400]
+                logger.warning("batch %s: response head (NORA_SIRA_BATCH_"
+                               "DEBUG_RAW):\n%s", batch_id, head)
         texts_by_id = dict(zip(batch.ids, batch.texts))
         for rid, phrases in res.phrases_by_id.items():
             if not phrases:
