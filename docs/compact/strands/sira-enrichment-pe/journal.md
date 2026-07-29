@@ -144,3 +144,53 @@
   small cell (carried).
 - Per-MNO query/relevance prompt selection in the query-time service still
   deferred (carried).
+
+## 2026-07-29 — Power-outage recovery: heal-torn + lane repair flags; MNO-C batch-size root cause
+
+### Done this session
+- `269132b` single operational doc: `docs/runbook-fresh-env.md` merged into
+  `docker/README.md` (phase-ordered ingest cycle, generalized `pre-<cycle>` /
+  `<run-name>` placeholders) + new "Bring up from a published release"
+  section (pull.sh → IMAGE_PREFIX/IMAGE_TAG → `up -d` WITHOUT `--build`).
+  `7250d21` repointed the STATUS flag (architect edit).
+- `a397eb3` heal-torn recovery (D-DRAFT-9): `sira_incremental heal-torn`
+  (torn-line drop + two-way kept↔enrichment invariant repair; trace.failed
+  untouched) + `sira_lane --heal-torn / --retry-failed
+  [--include-all-filtered]`, heal-before-retry, skipped with a note under
+  `--wipe-all-derived`. 14 new tests (55 passing); docs in docker/README +
+  sandbox/README §2.8/command-ref + SETUP crash gotcha.
+- Root-caused the MNO-C enrichment failure wave from paste-safe counts:
+  parse_error batches average 98.4 reqs vs 13.2 for ok → jumbo per-plan
+  batches (packer allowed 155 reqs / 14k-token responses) truncate at the
+  endpoint's REAL output ceiling → "no JSON object" → 3 identical requeue
+  rounds → 1,666 missing_in_batch_response (2,456 kept, all recoverable).
+- Ops: JOB_UID ownership diagnosis for `/data/env/reports` permission-denied
+  (+ `&&` short-circuit warning); sentinel ruled OUT for the batch path
+  (`_b_llm` bypasses the NORA provider; `parse_batch_response` is
+  prose-tolerant — fences + first-{...last-} scan).
+
+### In progress
+- Work-PC round-2 fan-out running: `NORA_SIRA_BATCH_RESP_TOKENS_PER_REQ=400`
+  (max 35 reqs/batch), image rebuilt at `a397eb3`, relaunched with
+  `--heal-torn --retry-failed`; verification pending (reqs ≤ 35,
+  parse_error ≈ 0, rounds decay, failed residue only all_filtered/no_phrases).
+
+### Next
+- Read round-2 verification counts; if MNO-C is clean, finish fan-out →
+  Phase 6 promote `--sira-build` + pin `NORA_SIRA_DOC_ENRICH_RUN=enrich-pe-v1`
+  in `.env.sira-query` → recreate the serve stack.
+- Quality follow-up: per-MNO doc prompt tightening ("return ONLY the listed
+  req_ids") to cut unknown-id response waste — prompt commit (internal
+  remote) + rebake, then optional targeted re-enrich.
+- Eval loop as a separate strand (carried).
+
+### Flags
+- Batch sizing lesson: `resp_tokens_per_req` must reflect the endpoint's
+  REAL output ceiling, not the 64k−50k reserve split — the 90/req default
+  permitted 155-req batches whose responses truncated to prose. Work-PC value
+  now 400; consider a sizing comment in `env.sira-batch.example` once round-2
+  confirms the value.
+- 5 taxonomy-refused plans enrich without taxonomy blocks (fail-soft,
+  log-verified); prompt-framing recovery stays optional/deferred.
+- Batched path is now real-LLM-exposed at scale — the "unit-tested only"
+  flag can drop once round-2 verification passes.

@@ -285,3 +285,43 @@ logged). Prose sections without req_ids remain invisible to
 taxonomy/enrichment by design; their text stays reachable via section
 nodes / `build_context_string`. A multi-plan chapter's top heading
 goes to its majority plan only.
+
+## D-DRAFT-9 — Post-interruption recovery: heal-torn invariant repair + mode-aware lane repair flags
+
+**Status**: Draft · **Date**: 2026-07-29.
+
+**Context:** A power outage killed a long doc-enrichment run mid-write.
+SIRA's resume is doc_id-keyed over append-only JSONL traces, but a hard kill
+loses each open file's buffered tail independently, leaving (a) torn
+half-written trailing lines — which crash the end-of-run merge's bare
+`json.loads` — and (b) a broken kept↔enrichment pairing: a `trace.kept` row
+whose enrichment row was lost makes the doc permanently "done" with its
+enrichment silently gone; the reverse merges duplicate phrases on re-enrich.
+Operators also had to hand-run per-cell `retry-failed` before every resume.
+
+**Decision:** (1) New `sira_incremental heal-torn` subcommand: drop
+unparseable lines from every `*.jsonl` in a stage run dir (shard files
+included), then repair the doc-enrich invariant in BOTH directions — evict
+kept-without-enrichment, drop orphan enrichments; `trace.failed` rows
+untouched (retry-failed's jurisdiction). (2) `sira_lane --heal-torn` and
+`--retry-failed [--include-all-filtered]` run the repairs per target cell
+before the lane (heal first, so retry-failed parses every row), and are
+skipped with an explicit note under `--wipe-all-derived` because the adapter
+wipes `runs/` — repairs would be silently discarded.
+
+**Why:** Torn-line dropping alone is insufficient — per-file buffers flush
+independently, so either side of the kept/enrichment pair can survive alone;
+only the two-way invariant repair makes resume trustworthy after a hard
+kill. The repair lives in `sira_incremental` (the established home of trace
+surgery, D-153's colocation rationale); the lane flags are thin delegating
+conveniences, preserving D-153's subcommand-over-ingest-flag boundary.
+Mode-awareness prevents the misleading "healed N → immediately wiped"
+sequence. Alternative considered: manual host-side torn-line script →
+rejected as unrepeatable and blind to the invariant damage.
+
+**Consequences:** Run-dir trace files are no longer strictly append-only
+from the operator's view — heal/retry rewrite them in place (inspect before
+repairing). `heal_run_dir` must track any future change to the kept/
+enrichment write pairing in `enrich_batching`. One-command recovery
+(`sira_lane --heal-torn --retry-failed`) applies to incremental runs only;
+full rebuilds ignore the flags by design.
