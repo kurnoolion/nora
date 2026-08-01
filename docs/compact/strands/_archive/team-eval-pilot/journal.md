@@ -400,7 +400,7 @@ Two distinct waves landed today plus the morning's TODO pointer:
 ## 2026-06-29 — Team-mode gate (SIRA-only for team, full app for admin) + test-page accuracy
 
 ### Done this session
-- **Team-mode access gate** (`5af9c2b`): `NORA_WEB_TEAM_MODE` + `TeamModeMiddleware`
+- **Team-mode access gate** (`324a118`): `NORA_WEB_TEAM_MODE` + `TeamModeMiddleware`
   (new `core/src/web/team_mode.py`). Team members are restricted to `/test`
   (+`/api/test`, `/static`, health); every other path → redirect to `/test`. The
   test page is **SIRA-locked**: NORA checkbox disabled+unchecked, SIRA
@@ -409,20 +409,20 @@ Two distinct waves landed today plus the morning's TODO pointer:
   The admin unlocks the full app for their browser via
   `/admin-unlock?token=<NORA_WEB_ADMIN_TOKEN>` → HttpOnly cookie. No-op when the
   flag is off. → D-DRAFT-18.
-- **Hidden-input fix** (`f142c11`): disabled checkboxes aren't submitted in
+- **Hidden-input fix** (`8b8c4d3`): disabled checkboxes aren't submitted in
   FormData, so the locked SIRA lane is carried by a hidden input (passes the
   client-side "≥1 lane" check + the POST).
-- **Test-page accuracy after the select-synth rename** (`13cf588`): the SIRA
+- **Test-page accuracy after the select-synth rename** (`7025c85`): the SIRA
   caption gated "no rerank" on the stale `sira_synth_mode == 'llm-select'` (value
   is now `select-synth`) → was wrongly showing "N reranked · pinned to synth" +
   the old "Path-B" badge; accept `select-synth`, rename badge. `_filter_sira_notes`
   suppresses the expected "rerank disabled" ⚠ in select-synth (rerank-off is by
-  design there, not a fault). Conditional `/test` description (`9f6e64b`): team
+  design there, not a fault). Conditional `/test` description (`882d18b`): team
   sees a SIRA-only blurb, admin sees the "selected lane(s)" version.
-- **Authoritative-lanes progress** (`df61234`): the SSE stream emits a `lanes`
+- **Authoritative-lanes progress** (`fafc057`): the SSE stream emits a `lanes`
   event first with the lanes the server actually runs; the client renders the
   progress rows from that, not the submitted form.
-- **`Cache-Control: no-cache` on `/test`** (`38e8940`): the progress logic ships
+- **`Cache-Control: no-cache` on `/test`** (`cd5d033`): the progress logic ships
   inline in the page, so a cached copy served stale JS until a hard-refresh;
   no-cache makes the browser revalidate every load. Test asserts the header.
 

@@ -127,7 +127,7 @@
 - Base/app image split still deferred (matters more now: PyPI torch pulls
   nvidia wheels — vendor is 2.6GB+, images will be bigger than the CPU-index
   dev builds).
-- OFFLINE validation pending — 0808b2b commit message records exactly what was
+- OFFLINE validation pending — 7cea874 commit message records exactly what was
   and wasn't verified at commit time.
 - env/pipeline MODULE.md now lag the code: PIPELINE_LANES, requirements_dir/
   input_root, resolve_requirements_dir, --lane/lane_bounds are new public
@@ -200,11 +200,11 @@ where noted as spillover:
   retry-failed enrichments.
 - **Spillover (query/web feature work, committed under this session but
   belonging to nora-retrieval-quality / team-eval-pilot scope):**
-  - MNO alias extraction token-boundary fix (2939cc7) — substring aliases
+  - MNO alias extraction token-boundary fix (b1f60c1) — substring aliases
     ('att' in 'attach') silently mis-scoped multi-MNO queries; regression
     tests added. Also identified the order-dependent glossary-pin test
     flake (test_query_intent before test_query).
-  - Test-page ingested-corpus table (5a1e0e9, e902457, 7070d68): per-cell
+  - Test-page ingested-corpus table (2209063, f1b0cd1, d4e73ea): per-cell
     MNO/release/plans/requirements/ingested + Latest badge + Lane column;
     sira-query gained GET /cells so SIRA-only cells (no nora vectorstore)
     are visible — inventory merges both lanes over NORA_SIRA_QUERY_URL.
@@ -219,7 +219,7 @@ where noted as spillover:
   lists the new cell, test-page corpus table shows ALL MNOs — including
   SIRA-only cells — with Latest + Lane badges. The full docker lifecycle
   (ingest → build → promote → serve) is now proven on real data.
-- Per-lane mismatch display (87bcc26): both-lane cells whose NORA/SIRA
+- Per-lane mismatch display (7dbc5be): both-lane cells whose NORA/SIRA
   counts diverge render both numbers as lane-colored badges — surfaced by
   a real case (stale/planless vectorstore vs fresh SIRA corpus reporting
   0 vs 87 plans). Doubles as a lane-staleness indicator.

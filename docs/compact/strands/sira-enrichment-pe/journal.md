@@ -10,7 +10,7 @@
   <env_dir>/out/taxonomy/<plan_id>_features.json, COMBINED staging for
   taxonomy-prompt cross-pollination (no curation exists; no measuring
   stick until the eval loop runs).
-- Slice 1: sizing scanner (sandbox/scan_enrichment_stats.py, fa428d7).
+- Slice 1: sizing scanner (sandbox/scan_enrichment_stats.py, f5ff935).
 - Slice 2: derive-sira-prompts skill + playbook MNO-parameterized;
   batched doc-prompt placeholder contract; standalone
   corpus_overview_<MNO>_<ver>.txt shared with NORA taxonomy extractor.
@@ -43,14 +43,14 @@
 ## 2026-07-25 — slice 5 (NORA half) + prompts-are-customizations decision
 
 ### Done this session
-- Slice 5, NORA half (commit 9e8c036): `FeatureExtractor(llm, overview_dir=)`
+- Slice 5, NORA half (commit 599e66a): `FeatureExtractor(llm, overview_dir=)`
   + `resolve_corpus_overview()` (highest-version glob); `{corpus_context}`
   section in the extraction prompt — byte-identical when absent (test-locked);
   `TAX-W003` registered; `run_taxonomy` reads `NORA_TAXONOMY_OVERVIEW_DIR`;
   cache-fingerprint decision resolved: overview files hashed into the corpus
   fingerprint (auto-bust, no `--force`); `taxonomy_cli --overview-dir` parity;
   taxonomy + pipeline MODULE.md updated; 6 new tests, suite 1541 green.
-- Prompt-location decision (user, commit 561a5a6): per-MNO prompt artifacts
+- Prompt-location decision (user, commit 9482921): per-MNO prompt artifacts
   (3 prompts + corpus overview per MNO) live in `customizations/prompts/`,
   committed to the company-internal remote only (D-062 pre-push-hook trust
   boundary) — supersedes the "runtime artifact, never committed" posture.
@@ -95,30 +95,30 @@
   reasoning-model support (sentinel opt-in via NORA_LLM_REASONING_SENTINEL +
   tolerant first-balanced-JSON fallback) — fixed all "Failed to parse" warnings
   on the proprietary endpoint.
-- Resilient taxonomy extraction (344e095): per-unit fail-soft (LLM error /
+- Resilient taxonomy extraction (534a401): per-unit fail-soft (LLM error /
   unparseable response marks the unit failed, run continues, WARN + TAX-W004);
   resumable `out/taxonomy/extraction_state.json` ledger written after every
   unit (survives hard kills); failed units retry automatically on re-run —
   re-running the same command IS the retry mechanism; fingerprint stamped only
   on zero-failure runs; `LLMParseError` replaces silent empty-success;
   stale features-file cleanup.
-- Multi-release semantics made explicit (344e095, user decisions): newest
+- Multi-release semantics made explicit (534a401, user decisions): newest
   release wins per (MNO, plan_id); MMMYYYY release names parsed to YYYYMM
   (user correction — Jul2026 sorts before Mar2025 alphabetically); superseded
   copies cost no LLM calls; fingerprint hashes the selected set only.
-- Plan-unit extraction (8a30095, user's mno-b finding): chapter-per-plan docs
+- Plan-unit extraction (b8a93c8, user's mno-b finding): chapter-per-plan docs
   (one doc, empty tree plan_id, 87 plans) previously produced one empty-prefix
   `_features.json` + one whole-doc call truncated at the 200-line TOC cap.
   `split_tree_by_plan` + unit-level newest-release supersession + per-plan
   ledger keys `<path>#<plan>` (independent fail/resume/retry per chapter-plan).
-- Heading inheritance (4a7b8e6): two paste-safe diagnostics on the real tree
+- Heading inheritance (a2f6fd6): two paste-safe diagnostics on the real tree
   showed the 870 dropped nodes were heading nodes (leaves carry parent_section
   but no section_number). Headings now join the majority plan of the leaves
   they enclose (ancestry join, immune to chapter-boundary misattribution).
   Work-PC verified: drops 870 → 115, residue confirmed as requirement-free
   tail sections (references/prose-without-req-id). plan_name is now the
   chapter title.
-- Flaky-test root cause (4a7b8e6): test_query MockEmbedder used salted builtin
+- Flaky-test root cause (a2f6fd6): test_query MockEmbedder used salted builtin
   hash() — glossary-pin ranking test was a per-process coin flip; now md5.
 - Work-PC state: taxonomy complete for all 3 MNOs (mno-b = 87 per-plan files);
   ledger-cleanup one-liner used to invalidate heading-less mno-b extractions.
@@ -148,12 +148,12 @@
 ## 2026-07-29 — Power-outage recovery: heal-torn + lane repair flags; MNO-C batch-size root cause
 
 ### Done this session
-- `269132b` single operational doc: `docs/runbook-fresh-env.md` merged into
+- `8593317` single operational doc: `docs/runbook-fresh-env.md` merged into
   `docker/README.md` (phase-ordered ingest cycle, generalized `pre-<cycle>` /
   `<run-name>` placeholders) + new "Bring up from a published release"
   section (pull.sh → IMAGE_PREFIX/IMAGE_TAG → `up -d` WITHOUT `--build`).
-  `7250d21` repointed the STATUS flag (architect edit).
-- `a397eb3` heal-torn recovery (D-DRAFT-9): `sira_incremental heal-torn`
+  `053064e` repointed the STATUS flag (architect edit).
+- `240742d` heal-torn recovery (D-DRAFT-9): `sira_incremental heal-torn`
   (torn-line drop + two-way kept↔enrichment invariant repair; trace.failed
   untouched) + `sira_lane --heal-torn / --retry-failed
   [--include-all-filtered]`, heal-before-retry, skipped with a note under
@@ -171,7 +171,7 @@
 
 ### In progress
 - Work-PC round-2 fan-out running: `NORA_SIRA_BATCH_RESP_TOKENS_PER_REQ=400`
-  (max 35 reqs/batch), image rebuilt at `a397eb3`, relaunched with
+  (max 35 reqs/batch), image rebuilt at `240742d`, relaunched with
   `--heal-torn --retry-failed`; verification pending (reqs ≤ 35,
   parse_error ≈ 0, rounds decay, failed residue only all_filtered/no_phrases).
 
@@ -198,7 +198,7 @@
 ## 2026-07-29 (evening) — Reasoning sentinel for batched enrichment; unknown-req_id warnings root-caused cosmetic
 
 ### Done this session
-- `6baa307` batch-path reasoning sentinel (D-DRAFT-10):
+- `03c3d6e` batch-path reasoning sentinel (D-DRAFT-10):
   `NORA_SIRA_BATCH_REASONING_SENTINEL=1` code-appends the
   `===FINAL_ANSWER===` instruction in `compose_prompt` (per-batch — no
   per-MNO prompt-file edits, header token estimate includes it);
@@ -207,7 +207,7 @@
   JSON candidates tried LAST-first so a thinking-draft never shadows the
   final answer (pre-fix, a fenced draft could silently win — real bug
   exposed by the debug prints).
-- `c4dd3ff`..`1dad89b` DEBUG_RAW observability suite, iterated live
+- `4f1d853`..`c743339` DEBUG_RAW observability suite, iterated live
   against the work-PC run: response head+tail, marker PRESENT/ABSENT,
   plan name, requested-vs-unknown ids side by side (first 20). Opt-in;
   outputs carry corpus content — local-only, redact before sharing.

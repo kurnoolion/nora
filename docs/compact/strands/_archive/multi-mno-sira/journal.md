@@ -573,12 +573,12 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
   now passes text through and does NOT re-serialize `req.tables`. → D-DRAFT-17.
 - **Full-text in query results** (`71366f5`) — `text_chars` request field; SIRA
   returns each result's whole chunk text (tables intact) for Path-B synthesis.
-- **Tooling:** `sira_enrich_inspect` (`cb4b27b`) — phrases by req_id, multi-cell,
-  with `--text`/`--trace`; `verify_tables` (`ee056f9`) — checks tables are
+- **Tooling:** `sira_enrich_inspect` (`8a9ca6c`) — phrases by req_id, multi-cell,
+  with `--text`/`--trace`; `verify_tables` (`039d5bc`) — checks tables are
   inlined in NORA parse text AND reached the per-cell SIRA corpus, with a
-  cross-check; `sira_multi --run-name` (`ea8e852`) — pins the doc-enrich run dir
+  cross-check; `sira_multi --run-name` (`47c71ea`) — pins the doc-enrich run dir
   so SIRA's resume accumulates across runs.
-- **Docs** (`0235b7f`, `ea8e852`) — sandbox README gained a multi-MNO ingestion +
+- **Docs** (`a9f7f3c`, `47c71ea`) — sandbox README gained a multi-MNO ingestion +
   pipeline section and an **operational scenarios** section: continue-after-crash,
   incremental new MNO/release, content-change re-ingest, prompt/model change.
 
@@ -607,8 +607,8 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
 ## 2026-06-28 — A/B harness (run_stack.sh) + SIRA shim auth for the two-LLM select-synth eval
 
 ### Done this session
-- **`run_stack.sh` — parallel A/B harness** (`9023813`..`388a179`, `df57569`,
-  `43ef6d4`): launches ONE isolated SIRA-service + NORA-web stack from args, so
+- **`run_stack.sh` — parallel A/B harness** (`3bc9d39`..`4f8087b`, `1aa6f3a`,
+  `74625e4`): launches ONE isolated SIRA-service + NORA-web stack from args, so
   two (Qwen3 vs the proprietary model) run side-by-side for a select-synth LLM
   A/B. Isolated per stack: ports, state dir, `--config-db`/`--jobs-db`/
   `--metrics-db` (precedence flag > env > `<state>/<n>.db`), `--state-dir`/
@@ -619,7 +619,7 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
   `source sandbox/activate.sh` for the service, preflight that surfaces the real
   import error, `--stop <label>` via a `~/.nora-stacks/<label>` registry, NO_PROXY
   localhost bypass per subshell. → D-DRAFT-18.
-- **SIRA shim/query-enrich API-key auth** (`7e46a3d`): the live query-enrich call
+- **SIRA shim/query-enrich API-key auth** (`750ffcc`): the live query-enrich call
   sent no `Authorization` header (only the rerank path had a key). Added
   `_SHIM_API_KEY` (`NORA_LLM_SHIM_API_KEY`, falling back to `NORA_LLM_API_KEY`);
   `_llm_call` attaches `Bearer` on the shim path while explicit-base_url callers
@@ -628,7 +628,7 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
   endpoints. NOTE: with query-enrich on, each stack expands queries with ITS OWN
   LLM, so *retrieval* (not just synthesis) differs across the A/B — documented;
   `NORA_SIRA_QUERY_ENRICH_ENABLED=false` gives a synthesis-only A/B.
-- **`--reasoning-sentinel` flag** (`43ef6d4`): sets `NORA_LLM_REASONING_SENTINEL=1`
+- **`--reasoning-sentinel` flag** (`74625e4`): sets `NORA_LLM_REASONING_SENTINEL=1`
   on the web process for a stack whose model emits untagged chain-of-thought (the
   select-synth sentinel — multi-mno-nora D-DRAFT-17). Aligned the launched/preview
   `NORA_SIRA_SYNTH_MODE` to `select-synth`.
@@ -672,7 +672,7 @@ Discussion on how per-(MNO, release) BM25 indexes proliferate at scale.
   caps dilute per-MNO share to ~budget/N** (a 3rd corpus cuts each MNO ~33%, can
   starve a borderline chunk). Secondary (lower severity): 2-cell-only test
   fixtures; eager per-cell load → RAM ×1.5 at 3 cells; 3rd-cell eval qrels (OQ-2).
-- **Per-cell top_k cap-scaling** (`e9c7226`, renamed `492cc09`):
+- **Per-cell top_k cap-scaling** (`f8824af`, renamed `9119867`):
   `NORA_SIRA_SCALE_TOPK_BY_CELLS` (default on). In balanced multi-cell mode the
   final cut scales to `top_k * n_cells`, so each cell keeps its full per-cell
   budget instead of `top_k/N`. Only the final cut moved (the per-cell retrieve

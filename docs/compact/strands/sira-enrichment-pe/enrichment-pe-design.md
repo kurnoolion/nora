@@ -143,7 +143,7 @@ scorecard attributes each change.
 
 ## Implementation slices
 
-1. Sizing scanner — DONE (`sandbox/scan_enrichment_stats.py`, fa428d7).
+1. Sizing scanner — DONE (`sandbox/scan_enrichment_stats.py`, f5ff935).
 2. Cline skill MNO-parameterization + batched doc-prompt contract —
    skill + playbook DONE (derive-sira-prompts SKILL.md step 7 carries
    the contract); per-MNO prompt regeneration itself runs on the work

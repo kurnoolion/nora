@@ -258,7 +258,7 @@ vendor is per-host disk (~2.6GB+; PyPI torch drags nvidia wheels — the
 base/app image split gains urgency). Runtime external downloads (the standards
 stage) stay blocked in containers on such hosts: --skip-standards or run that
 stage bare-metal. Validation status at capture: online path green, vendor
-harvest done, --network=none build + serve smoke pending (recorded in 0808b2b).
+harvest done, --network=none build + serve smoke pending (recorded in 7cea874).
 An IT policy change permitting container egress would obsolete this machinery.
 
 ## D-DRAFT-9 — Classical TLS key-exchange groups baked into all images

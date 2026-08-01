@@ -547,7 +547,7 @@
 ## 2026-06-28 — select-synth productionization: keyless provider, per-model reasoning sentinel, rename
 
 ### Done this session
-- **Keyless OpenAI-compatible provider** (`9100556`): `OpenAICompatibleProvider`
+- **Keyless OpenAI-compatible provider** (`585f005`): `OpenAICompatibleProvider`
   mandated `api_key` at construction, so a no-auth endpoint raised `ValueError`
   and the pipeline runner silently fell back to `MockLLMProvider` (canned
   answers). This was the *actual* cause of the "LLM calls failing / can't find
@@ -555,8 +555,8 @@
   `/sira-query` 200); the **web** provider was the culprit. Made `api_key`
   optional; omit the `Authorization` header when empty. Tests: keyless
   construction allowed, no-header-when-keyless, with-key path unchanged.
-- **Reasoning-leak handling for select-synth** (`6250e96`, `45fd4d1`, `4a720b5`,
-  `60c188c`): the proprietary "thinking" LLM leaked chain-of-thought into
+- **Reasoning-leak handling for select-synth** (`ae5f277`, `187e1ba`, `9b6e836`,
+  `6eeb421`): the proprietary "thinking" LLM leaked chain-of-thought into
   answers; Qwen3/Gemma did not. Diagnosis ladder: `_strip_reasoning` for
   `<think>` tags first; then an opt-in raw dump (`NORA_LLM_DEBUG_RAW`, repr-level,
   OFF by default to keep model output out of logs) proved the model emits
@@ -566,10 +566,10 @@
   Gated **per-model** by `NORA_LLM_REASONING_SENTINEL` (default off — most models
   skip thinking natively and shouldn't have output reshaped); the prompt
   instruction and the strip move together off one switch (the prompt imports the
-  flag). Superseded a brief configurable-marker-text attempt (`7d74aee`) after
+  flag). Superseded a brief configurable-marker-text attempt (`315d437`) after
   the user clarified they wanted an on/off toggle, not a configurable string.
   → D-DRAFT-17.
-- **`Path-B → select-synth` rename** (`c89ac72`): "Path-B" named nothing; renamed
+- **`Path-B → select-synth` rename** (`a741556`): "Path-B" named nothing; renamed
   to state the function — the LLM **selects** relevant chunks and **synth**esizes
   in one call. Symbols `_PATHB_*`/`_pathb_*` → `_SELECT_SYNTH_*`/`_select_synth_*`;
   env vars `NORA_SIRA_PATHB_*` → `NORA_SIRA_SELECT_SYNTH_*` (legacy read with a

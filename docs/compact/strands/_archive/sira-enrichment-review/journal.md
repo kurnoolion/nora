@@ -35,7 +35,7 @@
      (label/reason/note/name), chip grammar (plain ×→ghost ↺, green adds,
      suppress-collapse, held banners), stateless pending (overlay mtime vs
      loaded_at), Apply hits both stacks. Team-mode gate must admit the page.
-- (Pre-strand, same day: compact→compact-skill rename, 5830cc7; transcript
+- (Pre-strand, same day: compact→compact-skill rename, 4781564; transcript
   size guard rails in ~/.claude — outside this repo.)
 
 ### In progress
@@ -62,27 +62,27 @@
 ## 2026-07-24 — Development phase complete: slices 1–5, label branches, deployment hardening
 
 (Catch-up entry covering the full development phase, 2026-07-20 → 2026-07-24,
-27 commits `1407b36`..`3bdc4b4`.)
+27 commits `82a01a6`..`04a5b8a`.)
 
 ### Done this session
-- **All five design slices implemented** (1407b36..4a93d5c): sira-query
+- **All five design slices implemented** (82a01a6..55441c7): sira-query
   read endpoints + per-cell hot reload; web overlay store + edit API
   (flock, word records, cross-side fold parity test); the review page
   (chip grammar, stamp bar, HTMX partials); CORRECTIONS_DIR compose
   wiring (rw web, ro sira-query); exports — label × category report +
   prompt-fix scorecard.
-- **Beyond-design feature: labels are branches** (a02223b): per-label
+- **Beyond-design feature: labels are branches** (9d8109c): per-label
   serving variants on the service, `accepted-labels.json` merge log,
   admin merge-to-main / un-merge in the Labels drawer (team-mode
   `is_admin` gated); records never rewritten on merge — both directions
   instant and reversible.
-- **Iterative fixes from early field use** (e22a37e..f5864a7): all
+- **Iterative fixes from early field use** (13b9030..be20351): all
   requirements listed (not just enriched ones), free-form phrases +
   per-row reason/note, chip grammar polish, composite plan-stamp
   matching, 400+-row perf (CSS grid + content-visibility + lazy
   chunks), pending = overlay CONTENT digest (not mtime), per-plan
   pending dots.
-- **Real-deployment hardening on the TEAM_MODE stack** (6cc0fae..b586f3b,
+- **Real-deployment hardening on the TEAM_MODE stack** (0573b61..b26f310,
   all user-found): merge flags only touched plans; first-edit-after-label
   no longer wiped (projection-aware reload skip); newer add countermands
   a merged remove (strictly-newer-at wins, ties keep remove-wins);
@@ -111,12 +111,12 @@
 
 ### Flags
 - D-DRAFT-4's "pending = overlay mtime > loaded_at" is superseded by the
-  content-digest model (ade9f24, b586f3b) — correct at promotion time.
+  content-digest model (c8b6bf4, b26f310) — correct at promotion time.
 - Digest formula is cross-side locked (web store ↔ sira-query); any
   change must ship in BOTH images together or the banner wedges.
 - Enrich-model header: run config.json records the CONFIGURED
   sglang.model, not the served model — NORA_SIRA_ENRICH_MODEL_NAME
-  (operator-supplied) is the only reliable source (7594ac0).
+  (operator-supplied) is the only reliable source (8308558).
 - D-DRAFT-3 promotion notes: threshold "0.85, tunable" = code parameter
   only, no runtime knob wired; the design-time bm25x term-extraction
   risk flag resolved benignly (vanilla_tokens re-tokenizes corpus text
