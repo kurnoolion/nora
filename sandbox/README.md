@@ -19,10 +19,10 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_patches/per-stage-routing.patch` | Adds `NORA_SIRA_{ENRICH,RERANK}_LLM_{URL,MODEL}` env vars to SIRA's batch pipeline, letting enrichment and rerank stages target different OpenAI-compatible endpoints without running the shim. Applied idempotently by `install_configs.sh`. See `sira_patches/README.md` for env-var reference and usage examples. | ✅ |
 | `sira_patches/test/probe_per_stage_endpoints.py` | Stdlib sanity probe — POSTs a tiny chat-completion to each configured endpoint and reports compact `SPK` lines. Use before running the pipeline to confirm reachability + response shape. | ✅ |
 | `adapter/nora_to_beir.py` | Converts NORA parse output (`<env_dir>/out/parse/**/*_tree.json` — recursive, covers the per-cell `<mno>/<rel>/` layout, NORA D-DRAFT-12) + the 18-Q eval set into BEIR-format `corpus.jsonl` + `queries.jsonl` + `qrels/test.tsv`. `--multi-cell` emits one dataset per `(mno, release)` cell. | ✅ |
-| `sira_multi.py` | Multi-MNO batch orchestrator — enumerates the `(mno, release)` cells under a db_root and runs SIRA's `run_pipeline.py` once per cell (writes each cell's `configs/data/<cell>.yaml` from the `nora.yaml` template first). See "Running — multi-MNO" below. | ✅ |
+| `sira_multi.py` | Multi-MNO batch orchestrator — enumerates the `(mno, release)` cells under a db_root and runs SIRA's `run_pipeline.py` once per cell (writes each cell's `configs/data/<cell>.yaml` from the `nora.yaml` template first); `--verify` sweeps the same cells with read-only verify-run reports instead of building. See "Running — multi-MNO" below. | ✅ |
 | `sira_query/service.py` | Cell-aware FastAPI per-query service (`/sira-query`, `/healthz`) — loads every cell at startup; resolves query scope → retrieve per cell → merge → rerank. Query-time config in the multi-mno-sira runbook. | ✅ |
 | `sira_cells.py` | Cell-identity helpers (`cell_dirname`, `parse_cell_dirname`, `enumerate_cells`); release ordering re-exported from `core.extraction.release_key`. | ✅ |
-| `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`. | ✅ |
+| `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`; `--failed` inverts it into a triage listing (failed reqs per cell grouped status → plan; local-only, ids redacted before sharing). | ✅ |
 | `verify_tables.py` | Verifies parsed tables are inlined into NORA parse text (fails on any `tables`-field req missing its inline table) and reached the per-cell SIRA corpus, with a cross-check. `--parse` and/or `--db-root`. | ✅ |
 | `run_stack.sh` | Launch one isolated SIRA-service + NORA-web stack (Path-B) from args — own ports, own LLM, own web state DBs — so several can run in parallel to A/B different LLMs / ingestions. `--dry-run` to preview, `--stop <label>` to tear down. | ✅ |
 | `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed` / `heal-torn` / `verify-run`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
@@ -377,13 +377,16 @@ redacted) under each stack's state dir.
         [--run-name enrich-stable] [--only <MNO>__<REL>,...] \
         [--wipe-stale-index | --wipe-all-derived] \
         [--heal-torn] [--retry-failed [--include-all-filtered]] \
-        [--max-reqs N] \
+        [--max-reqs N] [--verify] \
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
 Runs the adapter (`nora_to_beir --multi-cell`) then `sira_multi`, threading
 `--only` and the wipe flag through both. `--max-reqs N` exports
 `NORA_SIRA_BATCH_MAX_REQS=N` to the build (caps reqs per enrichment batch;
-`1` = single-req mode — the typical pairing with `--retry-failed`). `--heal-torn` / `--retry-failed`
+`1` = single-req mode — the typical pairing with `--retry-failed`).
+`--verify` appends a read-only per-cell health sweep after the lane
+(`sira_multi.verify_cells` over the same `--only` scope); non-zero exit
+when any cell FAILs. `--heal-torn` / `--retry-failed`
 first run the matching `sira_incremental` repairs over each cell's
 `runs/doc-enrich/<run-name>/` (heal before retry) — resume-after-power-loss
 and retry-old-failures in one command. Incremental runs only: under
@@ -466,13 +469,12 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   an enrichment row whose kept row was lost is dropped (no duplicate
   phrases on re-enrich). `sira_lane --heal-torn` runs it inline per cell
   before the lane.
-- `verify-run (--dataset DIR | --db-root DIR [--only CELLS])
-  [--compare-run NAME] [--strict]` — READ-ONLY health report for a
-  doc-enrich run, paste-safe (counts/statuses only, never ids or
-  content). `--dataset` verifies one cell; `--db-root` verifies every
-  dataset dir under the root (skip-with-note when a cell lacks the run
-  name) and ends with a per-verdict summary; `--only <MNO>__<REL>[,...]`
-  restricts the db-root sweep. Sections: `[batches]` status/closed_by/round histograms +
+- `verify-run [--compare-run NAME] [--strict]` — READ-ONLY health report
+  for ONE cell's doc-enrich run, paste-safe (counts/statuses only, never
+  ids or content). Single-cell like every other subcommand here —
+  multi-cell sweeps live at the orchestrator layer: `sira_multi
+  --verify` (sweep instead of build) and `sira_lane --verify`
+  (post-build gate), both looping this per cell. Sections: `[batches]` status/closed_by/round histograms +
   reqs-per-batch stats + single-req-mode detection; `[trace]` kept/failed
   reconciliation (granularity split, duplicates, kept∩failed);
   `[coverage]` vs `raw/corpus.jsonl`; `[invariant]` torn lines +
@@ -532,6 +534,13 @@ import-checks `uvicorn`/`fastapi`/`bm25x` per role); `--reasoning-sentinel`
 - `sandbox.sira_enrich_inspect <req_id> [--db-root DIR] [--cell NAME]
   [--run NAME] [--text] [--trace]` — the enrichment phrases (and
   optionally corpus text / raw trace row) for one requirement.
+- `sandbox.sira_enrich_inspect --failed [--db-root DIR] [--cell NAME]
+  [--run NAME] [--limit N]` — triage listing: per cell, the failed reqs
+  from `trace.failed*.jsonl` grouped status → plan, `--limit` ids per
+  group (default 10, 0 = all). LOCAL-ONLY (real req ids / plan codes) —
+  the paste-safe counterpart is `sira_multi --verify`. Triage flow:
+  `--verify` (is anything wrong?) → `--failed` (what, where?) →
+  `<req_id> --trace` (why this one?) → `--retry-failed [--max-reqs 1]`.
 
 Deeper narrative (design rationale, cross-cell query checks, Path-B
 synthesis) lives in the archived runbook:

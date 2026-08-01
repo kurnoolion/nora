@@ -16,7 +16,11 @@ Usage::
         --db-root  sandbox/adapter/out \\
         --sira-clone sandbox/sira \\
         [--sglang-port 8030] [--stages prepare,bm25,enrich_corpus] \\
-        [--only VZW__Feb2026,TMO__Jan2026] [--dry-run]
+        [--only VZW__Feb2026,TMO__Jan2026] [--dry-run] \\
+        [--verify --run-name NAME [--compare-run NAME] [--strict]]
+
+`--verify` runs a READ-ONLY per-cell health sweep (sira_incremental
+verify-run per cell + summary) instead of builds — paste-safe output.
 
 LLM endpoints are configured via the per-stage-routing env vars
 (NORA_SIRA_{ENRICH,RERANK}_LLM_URL etc.); when those are set, sglang
@@ -193,6 +197,59 @@ def run_cells(
     return results
 
 
+def verify_cells(
+    db_root: Path,
+    run_name: str,
+    *,
+    only: list[CellKey] | None = None,
+    compare_run: str | None = None,
+    strict: bool = False,
+) -> int:
+    """Read-only verify sweep over the cells (same enumeration + --only
+    intersection semantics as run_cells; a requested-but-absent cell
+    gets a warning). Per cell: sira_incremental.verify_cell — batch
+    stats, trace reconciliation, kept↔enrichment invariant. Paste-safe.
+
+    Exit code 1 when any cell FAILs (or WARNs under strict), when no
+    cells match, or when every cell lacks the run name."""
+    from sandbox.sira_incremental import verify_cell
+
+    cells = enumerate_cells(db_root)
+    if only is not None:
+        only_set = set(only)
+        for missing in sorted(only_set - set(cells)):
+            print(f"--only: cell not found under {db_root}: "
+                  f"{cell_dirname(missing)} — skipping")
+        cells = [c for c in cells if c in only_set]
+    if not cells:
+        print(f"no cells found under {db_root} (expected <mno>__<MMMYYYY>/ dirs)")
+        return 1
+
+    print(f"{len(cells)} cell(s): {', '.join(cell_dirname(c) for c in cells)}")
+    print()
+    verdicts: dict[str, int] = {}
+    for i, cell in enumerate(cells):
+        if i:
+            print()
+        cell_dir = db_root / cell_dirname(cell)
+        if not (cell_dir / "runs" / "doc-enrich" / run_name).is_dir():
+            print(f"verify-run: {cell_dir.name}: no run dir for "
+                  f"'{run_name}' — skipping")
+            verdicts["skipped"] = verdicts.get("skipped", 0) + 1
+            continue
+        v = verify_cell(cell_dir, run_name, compare_run=compare_run)
+        verdicts[v] = verdicts.get(v, 0) + 1
+
+    print(f"\nverify summary: {len(cells)} cell(s) — "
+          + ", ".join(f"{n} {v}" for v, n in sorted(verdicts.items())))
+    if verdicts.get("skipped") == len(cells):
+        print("ERROR: every cell was skipped — check --run-name")
+        return 1
+    if verdicts.get("FAIL") or (strict and verdicts.get("WARN")):
+        return 1
+    return 0
+
+
 def _parse_cell_list(raw: str) -> list[CellKey]:
     cells: list[CellKey] = []
     for tok in raw.split(","):
@@ -216,9 +273,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db-root", required=True, type=Path,
                    help="Parent dir of the <mno>__<release>/ cell datasets "
                         "(the --output of nora_to_beir --multi-cell).")
-    p.add_argument("--sira-clone", required=True, type=Path,
+    p.add_argument("--sira-clone", type=Path, default=None,
                    help="Path to the SIRA clone (run_pipeline.py lives in "
-                        "<sira-clone>/scripts/).")
+                        "<sira-clone>/scripts/). Required for builds; "
+                        "unused with --verify.")
     p.add_argument("--sglang-port", type=int, default=None,
                    help="sglang.port override. Omit when LLM is routed via "
                         "NORA_SIRA_*_LLM_URL env vars (per-stage routing).")
@@ -243,16 +301,38 @@ def main(argv: list[str] | None = None) -> int:
                         "run_pipeline's own (timestamped) run name.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the per-cell commands without executing.")
+    p.add_argument("--verify", action="store_true",
+                   help="Read-only verify sweep INSTEAD of builds: per-cell "
+                        "sira_incremental verify-run report + summary. "
+                        "Requires --run-name; --sira-clone not needed. "
+                        "Paste-safe (counts/statuses only).")
+    p.add_argument("--compare-run", default=None, metavar="NAME",
+                   help="With --verify: diff each cell's phrase sets against "
+                        "this second run name (Jaccard agreement, counts only).")
+    p.add_argument("--strict", action="store_true",
+                   help="With --verify: exit 1 on WARN too (default: only FAIL).")
     args = p.parse_args(argv)
 
-    if not (args.sira_clone / "scripts" / "run_pipeline.py").is_file():
+    only = _parse_cell_list(args.only) if args.only else None
+
+    if args.verify:
+        if not args.run_name:
+            raise SystemExit("--verify requires --run-name (the pinned "
+                             "doc-enrich run to verify)")
+        return verify_cells(
+            args.db_root, args.run_name,
+            only=only, compare_run=args.compare_run, strict=args.strict,
+        )
+
+    if args.sira_clone is None or not (
+            args.sira_clone / "scripts" / "run_pipeline.py").is_file():
         raise SystemExit(
-            f"run_pipeline.py not found under {args.sira_clone}/scripts/ — "
-            f"is --sira-clone correct?"
+            f"run_pipeline.py not found under "
+            f"{args.sira_clone}/scripts/ — is --sira-clone correct? "
+            f"(--sira-clone is required except with --verify)"
         )
 
     stages = [s.strip() for s in args.stages.split(",")] if args.stages else None
-    only = _parse_cell_list(args.only) if args.only else None
     results = run_cells(
         args.db_root, args.sira_clone,
         only=only, sglang_port=args.sglang_port, stages=stages,

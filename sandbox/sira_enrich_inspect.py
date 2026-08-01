@@ -13,12 +13,21 @@ promoted "best" per doc; the run file is one specific enrichment run):
   * <cell>/runs/doc-enrich/<run>/enrichments.kept.jsonl
   * <cell>/enrichments/doc/best.jsonl
 
+`--failed` inverts the direction: instead of drilling into one req_id, it
+LISTS the failed reqs per cell, grouped status → plan (triage view for
+deciding what to retry / re-prompt). Output carries proprietary req ids
+and plan codes — local-only, redact before sharing (the paste-safe
+counterpart is `sira_multi --verify` / `sira_incremental verify-run`).
+
 Usage:
     export NORA_SIRA_DB_ROOT=$HOME/work/nora/sandbox/adapter/out-db
     python -m sandbox.sira_enrich_inspect <req_id>
     python -m sandbox.sira_enrich_inspect <req_id> --text     # + corpus text
     python -m sandbox.sira_enrich_inspect <req_id> --trace    # + raw LLM trace
     python -m sandbox.sira_enrich_inspect <req_id> --cell VZW__Feb2026
+    python -m sandbox.sira_enrich_inspect --failed            # triage listing
+    python -m sandbox.sira_enrich_inspect --failed --cell VZW__Feb2026 \\
+        --run enrich-stable --limit 20
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ import os
 import sys
 from pathlib import Path
 
+from sandbox.enrich_batching import plan_of
 from sandbox.sira_cells import cell_dirname, enumerate_cells
 
 
@@ -150,12 +160,91 @@ def inspect_cell(
     return True
 
 
+def _plan_from_coarse_id(doc_id: str) -> str:
+    """Fallback plan for coarse corpus rows: `doc:<plan>` carries the
+    plan in the id; `section:<plan>...` its first token. "" otherwise."""
+    kind, _, rest = doc_id.partition(":")
+    if kind == "doc" and rest:
+        return rest
+    if kind == "section" and rest:
+        return rest.split(":", 1)[0]
+    return ""
+
+
+def load_corpus_plans(corpus_path: Path) -> dict[str, str]:
+    """{_id: plan_id} for every corpus row (from the `**plan**:` stamp
+    the adapter writes into each row's text)."""
+    out: dict[str, str] = {}
+    for row in _iter_jsonl(corpus_path):
+        did = row.get("_id")
+        if did:
+            out[did] = plan_of(row.get("text") or "")
+    return out
+
+
+def list_failed_cell(cell_dir: Path, *, run: str | None, limit: int) -> int:
+    """Print one cell's failed reqs grouped status → plan (counts +
+    capped id lists). Returns the number of failed rows."""
+    run_dir = (cell_dir / "runs" / "doc-enrich" / run) if run else latest_run_dir(cell_dir)
+    if run_dir is None or not run_dir.is_dir():
+        print(f"\n=== cell: {cell_dir.name} — no doc-enrich run"
+              + (f" named {run!r}" if run else "") + " ===")
+        return 0
+
+    failed: list[tuple[str, str]] = []
+    for p in sorted(run_dir.glob("trace.failed*.jsonl")):
+        for row in _iter_jsonl(p):
+            did = _row_doc_id(row)
+            if did:
+                failed.append((did, row.get("status", "?")))
+
+    print(f"\n=== cell: {cell_dir.name} (run {run_dir.name}) ===")
+    if not failed:
+        print("no failed rows — clean")
+        return 0
+
+    plans = load_corpus_plans(cell_dir / "raw" / "corpus.jsonl")
+    by_status: dict[str, dict[str, list[str]]] = {}
+    for did, status in failed:
+        plan = plans.get(did) or _plan_from_coarse_id(did) or "(unknown)"
+        by_status.setdefault(status, {}).setdefault(plan, []).append(did)
+
+    print(f"failed: {len(failed)} row(s), {len(by_status)} status(es)")
+    for status, plan_map in sorted(
+            by_status.items(),
+            key=lambda kv: -sum(len(v) for v in kv[1].values())):
+        n = sum(len(v) for v in plan_map.values())
+        print(f"  status {status} ({n}):")
+        for plan, ids in sorted(plan_map.items(), key=lambda kv: -len(kv[1])):
+            shown = ids if limit <= 0 else ids[:limit]
+            more = "" if len(shown) == len(ids) else f"  (+{len(ids) - len(shown)} more)"
+            print(f"    plan {plan}: {len(ids)} req(s)")
+            for rid in shown:
+                print(f"      - {rid}")
+            if more:
+                print(f"     {more}")
+    return len(failed)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sira_enrich_inspect",
         description="Print SIRA doc-enrichment phrases for a req_id (multi-cell).",
     )
-    ap.add_argument("req_id", help="requirement id to inspect")
+    ap.add_argument("req_id", nargs="?", default=None,
+                    help="requirement id to inspect (omit with --failed)")
+    ap.add_argument(
+        "--failed", action="store_true",
+        help="triage listing instead of a drill-down: per cell, the "
+             "failed reqs from trace.failed*.jsonl grouped status → plan. "
+             "LOCAL-ONLY output (real req ids / plan codes) — redact "
+             "before sharing; use sira_multi --verify for paste-safe counts",
+    )
+    ap.add_argument(
+        "--limit", type=int, default=10, metavar="N",
+        help="with --failed: req ids printed per (status, plan) group "
+             "(default 10; 0 = all)",
+    )
     ap.add_argument(
         "--db-root", default=os.getenv("NORA_SIRA_DB_ROOT", ""),
         help="SIRA db_root (parent of the per-cell datasets); "
@@ -176,6 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         help="also print the raw enrichment trace row",
     )
     args = ap.parse_args(argv)
+
+    if args.failed and args.req_id:
+        ap.error("give a req_id OR --failed, not both")
+    if not args.failed and not args.req_id:
+        ap.error("req_id required (or use --failed for the triage listing)")
 
     if not args.db_root:
         print("error: set --db-root or $NORA_SIRA_DB_ROOT", file=sys.stderr)
@@ -200,6 +294,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         cell_dirs = [db_root / cell_dirname(c) for c in cells]
+
+    if args.failed:
+        print("NOTE: listing carries proprietary req ids / plan codes — "
+              "local triage only, redact before sharing.")
+        total = 0
+        for cell_dir in cell_dirs:
+            total += list_failed_cell(cell_dir, run=args.run, limit=args.limit)
+        print(f"\ntotal failed rows: {total}")
+        return 0
 
     any_found = False
     for cell_dir in cell_dirs:

@@ -219,3 +219,116 @@ def test_run_cells_passes_extra_config_dir_env(tmp_path, monkeypatch):
     # and the cell YAML was generated externally, not in the clone
     assert (cell_config_root(db_root) / "data" / "GP__Feb2026.yaml").is_file()
     assert not (cfg / "GP__Feb2026.yaml").exists()
+
+
+# ── verify_cells / --verify mode ──────────────────────────────────
+
+import json
+
+from sandbox.sira_multi import main as multi_main, verify_cells
+
+
+def _batch_row(**kw) -> str:
+    row = {"batch_id": "b0", "plan": "PA", "n_reqs": 2, "status": "ok",
+           "answered": 2, "missing": 0, "prompt_tokens_est": 100,
+           "resp_tokens_est": 180, "closed_by": "end", "oversized": False,
+           "attempt": 0, "ms": 5}
+    row.update(kw)
+    return json.dumps(row)
+
+
+def _make_verified_cell(db_root: Path, dirname: str, run: str = "r1") -> Path:
+    """A healthy enriched cell: corpus + kept traces + enrichments +
+    one ok batch row."""
+    _make_cell(db_root, dirname)
+    ds = db_root / dirname
+    with open(ds / "raw" / "corpus.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"_id": "R1", "title": "t", "text": "one"}) + "\n")
+        f.write(json.dumps({"_id": "R2", "title": "t", "text": "two"}) + "\n")
+    rd = ds / "runs" / "doc-enrich" / run
+    rd.mkdir(parents=True)
+    (rd / "trace.kept.jsonl").write_text(
+        "".join(json.dumps({"doc_id": d, "status": "ok"}) + "\n"
+                for d in ("R1", "R2")), encoding="utf-8")
+    (rd / "enrichments.kept.jsonl").write_text(
+        "".join(json.dumps({"doc_id": d, "phrases": ["p"]}) + "\n"
+                for d in ("R1", "R2")), encoding="utf-8")
+    (rd / "batches.jsonl").write_text(_batch_row() + "\n", encoding="utf-8")
+    return ds
+
+
+def test_verify_cells_all_pass(tmp_path, capsys):
+    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    _make_verified_cell(tmp_path, "TMO__Jan2026")
+    assert verify_cells(tmp_path, "r1") == 0
+    out = capsys.readouterr().out
+    assert "TMO__Jan2026/runs" in out and "VZW__Feb2026/runs" in out
+    assert "verify summary: 2 cell(s) — 2 PASS" in out
+
+
+def test_verify_cells_fail_propagates(tmp_path, capsys):
+    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    ds = _make_verified_cell(tmp_path, "TMO__Jan2026")
+    with open(ds / "runs" / "doc-enrich" / "r1" / "trace.kept.jsonl",
+              "a", encoding="utf-8") as f:
+        f.write('{"doc_id": "torn')
+    assert verify_cells(tmp_path, "r1") == 1
+    assert "1 FAIL, 1 PASS" in capsys.readouterr().out
+
+
+def test_verify_cells_only_intersects_and_warns_missing(tmp_path, capsys):
+    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    _make_verified_cell(tmp_path, "TMO__Jan2026")
+    rc = verify_cells(tmp_path, "r1",
+                      only=[("VZW", "Feb2026"), ("ATT", "Mar2026")])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "cell not found" in out and "ATT__Mar2026" in out
+    assert "TMO__Jan2026/runs" not in out
+    assert "verify summary: 1 cell(s) — 1 PASS" in out
+
+
+def test_verify_cells_unknown_run_name_all_skipped(tmp_path, capsys):
+    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    assert verify_cells(tmp_path, "nope") == 1
+    out = capsys.readouterr().out
+    assert "skipping" in out and "every cell was skipped" in out
+
+
+def test_verify_cells_non_cell_dirs_invisible(tmp_path, capsys):
+    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    # corpus but no metadata.json + non-cell name → not a cell
+    legacy = tmp_path / "legacy-dataset" / "raw"
+    legacy.mkdir(parents=True)
+    (legacy / "corpus.jsonl").write_text("")
+    assert verify_cells(tmp_path, "r1") == 0
+    out = capsys.readouterr().out
+    assert "legacy-dataset" not in out
+    assert "verify summary: 1 cell(s) — 1 PASS" in out
+
+
+def test_verify_cells_no_cells(tmp_path, capsys):
+    assert verify_cells(tmp_path, "r1") == 1
+    assert "no cells found" in capsys.readouterr().out
+
+
+def test_main_verify_mode_no_clone_needed(tmp_path, capsys):
+    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    rc = multi_main(["--db-root", str(tmp_path), "--verify",
+                     "--run-name", "r1"])
+    assert rc == 0
+    assert "verify summary" in capsys.readouterr().out
+
+
+def test_main_verify_requires_run_name(tmp_path):
+    with pytest.raises(SystemExit, match="requires --run-name"):
+        multi_main(["--db-root", str(tmp_path), "--verify"])
+
+
+def test_main_verify_strict_fails_on_warn(tmp_path):
+    ds = _make_verified_cell(tmp_path, "VZW__Feb2026")
+    (ds / "runs" / "doc-enrich" / "r1" / "batches.jsonl").write_text(
+        _batch_row(status="parse_error") + "\n", encoding="utf-8")
+    argv = ["--db-root", str(tmp_path), "--verify", "--run-name", "r1"]
+    assert multi_main(argv) == 0
+    assert multi_main(argv + ["--strict"]) == 1

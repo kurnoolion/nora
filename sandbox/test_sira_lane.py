@@ -158,3 +158,44 @@ def test_main_max_reqs_rejects_below_one(tmp_path):
     with pytest.raises(SystemExit) as e:
         main(_main_argv(tmp_path, "--max-reqs", "0"))
     assert e.value.code == 2
+
+
+def test_main_verify_runs_sweep_after_build(tmp_path, monkeypatch):
+    import subprocess
+    import sandbox.sira_multi as sm
+    from sandbox.sira_lane import main
+    calls = {}
+    monkeypatch.setattr(subprocess, "call", lambda cmd: 0)
+    monkeypatch.setattr(
+        sm, "verify_cells",
+        lambda db_root, run_name, only=None, **kw:
+            calls.update(db_root=db_root, run_name=run_name, only=only) or 0)
+    rc = main(["--env-dir", str(tmp_path / "env"), "--db-root", str(tmp_path),
+               "--run-name", "r1", "--only", "VZW__Feb2026", "--verify"])
+    assert rc == 0
+    assert calls["run_name"] == "r1" and calls["only"] == [("VZW", "Feb2026")]
+
+
+def test_main_verify_failure_propagates(tmp_path, monkeypatch, capsys):
+    import subprocess
+    import sandbox.sira_multi as sm
+    from sandbox.sira_lane import main
+    monkeypatch.setattr(subprocess, "call", lambda cmd: 0)
+    monkeypatch.setattr(sm, "verify_cells", lambda *a, **kw: 1)
+    rc = main(["--env-dir", str(tmp_path / "env"), "--db-root", str(tmp_path),
+               "--run-name", "r1", "--verify"])
+    assert rc == 1
+    assert "verification FAILED" in capsys.readouterr().err
+
+
+def test_main_verify_dry_run_prints_only(tmp_path, monkeypatch, capsys):
+    import sandbox.sira_multi as sm
+    from sandbox.sira_lane import main
+
+    def _boom(*a, **kw):
+        raise AssertionError("verify_cells must not run under --dry-run")
+
+    monkeypatch.setattr(sm, "verify_cells", _boom)
+    rc = main(_main_argv(tmp_path, "--verify"))
+    assert rc == 0
+    assert "would verify cells" in capsys.readouterr().out

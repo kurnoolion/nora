@@ -899,11 +899,17 @@ def cmd_heal_torn(args: argparse.Namespace) -> int:
     return 0
 
 
-def _verify_one_cell(dataset_dir: Path, args: argparse.Namespace) -> str:
-    """Print one cell's verify report; return its verdict string."""
-    run_dir = dataset_dir / "runs" / "doc-enrich" / args.run_name
-    rep = verify_run(dataset_dir, args.run_name)
-    print(f"verify-run: {dataset_dir.name}/runs/doc-enrich/{args.run_name}")
+def verify_cell(dataset_dir: Path, run_name: str,
+                compare_run: str | None = None) -> str:
+    """Print one cell's verify report; return its verdict string.
+
+    The per-cell primitive behind `verify-run` — multi-cell sweeps live
+    in the orchestrators (`sira_multi --verify`, `sira_lane --verify`),
+    which loop cells and call this, mirroring how `sira_lane` drives
+    `heal_run_dir` / `retry_failed_in_run` per cell."""
+    run_dir = dataset_dir / "runs" / "doc-enrich" / run_name
+    rep = verify_run(dataset_dir, run_name)
+    print(f"verify-run: {dataset_dir.name}/runs/doc-enrich/{run_name}")
 
     b = rep["batches"]
     if b is None:
@@ -942,13 +948,13 @@ def _verify_one_cell(dataset_dir: Path, args: argparse.Namespace) -> str:
           + f" | kept-without-enrichment {i['kept_without_enrichment']}"
           + f" | orphan-enrichments {i['orphan_enrichments']}")
 
-    if args.compare_run:
-        other = dataset_dir / "runs" / "doc-enrich" / args.compare_run
+    if compare_run:
+        other = dataset_dir / "runs" / "doc-enrich" / compare_run
         if not other.is_dir():
             print(f"[compare]   no run dir at {other} — skipped")
         else:
             c = compare_runs(run_dir, other)
-            print(f"[compare]   vs {args.compare_run}: docs {c['docs_a']} "
+            print(f"[compare]   vs {compare_run}: docs {c['docs_a']} "
                   f"| other {c['docs_b']} | common {c['common']} "
                   f"| only-this {c['only_a']} | only-other {c['only_b']}")
             print(f"            identical phrase-sets {c['identical']}"
@@ -963,71 +969,18 @@ def _verify_one_cell(dataset_dir: Path, args: argparse.Namespace) -> str:
     return rep["verdict"]
 
 
-def discover_cells(db_root: Path, only: str | None) -> list[Path]:
-    """Dataset dirs under db_root (marker: raw/corpus.jsonl), sorted.
-    `only` = comma-separated <MNO>__<REL> names restricting the list;
-    a name without a dataset dir raises ValueError (typo guard)."""
-    if only:
-        cells = []
-        for name in (n.strip() for n in only.split(",") if n.strip()):
-            d = db_root / name
-            if not (d / "raw" / "corpus.jsonl").exists():
-                raise ValueError(f"--only names no dataset dir: {d}")
-            cells.append(d)
-        return cells
-    return sorted(d for d in db_root.iterdir()
-                  if d.is_dir() and (d / "raw" / "corpus.jsonl").exists())
-
-
 def cmd_verify_run(args: argparse.Namespace) -> int:
-    """Read-only health report (batch and single-req modes), paste-safe.
-    Single cell via --dataset, or every cell under --db-root
-    (optionally restricted by --only)."""
-    if bool(args.dataset) == bool(args.db_root):
-        print("ERROR: give exactly one of --dataset or --db-root")
+    """Read-only health report for ONE cell's doc-enrich run (batch and
+    single-req modes), paste-safe. Multi-cell sweeps live at the
+    orchestrator layer: `sira_multi --verify` / `sira_lane --verify`."""
+    dataset_dir = Path(args.dataset)
+    run_dir = dataset_dir / "runs" / "doc-enrich" / args.run_name
+    if not run_dir.is_dir():
+        print(f"ERROR: no run dir at {run_dir}")
         return 1
-
-    if args.dataset:
-        dataset_dir = Path(args.dataset)
-        run_dir = dataset_dir / "runs" / "doc-enrich" / args.run_name
-        if not run_dir.is_dir():
-            print(f"ERROR: no run dir at {run_dir}")
-            return 1
-        verdict = _verify_one_cell(dataset_dir, args)
-        return 1 if verdict == "FAIL" or (verdict == "WARN" and args.strict) else 0
-
-    db_root = Path(args.db_root)
-    if not db_root.is_dir():
-        print(f"ERROR: no db root at {db_root}")
-        return 1
-    try:
-        cells = discover_cells(db_root, args.only)
-    except ValueError as e:
-        print(f"ERROR: {e}")
-        return 1
-    if not cells:
-        print(f"ERROR: no dataset dirs (raw/corpus.jsonl) under {db_root}")
-        return 1
-
-    verdicts: collections.Counter = collections.Counter()
-    for i, cell in enumerate(cells):
-        if i:
-            print()
-        if not (cell / "runs" / "doc-enrich" / args.run_name).is_dir():
-            print(f"verify-run: {cell.name}: no run dir for "
-                  f"'{args.run_name}' — skipping")
-            verdicts["skipped"] += 1
-            continue
-        verdicts[_verify_one_cell(cell, args)] += 1
-
-    print(f"\nverify-run summary: {len(cells)} cell(s) — "
-          + ", ".join(f"{n} {v}" for v, n in sorted(verdicts.items())))
-    if verdicts["skipped"] == len(cells):
-        print("ERROR: every cell was skipped — check --run-name")
-        return 1
-    if verdicts["FAIL"] or (args.strict and verdicts["WARN"]):
-        return 1
-    return 0
+    verdict = verify_cell(dataset_dir, args.run_name,
+                          compare_run=args.compare_run)
+    return 1 if verdict == "FAIL" or (verdict == "WARN" and args.strict) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1049,8 +1002,8 @@ def main(argv: list[str] | None = None) -> int:
     pr = sub.add_parser("promote", help="Reconstruct enrichments/doc/<run>.jsonl + best.jsonl from a full-resume run.")
     rf = sub.add_parser("retry-failed", help="Evict failed entries from a stage's resume trace so the next run reprocesses them.")
     ht = sub.add_parser("heal-torn", help="Post-interruption: drop torn JSONL lines and repair the kept/enrichment resume invariant.")
-    vr = sub.add_parser("verify-run", help="Read-only health report for a doc-enrich run (batch or single-req mode): batch stats, trace reconciliation, kept/enrichment invariant, optional cross-run phrase-set diff. Paste-safe (counts only). One cell via --dataset, or all cells under --db-root [--only].")
-    for parser in (pp, pc, pr, rf, ht):
+    vr = sub.add_parser("verify-run", help="Read-only health report for ONE cell's doc-enrich run (batch or single-req mode): batch stats, trace reconciliation, kept/enrichment invariant, optional cross-run phrase-set diff. Paste-safe (counts only). Multi-cell sweep: sira_multi --verify / sira_lane --verify.")
+    for parser in (pp, pc, pr, rf, ht, vr):
         for a, kw in common_args:
             parser.add_argument(*a, **kw)
 
@@ -1101,24 +1054,6 @@ def main(argv: list[str] | None = None) -> int:
                         "doc-enrich only; rerank gets the torn-line drop."
                     ))
 
-    vr.add_argument("--dataset", default=None,
-                    help=(
-                        "Single SIRA dataset dir (<db_root>/<MNO>__<REL>). "
-                        "Mutually exclusive with --db-root."
-                    ))
-    vr.add_argument("--db-root", default=None,
-                    help=(
-                        "Verify EVERY dataset dir under this root (marker: "
-                        "raw/corpus.jsonl), one report per cell + a summary. "
-                        "Cells without the run name are skipped with a note."
-                    ))
-    vr.add_argument("--only", default=None, metavar="CELLS",
-                    help=(
-                        "With --db-root: comma-separated <MNO>__<REL> names "
-                        "to restrict verification to."
-                    ))
-    vr.add_argument("--run-name", required=True,
-                    help="Pinned doc-enrich run_name (matches +run_name= passed to SIRA).")
     vr.add_argument("--compare-run", default=None, metavar="NAME",
                     help=(
                         "Second doc-enrich run name to diff phrase sets "

@@ -15,7 +15,7 @@ Usage:
         [--only <MNO>__<REL>[,...]] \\
         [--wipe-stale-index | --wipe-all-derived] \\
         [--heal-torn] [--retry-failed [--include-all-filtered]] \\
-        [--max-reqs N] \\
+        [--max-reqs N] [--verify] \\
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
 `--only` restricts BOTH steps to the named cells (same <MNO>__<REL> format
@@ -148,6 +148,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--include-all-filtered", action="store_true",
                    help="With --retry-failed: also retry status=all_filtered "
                         "rows (only useful after a prompt or LLM change)")
+    p.add_argument("--verify", action="store_true",
+                   help="After the lane completes: read-only per-cell "
+                        "verify sweep (sira_multi.verify_cells over the "
+                        "same --only scope and --run-name). Non-zero exit "
+                        "when any cell FAILs — the lane's post-build gate. "
+                        "Paste-safe (counts/statuses only)")
     p.add_argument("--max-reqs", type=int, default=None, metavar="N",
                    help="Cap reqs per enrichment batch (exported as "
                         "NORA_SIRA_BATCH_MAX_REQS to the build). 1 = "
@@ -179,6 +185,20 @@ def main(argv: list[str] | None = None) -> int:
         if rc != 0:
             print(f"sira-lane: step failed (exit {rc}) — stopping.", file=sys.stderr)
             return rc
+    if args.verify:
+        if args.dry_run:
+            print(f"sira-lane: would verify cells (run-name {args.run_name})")
+        else:
+            from sandbox.sira_multi import _parse_cell_list, verify_cells
+            print("sira-lane: verifying cells (read-only)…")
+            rc = verify_cells(
+                args.db_root, args.run_name,
+                only=_parse_cell_list(args.only) if args.only else None,
+            )
+            if rc != 0:
+                print("sira-lane: verification FAILED — see reports above.",
+                      file=sys.stderr)
+                return rc
     if not args.dry_run:
         print("sira-lane: done. Restart sira-query service(s) to load new cells "
               "(/healthz lists them).")

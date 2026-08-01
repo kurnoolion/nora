@@ -481,10 +481,20 @@ Skip the flag to retry with normal batch packing.
 
     # 3. verify — READ-ONLY, paste-safe (counts only). All cells + summary:
     docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
-      python -m sandbox.sira_incremental verify-run \
+      python -m sandbox.sira_multi --verify \
       --db-root /data/db --run-name <run-name>
-    # (one cell: --dataset /data/db/<MNO>__<REL> instead; restrict the
-    #  sweep: --db-root /data/db --only <MNO>__<REL>[,...])
+    # (restrict: --only <MNO>__<REL>[,...]; one cell: `python -m
+    #  sandbox.sira_incremental verify-run --dataset /data/db/<MNO>__<REL>
+    #  --run-name <run-name>`; or fold it into the lane run itself by
+    #  adding --verify to the sira_lane command — post-build gate)
+
+    # 4. triage WHICH reqs failed — LOCAL-ONLY (real req ids / plan codes;
+    #    redact before sharing). Failed reqs per cell, grouped status → plan:
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+      python -m sandbox.sira_enrich_inspect --failed \
+      --db-root /data/db --run <run-name>
+    # (--cell <MNO>__<REL> for one cell; --limit 20 for more ids per group;
+    #  then drill into one req: `sira_enrich_inspect <req_id> --trace`)
 
 `verify-run` replaces the ad-hoc step-1 histogram and more: batch
 status/round histograms (with single-req-mode detection), kept/failed
