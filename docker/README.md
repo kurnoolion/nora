@@ -311,6 +311,9 @@ NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy
 # NORA_SIRA_BATCH_REASONING_SENTINEL=1 (===FINAL_ANSWER=== instruction +
 # marker-aware parsing; raise RESP_TOKENS_PER_REQ too — thinking consumes
 # response budget)
+# NORA_SIRA_BATCH_MAX_REQS=1 forces single-req mode: same batched prompt
+# (taxonomy block included) + retry/trace machinery, one LLM call per req.
+# Values >1 hard-cap reqs/batch; never loosens the budget-derived cap.
 ```
 
 ### Phase 4 — taxonomy
@@ -463,10 +466,18 @@ N failed docs:
     #    Resume skips every kept doc; only the evicted ones hit the LLM:
     docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
-      --run-name <run-name> --wipe-stale-index --retry-failed
+      --run-name <run-name> --wipe-stale-index --retry-failed --max-reqs 1
     # (per-cell standalone form: `python -m sandbox.sira_incremental
     #  retry-failed --dataset /data/db/<MNO>__<REL> --run-name <run-name>
     #  --stage doc-enrich`, then re-run the lane exactly as before)
+
+`--max-reqs 1` on the retry pass runs each evicted req as its own LLM call
+(single-req mode) — same batched prompt (taxonomy block included) and
+retry/trace machinery, but a req that failed inside a large batch (endpoint
+truncation, one bad neighbor poisoning the parse) gets a clean solo shot.
+It exports `NORA_SIRA_BATCH_MAX_REQS` to the build; values >1 cap
+reqs/batch, and the cap never loosens the response-budget-derived limit.
+Skip the flag to retry with normal batch packing.
 
 Reading the step-1 histogram: timeout / connection / HTTP statuses are
 transient endpoint trouble — retry fixes them. `all_filtered` rows are NOT

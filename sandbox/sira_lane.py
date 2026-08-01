@@ -15,6 +15,7 @@ Usage:
         [--only <MNO>__<REL>[,...]] \\
         [--wipe-stale-index | --wipe-all-derived] \\
         [--heal-torn] [--retry-failed [--include-all-filtered]] \\
+        [--max-reqs N] \\
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
 `--only` restricts BOTH steps to the named cells (same <MNO>__<REL> format
@@ -25,6 +26,7 @@ new cells load (/healthz shows them).
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -115,7 +117,7 @@ def run_repairs(args: argparse.Namespace) -> None:
                   f"evicted {evicted} doc(s) for retry")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="sira_lane",
         description="Run the SIRA retrieval lane: adapter + per-cell index/enrich.",
@@ -146,10 +148,25 @@ def main() -> int:
     p.add_argument("--include-all-filtered", action="store_true",
                    help="With --retry-failed: also retry status=all_filtered "
                         "rows (only useful after a prompt or LLM change)")
+    p.add_argument("--max-reqs", type=int, default=None, metavar="N",
+                   help="Cap reqs per enrichment batch (exported as "
+                        "NORA_SIRA_BATCH_MAX_REQS to the build). 1 = "
+                        "single-req mode: same batched prompt + retry/trace "
+                        "machinery, one LLM call per req — the typical "
+                        "pairing with --retry-failed. Never loosens the "
+                        "response-budget-derived cap")
     p.add_argument("--stages", default="prepare,bm25,enrich_corpus")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the two commands, run nothing")
-    args = p.parse_args()
+    args = p.parse_args(argv)
+
+    if args.max_reqs is not None:
+        if args.max_reqs < 1:
+            p.error("--max-reqs must be >= 1")
+        # child steps inherit os.environ; the flag wins over any preset var
+        os.environ["NORA_SIRA_BATCH_MAX_REQS"] = str(args.max_reqs)
+        print(f"sira-lane: NORA_SIRA_BATCH_MAX_REQS={args.max_reqs} "
+              f"(reqs/batch cap{' — single-req mode' if args.max_reqs == 1 else ''})")
 
     run_repairs(args)
 

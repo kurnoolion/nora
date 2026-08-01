@@ -118,3 +118,43 @@ def test_run_repairs_noop_without_flags(tmp_path, capsys):
     _seed_cell(tmp_path, "MNOA__Feb2026")
     run_repairs(_repair_args(tmp_path, heal_torn=False, retry_failed=False))
     assert capsys.readouterr().out == ""
+
+
+def _main_argv(tmp_path, *extra):
+    return ["--env-dir", str(tmp_path / "env"), "--db-root", str(tmp_path),
+            "--dry-run", *extra]
+
+
+def test_main_max_reqs_exports_env_var(tmp_path, monkeypatch, capsys):
+    import os
+    from sandbox.sira_lane import main
+    # setenv (not delenv) so monkeypatch restores pre-test state even though
+    # main() writes the key directly
+    monkeypatch.setenv("NORA_SIRA_BATCH_MAX_REQS", "")
+    assert main(_main_argv(tmp_path, "--max-reqs", "1")) == 0
+    assert os.environ["NORA_SIRA_BATCH_MAX_REQS"] == "1"
+    assert "single-req mode" in capsys.readouterr().out
+
+
+def test_main_max_reqs_overrides_preset_env(tmp_path, monkeypatch):
+    import os
+    from sandbox.sira_lane import main
+    monkeypatch.setenv("NORA_SIRA_BATCH_MAX_REQS", "35")
+    assert main(_main_argv(tmp_path, "--max-reqs", "5")) == 0
+    assert os.environ["NORA_SIRA_BATCH_MAX_REQS"] == "5"
+
+
+def test_main_without_max_reqs_leaves_env_alone(tmp_path, monkeypatch):
+    import os
+    from sandbox.sira_lane import main
+    monkeypatch.delenv("NORA_SIRA_BATCH_MAX_REQS", raising=False)
+    assert main(_main_argv(tmp_path)) == 0
+    assert "NORA_SIRA_BATCH_MAX_REQS" not in os.environ
+
+
+def test_main_max_reqs_rejects_below_one(tmp_path):
+    import pytest
+    from sandbox.sira_lane import main
+    with pytest.raises(SystemExit) as e:
+        main(_main_argv(tmp_path, "--max-reqs", "0"))
+    assert e.value.code == 2

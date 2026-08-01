@@ -83,6 +83,33 @@ class TestPacking:
         # neighbors unaffected
         assert [rid for b in batches for rid in b.ids] == ["R0", "BIG", "R2"]
 
+    def test_from_env_parses_max_reqs(self):
+        assert eb.BatchConfig.from_env({"NORA_SIRA_BATCH_MAX_REQS": "1"}).max_reqs == 1
+        assert eb.BatchConfig.from_env({}).max_reqs == 0
+
+    def test_explicit_max_reqs_tightens_response_cap(self):
+        # derived cap would be 100/10 = 10; explicit 4 binds first
+        cfg = eb.BatchConfig(prompt_cap_tokens=10_000, context_tokens=10_100,
+                             resp_tokens_per_req=10, chars_per_token=3.5,
+                             max_reqs=4)
+        batches = eb.make_plan_batches("P", self._reqs(10, 20), 500, cfg)
+        assert [len(b.ids) for b in batches] == [4, 4, 2]
+        assert batches[0].closed_by == "response"
+
+    def test_explicit_max_reqs_never_loosens_response_budget(self):
+        # derived cap = 100/10 = 10; explicit 50 must not raise it
+        cfg = eb.BatchConfig(prompt_cap_tokens=10_000, context_tokens=10_100,
+                             resp_tokens_per_req=10, chars_per_token=3.5,
+                             max_reqs=50)
+        batches = eb.make_plan_batches("P", self._reqs(25, 20), 500, cfg)
+        assert [len(b.ids) for b in batches] == [10, 10, 5]
+
+    def test_max_reqs_one_packs_solo_batches(self):
+        cfg = eb.BatchConfig(max_reqs=1)
+        batches = eb.make_plan_batches("P", self._reqs(3, 20), 100, cfg)
+        assert [b.ids for b in batches] == [["R0"], ["R1"], ["R2"]]
+        assert not any(b.oversized for b in batches)
+
     def test_group_by_plan(self):
         items = [("R1", "**plan**: PA\nx"), ("R2", "**plan**: PB\nx"),
                  ("R3", "**plan**: PA\nx")]
@@ -216,6 +243,26 @@ class TestRunBatched:
         assert summary["batches"] == 2
         plans = {b["plan"] for b in sink.batches}
         assert plans == {"PA", "PB"}
+
+    def test_single_req_mode_one_call_per_req(self, tmp_path):
+        """max_reqs=1: same batched prompt (taxonomy block included),
+        one LLM call per req."""
+        (tmp_path / "PA_features.json").write_text('{"features": ["F1"]}')
+        calls = []
+
+        async def llm(prompt, max_tokens):
+            calls.append(prompt)
+            ids = [ln.split(": ")[1] for ln in prompt.splitlines()
+                   if ln.startswith("### req_id")]
+            assert len(ids) == 1
+            return json.dumps({ids[0]: ["w"]})
+
+        cfg = eb.BatchConfig(max_retries=1, max_reqs=1)
+        sink, summary = _run(self.ITEMS, llm, cfg=cfg,
+                             taxonomy_dir=str(tmp_path))
+        assert summary["batches"] == 2 and summary["enriched"] == 2
+        assert dict(sink.enrich) == {"R1": ["w"], "R2": ["w"]}
+        assert all("feature taxonomy" in p and '"F1"' in p for p in calls)
 
 
 class TestDebugRaw:

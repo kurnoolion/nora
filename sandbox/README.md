@@ -239,6 +239,12 @@ the previous run was killed mid-write — power loss, SIGKILL):
     python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
         --run-name "$RUN" --only <MNO>__<REL> --wipe-stale-index --retry-failed
 
+Add `--max-reqs 1` to run the retried reqs in single-req mode (one LLM
+call per req, same batched prompt incl. taxonomy block) — a req that
+failed inside a large batch gets a clean solo shot. Exports
+`NORA_SIRA_BATCH_MAX_REQS` to the build; >1 caps reqs/batch (never above
+the response-budget-derived limit).
+
 Verify: `retry-failed` prints per-file eviction counts; the resume
 re-enriches exactly those docs; `trace.failed.jsonl` shrinks.
 
@@ -371,10 +377,13 @@ redacted) under each stack's state dir.
         [--run-name enrich-stable] [--only <MNO>__<REL>,...] \
         [--wipe-stale-index | --wipe-all-derived] \
         [--heal-torn] [--retry-failed [--include-all-filtered]] \
+        [--max-reqs N] \
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
 Runs the adapter (`nora_to_beir --multi-cell`) then `sira_multi`, threading
-`--only` and the wipe flag through both. `--heal-torn` / `--retry-failed`
+`--only` and the wipe flag through both. `--max-reqs N` exports
+`NORA_SIRA_BATCH_MAX_REQS=N` to the build (caps reqs per enrichment batch;
+`1` = single-req mode — the typical pairing with `--retry-failed`). `--heal-torn` / `--retry-failed`
 first run the matching `sira_incremental` repairs over each cell's
 `runs/doc-enrich/<run-name>/` (heal before retry) — resume-after-power-loss
 and retry-old-failures in one command. Incremental runs only: under

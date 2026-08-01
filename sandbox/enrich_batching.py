@@ -117,6 +117,12 @@ class BatchConfig:
     prompt_cap_tokens: int = 50_000
     context_tokens: int = 64_000
     resp_tokens_per_req: int = 90       # measured p95 86, rounded up
+    max_reqs: int = 0                   # 0 = derived from response budget;
+                                        # >=1 caps reqs/batch below that.
+                                        # 1 = single-req mode: same batched
+                                        # prompt (taxonomy block included),
+                                        # packing/retry/trace machinery —
+                                        # just one req per LLM call
     chars_per_token: float = 3.5
     max_retries: int = 2                # re-queue rounds for missing/errored reqs
     batch_concurrency: int = 2
@@ -143,6 +149,7 @@ class BatchConfig:
             prompt_cap_tokens=_get("PROMPT_CAP_TOKENS", int, 50_000),
             context_tokens=_get("CONTEXT_TOKENS", int, 64_000),
             resp_tokens_per_req=_get("RESP_TOKENS_PER_REQ", int, 90),
+            max_reqs=_get("MAX_REQS", int, 0),
             chars_per_token=_get("CHARS_PER_TOKEN", float, 3.5),
             max_retries=_get("RETRIES", int, 2),
             batch_concurrency=_get("CONCURRENCY", int, 2),
@@ -173,6 +180,9 @@ def make_plan_batches(plan_id: str, reqs: list[tuple[str, str]],
     busts the prompt budget ships as a solo oversized batch."""
     text_budget = cfg.prompt_cap_tokens - header_tokens
     max_reqs = max(1, cfg.response_reserve // max(1, cfg.resp_tokens_per_req))
+    if cfg.max_reqs > 0:
+        # explicit cap only tightens — the response budget stays a hard bound
+        max_reqs = min(max_reqs, cfg.max_reqs)
     batches: list[Batch] = []
     ids: list[str] = []
     texts: list[str] = []
