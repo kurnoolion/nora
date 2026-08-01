@@ -446,6 +446,214 @@ def merge_kept_enrichments(
     return merged
 
 
+# ── verify-run (read-only diagnostics) ──────────────────────────────
+#
+# Paste-safe by design: reports carry counts, statuses, and filenames
+# only — never doc_ids/req_ids or corpus text (collab protocol).
+
+_BENIGN_FAILED_STATUSES = {"all_filtered", "no_phrases"}
+
+
+def _count_torn_lines(path: Path) -> int:
+    """Read-only counterpart of heal_torn_lines: count unparseable
+    lines without rewriting anything."""
+    if not path.exists():
+        return 0
+    torn = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                json.loads(stripped)
+            except json.JSONDecodeError:
+                torn += 1
+    return torn
+
+
+def _jsonl_rows(paths: list[Path]):
+    """Yield parsed rows across JSONL files (torn/blank lines skipped)."""
+    for p in paths:
+        if not p.exists():
+            continue
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+
+def _granularity(doc_id: str) -> str:
+    """Corpus row granularity: doc: / section: prefixed ids are coarse
+    rows; everything else is a per-req row."""
+    head = doc_id.split(":", 1)[0]
+    return head if head in ("doc", "section") else "req"
+
+
+def batches_report(run_dir: Path) -> dict | None:
+    """Aggregate batches*.jsonl (batched-enrich only). None when the run
+    has no batch rows (legacy per-req path)."""
+    rows = list(_jsonl_rows(sorted(run_dir.glob("batches*.jsonl"))))
+    if not rows:
+        return None
+    status = collections.Counter(r.get("status", "?") for r in rows)
+    ok_sizes = [r.get("n_reqs", 0) for r in rows if r.get("status") == "ok"]
+    pe_sizes = [r.get("n_reqs", 0) for r in rows if r.get("status") == "parse_error"]
+    final_round = max((r.get("attempt", 0) for r in rows), default=0)
+    return {
+        "n": len(rows),
+        "status": dict(status),
+        "closed_by": dict(collections.Counter(r.get("closed_by", "?") for r in rows)),
+        "rounds": dict(sorted(collections.Counter(
+            r.get("attempt", 0) for r in rows).items())),
+        "oversized": sum(1 for r in rows if r.get("oversized")),
+        "reqs_ok": {"min": min(ok_sizes), "avg": round(sum(ok_sizes) / len(ok_sizes), 1),
+                    "max": max(ok_sizes)} if ok_sizes else None,
+        "reqs_parse_error_avg": (round(sum(pe_sizes) / len(pe_sizes), 1)
+                                 if pe_sizes else None),
+        "answered": sum(r.get("answered", 0) for r in rows),
+        "missing_final": sum(r.get("missing", 0) for r in rows
+                             if r.get("attempt", 0) == final_round),
+        "single_req_mode": all(r.get("n_reqs") == 1 for r in rows),
+    }
+
+
+def trace_report(run_dir: Path, corpus_ids: set[str] | None) -> dict:
+    """Per-req outcome reconciliation over trace.kept*/trace.failed*."""
+    kept_ids: list[str] = []
+    for row in _jsonl_rows(sorted(run_dir.glob("trace.kept*.jsonl"))):
+        if row.get("doc_id") is not None:
+            kept_ids.append(row["doc_id"])
+    failed_status: collections.Counter = collections.Counter()
+    failed_ids: set[str] = set()
+    for row in _jsonl_rows(sorted(run_dir.glob("trace.failed*.jsonl"))):
+        if row.get("doc_id") is not None:
+            failed_ids.add(row["doc_id"])
+            failed_status[row.get("status", "?")] += 1
+    kept_set = set(kept_ids)
+    rep = {
+        "kept": len(kept_ids),
+        "kept_granularity": dict(collections.Counter(
+            _granularity(d) for d in kept_ids)),
+        "kept_duplicates": len(kept_ids) - len(kept_set),
+        "failed": sum(failed_status.values()),
+        "failed_status": dict(failed_status),
+        "failed_non_benign": sum(n for s, n in failed_status.items()
+                                 if s not in _BENIGN_FAILED_STATUSES),
+        "kept_and_failed_overlap": len(kept_set & failed_ids),
+    }
+    if corpus_ids is not None:
+        covered = kept_set | failed_ids
+        rep["corpus"] = len(corpus_ids)
+        rep["uncovered"] = len(corpus_ids - covered)
+        rep["not_in_corpus"] = len(covered - corpus_ids)
+    return rep
+
+
+def invariant_report(run_dir: Path) -> dict:
+    """Read-only version of heal_run_dir's checks: torn-line counts and
+    the two-way kept↔enrichment invariant. All zeros on a healthy run."""
+    torn = {p.name: n for p in sorted(run_dir.glob("*.jsonl"))
+            if (n := _count_torn_lines(p))}
+    kept_ids = _jsonl_doc_ids(sorted(run_dir.glob("trace.kept*.jsonl")))
+    enrich_ids = _jsonl_doc_ids(sorted(run_dir.glob("enrichments.kept*.jsonl")))
+    return {"torn": torn,
+            "kept_without_enrichment": len(kept_ids - enrich_ids),
+            "orphan_enrichments": len(enrich_ids - kept_ids)}
+
+
+def verify_run(dataset_dir: Path, run_name: str) -> dict:
+    """Assemble the full read-only report + verdict for one doc-enrich
+    run. verdict: FAIL on structural-integrity breaks (torn lines,
+    invariant, duplicate/overlapping trace rows), WARN on quality
+    signals (parse errors, unanswered reqs, uncovered corpus rows,
+    non-benign failures), PASS otherwise."""
+    run_dir = dataset_dir / "runs" / "doc-enrich" / run_name
+    corpus = dataset_dir / "raw" / "corpus.jsonl"
+    corpus_ids = set(corpus_hashes(corpus)) if corpus.exists() else None
+
+    batches = batches_report(run_dir)
+    trace = trace_report(run_dir, corpus_ids)
+    invariant = invariant_report(run_dir)
+
+    fails: list[str] = []
+    warns: list[str] = []
+    if invariant["torn"]:
+        fails.append(f"torn lines: {sum(invariant['torn'].values())}")
+    if invariant["kept_without_enrichment"]:
+        fails.append(f"kept-without-enrichment: "
+                     f"{invariant['kept_without_enrichment']}")
+    if invariant["orphan_enrichments"]:
+        fails.append(f"orphan enrichments: {invariant['orphan_enrichments']}")
+    if trace["kept_duplicates"]:
+        fails.append(f"duplicate kept rows: {trace['kept_duplicates']}")
+    if trace["kept_and_failed_overlap"]:
+        fails.append(f"kept∩failed overlap: {trace['kept_and_failed_overlap']}")
+    if batches:
+        if batches["status"].get("parse_error"):
+            warns.append(f"parse_error batches: {batches['status']['parse_error']}")
+        if batches["missing_final"]:
+            warns.append(f"missing at final round: {batches['missing_final']}")
+    if trace["failed_non_benign"]:
+        warns.append(f"non-benign failures: {trace['failed_non_benign']}")
+    if trace.get("uncovered"):
+        warns.append(f"corpus rows never attempted: {trace['uncovered']}")
+    if trace.get("not_in_corpus"):
+        warns.append(f"trace rows not in current corpus: "
+                     f"{trace['not_in_corpus']} (stale corpus?)")
+
+    verdict = "FAIL" if fails else ("WARN" if warns else "PASS")
+    return {"batches": batches, "trace": trace, "invariant": invariant,
+            "fails": fails, "warns": warns, "verdict": verdict}
+
+
+def _merged_enrichments(run_dir: Path) -> dict[str, list]:
+    """Per-doc merged phrase lists across enrichments.kept*.jsonl shards
+    (same setdefault+extend semantics as merge_kept_enrichments)."""
+    merged: dict[str, list] = {}
+    for row in _jsonl_rows(sorted(run_dir.glob("enrichments.kept*.jsonl"))):
+        did, phrases = row.get("doc_id"), row.get("phrases")
+        if did is None or not phrases:
+            continue
+        merged.setdefault(did, []).extend(phrases)
+    return merged
+
+
+def compare_runs(run_dir_a: Path, run_dir_b: Path) -> dict:
+    """Phrase-set agreement between two runs of the same cell (e.g.
+    batch mode vs --max-reqs 1). Jaccard over per-doc phrase SETS;
+    counts only — ids and phrases never leave this function."""
+    a, b = _merged_enrichments(run_dir_a), _merged_enrichments(run_dir_b)
+    common = sorted(set(a) & set(b))
+    jaccards = []
+    for did in common:
+        sa, sb = set(a[did]), set(b[did])
+        union = sa | sb
+        jaccards.append(len(sa & sb) / len(union) if union else 1.0)
+    buckets = {"=1.0": 0, ">=0.8": 0, ">=0.5": 0, "<0.5": 0}
+    for j in jaccards:
+        if j == 1.0:
+            buckets["=1.0"] += 1
+        elif j >= 0.8:
+            buckets[">=0.8"] += 1
+        elif j >= 0.5:
+            buckets[">=0.5"] += 1
+        else:
+            buckets["<0.5"] += 1
+    return {
+        "docs_a": len(a), "docs_b": len(b), "common": len(common),
+        "only_a": len(set(a) - set(b)), "only_b": len(set(b) - set(a)),
+        "identical": buckets["=1.0"],
+        "jaccard_mean": round(sum(jaccards) / len(jaccards), 3) if jaccards else None,
+        "jaccard_min": round(min(jaccards), 3) if jaccards else None,
+        "buckets": buckets,
+    }
+
+
 # ── CLI ─────────────────────────────────────────────────────────────
 
 
@@ -691,6 +899,137 @@ def cmd_heal_torn(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_one_cell(dataset_dir: Path, args: argparse.Namespace) -> str:
+    """Print one cell's verify report; return its verdict string."""
+    run_dir = dataset_dir / "runs" / "doc-enrich" / args.run_name
+    rep = verify_run(dataset_dir, args.run_name)
+    print(f"verify-run: {dataset_dir.name}/runs/doc-enrich/{args.run_name}")
+
+    b = rep["batches"]
+    if b is None:
+        print("[batches]   no batches*.jsonl — legacy per-req path "
+              "(or run predates batched enrich)")
+    else:
+        mode = ("single-req (all batches carry 1 req)" if b["single_req_mode"]
+                else "batched")
+        print(f"[batches]   {b['n']} | status {b['status']} | "
+              f"closed_by {b['closed_by']} | rounds {b['rounds']}")
+        line = f"            mode: {mode} | oversized {b['oversized']}"
+        if b["reqs_ok"]:
+            r = b["reqs_ok"]
+            line += (f" | reqs/batch ok: min {r['min']} avg {r['avg']} "
+                     f"max {r['max']}")
+        if b["reqs_parse_error_avg"] is not None:
+            line += f" | reqs/batch parse_error avg: {b['reqs_parse_error_avg']}"
+        print(line)
+        print(f"            answered {b['answered']} | "
+              f"missing@final-round {b['missing_final']}")
+
+    t = rep["trace"]
+    print(f"[trace]     kept {t['kept']} {t['kept_granularity']} | "
+          f"failed {t['failed']} {t['failed_status']}")
+    print(f"            duplicates {t['kept_duplicates']} | "
+          f"kept∩failed {t['kept_and_failed_overlap']}")
+    if "corpus" in t:
+        print(f"[coverage]  corpus {t['corpus']} | uncovered {t['uncovered']} "
+              f"| not-in-corpus {t['not_in_corpus']}")
+    else:
+        print("[coverage]  raw/corpus.jsonl missing — coverage skipped")
+
+    i = rep["invariant"]
+    print(f"[invariant] torn {sum(i['torn'].values())}"
+          + "".join(f" ({name}: {n})" for name, n in i["torn"].items())
+          + f" | kept-without-enrichment {i['kept_without_enrichment']}"
+          + f" | orphan-enrichments {i['orphan_enrichments']}")
+
+    if args.compare_run:
+        other = dataset_dir / "runs" / "doc-enrich" / args.compare_run
+        if not other.is_dir():
+            print(f"[compare]   no run dir at {other} — skipped")
+        else:
+            c = compare_runs(run_dir, other)
+            print(f"[compare]   vs {args.compare_run}: docs {c['docs_a']} "
+                  f"| other {c['docs_b']} | common {c['common']} "
+                  f"| only-this {c['only_a']} | only-other {c['only_b']}")
+            print(f"            identical phrase-sets {c['identical']}"
+                  f"/{c['common']} | jaccard mean {c['jaccard_mean']} "
+                  f"min {c['jaccard_min']} | buckets {c['buckets']}")
+
+    for f_ in rep["fails"]:
+        print(f"FAIL: {f_}")
+    for w in rep["warns"]:
+        print(f"WARN: {w}")
+    print(f"verdict: {rep['verdict']}")
+    return rep["verdict"]
+
+
+def discover_cells(db_root: Path, only: str | None) -> list[Path]:
+    """Dataset dirs under db_root (marker: raw/corpus.jsonl), sorted.
+    `only` = comma-separated <MNO>__<REL> names restricting the list;
+    a name without a dataset dir raises ValueError (typo guard)."""
+    if only:
+        cells = []
+        for name in (n.strip() for n in only.split(",") if n.strip()):
+            d = db_root / name
+            if not (d / "raw" / "corpus.jsonl").exists():
+                raise ValueError(f"--only names no dataset dir: {d}")
+            cells.append(d)
+        return cells
+    return sorted(d for d in db_root.iterdir()
+                  if d.is_dir() and (d / "raw" / "corpus.jsonl").exists())
+
+
+def cmd_verify_run(args: argparse.Namespace) -> int:
+    """Read-only health report (batch and single-req modes), paste-safe.
+    Single cell via --dataset, or every cell under --db-root
+    (optionally restricted by --only)."""
+    if bool(args.dataset) == bool(args.db_root):
+        print("ERROR: give exactly one of --dataset or --db-root")
+        return 1
+
+    if args.dataset:
+        dataset_dir = Path(args.dataset)
+        run_dir = dataset_dir / "runs" / "doc-enrich" / args.run_name
+        if not run_dir.is_dir():
+            print(f"ERROR: no run dir at {run_dir}")
+            return 1
+        verdict = _verify_one_cell(dataset_dir, args)
+        return 1 if verdict == "FAIL" or (verdict == "WARN" and args.strict) else 0
+
+    db_root = Path(args.db_root)
+    if not db_root.is_dir():
+        print(f"ERROR: no db root at {db_root}")
+        return 1
+    try:
+        cells = discover_cells(db_root, args.only)
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        return 1
+    if not cells:
+        print(f"ERROR: no dataset dirs (raw/corpus.jsonl) under {db_root}")
+        return 1
+
+    verdicts: collections.Counter = collections.Counter()
+    for i, cell in enumerate(cells):
+        if i:
+            print()
+        if not (cell / "runs" / "doc-enrich" / args.run_name).is_dir():
+            print(f"verify-run: {cell.name}: no run dir for "
+                  f"'{args.run_name}' — skipping")
+            verdicts["skipped"] += 1
+            continue
+        verdicts[_verify_one_cell(cell, args)] += 1
+
+    print(f"\nverify-run summary: {len(cells)} cell(s) — "
+          + ", ".join(f"{n} {v}" for v, n in sorted(verdicts.items())))
+    if verdicts["skipped"] == len(cells):
+        print("ERROR: every cell was skipped — check --run-name")
+        return 1
+    if verdicts["FAIL"] or (args.strict and verdicts["WARN"]):
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="sira_incremental",
@@ -710,6 +1049,7 @@ def main(argv: list[str] | None = None) -> int:
     pr = sub.add_parser("promote", help="Reconstruct enrichments/doc/<run>.jsonl + best.jsonl from a full-resume run.")
     rf = sub.add_parser("retry-failed", help="Evict failed entries from a stage's resume trace so the next run reprocesses them.")
     ht = sub.add_parser("heal-torn", help="Post-interruption: drop torn JSONL lines and repair the kept/enrichment resume invariant.")
+    vr = sub.add_parser("verify-run", help="Read-only health report for a doc-enrich run (batch or single-req mode): batch stats, trace reconciliation, kept/enrichment invariant, optional cross-run phrase-set diff. Paste-safe (counts only). One cell via --dataset, or all cells under --db-root [--only].")
     for parser in (pp, pc, pr, rf, ht):
         for a, kw in common_args:
             parser.add_argument(*a, **kw)
@@ -761,6 +1101,34 @@ def main(argv: list[str] | None = None) -> int:
                         "doc-enrich only; rerank gets the torn-line drop."
                     ))
 
+    vr.add_argument("--dataset", default=None,
+                    help=(
+                        "Single SIRA dataset dir (<db_root>/<MNO>__<REL>). "
+                        "Mutually exclusive with --db-root."
+                    ))
+    vr.add_argument("--db-root", default=None,
+                    help=(
+                        "Verify EVERY dataset dir under this root (marker: "
+                        "raw/corpus.jsonl), one report per cell + a summary. "
+                        "Cells without the run name are skipped with a note."
+                    ))
+    vr.add_argument("--only", default=None, metavar="CELLS",
+                    help=(
+                        "With --db-root: comma-separated <MNO>__<REL> names "
+                        "to restrict verification to."
+                    ))
+    vr.add_argument("--run-name", required=True,
+                    help="Pinned doc-enrich run_name (matches +run_name= passed to SIRA).")
+    vr.add_argument("--compare-run", default=None, metavar="NAME",
+                    help=(
+                        "Second doc-enrich run name to diff phrase sets "
+                        "against (e.g. a --max-reqs 1 rerun of the same "
+                        "cell vs its batch-mode run). Reports per-doc "
+                        "Jaccard agreement — counts only, no content."
+                    ))
+    vr.add_argument("--strict", action="store_true",
+                    help="Exit 1 on WARN too (default: only FAIL exits 1).")
+
     args = p.parse_args(argv)
     return {
         "prune": cmd_prune,
@@ -768,6 +1136,7 @@ def main(argv: list[str] | None = None) -> int:
         "promote": cmd_promote,
         "retry-failed": cmd_retry_failed,
         "heal-torn": cmd_heal_torn,
+        "verify-run": cmd_verify_run,
     }[args.cmd](args)
 
 

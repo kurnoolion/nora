@@ -25,7 +25,7 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`. | ✅ |
 | `verify_tables.py` | Verifies parsed tables are inlined into NORA parse text (fails on any `tables`-field req missing its inline table) and reached the per-cell SIRA corpus, with a cross-check. `--parse` and/or `--db-root`. | ✅ |
 | `run_stack.sh` | Launch one isolated SIRA-service + NORA-web stack (Path-B) from args — own ports, own LLM, own web state DBs — so several can run in parallel to A/B different LLMs / ingestions. `--dry-run` to preview, `--stop <label>` to tear down. | ✅ |
-| `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed` / `heal-torn`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
+| `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed` / `heal-torn` / `verify-run`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
 | `prompts/doc_requirement_v01.txt` | Telecom-tuned doc-enrichment prompt (replaces SIRA's Wikipedia-tuned `doc_v07.txt`). | ✅ |
 | `prompts/query_requirement_v01.txt` | Mirror query-enrichment prompt. | ✅ |
 | `prompts/relevance_requirement_v01.txt` | LLM-reranker prompt. | ✅ |
@@ -466,6 +466,22 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   an enrichment row whose kept row was lost is dropped (no duplicate
   phrases on re-enrich). `sira_lane --heal-torn` runs it inline per cell
   before the lane.
+- `verify-run (--dataset DIR | --db-root DIR [--only CELLS])
+  [--compare-run NAME] [--strict]` — READ-ONLY health report for a
+  doc-enrich run, paste-safe (counts/statuses only, never ids or
+  content). `--dataset` verifies one cell; `--db-root` verifies every
+  dataset dir under the root (skip-with-note when a cell lacks the run
+  name) and ends with a per-verdict summary; `--only <MNO>__<REL>[,...]`
+  restricts the db-root sweep. Sections: `[batches]` status/closed_by/round histograms +
+  reqs-per-batch stats + single-req-mode detection; `[trace]` kept/failed
+  reconciliation (granularity split, duplicates, kept∩failed);
+  `[coverage]` vs `raw/corpus.jsonl`; `[invariant]` torn lines +
+  kept↔enrichment both directions (all zeros on a healthy run).
+  `--compare-run` diffs per-doc phrase SETS against a second run of the
+  same cell (e.g. batch mode vs `--max-reqs 1`) as Jaccard buckets — the
+  strongest no-cross-contamination check. Exit 1 on FAIL (structural
+  breaks); `--strict` also fails on WARN (quality signals) for CI-style
+  gating. Run after every build; run before trusting a heal/retry pass.
 
 ### Query-service env vars (`sandbox/sira_query/service.py`)
 

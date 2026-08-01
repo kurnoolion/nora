@@ -763,3 +763,247 @@ def test_cmd_heal_torn_via_main(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "doc-enrich (r1): 1 torn line(s) dropped" in out
     assert "rerank: no run dir" in out
+
+
+# ── verify-run: read-only run diagnostics ───────────────────────────
+
+
+from sandbox.sira_incremental import (  # noqa: E402
+    batches_report,
+    compare_runs,
+    trace_report,
+    verify_run,
+)
+
+
+def _batch_row(**kw) -> str:
+    row = {"batch_id": "b0", "plan": "PA", "n_reqs": 2, "status": "ok",
+           "answered": 2, "missing": 0, "prompt_tokens_est": 100,
+           "resp_tokens_est": 180, "closed_by": "end", "oversized": False,
+           "attempt": 0, "ms": 5}
+    row.update(kw)
+    return json.dumps(row)
+
+
+def _seed_verified_run(tmp_path, run="r1"):
+    """Healthy 3-row cell: 2 req rows + 1 coarse doc row, all kept."""
+    ds = tmp_path / "MNOA__Feb2026"
+    rd = ds / "runs" / "doc-enrich" / run
+    _write_corpus(ds / "raw" / "corpus.jsonl", [
+        {"_id": "R1", "title": "t", "text": "one"},
+        {"_id": "R2", "title": "t", "text": "two"},
+        {"_id": "doc:PA", "title": "", "text": "plan"},
+    ])
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": d, "status": "ok", "batch_id": "b0"})
+        for d in ("R1", "R2", "doc:PA")
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha", "beta"]}),
+        json.dumps({"doc_id": "R2", "phrases": ["gamma"]}),
+        json.dumps({"doc_id": "doc:PA", "phrases": ["delta"]}),
+    ])
+    _write_lines(rd / "batches.jsonl", [
+        _batch_row(n_reqs=2, answered=2),
+        _batch_row(batch_id="b1", n_reqs=1, answered=1, closed_by="response"),
+    ])
+    return ds, rd
+
+
+def test_verify_run_healthy_passes(tmp_path):
+    ds, _ = _seed_verified_run(tmp_path)
+    rep = verify_run(ds, "r1")
+    assert rep["verdict"] == "PASS" and not rep["fails"] and not rep["warns"]
+    assert rep["batches"]["n"] == 2 and rep["batches"]["status"] == {"ok": 2}
+    assert rep["batches"]["single_req_mode"] is False
+    assert rep["trace"]["kept"] == 3
+    assert rep["trace"]["kept_granularity"] == {"req": 2, "doc": 1}
+    assert rep["trace"]["uncovered"] == 0 and rep["trace"]["not_in_corpus"] == 0
+
+
+def test_verify_run_detects_single_req_mode(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "batches.jsonl", [
+        _batch_row(n_reqs=1, answered=1),
+        _batch_row(batch_id="b1", n_reqs=1, answered=1),
+    ])
+    assert verify_run(ds, "r1")["batches"]["single_req_mode"] is True
+
+
+def test_verify_run_no_batches_file_reports_legacy(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    (rd / "batches.jsonl").unlink()
+    rep = verify_run(ds, "r1")
+    assert rep["batches"] is None and rep["verdict"] == "PASS"
+
+
+def test_verify_run_broken_invariant_fails_and_is_readonly(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    # R2's enrichment lost + a torn kept line
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha"]}),
+        json.dumps({"doc_id": "doc:PA", "phrases": ["delta"]}),
+    ])
+    with open(rd / "trace.kept.jsonl", "a", encoding="utf-8") as f:
+        f.write('{"doc_id": "torn')
+    before = {p.name: p.read_text() for p in rd.glob("*.jsonl")}
+    rep = verify_run(ds, "r1")
+    assert rep["verdict"] == "FAIL"
+    assert rep["invariant"]["kept_without_enrichment"] == 1
+    assert rep["invariant"]["torn"] == {"trace.kept.jsonl": 1}
+    # read-only: nothing healed/rewritten
+    assert {p.name: p.read_text() for p in rd.glob("*.jsonl")} == before
+
+
+def test_verify_run_quality_signals_warn(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "batches.jsonl", [
+        _batch_row(n_reqs=2, answered=2),
+        _batch_row(batch_id="b1", status="parse_error", answered=0,
+                   missing=1, attempt=2),
+    ])
+    # R2 actually failed (benign + non-benign rows for the histogram)
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": d, "status": "ok"}) for d in ("R1", "doc:PA")
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha"]}),
+        json.dumps({"doc_id": "doc:PA", "phrases": ["delta"]}),
+    ])
+    _write_lines(rd / "trace.failed.jsonl", [
+        json.dumps({"doc_id": "R2", "status": "missing_in_batch_response"}),
+    ])
+    rep = verify_run(ds, "r1")
+    assert rep["verdict"] == "WARN" and not rep["fails"]
+    assert any("parse_error" in w for w in rep["warns"])
+    assert any("missing at final round" in w for w in rep["warns"])
+    assert rep["trace"]["failed_non_benign"] == 1
+
+
+def test_verify_run_duplicate_and_overlap_fail(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    with open(rd / "trace.kept.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"doc_id": "R1", "status": "ok"}) + "\n")
+    _write_lines(rd / "trace.failed.jsonl", [
+        json.dumps({"doc_id": "R2", "status": "http_500"}),
+    ])
+    rep = verify_run(ds, "r1")
+    assert rep["verdict"] == "FAIL"
+    assert rep["trace"]["kept_duplicates"] == 1
+    assert rep["trace"]["kept_and_failed_overlap"] == 1
+
+
+def test_compare_runs_identical_and_divergent(tmp_path):
+    ds, rd1 = _seed_verified_run(tmp_path, run="r1")
+    _, rd2 = _seed_verified_run(tmp_path / "b", run="r2")
+    # r2: R1 identical, R2 disjoint, doc:PA half-overlap, R3 only in r2
+    _write_lines(rd2 / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha", "beta"]}),
+        json.dumps({"doc_id": "R2", "phrases": ["other"]}),
+        json.dumps({"doc_id": "doc:PA", "phrases": ["delta", "extra"]}),
+        json.dumps({"doc_id": "R3", "phrases": ["new"]}),
+    ])
+    c = compare_runs(rd1, rd2)
+    assert c["docs_a"] == 3 and c["docs_b"] == 4
+    assert c["common"] == 3 and c["only_a"] == 0 and c["only_b"] == 1
+    assert c["identical"] == 1 and c["jaccard_min"] == 0.0
+    assert c["buckets"] == {"=1.0": 1, ">=0.8": 0, ">=0.5": 1, "<0.5": 1}
+
+
+def test_cmd_verify_run_via_main(tmp_path, capsys):
+    ds, _ = _seed_verified_run(tmp_path)
+    assert main(["verify-run", "--dataset", str(ds), "--run-name", "r1"]) == 0
+    out = capsys.readouterr().out
+    assert "verdict: PASS" in out and "[invariant] torn 0" in out
+
+
+def test_cmd_verify_run_fail_exit_and_strict(tmp_path, capsys):
+    ds, rd = _seed_verified_run(tmp_path)
+    # WARN-only run: benign structural state, one parse_error batch
+    _write_lines(rd / "batches.jsonl", [_batch_row(status="parse_error")])
+    assert main(["verify-run", "--dataset", str(ds), "--run-name", "r1"]) == 0
+    assert main(["verify-run", "--dataset", str(ds), "--run-name", "r1",
+                 "--strict"]) == 1
+    capsys.readouterr()
+    assert main(["verify-run", "--dataset", str(ds), "--run-name",
+                 "missing"]) == 1
+    assert "no run dir" in capsys.readouterr().out
+
+
+def test_cmd_verify_run_compare_via_main(tmp_path, capsys):
+    ds, _ = _seed_verified_run(tmp_path)
+    rd2 = ds / "runs" / "doc-enrich" / "r2"
+    _write_lines(rd2 / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha", "beta"]}),
+        json.dumps({"doc_id": "R2", "phrases": ["gamma"]}),
+        json.dumps({"doc_id": "doc:PA", "phrases": ["delta"]}),
+    ])
+    rc = main(["verify-run", "--dataset", str(ds), "--run-name", "r1",
+               "--compare-run", "r2"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "identical phrase-sets 3/3" in out and "jaccard mean 1.0" in out
+
+
+def _seed_db_root(tmp_path):
+    """Two healthy cells under one db root."""
+    _seed_verified_run(tmp_path)                      # MNOA__Feb2026
+    ds_b, _ = _seed_verified_run(tmp_path / "stage")  # then move next to it
+    ds_b.rename(tmp_path / "MNOB__Feb2026")
+    return tmp_path
+
+
+def test_verify_run_db_root_all_cells(tmp_path, capsys):
+    db = _seed_db_root(tmp_path)
+    rc = main(["verify-run", "--db-root", str(db), "--run-name", "r1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "MNOA__Feb2026/runs" in out and "MNOB__Feb2026/runs" in out
+    assert "summary: 2 cell(s) — 2 PASS" in out
+
+
+def test_verify_run_db_root_fail_propagates_exit(tmp_path, capsys):
+    db = _seed_db_root(tmp_path)
+    # break MNOB: torn kept line
+    with open(db / "MNOB__Feb2026" / "runs" / "doc-enrich" / "r1"
+              / "trace.kept.jsonl", "a", encoding="utf-8") as f:
+        f.write('{"doc_id": "torn')
+    rc = main(["verify-run", "--db-root", str(db), "--run-name", "r1"])
+    assert rc == 1
+    assert "1 FAIL, 1 PASS" in capsys.readouterr().out
+
+
+def test_verify_run_only_restricts_cells(tmp_path, capsys):
+    db = _seed_db_root(tmp_path)
+    rc = main(["verify-run", "--db-root", str(db), "--run-name", "r1",
+               "--only", "MNOB__Feb2026"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "MNOB__Feb2026/runs" in out and "MNOA__Feb2026" not in out
+    assert "summary: 1 cell(s) — 1 PASS" in out
+
+
+def test_verify_run_only_unknown_cell_errors(tmp_path, capsys):
+    db = _seed_db_root(tmp_path)
+    rc = main(["verify-run", "--db-root", str(db), "--run-name", "r1",
+               "--only", "MNOC__Feb2026"])
+    assert rc == 1
+    assert "names no dataset dir" in capsys.readouterr().out
+
+
+def test_verify_run_dataset_and_db_root_mutually_exclusive(tmp_path, capsys):
+    db = _seed_db_root(tmp_path)
+    rc = main(["verify-run", "--dataset", str(db / "MNOA__Feb2026"),
+               "--db-root", str(db), "--run-name", "r1"])
+    assert rc == 1
+    assert "exactly one of" in capsys.readouterr().out
+    rc = main(["verify-run", "--run-name", "r1"])
+    assert rc == 1
+
+
+def test_verify_run_db_root_unknown_run_name_skips_all(tmp_path, capsys):
+    db = _seed_db_root(tmp_path)
+    rc = main(["verify-run", "--db-root", str(db), "--run-name", "nope"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "skipping" in out and "every cell was skipped" in out

@@ -479,6 +479,22 @@ It exports `NORA_SIRA_BATCH_MAX_REQS` to the build; values >1 cap
 reqs/batch, and the cap never loosens the response-budget-derived limit.
 Skip the flag to retry with normal batch packing.
 
+    # 3. verify — READ-ONLY, paste-safe (counts only). All cells + summary:
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+      python -m sandbox.sira_incremental verify-run \
+      --db-root /data/db --run-name <run-name>
+    # (one cell: --dataset /data/db/<MNO>__<REL> instead; restrict the
+    #  sweep: --db-root /data/db --only <MNO>__<REL>[,...])
+
+`verify-run` replaces the ad-hoc step-1 histogram and more: batch
+status/round histograms (with single-req-mode detection), kept/failed
+reconciliation, coverage vs the corpus, and the kept↔enrichment invariant
+(all zeros on a healthy run). Verdict PASS/WARN/FAIL; exit 1 on FAIL,
+`--strict` fails on WARN too. Add `--compare-run <other-run-name>` to
+diff per-doc phrase sets between two runs of the same cell (batch vs
+`--max-reqs 1`) as Jaccard agreement — the strongest check that batching
+introduces no cross-req contamination.
+
 Reading the step-1 histogram: timeout / connection / HTTP statuses are
 transient endpoint trouble — retry fixes them. `all_filtered` rows are NOT
 errors (the enrichment filter kept nothing for that doc); retrying reproduces
