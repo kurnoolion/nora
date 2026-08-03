@@ -243,3 +243,83 @@
   parse); only revisit via targeted re-enrich if eval shows weak cells.
 - The "batched path unit-tested only" flag is now DROPPED — real-LLM
   exposure at scale verified this session.
+
+## 2026-08-03 — Single-req mode, three-layer verify, coarse-chunk skip policy, permanent-refusal fallback
+
+### Done this session
+- `62b793c` `NORA_SIRA_BATCH_MAX_REQS` + `sira_lane --max-reqs N`:
+  explicit reqs/batch cap (only ever tightens the response-budget-derived
+  cap); `1` = single-req mode — same batched prompt (taxonomy block
+  included), packing/retry/trace machinery, one LLM call per req. The
+  standard retry pairing: `--retry-failed --max-reqs 1`.
+- `84efc1e` + `8cd55ea` three-layer verify architecture:
+  `sira_incremental verify-run` (per-cell primitive; batches/trace/
+  coverage/invariant blocks, FAIL=structural / WARN=quality verdict,
+  paste-safe counts only), `sira_multi --verify` (cell sweep instead of
+  build; `--only` intersection, `--compare-run` Jaccard A/B), `sira_lane
+  --verify` (post-build gate). Cell discovery unified on
+  `sira_cells.enumerate_cells`. Separate triage layer:
+  `sira_enrich_inspect --failed` (LOCAL-ONLY id-bearing listing,
+  status → plan grouping).
+- `6436711` verify-run scopes batch stats to the LATEST invocation
+  (batches files are append-only across resumes; segmentation on
+  batch-id sequence resets with concurrency-jitter tolerance, `history:`
+  line for excluded eras) + sanitized top-5 error histogram
+  (URL/endpoint redaction, 80-char cap). A clean retry pass now PASSes
+  on its own merits.
+- `abe5154` coarse-chunk policy: `doc:`/`section:` corpus rows SKIPPED
+  from enrichment by default, traced as `skipped_doc_chunk` /
+  `skipped_section_chunk` (benign, coverage-counted). Opt-ins
+  `--enrich-doc-chunks` / `--enrich-section-chunks` (lane→multi→env);
+  `retry-failed --include-skipped` evicts them back into scope. Verify
+  splits failed/non-benign/uncovered by row type. DEBUG_RAW widened to
+  dump on ALL parse anomalies (no-JSON, ids-absent, unknown-ids) — the
+  first two were previously invisible.
+- `baa3f14` permanent-refusal fallback: `sandbox/llm_refusal.py`
+  detector (marker-prefix + no-JSON-payload; markers env-local via
+  `NORA_LLM_REFUSAL_MARKERS`, never committed). Batch lane: refused
+  call → one fallback-LLM shot (same prompt/budget, batch row
+  `llm=fallback`, verify shows `fallback-answered N`); markers set but
+  no fallback → fail fast as `llm_refused` (no requeue burn), retryable
+  via `--include-refused` once a fallback exists. Query service: same
+  detection inside `_llm_call` (covers query-enrich + chat rerank),
+  `/healthz` reports `refusal_fallback {configured, used}`. Taxonomy
+  lane deferred (TBD).
+- Public-history scrub executed (dir-name string in a docstring):
+  two filter-repo passes + force-push; 63 doc SHA references re-pointed
+  from the CUMULATIVE commit-map (`7dbbebe`); backup ref lifecycle
+  managed and deleted after work-PC re-sync. `~/work/utils`
+  `adopt-github-rewrite.sh` upgraded to an exact-split
+  `rebase --onto` via the recorded last-synced tip (conflict-free for
+  content scrubs; patch-id fallback retained) — validated by sandbox
+  simulation; work PC shepherded through two failed recoveries to a
+  clean adopt + sync.
+- Debugging arc CLOSED on run `enrich-pe-v1` (4 cells): the ~2,100
+  persistent solo-call failures decomposed via the new by-type verify
+  into 93% coarse doc/section chunks (model returns `{}`/no JSON for
+  rollup texts — now policy-skipped) + a 146-req residue the endpoint
+  PERMANENTLY refuses (deterministic non-answer, DEBUG_RAW-confirmed;
+  111 of 146 concentrated in one cell). Post-policy sweep: all four
+  cells' non-benign = req-only 146; coverage 100%, invariants clean.
+
+### In progress
+- Work-PC: configure refusal markers + fallback endpoints in
+  `.env.sira-batch` / `.env.sira-query`, rebake `sira-batch` +
+  `sira-query`, then `--retry-failed --max-reqs 1 --verify` to route
+  the 146 through the fallback (expect `fallback-answered` counts,
+  non-benign → ~0).
+
+### Next
+- If the fallback retry pass is clean → Phase 6: `promote.sh
+  --sira-build`, pin `NORA_SIRA_DOC_ENRICH_RUN=enrich-pe-v1`, recreate
+  serve stack, `/healthz` (incl. `refusal_fallback.configured`).
+- Eval loop as a separate strand (carried).
+
+### Flags
+- The run is serviceable even before the fallback pass: 24,957 kept
+  rows, 100% coverage — the 146 unenriched reqs still index on raw
+  text; promote is not blocked on the fallback retry.
+- Fallback-model enrichments mix into the same run, recoverable via the
+  `llm=fallback` batch-row tag if quality auditing is ever needed.
+- Pre-sentinel draft-quality-phrase flag (2026-07-29) still open —
+  only revisit via targeted re-enrich if eval shows weak cells.

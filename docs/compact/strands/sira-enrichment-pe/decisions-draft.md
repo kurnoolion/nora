@@ -365,3 +365,146 @@ if eval motivates it). The sentinel does NOT stop thinking — response
 budget must still absorb reasoning tokens (`RESP_TOKENS_PER_REQ` raised
 to 400 on this endpoint, validated). Two sentinel constants now exist
 (core + sandbox) that must stay string-identical if ever changed.
+
+## D-DRAFT-11 — Single-req retry mode reuses the batched machinery (max_reqs=1)
+
+**Status**: Draft · **Date**: 2026-08-03.
+
+**Context:** Reqs that fail inside large batches (truncation, one bad
+neighbor poisoning a parse) needed a clean retry path. Two candidate
+shapes existed: revive the legacy per-req prompt path (`{doc_text}`
+template, separate parse), or run the batched pipeline with one req per
+call.
+
+**Decision:** `NORA_SIRA_BATCH_MAX_REQS` on `BatchConfig` (0 = derived
+from response budget; ≥1 tightens only — `min(derived, cfg.max_reqs)`;
+the explicit cap can never loosen the response-budget bound), surfaced
+as `sira_lane --max-reqs N`. `1` = single-req mode: the SAME batched
+prompt (taxonomy block included), packing, sentinel, requeue and trace
+machinery — just one req per LLM call. Standard retry pairing:
+`--retry-failed --max-reqs 1`.
+
+**Why:** One prompt shape for both modes means one parser, one trace
+schema, one verified pipeline — no dual-path drift, and per-MNO prompt
+files serve both cases (architect call: the taxonomy block is wanted in
+solo prompts too). The legacy per-req path stays what it is: a
+compatibility fallback for non-batched templates, not a retry tool.
+
+**Consequences:** Solo calls pay the full batched-prompt token overhead
+(taxonomy block per call). Batch ids/stats mix solo and batched eras in
+one run dir — handled by verify's invocation scoping (D-DRAFT-13).
+
+## D-DRAFT-12 — Three-layer verify: per-cell primitive, orchestrator sweep, lane gate
+
+**Status**: Draft · **Date**: 2026-08-03.
+
+**Context:** Batch + single-req enrichment needed systematic health
+checking. Early sketches put multi-cell sweeping into `sira_incremental`
+(which duplicated cell discovery with different rules) or proposed one
+monolithic command; triage (WHICH reqs failed) initially conflated with
+verification (IS anything wrong).
+
+**Decision:** Three layers mirroring how the lane already drives
+repairs per cell: `sira_incremental verify-run` = single-cell
+primitive; `sira_multi --verify` = sweep (run_cells-style `--only`
+intersection, warn-on-missing); `sira_lane --verify` = post-build gate.
+Cell discovery unified on `sira_cells.enumerate_cells`. Verdict
+contract: FAIL = structural breaks (torn lines, kept↔enrichment
+invariant, duplicates, kept∩failed) → exit 1; WARN = quality signals
+(parse errors, unanswered, non-benign failures, uncovered) → exit 1
+only under `--strict`. Verify output is paste-safe BY CONSTRUCTION
+(counts/statuses/sanitized errors only); id-bearing triage lives in a
+separate LOCAL-ONLY tool (`sira_enrich_inspect --failed`). Batch stats
+scope to the LATEST invocation (segmentation on batch-id sequence
+resets, concurrency-jitter tolerance, `history:` line) because batches
+files are append-only across resumes.
+
+**Why:** Layering matches the existing repair pattern (lane →
+heal/retry per cell), so each tool has one job and single-cell debugging
+stays cheap. The paste-safe/triage split enforces the collab protocol
+mechanically instead of by discipline. Latest-invocation scoping exists
+because cumulative stats blended dead eras (observed live: 4 cells
+all-WARN from historical rows; missing@final 4317 vs 279 actual) — a
+clean retry pass must PASS on its own merits.
+
+**Consequences:** Every failure-status addition must be classified
+benign/non-benign in one place (`_BENIGN_FAILED_STATUSES`). Invocation
+segmentation has a known limit: back-to-back tiny invocations (< jitter
+window) merge. trace.failed is always current (retry evicts before
+re-run) while batches files are history-bearing — readers must keep the
+two mental models apart (documented in docker README).
+
+## D-DRAFT-13 — Coarse doc/section chunks: skip enrichment by default, opt-in flags
+
+**Status**: Draft · **Date**: 2026-08-03.
+
+**Context:** By-type verify decomposition showed ~93% of the ~2,100
+persistent solo-retry failures were coarse `doc:`/`section:` rollup
+rows — the model deterministically returns `{}`/no JSON for long
+concatenated rollup texts — while per-req rows failed at ~0.6%. Coarse
+rows were also the main driver of retry-round waste and token cost.
+
+**Decision:** Enrichment SKIPS coarse rows by default at the
+`run_batched` choke point. Skipped rows are traced as
+`skipped_doc_chunk` / `skipped_section_chunk` — benign for verify,
+coverage-counted, resume-visible. Opt-ins: `--enrich-doc-chunks` /
+`--enrich-section-chunks` on `sira_lane`/`sira_multi` (exported as
+`NORA_SIRA_BATCH_ENRICH_*_CHUNKS`). Re-scoping after a policy flip:
+`retry-failed --include-skipped`. Verify reports failed/non-benign/
+uncovered split by row type (req/doc/section).
+
+**Why:** Trace rows (vs. silently dropping items) keep the coverage
+invariant intact — verify still proves every corpus row was handled —
+and make the policy self-describing in the run dir. Statuses record
+policy, not failure, so default retries leave them alone (no churn).
+Coarse rows still retrieve via BM25 on raw text; enrichment is additive,
+so the quality cost of skipping is bounded while the failure noise it
+removes is large.
+
+**Consequences:** New trace statuses join the benign set and every
+consumer (verify, triage listing, retry eviction) special-cases the
+`skipped_` prefix. Enriching coarse chunks later requires BOTH the
+opt-in flags and `--include-skipped` (documented recipe). Existing runs
+convert their coarse failures to skipped rows on the next retry pass.
+
+## D-DRAFT-14 — Permanent-refusal detection + fallback LLM (markers env-local)
+
+**Status**: Draft · **Date**: 2026-08-03.
+
+**Context:** After the coarse-chunk policy, a 146-req residue failed
+identically on every solo retry: the endpoint PERMANENTLY refuses those
+inputs — a fixed notice instead of an answer (DEBUG_RAW-confirmed:
+notice is the entire response). Retrying the same endpoint can never
+succeed; each refused req burned all requeue rounds, every pass.
+
+**Decision:** Shared detector `sandbox/llm_refusal.py`: refusal =
+response starts with a configured marker AND carries no JSON payload.
+Markers come from `NORA_LLM_REFUSAL_MARKERS` (`||`-separated) and are
+DEPLOYMENT-LOCAL — set only in gitignored env files, never in committed
+code/tests/docs. Batch lane: refused call gets ONE fallback-LLM shot
+(same prompt/budget; `NORA_SIRA_ENRICH_FALLBACK_LLM_URL/_MODEL`; batch
+row tagged `llm=fallback`, verify prints `fallback-answered N`); with
+markers but no fallback, reqs fail fast as `llm_refused` (skip
+remaining rounds), excluded from default retry, re-scoped via
+`--include-refused`. Query service: identical detection inside the
+`_llm_call` choke point (covers query-enrich + chat rerank;
+`NORA_SIRA_QUERY_FALLBACK_LLM_*`; `/healthz` reports
+`refusal_fallback {configured, used}`). Taxonomy lane: deferred (TBD).
+
+**Why:** Detection at the call boundary (not per-caller parsing) gives
+both lanes one implementation; the two-condition trigger (prefix AND
+no-JSON) makes false positives on genuine answers implausible. Env-local
+markers keep deployment-specific strings out of the public repo by
+construction. Fail-fast without a fallback stops the observed
+3-rounds-per-refusal waste and stamps a status that names the real
+cause. One fallback pair per lane (not per stage) keeps the env surface
+small — the fallback only ever sees inputs the primary refuses, so a
+weaker local model is strictly better than nothing.
+
+**Consequences:** Fallback enrichments mix into the same run,
+auditable only via the `llm=fallback` tag. `llm_refused` joins the
+status taxonomy (non-benign; excluded from default eviction — a third
+include-flag on retry-failed). The detector ships flat into the SIRA
+clone (install_configs.sh) — patch layer changed, image rebake
+required. Marker hygiene is now a standing rule: real values never
+committed; tests use invented placeholders.
