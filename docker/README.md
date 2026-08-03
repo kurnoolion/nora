@@ -447,26 +447,78 @@ docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
   --run-name <run-name> --wipe-stale-index
 ```
 
+### Verifying an enrichment build
+
+Four tools, one flow: **verify** (is anything wrong?) → **--failed**
+(what failed, where?) → **--trace** (why this one?) → retry (next
+section). The verify layer is READ-ONLY and paste-safe by design —
+counts, statuses, and verdicts only, never req ids or corpus content —
+so its output can be shared verbatim. The triage layer prints real ids
+and is local-only.
+
+**1. Sweep every cell** (the standard post-build check):
+
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+      python -m sandbox.sira_multi --verify \
+      --db-root /data/db --run-name <run-name>
+    # restrict: --only <MNO>__<REL>[,...]
+
+Per cell: batch status / closed_by / round histograms (with
+single-req-mode detection), kept/failed reconciliation (granularity
+split, duplicates, kept∩failed), coverage vs the corpus, and the
+kept↔enrichment resume invariant (all zeros on a healthy run). Verdict
+per cell + a summary line. Exit 1 when any cell FAILs (structural
+breaks); `--strict` also fails on WARN (quality signals: parse_error
+batches, unanswered reqs, non-benign failures).
+
+**2. One cell / A-B equivalence**:
+
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+      python -m sandbox.sira_incremental verify-run \
+      --dataset /data/db/<MNO>__<REL> --run-name <run-name>
+
+Add `--compare-run <other-run-name>` to diff per-doc phrase sets between
+two runs of the same cell (e.g. batch mode vs `--max-reqs 1`) as Jaccard
+agreement — the strongest check that batching introduces no cross-req
+contamination.
+
+**3. Lane gate** — append `--verify` to any `sira_lane` command to run
+the sweep automatically after the build; non-zero exit when a cell FAILs.
+
+**4. Triage WHICH reqs failed** — LOCAL-ONLY (real req ids / plan
+codes; redact before sharing):
+
+    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+      python -m sandbox.sira_enrich_inspect --failed \
+      --db-root /data/db --run <run-name>
+    # --cell <MNO>__<REL> for one cell; --limit 20 for more ids per group;
+    # then drill into one req: `sira_enrich_inspect <req_id> --trace`
+
+Failed reqs per cell, grouped status → plan, biggest problem first.
+
+Reading the failure statuses: timeout / connection / HTTP statuses are
+transient endpoint trouble — retry fixes them. `all_filtered` rows are NOT
+errors (the enrichment filter kept nothing for that doc); retrying reproduces
+them identically, so `retry-failed` excludes them by default — pass
+`--include-all-filtered` only after changing the prompt or the LLM. If the
+same docs fail repeatedly with the same status, inspect their trace lines —
+oversized docs vs endpoint token limits are the usual culprits.
+
 ### Retrying failed enrichments
 
 Doc-enrichment resumes by doc_id inside the pinned run dir
 (`<cell>/runs/doc-enrich/<run-name>/`), so failures — and interruptions
 (power loss, killed container) — never mean starting over. Re-running the
 same command with the SAME `--run-name` resumes; docs listed in the run
-dir's trace files (kept AND failed) are skipped. When a lane finishes with
-N failed docs:
+dir's trace files (kept AND failed) are skipped. When verification
+(previous section) shows failed docs worth retrying:
 
-    # 1. WHY did they fail? Histogram the failure statuses first:
-    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
-      python -c "import json,collections; print(dict(collections.Counter( \
-        json.loads(l).get('status','?') for l in \
-        open('/data/db/<MNO>__<REL>/runs/doc-enrich/<run-name>/trace.failed.jsonl'))))"
-
-    # 2. evict genuine failures + re-run in ONE command — SAME --run-name.
-    #    Resume skips every kept doc; only the evicted ones hit the LLM:
+    # evict genuine failures + re-run + re-verify in ONE command —
+    # SAME --run-name. Resume skips every kept doc; only the evicted
+    # ones hit the LLM:
     docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
-      --run-name <run-name> --wipe-stale-index --retry-failed --max-reqs 1
+      --run-name <run-name> --wipe-stale-index --retry-failed --max-reqs 1 --verify
     # (per-cell standalone form: `python -m sandbox.sira_incremental
     #  retry-failed --dataset /data/db/<MNO>__<REL> --run-name <run-name>
     #  --stage doc-enrich`, then re-run the lane exactly as before)
@@ -478,40 +530,6 @@ truncation, one bad neighbor poisoning the parse) gets a clean solo shot.
 It exports `NORA_SIRA_BATCH_MAX_REQS` to the build; values >1 cap
 reqs/batch, and the cap never loosens the response-budget-derived limit.
 Skip the flag to retry with normal batch packing.
-
-    # 3. verify — READ-ONLY, paste-safe (counts only). All cells + summary:
-    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
-      python -m sandbox.sira_multi --verify \
-      --db-root /data/db --run-name <run-name>
-    # (restrict: --only <MNO>__<REL>[,...]; one cell: `python -m
-    #  sandbox.sira_incremental verify-run --dataset /data/db/<MNO>__<REL>
-    #  --run-name <run-name>`; or fold it into the lane run itself by
-    #  adding --verify to the sira_lane command — post-build gate)
-
-    # 4. triage WHICH reqs failed — LOCAL-ONLY (real req ids / plan codes;
-    #    redact before sharing). Failed reqs per cell, grouped status → plan:
-    docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
-      python -m sandbox.sira_enrich_inspect --failed \
-      --db-root /data/db --run <run-name>
-    # (--cell <MNO>__<REL> for one cell; --limit 20 for more ids per group;
-    #  then drill into one req: `sira_enrich_inspect <req_id> --trace`)
-
-`verify-run` replaces the ad-hoc step-1 histogram and more: batch
-status/round histograms (with single-req-mode detection), kept/failed
-reconciliation, coverage vs the corpus, and the kept↔enrichment invariant
-(all zeros on a healthy run). Verdict PASS/WARN/FAIL; exit 1 on FAIL,
-`--strict` fails on WARN too. Add `--compare-run <other-run-name>` to
-diff per-doc phrase sets between two runs of the same cell (batch vs
-`--max-reqs 1`) as Jaccard agreement — the strongest check that batching
-introduces no cross-req contamination.
-
-Reading the step-1 histogram: timeout / connection / HTTP statuses are
-transient endpoint trouble — retry fixes them. `all_filtered` rows are NOT
-errors (the enrichment filter kept nothing for that doc); retrying reproduces
-them identically, so `retry-failed` excludes them by default — pass
-`--include-all-filtered` only after changing the prompt or the LLM. If the
-same docs fail repeatedly with the same status, inspect their trace lines —
-oversized docs vs endpoint token limits are the usual culprits.
 
 After a hard interruption (power loss, killed container), add `--heal-torn`
 to the sira_lane resume command — before the lane runs, it repairs each
