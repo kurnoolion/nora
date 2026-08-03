@@ -474,7 +474,11 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   ids or content). Single-cell like every other subcommand here —
   multi-cell sweeps live at the orchestrator layer: `sira_multi
   --verify` (sweep instead of build) and `sira_lane --verify`
-  (post-build gate), both looping this per cell. Sections: `[batches]` status/closed_by/round histograms +
+  (post-build gate), both looping this per cell. Batch stats are scoped
+  to the LATEST invocation (batches files append across every
+  resume/retry; a `history:` line counts what's excluded) so verdicts
+  reflect current state, not accumulated eras; failed rows also get a
+  sanitized top-errors histogram (URLs/IP:port redacted). Sections: `[batches]` status/closed_by/round histograms +
   reqs-per-batch stats + single-req-mode detection; `[trace]` kept/failed
   reconciliation (granularity split, duplicates, kept∩failed);
   `[coverage]` vs `raw/corpus.jsonl`; `[invariant]` torn lines +

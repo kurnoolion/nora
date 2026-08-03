@@ -943,3 +943,80 @@ def test_cmd_verify_run_compare_via_main(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "identical phrase-sets 3/3" in out and "jaccard mean 1.0" in out
+
+
+# ── verify-run: invocation scoping + error histogram ────────────────
+
+
+from sandbox.sira_incremental import _batch_invocations, _sanitize_error
+
+
+def test_batch_invocations_split_on_seq_reset():
+    rows = [{"batch_id": f"b{i:05d}"} for i in (0, 100, 200)] \
+         + [{"batch_id": f"b{i:05d}"} for i in (0, 1)]
+    segs = _batch_invocations(rows)
+    assert [len(s) for s in segs] == [3, 2]
+
+
+def test_batch_invocations_tolerate_concurrency_jitter():
+    # completion order jitter (b2 before b1) must NOT split
+    rows = [{"batch_id": "b00000"}, {"batch_id": "b00002"},
+            {"batch_id": "b00001"}, {"batch_id": "b00003"}]
+    assert len(_batch_invocations(rows)) == 1
+
+
+def test_batches_report_scopes_to_latest_invocation(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "batches.jsonl", [
+        # old jumbo-era invocation: parse errors, big batches
+        _batch_row(batch_id="b00000", n_reqs=155, status="parse_error",
+                   answered=0, missing=155),
+        _batch_row(batch_id="b00100", n_reqs=155, status="parse_error",
+                   answered=0, missing=155, attempt=2),
+        _batch_row(batch_id="b00200", n_reqs=10, status="ok", answered=10),
+        # retry invocation: clean single-req
+        _batch_row(batch_id="b00000", n_reqs=1, answered=1),
+        _batch_row(batch_id="b00001", n_reqs=1, answered=1),
+    ])
+    b = verify_run(ds, "r1")["batches"]
+    assert b["n"] == 2 and b["status"] == {"ok": 2}
+    assert b["single_req_mode"] is True
+    assert b["invocations"] == 2 and b["earlier_batches"] == 3
+    assert b["missing_final"] == 0
+
+
+def test_verdict_ignores_historical_batch_errors(tmp_path):
+    """A clean retry pass must yield PASS even though earlier invocations
+    left parse_error rows in the append-only batches file."""
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "batches.jsonl", [
+        _batch_row(batch_id="b00300", n_reqs=155, status="parse_error",
+                   answered=0, missing=155, attempt=2),
+        _batch_row(batch_id="b00000", n_reqs=1, answered=1),
+        _batch_row(batch_id="b00001", n_reqs=1, answered=1),
+        _batch_row(batch_id="b00002", n_reqs=1, answered=1),
+    ])
+    rep = verify_run(ds, "r1")
+    assert rep["verdict"] == "PASS" and not rep["warns"]
+
+
+def test_failed_errors_histogram_sanitized(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "trace.failed.jsonl", [
+        json.dumps({"doc_id": "RX", "status": "missing_in_batch_response",
+                    "error": "no JSON object in response"}),
+        json.dumps({"doc_id": "RY", "status": "missing_in_batch_response",
+                    "error": "no JSON object in response"}),
+        json.dumps({"doc_id": "RZ", "status": "batch_error",
+                    "error": "Cannot connect to host 10.1.2.3:8030 "
+                             "(see http://internal.host/logs)"}),
+    ])
+    t = verify_run(ds, "r1")["trace"]
+    assert t["failed_errors"]["no JSON object in response"] == 2
+    joined = " ".join(t["failed_errors"])
+    assert "10.1.2.3" not in joined and "internal.host" not in joined
+    assert any("<endpoint>" in k and "<url>" in k for k in t["failed_errors"])
+
+
+def test_sanitize_error_caps_length():
+    assert len(_sanitize_error("x" * 500)) == 80

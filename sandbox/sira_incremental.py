@@ -83,6 +83,7 @@ import collections
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -494,12 +495,40 @@ def _granularity(doc_id: str) -> str:
     return head if head in ("doc", "section") else "req"
 
 
-def batches_report(run_dir: Path) -> dict | None:
-    """Aggregate batches*.jsonl (batched-enrich only). None when the run
-    has no batch rows (legacy per-req path)."""
-    rows = list(_jsonl_rows(sorted(run_dir.glob("batches*.jsonl"))))
-    if not rows:
-        return None
+_BATCH_SEQ_RE = re.compile(r"(\d+)$")
+_SEQ_JITTER = 64            # concurrency-window reorder tolerance (default
+                            # concurrency is 2; real invocations run hundreds
+                            # of batches, so a >64 backwards jump = restart)
+
+
+def _batch_invocations(rows: list[dict]) -> list[list[dict]]:
+    """Split one batches file's rows into invocation segments.
+
+    batch ids restart at b00000 on every run_batched call (resume, retry
+    pass), and completion order can jitter within the concurrency window
+    — so only a backwards jump larger than _SEQ_JITTER starts a new
+    segment. Limitation: back-to-back TINY invocations (< jitter) merge
+    into one segment; that tail is the already-converged case."""
+    segs: list[list[dict]] = []
+    cur: list[dict] = []
+    prev_max: int | None = None
+    for r in rows:
+        m = _BATCH_SEQ_RE.search(str(r.get("batch_id", "")))
+        seq = int(m.group(1)) if m else None
+        if seq is not None:
+            if prev_max is not None and seq < prev_max - _SEQ_JITTER:
+                segs.append(cur)
+                cur = []
+                prev_max = seq
+            else:
+                prev_max = seq if prev_max is None else max(prev_max, seq)
+        cur.append(r)
+    if cur:
+        segs.append(cur)
+    return segs
+
+
+def _batch_stats(rows: list[dict]) -> dict:
     status = collections.Counter(r.get("status", "?") for r in rows)
     ok_sizes = [r.get("n_reqs", 0) for r in rows if r.get("status") == "ok"]
     pe_sizes = [r.get("n_reqs", 0) for r in rows if r.get("status") == "parse_error"]
@@ -522,6 +551,46 @@ def batches_report(run_dir: Path) -> dict | None:
     }
 
 
+def batches_report(run_dir: Path) -> dict | None:
+    """Aggregate batches*.jsonl (batched-enrich only), scoped to the
+    LATEST invocation — batches files are append-only across every
+    resume/retry of a run name, so cumulative stats would blend the
+    jumbo-batch/pre-sentinel eras into the current state forever. The
+    trailing segment of each (shard) file is the live signal; earlier
+    segments are surfaced only as history counts. None when the run has
+    no batch rows (legacy per-req path)."""
+    latest: list[dict] = []
+    total = 0
+    invocations = 0
+    for p in sorted(run_dir.glob("batches*.jsonl")):
+        rows = list(_jsonl_rows([p]))
+        if not rows:
+            continue
+        segs = _batch_invocations(rows)
+        total += len(rows)
+        invocations = max(invocations, len(segs))
+        latest.extend(segs[-1])
+    if not latest:
+        return None
+    rep = _batch_stats(latest)
+    rep["invocations"] = invocations
+    rep["earlier_batches"] = total - len(latest)
+    return rep
+
+
+_ERR_URL_RE = re.compile(r"https?://\S+")
+_ERR_HOSTPORT_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+
+
+def _sanitize_error(err: str) -> str:
+    """Paste-safe error label: endpoint URLs / IP:port redacted, capped
+    length. Error strings are generic parser/transport messages, but
+    transport errors can embed the endpoint address."""
+    err = _ERR_URL_RE.sub("<url>", err)
+    err = _ERR_HOSTPORT_RE.sub("<endpoint>", err)
+    return " ".join(err.split())[:80]
+
+
 def trace_report(run_dir: Path, corpus_ids: set[str] | None) -> dict:
     """Per-req outcome reconciliation over trace.kept*/trace.failed*."""
     kept_ids: list[str] = []
@@ -529,11 +598,14 @@ def trace_report(run_dir: Path, corpus_ids: set[str] | None) -> dict:
         if row.get("doc_id") is not None:
             kept_ids.append(row["doc_id"])
     failed_status: collections.Counter = collections.Counter()
+    failed_errors: collections.Counter = collections.Counter()
     failed_ids: set[str] = set()
     for row in _jsonl_rows(sorted(run_dir.glob("trace.failed*.jsonl"))):
         if row.get("doc_id") is not None:
             failed_ids.add(row["doc_id"])
             failed_status[row.get("status", "?")] += 1
+            if row.get("error"):
+                failed_errors[_sanitize_error(str(row["error"]))] += 1
     kept_set = set(kept_ids)
     rep = {
         "kept": len(kept_ids),
@@ -542,6 +614,7 @@ def trace_report(run_dir: Path, corpus_ids: set[str] | None) -> dict:
         "kept_duplicates": len(kept_ids) - len(kept_set),
         "failed": sum(failed_status.values()),
         "failed_status": dict(failed_status),
+        "failed_errors": dict(failed_errors.most_common(5)),
         "failed_non_benign": sum(n for s, n in failed_status.items()
                                  if s not in _BENIGN_FAILED_STATUSES),
         "kept_and_failed_overlap": len(kept_set & failed_ids),
@@ -918,7 +991,8 @@ def verify_cell(dataset_dir: Path, run_name: str,
     else:
         mode = ("single-req (all batches carry 1 req)" if b["single_req_mode"]
                 else "batched")
-        print(f"[batches]   {b['n']} | status {b['status']} | "
+        scope = " (latest invocation)" if b["earlier_batches"] else ""
+        print(f"[batches]   {b['n']}{scope} | status {b['status']} | "
               f"closed_by {b['closed_by']} | rounds {b['rounds']}")
         line = f"            mode: {mode} | oversized {b['oversized']}"
         if b["reqs_ok"]:
@@ -930,12 +1004,18 @@ def verify_cell(dataset_dir: Path, run_name: str,
         print(line)
         print(f"            answered {b['answered']} | "
               f"missing@final-round {b['missing_final']}")
+        if b["earlier_batches"]:
+            print(f"            history: {b['invocations']} invocation(s) on "
+                  f"this run name; {b['earlier_batches']} earlier batch(es) "
+                  f"excluded from the stats above")
 
     t = rep["trace"]
     print(f"[trace]     kept {t['kept']} {t['kept_granularity']} | "
           f"failed {t['failed']} {t['failed_status']}")
     print(f"            duplicates {t['kept_duplicates']} | "
           f"kept∩failed {t['kept_and_failed_overlap']}")
+    if t["failed_errors"]:
+        print(f"            errors (top): {t['failed_errors']}")
     if "corpus" in t:
         print(f"[coverage]  corpus {t['corpus']} | uncovered {t['uncovered']} "
               f"| not-in-corpus {t['not_in_corpus']}")

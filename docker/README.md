@@ -465,11 +465,19 @@ and is local-only.
 
 Per cell: batch status / closed_by / round histograms (with
 single-req-mode detection), kept/failed reconciliation (granularity
-split, duplicates, kept∩failed), coverage vs the corpus, and the
-kept↔enrichment resume invariant (all zeros on a healthy run). Verdict
-per cell + a summary line. Exit 1 when any cell FAILs (structural
-breaks); `--strict` also fails on WARN (quality signals: parse_error
-batches, unanswered reqs, non-benign failures).
+split, duplicates, kept∩failed, a sanitized top-errors histogram),
+coverage vs the corpus, and the kept↔enrichment resume invariant (all
+zeros on a healthy run). Verdict per cell + a summary line. Exit 1 when
+any cell FAILs (structural breaks); `--strict` also fails on WARN
+(quality signals: parse_error batches, unanswered reqs, non-benign
+failures).
+
+Batch stats cover the LATEST invocation only — batches files are
+append-only across every resume/retry of a run name, so cumulative
+stats would carry old-era parse errors forever. A `history:` line shows
+how many earlier invocations/batches were excluded; a clean retry pass
+therefore reports PASS on its own merits. `trace.failed` numbers are
+always current (retry evicts before re-running).
 
 **2. One cell / A-B equivalence**:
 
