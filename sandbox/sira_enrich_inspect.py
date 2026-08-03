@@ -192,13 +192,23 @@ def list_failed_cell(cell_dir: Path, *, run: str | None, limit: int) -> int:
         return 0
 
     failed: list[tuple[str, str]] = []
+    n_skipped = 0
     for p in sorted(run_dir.glob("trace.failed*.jsonl")):
         for row in _iter_jsonl(p):
             did = _row_doc_id(row)
             if did:
-                failed.append((did, row.get("status", "?")))
+                status = str(row.get("status", "?"))
+                # skipped_* rows record build policy (coarse chunks
+                # excluded), not failures — count, don't list
+                if status.startswith("skipped_"):
+                    n_skipped += 1
+                    continue
+                failed.append((did, status))
 
     print(f"\n=== cell: {cell_dir.name} (run {run_dir.name}) ===")
+    if n_skipped:
+        print(f"(+{n_skipped} skipped_* row(s) — coarse chunks excluded "
+              f"by build policy, not listed)")
     if not failed:
         print("no failed rows — clean")
         return 0

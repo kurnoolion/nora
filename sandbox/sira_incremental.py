@@ -282,6 +282,7 @@ def retry_failed_in_run(
     stage: str,
     *,
     include_all_filtered: bool = False,
+    include_skipped: bool = False,
 ) -> tuple[int, dict[str, int]]:
     """Evict failed entries from one SIRA stage's run dir so SIRA's resume
     reprocesses them next run. Returns (eviction_count, per_file_dropped).
@@ -289,7 +290,11 @@ def retry_failed_in_run(
     Default behavior skips `status='all_filtered'` rows — re-running them
     won't change the outcome unless prompts or LLM changed. Pass
     `include_all_filtered=True` after a prompt or LLM swap to retry them
-    too. Doc-enrich keys on doc_id; rerank keys on (query_id, doc_id).
+    too. `skipped_*` rows (coarse doc:/section: chunks excluded by build
+    policy) likewise stay put unless `include_skipped=True` — pass it
+    after opting the build into coarse-chunk enrichment, otherwise the
+    next run just re-skips them. Doc-enrich keys on doc_id; rerank keys
+    on (query_id, doc_id).
     """
     if stage not in _STAGE_FILES:
         raise ValueError(
@@ -311,7 +316,10 @@ def retry_failed_in_run(
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not include_all_filtered and rec.get("status") == "all_filtered":
+            status = str(rec.get("status", ""))
+            if not include_all_filtered and status == "all_filtered":
+                continue
+            if not include_skipped and status.startswith("skipped_"):
                 continue
             key = key_fn(rec)
             # Skip keys with any None component — they can't have been
@@ -452,7 +460,8 @@ def merge_kept_enrichments(
 # Paste-safe by design: reports carry counts, statuses, and filenames
 # only — never doc_ids/req_ids or corpus text (collab protocol).
 
-_BENIGN_FAILED_STATUSES = {"all_filtered", "no_phrases"}
+_BENIGN_FAILED_STATUSES = {"all_filtered", "no_phrases",
+                           "skipped_doc_chunk", "skipped_section_chunk"}
 
 
 def _count_torn_lines(path: Path) -> int:
@@ -599,11 +608,17 @@ def trace_report(run_dir: Path, corpus_ids: set[str] | None) -> dict:
             kept_ids.append(row["doc_id"])
     failed_status: collections.Counter = collections.Counter()
     failed_errors: collections.Counter = collections.Counter()
+    failed_gran: collections.Counter = collections.Counter()
+    failed_nb_gran: collections.Counter = collections.Counter()
     failed_ids: set[str] = set()
     for row in _jsonl_rows(sorted(run_dir.glob("trace.failed*.jsonl"))):
         if row.get("doc_id") is not None:
             failed_ids.add(row["doc_id"])
-            failed_status[row.get("status", "?")] += 1
+            status = row.get("status", "?")
+            failed_status[status] += 1
+            failed_gran[_granularity(row["doc_id"])] += 1
+            if status not in _BENIGN_FAILED_STATUSES:
+                failed_nb_gran[_granularity(row["doc_id"])] += 1
             if row.get("error"):
                 failed_errors[_sanitize_error(str(row["error"]))] += 1
     kept_set = set(kept_ids)
@@ -614,15 +629,18 @@ def trace_report(run_dir: Path, corpus_ids: set[str] | None) -> dict:
         "kept_duplicates": len(kept_ids) - len(kept_set),
         "failed": sum(failed_status.values()),
         "failed_status": dict(failed_status),
+        "failed_granularity": dict(failed_gran),
         "failed_errors": dict(failed_errors.most_common(5)),
-        "failed_non_benign": sum(n for s, n in failed_status.items()
-                                 if s not in _BENIGN_FAILED_STATUSES),
+        "failed_non_benign": sum(failed_nb_gran.values()),
+        "failed_non_benign_granularity": dict(failed_nb_gran),
         "kept_and_failed_overlap": len(kept_set & failed_ids),
     }
     if corpus_ids is not None:
         covered = kept_set | failed_ids
         rep["corpus"] = len(corpus_ids)
         rep["uncovered"] = len(corpus_ids - covered)
+        rep["uncovered_granularity"] = dict(collections.Counter(
+            _granularity(d) for d in corpus_ids - covered))
         rep["not_in_corpus"] = len(covered - corpus_ids)
     return rep
 
@@ -672,9 +690,11 @@ def verify_run(dataset_dir: Path, run_name: str) -> dict:
         if batches["missing_final"]:
             warns.append(f"missing at final round: {batches['missing_final']}")
     if trace["failed_non_benign"]:
-        warns.append(f"non-benign failures: {trace['failed_non_benign']}")
+        warns.append(f"non-benign failures: {trace['failed_non_benign']} "
+                     f"{trace['failed_non_benign_granularity']}")
     if trace.get("uncovered"):
-        warns.append(f"corpus rows never attempted: {trace['uncovered']}")
+        warns.append(f"corpus rows never attempted: {trace['uncovered']} "
+                     f"{trace['uncovered_granularity']}")
     if trace.get("not_in_corpus"):
         warns.append(f"trace rows not in current corpus: "
                      f"{trace['not_in_corpus']} (stale corpus?)")
@@ -929,6 +949,8 @@ def cmd_retry_failed(args: argparse.Namespace) -> int:
 
     scope = ("errors + all_filtered" if args.include_all_filtered
              else "errors only (all_filtered kept)")
+    if args.include_skipped:
+        scope += " + skipped coarse chunks"
     print(f"retry-failed: scope = {scope}")
 
     for stage in stages:
@@ -938,6 +960,7 @@ def cmd_retry_failed(args: argparse.Namespace) -> int:
             continue
         evicted, counts = retry_failed_in_run(
             run_dir, stage, include_all_filtered=args.include_all_filtered,
+            include_skipped=args.include_skipped,
         )
         print(f"\n{stage} ({args.run_name}): evicted {evicted} key(s)")
         for name, dropped in counts.items():
@@ -1012,12 +1035,18 @@ def verify_cell(dataset_dir: Path, run_name: str,
     t = rep["trace"]
     print(f"[trace]     kept {t['kept']} {t['kept_granularity']} | "
           f"failed {t['failed']} {t['failed_status']}")
+    if t["failed"]:
+        print(f"            failed by-type {t['failed_granularity']} | "
+              f"non-benign by-type {t['failed_non_benign_granularity']}")
     print(f"            duplicates {t['kept_duplicates']} | "
           f"kept∩failed {t['kept_and_failed_overlap']}")
     if t["failed_errors"]:
         print(f"            errors (top): {t['failed_errors']}")
     if "corpus" in t:
-        print(f"[coverage]  corpus {t['corpus']} | uncovered {t['uncovered']} "
+        unc = str(t["uncovered"])
+        if t["uncovered"]:
+            unc += f" {t['uncovered_granularity']}"
+        print(f"[coverage]  corpus {t['corpus']} | uncovered {unc} "
               f"| not-in-corpus {t['not_in_corpus']}")
     else:
         print("[coverage]  raw/corpus.jsonl missing — coverage skipped")
@@ -1124,6 +1153,14 @@ def main(argv: list[str] | None = None) -> int:
                         "unless prompts or LLM changed. Set this flag after a "
                         "prompt-version bump or LLM swap so the new setup gets "
                         "a clean shot at those docs."
+                    ))
+    rf.add_argument("--include-skipped", action="store_true",
+                    help=(
+                        "Also evict skipped_* rows (coarse doc:/section: "
+                        "chunks excluded by build policy). Default keeps "
+                        "them — set this after opting the build into "
+                        "--enrich-doc-chunks/--enrich-section-chunks so the "
+                        "next run actually enriches them."
                     ))
 
     ht.add_argument("--stage", choices=["doc-enrich", "rerank", "both"],

@@ -417,7 +417,19 @@ docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
 
 `--wipe-stale-index` is the incremental-safe wipe (keeps the `runs/`
 enrichment cache); `--wipe-all-derived` is the full-rebuild hammer that
-re-enriches everything. Inspect the pilot cell before continuing (host
+re-enriches everything.
+
+Coarse corpus rows (`doc:`/`section:`-prefixed rollups) are SKIPPED by
+default — only per-req rows hit the LLM. Skipped rows are traced as
+`skipped_doc_chunk` / `skipped_section_chunk` (benign; counted as
+covered by verify). Opt in with `--enrich-doc-chunks` /
+`--enrich-section-chunks` (same flags on `sira_lane` and `sira_multi`;
+env form `NORA_SIRA_BATCH_ENRICH_DOC_CHUNKS=1` etc.). To enrich them
+AFTER a default-skip build, flip the flags AND add
+`--include-skipped` to the retry so the skipped rows are evicted back
+into scope (see the retry section).
+
+Inspect the pilot cell before continuing (host
 paths — the sira-build dir is directly visible):
 
 ```bash
@@ -464,10 +476,11 @@ and is local-only.
     # restrict: --only <MNO>__<REL>[,...]
 
 Per cell: batch status / closed_by / round histograms (with
-single-req-mode detection), kept/failed reconciliation (granularity
-split, duplicates, kept∩failed, a sanitized top-errors histogram),
-coverage vs the corpus, and the kept↔enrichment resume invariant (all
-zeros on a healthy run). Verdict per cell + a summary line. Exit 1 when
+single-req-mode detection), kept/failed reconciliation (kept AND failed
+split by row type — req vs coarse doc/section chunks — plus duplicates,
+kept∩failed, a sanitized top-errors histogram), coverage vs the corpus
+(uncovered also split by type), and the kept↔enrichment resume
+invariant (all zeros on a healthy run). Verdict per cell + a summary line. Exit 1 when
 any cell FAILs (structural breaks); `--strict` also fails on WARN
 (quality signals: parse_error batches, unanswered reqs, non-benign
 failures).
@@ -508,7 +521,11 @@ Reading the failure statuses: timeout / connection / HTTP statuses are
 transient endpoint trouble — retry fixes them. `all_filtered` rows are NOT
 errors (the enrichment filter kept nothing for that doc); retrying reproduces
 them identically, so `retry-failed` excludes them by default — pass
-`--include-all-filtered` only after changing the prompt or the LLM. If the
+`--include-all-filtered` only after changing the prompt or the LLM.
+`skipped_doc_chunk` / `skipped_section_chunk` rows record build policy
+(coarse chunks excluded by default), not failures — `retry-failed` leaves
+them alone unless you pass `--include-skipped` together with the
+`--enrich-*-chunks` build flags. If the
 same docs fail repeatedly with the same status, inspect their trace lines —
 oversized docs vs endpoint token limits are the usual culprits.
 
@@ -538,6 +555,13 @@ truncation, one bad neighbor poisoning the parse) gets a clean solo shot.
 It exports `NORA_SIRA_BATCH_MAX_REQS` to the build; values >1 cap
 reqs/batch, and the cap never loosens the response-budget-derived limit.
 Skip the flag to retry with normal batch packing.
+
+To enrich the coarse `doc:`/`section:` chunks a default build skipped,
+combine the opt-ins with the skipped-row eviction in one lane pass:
+`--retry-failed --include-skipped --enrich-doc-chunks
+--enrich-section-chunks`. Without `--include-skipped` the skipped rows
+stay in the resume trace and the build never revisits them; without the
+`--enrich-*-chunks` flags the retry just re-skips them.
 
 After a hard interruption (power loss, killed container), add `--heal-torn`
 to the sira_lane resume command — before the lane runs, it repairs each

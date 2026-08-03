@@ -299,6 +299,14 @@ def main(argv: list[str] | None = None) -> int:
                         "<cell>/runs/doc-enrich/<run-name>/; point the service's "
                         "NORA_SIRA_DOC_ENRICH_RUN at the same name. Default: "
                         "run_pipeline's own (timestamped) run name.")
+    p.add_argument("--enrich-doc-chunks", action="store_true",
+                   help="Also enrich coarse doc:-prefixed corpus rows. "
+                        "Default: builds skip them (traced as "
+                        "skipped_doc_chunk).")
+    p.add_argument("--enrich-section-chunks", action="store_true",
+                   help="Also enrich coarse section:-prefixed corpus rows. "
+                        "Default: builds skip them (traced as "
+                        "skipped_section_chunk).")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the per-cell commands without executing.")
     p.add_argument("--verify", action="store_true",
@@ -331,6 +339,17 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.sira_clone}/scripts/ — is --sira-clone correct? "
             f"(--sira-clone is required except with --verify)"
         )
+
+    # Coarse-chunk opt-ins travel to the batched-enrich layer as env vars
+    # (children inherit; BatchConfig.from_env reads them). Default: skip.
+    if args.enrich_doc_chunks:
+        os.environ["NORA_SIRA_BATCH_ENRICH_DOC_CHUNKS"] = "1"
+        print("sira-multi: NORA_SIRA_BATCH_ENRICH_DOC_CHUNKS=1 "
+              "(doc: chunks will be enriched)")
+    if args.enrich_section_chunks:
+        os.environ["NORA_SIRA_BATCH_ENRICH_SECTION_CHUNKS"] = "1"
+        print("sira-multi: NORA_SIRA_BATCH_ENRICH_SECTION_CHUNKS=1 "
+              "(section: chunks will be enriched)")
 
     stages = [s.strip() for s in args.stages.split(",")] if args.stages else None
     results = run_cells(

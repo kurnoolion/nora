@@ -155,6 +155,21 @@ def test_list_failed_clean_cell(tmp_path, capsys):
     assert "no failed rows — clean" in capsys.readouterr().out
 
 
+def test_list_failed_counts_but_hides_skipped_rows(tmp_path, capsys):
+    """skipped_* rows are build policy (coarse chunks excluded), not
+    failures — summarized as a count, never listed as triage targets."""
+    cell = _seed_failed_cell(tmp_path)
+    with open(cell / "runs" / "doc-enrich" / "enrich-1" /
+              "trace.failed.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"doc_id": "section:PA 3.2",
+                            "status": "skipped_section_chunk"}) + "\n")
+    n = list_failed_cell(cell, run="enrich-1", limit=10)
+    assert n == 4                        # skipped row not counted as failed
+    out = capsys.readouterr().out
+    assert "(+1 skipped_* row(s)" in out
+    assert "section:PA 3.2" not in out
+
+
 def test_main_failed_sweeps_cells_with_banner(tmp_path, capsys):
     _seed_failed_cell(tmp_path, "VZW__Feb2026")
     _seed_cell(tmp_path, "TMO__Jan2026")

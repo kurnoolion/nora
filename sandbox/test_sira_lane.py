@@ -11,6 +11,7 @@ def _args(**kw):
     base = dict(env_dir=Path("/e"), db_root=Path("/d"),
                 sira_clone=Path("sandbox/sira"), run_name="enrich-stable",
                 only=None, wipe_stale_index=False, wipe_all_derived=False,
+                enrich_doc_chunks=False, enrich_section_chunks=False,
                 stages="prepare,bm25,enrich_corpus", dry_run=True)
     base.update(kw)
     return argparse.Namespace(**base)
@@ -32,6 +33,18 @@ def test_only_reaches_both_steps():
 def test_wipe_all_takes_precedence_over_stale():
     cmds = build_commands(_args(wipe_all_derived=True, wipe_stale_index=True))
     assert "--wipe-all-derived" in cmds[0] and "--wipe-stale-index" not in cmds[0]
+
+
+def test_coarse_chunk_flags_forwarded_to_multi_only():
+    cmds = build_commands(_args(enrich_doc_chunks=True,
+                                enrich_section_chunks=True))
+    assert "--enrich-doc-chunks" in cmds[1]
+    assert "--enrich-section-chunks" in cmds[1]
+    assert "--enrich-doc-chunks" not in cmds[0]
+    # default: neither flag appears
+    default = build_commands(_args())
+    assert "--enrich-doc-chunks" not in default[1]
+    assert "--enrich-section-chunks" not in default[1]
 
 
 def test_heal_targets_filters_by_only_and_existence(tmp_path):
@@ -57,6 +70,7 @@ def _repair_args(db_root, **kw):
                 sira_clone=Path("sandbox/sira"), run_name="r1",
                 only=None, wipe_stale_index=False, wipe_all_derived=False,
                 heal_torn=True, retry_failed=True, include_all_filtered=False,
+                include_skipped=False,
                 stages="prepare,bm25,enrich_corpus", dry_run=False)
     base.update(kw)
     return argparse.Namespace(**base)

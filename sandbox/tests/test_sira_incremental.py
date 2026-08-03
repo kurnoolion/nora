@@ -404,6 +404,38 @@ def test_retry_doc_enrich_also_evicts_if_present_in_kept_or_enrichments(tmp_path
     assert counts["enrichments.kept.jsonl"] == 1
 
 
+def test_retry_doc_enrich_default_keeps_skipped_rows(tmp_path):
+    """skipped_* rows record build policy (coarse chunks excluded), not
+    failures — retrying them without flipping the policy just re-skips,
+    so the default leaves them in place."""
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    _write_doc_enrich_failed(run_dir, [
+        {"doc_id": "FAIL-1", "status": "error"},
+        {"doc_id": "doc:PA", "status": "skipped_doc_chunk"},
+        {"doc_id": "section:PA 3.2", "status": "skipped_section_chunk"},
+    ])
+    n, counts = retry_failed_in_run(run_dir, "doc-enrich")
+    assert n == 1 and counts["trace.failed.jsonl"] == 1
+    remaining = {
+        json.loads(l)["doc_id"]
+        for l in (run_dir / "trace.failed.jsonl").read_text().splitlines()
+        if l.strip()
+    }
+    assert remaining == {"doc:PA", "section:PA 3.2"}
+
+
+def test_retry_doc_enrich_include_skipped_evicts_them(tmp_path):
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    _write_doc_enrich_failed(run_dir, [
+        {"doc_id": "doc:PA", "status": "skipped_doc_chunk"},
+        {"doc_id": "AF-1",   "status": "all_filtered"},
+    ])
+    n, counts = retry_failed_in_run(
+        run_dir, "doc-enrich", include_skipped=True,
+    )
+    assert n == 1 and counts["trace.failed.jsonl"] == 1  # all_filtered stays
+
+
 def test_retry_doc_enrich_missing_failed_file_returns_zero(tmp_path):
     run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
     run_dir.mkdir(parents=True)
@@ -501,7 +533,7 @@ def test_cmd_retry_failed_both_stages(tmp_path, capsys):
 
     args = argparse.Namespace(
         dataset=str(ds), run_name="qwen3",
-        stage="both", include_all_filtered=False,
+        stage="both", include_all_filtered=False, include_skipped=False,
     )
     rc = cmd_retry_failed(args)
     assert rc == 0
@@ -534,7 +566,7 @@ def test_cmd_retry_failed_missing_run_dir_skips_gracefully(tmp_path, capsys):
     # No runs/doc-enrich/qwen3 or runs/rerank/qwen3 — both stages absent
     args = argparse.Namespace(
         dataset=str(ds), run_name="qwen3",
-        stage="both", include_all_filtered=False,
+        stage="both", include_all_filtered=False, include_skipped=False,
     )
     assert cmd_retry_failed(args) == 0
     out = capsys.readouterr().out
@@ -544,7 +576,7 @@ def test_cmd_retry_failed_missing_run_dir_skips_gracefully(tmp_path, capsys):
 def test_cmd_retry_failed_not_a_dataset_dir_errors(tmp_path, capsys):
     args = argparse.Namespace(
         dataset=str(tmp_path / "no-such"), run_name="x",
-        stage="both", include_all_filtered=False,
+        stage="both", include_all_filtered=False, include_skipped=False,
     )
     assert cmd_retry_failed(args) == 1
 
@@ -878,6 +910,69 @@ def test_verify_run_quality_signals_warn(tmp_path):
     assert any("parse_error" in w for w in rep["warns"])
     assert any("missing at final round" in w for w in rep["warns"])
     assert rep["trace"]["failed_non_benign"] == 1
+
+
+def test_verify_failed_split_by_granularity(tmp_path):
+    """Failures are reported per corpus-row type (req/doc/section) so a
+    skew toward coarse chunks is visible at a glance."""
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_corpus(ds / "raw" / "corpus.jsonl", [
+        {"_id": "R1", "title": "t", "text": "one"},
+        {"_id": "R2", "title": "t", "text": "two"},
+        {"_id": "doc:PA", "title": "", "text": "plan"},
+        {"_id": "section:PA 3.2", "title": "", "text": "sec"},
+    ])
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "status": "ok"}),
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha"]}),
+    ])
+    _write_lines(rd / "trace.failed.jsonl", [
+        json.dumps({"doc_id": "R2", "status": "missing_in_batch_response"}),
+        json.dumps({"doc_id": "doc:PA", "status": "missing_in_batch_response"}),
+        json.dumps({"doc_id": "section:PA 3.2", "status": "skipped_section_chunk"}),
+    ])
+    rep = verify_run(ds, "r1")
+    t = rep["trace"]
+    assert t["failed_granularity"] == {"req": 1, "doc": 1, "section": 1}
+    assert t["failed_non_benign"] == 2                 # skipped_* is benign
+    assert t["failed_non_benign_granularity"] == {"req": 1, "doc": 1}
+    assert any("non-benign failures: 2 {" in w for w in rep["warns"])
+
+
+def test_verify_skipped_chunks_are_benign_and_covered(tmp_path):
+    """A run built with the default skip policy verifies PASS: skipped
+    rows count as covered and their status is benign."""
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": d, "status": "ok"}) for d in ("R1", "R2")
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha"]}),
+        json.dumps({"doc_id": "R2", "phrases": ["gamma"]}),
+    ])
+    _write_lines(rd / "trace.failed.jsonl", [
+        json.dumps({"doc_id": "doc:PA", "status": "skipped_doc_chunk"}),
+    ])
+    rep = verify_run(ds, "r1")
+    assert rep["verdict"] == "PASS", rep["warns"]
+    assert rep["trace"]["uncovered"] == 0
+    assert rep["trace"]["failed_non_benign"] == 0
+
+
+def test_verify_uncovered_split_by_granularity(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_corpus(ds / "raw" / "corpus.jsonl", [
+        {"_id": "R1", "title": "t", "text": "one"},
+        {"_id": "R2", "title": "t", "text": "two"},
+        {"_id": "doc:PA", "title": "", "text": "plan"},
+        {"_id": "section:PA 3.2", "title": "", "text": "sec"},
+    ])
+    rep = verify_run(ds, "r1")            # kept covers R1/R2/doc:PA only
+    assert rep["trace"]["uncovered"] == 1
+    assert rep["trace"]["uncovered_granularity"] == {"section": 1}
+    assert any("never attempted: 1 {'section': 1}" in w for w in rep["warns"])
 
 
 def test_verify_run_duplicate_and_overlap_fail(tmp_path):

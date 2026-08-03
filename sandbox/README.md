@@ -245,6 +245,12 @@ failed inside a large batch gets a clean solo shot. Exports
 `NORA_SIRA_BATCH_MAX_REQS` to the build; >1 caps reqs/batch (never above
 the response-budget-derived limit).
 
+Coarse `doc:`/`section:` corpus rows are skipped by default (traced as
+`skipped_doc_chunk` / `skipped_section_chunk`, benign) — `retry-failed`
+leaves those rows alone. To enrich them after the fact, combine
+`--include-skipped` (evicts the skipped rows) with the build opt-ins
+`--enrich-doc-chunks` / `--enrich-section-chunks` in the same lane pass.
+
 Verify: `retry-failed` prints per-file eviction counts; the resume
 re-enriches exactly those docs; `trace.failed.jsonl` shrinks.
 
@@ -376,7 +382,8 @@ redacted) under each stack's state dir.
     python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
         [--run-name enrich-stable] [--only <MNO>__<REL>,...] \
         [--wipe-stale-index | --wipe-all-derived] \
-        [--heal-torn] [--retry-failed [--include-all-filtered]] \
+        [--heal-torn] [--retry-failed [--include-all-filtered] [--include-skipped]] \
+        [--enrich-doc-chunks] [--enrich-section-chunks] \
         [--max-reqs N] [--verify] \
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
@@ -384,6 +391,12 @@ Runs the adapter (`nora_to_beir --multi-cell`) then `sira_multi`, threading
 `--only` and the wipe flag through both. `--max-reqs N` exports
 `NORA_SIRA_BATCH_MAX_REQS=N` to the build (caps reqs per enrichment batch;
 `1` = single-req mode — the typical pairing with `--retry-failed`).
+`--enrich-doc-chunks` / `--enrich-section-chunks` opt coarse `doc:` /
+`section:` corpus rows into enrichment (default: skipped, traced as
+`skipped_*`; forwarded to `sira_multi`, which exports the matching
+`NORA_SIRA_BATCH_ENRICH_*` env vars). `--include-skipped` extends
+`--retry-failed`'s eviction to those skipped rows — pair it with the
+opt-ins to enrich coarse chunks after a default-skip build.
 `--verify` appends a read-only per-cell health sweep after the lane
 (`sira_multi.verify_cells` over the same `--only` scope); non-zero exit
 when any cell FAILs. `--heal-torn` / `--retry-failed`

@@ -14,7 +14,8 @@ Usage:
         [--sira-clone sandbox/sira] [--run-name enrich-stable] \\
         [--only <MNO>__<REL>[,...]] \\
         [--wipe-stale-index | --wipe-all-derived] \\
-        [--heal-torn] [--retry-failed [--include-all-filtered]] \\
+        [--heal-torn] [--retry-failed [--include-all-filtered] [--include-skipped]] \\
+        [--enrich-doc-chunks] [--enrich-section-chunks] \\
         [--max-reqs N] [--verify] \\
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
 
@@ -56,6 +57,10 @@ def build_commands(args: argparse.Namespace) -> list[list[str]]:
     ]
     if args.only:
         multi += ["--only", args.only]
+    if args.enrich_doc_chunks:
+        multi += ["--enrich-doc-chunks"]
+    if args.enrich_section_chunks:
+        multi += ["--enrich-section-chunks"]
     return [adapter, multi]
 
 
@@ -112,6 +117,7 @@ def run_repairs(args: argparse.Namespace) -> None:
             evicted, _ = retry_failed_in_run(
                 rd, "doc-enrich",
                 include_all_filtered=args.include_all_filtered,
+                include_skipped=args.include_skipped,
             )
             print(f"sira-lane: retry-failed {cell}/{args.run_name}: "
                   f"evicted {evicted} doc(s) for retry")
@@ -148,6 +154,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--include-all-filtered", action="store_true",
                    help="With --retry-failed: also retry status=all_filtered "
                         "rows (only useful after a prompt or LLM change)")
+    p.add_argument("--include-skipped", action="store_true",
+                   help="With --retry-failed: also evict skipped_* rows "
+                        "(coarse doc:/section: chunks). Pair with "
+                        "--enrich-doc-chunks/--enrich-section-chunks so this "
+                        "run actually enriches them instead of re-skipping")
+    p.add_argument("--enrich-doc-chunks", action="store_true",
+                   help="Enrich coarse doc:-prefixed corpus rows too "
+                        "(forwarded to sira_multi; default: skipped, traced "
+                        "as skipped_doc_chunk)")
+    p.add_argument("--enrich-section-chunks", action="store_true",
+                   help="Enrich coarse section:-prefixed corpus rows too "
+                        "(forwarded to sira_multi; default: skipped, traced "
+                        "as skipped_section_chunk)")
     p.add_argument("--verify", action="store_true",
                    help="After the lane completes: read-only per-cell "
                         "verify sweep (sira_multi.verify_cells over the "

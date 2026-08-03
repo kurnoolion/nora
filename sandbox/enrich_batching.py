@@ -126,6 +126,12 @@ class BatchConfig:
     chars_per_token: float = 3.5
     max_retries: int = 2                # re-queue rounds for missing/errored reqs
     batch_concurrency: int = 2
+    enrich_doc_chunks: bool = False     # coarse doc:-prefixed corpus rows are
+                                        # skipped by default — traced as
+                                        # skipped_doc_chunk so resume/coverage
+                                        # treat them as handled; opt in per build
+    enrich_section_chunks: bool = False  # same for section:-prefixed rows
+                                         # (skipped_section_chunk)
     debug_raw: bool = False             # opt-in: log response head on anomalies
                                         # (raw text carries corpus content — keep
                                         # such logs local, never in shared reports)
@@ -145,6 +151,9 @@ class BatchConfig:
                 return cast(raw) if raw else default
             except ValueError:
                 return default
+
+        def _bool(s):
+            return s.strip().lower() not in ("", "0", "false")
         return cls(
             prompt_cap_tokens=_get("PROMPT_CAP_TOKENS", int, 50_000),
             context_tokens=_get("CONTEXT_TOKENS", int, 64_000),
@@ -153,13 +162,10 @@ class BatchConfig:
             chars_per_token=_get("CHARS_PER_TOKEN", float, 3.5),
             max_retries=_get("RETRIES", int, 2),
             batch_concurrency=_get("CONCURRENCY", int, 2),
-            debug_raw=_get("DEBUG_RAW",
-                           lambda s: s.strip().lower() not in ("", "0", "false"),
-                           False),
-            reasoning_sentinel=_get(
-                "REASONING_SENTINEL",
-                lambda s: s.strip().lower() not in ("", "0", "false"),
-                False),
+            enrich_doc_chunks=_get("ENRICH_DOC_CHUNKS", _bool, False),
+            enrich_section_chunks=_get("ENRICH_SECTION_CHUNKS", _bool, False),
+            debug_raw=_get("DEBUG_RAW", _bool, False),
+            reasoning_sentinel=_get("REASONING_SENTINEL", _bool, False),
         )
 
 
@@ -306,7 +312,7 @@ async def run_batched(
     cfg.max_retries extra rounds."""
     summary = {"batches": 0, "oversized": 0, "enriched": 0, "failed": 0,
                "proposed": 0, "kept": 0, "filtered": 0, "errors": 0,
-               "requeued": 0}
+               "requeued": 0, "skipped": 0}
     tax_cache: dict[str, str] = {}
     header_cache: dict[str, int] = {}
     sem = asyncio.Semaphore(max(1, cfg.batch_concurrency))
@@ -359,18 +365,26 @@ async def run_batched(
         if res.extra:
             logger.warning("batch %s (plan %s): %d unknown req_ids in response",
                            batch_id, batch.plan_id, len(res.extra))
-            if cfg.debug_raw:
-                lines = (raw or "").splitlines()
-                head = "\n".join(lines[:2])[:400]
-                tail = "\n".join(lines[-2:])[:400]
-                logger.warning(
-                    "batch %s plan %s (NORA_SIRA_BATCH_DEBUG_RAW) marker %s — "
-                    "head:\n%s\n--- tail:\n%s"
-                    "\n--- requested ids (first 20): %s"
-                    "\n--- unknown ids  (first 20): %s",
-                    batch_id, batch.plan_id,
-                    "PRESENT" if FINAL_ANSWER_MARKER in (raw or "") else "ABSENT",
-                    head, tail, batch.ids[:20], res.extra[:20])
+        # Dump on every anomaly shape: no JSON at all, a parsed dict that
+        # omits requested ids (e.g. bare {}), or unknown ids. The first two
+        # are the shapes that survive solo retries, so extra-only dumping
+        # would miss exactly the responses worth seeing.
+        if cfg.debug_raw and (res.error or res.missing or res.extra):
+            lines = (raw or "").splitlines()
+            head = "\n".join(lines[:2])[:400]
+            tail = "\n".join(lines[-2:])[:400]
+            anomaly = res.error or ("ids absent from parsed response"
+                                    if res.missing else "unknown ids in response")
+            logger.warning(
+                "batch %s plan %s (NORA_SIRA_BATCH_DEBUG_RAW) %s — "
+                "marker %s len %d — head:\n%s\n--- tail:\n%s"
+                "\n--- requested ids (first 20): %s"
+                "\n--- missing ids  (first 20): %s"
+                "\n--- unknown ids  (first 20): %s",
+                batch_id, batch.plan_id, anomaly,
+                "PRESENT" if FINAL_ANSWER_MARKER in (raw or "") else "ABSENT",
+                len(raw or ""),
+                head, tail, batch.ids[:20], res.missing[:20], res.extra[:20])
         texts_by_id = dict(zip(batch.ids, batch.texts))
         for rid, phrases in res.phrases_by_id.items():
             if not phrases:
@@ -408,7 +422,29 @@ async def run_batched(
             "closed_by": batch.closed_by, "oversized": batch.oversized,
             "attempt": attempt, "ms": ms})
 
-    pending = list(items)
+    # Coarse corpus rows (doc:/section:-prefixed ids) are skipped unless
+    # opted in — traced as skipped_* rows so SIRA's resume and verify's
+    # coverage see them as handled; `retry-failed --include-skipped`
+    # evicts them back into scope after flipping the opt-in.
+    skip_prefix = {"doc": not cfg.enrich_doc_chunks,
+                   "section": not cfg.enrich_section_chunks}
+    live: list[tuple[str, str]] = []
+    for rid, text in items:
+        head = rid.split(":", 1)[0]
+        if skip_prefix.get(head):
+            summary["skipped"] += 1
+            await write_failed({"doc_id": rid,
+                                "status": f"skipped_{head}_chunk",
+                                "batch_id": None})
+        else:
+            live.append((rid, text))
+    if summary["skipped"]:
+        logger.info(
+            "Skipped %d coarse chunk(s) (doc:/section: ids) — opt in with "
+            "NORA_SIRA_BATCH_ENRICH_DOC_CHUNKS / _ENRICH_SECTION_CHUNKS",
+            summary["skipped"])
+
+    pending = live
     attempt = 0
     while pending and attempt <= cfg.max_retries:
         round_batches: list[Batch] = []

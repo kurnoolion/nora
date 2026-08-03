@@ -244,6 +244,48 @@ class TestRunBatched:
         plans = {b["plan"] for b in sink.batches}
         assert plans == {"PA", "PB"}
 
+    def test_coarse_chunks_skipped_by_default(self):
+        """doc:/section: corpus rows never reach the LLM by default;
+        traced as skipped_* so resume/coverage treat them as handled."""
+        items = self.ITEMS + [
+            ("doc:PA", "**plan**: PA\nwhole-doc rollup"),
+            ("section:PA 3.2", "**plan**: PA\nsection rollup"),
+        ]
+
+        async def llm(prompt, max_tokens):
+            assert "doc:PA" not in prompt and "section:PA" not in prompt
+            return json.dumps({"R1": ["alpha"], "R2": ["beta"]})
+
+        sink, summary = _run(items, llm)
+        assert summary["skipped"] == 2 and summary["failed"] == 0
+        skipped = {r["doc_id"]: r["status"] for r in sink.failed}
+        assert skipped == {"doc:PA": "skipped_doc_chunk",
+                           "section:PA 3.2": "skipped_section_chunk"}
+        assert dict(sink.enrich) == {"R1": ["alpha"], "R2": ["beta"]}
+
+    def test_coarse_chunks_enriched_when_opted_in(self):
+        items = self.ITEMS + [("doc:PA", "**plan**: PA\nwhole-doc rollup")]
+
+        async def llm(prompt, max_tokens):
+            ids = [ln.split(": ", 1)[1] for ln in prompt.splitlines()
+                   if ln.startswith("### req_id")]
+            return json.dumps({rid: ["w"] for rid in ids})
+
+        cfg = eb.BatchConfig(max_retries=1, enrich_doc_chunks=True,
+                             enrich_section_chunks=True)
+        sink, summary = _run(items, llm, cfg=cfg)
+        assert summary["skipped"] == 0
+        assert ("doc:PA", ["w"]) in sink.enrich
+
+    def test_from_env_parses_coarse_chunk_flags(self):
+        env = {"NORA_SIRA_BATCH_ENRICH_DOC_CHUNKS": "1",
+               "NORA_SIRA_BATCH_ENRICH_SECTION_CHUNKS": "true"}
+        cfg = eb.BatchConfig.from_env(env)
+        assert cfg.enrich_doc_chunks and cfg.enrich_section_chunks
+        default = eb.BatchConfig.from_env({})
+        assert not default.enrich_doc_chunks
+        assert not default.enrich_section_chunks
+
     def test_single_req_mode_one_call_per_req(self, tmp_path):
         """max_reqs=1: same batched prompt (taxonomy block included),
         one LLM call per req."""
@@ -266,7 +308,8 @@ class TestRunBatched:
 
 
 class TestDebugRaw:
-    """Opt-in response-head logging on the unknown-req_ids anomaly."""
+    """Opt-in response-head logging on parse anomalies: no JSON, requested
+    ids absent from a parsed response, or unknown req_ids."""
 
     def test_from_env_parses_debug_raw(self):
         assert eb.BatchConfig.from_env({"NORA_SIRA_BATCH_DEBUG_RAW": "1"}).debug_raw
@@ -298,6 +341,31 @@ class TestDebugRaw:
         joined = "\n".join(r.getMessage() for r in caplog.records)
         assert "unknown req_ids" in joined
         assert "response head" not in joined
+
+    def test_empty_json_object_dumps_missing_ids(self, caplog):
+        """The dominant solo-retry failure: a parseable dict that omits
+        the requested id. Must dump even with no unknown ids."""
+        async def llm(prompt, max_tokens):
+            return "some reasoning prose\n{}"
+
+        with caplog.at_level(logging.WARNING, logger="test"):
+            _run(TestRunBatched.ITEMS, llm,
+                 cfg=eb.BatchConfig(max_retries=0, debug_raw=True))
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "ids absent from parsed response" in joined
+        assert "missing ids  (first 20): ['R1', 'R2']" in joined
+        assert "marker ABSENT" in joined
+
+    def test_no_json_response_dumps_error(self, caplog):
+        async def llm(prompt, max_tokens):
+            return "thinking forever with no answer emitted"
+
+        with caplog.at_level(logging.WARNING, logger="test"):
+            _run(TestRunBatched.ITEMS, llm,
+                 cfg=eb.BatchConfig(max_retries=0, debug_raw=True))
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "no JSON object in response" in joined
+        assert "thinking forever" in joined                  # head visible
 
 
 class TestReasoningResponses:

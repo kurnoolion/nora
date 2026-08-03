@@ -332,3 +332,20 @@ def test_main_verify_strict_fails_on_warn(tmp_path):
     argv = ["--db-root", str(tmp_path), "--verify", "--run-name", "r1"]
     assert multi_main(argv) == 0
     assert multi_main(argv + ["--strict"]) == 1
+
+
+def test_main_coarse_chunk_flags_export_env(tmp_path, monkeypatch):
+    """--enrich-doc-chunks / --enrich-section-chunks reach the batched
+    enrich layer as env vars the pipeline children inherit."""
+    import os
+    monkeypatch.setenv("NORA_SIRA_BATCH_ENRICH_DOC_CHUNKS", "")
+    monkeypatch.setenv("NORA_SIRA_BATCH_ENRICH_SECTION_CHUNKS", "")
+    _seed_clone(tmp_path)
+    (tmp_path / "scripts" / "run_pipeline.py").write_text("")
+    _make_cell(tmp_path, "VZW__Feb2026")
+    rc = multi_main(["--db-root", str(tmp_path),
+                     "--sira-clone", str(tmp_path), "--dry-run",
+                     "--enrich-doc-chunks", "--enrich-section-chunks"])
+    assert rc == 0
+    assert os.environ["NORA_SIRA_BATCH_ENRICH_DOC_CHUNKS"] == "1"
+    assert os.environ["NORA_SIRA_BATCH_ENRICH_SECTION_CHUNKS"] == "1"
