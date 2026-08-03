@@ -26,6 +26,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+try:                                    # repo context (sandbox package)
+    from sandbox.llm_refusal import is_permanent_refusal, parse_markers
+except ImportError:                     # SIRA clone context (copied flat
+    from llm_refusal import is_permanent_refusal, parse_markers  # noqa: F401
+                                        # into scripts/ by install_configs.sh)
+
 PLAN_RE = re.compile(r"^\*\*plan\*\*: *(.+?) *$", re.M)
 
 # The prologue the design fixes for the taxonomy block (section 2).
@@ -132,6 +138,12 @@ class BatchConfig:
                                         # treat them as handled; opt in per build
     enrich_section_chunks: bool = False  # same for section:-prefixed rows
                                          # (skipped_section_chunk)
+    refusal_markers: tuple[str, ...] = ()  # permanent-refusal prefixes
+                                        # (NORA_LLM_REFUSAL_MARKERS,
+                                        # ||-separated). Marker values are
+                                        # deployment-local — env files only,
+                                        # never committed. Empty = detection
+                                        # off.
     debug_raw: bool = False             # opt-in: log response head on anomalies
                                         # (raw text carries corpus content — keep
                                         # such logs local, never in shared reports)
@@ -164,6 +176,8 @@ class BatchConfig:
             batch_concurrency=_get("CONCURRENCY", int, 2),
             enrich_doc_chunks=_get("ENRICH_DOC_CHUNKS", _bool, False),
             enrich_section_chunks=_get("ENRICH_SECTION_CHUNKS", _bool, False),
+            refusal_markers=parse_markers(
+                env.get("NORA_LLM_REFUSAL_MARKERS", "")),
             debug_raw=_get("DEBUG_RAW", _bool, False),
             reasoning_sentinel=_get("REASONING_SENTINEL", _bool, False),
         )
@@ -297,6 +311,7 @@ async def run_batched(
     taxonomy_dir: str,
     cfg: BatchConfig,
     llm_call: Callable[[str, int], Awaitable[str]],
+    fallback_llm_call: Callable[[str, int], Awaitable[str]] | None = None,
     filter_fn: Callable[[list[str]], tuple[list[str], dict]],
     write_enrich: Callable[[str, list[str]], Awaitable[None]],
     write_kept: Callable[[dict], Awaitable[None]],
@@ -307,12 +322,18 @@ async def run_batched(
     """Drive batched enrichment over `items` ((doc_id, text), already
     resume-filtered by the caller). Per-req trace rows mirror the legacy
     statuses (ok / no_phrases / all_filtered) plus batch-path statuses
-    (batch_error / missing_in_batch_response); every row carries its
-    batch_id. Missing/errored reqs re-queue into fresh batches up to
-    cfg.max_retries extra rounds."""
+    (batch_error / missing_in_batch_response / llm_refused); every row
+    carries its batch_id. Missing/errored reqs re-queue into fresh
+    batches up to cfg.max_retries extra rounds.
+
+    Permanent refusals (cfg.refusal_markers): when the primary endpoint
+    returns a marker-prefixed non-answer, retrying it can never succeed
+    — the same call goes to `fallback_llm_call` instead (same prompt,
+    same budget, batch row tagged "llm": "fallback"). With no fallback
+    configured the batch fails fast as llm_refused (no requeue burn)."""
     summary = {"batches": 0, "oversized": 0, "enriched": 0, "failed": 0,
                "proposed": 0, "kept": 0, "filtered": 0, "errors": 0,
-               "requeued": 0, "skipped": 0}
+               "requeued": 0, "skipped": 0, "fallbacks": 0, "refused": 0}
     tax_cache: dict[str, str] = {}
     header_cache: dict[str, int] = {}
     sem = asyncio.Semaphore(max(1, cfg.batch_concurrency))
@@ -343,9 +364,20 @@ async def run_batched(
         prompt = compose_prompt(template, block, batch.ids, batch.texts, max_n,
                                 sentinel=cfg.reasoning_sentinel)
         t0 = time.time()
+        used_fallback = False
         try:
             async with sem:
                 raw = await llm_call(prompt, cfg.response_reserve)
+                if (cfg.refusal_markers and fallback_llm_call is not None
+                        and is_permanent_refusal(raw, cfg.refusal_markers)):
+                    # permanent refusal from primary — same endpoint can
+                    # never answer this input; one shot on the fallback
+                    logger.info("batch %s (plan %s): permanent refusal — "
+                                "routing to fallback LLM",
+                                batch_id, batch.plan_id)
+                    summary["fallbacks"] += 1
+                    used_fallback = True
+                    raw = await fallback_llm_call(prompt, cfg.response_reserve)
         except Exception as e:                                    # noqa: BLE001
             summary["errors"] += 1
             logger.warning("batch %s (%d reqs) LLM error: %s",
@@ -361,6 +393,25 @@ async def run_batched(
                                "ms": int((time.time() - t0) * 1000)})
             return
         ms = int((time.time() - t0) * 1000)
+        if (cfg.refusal_markers and fallback_llm_call is None
+                and is_permanent_refusal(raw, cfg.refusal_markers)):
+            # permanent refusal, no fallback configured: retrying
+            # reproduces the notice — fail fast, skip the requeue rounds
+            logger.warning("batch %s (plan %s): permanent refusal, no "
+                           "fallback LLM configured — failing %d req(s)",
+                           batch_id, batch.plan_id, len(batch.ids))
+            summary["refused"] += len(batch.ids)
+            for rid in batch.ids:
+                await _fail(rid, "llm_refused", batch_id, ms=ms)
+            await write_batch({
+                "batch_id": batch_id, "plan": batch.plan_id,
+                "n_reqs": len(batch.ids), "status": "refused",
+                "answered": 0, "missing": len(batch.ids),
+                "prompt_tokens_est": batch.prompt_tokens,
+                "resp_tokens_est": len(batch.ids) * cfg.resp_tokens_per_req,
+                "closed_by": batch.closed_by, "oversized": batch.oversized,
+                "attempt": attempt, "ms": ms})
+            return
         res = parse_batch_response(raw, batch.ids)
         if res.extra:
             logger.warning("batch %s (plan %s): %d unknown req_ids in response",
@@ -413,14 +464,17 @@ async def run_batched(
                 for rid in res.missing:
                     await _fail(rid, "missing_in_batch_response", batch_id,
                                 error=res.error, ms=ms)
-        await write_batch({
+        row = {
             "batch_id": batch_id, "plan": batch.plan_id,
             "n_reqs": len(batch.ids), "status": "ok" if not res.error else "parse_error",
             "answered": len(res.phrases_by_id), "missing": len(res.missing),
             "prompt_tokens_est": batch.prompt_tokens,
             "resp_tokens_est": len(batch.ids) * cfg.resp_tokens_per_req,
             "closed_by": batch.closed_by, "oversized": batch.oversized,
-            "attempt": attempt, "ms": ms})
+            "attempt": attempt, "ms": ms}
+        if used_fallback:
+            row["llm"] = "fallback"
+        await write_batch(row)
 
     # Coarse corpus rows (doc:/section:-prefixed ids) are skipped unless
     # opted in — traced as skipped_* rows so SIRA's resume and verify's

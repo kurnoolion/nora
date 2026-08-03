@@ -14,7 +14,8 @@ Usage:
         [--sira-clone sandbox/sira] [--run-name enrich-stable] \\
         [--only <MNO>__<REL>[,...]] \\
         [--wipe-stale-index | --wipe-all-derived] \\
-        [--heal-torn] [--retry-failed [--include-all-filtered] [--include-skipped]] \\
+        [--heal-torn] [--retry-failed [--include-all-filtered] [--include-skipped]
+                       [--include-refused]] \\
         [--enrich-doc-chunks] [--enrich-section-chunks] \\
         [--max-reqs N] [--verify] \\
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
@@ -118,6 +119,7 @@ def run_repairs(args: argparse.Namespace) -> None:
                 rd, "doc-enrich",
                 include_all_filtered=args.include_all_filtered,
                 include_skipped=args.include_skipped,
+                include_refused=args.include_refused,
             )
             print(f"sira-lane: retry-failed {cell}/{args.run_name}: "
                   f"evicted {evicted} doc(s) for retry")
@@ -159,6 +161,11 @@ def main(argv: list[str] | None = None) -> int:
                         "(coarse doc:/section: chunks). Pair with "
                         "--enrich-doc-chunks/--enrich-section-chunks so this "
                         "run actually enriches them instead of re-skipping")
+    p.add_argument("--include-refused", action="store_true",
+                   help="With --retry-failed: also evict llm_refused rows "
+                        "(inputs the endpoint permanently refuses). Set "
+                        "after configuring the fallback LLM in "
+                        ".env.sira-batch so the retry can succeed")
     p.add_argument("--enrich-doc-chunks", action="store_true",
                    help="Enrich coarse doc:-prefixed corpus rows too "
                         "(forwarded to sira_multi; default: skipped, traced "

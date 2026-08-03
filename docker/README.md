@@ -525,7 +525,43 @@ them identically, so `retry-failed` excludes them by default — pass
 `skipped_doc_chunk` / `skipped_section_chunk` rows record build policy
 (coarse chunks excluded by default), not failures — `retry-failed` leaves
 them alone unless you pass `--include-skipped` together with the
-`--enrich-*-chunks` build flags. If the
+`--enrich-*-chunks` build flags. `llm_refused` rows mean the endpoint
+PERMANENTLY refuses that input (deterministic non-answer, marker-detected —
+see the fallback section below); they too stay put unless `--include-refused`.
+
+### Permanent refusals — fallback LLM
+
+Some endpoints deterministically refuse certain inputs: instead of an
+answer they return a fixed notice, identical on every retry — burning
+retry rounds on them is pure waste. The refusal detector + fallback
+model handles these:
+
+- **Detect**: set `NORA_LLM_REFUSAL_MARKERS` (in `.env.sira-batch` AND
+  `.env.sira-query`; `||`-separated prefixes). A response that starts
+  with a marker and carries no JSON payload is a permanent refusal.
+  Marker values are deployment-specific — env files only, never commit
+  them.
+- **Fallback (batch)**: set `NORA_SIRA_ENRICH_FALLBACK_LLM_URL` (+`_MODEL`,
+  URL WITH `/v1`) in `.env.sira-batch` — typically a local model. A
+  refused call is re-sent once to the fallback (same prompt/budget); the
+  batch row is tagged `"llm": "fallback"` and verify shows a
+  `fallback-answered N` count. Markers set but no fallback → reqs fail
+  fast as `llm_refused` (no retry-round burn).
+- **Fallback (query service)**: set `NORA_SIRA_QUERY_FALLBACK_LLM_URL`
+  (+`_MODEL`, `_API_KEY`; URL WITHOUT `/v1`) in `.env.sira-query` —
+  covers query enrichment and chat rerank; `/healthz` reports
+  `refusal_fallback {configured, used}`. Recreate the serve stack after
+  editing.
+- **Retry existing `llm_refused` rows** after configuring the fallback
+  (rebake `sira-batch` first — the patch layer changed):
+
+      docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
+        python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
+        --run-name <run-name> --wipe-stale-index \
+        --retry-failed --include-refused --max-reqs 1 --verify
+
+Taxonomy-lane fallback is deferred (TBD) — the same detector will plug
+into the core LLM provider path later. If the
 same docs fail repeatedly with the same status, inspect their trace lines —
 oversized docs vs endpoint token limits are the usual culprits.
 

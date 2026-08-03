@@ -40,6 +40,8 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from sandbox.llm_refusal import is_permanent_refusal, parse_markers
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,6 +78,18 @@ _SHIM_API_KEY = os.getenv("NORA_LLM_SHIM_API_KEY", "") or os.getenv("NORA_LLM_AP
 _RERANK_LLM_URL = os.getenv("NORA_SIRA_RERANK_LLM_URL", "").rstrip("/")
 _RERANK_LLM_MODEL = os.getenv("NORA_SIRA_RERANK_LLM_MODEL", "")
 _RERANK_LLM_API_KEY = os.getenv("NORA_SIRA_RERANK_LLM_API_KEY", "")
+
+# Permanent-refusal fallback (shared with the batch lane's design, see
+# sandbox/llm_refusal.py): when a primary endpoint returns a
+# marker-prefixed non-answer for a given input, it will do so on every
+# retry — route that one call to a fallback model instead. One fallback
+# pair covers every _llm_call site (query enrichment AND rerank).
+# Marker values are deployment-local (.env.sira-query, gitignored).
+_FALLBACK_LLM_URL = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_URL", "").rstrip("/")
+_FALLBACK_LLM_MODEL = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_MODEL", "")
+_FALLBACK_LLM_API_KEY = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_API_KEY", "")
+_REFUSAL_MARKERS = parse_markers(os.getenv("NORA_LLM_REFUSAL_MARKERS", ""))
+_FALLBACK_STATS = {"used": 0}        # process-lifetime counter (stats endpoint)
 # Rerank backend (multi-mno-sira): "chat" (default — pointwise LLM-as-judge,
 # one chat-completion per candidate, uses the rerank prompt) | "tei" (one bulk
 # POST to {RERANK_LLM_URL}/rerank, TEI/HF cross-encoder shape) | "openai-
@@ -1352,6 +1366,12 @@ def healthz() -> dict[str, Any]:
         "shim_url": _SHIM_URL,
         "shim_model": _SHIM_MODEL or "(unset — falls back to whatever the shim sends)",
         "shim_api_key_set": bool(_SHIM_API_KEY),
+        # Permanent-refusal fallback: configured = both URL + markers set;
+        # used = calls answered by the fallback since process start.
+        "refusal_fallback": {
+            "configured": bool(_FALLBACK_LLM_URL and _REFUSAL_MARKERS),
+            "used": _FALLBACK_STATS["used"],
+        },
         "query_prompt_loaded": bool(_query_prompt_template),
         "rerank_prompt_loaded": bool(_rerank_prompt_template),
         # Provenance — verify everything ties back to the run you expect.
@@ -1418,7 +1438,30 @@ async def _llm_call(
             f"LLM endpoint ({url}) returned {resp.status_code}: {resp.text[:200]}"
         )
     data = resp.json()
-    return data["choices"][0]["message"]["content"] or ""
+    raw = data["choices"][0]["message"]["content"] or ""
+    if (_FALLBACK_LLM_URL and _REFUSAL_MARKERS
+            and is_permanent_refusal(raw, _REFUSAL_MARKERS)):
+        # Permanent refusal — the same endpoint reproduces it on every
+        # retry, so this one call goes to the fallback model instead.
+        # Covers every _llm_call site (query enrichment + chat rerank).
+        _FALLBACK_STATS["used"] += 1
+        logger.info("LLM permanently refused — routing call to fallback "
+                    "(%d fallback call(s) this process)",
+                    _FALLBACK_STATS["used"])
+        payload["model"] = _FALLBACK_LLM_MODEL or used_model
+        fb_headers = ({"Authorization": f"Bearer {_FALLBACK_LLM_API_KEY}"}
+                      if _FALLBACK_LLM_API_KEY else None)
+        resp = await client.post(
+            f"{_FALLBACK_LLM_URL}/v1/chat/completions", json=payload,
+            headers=fb_headers,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Fallback LLM endpoint ({_FALLBACK_LLM_URL}) returned "
+                f"{resp.status_code}: {resp.text[:200]}"
+            )
+        raw = resp.json()["choices"][0]["message"]["content"] or ""
+    return raw
 
 
 def _parse_phrases(raw: str) -> list[str]:

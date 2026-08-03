@@ -70,7 +70,7 @@ def _repair_args(db_root, **kw):
                 sira_clone=Path("sandbox/sira"), run_name="r1",
                 only=None, wipe_stale_index=False, wipe_all_derived=False,
                 heal_torn=True, retry_failed=True, include_all_filtered=False,
-                include_skipped=False,
+                include_skipped=False, include_refused=False,
                 stages="prepare,bm25,enrich_corpus", dry_run=False)
     base.update(kw)
     return argparse.Namespace(**base)

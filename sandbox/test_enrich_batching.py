@@ -160,12 +160,12 @@ class _Sink:
         self.batches.append(row)
 
 
-def _run(items, llm_call, cfg=None, taxonomy_dir=""):
+def _run(items, llm_call, cfg=None, taxonomy_dir="", fallback=None):
     sink = _Sink()
     cfg = cfg or eb.BatchConfig(max_retries=1)
     summary = asyncio.run(eb.run_batched(
         items=items, template=TEMPLATE, max_n=3, taxonomy_dir=taxonomy_dir,
-        cfg=cfg, llm_call=llm_call,
+        cfg=cfg, llm_call=llm_call, fallback_llm_call=fallback,
         filter_fn=lambda ph: ([p for p in ph if p != "drop"],
                               {"kept": len([p for p in ph if p != "drop"])}),
         write_enrich=sink.w_enrich, write_kept=sink.w_kept,
@@ -305,6 +305,82 @@ class TestRunBatched:
         assert summary["batches"] == 2 and summary["enriched"] == 2
         assert dict(sink.enrich) == {"R1": ["w"], "R2": ["w"]}
         assert all("feature taxonomy" in p and '"F1"' in p for p in calls)
+
+
+class TestRefusalFallback:
+    """Permanent-refusal handling: marker-prefixed non-answers reroute
+    to the fallback LLM (when configured) or fail fast as llm_refused.
+    Markers are invented test strings — real values are env-local."""
+
+    CFG = dict(max_retries=2, refusal_markers=("CANNOT_COMPLY",))
+
+    def test_refusal_routes_to_fallback(self):
+        primary_calls, fallback_calls = [], []
+
+        async def llm(prompt, max_tokens):
+            primary_calls.append(prompt)
+            return "CANNOT_COMPLY with this input."
+
+        async def fb(prompt, max_tokens):
+            fallback_calls.append(prompt)
+            return json.dumps({"R1": ["alpha"], "R2": ["beta"]})
+
+        sink, summary = _run(TestRunBatched.ITEMS, llm,
+                             cfg=eb.BatchConfig(**self.CFG), fallback=fb)
+        assert dict(sink.enrich) == {"R1": ["alpha"], "R2": ["beta"]}
+        assert summary["fallbacks"] == 1 and summary["failed"] == 0
+        # same prompt reaches both endpoints, exactly once each
+        assert fallback_calls == primary_calls
+        assert all(b.get("llm") == "fallback" for b in sink.batches)
+
+    def test_refusal_without_fallback_fails_fast(self):
+        calls = []
+
+        async def llm(prompt, max_tokens):
+            calls.append(prompt)
+            return "CANNOT_COMPLY with this input."
+
+        sink, summary = _run(TestRunBatched.ITEMS, llm,
+                             cfg=eb.BatchConfig(**self.CFG))
+        # one round only — permanent refusals never requeue
+        assert len(calls) == 1 and summary["requeued"] == 0
+        assert summary["refused"] == 2
+        statuses = {r["doc_id"]: r["status"] for r in sink.failed}
+        assert statuses == {"R1": "llm_refused", "R2": "llm_refused"}
+        assert [b["status"] for b in sink.batches] == ["refused"]
+
+    def test_non_refusal_garbage_still_requeues(self):
+        """No-JSON without a marker prefix keeps the normal transient
+        retry path — fallback is never consulted."""
+        fallback_calls = []
+
+        async def llm(prompt, max_tokens):
+            return "no answer today"
+
+        async def fb(prompt, max_tokens):
+            fallback_calls.append(prompt)
+            return "{}"
+
+        sink, summary = _run(TestRunBatched.ITEMS, llm,
+                             cfg=eb.BatchConfig(**self.CFG), fallback=fb)
+        assert fallback_calls == [] and summary["fallbacks"] == 0
+        assert {r["status"] for r in sink.failed} == {"missing_in_batch_response"}
+
+    def test_no_markers_disables_detection(self):
+        async def llm(prompt, max_tokens):
+            return "CANNOT_COMPLY with this input."
+
+        sink, summary = _run(TestRunBatched.ITEMS, llm,
+                             cfg=eb.BatchConfig(max_retries=1))
+        # without markers the response is just a parse failure (transient)
+        assert summary["refused"] == 0 and summary["fallbacks"] == 0
+        assert {r["status"] for r in sink.failed} == {"missing_in_batch_response"}
+
+    def test_from_env_parses_markers(self):
+        cfg = eb.BatchConfig.from_env(
+            {"NORA_LLM_REFUSAL_MARKERS": "CANNOT_COMPLY||Request declined:"})
+        assert cfg.refusal_markers == ("CANNOT_COMPLY", "Request declined:")
+        assert eb.BatchConfig.from_env({}).refusal_markers == ()
 
 
 class TestDebugRaw:

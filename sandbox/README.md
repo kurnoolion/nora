@@ -22,6 +22,7 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_multi.py` | Multi-MNO batch orchestrator — enumerates the `(mno, release)` cells under a db_root and runs SIRA's `run_pipeline.py` once per cell (writes each cell's `configs/data/<cell>.yaml` from the `nora.yaml` template first); `--verify` sweeps the same cells with read-only verify-run reports instead of building. See "Running — multi-MNO" below. | ✅ |
 | `sira_query/service.py` | Cell-aware FastAPI per-query service (`/sira-query`, `/healthz`) — loads every cell at startup; resolves query scope → retrieve per cell → merge → rerank. Query-time config in the multi-mno-sira runbook. | ✅ |
 | `sira_cells.py` | Cell-identity helpers (`cell_dirname`, `parse_cell_dirname`, `enumerate_cells`); release ordering re-exported from `core.extraction.release_key`. | ✅ |
+| `llm_refusal.py` | Permanent-refusal detection shared by the batch enrich lane and the query service: a marker-prefixed, JSON-free response means the endpoint will refuse that input on every retry — route the call to a configured fallback LLM instead (or fail fast as `llm_refused`). Markers/fallback endpoints are env-local (`NORA_LLM_REFUSAL_MARKERS`, `NORA_SIRA_ENRICH_FALLBACK_LLM_*`, `NORA_SIRA_QUERY_FALLBACK_LLM_*`). Copied flat into the SIRA clone by `install_configs.sh`. | ✅ |
 | `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`; `--failed` inverts it into a triage listing (failed reqs per cell grouped status → plan; local-only, ids redacted before sharing). | ✅ |
 | `verify_tables.py` | Verifies parsed tables are inlined into NORA parse text (fails on any `tables`-field req missing its inline table) and reached the per-cell SIRA corpus, with a cross-check. `--parse` and/or `--db-root`. | ✅ |
 | `run_stack.sh` | Launch one isolated SIRA-service + NORA-web stack (Path-B) from args — own ports, own LLM, own web state DBs — so several can run in parallel to A/B different LLMs / ingestions. `--dry-run` to preview, `--stop <label>` to tear down. | ✅ |
@@ -251,6 +252,12 @@ leaves those rows alone. To enrich them after the fact, combine
 `--include-skipped` (evicts the skipped rows) with the build opt-ins
 `--enrich-doc-chunks` / `--enrich-section-chunks` in the same lane pass.
 
+`llm_refused` rows (the endpoint permanently refuses that input —
+marker-detected, see `llm_refusal.py`) also stay put by default:
+retrying the same endpoint reproduces the refusal. Configure the
+fallback LLM (`NORA_SIRA_ENRICH_FALLBACK_LLM_URL/_MODEL` +
+`NORA_LLM_REFUSAL_MARKERS`), then retry with `--include-refused`.
+
 Verify: `retry-failed` prints per-file eviction counts; the resume
 re-enriches exactly those docs; `trace.failed.jsonl` shrinks.
 
@@ -382,7 +389,8 @@ redacted) under each stack's state dir.
     python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
         [--run-name enrich-stable] [--only <MNO>__<REL>,...] \
         [--wipe-stale-index | --wipe-all-derived] \
-        [--heal-torn] [--retry-failed [--include-all-filtered] [--include-skipped]] \
+        [--heal-torn] [--retry-failed [--include-all-filtered] [--include-skipped]
+                       [--include-refused]] \
         [--enrich-doc-chunks] [--enrich-section-chunks] \
         [--max-reqs N] [--verify] \
         [--stages prepare,bm25,enrich_corpus] [--dry-run]

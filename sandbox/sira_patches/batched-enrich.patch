@@ -32,7 +32,7 @@
      prompt_path = os.path.join(SCRIPTS_DIR, cfg.enrich.doc_prompt_file)
      with open(prompt_path) as f:
          return f.read()
-@@ -353,12 +371,91 @@
+@@ -353,12 +371,114 @@
  
      async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
          items = list(zip(target_ids, target_texts))
@@ -60,6 +60,28 @@
 +                if chat_template_kwargs:
 +                    payload["chat_template_kwargs"] = chat_template_kwargs
 +                data = await post_chat(session, llm_url, payload)
++                return data["choices"][0]["message"]["content"] or ""
++
++            # Permanent-refusal fallback (sandbox/llm_refusal.py): when
++            # the primary endpoint returns a marker-prefixed non-answer,
++            # run_batched routes that call here instead. URL WITH /v1
++            # (batch convention); unset -> no fallback, refusals fail
++            # fast as llm_refused.
++            _fb_url = os.getenv(
++                "NORA_SIRA_ENRICH_FALLBACK_LLM_URL", ""
++            ).rstrip("/")
++            _fb_model = os.getenv("NORA_SIRA_ENRICH_FALLBACK_LLM_MODEL", "")
++
++            async def _b_fallback_llm(prompt: str, max_tokens: int) -> str:
++                payload: dict = {
++                    "model": _fb_model or model,
++                    "messages": [{"role": "user", "content": prompt}],
++                    "max_tokens": max_tokens,
++                    "temperature": enrich_cfg.temperature,
++                }
++                data = await post_chat(
++                    session, f"{_fb_url}/chat/completions", payload
++                )
 +                return data["choices"][0]["message"]["content"] or ""
 +
 +            def _b_filter(phrases):
@@ -97,6 +119,7 @@
 +                taxonomy_dir=os.getenv("NORA_SIRA_TAXONOMY_DIR", ""),
 +                cfg=enrich_batching.BatchConfig.from_env(dict(os.environ)),
 +                llm_call=_b_llm,
++                fallback_llm_call=_b_fallback_llm if _fb_url else None,
 +                filter_fn=_b_filter,
 +                write_enrich=_b_enrich,
 +                write_kept=_b_kept,

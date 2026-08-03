@@ -283,6 +283,7 @@ def retry_failed_in_run(
     *,
     include_all_filtered: bool = False,
     include_skipped: bool = False,
+    include_refused: bool = False,
 ) -> tuple[int, dict[str, int]]:
     """Evict failed entries from one SIRA stage's run dir so SIRA's resume
     reprocesses them next run. Returns (eviction_count, per_file_dropped).
@@ -293,8 +294,10 @@ def retry_failed_in_run(
     too. `skipped_*` rows (coarse doc:/section: chunks excluded by build
     policy) likewise stay put unless `include_skipped=True` — pass it
     after opting the build into coarse-chunk enrichment, otherwise the
-    next run just re-skips them. Doc-enrich keys on doc_id; rerank keys
-    on (query_id, doc_id).
+    next run just re-skips them. `llm_refused` rows (endpoint permanently
+    refuses that input) stay put unless `include_refused=True` — pass it
+    after configuring a fallback LLM so the retry can actually succeed.
+    Doc-enrich keys on doc_id; rerank keys on (query_id, doc_id).
     """
     if stage not in _STAGE_FILES:
         raise ValueError(
@@ -320,6 +323,8 @@ def retry_failed_in_run(
             if not include_all_filtered and status == "all_filtered":
                 continue
             if not include_skipped and status.startswith("skipped_"):
+                continue
+            if not include_refused and status == "llm_refused":
                 continue
             key = key_fn(rec)
             # Skip keys with any None component — they can't have been
@@ -557,6 +562,7 @@ def _batch_stats(rows: list[dict]) -> dict:
         "missing_final": sum(r.get("missing", 0) for r in rows
                              if r.get("attempt", 0) == final_round),
         "single_req_mode": all(r.get("n_reqs") == 1 for r in rows),
+        "fallback_used": sum(1 for r in rows if r.get("llm") == "fallback"),
     }
 
 
@@ -951,6 +957,8 @@ def cmd_retry_failed(args: argparse.Namespace) -> int:
              else "errors only (all_filtered kept)")
     if args.include_skipped:
         scope += " + skipped coarse chunks"
+    if args.include_refused:
+        scope += " + refused"
     print(f"retry-failed: scope = {scope}")
 
     for stage in stages:
@@ -961,6 +969,7 @@ def cmd_retry_failed(args: argparse.Namespace) -> int:
         evicted, counts = retry_failed_in_run(
             run_dir, stage, include_all_filtered=args.include_all_filtered,
             include_skipped=args.include_skipped,
+            include_refused=args.include_refused,
         )
         print(f"\n{stage} ({args.run_name}): evicted {evicted} key(s)")
         for name, dropped in counts.items():
@@ -1018,6 +1027,8 @@ def verify_cell(dataset_dir: Path, run_name: str,
         print(f"[batches]   {b['n']}{scope} | status {b['status']} | "
               f"closed_by {b['closed_by']} | rounds {b['rounds']}")
         line = f"            mode: {mode} | oversized {b['oversized']}"
+        if b["fallback_used"]:
+            line += f" | fallback-answered {b['fallback_used']}"
         if b["reqs_ok"]:
             r = b["reqs_ok"]
             line += (f" | reqs/batch ok: min {r['min']} avg {r['avg']} "
@@ -1161,6 +1172,15 @@ def main(argv: list[str] | None = None) -> int:
                         "them — set this after opting the build into "
                         "--enrich-doc-chunks/--enrich-section-chunks so the "
                         "next run actually enriches them."
+                    ))
+    rf.add_argument("--include-refused", action="store_true",
+                    help=(
+                        "Also evict status=llm_refused rows (the endpoint "
+                        "permanently refuses those inputs — retrying the "
+                        "same endpoint reproduces the refusal). Set this "
+                        "after configuring a fallback LLM "
+                        "(NORA_SIRA_ENRICH_FALLBACK_LLM_URL) so the retry "
+                        "can actually succeed."
                     ))
 
     ht.add_argument("--stage", choices=["doc-enrich", "rerank", "both"],

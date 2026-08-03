@@ -18,6 +18,7 @@
 #   sandbox/sira_configs/{data,enrich,rerank}/nora.yaml
 #   sandbox/prompts/{doc,query,relevance}_requirement_v*.txt
 #   sandbox/enrich_batching.py
+#   sandbox/llm_refusal.py
 #   sandbox/sira_patches/*.patch
 
 set -euo pipefail
@@ -50,6 +51,9 @@ cp "$REPO_ROOT/sandbox/prompts/relevance_requirement_v01.txt" "$SIRA_CLONE/scrip
 # in-container; committed to the internal remote only, see that dir's
 # README).
 cp "$REPO_ROOT/sandbox/enrich_batching.py" "$SIRA_CLONE/scripts/enrich_batching.py"
+# Permanent-refusal detection — imported by enrich_batching (flat import
+# in clone context; marker values come from env at run time).
+cp "$REPO_ROOT/sandbox/llm_refusal.py" "$SIRA_CLONE/scripts/llm_refusal.py"
 
 set +x
 

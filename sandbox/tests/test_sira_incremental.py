@@ -424,6 +424,36 @@ def test_retry_doc_enrich_default_keeps_skipped_rows(tmp_path):
     assert remaining == {"doc:PA", "section:PA 3.2"}
 
 
+def test_retry_doc_enrich_default_keeps_refused_rows(tmp_path):
+    """llm_refused = the endpoint permanently refuses that input —
+    retrying the same endpoint reproduces it, so default leaves them."""
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    _write_doc_enrich_failed(run_dir, [
+        {"doc_id": "FAIL-1", "status": "error"},
+        {"doc_id": "REF-1", "status": "llm_refused"},
+    ])
+    n, counts = retry_failed_in_run(run_dir, "doc-enrich")
+    assert n == 1 and counts["trace.failed.jsonl"] == 1
+    remaining = {
+        json.loads(l)["doc_id"]
+        for l in (run_dir / "trace.failed.jsonl").read_text().splitlines()
+        if l.strip()
+    }
+    assert remaining == {"REF-1"}
+
+
+def test_retry_doc_enrich_include_refused_evicts_them(tmp_path):
+    run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
+    _write_doc_enrich_failed(run_dir, [
+        {"doc_id": "REF-1", "status": "llm_refused"},
+        {"doc_id": "AF-1",  "status": "all_filtered"},
+    ])
+    n, counts = retry_failed_in_run(
+        run_dir, "doc-enrich", include_refused=True,
+    )
+    assert n == 1 and counts["trace.failed.jsonl"] == 1  # all_filtered stays
+
+
 def test_retry_doc_enrich_include_skipped_evicts_them(tmp_path):
     run_dir = tmp_path / "ds" / "runs" / "doc-enrich" / "stable"
     _write_doc_enrich_failed(run_dir, [
@@ -534,6 +564,7 @@ def test_cmd_retry_failed_both_stages(tmp_path, capsys):
     args = argparse.Namespace(
         dataset=str(ds), run_name="qwen3",
         stage="both", include_all_filtered=False, include_skipped=False,
+        include_refused=False,
     )
     rc = cmd_retry_failed(args)
     assert rc == 0
@@ -567,6 +598,7 @@ def test_cmd_retry_failed_missing_run_dir_skips_gracefully(tmp_path, capsys):
     args = argparse.Namespace(
         dataset=str(ds), run_name="qwen3",
         stage="both", include_all_filtered=False, include_skipped=False,
+        include_refused=False,
     )
     assert cmd_retry_failed(args) == 0
     out = capsys.readouterr().out
@@ -577,6 +609,7 @@ def test_cmd_retry_failed_not_a_dataset_dir_errors(tmp_path, capsys):
     args = argparse.Namespace(
         dataset=str(tmp_path / "no-such"), run_name="x",
         stage="both", include_all_filtered=False, include_skipped=False,
+        include_refused=False,
     )
     assert cmd_retry_failed(args) == 1
 
@@ -973,6 +1006,34 @@ def test_verify_uncovered_split_by_granularity(tmp_path):
     assert rep["trace"]["uncovered"] == 1
     assert rep["trace"]["uncovered_granularity"] == {"section": 1}
     assert any("never attempted: 1 {'section': 1}" in w for w in rep["warns"])
+
+
+def test_verify_reports_fallback_answered_batches(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "batches.jsonl", [
+        _batch_row(n_reqs=2, answered=2),
+        _batch_row(batch_id="b1", n_reqs=1, answered=1, llm="fallback"),
+    ])
+    rep = verify_run(ds, "r1")
+    assert rep["batches"]["fallback_used"] == 1
+    assert rep["verdict"] == "PASS"      # fallback answers are answers
+
+
+def test_verify_llm_refused_is_non_benign(tmp_path):
+    ds, rd = _seed_verified_run(tmp_path)
+    _write_lines(rd / "trace.kept.jsonl", [
+        json.dumps({"doc_id": d, "status": "ok"}) for d in ("R1", "doc:PA")
+    ])
+    _write_lines(rd / "enrichments.kept.jsonl", [
+        json.dumps({"doc_id": "R1", "phrases": ["alpha"]}),
+        json.dumps({"doc_id": "doc:PA", "phrases": ["delta"]}),
+    ])
+    _write_lines(rd / "trace.failed.jsonl", [
+        json.dumps({"doc_id": "R2", "status": "llm_refused"}),
+    ])
+    rep = verify_run(ds, "r1")
+    assert rep["trace"]["failed_non_benign"] == 1
+    assert rep["verdict"] == "WARN"
 
 
 def test_verify_run_duplicate_and_overlap_fail(tmp_path):
