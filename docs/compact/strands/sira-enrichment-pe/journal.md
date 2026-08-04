@@ -323,3 +323,46 @@
   `llm=fallback` batch-row tag if quality auditing is ever needed.
 - Pre-sentinel draft-quality-phrase flag (2026-07-29) still open —
   only revisit via targeted re-enrich if eval shows weak cells.
+
+## 2026-08-04 — Fallback retry pass verified: 146/146 recovered; v2 serve stack live
+
+### Done this session
+- verify-5 vs verify-4: the fallback retry pass recovered ALL 146
+  permanently-refused reqs (kept-req deltas +111 / +5 / +5 / +25 across
+  the four cells; every answering batch tagged `llm=fallback`).
+  Non-benign failures 0 in all cells, coverage 100%, invariants clean —
+  run `enrich-pe-v1` declared promote-ready.
+- Residual WARNs triaged as non-blocking: 5 parse_error batches in the
+  big cell were fallback outputs recovered by requeue
+  (missing@final-round 0); the two small-cell WARNs are stale-era
+  bleed-through — a retry scope smaller than the 64-batch jitter
+  tolerance merges the pre-fallback era into the "latest invocation"
+  (batch-id reset drop ~14 < 64). Trace layer is authoritative and
+  clean; artifact is cosmetic.
+- Phase 6 executed on the work PC: `promote.sh` passed for BOTH
+  `--nora-build` and `--sira-build`; v2 serve stack brought up on a
+  separate port combo per the documented A/B-stacks pattern (own
+  wiring env, per-stack web-state + service env files, shared
+  feedback/corrections; `NORA_SIRA_QUERY_URLS` fan-out set so one
+  enrichment-review Apply reloads both stacks' sira-query).
+- v2 verification: /healthz on both stacks and test-page query smoke
+  confirmed good.
+
+### In progress
+- Apply fan-out check (enrichment-review Apply reloading BOTH stacks'
+  sira-query via NORA_SIRA_QUERY_URLS) — verify on first real
+  corrections use; not blocking.
+
+### Next
+- Strand is land-ripe: 14 pending drafts + this arc closed —
+  `/land-strand sira-enrichment-pe` when ready.
+- Eval loop as a separate strand (carried).
+
+### Flags
+- Verify latest-invocation splitter merges eras when the retry scope
+  is < ~64 batches (jitter tolerance) — small cells can inherit stale
+  WARNs. Cosmetic (trace verdict is truthful); candidate fix: delimit
+  invocations with a marker row instead of the batch-id-reset
+  heuristic.
+- Pre-sentinel draft-quality-phrase flag (2026-07-29) still open —
+  revisit only via targeted re-enrich if eval shows weak cells.
