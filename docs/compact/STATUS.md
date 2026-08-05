@@ -157,6 +157,12 @@
   rows; v2 serve stack live alongside v1. Deferred at landing: eval loop as a
   separate strand, taxonomy-lane refusal fallback, verify era-merge cosmetic
   fix, Apply fan-out check on first real corrections use.
+- 2026-08-04 Landed strand `plan-aware-sira` — D-182 promoted (incremental
+  enrichment: content-hash prune/commit + drift guard). Drafts 1/3/4/5 dropped
+  as superseded (pointer rows + fan-out = D-090; patches-not-fork = D-155;
+  ranking-determinism absorbed into D-103's select-synth posture and relaxed by
+  D-105/D-116/D-118 fusion; temperature knob shipped in code). Unshipped
+  residue (fan-out query-type routing) carried to `nora-retrieval-quality`.
 
 ## In progress
 
