@@ -10,7 +10,7 @@ Also owns the **golden eval set** (strand golden-eval; serves FR-38): expert-cur
 - Questions: `EvalQuestion`, `GroundTruth`, `ALL_QUESTIONS` (questions.py) — curated Q&A fixture + loader for user-supplied Excel eval sets
 - Metrics: `QuestionScore`, `EvalReport`, `score_question(question, response)` (metrics.py) — per-question scoring + aggregate report
 - CLI: `eval_cli.main`
-- Golden eval (strand golden-eval — design; code pending):
+- Golden eval (strand golden-eval):
   - Schema (golden.py): `GoldenSample` — sample_id, created_by/created_at/updated_at, area (use-case tag), query, `ground_truth: list[GroundTruthEntry]` (req_id + optional `(mno, release, plan)` qualifiers — picker-sourced entries are always fully qualified, direct-entry may be bare), golden_response (None until curated), golden_meta (curated_at, chat_turns, model), status (`draft | stage1-ready | golden-ready`); `load_samples(env_dir)`, `save_sample(env_dir, sample)` — one JSON file per sample under `<env_dir>/eval/golden/samples/<sample_id>.json`
   - Runner (golden_runner.py): `GoldenRunner(stack_url, pipeline, judge_llm)` — `run_stage1(sample)` (POST `/sira-query` → per-sample recall + per-hit ranks, so recall@5/@10 derive from one run), `run_stage2(sample, stage1_result)` (pin Stage-1 retrieved req_ids into `QueryPipeline` via `pinned_chunk_ids` → judge candidate vs golden_response), `run_all(samples) -> GoldenRunReport`; run artifacts under `<env_dir>/eval/golden/runs/<run_id>/`
   - Judge prompt: `prompts/judge_v<N>.txt` — versioned committed artifact (generic wording; sees proprietary content only at runtime); version recorded in every run report

@@ -1,0 +1,7 @@
+<select class="form-select form-select-sm" name="plan"
+        hx-get="{{ root_path }}/api/eval-studio/picker/releases"
+        hx-target="#es-picker-release-wrap" hx-swap="innerHTML"
+        hx-include="#es-picker-mno, this">
+  <option value="">Plan…</option>
+  {% for plan in plans %}<option value="{{ plan }}">{{ plan }}</option>{% endfor %}
+</select>

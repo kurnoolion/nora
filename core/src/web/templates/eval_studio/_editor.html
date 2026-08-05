@@ -1,0 +1,185 @@
+{# Sample editor — re-rendered whole after every mutation. #}
+<div class="card mb-2">
+  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+    <span class="small fw-semibold">{{ sample.sample_id }}
+      <span class="badge es-status-{{ sample.status }} ms-1">{{ sample.status }}</span>
+      <span class="text-muted ms-2">{{ sample.created_by }}</span>
+    </span>
+    <span>
+      {% for st in statuses %}
+        {% if st != sample.status %}
+        <form class="d-inline" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/status"
+              hx-target="#es-editor" hx-swap="innerHTML">
+          <input type="hidden" name="status" value="{{ st }}">
+          <button class="btn btn-sm btn-outline-secondary py-0" type="submit">→ {{ st }}</button>
+        </form>
+        {% endif %}
+      {% endfor %}
+      {% if admin %}
+      <form class="d-inline ms-2" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/delete"
+            hx-target="#es-board" hx-swap="innerHTML"
+            hx-confirm="Delete sample {{ sample.sample_id }}?">
+        <button class="btn btn-sm btn-outline-danger py-0" type="submit"><i class="bi bi-trash"></i></button>
+      </form>
+      {% endif %}
+    </span>
+  </div>
+  <div class="card-body py-2">
+    {% if status_error %}
+    <div class="alert alert-warning small py-1">{{ status_error }}</div>
+    {% endif %}
+    <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/meta"
+          hx-target="#es-editor" hx-swap="innerHTML">
+      <div class="d-flex gap-1">
+        <textarea class="form-control form-control-sm" name="query" rows="2" required>{{ sample.query }}</textarea>
+        <div class="d-flex flex-column gap-1" style="width:180px">
+          <input class="form-control form-control-sm" name="area" value="{{ sample.area }}" placeholder="Area">
+          <button class="btn btn-sm btn-outline-primary" type="submit">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<ul class="nav nav-tabs nav-tabs-sm mb-2" role="tablist">
+  <li class="nav-item"><button class="nav-link active small" data-bs-toggle="tab" data-bs-target="#es-tab-gt" type="button">Ground truth ({{ sample.ground_truth|length }})</button></li>
+  <li class="nav-item"><button class="nav-link small" data-bs-toggle="tab" data-bs-target="#es-tab-curate" type="button">Golden response {% if sample.golden_response %}<i class="bi bi-check-circle-fill text-success"></i>{% endif %}</button></li>
+</ul>
+
+<div class="tab-content">
+<div class="tab-pane fade show active" id="es-tab-gt">
+
+  {% if gt_error %}
+  <div class="alert alert-warning small py-1">{{ gt_error }}</div>
+  {% endif %}
+
+  <div class="row g-2">
+    <div class="col-5">
+      <div class="card">
+        <div class="card-header py-1 small fw-semibold">Ground truth</div>
+        <table class="table es-gt-list mb-0">
+          <tbody>
+          {% for e in sample.ground_truth %}
+            <tr>
+              <td>
+                <span class="fw-semibold">{{ e.req_id }}</span><br>
+                <span class="text-muted">{{ e.mno or "?" }} / {{ e.release or "?" }}{% if e.plan %} / {{ e.plan }}{% endif %}</span>
+                <span class="badge text-bg-light">{{ e.source }}</span>
+              </td>
+              <td class="text-end">
+                <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/remove"
+                      hx-target="#es-editor" hx-swap="innerHTML">
+                  <input type="hidden" name="req_id" value="{{ e.req_id }}">
+                  <input type="hidden" name="mno" value="{{ e.mno }}">
+                  <input type="hidden" name="release" value="{{ e.release }}">
+                  <button class="btn btn-sm btn-outline-danger py-0" type="submit">×</button>
+                </form>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td class="text-muted small p-2">Empty — add via the picker, paste, or a preview run.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <form class="d-flex gap-1 mt-2"
+            hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/add"
+            hx-target="#es-editor" hx-swap="innerHTML">
+        <input type="hidden" name="source" value="direct">
+        <input class="form-control form-control-sm" name="req_id" placeholder="Paste req_id…" required>
+        <button class="btn btn-sm btn-outline-primary" type="submit">Add</button>
+      </form>
+
+      <div class="mt-3">
+        <button class="btn btn-sm btn-outline-secondary"
+                hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/preview"
+                hx-target="#es-preview" hx-swap="innerHTML"
+                {% if not stack_url or not sample.ground_truth %}disabled{% endif %}>
+          <i class="bi bi-play-circle"></i> Stage-1 preview
+        </button>
+        {% if not stack_url %}<span class="text-muted small">no stack configured</span>{% endif %}
+        <div id="es-preview" class="mt-2"></div>
+      </div>
+    </div>
+
+    <div class="col-7">
+      <div class="card">
+        <div class="card-header py-1 small fw-semibold">Picker — MNO → Plan → Release</div>
+        <div class="card-body py-2">
+          <div class="d-flex gap-1 mb-2">
+            <select class="form-select form-select-sm" id="es-picker-mno" name="mno"
+                    hx-get="{{ root_path }}/api/eval-studio/picker/plans"
+                    hx-target="#es-picker-plan-wrap" hx-swap="innerHTML"
+                    hx-include="this">
+              <option value="">MNO…</option>
+              {% for m in mnos %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            </select>
+            <span id="es-picker-plan-wrap" class="w-100">
+              <select class="form-select form-select-sm" disabled><option>Plan…</option></select>
+            </span>
+            <span id="es-picker-release-wrap" class="w-100">
+              <select class="form-select form-select-sm" disabled><option>Release…</option></select>
+            </span>
+          </div>
+          <input class="form-control form-control-sm mb-1" name="filter" id="es-picker-filter"
+                 placeholder="Filter by id or title…"
+                 hx-get="{{ root_path }}/api/eval-studio/picker/reqs"
+                 hx-trigger="keyup changed delay:300ms, es-picker-changed from:body"
+                 hx-target="#es-picker-reqs" hx-swap="innerHTML"
+                 hx-include="#es-picker-mno, #es-picker-plan-wrap select, #es-picker-release-wrap select, #es-picker-sid">
+          <input type="hidden" id="es-picker-sid" name="sid" value="{{ sample.sample_id }}">
+          <div class="es-picker-reqs" id="es-picker-reqs">
+            <div class="text-muted small p-2">Pick MNO, plan, and release.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="tab-pane fade" id="es-tab-curate">
+  <div class="row g-2">
+    <div class="col-6">
+      <div class="card">
+        <div class="card-header py-1 small fw-semibold">Curation chat (scratchpad — only the saved text persists)</div>
+        <div class="card-body py-2">
+          <div class="es-chat-log" id="es-chat-log"></div>
+          <form class="d-flex gap-1 mt-2" id="es-chat-form"
+                hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/chat"
+                hx-target="#es-chat-log" hx-swap="beforeend"
+                hx-on::after-request="this.reset()">
+            <input type="hidden" name="history" id="es-chat-history" value="[]">
+            <textarea class="form-control form-control-sm" name="message" rows="2"
+                      placeholder="Ask the LLM to draft / refine the golden answer…" required></textarea>
+            <button class="btn btn-sm btn-primary" type="submit">Send</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    <div class="col-6">
+      <div class="card">
+        <div class="card-header py-1 small fw-semibold">Golden response</div>
+        <div class="card-body py-2">
+          <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/golden"
+                hx-target="#es-editor" hx-swap="innerHTML">
+            <textarea class="form-control form-control-sm mb-1" name="golden_response" rows="14"
+                      id="es-golden-text" placeholder="Paste / edit the final golden answer here…"
+                      required>{{ sample.golden_response or "" }}</textarea>
+            <input type="hidden" name="chat_turns" id="es-golden-turns" value="{{ sample.golden_meta.get('chat_turns', 0) }}">
+            <input type="hidden" name="model" value="{{ sample.golden_meta.get('model', '') }}">
+            <button class="btn btn-sm btn-success" type="submit">Save golden response</button>
+            {% if sample.golden_meta.get('curated_at') %}
+            <span class="text-muted small ms-2">curated {{ sample.golden_meta.get('curated_at') }}</span>
+            {% endif %}
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+  htmx.trigger(document.body, "es-board-refresh");
+</script>

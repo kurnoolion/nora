@@ -1,0 +1,29 @@
+{% if not rows %}
+<div class="text-muted small p-2">No requirements{% if mno and plan and release %} for {{ plan }} in {{ mno }}/{{ release }}{% endif %}.</div>
+{% else %}
+<table class="table table-sm table-hover mb-0">
+  <tbody>
+  {% for r in rows %}
+    {% if r.req_id %}
+    <tr>
+      <td style="width:30px">
+        <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sid }}/gt/add"
+              hx-target="#es-editor" hx-swap="innerHTML">
+          <input type="hidden" name="req_id" value="{{ r.req_id }}">
+          <input type="hidden" name="mno" value="{{ mno }}">
+          <input type="hidden" name="release" value="{{ release }}">
+          <input type="hidden" name="plan" value="{{ plan }}">
+          <input type="hidden" name="source" value="picker">
+          <button class="btn btn-sm btn-outline-success py-0 px-1" type="submit" title="Add to ground truth">+</button>
+        </form>
+      </td>
+      <td class="fw-semibold text-nowrap">{{ r.req_id }}</td>
+      <td class="text-truncate" style="max-width:340px" title="{{ r.title }}">{{ r.title or "—" }}
+        {% if r.text %}<br><span class="text-muted">{{ r.text[:160] }}{% if r.text|length > 160 %}…{% endif %}</span>{% endif %}
+      </td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

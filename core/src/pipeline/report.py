@@ -172,6 +172,14 @@ QC_TEMPLATES = {
         q={N} pass={N} fail={N}
         fail: Q_ID(reason), ... or "none"
         notes: (free text)"""),
+
+    "golden": dedent("""\
+        QC {env} golden
+        samples={N} draft={N} s1ready={N} golden={N}
+        ids_unresolved: SAMPLE_ID(count), ... or "none"
+        bare_ids={N} indep_missing: SAMPLE_ID, ... or "none"
+        judge_version: vN or MIXED(list)
+        notes: (free text)"""),
 }
 
 
@@ -197,6 +205,13 @@ FIX_TEMPLATES = {
         FIX {env} eval Q_ID
         expected_plans: +PLAN / -PLAN
         expected_req_ids: +REQ_ID / -REQ_ID
+        notes: (free text)"""),
+
+    "golden": dedent("""\
+        FIX {env} golden SAMPLE_ID
+        ground_truth: +REQ_ID@CELL / -REQ_ID
+        golden_response: revised yes/no
+        status: OLD -> NEW
         notes: (free text)"""),
 }
 

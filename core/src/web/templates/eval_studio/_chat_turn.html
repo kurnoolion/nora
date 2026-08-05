@@ -1,0 +1,17 @@
+<div class="es-chat-user"><span class="fw-semibold small">You:</span> {{ user_text }}</div>
+<div class="es-chat-assistant">{{ assistant_text }}</div>
+<script>
+(function () {
+  var h = document.getElementById("es-chat-history");
+  if (h) {
+    var turns = JSON.parse(h.value || "[]");
+    turns.push({role: "user", text: {{ user_text | tojson }}});
+    turns.push({role: "assistant", text: {{ assistant_text | tojson }}});
+    h.value = JSON.stringify(turns);
+    var t = document.getElementById("es-golden-turns");
+    if (t) t.value = String(turns.length);
+  }
+  var log = document.getElementById("es-chat-log");
+  if (log) log.scrollTop = log.scrollHeight;
+})();
+</script>

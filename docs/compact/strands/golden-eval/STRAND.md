@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** web, eval (+ runtime service edge: sandbox/sira_query, outside the module system)
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 

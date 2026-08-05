@@ -1,0 +1,10 @@
+<select class="form-select form-select-sm" name="release"
+        hx-on:change="htmx.trigger(document.body, 'es-picker-changed')">
+  {% if not releases %}<option value="">Release…</option>{% endif %}
+  {% for rel in releases %}
+  <option value="{{ rel }}" {% if rel == selected %}selected{% endif %}>{{ rel }}</option>
+  {% endfor %}
+</select>
+{% if releases %}
+<script>htmx.trigger(document.body, "es-picker-changed");</script>
+{% endif %}

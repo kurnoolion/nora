@@ -1,0 +1,42 @@
+<div class="card">
+  <div class="card-header py-1 small fw-semibold">
+    Stage-1 preview — recall {{ "%.0f"|format(result.recall * 100) }}%
+    ({{ result.hits|length }}/{{ result.gt_count }} found,
+    {{ result.retrieved }} retrieved, {{ result.mode or "single" }})
+  </div>
+  <div class="card-body py-2 small">
+    {% if result.hits %}
+    <div class="mb-1"><span class="fw-semibold text-success">Found:</span>
+      {% for h in result.hits %}
+      <span class="badge text-bg-success-subtle border text-dark me-1">{{ h.req_id }} @{{ h.rank }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if result.misses %}
+    <div class="mb-2"><span class="fw-semibold text-danger">Missed:</span>
+      {% for m in result.misses %}
+      <span class="badge text-bg-danger-subtle border text-dark me-1">{{ m.req_id }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% set gt_ids = sample.ground_truth | map(attribute="req_id") | list %}
+    {% set extra = result.retrieved_req_ids | reject("in", gt_ids) | list %}
+    {% if extra %}
+    <details>
+      <summary class="text-muted">Retrieved but not in ground truth ({{ extra|length }}) — tick any that ARE relevant
+        <span class="text-warning" title="Ground truth seeded only from retrieval can never capture what retrieval misses — keep at least one independently-sourced entry.">⚠</span>
+      </summary>
+      <div class="mt-1">
+        {% for rid in extra %}
+        <form class="d-inline" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/add"
+              hx-target="#es-editor" hx-swap="innerHTML">
+          <input type="hidden" name="req_id" value="{{ rid }}">
+          <input type="hidden" name="source" value="retrieval">
+          <button class="btn btn-sm btn-outline-secondary py-0 mb-1" type="submit">+ {{ rid }}</button>
+        </form>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+</div>

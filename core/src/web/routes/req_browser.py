@@ -1,4 +1,8 @@
-"""Requirement browser routes — browse, view, and compare requirements."""
+"""Requirement browser routes — browse, view, and compare requirements.
+
+Tree loading lives in the shared ``core.src.web.req_tree`` module (used by
+this router and the Eval Studio picker — strand golden-eval, D-DRAFT-5).
+"""
 
 from __future__ import annotations
 
@@ -11,17 +15,16 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from core.src.web.req_tree import (
+    build_tree_hierarchy as _build_tree_hierarchy,
+    list_docs as _shared_list_docs,
+    load_tree_flat as _load_tree_flat,
+    parse_dir as _parse_dir,
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/req-browser", tags=["req-browser"])
-
-
-# ---------------------------------------------------------------------------
-# Path helpers
-# ---------------------------------------------------------------------------
-
-def _parse_dir(env_dir_path: Path) -> Path:
-    return env_dir_path / "out" / "parse"
 
 
 def _resolve_dir(env_dir_path: Path) -> Path:
@@ -29,11 +32,7 @@ def _resolve_dir(env_dir_path: Path) -> Path:
 
 
 def _list_docs(env_dir_path: Path) -> list[str]:
-    d = _parse_dir(env_dir_path)
-    if not d.is_dir():
-        return []
-    # rglob: per-cell layout nests trees at out/parse/<mno>/<rel>/ (D-DRAFT-6).
-    return sorted(p.stem.replace("_tree", "") for p in d.rglob("*_tree.json"))
+    return _shared_list_docs(env_dir_path)
 
 
 # ---------------------------------------------------------------------------
@@ -47,40 +46,6 @@ def _parse_str_list(value: Any) -> list:
         return ast.literal_eval(value) if value else []
     except Exception:
         return []
-
-
-def _load_tree_flat(env_dir_path: Path, doc_id: str) -> list[dict]:
-    p = _parse_dir(env_dir_path) / f"{doc_id}_tree.json"
-    if not p.exists():
-        return []
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data.get("requirements", [])
-    except Exception as exc:
-        logger.warning("Failed to load tree %s: %s", p, exc)
-        return []
-
-
-def _build_tree_hierarchy(reqs: list[dict]) -> list[dict]:
-    """Convert flat requirement list into nested tree (child_nodes populated).
-
-    Reqs with an empty req_id are skipped (parser artefacts).
-    """
-    nodes: dict[str, dict] = {}
-    for r in reqs:
-        rid = r.get("req_id", "")
-        if rid:
-            nodes[rid] = {**r, "child_nodes": []}
-
-    roots: list[dict] = []
-    for node in nodes.values():
-        parent_id = node.get("parent_req_id", "")
-        if parent_id and parent_id in nodes:
-            nodes[parent_id]["child_nodes"].append(node)
-        else:
-            roots.append(node)
-
-    return roots
 
 
 def _load_req(env_dir_path: Path, doc_id: str, req_id: str) -> dict | None:

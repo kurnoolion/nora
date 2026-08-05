@@ -1,0 +1,25 @@
+{% if load_error %}
+<div class="alert alert-danger small">{{ load_error }}</div>
+{% endif %}
+<div class="card">
+  <div class="card-header py-2 small fw-semibold">
+    Samples ({{ samples|length }})
+  </div>
+  <table class="table table-hover mb-0">
+    <tbody>
+    {% for s in samples %}
+      <tr style="cursor:pointer"
+          hx-get="{{ root_path }}/api/eval-studio/sample/{{ s.sample_id }}"
+          hx-target="#es-editor" hx-swap="innerHTML">
+        <td class="fw-semibold">{{ s.sample_id }}</td>
+        <td class="text-truncate" style="max-width:120px" title="{{ s.area }}">{{ s.area or "—" }}</td>
+        <td><span class="badge es-status-{{ s.status }}">{{ s.status }}</span></td>
+        <td class="text-muted">{{ s.ground_truth|length }} req</td>
+        <td class="text-muted text-truncate" style="max-width:80px">{{ s.created_by }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="text-muted small p-3">No samples yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

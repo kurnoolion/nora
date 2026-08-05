@@ -106,6 +106,15 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("EVL-E001", "Evaluation failed for question {qid}: {reason}", "Check pipeline dependencies"),
     ErrorDef("EVL-W001", "Low overall score ({score:.0%}) for {qid}", "Review ground truth or pipeline output"),
 
+    # --- Golden eval (GEV) — artifact-family prefix inside the eval module
+    #     (strand golden-eval, D-DRAFT-1). Raised as eval.golden.GoldenEvalError;
+    #     registered here so the code catalog stays the single human-readable index.
+    ErrorDef("GEV-E001", "Golden sample invalid: {reason}", "Fix ground truth / fields in the Eval Studio"),
+    ErrorDef("GEV-E002", "Serving stack unreachable or /sira-query failed: {reason}", "Check the stack URL and its health endpoint"),
+    ErrorDef("GEV-E003", "Stage-2 synthesis failed: chunk {chunk_id} not in NORA store", "Re-ingest the cell or fix the entry's qualifiers"),
+    ErrorDef("GEV-E004", "Judge call failed or verdict unparseable for {sample_id}: {reason}", "Check judge provider and prompt version"),
+    ErrorDef("GEV-W001", "Sample {sample_id} skipped: {reason}", "Advance the sample's status in the Eval Studio"),
+
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),

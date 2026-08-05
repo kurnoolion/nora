@@ -29,7 +29,8 @@ ADMIN_TOKEN = os.getenv(ENV_ADMIN_TOKEN, "")
 
 # Path prefixes a gated team member may reach. Everything else → /test.
 _TEAM_ALLOWED = ("/test", "/api/test", "/static", "/api/health", "/admin-unlock", "/favicon",
-                 "/enrichment-review", "/api/enrich-review")
+                 "/enrichment-review", "/api/enrich-review",
+                 "/eval-studio", "/api/eval-studio")
 
 
 def is_admin(request: Request) -> bool:

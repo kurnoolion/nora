@@ -36,6 +36,7 @@ from core.src.web.routes.resolve_review import router as resolve_review_router
 from core.src.web.routes.pipeline import router as pipeline_router
 from core.src.web.routes.query import router as query_router
 from core.src.web.routes.enrich_review import router as enrich_review_router
+from core.src.web.routes.golden_eval import router as golden_eval_router
 from core.src.web.routes.playground import router as playground_router
 from core.src.web.routes.config_route import router as config_router
 
@@ -233,6 +234,7 @@ app.include_router(pipeline_router)
 app.include_router(query_router)
 app.include_router(playground_router)
 app.include_router(enrich_review_router)
+app.include_router(golden_eval_router)
 app.include_router(config_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
