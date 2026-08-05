@@ -2,7 +2,7 @@
 
 > **Strands active from 2026-05-16.** Mid-session journal entries land in `docs/compact/strands/<name>/journal.md`. Content below this line is historical and is no longer updated by `close-session` when a strand is bound. Architect-only writes (project-wide status, decisions promoted via `/land-strand`) continue to land here.
 
-**Active phase**: development
+**Active phase**: architecture
 **Last updated**: 2026-08-04
 **Last drift-check**: 2026-08-04 — mode: all — 7 drifts resolved (5 requirements: FR-6 reworded per-plan, FR-36 enrichment-review added, NFR-6 scoped to NORA core, FR-15/NFR-13 `<doc_root>`→`<env_dir>`; 2 design: FR-36 citation in web MODULE.md, taxonomy Purpose per-plan), 1 deferred added (FR-37 — SIRA replaces BM25 in NORA pipeline; revisit at nora-retrieval-quality), dev-full clean (3 changed modules aligned; 13 carried from 2026-07-18)
 

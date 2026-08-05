@@ -1,6 +1,6 @@
 # Requirements
 
-Last updated: 2026-08-04. Behavioral specs only — project identity and scope live in `PROJECT.md`.
+Last updated: 2026-08-05. Behavioral specs only — project identity and scope live in `PROJECT.md`.
 
 <!--
 How to use this file:
@@ -58,6 +58,8 @@ How to use this file:
 - **FR-19** — The Web UI exposes pipeline-job submission, real-time SSE log streaming, an SQLite-backed job queue, shared-folder browsing with Windows↔Linux path mapping, the query interface, environment CRUD, the corrections editor, and the metrics dashboard, all under a configurable reverse-proxy `root_path`.
 - **FR-20** — The Web UI runs without an npm or JS build toolchain (FastAPI + Jinja2 + HTMX + vendored Bootstrap 5) and serves all static assets locally.
 - **FR-36** — The Web UI provides an enrichment-review editor: per-cell review of SIRA doc-enrichment phrases with expert add/remove records folded by merge-log semantics, and an Apply action that reloads every configured sira-query service so corrections take effect across all serving stacks.
+- **FR-38** — The system maintains an expert-curated golden eval set (target 50 → 200 samples; per-sample JSON under `<env_dir>/eval/golden/`, never in the repo) scored in two stages against any configured serving stack: Stage 1 — retrieval recall (% of a sample's ground-truth req_ids, optionally cell-qualified, present in the stack's retrieved results); Stage 2 — LLM-judged similarity between a response regenerated from Stage-1 retrieved chunks via the production synthesis path and the expert's golden response. One run per stack URL is the release A/B; judge scores are comparable only within one judge-prompt version.
+- **FR-39** — The Web UI provides an Eval Studio: an expert one-stop-shop for authoring golden samples (query + area tag + ground-truth picker with MNO → Plan → Release cascade over the ingested corpus, direct-entry, and retrieval-assisted seeding) and curating golden responses via free-form LLM chat, with per-sample Stage-1 preview. The batch eval run itself executes outside the UI as a build step (standalone CLI or final pipeline stage).
 
 ### Evaluation
 
