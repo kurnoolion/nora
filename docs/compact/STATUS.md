@@ -4,7 +4,7 @@
 
 **Active phase**: development
 **Last updated**: 2026-08-04
-**Last drift-check**: 2026-07-18 — mode: dev-full — 4 drifts resolved (all [a] MODULE.md → implementation: env/pipeline requirements_dir + lanes, extraction images_root + fail-loud providers, web inventory + sira-query runtime edge; anchored by docker-distro D-DRAFT-5/6/10/11/14), 1 deferred surfaced (web FeedbackStore 0-9 scoring wording → team-eval-pilot)
+**Last drift-check**: 2026-08-04 — mode: all — 7 drifts resolved (5 requirements: FR-6 reworded per-plan, FR-36 enrichment-review added, NFR-6 scoped to NORA core, FR-15/NFR-13 `<doc_root>`→`<env_dir>`; 2 design: FR-36 citation in web MODULE.md, taxonomy Purpose per-plan), 1 deferred added (FR-37 — SIRA replaces BM25 in NORA pipeline; revisit at nora-retrieval-quality), dev-full clean (3 changed modules aligned; 13 carried from 2026-07-18)
 
 ## Done
 

@@ -1,6 +1,6 @@
 # Requirements
 
-Last updated: 2026-05-01. Behavioral specs only — project identity and scope live in `PROJECT.md`.
+Last updated: 2026-08-04. Behavioral specs only — project identity and scope live in `PROJECT.md`.
 
 <!--
 How to use this file:
@@ -25,7 +25,7 @@ How to use this file:
 - **FR-3** — A profile-driven generic structural parser produces a RequirementTree from any MNO's documents using only the profile and detected patterns; no per-MNO code paths.
 - **FR-4** — Cross-reference extraction captures internal, cross-plan, and 3GPP standards references with section number and release.
 - **FR-5** — Standards ingestion fetches referenced 3GPP specs from the 3GPP archive, parses each spec to a section tree, and extracts the referenced sections plus their parent, definitions, and adjacent siblings (Option C Hybrid).
-- **FR-6** — The feature taxonomy is derived bottom-up by per-document LLM extraction, then consolidated across documents into a unified taxonomy; the workflow includes human review through the Web UI.
+- **FR-6** — The feature taxonomy is derived bottom-up by per-plan LLM extraction (a document may carry one plan or many; multi-plan documents are split into per-plan units), then consolidated into a unified taxonomy; the workflow includes human review through the Web UI.
 - **FR-7** — The unified knowledge graph aggregates Requirements, Features, Standard_Sections, and Plan / Release / MNO organization with typed edges across organizational, within-doc, cross-doc, standards, and feature categories. The schema also defines Test_Case node and edge types; Test_Case nodes are populated post-v1 (see FR-26).
 - **FR-8** — The unified vector store chunks requirements with metadata filters keyed on `mno`, `release`, `doc_type`, and `plan_id`.
 - **FR-31** — Priority-marker extraction in headings. The structural parser detects an optional priority marker embedded in heading text (e.g., `mandatory`, `optional`, `conditional`) via a profile-defined regex; when matched, the marker is stored as a `priority` attribute on the `Requirement` node and stripped from the displayed title. Profile carries `heading_detection.priority_marker_pattern`; corpora without the convention leave it empty. (Verizon OA does not use this convention; some other carriers do.)
@@ -45,7 +45,7 @@ How to use this file:
 
 ### Corrections and overrides
 
-- **FR-15** — On re-run, the pipeline reads human-edited overrides from `<doc_root>/corrections/*.json` and prefers them over auto-generated outputs.
+- **FR-15** — On re-run, the pipeline reads human-edited overrides from `<env_dir>/corrections/*.json` and prefers them over auto-generated outputs.
 - **FR-16** — The Web UI provides in-browser editing of document profiles and feature taxonomies; saved edits land in the same files the pipeline reads as overrides under FR-15.
 
 ### Remote collaboration
@@ -57,6 +57,7 @@ How to use this file:
 
 - **FR-19** — The Web UI exposes pipeline-job submission, real-time SSE log streaming, an SQLite-backed job queue, shared-folder browsing with Windows↔Linux path mapping, the query interface, environment CRUD, the corrections editor, and the metrics dashboard, all under a configurable reverse-proxy `root_path`.
 - **FR-20** — The Web UI runs without an npm or JS build toolchain (FastAPI + Jinja2 + HTMX + vendored Bootstrap 5) and serves all static assets locally.
+- **FR-36** — The Web UI provides an enrichment-review editor: per-cell review of SIRA doc-enrichment phrases with expert add/remove records folded by merge-log semantics, and an Apply action that reloads every configured sira-query service so corrections take effect across all serving stacks.
 
 ### Evaluation
 
@@ -83,7 +84,7 @@ How to use this file:
 
 ### LLM and store abstraction
 
-- **NFR-6** — All LLM calls flow through the `LLMProvider` Protocol (structural typing); providers are swappable by passing a different instance with no other code changes.
+- **NFR-6** — All LLM calls in NORA core flow through the `LLMProvider` Protocol (structural typing); providers are swappable by passing a different instance with no other code changes. The SIRA sandbox patch layer sits outside this scope (D-111 boundary) until SIRA integrates as a pipeline retrieval signal (see deferred FR-37).
 - **NFR-7** — Embedding model, vector-DB backend, distance metric, and chunk contextualization toggles are configurable via a JSON-serializable `VectorStoreConfig`; `EmbeddingProvider` and `VectorStoreProvider` follow the same swap-by-instance Protocol pattern.
 
 ### Remote collaboration
@@ -99,7 +100,7 @@ How to use this file:
 
 ### Data integrity
 
-- **NFR-13** — The pipeline is re-runnable and idempotent per stage; partial re-runs auto-pick-up corrections from `<doc_root>/corrections/*.json`.
+- **NFR-13** — The pipeline is re-runnable and idempotent per stage; partial re-runs auto-pick-up corrections from `<env_dir>/corrections/*.json`.
 - **NFR-14** — Standards resolution is release-aware: each Standard_Section node carries its 3GPP release, and different MNO releases may reference different 3GPP releases of the same spec.
 
 ### Accuracy
@@ -120,3 +121,4 @@ Entry format: **FR-N** — <requirement> (deferred: <why> — revisit: <trigger 
 - **FR-25** — Delta compliance sheet generation between releases (deferred: post-PoC compliance agent v2 — revisit: when a multi-release corpus exists).
 - **FR-26** — Test-case parsing (separate parser for test case documents) populates Test_Case nodes in the unified knowledge graph and Test_Case-related edges per FR-7's schema (deferred: post-v1 — revisit: when a test-case corpus is identified for ingestion).
 - **FR-27** — Extraction of DOC and XLS legacy formats (DOC converted to DOCX via LibreOffice headless per the format-aware extraction design) (deferred: not required for v1 corpus — revisit: when a corpus containing DOC or XLS files needs ingestion).
+- **FR-37** — SIRA select-synth retrieval replaces the vanilla BM25 signal inside the NORA query pipeline; today SIRA serves standalone at effective weight 1.0 with RAG and graph-scoping at 0.0 (deferred: integration as a weighted pipeline retrieval signal is future work — revisit: when strand `nora-retrieval-quality` takes up per-cell routing/fusion).
