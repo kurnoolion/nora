@@ -1,8 +1,8 @@
 # sira-enrichment-pe
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-07-24
-**Landed:**
+**Landed:** 2026-08-04
 **Assignees:** kurnoolion
 **Target modules:** unspecified (sandbox/sira scripts — outside the module system, like sira-query)
 **Active phase:** development
@@ -25,3 +25,5 @@ loop is a separate future strand.
 ## Notes
 
 <!-- appended to over the strand's lifetime -->
+
+Landed on 2026-08-04 with 14 promoted decisions: D-168, D-169, D-170, D-171, D-172, D-173, D-174, D-175, D-176, D-177, D-178, D-179, D-180, D-181
