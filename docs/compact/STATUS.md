@@ -3,7 +3,7 @@
 > **Strands active from 2026-05-16.** Mid-session journal entries land in `docs/compact/strands/<name>/journal.md`. Content below this line is historical and is no longer updated by `close-session` when a strand is bound. Architect-only writes (project-wide status, decisions promoted via `/land-strand`) continue to land here.
 
 **Active phase**: development
-**Last updated**: 2026-07-24
+**Last updated**: 2026-08-04
 **Last drift-check**: 2026-07-18 — mode: dev-full — 4 drifts resolved (all [a] MODULE.md → implementation: env/pipeline requirements_dir + lanes, extraction images_root + fail-loud providers, web inventory + sira-query runtime edge; anchored by docker-distro D-DRAFT-5/6/10/11/14), 1 deferred surfaced (web FeedbackStore 0-9 scoring wording → team-eval-pilot)
 
 ## Done
@@ -146,6 +146,17 @@
   INFRASTRUCTURE delivered; the team eval round continues as operations. Defers in
   the strand's final journal entry.
 - 2026-07-03 NORA + SIRA READMEs restructured (setup / scenario matrix / services / command reference; 12 SIRA + 8 NORA scenarios); all commands argparse-verified; NORA Quick Start's removed `--docs` flag fixed; two doc-drift code fixes (adapter wipe-scope help, service LLM-routing docstring). New strand `docker-distro` opened.
+- 2026-08-04 Landed strand `sira-enrichment-pe` — D-168..D-181 promoted (batched
+  enrichment under dual token budget, per-MNO prompts + per-plan taxonomy
+  attachment, combined staging, shared corpus overview, taxonomy cache
+  fingerprint / newest-release dedup / per-unit resilience / plan-unit split,
+  heal-torn recovery, batch reasoning sentinel, single-req retry mode,
+  three-layer verify, coarse-chunk skip default, permanent-refusal detection +
+  fallback LLM). Landing state: run `enrich-pe-v1` verified — 146/146
+  permanently-refused reqs recovered via fallback, 100% coverage, 25,103 kept
+  rows; v2 serve stack live alongside v1. Deferred at landing: eval loop as a
+  separate strand, taxonomy-lane refusal fallback, verify era-merge cosmetic
+  fix, Apply fan-out check on first real corrections use.
 
 ## In progress
 
@@ -195,7 +206,7 @@
 
 ## Flags
 
-- 2026-07-25 [process] **Fresh-env work-PC run follows `docker/README.md` §Ingest a new release — the full cycle** (formerly `docs/runbook-fresh-env.md`, merged 2026-07-29) — the committed runbook for strand `sira-enrichment-pe`'s combined-staging cycle (image snapshot → one-shot/incremental ingestion → Cline per-MNO prompts into `customizations/prompts/` → rebake → overview-primed taxonomy → batched enrichment, smallest cell first → promote/serve). Next session starts from wherever that run stopped.
+- ✅ 2026-07-25 [process] **Fresh-env work-PC run — closed 2026-08-04.** The combined-staging cycle per `docker/README.md` §Ingest a new release ran end-to-end (image snapshot → ingestion → per-MNO prompts → rebake → overview-primed taxonomy → batched enrichment → promote/serve); strand `sira-enrichment-pe` landed. The README section remains the canonical runbook for future releases.
 - 2026-07-18 [process] **Stale-strand triage due** — 3 active strands >50d idle:
   `plan-aware-sira` (5 drafts — land or fold), `nora-retrieval-parent-displacement`
   and `references-handling` (0 drafts — keep-or-abandon). Remaining active board:
