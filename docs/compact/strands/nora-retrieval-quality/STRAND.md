@@ -21,3 +21,4 @@ Picks up the query-side work paused from multi-mno-nora — see the relocated
 draft decisions (per-cell vectorstore + NORA routing/fusion; balanced pin).
 
 ## Notes
+2026-08-04 triage: kept (not land-ripe). Much of D-DRAFT-1/2 shipped pre-strand (per-cell stores, slice-2a cell routing + merge-then-rerank, balanced pin) but the opening symptoms are unverified — first task is re-testing the FR2-band single-MNO miss and the cross-MNO drop against current main, then the team-eval exclusion flag can lift. Also owns: fan-out query-type routing (journal 2026-08-04) and deferred FR-37.

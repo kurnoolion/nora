@@ -1,6 +1,6 @@
 # nora-retrieval-parent-displacement
 
-**Status:** in-flight
+**Status:** abandoned
 **Opened:** 2026-05-22
 **Landed:**
 **Assignees:** kurnoolion
@@ -13,3 +13,5 @@ NORA's retrieval favors heading-only parent chunks over content-bearing children
 
 ## Notes
 
+
+Abandoned on 2026-08-04 — folded into strand nora-retrieval-quality (parent-displacement is the leading hypothesis for its single-MNO chunk-miss symptom; see that journal 2026-08-04).

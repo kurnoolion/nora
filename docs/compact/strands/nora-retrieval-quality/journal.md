@@ -51,3 +51,16 @@
   all queries. The needed end-state is query-type routing: detect a named-plan
   target → plan-aware; else → vanilla. Slots naturally into this strand's
   retrieval-lane work (deferred FR-37 anchors SIRA-in-NORA integration).
+
+## 2026-08-04 — Folded in: parent-displacement hypothesis (from nora-retrieval-parent-displacement)
+
+- Strand `nora-retrieval-parent-displacement` abandoned today; its finding
+  moves here as the leading root-cause hypothesis for this strand's
+  single-MNO miss symptom: NORA retrieval favors heading-only parent chunks
+  over content-bearing children on breadth queries ("What 5G bands shall a
+  device support" — NORA prompt 4,171 chars vs SIRA 30,021 on the same
+  query, via the Test-page probe). Both symptoms live in module `query`.
+- Constraint carried with it: any fix must not regress the per-type tuning
+  baked in by D-040. Related prior art: the 2026-05-02 chunk-augmentation
+  flag (include_children_titles default-off — parents displacing children in
+  cross-doc retrieval is a known corpus property).
