@@ -39,3 +39,15 @@
 ### Flags
 - This strand inherits the deferred `regen-map` / `drift-check dev-module
   {query,vectorstore}` from multi-mno-nora's query side.
+
+## 2026-08-04 — Carried from plan-aware-sira landing: fan-out query-type routing
+
+- Strand `plan-aware-sira` landed today (D-182 promoted; pointer-row/fan-out
+  design canonical as D-090). Its unshipped residue moves here, per its
+  2026-05-27 finding: fan-out ON/OFF is query-type dependent — plan-aware mode
+  (pointer rows + fan-out) is right for plan-summarize queries; vanilla mode
+  (pointer rows excluded, fan-out off) is right for feature/concept queries.
+  Today a single global `NORA_SIRA_FANOUT_ENABLED` flag picks one posture for
+  all queries. The needed end-state is query-type routing: detect a named-plan
+  target → plan-aware; else → vanilla. Slots naturally into this strand's
+  retrieval-lane work (deferred FR-37 anchors SIRA-in-NORA integration).

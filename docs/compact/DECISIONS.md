@@ -6773,3 +6773,30 @@ required. Marker hygiene is now a standing rule: real values never
 committed; tests use invented placeholders.
 
 _Promoted from strand: sira-enrichment-pe on 2026-08-04._
+
+## D-182: Incremental enrichment (content-hash resume + drift guard)
+**Status**: Active · **Date**: 2026-08-04.
+
+**Context:** Corpus growth is the steady state (more releases, more MNOs). A
+full doc-enrichment pass is ~13h. Growing the corpus 10× must not force a 10×
+rebuild.
+
+**Decision:** `sandbox/sira_incremental.py` rides SIRA's native doc_id-keyed
+resume and adds content-hash awareness. `prune` (pre-enrich) evicts changed +
+removed doc_ids from the run's trace so they re-enrich; unchanged docs stay
+skipped. `commit` (post-enrich) records the corpus content-hashes as the new
+baseline. A pinned `run_name` accumulates the trace across ingests. A
+cumulative-drift guard warns when corpus growth since the last full rebuild
+exceeds a ratio (default 1.5×, `--strict-growth` makes it a hard stop).
+
+**Why:** Only new + changed docs hit the LLM; the BM25 rebuild and DF filter are
+cheap and always run over the full corpus. Content-hashing catches same-doc_id
+content edits (e.g. a correction) that SIRA's id-only resume would wrongly skip.
+The drift guard surfaces when corpus-wide DF statistics have shifted enough that
+cached enrichment (DF-filtered against a smaller corpus) is meaningfully stale.
+
+**Consequences:** Operators must pin `run_name` and run prune/commit around each
+ingest (documented in SETUP). A wrong/typo'd run_name silently falls back to
+best-pointer behavior. The drift warning is advisory unless `--strict-growth`.
+
+_Promoted from strand: plan-aware-sira on 2026-08-04._
