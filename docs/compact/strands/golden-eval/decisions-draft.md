@@ -10,7 +10,9 @@ experts across environments (dev PC / work PC / team members).
 `<env_dir>/eval/golden/samples/<sample_id>.json`, schema owned by
 `eval/golden.py` (`GoldenSample`): sample_id, created_by, timestamps, area
 tag, query, `ground_truth` entries (req_id + optional `(mno, release, plan)`
-qualifiers), golden_response + curation meta, status
+qualifiers, plus a `source` field — `picker` / `direct` / `retrieval` — that
+makes the QC template's ≥1-independently-sourced-entry check computable),
+golden_response + curation meta, status
 (`draft | stage1-ready | golden-ready`). Run artifacts under
 `<env_dir>/eval/golden/runs/<run_id>/`. Never in the repo. As the NFR-9
 triple for the new artifact type: error-code prefix **`GEV-`** (registered in
@@ -171,3 +173,31 @@ at the doc level (web imports eval's schema; eval's runners are invoked from
 web's eval routes) — acceptable as-is because eval imports nothing from web;
 a true import cycle would force a schema extraction. MAP.md gains the
 web → eval edge at next regen.
+
+---
+
+## D-DRAFT-6 — Eval Studio reads requirement texts from parse trees, not the vector store
+
+**Context:** The studio needs requirement text in three places: picker rows,
+direct-entry validation (`find_req`), and the Stage-2 curation-chat context.
+Both sources exist: the built vector store (chunk text, needs the vectorstore
+stage + heavy pipeline build) and the parse trees under `out/parse/`
+(available from the parse stage onward, plain JSON).
+
+**Decision:** All three read parse trees via the shared `web/req_tree.py`
+loader. The vector store is touched only where synthesis genuinely needs it —
+the Stage-2 batch runner's `pinned_chunk_ids` path (eval side, not studio).
+
+**Why:** Experts can author and curate as soon as parsing has run — no store,
+no graph, no cold-start pipeline build behind a page load. Tree JSON reads are
+cheap and per-cell scoped. Rejected: store-backed reads (couples the studio to
+the built store's existence and the ~10s pipeline build; chunk text differs
+from source text only by contextualization headers, which experts don't need).
+
+**Consequences:** Curation-chat context is parser text, not chunk-builder
+text — fine for grounding an expert's golden answer, but it is NOT the exact
+string the synthesizer sees at eval time (that comes via pinned chunks). A
+req_id present in the store but missing from parse trees (or vice versa)
+surfaces as a studio-vs-runner discrepancy — GEV-E001/E003 make it loud.
+`find_req` scans every cell's trees per lookup; if corpora grow enough to make
+that slow, an index cache inside req_tree is the fix, not a store switch.
