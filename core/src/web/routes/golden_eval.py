@@ -459,11 +459,14 @@ def _gt_context(env_dir: Path, sample: GoldenSample) -> str:
     return "\n".join(parts) if parts else "(no ground-truth texts found)"
 
 
+_CHAT_KICKOFF = "Draft the golden answer."
+
+
 @router.post("/api/eval-studio/sample/{sid}/chat", response_class=HTMLResponse)
 def curation_chat(
     request: Request,
     sid: str,
-    message: str = Form(...),
+    message: str = Form(""),
     history: str = Form("[]"),
 ):
     sample = _load_or_error(sid)
@@ -481,6 +484,17 @@ def curation_chat(
         turns = json.loads(history) if history.strip() else []
     except json.JSONDecodeError:
         turns = []
+    message = message.strip()
+    if not message:
+        if turns:
+            # Refinement without guidance is a no-op ask — require text.
+            return HTMLResponse(
+                '<div class="alert alert-warning small mb-1">Type what to '
+                "change — refinements need guidance.</div>"
+            )
+        # First turn: the system prompt carries the question and the
+        # rules, so a bare Send kicks off the initial draft.
+        message = _CHAT_KICKOFF
     system = _CHAT_SYSTEM.format(
         query=sample.query, context=_gt_context(_env_dir(), sample),
     )

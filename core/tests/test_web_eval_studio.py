@@ -248,6 +248,29 @@ class _FakeLLM:
 
 
 class TestCuration:
+    def test_empty_first_send_drafts_empty_refinement_warns(
+            self, client, tmp_path, monkeypatch):
+        _create(client)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={"req_id": "REQ_FOO_0002"})
+        import core.src.web.routes.query as query_routes
+        monkeypatch.setattr(
+            query_routes, "_build_llm_from_env_or_default", lambda: _FakeLLM())
+        # Empty message, empty history -> kickoff draft.
+        r = client.post("/api/eval-studio/sample/gs-0001/chat",
+                        data={"message": "", "history": "[]"})
+        assert "Draft the golden answer." in r.text  # kickoff shown as user turn
+        assert "Draft golden answer." in r.text      # LLM reply rendered
+        # Empty message with history -> refinement guidance required.
+        r = client.post("/api/eval-studio/sample/gs-0001/chat", data={
+            "message": "",
+            "history": json.dumps([
+                {"role": "user", "text": "Draft the golden answer."},
+                {"role": "assistant", "text": "Draft golden answer."},
+            ]),
+        })
+        assert "refinements need guidance" in r.text
+
     def test_chat_and_golden_save(self, client, tmp_path, monkeypatch):
         _create(client)
         client.post("/api/eval-studio/sample/gs-0001/gt/add",
