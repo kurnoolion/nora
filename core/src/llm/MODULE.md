@@ -5,6 +5,7 @@ LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method st
 
 **Public surface**
 - `LLMProvider` (base.py) — `@runtime_checkable Protocol`; the only LLM interface the rest of the project sees
+- `answering_model(llm)` (base.py) — name of the model that produced the last answer (`last_model` over static `model`; empty for mocks) — the provenance source for synthesis epilogues
 - `OllamaProvider` (ollama_provider.py) — local Ollama HTTP client via stdlib `urllib`; `model`, `call_count`, `last_call_stats` (total_duration_s, eval_count, prompt_eval_count, tokens_per_second, model) for observability
 - `OpenAICompatibleProvider` (openai_provider.py) — Chat-Completions client for any OpenAI-compatible cloud endpoint (OpenRouter, Together AI, DeepInfra, Groq, Fireworks, vLLM, OpenAI). Stdlib `urllib` only. Reads `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY` / `NORA_LLM_MODEL` env vars when constructor args are None. Same `model` / `call_count` / `last_call_stats` surface as `OllamaProvider`.
 - `MockLLMProvider` (mock_provider.py) — deterministic keyword-based stub for tests and offline runs; `call_count`

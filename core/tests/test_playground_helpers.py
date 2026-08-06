@@ -610,3 +610,29 @@ def test_ingested_rows_both_lane_mismatch_keeps_both_counts(tmp_path, monkeypatc
     assert row["lane"] == "both" and row["mismatch"] is True
     assert (row["plans"], row["sira_plans"]) == (0, 87)
     assert (row["requirements"], row["sira_requirements"]) == (1, 1200)
+
+
+# ── select-synth provenance epilogue ─────────────────────────────────
+
+
+def test_select_synth_answer_carries_epilogue(monkeypatch):
+    import core.src.web.routes.playground as pg
+    import core.src.web.routes.query as query_routes
+
+    class _NamedLLM:
+        model = "model-foo"
+
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=4096):
+            return "Per REQ_FOO_0001, widgets retry."
+
+    monkeypatch.setattr(
+        query_routes, "_build_llm_from_env_or_default", lambda: _NamedLLM())
+    out = pg._select_synth_synthesize(
+        "widget retry?",
+        [{"req_id": "REQ_FOO_0001", "text": "Widgets shall retry.",
+          "mno": "mno-a"}],
+    )
+    assert out["answer"].endswith("\n\nSynthesized by model-foo")
+    assert out["llm_model"] == "model-foo"
+    # Citations extracted from the pre-epilogue answer.
+    assert [c["req_id"] for c in out["citations"]] == ["REQ_FOO_0001"]

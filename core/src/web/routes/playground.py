@@ -693,6 +693,13 @@ def _select_synth_synthesize(question: str, packed: list[dict[str, Any]]) -> dic
         logger.exception("select-synth LLM synthesis failed")
         return {"error": f"LLM synthesis failed: {exc}"}
     cites = _select_synth_extract_citations(answer, packed)
+    # Provenance epilogue — same stamp as LLMSynthesizer's; names the
+    # fallback model when a refused call was rerouted.
+    from core.src.llm.base import answering_model
+
+    epilogue_model = answering_model(llm)
+    if epilogue_model:
+        answer = f"{answer}\n\nSynthesized by {epilogue_model}"
     rag_chunks = [
         {
             "req_id": c.get("req_id"),
@@ -708,7 +715,7 @@ def _select_synth_synthesize(question: str, packed: list[dict[str, Any]]) -> dic
         "llm_citations": cites,            # all extracted from the answer = LLM-cited
         "rag_chunks": rag_chunks,
         "rag_chunk_count": len(rag_chunks),
-        "llm_model": getattr(llm, "model_name", "") or getattr(llm, "model", "") or "",
+        "llm_model": answering_model(llm) or getattr(llm, "model_name", "") or "",
         "llm_system_prompt": _SELECT_SYNTH_SYSTEM_PROMPT,
         "llm_context_text": context_text,
     }

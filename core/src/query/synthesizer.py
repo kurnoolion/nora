@@ -57,13 +57,9 @@ class LLMSynthesizer:
                 temperature=0.0,
                 max_tokens=self._max_tokens,
             )
-            # Provenance epilogue: the model that actually answered —
-            # `last_model` (set per call by RefusalFallbackProvider)
-            # over the provider's static `model`.
-            epilogue_model = (
-                getattr(self._llm, "last_model", "")
-                or getattr(self._llm, "model", "")
-            )
+            from core.src.llm.base import answering_model
+
+            epilogue_model = answering_model(self._llm)
         except Exception as e:
             logger.error(f"LLM synthesis failed: {e}")
             answer = f"[LLM synthesis failed: {e}]"

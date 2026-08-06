@@ -77,3 +77,13 @@ class LLMProvider(Protocol):
             The LLM's text response.
         """
         ...
+
+
+def answering_model(llm) -> str:
+    """Name of the model that produced the LAST answer from `llm` —
+    `last_model` (set per call by RefusalFallbackProvider, so a
+    fallback-answered call names the fallback model) over the
+    provider's static `model`. Empty string when the provider exposes
+    neither (e.g. the mock) — callers skip provenance stamping then.
+    """
+    return getattr(llm, "last_model", "") or getattr(llm, "model", "") or ""
