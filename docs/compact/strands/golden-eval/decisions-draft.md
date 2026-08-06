@@ -35,6 +35,16 @@ only through `golden.py`. `GEV-` breaks the strict one-prefix-per-module
 convention (eval now has `EVL-` + `GEV-`); the catalog entry documents it as
 an artifact-family prefix.
 
+**Amendment (2026-08-06):** The golden store's home must survive the
+docker-distro serve topology: promoted `serve/<label>/` snapshots are
+immutable and GC-able, so samples cannot live inside the label a stack
+mounts as its env dir. Compose gained `GOLDEN_DIR` — a pooled host dir
+mounted over `<env>/eval/golden` on nora-web AND nora-pipeline (one sample
+set across A/B stacks; batch CLI reads the same store), defaulting to
+`<NORA_ENV_DIR>/eval/golden` so single-build setups are unchanged. Rejected:
+promote.sh carrying samples forward (live data inside immutable snapshots
+muddies rollback); host-local compose override (invisible to the repo).
+
 ---
 
 ## D-DRAFT-2 — Stage-1 recall scored black-box via the sira-query service HTTP API, per stack
@@ -201,3 +211,82 @@ req_id present in the store but missing from parse trees (or vice versa)
 surfaces as a studio-vs-runner discrepancy — GEV-E001/E003 make it loud.
 `find_req` scans every cell's trees per lookup; if corpora grow enough to make
 that slow, an index cache inside req_tree is the fix, not a store switch.
+
+**Amendment (2026-08-06):** Real corpora hit both predicted costs at once —
+per-entry corpus-wide `find_req` scans during editor renders, executed on
+the event loop by async handlers, froze the entire app for minutes. The
+index cache this draft anticipated is now built (`req_tree.load_tree`,
+mtime+size-keyed; safe because the pipeline is the sole tree writer), plus
+`find_req` takes cell qualifiers (qualified entries scan one cell). New
+posture choice beyond the cache: Eval Studio handlers are sync `def`
+(FastAPI threadpool) — a deliberate deviation from the router's async style,
+because these handlers do blocking work inline (corpus reads, sira-query
+HTTP, curation LLM calls) rather than delegating to background jobs like
+query.py. Any new studio handler doing blocking work must stay sync.
+
+---
+
+## D-DRAFT-7 — Core permanent-refusal fallback: provider decorator + deliberate twin of the sandbox detection module
+
+**Context:** baa3f14 (landed strand sira-enrichment-pe) gave the enrich lane
+and the sira-query service a permanent-refusal fallback, but the synthesis
+step — the one LLM call whose output the user reads verbatim — had none. The
+team hit exactly that: a permanently-refused synthesis surfaced the refusal
+notice as the answer. Core cannot import the sandbox detection module (D-111
+boundary), and that module must stay flat-copyable into the SIRA clone.
+
+**Decision:** `core/src/llm/refusal.py`: detection functions as a deliberate
+twin copy of `sandbox/llm_refusal.py` (same rules, same
+`NORA_LLM_REFUSAL_MARKERS`), plus `RefusalFallbackProvider` — an LLMProvider
+decorator that retries a marker-prefixed, JSON-free response ONCE on a
+fallback endpoint (`NORA_LLM_FALLBACK_BASE_URL/_MODEL/_API_KEY`).
+`maybe_wrap_with_refusal_fallback` wraps at the two builder choke points:
+web's query/chat LLM builder and golden_cli's `_build_llm` — synthesis, the
+/test lanes, curation chat, and the eval judge all inherit one config. A
+sync-guard test (`TestTwinSync`) compares the twins' function sources and
+fails on drift. Partial config warns loudly instead of silently disabling.
+
+**Why:** A protocol-level decorator covers every core lane through structural
+typing — no per-call-site wiring, and Stage-2 eval stays on the identical
+provider chain (D-DRAFT-3) by construction. Rejected: importing sandbox
+(breaks D-111); relocating the canonical module to core (the SIRA-clone
+flat-copy must stay dependency-free and core-free); per-lane fallback code
+in web routes (three copies of the same logic). The twin-copy cost is
+mitigated by the source-parity test rather than discipline alone.
+
+**Consequences:** Three fallback config families now exist (enrich, sira-query,
+core) sharing one markers var — each container's env file needs it. The twins
+must change together; the sync test makes divergence loud. Taxonomy remains
+the only lane without refusal fallback (deferred since baa3f14). Provenance:
+this draft belongs to the sira-enrichment-pe lineage — carried here because
+the session was bound to golden-eval; note at promotion time.
+
+---
+
+## D-DRAFT-8 — Synthesis answers carry a provenance epilogue naming the model that answered
+
+**Context:** With a refusal fallback in place (D-DRAFT-7), two models can
+answer queries and nothing user-visible said which one did. The team asked
+for provenance on the answer itself.
+
+**Decision:** Every synthesized answer ends with a blank line and
+"Synthesized by <model>". `RefusalFallbackProvider` tracks `last_model` per
+call, and the shared `answering_model()` helper (llm/base.py) prefers it over
+the provider's static name — a fallback-answered call names the fallback
+model. Stamped in BOTH synthesis paths (LLMSynthesizer and the /test SIRA
+lane's select-synth call), appended after citation extraction. Mock providers
+(no model name) stamp nothing. Deliberately NOT applied to the curation chat.
+
+**Why:** The team reads answers, not response metadata — an epilogue is the
+only placement that actually surfaces fallback engagement to them, and it
+doubled as the deployment verification signal. Appending after citation
+extraction keeps the stamp out of cited-req-id detection. The curation chat
+is excluded because chat drafts get pasted into golden responses, and a
+provenance line there would contaminate the golden text.
+
+**Consequences:** The answer is no longer pure model output — anything
+parsing answers must tolerate the trailing line. Stage-2 candidates carry the
+epilogue while golden responses don't; judge_v1 instructs style-blindness,
+but if real runs show the judge citing it, strip it in run_stage2 before
+judging (flagged in the journal). Two stamp sites exist because select-synth
+bypasses LLMSynthesizer — a third synthesis path would need the same stamp.
