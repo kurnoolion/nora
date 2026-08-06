@@ -9,6 +9,7 @@ LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method st
 - `OpenAICompatibleProvider` (openai_provider.py) — Chat-Completions client for any OpenAI-compatible cloud endpoint (OpenRouter, Together AI, DeepInfra, Groq, Fireworks, vLLM, OpenAI). Stdlib `urllib` only. Reads `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY` / `NORA_LLM_MODEL` env vars when constructor args are None. Same `model` / `call_count` / `last_call_stats` surface as `OllamaProvider`.
 - `MockLLMProvider` (mock_provider.py) — deterministic keyword-based stub for tests and offline runs; `call_count`
 - `HardwareInfo`, `ModelSpec`, `ModelChoice` (model_picker.py); `detect_hardware()`, `pick_model(hw, prefer=None)`, `list_available_ollama_models()`, `check_model_available()` — auto-select the best Ollama model that fits detected RAM/VRAM
+- `parse_markers`, `is_permanent_refusal`, `RefusalFallbackProvider`, `maybe_wrap_with_refusal_fallback` (refusal.py) — permanent-refusal detection + provider decorator: a marker-prefixed, JSON-free response is retried once on a fallback endpoint (`NORA_LLM_REFUSAL_MARKERS` + `NORA_LLM_FALLBACK_BASE_URL/_MODEL/_API_KEY`). Wraps the web query/chat LLM and the golden-eval CLI's providers; `used` counter for content-free visibility (NFR-8)
 - Debug CLI (`llm_debug.py`):
   - `--probe <URL>` — probes the four interesting routes (`GET /api/tags`, `GET /v1/models`, `POST /api/chat`, `POST /v1/chat/completions`) and reports whether the endpoint speaks native Ollama, OpenAI-compatible, or both. Prints a copy-pasteable `NORA_LLM_*` env-var config recommendation. Use before configuring a new custom Ollama URL or proprietary-LLM proxy.
   - `--check` — resolves the active provider via the unified D-044 chain (CLI > env > config/llm.json > default) and sends a one-line "ping" completion. Reports the resolved provider class and whether construction landed on a mock fallback. Useful when web UI answers don't match what `NORA_LLM_*` says.
@@ -26,6 +27,7 @@ LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method st
 - `Protocol` + structural typing over an ABC — lets a vendor SDK wrapper satisfy the interface with zero inheritance, which matters when work-laptop constraints force swapping providers.
 - Stdlib `urllib` for the Ollama HTTP call — no `httpx` dependency, keeps the module installable on offline/locked-down hosts.
 - Model selection is data-driven (`ModelSpec` list in `model_picker.py`), not wired into provider constructors — hardware detection runs once and the pipeline config records the chosen model.
+- Refusal detection in `refusal.py` is a deliberate twin copy of `sandbox/llm_refusal.py` (same rules, same markers env var): core cannot import sandbox (D-111) and the sandbox copy must stay flat-copyable into the SIRA clone. A sync test (`test_llm_refusal.py::TestTwinSync`) fails loudly if the copies drift.
 
 **Non-goals**
 - Not a prompt library — every caller owns its prompts; we don't centralize them here.

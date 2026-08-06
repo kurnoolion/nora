@@ -49,6 +49,7 @@ class LLMSynthesizer:
         """
         prompt = context.context_text
 
+        epilogue_model = ""
         try:
             answer = self._llm.complete(
                 prompt=prompt,
@@ -56,9 +57,19 @@ class LLMSynthesizer:
                 temperature=0.0,
                 max_tokens=self._max_tokens,
             )
+            # Provenance epilogue: the model that actually answered —
+            # `last_model` (set per call by RefusalFallbackProvider)
+            # over the provider's static `model`.
+            epilogue_model = (
+                getattr(self._llm, "last_model", "")
+                or getattr(self._llm, "model", "")
+            )
         except Exception as e:
             logger.error(f"LLM synthesis failed: {e}")
             answer = f"[LLM synthesis failed: {e}]"
+
+        if epilogue_model:
+            answer = f"{answer}\n\nSynthesized by {epilogue_model}"
 
         # Extract citations from the answer text
         citations = self._extract_citations(answer)

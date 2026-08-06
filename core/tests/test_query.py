@@ -1012,6 +1012,25 @@ class TestSynthesizer:
         assert "VZ_REQ_LTEDATARETRY_200" in req_ids
         assert "VZ_REQ_LTESMS_100" not in req_ids
 
+    def test_synthesis_epilogue_names_answering_model(self):
+        class _NamedLLM:
+            model = "model-foo"
+
+            def complete(self, prompt, system, temperature, max_tokens):
+                return "The timer is 720s."
+
+        class _AnonLLM:
+            def complete(self, prompt, system, temperature, max_tokens):
+                return "The timer is 720s."
+
+        ctx = AssembledContext(system_prompt="s", context_text="c", chunks=[])
+        intent = QueryIntent(raw_query="test")
+        named = LLMSynthesizer(_NamedLLM()).synthesize(ctx, intent)
+        assert named.answer.endswith("\n\nSynthesized by model-foo")
+        # Providers without a model name (mock) add no epilogue.
+        anon = LLMSynthesizer(_AnonLLM()).synthesize(ctx, intent)
+        assert anon.answer == "The timer is 720s."
+
 
 # ═══════════════════════════════════════════════════════════════
 # Pipeline tests (synthetic data)

@@ -44,21 +44,27 @@ def _build_llm(model: str | None = None, timeout: int | None = None):
         resolve_llm_timeout,
     )
 
+    from core.src.llm.refusal import maybe_wrap_with_refusal_fallback
+
     provider = resolve_llm_provider()
     model = resolve_llm_model(cli_value=model)
     timeout = resolve_llm_timeout(cli_value=timeout)
     if provider == "openai":
         from core.src.llm.openai_provider import OpenAICompatibleProvider
 
-        return OpenAICompatibleProvider(
+        llm = OpenAICompatibleProvider(
             model=model,
             base_url=resolve_llm_base_url(),
             api_key=resolve_llm_api_key(),
             timeout=timeout,
         )
-    from core.src.llm.ollama_provider import OllamaProvider
+    else:
+        from core.src.llm.ollama_provider import OllamaProvider
 
-    return OllamaProvider(model=model, timeout=timeout)
+        llm = OllamaProvider(model=model, timeout=timeout)
+    # Same refusal-fallback wrap as the web lane — keeps Stage-2
+    # synthesis on the identical provider chain (D-DRAFT-3).
+    return maybe_wrap_with_refusal_fallback(llm, timeout=timeout)
 
 
 def _build_query_pipeline(graph_path: Path, vectorstore_dir: Path, llm):
