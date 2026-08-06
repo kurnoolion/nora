@@ -97,6 +97,11 @@ def _editor_ctx(request: Request, sample: GoldenSample) -> dict:
         "admin": is_admin(request),
         "stack_url": _stack_url(),
         "mnos": sorted({c["mno"] for c in req_tree.list_cells(_env_dir())}),
+        # Shown read-only in the curation chat so experts see exactly what
+        # the LLM is told; the same string is rebuilt at each /chat call.
+        "chat_system": _CHAT_SYSTEM.format(
+            query=sample.query, context=_gt_context(_env_dir(), sample),
+        ),
     }
 
 

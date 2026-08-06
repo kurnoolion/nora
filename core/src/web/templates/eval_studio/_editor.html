@@ -147,6 +147,13 @@
       <div class="card">
         <div class="card-header py-1 small fw-semibold">Curation chat (scratchpad — only the saved text persists)</div>
         <div class="card-body py-2">
+          <details class="mb-2">
+            <summary class="small text-muted" style="cursor:pointer">
+              System prompt (read-only — sent with every message; rebuilt from the query + ground truth)
+            </summary>
+            <pre class="small bg-body-tertiary border rounded p-2 mt-1 mb-0"
+                 style="white-space:pre-wrap; max-height:200px; overflow-y:auto">{{ chat_system }}</pre>
+          </details>
           <div class="es-chat-log" id="es-chat-log"></div>
           <form class="d-flex gap-1 mt-2" id="es-chat-form"
                 hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/chat"

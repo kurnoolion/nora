@@ -104,6 +104,14 @@ class TestSampleCrud:
         client.post("/api/eval-studio/sample/gs-0001/delete")
         assert not sample_path(tmp_path, "gs-0001").exists()
 
+    def test_editor_shows_chat_system_prompt(self, client):
+        _create(client)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={"req_id": "REQ_FOO_0002"})
+        r = client.get("/api/eval-studio/sample/gs-0001")
+        assert "QUESTION: widget retry?" in r.text
+        assert "Retries use exponential backoff." in r.text  # GT text visible
+
     def test_missing_sample_is_warning(self, client):
         r = client.get("/api/eval-studio/sample/gs-9999")
         assert "not found" in r.text
