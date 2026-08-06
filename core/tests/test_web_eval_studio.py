@@ -235,6 +235,7 @@ class TestPreview:
 class _FakeLLM:
     def complete(self, prompt, system=None, temperature=0.0, max_tokens=None):
         assert "Retries use exponential backoff." in system  # GT context assembled
+        assert "QUESTION: widget retry?" in system  # sample query in system prompt
         return "Draft golden answer."
 
 

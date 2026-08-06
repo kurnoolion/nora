@@ -47,9 +47,20 @@ router = APIRouter(tags=["eval-studio"])
 
 _CHAT_CONTEXT_MAX_CHARS = 30000
 _CHAT_SYSTEM = (
-    "You are helping a telecom requirements expert craft an ideal reference "
-    "answer to a question. The authoritative requirement texts are provided "
-    "below — ground every statement in them; do not invent requirements. "
+    "You are helping a telecom requirements expert craft the ideal reference "
+    "(golden) answer for this evaluation question:\n\n"
+    "QUESTION: {query}\n\n"
+    "How to answer:\n"
+    "- Ground every statement in the requirement texts below; do not invent "
+    "requirements or bring in outside knowledge.\n"
+    "- Answer the question directly and cover every provided requirement "
+    "that bears on it; note anything the question asks that the "
+    "requirements do not address.\n"
+    "- Reference requirement ids inline so coverage is checkable.\n"
+    "- Where requirements differ across MNOs or releases, state the "
+    "difference explicitly.\n"
+    "- Plain prose, no filler — the answer is judged on content, not "
+    "style.\n\n"
     "Iterate with the expert until they are satisfied.\n\n"
     "REQUIREMENT TEXTS:\n{context}"
 )
@@ -464,7 +475,9 @@ async def curation_chat(
         turns = json.loads(history) if history.strip() else []
     except json.JSONDecodeError:
         turns = []
-    system = _CHAT_SYSTEM.format(context=_gt_context(_env_dir(), sample))
+    system = _CHAT_SYSTEM.format(
+        query=sample.query, context=_gt_context(_env_dir(), sample),
+    )
     convo = "".join(
         f"{'Expert' if t.get('role') == 'user' else 'Assistant'}: "
         f"{t.get('text', '')}\n\n"
