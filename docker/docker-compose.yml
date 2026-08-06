@@ -76,6 +76,10 @@ services:
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
       # enrichment-corrections overlay — this app is the sole WRITER
       - ${CORRECTIONS_DIR:?}:/data/corrections
+      # golden eval set (FR-38) — pooled across stacks and durable across
+      # promote labels: shadows <env>/eval/golden so samples/runs never live
+      # inside a promoted snapshot. Default keeps single-build setups as-is.
+      - ${GOLDEN_DIR:-${NORA_ENV_DIR}/eval/golden}:/data/env/eval/golden
     env_file:
       - path: ${WEB_ENV_FILE:-.env.nora-web}
         required: false
@@ -116,6 +120,9 @@ services:
       - ${REQUIREMENTS_DIR:?set REQUIREMENTS_DIR in .env}:/data/requirements:ro
       - ${SIRA_DB_ROOT:?}:/data/db
       - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
+      # golden eval set — same pooled mount as nora-web, so the batch CLI
+      # (core.src.eval.golden_cli) reads/writes the same samples + runs
+      - ${GOLDEN_DIR:-${NORA_ENV_DIR}/eval/golden}:/data/env/eval/golden
     # Run ingest jobs as the calling user so build artifacts on the mounts
     # aren't root-owned on the host (set JOB_UID/JOB_GID in the wiring env:
     # JOB_UID=1000 / `id -u`). Default 0 = root (current behavior).

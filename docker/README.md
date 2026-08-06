@@ -101,6 +101,7 @@ In `.env`, point the volume paths at the layout above:
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
     CORRECTIONS_DIR=/home/<you>/nora-data/corrections
     MODELS_DIR=/home/<you>/nora-data/models
+    GOLDEN_DIR=/home/<you>/nora-data/eval-golden   # pooled golden eval set; like corrections, never inside a serve label
 
 Create the directories before `up` (docker creates missing bind sources
 root-owned, and the app then can't write its DBs). Then bring the stack up —
