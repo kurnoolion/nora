@@ -15,10 +15,10 @@
         </form>
         {% endif %}
       {% endfor %}
-      {% if admin %}
+      {% if admin or sample.status == 'draft' %}
       <form class="d-inline ms-2" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/delete"
             hx-target="#es-board" hx-swap="innerHTML"
-            hx-confirm="Delete sample {{ sample.sample_id }}?">
+            hx-confirm="Delete {{ 'draft ' if sample.status == 'draft' else '' }}sample {{ sample.sample_id }}? This cannot be undone.">
         <button class="btn btn-sm btn-outline-danger py-0" type="submit"><i class="bi bi-trash"></i></button>
       </form>
       {% endif %}

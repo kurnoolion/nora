@@ -83,8 +83,19 @@ class TestSampleCrud:
         assert "requires ground_truth" in r.text
         assert load_sample(sample_path(tmp_path, "gs-0001")).status == "draft"
 
-    def test_delete_requires_admin(self, client, tmp_path, monkeypatch):
+    def test_draft_delete_open_to_experts(self, client, tmp_path, monkeypatch):
         _create(client)
+        monkeypatch.setattr(ge, "is_admin", lambda request: False)
+        r = client.post("/api/eval-studio/sample/gs-0001/delete")
+        assert r.status_code == 200
+        assert not sample_path(tmp_path, "gs-0001").exists()
+
+    def test_promoted_delete_requires_admin(self, client, tmp_path, monkeypatch):
+        _create(client)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={"req_id": "REQ_FOO_0002"})
+        client.post("/api/eval-studio/sample/gs-0001/status",
+                    data={"status": "stage1-ready"})
         monkeypatch.setattr(ge, "is_admin", lambda request: False)
         r = client.post("/api/eval-studio/sample/gs-0001/delete")
         assert r.status_code == 403

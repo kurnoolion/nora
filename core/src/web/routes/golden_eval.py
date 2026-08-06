@@ -11,8 +11,9 @@ All sample I/O goes through ``core.src.eval.golden`` — the schema has one
 owner (no parallel write path). Sample content is proprietary: it never
 appears in logs, metrics, or error messages (NFR-8).
 
-Team-mode: the page family is whitelisted for gated experts; sample
-delete is admin-only.
+Team-mode: the page family is whitelisted for gated experts. Draft
+samples may be deleted by any expert (UI-confirmed); deleting a promoted
+(stage1-ready / golden-ready) sample is admin-only.
 """
 
 from __future__ import annotations
@@ -198,13 +199,18 @@ async def sample_status(request: Request, sid: str, status: str = Form(...)):
 
 @router.post("/api/eval-studio/sample/{sid}/delete", response_class=HTMLResponse)
 async def sample_delete(request: Request, sid: str):
-    if not is_admin(request):
-        return HTMLResponse(
-            '<div class="alert alert-warning small">Delete is admin-only.</div>',
-            status_code=403,
-        )
     path = sample_path(_env_dir(), sid)
     if path.exists():
+        try:
+            status = load_sample(path).status
+        except GoldenEvalError:
+            status = ""  # unreadable file — cleanup is an admin call
+        if status != "draft" and not is_admin(request):
+            return HTMLResponse(
+                '<div class="alert alert-warning small">Only draft samples '
+                "can be deleted — this one is promoted; ask an admin.</div>",
+                status_code=403,
+            )
         path.unlink()
     return await sample_board(request)
 
