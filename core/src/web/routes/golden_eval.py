@@ -109,14 +109,14 @@ def _editor_ctx(request: Request, sample: GoldenSample) -> dict:
 
 
 @router.get("/eval-studio", response_class=HTMLResponse)
-async def eval_studio_page(request: Request):
+def eval_studio_page(request: Request):
     return _template(request, "eval_studio/index.html", {
         "mnos": sorted({c["mno"] for c in req_tree.list_cells(_env_dir())}),
     })
 
 
 @router.get("/api/eval-studio/samples", response_class=HTMLResponse)
-async def sample_board(request: Request):
+def sample_board(request: Request):
     try:
         samples = load_samples(_env_dir())
         load_error = ""
@@ -132,7 +132,7 @@ async def sample_board(request: Request):
 
 
 @router.post("/api/eval-studio/sample", response_class=HTMLResponse)
-async def sample_create(
+def sample_create(
     request: Request,
     query: str = Form(...),
     area: str = Form(""),
@@ -172,7 +172,7 @@ def _load_or_error(sid: str) -> GoldenSample | HTMLResponse:
 
 
 @router.get("/api/eval-studio/sample/{sid}", response_class=HTMLResponse)
-async def sample_editor(request: Request, sid: str):
+def sample_editor(request: Request, sid: str):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
@@ -181,7 +181,7 @@ async def sample_editor(request: Request, sid: str):
 
 
 @router.post("/api/eval-studio/sample/{sid}/meta", response_class=HTMLResponse)
-async def sample_meta(
+def sample_meta(
     request: Request, sid: str, query: str = Form(...), area: str = Form(""),
 ):
     sample = _load_or_error(sid)
@@ -195,7 +195,7 @@ async def sample_meta(
 
 
 @router.post("/api/eval-studio/sample/{sid}/status", response_class=HTMLResponse)
-async def sample_status(request: Request, sid: str, status: str = Form(...)):
+def sample_status(request: Request, sid: str, status: str = Form(...)):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
@@ -214,7 +214,7 @@ async def sample_status(request: Request, sid: str, status: str = Form(...)):
 
 
 @router.post("/api/eval-studio/sample/{sid}/delete", response_class=HTMLResponse)
-async def sample_delete(request: Request, sid: str):
+def sample_delete(request: Request, sid: str):
     path = sample_path(_env_dir(), sid)
     if path.exists():
         try:
@@ -228,14 +228,14 @@ async def sample_delete(request: Request, sid: str):
                 status_code=403,
             )
         path.unlink()
-    return await sample_board(request)
+    return sample_board(request)
 
 
 # ─── Ground-truth entries ───────────────────────────────────────────
 
 
 @router.post("/api/eval-studio/sample/{sid}/gt/add", response_class=HTMLResponse)
-async def gt_add(
+def gt_add(
     request: Request,
     sid: str,
     req_id: str = Form(...),
@@ -250,7 +250,9 @@ async def gt_add(
     env_dir = _env_dir()
     req_id = req_id.strip()
     gt_error = ""
-    matches = req_tree.find_req(env_dir, req_id)
+    # Picker adds arrive fully qualified — validate within that cell only;
+    # unqualified direct pastes need the corpus-wide scan.
+    matches = req_tree.find_req(env_dir, req_id, mno, release)
     if not matches:
         gt_error = f"{req_id}: not found in any parsed cell (GEV-E001)"
     elif not (mno and release):
@@ -282,7 +284,7 @@ async def gt_add(
 
 
 @router.post("/api/eval-studio/sample/{sid}/gt/add-bulk", response_class=HTMLResponse)
-async def gt_add_bulk(
+def gt_add_bulk(
     request: Request,
     sid: str,
     req_ids: list[str] = Form([]),
@@ -328,7 +330,7 @@ async def gt_add_bulk(
 
 
 @router.post("/api/eval-studio/sample/{sid}/gt/remove", response_class=HTMLResponse)
-async def gt_remove(
+def gt_remove(
     request: Request,
     sid: str,
     req_id: str = Form(...),
@@ -352,7 +354,7 @@ async def gt_remove(
 
 
 @router.get("/api/eval-studio/picker/plans", response_class=HTMLResponse)
-async def picker_plans(request: Request, mno: str = ""):
+def picker_plans(request: Request, mno: str = ""):
     plans = req_tree.plans_for_mno(_env_dir(), mno) if mno else {}
     return _template(request, "eval_studio/_picker_plans.html", {
         "mno": mno,
@@ -361,7 +363,7 @@ async def picker_plans(request: Request, mno: str = ""):
 
 
 @router.get("/api/eval-studio/picker/releases", response_class=HTMLResponse)
-async def picker_releases(request: Request, mno: str = "", plan: str = ""):
+def picker_releases(request: Request, mno: str = "", plan: str = ""):
     releases: list[str] = []
     if mno and plan:
         releases = req_tree.plans_for_mno(_env_dir(), mno).get(plan, [])
@@ -373,7 +375,7 @@ async def picker_releases(request: Request, mno: str = "", plan: str = ""):
 
 
 @router.get("/api/eval-studio/picker/reqs", response_class=HTMLResponse)
-async def picker_reqs(
+def picker_reqs(
     request: Request,
     sid: str = "",
     mno: str = "",
@@ -404,7 +406,7 @@ async def picker_reqs(
 
 
 @router.post("/api/eval-studio/sample/{sid}/preview", response_class=HTMLResponse)
-async def stage1_preview(request: Request, sid: str):
+def stage1_preview(request: Request, sid: str):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
@@ -440,12 +442,11 @@ def _gt_context(env_dir: Path, sample: GoldenSample) -> str:
     parts: list[str] = []
     total = 0
     for entry in sample.ground_truth:
-        matches = req_tree.find_req(env_dir, entry.req_id)
-        if entry.mno and entry.release:
-            matches = [
-                m for m in matches
-                if m["mno"] == entry.mno and m["release"] == entry.release
-            ]
+        # Qualified entries scope the scan to their cell; only legacy
+        # unqualified entries pay a corpus-wide lookup.
+        matches = req_tree.find_req(
+            env_dir, entry.req_id, entry.mno, entry.release,
+        )
         for m in matches[:1]:
             block = (
                 f"[{entry.req_id}] {m['title']}\n{m['text']}".strip() + "\n"
@@ -459,7 +460,7 @@ def _gt_context(env_dir: Path, sample: GoldenSample) -> str:
 
 
 @router.post("/api/eval-studio/sample/{sid}/chat", response_class=HTMLResponse)
-async def curation_chat(
+def curation_chat(
     request: Request,
     sid: str,
     message: str = Form(...),
@@ -506,7 +507,7 @@ async def curation_chat(
 
 
 @router.post("/api/eval-studio/sample/{sid}/golden", response_class=HTMLResponse)
-async def save_golden(
+def save_golden(
     request: Request,
     sid: str,
     golden_response: str = Form(...),

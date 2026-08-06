@@ -80,17 +80,32 @@ def find_tree(
     return None
 
 
+# (mtime, size, tree) per absolute path — parse trees are written by the
+# pipeline, not the web app, so mtime+size staleness checks suffice. Real
+# corpora make repeated JSON parses the dominant page cost (D-DRAFT-6
+# anticipated this cache).
+_TREE_CACHE: dict[str, tuple[float, int, dict]] = {}
+
+
 def load_tree(
     env_dir_path: Path, doc_id: str, mno: str = "", release: str = ""
 ) -> dict:
     """Full tree dict (incl. plan_id / plan_name / requirements).
-    Empty dict when missing or unreadable.
+    Empty dict when missing or unreadable. The returned dict is a shared
+    cache entry — callers must treat it as read-only.
     """
     p = find_tree(env_dir_path, doc_id, mno, release)
     if p is None:
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        st = p.stat()
+        key = str(p)
+        hit = _TREE_CACHE.get(key)
+        if hit is not None and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            return hit[2]
+        tree = json.loads(p.read_text(encoding="utf-8"))
+        _TREE_CACHE[key] = (st.st_mtime, st.st_size, tree)
+        return tree
     except Exception as exc:
         logger.warning("Failed to load tree %s: %s", p, exc)
         return {}
@@ -157,16 +172,24 @@ def plans_for_mno(env_dir_path: Path, mno: str) -> dict[str, list[str]]:
     }
 
 
-def find_req(env_dir_path: Path, req_id: str) -> list[dict]:
+def find_req(
+    env_dir_path: Path, req_id: str, mno: str = "", release: str = ""
+) -> list[dict]:
     """Locate a req_id across the corpus — direct-entry validation and
     auto-qualification in the Eval Studio picker (an id found in exactly
     one cell auto-fills its qualifiers). Returns
     ``[{mno, release, plan, doc_id, title, text}]``, one row per cell the
     id appears in. Falls back to the legacy flat layout (empty mno/release)
     when no per-cell trees exist.
+
+    Passing both qualifiers scopes the scan to that single cell —
+    corpus-wide scans are for genuinely unqualified lookups only.
     """
     matches: list[dict] = []
-    cells = list_cells(env_dir_path) or [{"mno": "", "release": ""}]
+    if mno and release:
+        cells: list[dict] = [{"mno": mno, "release": release}]
+    else:
+        cells = list_cells(env_dir_path) or [{"mno": "", "release": ""}]
     for cell in cells:
         mno, rel = cell["mno"], cell["release"]
         for doc_id in list_docs(env_dir_path, mno, rel):

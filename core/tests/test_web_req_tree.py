@@ -10,9 +10,11 @@ from pathlib import Path
 
 from core.src.web.req_tree import (
     build_tree_hierarchy,
+    find_req,
     find_tree,
     list_cells,
     list_docs,
+    load_tree,
     load_tree_flat,
     plans_for_mno,
     reqs_for_plan,
@@ -109,6 +111,33 @@ def test_plans_for_mno_union_with_release_filter(tmp_path: Path):
         "PLAN_Z": ["Apr2026"],
     }
     assert plans_for_mno(tmp_path, "mno-b") == {"PLAN_Q": ["Jan2026"]}
+
+
+def test_find_req_scoped_to_cell(tmp_path: Path):
+    _corpus(tmp_path)
+    # Unqualified: found in both mno-a releases.
+    assert len(find_req(tmp_path, "REQ_FOO_0001")) == 2
+    # Qualified: only the named cell is scanned.
+    scoped = find_req(tmp_path, "REQ_FOO_0001", "mno-a", "Jan2026")
+    assert [(m["mno"], m["release"]) for m in scoped] == [("mno-a", "Jan2026")]
+    assert find_req(tmp_path, "REQ_FOO_0001", "mno-b", "Jan2026") == []
+    assert find_req(tmp_path, "REQ_FOO_0001", "mno-a", "Jul2026") == []
+
+
+def test_load_tree_cache_hits_and_invalidates(tmp_path: Path):
+    _corpus(tmp_path)
+    t1 = load_tree(tmp_path, "docA", "mno-a", "Jan2026")
+    t2 = load_tree(tmp_path, "docA", "mno-a", "Jan2026")
+    assert t2 is t1  # served from cache, not re-parsed
+    # A rewrite (different size => stat change regardless of mtime
+    # granularity) invalidates the entry.
+    _write_tree(tmp_path, "mno-a", "Jan2026", "docA", {
+        "plan_id": "PLAN_X",
+        "requirements": [{"req_id": "REQ_FOO_0009", "title": "rewritten"}],
+    })
+    t3 = load_tree(tmp_path, "docA", "mno-a", "Jan2026")
+    assert t3 is not t1
+    assert t3["requirements"][0]["req_id"] == "REQ_FOO_0009"
 
 
 def test_reqs_for_plan_per_req_fallback_rule(tmp_path: Path):
