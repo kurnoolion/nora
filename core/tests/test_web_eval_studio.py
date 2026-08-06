@@ -153,6 +153,40 @@ class TestGroundTruth:
         assert load_sample(sample_path(tmp_path, "gs-0001")).ground_truth == []
 
 
+class TestBulkAdd:
+    def test_bulk_add_and_duplicate_skip(self, client, tmp_path):
+        _create(client)
+        r = client.post("/api/eval-studio/sample/gs-0001/gt/add-bulk", data={
+            "req_ids": ["REQ_FOO_0001", "REQ_FOO_0002"],
+            "mno": "mno-a", "release": "Jan2026", "plan": "PLAN_X",
+        })
+        assert r.status_code == 200 and "Added 2 requirement(s)" in r.text
+        s = load_sample(sample_path(tmp_path, "gs-0001"))
+        assert [(e.req_id, e.source) for e in s.ground_truth] == [
+            ("REQ_FOO_0001", "picker"), ("REQ_FOO_0002", "picker")]
+        r = client.post("/api/eval-studio/sample/gs-0001/gt/add-bulk", data={
+            "req_ids": ["REQ_FOO_0001"],
+            "mno": "mno-a", "release": "Jan2026", "plan": "PLAN_X",
+        })
+        assert "1 already present" in r.text
+        assert len(load_sample(sample_path(tmp_path, "gs-0001")).ground_truth) == 2
+
+    def test_bulk_add_empty_selection(self, client, tmp_path):
+        _create(client)
+        r = client.post("/api/eval-studio/sample/gs-0001/gt/add-bulk", data={
+            "mno": "mno-a", "release": "Jan2026", "plan": "PLAN_X",
+        })
+        assert "No requirements selected" in r.text
+        assert load_sample(sample_path(tmp_path, "gs-0001")).ground_truth == []
+
+    def test_reqs_list_renders_selection_controls(self, client):
+        reqs = client.get(
+            "/api/eval-studio/picker/reqs?sid=gs-0001&mno=mno-a"
+            "&plan=PLAN_X&release=Jan2026").text
+        assert 'name="req_ids"' in reqs and "es-req-selall" in reqs
+        assert "Add selected" in reqs
+
+
 class TestPicker:
     def test_cascade(self, client):
         plans = client.get("/api/eval-studio/picker/plans?mno=mno-a").text

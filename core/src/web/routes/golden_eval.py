@@ -265,6 +265,52 @@ async def gt_add(
     })
 
 
+@router.post("/api/eval-studio/sample/{sid}/gt/add-bulk", response_class=HTMLResponse)
+async def gt_add_bulk(
+    request: Request,
+    sid: str,
+    req_ids: list[str] = Form([]),
+    mno: str = Form(""),
+    release: str = Form(""),
+    plan: str = Form(""),
+):
+    """Add every selected picker row in one shot. The ids come from the
+    picker's own plan listing (parse trees), so per-id existence checks
+    are redundant — only the duplicate guard applies.
+    """
+    sample = _load_or_error(sid)
+    if isinstance(sample, HTMLResponse):
+        return sample
+    if not (mno and release):
+        return _template(request, "eval_studio/_editor.html", {
+            **_editor_ctx(request, sample),
+            "gt_error": "bulk add needs the picker's MNO/release selection",
+        })
+    existing = {(e.req_id, e.mno, e.release) for e in sample.ground_truth}
+    added = skipped = 0
+    for rid in req_ids:
+        rid = rid.strip()
+        key = (rid, mno, release)
+        if not rid or key in existing:
+            skipped += bool(rid)
+            continue
+        sample.ground_truth.append(GroundTruthEntry(
+            req_id=rid, mno=mno, release=release, plan=plan, source="picker",
+        ))
+        existing.add(key)
+        added += 1
+    if added:
+        save_sample(_env_dir(), sample)
+    return _template(request, "eval_studio/_editor.html", {
+        **_editor_ctx(request, sample),
+        "gt_info": (
+            f"Added {added} requirement(s)"
+            + (f", {skipped} already present" if skipped else "")
+        ) if (added or skipped) else "",
+        "gt_error": "" if (added or skipped) else "No requirements selected",
+    })
+
+
 @router.post("/api/eval-studio/sample/{sid}/gt/remove", response_class=HTMLResponse)
 async def gt_remove(
     request: Request,

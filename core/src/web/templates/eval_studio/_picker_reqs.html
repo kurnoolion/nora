@@ -1,11 +1,30 @@
 {% if not rows %}
 <div class="text-muted small p-2">No requirements{% if mno and plan and release %} for {{ plan }} in {{ mno }}/{{ release }}{% endif %}.</div>
 {% else %}
+<div class="d-flex align-items-center gap-2 px-1 py-1 border-bottom">
+  <input class="form-check-input m-0" type="checkbox" id="es-req-selall"
+         title="Select all listed requirements"
+         onclick="document.querySelectorAll('#es-req-rows input[name=req_ids]').forEach(c => c.checked = this.checked)">
+  <label class="small text-muted" for="es-req-selall">all</label>
+  <span id="es-bulk-quals">
+    <input type="hidden" name="mno" value="{{ mno }}">
+    <input type="hidden" name="release" value="{{ release }}">
+    <input type="hidden" name="plan" value="{{ plan }}">
+  </span>
+  <button class="btn btn-sm btn-outline-success py-0"
+          hx-post="{{ root_path }}/api/eval-studio/sample/{{ sid }}/gt/add-bulk"
+          hx-include="#es-req-rows input[name=req_ids], #es-bulk-quals input"
+          hx-target="#es-editor" hx-swap="innerHTML">Add selected</button>
+  <span class="text-muted small">{{ rows|length }} listed</span>
+</div>
 <table class="table table-sm table-hover mb-0">
-  <tbody>
+  <tbody id="es-req-rows">
   {% for r in rows %}
     {% if r.req_id %}
     <tr>
+      <td style="width:26px" class="text-center">
+        <input class="form-check-input m-0" type="checkbox" name="req_ids" value="{{ r.req_id }}">
+      </td>
       <td style="width:30px">
         <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sid }}/gt/add"
               hx-target="#es-editor" hx-swap="innerHTML">
