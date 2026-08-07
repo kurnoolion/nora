@@ -104,3 +104,57 @@
   (req_tree scoping, gt_add_bulk); MAP file tree lacks the two new files.
   No structural trigger fired (no module/edge changes) — regen at next
   triggered regen-map run.
+
+## 2026-08-07 — Pipeline refusal coverage + taxonomy refusal diagnosis
+
+### Done this session
+- Closed the last refusal-coverage gap (95e6538): the pipeline had none —
+  taxonomy and eval construct providers via
+  PipelineContext.create_llm_provider, bypassing both existing wrap sites
+  (web builder, golden_cli). Wrap moved INSIDE create_llm_provider
+  (construction split to _construct_llm_provider), so every stage plus the
+  debug/miner CLIs and web's builder inherit it from one place;
+  maybe_wrap_with_refusal_fallback made idempotent and web's now-redundant
+  wrap dropped. golden_cli keeps its own (builds providers directly).
+  NORA_LLM_FALLBACK_* block added to env.nora-pipeline.example; invariants
+  added to pipeline + llm MODULE.md ("constructing a provider outside
+  create_llm_provider opts out of refusal coverage"). 3 new tests; full
+  suite 1646 passed. D-DRAFT-7 amended (6a7748a).
+- Diagnosed a live work-PC failure: TAX-E001 "unparseable LLM response"
+  across many plans during a new mno-a release ingest. Confirmed via
+  tax_debug as permanent refusals — the exact class 95e6538 fixes.
+  Two observations explained against the code: taxonomy covering mno-b /
+  mno-c is by design (global union stage; --mno/--release scope only the
+  per-cell stages), and the repeated retries are the documented
+  failed-unit retry path (per-unit skip requires status == "ok", so failed
+  units re-attempt on every run — user's reading, code-confirmed).
+- Config questions answered from code, no changes needed: ingest scoping
+  (--mno / --release, comma-separated, per-cell stages only);
+  NORA_LLM_BASE_URL keeps /v1 for openai-compatible, drops it for ollama
+  (NORA_LLM_FALLBACK_BASE_URL always includes /v1 — always
+  OpenAI-compatible).
+
+### In progress
+- Work-PC deploy of 95e6538: fill NORA_LLM_FALLBACK_* in
+  .env.nora-pipeline, rebuild the pipeline image, re-run the same ingest
+  command (failed units retry automatically).
+
+### Next
+- Verify the taxonomy failed set clears and the corpus fingerprint stamps
+  on a zero-failure run — that also restores the plans currently missing
+  from taxonomy.json.
+- Golden eval (unchanged): expert authoring → first Stage-1 batch A/B →
+  Stage-2 end-to-end; confirm v1 /sira-query row fields; GEV- vs EVL-
+  prefix call before land.
+
+### Flags
+- Taxonomy output is currently DEGRADED on the work PC: a refused plan's
+  <plan>_features.json is deleted and excluded from the consolidated
+  taxonomy.json (which is still written), so refused plans have been
+  silently absent for however many runs this recurred. The stage returns
+  WARN and unlinks the fingerprint so it can never cache-lock — a clean
+  run restores the full set. Anything built from taxonomy.json meanwhile
+  (graph, vectorstore) may carry the thinner feature set.
+- Extraction max_tokens is a hardcoded 4096 in taxonomy/extractor.py — not
+  the cause here, but the candidate if truncation-shaped parse failures
+  ever appear (reasoning models can spend the budget before closing JSON).
