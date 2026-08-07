@@ -261,6 +261,22 @@ the only lane without refusal fallback (deferred since baa3f14). Provenance:
 this draft belongs to the sira-enrichment-pe lineage — carried here because
 the session was bound to golden-eval; note at promotion time.
 
+**Amendment (2026-08-06, commit 95e6538):** Scope corrected from "two
+builder choke points" to one. The pipeline's LLM stages (taxonomy, eval)
+and the debug / miner CLIs construct providers via
+`PipelineContext.create_llm_provider`, bypassing both wrap sites — so
+taxonomy still had no coverage (the lane baa3f14 deferred as TBD). The
+wrap now lives INSIDE `create_llm_provider` (construction proper moved to
+`_construct_llm_provider`), which every pipeline stage, both debug CLIs,
+and web's builder already funnel through; web's explicit wrap is dropped
+as redundant, and `maybe_wrap_with_refusal_fallback` is idempotent so
+double-wrapping stays safe. golden_cli keeps its own call — it builds
+providers directly rather than through a PipelineContext. New invariant
+(pipeline MODULE.md): constructing a provider outside
+`create_llm_provider` opts out of refusal coverage. Config block added to
+`env.nora-pipeline.example`. Refusal coverage is now complete across all
+lanes — the taxonomy gap noted in this draft's Consequences is closed.
+
 ---
 
 ## D-DRAFT-8 — Synthesis answers carry a provenance epilogue naming the model that answered
