@@ -105,7 +105,25 @@ class PipelineContext:
         return p if p.exists() else None
 
     def create_llm_provider(self, require_real: bool = False):
-        """Create an LLM provider based on config.
+        """Create an LLM provider based on config, wrapped with the
+        permanent-refusal fallback when one is configured.
+
+        Every LLM-using pipeline stage (taxonomy, eval) and the debug /
+        miner CLIs construct their provider here, so this is the single
+        choke point that gives them refusal coverage — same env-var
+        family as the web and golden-eval lanes
+        (``NORA_LLM_REFUSAL_MARKERS`` + ``NORA_LLM_FALLBACK_*``).
+        Unconfigured or mock providers are returned unwrapped.
+        """
+        from core.src.llm.refusal import maybe_wrap_with_refusal_fallback
+
+        return maybe_wrap_with_refusal_fallback(
+            self._construct_llm_provider(require_real=require_real),
+            timeout=self.model_timeout,
+        )
+
+    def _construct_llm_provider(self, require_real: bool = False):
+        """Provider construction proper (no refusal wrap).
 
         Dispatch on `model_provider`. Each branch falls back to MockLLMProvider
         on failure unless `require_real=True`.

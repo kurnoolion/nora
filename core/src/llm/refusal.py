@@ -138,11 +138,15 @@ class RefusalFallbackProvider:
 def maybe_wrap_with_refusal_fallback(llm, timeout: int = 600):
     """Wrap `llm` with the refusal fallback when fully configured.
 
-    Returns `llm` unchanged when: markers or fallback endpoint/model are
-    unset (feature off), or `llm` is the mock provider (nothing real to
-    fall back from). Partial config logs a warning so a half-wired env
-    file is visible instead of silently off.
+    Returns `llm` unchanged when: it is already wrapped (idempotent —
+    callers may wrap a provider that a builder already wrapped), markers
+    or fallback endpoint/model are unset (feature off), or `llm` is the
+    mock provider (nothing real to fall back from). Partial config logs
+    a warning so a half-wired env file is visible instead of silently
+    off.
     """
+    if isinstance(llm, RefusalFallbackProvider):
+        return llm
     markers = parse_markers(os.getenv("NORA_LLM_REFUSAL_MARKERS"))
     base_url = os.getenv("NORA_LLM_FALLBACK_BASE_URL", "").strip()
     model = os.getenv("NORA_LLM_FALLBACK_MODEL", "").strip()

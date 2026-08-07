@@ -118,6 +118,44 @@ class TestMaybeWrap:
         assert maybe_wrap_with_refusal_fallback(llm) is llm
 
 
+class TestPipelineChokePoint:
+    """PipelineContext.create_llm_provider is the single wrap site for
+    every pipeline stage (taxonomy, eval) and the debug / miner CLIs.
+    """
+
+    def _ctx(self, **kw):
+        from pathlib import Path as _P
+        from core.src.pipeline.runner import PipelineContext
+        return PipelineContext(
+            documents_dir=_P("."), corrections_dir=None, eval_dir=None,
+            verbose=False, **kw,
+        )
+
+    def test_configured_wraps_real_provider(self, monkeypatch):
+        monkeypatch.setenv("NORA_LLM_REFUSAL_MARKERS", "BLOCKED_NOTICE_FOO")
+        monkeypatch.setenv("NORA_LLM_FALLBACK_BASE_URL", "http://127.0.0.1:1/v1")
+        monkeypatch.setenv("NORA_LLM_FALLBACK_MODEL", "fallback-model")
+        ctx = self._ctx(model_provider="openai-compatible",
+                        model_name="primary-model",
+                        llm_base_url="http://127.0.0.1:2/v1",
+                        llm_api_key="k")
+        assert isinstance(ctx.create_llm_provider(), RefusalFallbackProvider)
+
+    def test_mock_provider_not_wrapped(self, monkeypatch):
+        monkeypatch.setenv("NORA_LLM_REFUSAL_MARKERS", "BLOCKED_NOTICE_FOO")
+        monkeypatch.setenv("NORA_LLM_FALLBACK_BASE_URL", "http://127.0.0.1:1/v1")
+        monkeypatch.setenv("NORA_LLM_FALLBACK_MODEL", "fallback-model")
+        ctx = self._ctx(model_provider="mock", model_name="mock")
+        assert not isinstance(ctx.create_llm_provider(), RefusalFallbackProvider)
+
+    def test_wrap_is_idempotent(self, monkeypatch):
+        monkeypatch.setenv("NORA_LLM_REFUSAL_MARKERS", "BLOCKED_NOTICE_FOO")
+        monkeypatch.setenv("NORA_LLM_FALLBACK_BASE_URL", "http://127.0.0.1:1/v1")
+        monkeypatch.setenv("NORA_LLM_FALLBACK_MODEL", "fallback-model")
+        once = maybe_wrap_with_refusal_fallback(_Primary(["x"]))
+        assert maybe_wrap_with_refusal_fallback(once) is once
+
+
 class TestTwinSync:
     def test_detection_twins_in_sync(self):
         """The core module and sandbox/llm_refusal.py are deliberate

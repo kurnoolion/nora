@@ -303,14 +303,10 @@ def _build_llm_from_env_or_default():
         llm_base_url=base_url,
         llm_api_key=api_key,
     )
-    from core.src.llm.refusal import maybe_wrap_with_refusal_fallback
-
-    # Permanent refusals get one shot on a fallback model
-    # (NORA_LLM_FALLBACK_* + NORA_LLM_REFUSAL_MARKERS) — covers
-    # synthesis, the /test lanes, and the Eval Studio curation chat.
-    return maybe_wrap_with_refusal_fallback(
-        ctx.create_llm_provider(require_real=False), timeout=timeout,
-    )
+    # create_llm_provider applies the permanent-refusal fallback wrap
+    # (NORA_LLM_FALLBACK_* + NORA_LLM_REFUSAL_MARKERS) — synthesis, the
+    # /test lanes, and the Eval Studio curation chat inherit it.
+    return ctx.create_llm_provider(require_real=False)
 
 router = APIRouter()
 

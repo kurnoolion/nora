@@ -29,6 +29,7 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 - Stage order is fixed and matches `env.config.PIPELINE_STAGES`. Running a downstream stage without its prerequisites emits `PIP-E002` (required input missing) rather than silently failing later.
 - `StageResult.status` uses four discrete values: `OK` (clean), `WARN` (completed but flagged), `FAIL` (aborted), `SKIP` (not run this invocation). Collapsing WARN into OK loses the signal that drives compact QC reports.
 - `PipelineContext.create_llm_provider()` falls back to `MockLLMProvider` when Ollama is unreachable unless `require_real=True`. This keeps offline stages runnable on work laptops without an LLM server.
+- `PipelineContext.create_llm_provider()` is also the single site where the permanent-refusal fallback is applied (`llm/refusal.py`, `NORA_LLM_REFUSAL_MARKERS` + `NORA_LLM_FALLBACK_*`): every LLM-using stage and CLI that constructs its provider here inherits refusal coverage. Constructing a provider directly (bypassing this method) opts out — don't.
 - Compact reports (`format_compact_report`) contain **no proprietary content** — only stage names, codes, counts, and timings. Verbose reports (separate function) may contain content and go to disk, not chat.
 
 **Key choices**
