@@ -348,6 +348,36 @@ class TestBuildTextContext:
         assert "[Context:" not in out and "[5 Bands]" not in out
 
 
+class TestBuildTextPlanStamp:
+    """Requirement rows stamp the bare plan_id, never plan_name — enrichment
+    resolves the taxonomy block as <plan_id>_features.json from this stamp
+    (plan_name-shaped stamps made every lookup miss on one-doc-per-plan
+    corpora), and the query service's plan dropdown lists req-row stamps."""
+
+    def test_heading_mode_stamps_plan_id_over_plan_name(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"plan_id": "FOOPLAN", "plan_name": "Reqs-FOOPLAN"}
+        req = {"req_id": "R-1", "title": "T", "text": "body"}
+        out = _build_text(req, tree, None, {})
+        assert "**plan**: FOOPLAN\n" in out
+        assert "Reqs-FOOPLAN" not in out
+
+    def test_heading_mode_falls_back_to_plan_name(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"plan_name": "Reqs-FOOPLAN"}
+        req = {"req_id": "R-1", "title": "T", "text": "body"}
+        out = _build_text(req, tree, None, {})
+        assert "**plan**: Reqs-FOOPLAN" in out
+
+    def test_leading_id_tree_fallback_prefers_plan_id(self):
+        from sandbox.adapter.nora_to_beir import _build_text
+        tree = {"detection_mode": "leading_id_body",
+                "plan_id": "FOOPLAN", "plan_name": "Reqs-FOOPLAN"}
+        req = {"req_id": "R-1", "title": "T", "text": "body", "plan_id": ""}
+        out = _build_text(req, tree, None, {})
+        assert "**plan**: FOOPLAN\n" in out
+
+
 class TestBuildTextTables:
     """Tables are inlined into req.text by the parser (faithful order); the
     adapter must pass that text through and NOT re-serialize req.tables (which

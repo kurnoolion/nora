@@ -21,7 +21,7 @@ Corpus row shape — `{"_id": req_id, "title": "<section_num section_title>",
 
     # {section_number} {section_title}
     **req_id**: {req_id}
-    **plan**: {plan_name or plan_id}
+    **plan**: {plan_id, falling back to plan_name}
     **hierarchy**: {parent_section path}
 
     {body text with inline acronym expansion per chunk_builder D-032 / D-043}
@@ -234,15 +234,19 @@ def _build_text(req: dict[str, Any], tree: dict[str, Any],
     title = req.get("title") or ""
     req_id = req.get("req_id") or ""
     # In leading-id mode prefer the requirement's own plan (D-DRAFT-1) — a
-    # multi-plan document's reqs each carry their plan. In heading mode
-    # (MNO-A) keep the original tree-level plan display, unchanged.
+    # multi-plan document's reqs each carry their plan. Requirement rows
+    # always stamp the bare plan_id: downstream consumers key on it —
+    # enrichment resolves the taxonomy block as <plan_id>_features.json
+    # from this stamp, and the query service's plan dropdown lists
+    # req-row stamps verbatim. plan_name is display vocabulary and lives
+    # on the composite doc/section rows (`plan_id / plan_name`).
     if (tree.get("detection_mode") or "heading") == "leading_id_body":
         plan = (
             (req.get("plan_id") or "").strip()
-            or tree.get("plan_name") or tree.get("plan_id") or ""
+            or tree.get("plan_id") or tree.get("plan_name") or ""
         )
     else:
-        plan = tree.get("plan_name") or tree.get("plan_id") or ""
+        plan = tree.get("plan_id") or tree.get("plan_name") or ""
     hierarchy = _hierarchy_path(req)
     body = req.get("text") or ""
     if defs_re is not None and body:
