@@ -158,3 +158,45 @@
 - Extraction max_tokens is a hardcoded 4096 in taxonomy/extractor.py — not
   the cause here, but the candidate if truncation-shaped parse failures
   ever appear (reasoning models can spend the budget before closing JSON).
+
+## 2026-08-09 — mno-a enrichment plan-stamp fix (taxonomy blocks never applied)
+
+### Done this session
+- Work-PC verification closed the 95e6538 loop: taxonomy failed set
+  cleared after the fallback deploy; corpus restored.
+- The next SIRA enrichment build surfaced 42 "No taxonomy for plan
+  'Reqs-<PLAN>'" warnings on mno-a — root-caused to a plan-key mismatch:
+  taxonomy files are keyed <plan_id>_features.json, but heading-mode
+  requirement rows in the adapter stamped **plan**: with plan_name
+  (a pre-taxonomy-blocks back-compat leftover from the D-DRAFT-1 per-req
+  plan work). plan_of() fed the name to load_taxonomy_block() → every
+  lookup missed → the whole mno-a enrichment build ran WITHOUT taxonomy
+  context in its prompts, silently.
+- Fixed (36b08f7): requirement rows now stamp the bare plan_id in both
+  detection modes; plan_name stays on the composite doc/section rows.
+  Composite req-row stamps deliberately rejected — the sira-query plan
+  dropdown lists req-row stamps verbatim and _plan_matches documents the
+  single-value invariant. 3 new tests pin the stamp value (previously
+  unasserted). Suites: adapter 49, sandbox 384, core 1646/109 skipped.
+- Deploy guidance: no NORA stages (adapter inputs unchanged); SIRA full
+  re-enrich of mno-a cells via sira_lane --wipe-all-derived --only
+  <cells> (prune evicts nothing without a committed baseline; 100% of
+  rows changed anyway). Leading-id cells unaffected.
+
+### In progress
+- Work-PC re-enrich of the mno-a cells with taxonomy blocks now in
+  prompts: pull + rebuild sira-batch image, run the lane with
+  --wipe-all-derived --only, restart sira-query, confirm zero
+  "No taxonomy" warnings and larger prompt_tokens_est.
+
+### Next
+- Optionally `sira_incremental commit --full` per rebuilt cell so future
+  incremental prune flows have a hash baseline.
+- Golden eval (unchanged): expert authoring → first Stage-1 batch A/B →
+  Stage-2 end-to-end; confirm v1 /sira-query row fields; GEV- vs EVL-
+  prefix call before land.
+
+### Flags
+- Any pre-fix enrichment build of a heading-mode corpus was enriched
+  without taxonomy context — if other heading-mode cells exist beyond
+  mno-a, they carry the same silent degradation until re-enriched.

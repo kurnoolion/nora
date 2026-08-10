@@ -306,3 +306,41 @@ epilogue while golden responses don't; judge_v1 instructs style-blindness,
 but if real runs show the judge citing it, strip it in run_stage2 before
 judging (flagged in the journal). Two stamp sites exist because select-synth
 bypasses LLMSynthesizer — a third synthesis path would need the same stamp.
+
+## D-DRAFT-9 — SIRA corpus requirement rows stamp bare plan_id, never plan_name
+
+**Context**: Enrichment resolves each plan's taxonomy block as
+`<plan_id>_features.json` from the corpus row's `**plan**:` stamp (via
+`plan_of()`). Heading-mode requirement rows (one-doc-per-plan corpora,
+mno-a shape) stamped plan_name instead — a back-compat leftover from the
+per-req-plan work, predating taxonomy blocks in enrichment. On mno-a,
+where plan_name ≠ plan_id, every taxonomy lookup missed and the entire
+enrichment build ran without taxonomy context, silently (42 warnings,
+one per plan). Nothing asserted the stamp value.
+
+**Decision**: Requirement rows stamp the bare plan_id in BOTH detection
+modes (heading mode: `tree.plan_id or tree.plan_name`; leading-id
+tree-level fallback flipped the same way). plan_name remains only on the
+composite doc/section rows (`plan_id / plan_name`). Stamp value pinned
+by tests (36b08f7).
+
+**Why**: Every machine consumer keys on plan_id (taxonomy lookup,
+`_plan_matches`, corrections attribution). Composite req-row stamps were
+rejected: the sira-query plan dropdown lists req-row stamps verbatim and
+`_plan_matches` documents "requirement rows stamp a single value" — bare
+plan_id fixes the lookup with zero consumer changes. An enrichment-side
+name→id mapping was rejected as a second source of truth for a
+one-line stamping fix.
+
+**Consequences**: Every heading-mode row's text changes → content-hash
+flip → full re-enrichment of those cells on next build (needed anyway to
+get taxonomy blocks into prompts). Plan dropdown shows plan ids, not
+names. Corpora built pre-fix carry enrichment generated without taxonomy
+context until rebuilt. plan_name is display/BM25 vocabulary on composite
+rows only — any future consumer wanting names on req rows must extend
+the composite convention, not re-prefer plan_name.
+
+**Provenance note for promotion**: belongs to the sira-enrichment
+lineage (amends the per-req plan-stamp choice from multi-mno-sira's
+D-DRAFT-1, promoted line); drafted here because the session was bound to
+golden-eval.
