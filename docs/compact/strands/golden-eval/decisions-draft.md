@@ -344,3 +344,81 @@ the composite convention, not re-prefer plan_name.
 lineage (amends the per-req plan-stamp choice from multi-mno-sira's
 D-DRAFT-1, promoted line); drafted here because the session was bound to
 golden-eval.
+
+## D-DRAFT-10 — Reverse-proxy serving: prefix-stripping proxy + scope-derived redirects + env-first root_path
+
+**Context**: Stacks must be reachable through a path-prefixed reverse
+proxy (Caddy). The web module was designed root_path-aware (D-016
+posture: templates, router redirects, JS, SSE all carry `{{ root_path }}`),
+but four redirects used bare paths (team-gate middleware + three
+/admin-unlock) — behind a prefix they bounced clients to the proxy root —
+and root_path's only source was config/web.json, which is baked into the
+container image, so N stacks behind one proxy could not get N prefixes
+from one image.
+
+**Decision**: (a) The proxy strips the prefix (`handle_path`;
+`flush_interval -1` for SSE) — the app serves its routes at `/` and
+root_path shapes only generated URLs. (b) The four redirects read
+`request.scope["root_path"]` (ASGI-populated from FastAPI's root_path)
+instead of importing config. (c) New `NORA_WEB_ROOT_PATH` env var,
+resolved env-first (env > web.json), normalized to
+leading-slash/no-trailing-slash.
+
+**Why**: Prefix-stripping is the ASGI-standard topology FastAPI's
+root_path models; prefix-preserving would require every route to move.
+scope-derived redirects keep middleware decoupled from the config module
+and correct under any future mount. Env-first inverts the module's
+web.json-first convention (env_dir, corrections_root) deliberately: the
+file is image-baked and identical across stacks, while the prefix is
+per-deployment — the per-stack env file is the only place it can vary.
+Rejected: per-stack web.json volume mounts (config/ is a baked tree;
+mounting fragments it).
+
+**Consequences**: Env value must equal the proxy path prefix exactly,
+per stack. With a prefix set, direct (non-proxy) browsing produces
+prefixed links that 404 — proxy URLs become the canonical access path.
+Env-file changes need a container recreate, not a restart. Tests pin
+all four redirect prefixes and the resolution/normalization chain.
+
+## D-DRAFT-11 — Variant lineages: ideas ship as recipes over one code line, never as code forks
+
+**Context**: The team evaluates pipeline ideas (per-MNO Cline-derived
+prompts, taxonomy-context enrichment, future hypotheses) as nora1 /
+nora2 / nora<N> deployments, and needs new raw releases ingested into
+EVERY active variant so evals compare ideas on the same corpus. Letting
+variants drift onto different code versions (as v1/v2 images had)
+confounds the comparison and multiplies maintenance.
+
+**Decision**: A variant is a *recipe* — prompt set + knobs + wiring
+env — never a branch or image fork. One code line and one image set
+serve all variants. Each variant owns a complete artifact lineage
+(build env + sira db_root + serve labels) built from the shared raw
+corpus; a new release is ingested once per active variant via its
+wiring env. New-idea code ships dormant behind a knob defaulting to old
+behavior. One variable changes per new variant, recorded in a per-build
+RECIPE.md (MANIFEST.json ties artifacts to git sha; RECIPE.md ties them
+to the hypothesis). Eval state stays pooled (GOLDEN_DIR, FEEDBACK_DIR —
+D-120) so all variants score against identical samples. Prompt delivery
+is runtime-mounted: the prompt set lives in the variant's build env
+(`<env>/prompts/`, resolved at run time via the existing NORA_ENV_DIR
+mount); the image-baked customizations/prompts copy is legacy — the git
+commit of prompts remains the version-control record, publishing to the
+env dir is the deploy step. An empty prompts dir IS a recipe (generic
+prompts), stated explicitly.
+
+**Why**: Identical serving code across variants isolates the idea as
+the only experimental variable — that's what makes the A/B attribution
+valid. Config-not-code keeps N variants maintainable from one main.
+Runtime-mounted prompts remove the image rebake from the prompt loop
+and make the sira images variant-neutral. Rejected: per-variant
+branches/images (code drift confounds evals, N× image maintenance);
+shared build dirs (cross-contamination); per-variant image tags for
+prompt sets (workable but couples recipe identity to image identity).
+
+**Consequences**: N× pipeline cost per release across active variants —
+accepted as the price of clean comparison. Older variants must be
+rebuilt/served from latest images (their identity lives in data + env,
+not code vintage); serving-side behavior added later appears on all
+variants equally. Every knob added for an idea must default to the
+pre-idea behavior. docker/README "Variant lineages" section is the
+canonical statement.

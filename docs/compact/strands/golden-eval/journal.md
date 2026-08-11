@@ -200,3 +200,51 @@
 - Any pre-fix enrichment build of a heading-mode corpus was enriched
   without taxonomy context — if other heading-mode cells exist beyond
   mno-a, they carry the same silent degradation until re-enriched.
+
+## 2026-08-10 — enrich-timeout triage; reverse-proxy support; variant-lineage methodology
+
+### Done this session
+- mno-a re-enrich verify (work PC) confirmed the plan-stamp fix: full
+  coverage, zero "No taxonomy" warnings, no refusals. New failure mode:
+  548 reqs / 48 batches all "Timeout on reading data from socket" —
+  taxonomy-block prompts are larger/slower and trip the 300s default
+  NORA_SIRA_ENRICH_LLM_TIMEOUT. Guidance: timeout 900, --retry-failed on
+  the same run name (no wipe; kept enrichments stay cached), --max-reqs 1
+  single-req mode for the retry.
+- Reverse-proxy support shipped (2bef80c): web module audited — already
+  root_path-clean by design except four unprefixed redirects (team-gate
+  middleware + three /admin-unlock), now prefixed via
+  scope["root_path"]; new NORA_WEB_ROOT_PATH env var (env > baked
+  web.json, normalized) as the per-deployment prefix knob. Caddy
+  handle_path + flush_interval -1 recipe in docker/README. 8 new tests;
+  suite 1654/109. Committed artifacts framed purely as reverse-proxy
+  support (no org context), per user instruction.
+- Variant-lineage methodology documented (4476d3f, 8fd815a):
+  docker/README "Variant lineages — comparing ideas, not code" — variant
+  = recipe (prompt set + knobs + wiring env), one code line/image set,
+  per-variant build+serve lineages over the shared raw corpus, pooled
+  GOLDEN_DIR/FEEDBACK_DIR for same-corpus eval. Prompt delivery
+  discovered to be runtime-resolved → mounted <build-env>/prompts/
+  documented as primary (Phase 3 "publish prompts"); baked path legacy.
+
+### In progress
+- Work-PC: mno-a retry running (--retry-failed --max-reqs 1, timeout
+  raised) — verify log pending; expect failed set to collapse to ~42
+  benign rows, then restart sira-query + optional commit --full baseline.
+- Work-PC rollout of reverse-proxy serving: rebuild web+sira-query pairs
+  for both stacks from main, NORA_WEB_ROOT_PATH=/nora1|/nora2, Caddy
+  handle_path blocks.
+
+### Next
+- Materialize the variant recipes: nora-builds/<variant>/prompts/ +
+  RECIPE.md per build env; per-variant wiring envs so a new release
+  ingests into nora1 (generic recipe) and nora2 (PE recipe) from the
+  same raw corpus.
+- Golden eval (unchanged): expert authoring → first Stage-1 batch A/B →
+  Stage-2 end-to-end; confirm v1 /sira-query row fields; GEV- vs EVL-
+  prefix call before land.
+
+### Flags
+- Enrichment timeout knob is deployment-local: 900s + --max-reqs 1 were
+  chosen for THIS endpoint's latency; revisit if batch sizes grow or the
+  endpoint changes.
