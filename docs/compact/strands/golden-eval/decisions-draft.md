@@ -422,3 +422,74 @@ not code vintage); serving-side behavior added later appears on all
 variants equally. Every knob added for an idea must default to the
 pre-idea behavior. docker/README "Variant lineages" section is the
 canonical statement.
+
+## D-DRAFT-12 — Reverse-proxy contract: the proxy passes the path prefix THROUGH; middleware compares root_path-stripped paths (amends D-DRAFT-10)
+
+**Context**: Deploying D-DRAFT-10's contract (prefix-stripping proxy +
+app root_path) broke the first real prefixed deployment: every /static
+asset 404'd (direct AND proxied) and the team gate redirect-looped on
+`<prefix>/test`. Root cause is Starlette 1.0 root_path semantics: the
+ASGI path is expected to INCLUDE root_path — routing strips it
+internally, and the mounted StaticFiles strips root_path + mount prefix
+when resolving files. A stripping proxy leaves the mount unable to
+strip, so it resolves `static/...` INSIDE the static dir. Regular
+routes survive a stripped path only by accident (stripping a prefix
+that isn't there is a no-op), which is why the bug shipped: pages
+worked, mounts didn't.
+
+**Decision**: The proxy forwards the full path unchanged (Caddy: plain
+`handle` + path matcher, explicitly NOT `handle_path`/`uri
+strip_prefix`), and the app owns all prefix handling: routing strips it
+per Starlette semantics, generated URLs carry it via root_path, and
+middleware path checks (team-gate allowlist, metrics endpoint label)
+compare the root_path-stripped path via a shared `_route_path()`
+helper, never the raw path. A prefixed-static regression test
+(`TestClient(app, root_path=...)` fetching `<prefix>/static/...` → 200)
+pins the contract.
+
+**Why**: Aligning with the framework's semantics beats fighting them —
+the alternative (keep stripping, un-set root_path, drive all URL
+generation from config alone) re-opens every redirect/link site to
+hand-rolled prefix logic and still leaves scope root_path wrong for any
+library that reads it. Pass-through also makes direct access fully
+functional WITH the prefix in the URL (no proxy required for
+browsing), which stripping can never offer.
+
+**Consequences**: Deployed proxies configured per D-DRAFT-10
+(handle_path) must be reconfigured — the two contracts are mutually
+exclusive. Every future middleware or handler that compares request
+paths must use the stripped path (`_route_path()`); comparing
+`request.url.path` raw is now a bug class. At /land-strand, promote
+this together with D-DRAFT-10 (or fold into it) so the canonical log
+never teaches the stripping convention. Amends: D-DRAFT-10 (its
+"prefix-stripping proxy" clause; its env-first root_path knob and
+scope-derived redirect clauses stand unchanged).
+
+## D-DRAFT-13 — out/parse is part of promote.sh's default SERVE-set
+
+**Context**: Promoted serve labels originally snapshotted
+out/{vectorstore,graph,taxonomy} only; out/parse was opt-in
+(--include-parse). Since that set was defined, serve-time web surfaces
+grew hard dependencies on parse trees: the Eval Studio ground-truth
+picker and req-browser both read out/parse/<mno>/<release>/ at request
+time. A label promoted without the flag serves those surfaces EMPTY —
+no error, just a blank MNO dropdown — and the first real label-backed
+deployment hit exactly that.
+
+**Decision**: parse joins the default SERVE-set — promote.sh snapshots
+out/{vectorstore,graph,taxonomy,parse} whenever --nora-build is given.
+--include-parse remains accepted as a no-op for script compatibility.
+
+**Why**: The failure mode is silent and lands on the serving side long
+after the promote command scrolled away; an opt-in flag guarding a
+serve-time dependency is a trap. Hardlink promotion (cp -al) makes the
+inclusion effectively free in time and disk, so the only cost of
+defaulting is none. Alternative — keep opt-in and document harder —
+rejected: docs don't fix silent failure modes.
+
+**Consequences**: Labels promoted before this change lack out/parse;
+repointing a stack at one re-breaks the picker — re-promote instead of
+reusing old labels (journaled as a flag). The SERVE-set definition now
+tracks web serve-time reads: any future surface that reads a new
+out/<stage> at request time must add that stage to promote.sh in the
+same change.

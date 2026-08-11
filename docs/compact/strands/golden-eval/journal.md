@@ -248,3 +248,54 @@
 - Enrichment timeout knob is deployment-local: 900s + --max-reqs 1 were
   chosen for THIS endpoint's latency; revisit if batch sizes grow or the
   endpoint changes.
+
+## 2026-08-11 — rollout day: retry verified; root_path semantics fix; promote serve-set
+
+### Done this session
+- mno-a retry verify came back clean (--retry-failed --max-reqs 1,
+  timeout 900): zero timeouts (was 548), missing@final-round 0, coverage
+  full, failed set entirely benign (24 req-level: 23 all_filtered +
+  1 no_phrases, plus intentional doc/section skips). 315/567 answers via
+  the refusal fallback — fallback-model quality is load-bearing for this
+  corpus slice. commit --full baseline recorded for the cell.
+- Serving rollout: new cell was invisible to sira-query — serve stack
+  mounted a label promoted BEFORE the build. Fresh label + repoint +
+  recreate fixed it; healthz doc_enrich_source verified against the
+  pinned run.
+- Reverse-proxy deploy surfaced that the shipped strip-prefix contract
+  was wrong (42174a7): Starlette 1.0 expects the ASGI path to INCLUDE
+  root_path (routing strips it) — a stripping proxy 404s the /static
+  mount and loops the team gate (raw-path allowlist compare). Fix: the
+  proxy passes the prefix through (Caddy `handle` + matcher, not
+  `handle_path`); middleware _route_path() strips scope root_path before
+  the gate allowlist and metrics label; docs/env example/MODULE.md
+  invariant corrected; prefixed-static regression test added. All
+  surfaces verified through the proxy: statics, gate, admin-unlock, SSE,
+  JS views. Side effect: direct-port browsing works WITH the prefix in
+  the URL.
+- Eval Studio picker served empty off the promoted label (3757c22): the
+  picker + req-browser read out/parse/ trees at SERVE time, but
+  promote.sh's SERVE-set predated those surfaces — parse was opt-in
+  (--include-parse). parse now in the default serve-set (flag kept as
+  no-op); re-promote verified, picker fully populated.
+
+### In progress
+- nora1 stack: not yet proxied — needs NORA_WEB_ROOT_PATH=/nora1 in its
+  web env, its Caddy handler, rebuild + recreate (mechanical repeat of
+  nora2).
+
+### Next
+- Materialize the variant recipes: nora-builds/<variant>/prompts/ +
+  RECIPE.md per build env; per-variant wiring envs.
+- Golden eval (unchanged): expert authoring → first Stage-1 batch A/B →
+  Stage-2 end-to-end; confirm v1 /sira-query row fields; GEV- vs EVL-
+  prefix call before land.
+
+### Flags
+- D-DRAFT-10 records the now-reversed strip-prefix proxy contract —
+  amended by D-DRAFT-12 this session; at /land-strand promote them
+  together (or fold 12 into 10) so the canonical log never teaches the
+  broken convention.
+- Labels promoted before 3757c22 lack out/parse — any stack repointed at
+  an old label serves an empty Eval Studio picker; re-promote rather
+  than reuse.
