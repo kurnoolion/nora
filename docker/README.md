@@ -725,6 +725,10 @@ Rules that keep the comparison honest:
 Retiring a variant = stop its stack; its builds and labels stay on disk
 as the historical record.
 
+Each variant's stack gets its own reverse-proxy path prefix
+(`NORA_WEB_ROOT_PATH=/nora1`, `/nora2`, …) — see "Serving behind a
+reverse proxy (Caddy)" below.
+
 ## Two stacks, two LLMs (A/B)
 
 The two-variant instance of the lineage pattern above (with the LLM as
