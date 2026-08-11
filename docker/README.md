@@ -61,9 +61,11 @@ paths (`$HOME` does not expand there).
     ├── sira-builds/<build>/           # SIRA db_roots (cells) — NEVER inside the repo
     │                                  #   tree (git clean would wipe the enrichment cache)
     ├── serve/<label>/                 # promoted hardlink snapshots (promote.sh):
-    │   ├── MANIFEST.json              #   nora/out/{vectorstore,graph,taxonomy} +
-    │   ├── nora/out/...               #   sira/<cells>. Stacks mount THESE — builds
+    │   ├── MANIFEST.json              #   nora/out/{vectorstore,graph,taxonomy,parse}
+    │   ├── nora/out/...               #   + sira/<cells>. Stacks mount THESE — builds
     │   └── sira/...                   #   can be rebuilt/wiped without touching serving.
+    │                                  #   (parse feeds the tree-backed web surfaces:
+    │                                  #   Eval Studio picker, req-browser)
     ├── web-state-a/                   # per stack: nora_jobs/metrics/config.db
     ├── web-state-b/                   #   (stack identity = directory, not filename)
     ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)

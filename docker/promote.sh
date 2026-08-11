@@ -4,8 +4,12 @@
 #
 #   serve/<label>/
 #   ├── MANIFEST.json          # which builds + git sha + timestamp
-#   ├── nora/out/{vectorstore,graph,taxonomy}/    # env_dir-SHAPED: mount as /data/env
-#   └── sira/<MNO>__<MMMYYYY>/...                 # cells: mount as /data/db
+#   ├── nora/out/{vectorstore,graph,taxonomy,parse}/  # env_dir-SHAPED: mount as /data/env
+#   └── sira/<MNO>__<MMMYYYY>/...                     # cells: mount as /data/db
+#
+# parse is part of the serve-set: the web app reads out/parse/ trees at
+# SERVE time (Eval Studio ground-truth picker, req-browser) — a label
+# without it serves those surfaces empty.
 #
 # Hardlinks (cp -al): instant, ~zero disk, real files (container-safe), and
 # immune to later build wipes — rebuilding a build never mutates a promoted
@@ -15,19 +19,19 @@
 #
 # Usage:
 #   ./promote.sh --serve-root <nora-data>/serve --label <label> \
-#       [--nora-build <nora-builds/X>] [--sira-build <sira-builds/Y>] \
-#       [--include-parse]
+#       [--nora-build <nora-builds/X>] [--sira-build <sira-builds/Y>]
 # At least one of --nora-build / --sira-build is required.
+# (--include-parse is accepted as a no-op — parse is in the default set.)
 set -euo pipefail
 
-SERVE_ROOT="" LABEL="" NORA_BUILD="" SIRA_BUILD="" INCLUDE_PARSE=0
+SERVE_ROOT="" LABEL="" NORA_BUILD="" SIRA_BUILD=""
 while (( $# > 0 )); do
   case "$1" in
     --serve-root)    SERVE_ROOT="$2"; shift 2;;
     --label)         LABEL="$2"; shift 2;;
     --nora-build)    NORA_BUILD="$2"; shift 2;;
     --sira-build)    SIRA_BUILD="$2"; shift 2;;
-    --include-parse) INCLUDE_PARSE=1; shift;;
+    --include-parse) shift;;   # no-op: parse is in the default serve-set
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -41,7 +45,7 @@ mkdir -p "$DEST"
 promoted_nora="" promoted_sira=""
 if [ -n "$NORA_BUILD" ]; then
   [ -d "$NORA_BUILD/out" ] || { echo "not a nora build (no out/): $NORA_BUILD" >&2; exit 1; }
-  for d in vectorstore graph taxonomy; do
+  for d in vectorstore graph taxonomy parse; do
     if [ -d "$NORA_BUILD/out/$d" ]; then
       mkdir -p "$DEST/nora/out"
       cp -al "$NORA_BUILD/out/$d" "$DEST/nora/out/$d"
@@ -50,9 +54,6 @@ if [ -n "$NORA_BUILD" ]; then
       echo "WARN: $NORA_BUILD/out/$d missing — skipped"
     fi
   done
-  if (( INCLUDE_PARSE )) && [ -d "$NORA_BUILD/out/parse" ]; then
-    cp -al "$NORA_BUILD/out/parse" "$DEST/nora/out/parse" && echo "promoted nora out/parse"
-  fi
   promoted_nora="$(cd "$NORA_BUILD" && pwd)"
 fi
 if [ -n "$SIRA_BUILD" ]; then
