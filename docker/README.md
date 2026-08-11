@@ -56,6 +56,8 @@ paths (`$HOME` does not expand there).
     │                                  #   shared by all builds (requirements_dir
     │                                  #   override; default is <env_dir>/input)
     ├── nora-builds/<build>/           # env_dirs: out/, state/, corrections/, reports/
+    │                                  #   (+ prompts/ + RECIPE.md when the build is a
+    │                                  #   variant lineage — see "Variant lineages")
     ├── sira-builds/<build>/           # SIRA db_roots (cells) — NEVER inside the repo
     │                                  #   tree (git clean would wipe the enrichment cache)
     ├── serve/<label>/                 # promoted hardlink snapshots (promote.sh):
@@ -151,7 +153,7 @@ local docker cache unless pruned; otherwise `./pull.sh` the old tag).
 
 ## Ingest a new release — the full cycle
 
-Parse → derive prompts → rebake → taxonomy → enrich → promote. The ordering
+Parse → derive prompts → publish → taxonomy → enrich → promote. The ordering
 matters: the Cline prompt-derivation skill reads the **parsed** corpus, and
 the taxonomy stage consumes the **derived** corpus overviews. The taxonomy
 cache auto-busts when overview files change (fingerprint includes their
@@ -286,25 +288,43 @@ Then commit — **work PC / internal remote only** (D-062 trust boundary; see
 git add customizations/prompts/ && git commit -m "prompts: per-MNO v02 set (<build>)" && git push
 ```
 
-(Any prompt commit ⇒ image rebake in Phase 3 — the files ride in the images.)
+(The commit is the version-control record; Phase 3 publishes the files to
+the runtime.)
 
-### Phase 3 — rebake images + set the knobs
+### Phase 3 — publish prompts + set the knobs
 
-The prompt files ride inside the images (`COPY customizations/`), so rebuild
-after committing them:
+The prompt resolvers read their directories at RUN time, so there are two
+ways to deliver prompt files — pick one:
+
+**A. Mounted (recommended — per-build-env, no rebuild).** Copy the prompt
+set into the build env dir, which is already mounted at `/data/env`:
+
+```bash
+cp customizations/prompts/*_<MNO>_v*.txt /home/<you>/nora-data/nora-builds/<build>/prompts/
+```
+
+Each build env carries its own prompt set — different envs can run
+different prompt recipes from the SAME images, and a prompt update is a
+file copy + re-run. An env whose `prompts/` dir is empty (or whose
+`*_PROMPT_DIR` vars are unset) runs the generic fallback prompts — that
+too is a recipe, stated explicitly.
+
+**B. Baked (legacy).** The files also ride inside the images
+(`COPY customizations/`); rebuild after committing them:
 
 ```bash
 docker compose --env-file .env.builds --profile ingest build nora-pipeline sira-batch
 ```
 
-Set once in the per-service env files:
+Set once in the per-service env files (paths shown for option A; for
+option B use `/app/customizations/prompts` instead):
 
 ```
 # .env.nora-pipeline
-NORA_TAXONOMY_OVERVIEW_DIR=/app/customizations/prompts
+NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts
 
 # .env.sira-batch
-NORA_SIRA_DOC_PROMPT_DIR=/app/customizations/prompts
+NORA_SIRA_DOC_PROMPT_DIR=/data/env/prompts
 NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy
 # NORA_SIRA_BATCH_* only if deviating from defaults (cap 50k / ctx 64k /
 # 90 resp-tokens/req / 3.5 chars-per-token / 2 retries / 2 concurrent).
@@ -437,7 +457,9 @@ paths — the sira-build dir is directly visible):
 D=/home/<you>/nora-data/sira-builds/<build>/<MNO>__<MMMYYYY>/runs/doc-enrich/<run-name>
 grep -c '{taxonomy_block}' $D/prompt.txt   # 1 -> per-MNO BATCHED template resolved
                                            # (0 -> fell back to generic v01: check
-                                           #  NORA_SIRA_DOC_PROMPT_DIR + image rebake)
+                                           #  NORA_SIRA_DOC_PROMPT_DIR + that the dir
+                                           #  holds the files — mounted <env>/prompts/
+                                           #  or rebaked image, per Phase 3)
 # batch shapes: n_reqs, prompt_tokens_est, closed_by (prompt|response|end),
 # oversized, status per batch:
 head -5 $D/batches*.jsonl; wc -l $D/batches*.jsonl
@@ -656,10 +678,58 @@ Known limit: per-MNO **query/relevance** prompts are generated but the
 query-time service still loads a single pair — per-cell selection there is
 a deferred change (strand journal 2026-07-24).
 
+## Variant lineages — comparing ideas, not code
+
+To evaluate a pipeline idea (per-MNO derived prompts, taxonomy-context
+enrichment, a future nora3 hypothesis), run it as a **variant lineage**:
+one code line and one image set for everything, with each variant defined
+entirely by its *recipe* — prompt set + knobs + wiring env — and owning a
+complete artifact lineage built from the **shared raw corpus**.
+
+```
+input/<MNO>/<release>/            SHARED raw corpus — the controlled variable
+nora-builds/<variant>/            per-variant build env (artifacts + prompts/ + RECIPE.md)
+sira-builds/<variant>/            per-variant sira db_root
+serve/<variant>-<label>/          immutable promoted labels, per (variant, release)
+docker/.env.builds.<variant>     ingest wiring: where artifacts land + which knobs
+docker/.env.<variant>            serve wiring: stack -> its labels + runtime env files
+```
+
+Rules that keep the comparison honest:
+
+1. **An idea lives in config/data, never in a code branch.** The resolvers
+   are built for this: per-MNO prompts are files resolved at run time
+   (generic fallback when absent), taxonomy blocks activate only when
+   their dir is wired, fallbacks only when their env vars are set. A new
+   idea that needs code ships dormant behind a knob defaulting to the old
+   behavior — so every variant, old and new, runs the SAME latest images
+   and the eval isolates the idea, not the code drift.
+2. **Never share build dirs between variants.** A new release is ingested
+   once per active variant — same corpus, that variant's wiring:
+   `./ingest.sh -e .env.builds.<variant> <MNO> <MMMYYYY>` (+ its sira
+   lane), then promote into that variant's own label. N× pipeline cost is
+   the price of a clean comparison.
+3. **Change one variable per new variant.** Seed `nora<N+1>` by copying
+   the previous recipe (wiring envs + prompts/) and altering only the
+   idea under test. Record it in `nora-builds/<variant>/RECIPE.md` — one
+   short paragraph: what this variant embodies ("generic prompts, no
+   taxonomy context" / "Cline per-MNO prompts v3 + taxonomy blocks").
+   `MANIFEST.json` in each label ties artifacts to source builds + git
+   sha; RECIPE.md ties them to the hypothesis.
+4. **Evaluation state is pooled; everything else is per-variant.**
+   `GOLDEN_DIR` (same golden samples scored against every stack) and
+   `FEEDBACK_DIR` (attributable A/B, D-120) are shared across stacks by
+   design — same corpus + same samples + same code, recipe is the only
+   difference.
+
+Retiring a variant = stop its stack; its builds and labels stay on disk
+as the historical record.
+
 ## Two stacks, two LLMs (A/B)
 
-Same images; each stack gets its own wiring env + its own service runtime
-files. Per stack: STACK_NAME, ports, its `web-state-<x>/` directory, and the
+The two-variant instance of the lineage pattern above (with the LLM as
+the recipe delta). Same images; each stack gets its own wiring env + its
+own service runtime files. Per stack: STACK_NAME, ports, its `web-state-<x>/` directory, and the
 LLM-bearing runtime files. Shared (same values in both wiring envs):
 NORA_ENV_DIR, SIRA_DB_ROOT (one ingest serves both) and FEEDBACK_DIR (the
 pooled feedback DB → attributable A/B, D-120). To A/B *ingestions* instead of
