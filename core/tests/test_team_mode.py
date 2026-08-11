@@ -91,3 +91,43 @@ class TestMiddleware:
         c = TestClient(_mini_app())
         c.cookies.set(tm.ADMIN_COOKIE, "sek")
         assert c.get("/dashboard").text == "home"
+
+    def test_restricted_redirect_carries_proxy_prefix(self, monkeypatch):
+        """Behind a path-prefixed reverse proxy (scope root_path), the gate
+        redirect must stay inside the prefix — a bare /test would bounce
+        the client to the proxy root, off the app entirely."""
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+        c = TestClient(_mini_app(), root_path="/nora-v2")
+        r = c.get("/dashboard", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/nora-v2/test"
+
+
+class TestAdminUnlockProxyPrefix:
+    """/admin-unlock redirects (real app) must carry the reverse-proxy
+    prefix from scope root_path."""
+
+    def _client(self):
+        from core.src.web.app import app
+        return TestClient(app, root_path="/nora-v2")
+
+    def test_wrong_token_redirects_to_prefixed_test(self, monkeypatch):
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+        r = self._client().get("/admin-unlock?token=bad", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/nora-v2/test"
+
+    def test_good_token_redirects_to_prefixed_home(self, monkeypatch):
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+        r = self._client().get("/admin-unlock?token=sek", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/nora-v2/"
+
+    def test_gate_off_redirects_to_prefixed_home(self, monkeypatch):
+        monkeypatch.setattr(tm, "TEAM_MODE", False)
+        r = self._client().get("/admin-unlock", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/nora-v2/"

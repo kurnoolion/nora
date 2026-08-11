@@ -28,6 +28,7 @@ DEFAULT_ENV_JSON_PATH = PROJECT_ROOT / "config" / "env.json"
 _ENV_VAR_JOBS_DB = "NORA_JOBS_DB"
 _ENV_VAR_METRICS_DB = "NORA_METRICS_DB"
 _ENV_VAR_FEEDBACK_DB = "NORA_FEEDBACK_DB"
+_ENV_VAR_ROOT_PATH = "NORA_WEB_ROOT_PATH"
 
 
 @dataclass
@@ -200,7 +201,26 @@ def load_config(path: Path | None = None) -> WebConfig:
         env_val = os.environ.get("NORA_CORRECTIONS_ROOT", "").strip()
         cfg.corrections_root = env_val or env_json.corrections_root
 
+    # root_path: $NORA_WEB_ROOT_PATH > web.json. Env var wins (unlike
+    # env_dir) because web.json is baked into the container image while
+    # the reverse-proxy prefix is per-deployment — two stacks behind one
+    # Caddy need two different prefixes from the same image.
+    env_val = os.environ.get(_ENV_VAR_ROOT_PATH, "").strip()
+    if env_val:
+        logger.info("root_path override from $%s: %s", _ENV_VAR_ROOT_PATH, env_val)
+        cfg.root_path = env_val
+    cfg.root_path = _normalize_root_path(cfg.root_path)
+
     return cfg
+
+
+def _normalize_root_path(value: str) -> str:
+    """Canonical proxy-prefix form: leading slash, no trailing slash,
+    "" for unset or bare "/" ("nora/" -> "/nora", "/" -> "")."""
+    value = value.strip().rstrip("/")
+    if value and not value.startswith("/"):
+        value = "/" + value
+    return value
 
 
 def _resolve_db_path(env_var: str, env_json_value: str, label: str) -> str:

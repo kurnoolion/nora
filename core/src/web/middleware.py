@@ -28,7 +28,11 @@ class TeamModeMiddleware(BaseHTTPMiddleware):
         if tm.TEAM_MODE and tm.team_restricted(request) and not tm.path_allowed_for_team(
             request.url.path
         ):
-            return RedirectResponse("/test", status_code=302)
+            # Reverse-proxy safe: scope["root_path"] carries the proxy
+            # prefix (FastAPI root_path) — a bare "/test" would bounce
+            # gated users to the proxy root, off the app entirely.
+            root = request.scope.get("root_path", "")
+            return RedirectResponse(f"{root}/test", status_code=302)
         return await call_next(request)
 
 

@@ -275,16 +275,17 @@ async def admin_unlock(request: Request, token: str = ""):
     """Admin full-access unlock for team mode: a correct ?token sets an HttpOnly
     cookie and redirects home. No-op when the gate is off."""
     from core.src.web import team_mode as tm
+    root = request.scope.get("root_path", "")  # reverse-proxy prefix
     if not tm.TEAM_MODE:
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse(f"{root}/", status_code=302)
     if tm.ADMIN_TOKEN and token == tm.ADMIN_TOKEN:
-        resp = RedirectResponse("/", status_code=302)
+        resp = RedirectResponse(f"{root}/", status_code=302)
         resp.set_cookie(
             tm.ADMIN_COOKIE, tm.ADMIN_TOKEN,
             httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30,
         )
         return resp
-    return RedirectResponse("/test", status_code=302)  # wrong/no token → eval page
+    return RedirectResponse(f"{root}/test", status_code=302)  # wrong/no token → eval page
 
 
 # -- API endpoints ------------------------------------------------------------

@@ -29,7 +29,8 @@ from core.src.web.config import (
 def clean_env(monkeypatch):
     """Unset every env var the resolver looks at so each test starts
     from a clean slate."""
-    for v in ("ENV_DIR", "NORA_JOBS_DB", "NORA_METRICS_DB", "NORA_FEEDBACK_DB"):
+    for v in ("ENV_DIR", "NORA_JOBS_DB", "NORA_METRICS_DB", "NORA_FEEDBACK_DB",
+              "NORA_WEB_ROOT_PATH"):
         monkeypatch.delenv(v, raising=False)
 
 
@@ -213,3 +214,35 @@ def test_web_config_db_path_overrides_are_absolute_paths(clean_env, isolated_con
     # Returned path is exactly the override, not joined under state_path()
     assert p == Path("/some/where/else.db")
     assert "state" not in str(p)
+
+
+# ---------------------------------------------------------------------------
+# root_path resolution (reverse-proxy prefix): $NORA_WEB_ROOT_PATH > web.json
+# ---------------------------------------------------------------------------
+
+
+def test_root_path_env_var_beats_web_json(clean_env, isolated_configs, monkeypatch):
+    """The env var wins because web.json is baked into the container
+    image while the proxy prefix is per-deployment."""
+    _write(isolated_configs["web"], {"root_path": "/from-file"})
+    monkeypatch.setenv("NORA_WEB_ROOT_PATH", "/nora-v2")
+    assert load_config().root_path == "/nora-v2"
+
+
+def test_root_path_web_json_used_when_env_unset(clean_env, isolated_configs):
+    _write(isolated_configs["web"], {"root_path": "/from-file"})
+    assert load_config().root_path == "/from-file"
+
+
+def test_root_path_default_empty(clean_env, isolated_configs):
+    _write(isolated_configs["web"], {})
+    assert load_config().root_path == ""
+
+
+def test_root_path_normalized(clean_env, isolated_configs, monkeypatch):
+    """Leading slash added, trailing slash dropped, bare '/' -> ''."""
+    _write(isolated_configs["web"], {})
+    for raw, want in (("nora-v2", "/nora-v2"), ("/nora-v2/", "/nora-v2"),
+                      ("nora-v2/", "/nora-v2"), ("/", ""), ("  ", "")):
+        monkeypatch.setenv("NORA_WEB_ROOT_PATH", raw)
+        assert load_config().root_path == want, raw

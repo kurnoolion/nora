@@ -7,7 +7,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - App (app.py):
   - `app: FastAPI` — the ASGI application; wires middleware, static mounts, routers, templates
 - Config (config.py):
-  - `WebConfig` — host, port, root_path, path_mappings, ollama_url, default_model, env_dir, plus DB-path overrides `jobs_db` / `metrics_db` / `feedback_db` and `corrections_root` (enrichment-corrections volume, strand sira-enrichment-review; resolution web.json > $NORA_CORRECTIONS_ROOT > env.json; "" = surface disabled); `from_dict()`, `env_dir_path()`, `state_path()`, `jobs_db_path()`, `metrics_db_path()`, `feedback_db_path()` (per D-022; override-aware)
+  - `WebConfig` — host, port, root_path (reverse-proxy prefix; `$NORA_WEB_ROOT_PATH` > web.json, env-first because web.json is baked into the image while the prefix is per-deployment; normalized to leading-slash/no-trailing-slash), path_mappings, ollama_url, default_model, env_dir, plus DB-path overrides `jobs_db` / `metrics_db` / `feedback_db` and `corrections_root` (enrichment-corrections volume, strand sira-enrichment-review; resolution web.json > $NORA_CORRECTIONS_ROOT > env.json; "" = surface disabled); `from_dict()`, `env_dir_path()`, `state_path()`, `jobs_db_path()`, `metrics_db_path()`, `feedback_db_path()` (per D-022; override-aware)
   - `PathMapping` — `(windows, linux, label)` entry
   - `EnvJsonConfig` — schema for the optional `config/env.json` layer (env-related fields: `env_dir`, `jobs_db`, `metrics_db`, `feedback_db`); `load(path=None)` with malformed/missing tolerance
   - `load_config(path=None) -> WebConfig` — resolves env_dir (web.json > $ENV_DIR > env.json) and per-DB overrides (CLI / env var > env.json > computed default) in one call

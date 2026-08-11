@@ -691,6 +691,53 @@ with either wiring env. After ingesting a new cell (shared db_root), restart
 BOTH stacks' sira-query — a plain `restart` suffices here (data reload, same
 config); only env-file/.env CHANGES need an `up -d` recreate.
 
+## Serving behind a reverse proxy (Caddy)
+
+nora-web can be served under a path prefix behind a reverse proxy. Two
+pieces, one per side:
+
+1. **Proxy side** — the proxy must STRIP the prefix before forwarding
+   (the app serves its routes at `/`). Caddy's `handle_path` does exactly
+   that; `flush_interval -1` keeps the SSE surfaces live (job log
+   streaming, `/api/test/ask-stream`):
+
+   ```caddyfile
+   example.test {
+       handle_path /nora-v2/* {
+           reverse_proxy 127.0.0.1:8001 {
+               flush_interval -1
+           }
+       }
+       handle_path /nora-v1/* {
+           reverse_proxy 127.0.0.1:8000 {
+               flush_interval -1
+           }
+       }
+   }
+   ```
+
+2. **App side** — tell each stack its prefix so every generated link,
+   redirect, form target, and SSE URL carries it. In that stack's
+   `.env.nora-web.<x>`:
+
+   ```bash
+   NORA_WEB_ROOT_PATH=/nora-v2
+   ```
+
+   The env var overrides `config/web.json`'s `root_path` (the file is
+   baked into the image; the prefix is per-deployment). Values are
+   normalized (leading slash added, trailing slash dropped). Then
+   `up -d` to recreate — env-file changes need a recreate, not a
+   restart.
+
+Sanity check: `curl -s http://127.0.0.1:8001/ | grep data-root-path`
+should show the prefix; through the proxy, page links and the team-mode
+`/test` redirect stay under `https://<host>/nora-v2/...`.
+
+Team mode composes with this: gated experts land on
+`<prefix>/test`, and `/admin-unlock?token=...` redirects stay inside the
+prefix.
+
 ## Enrichment review (domain experts)
 
 `/enrichment-review` on nora-web lets domain experts browse SIRA's
