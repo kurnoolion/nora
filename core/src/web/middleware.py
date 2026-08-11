@@ -18,6 +18,21 @@ from starlette.responses import RedirectResponse, Response
 logger = logging.getLogger(__name__)
 
 
+def _route_path(request: Request) -> str:
+    """Request path with the reverse-proxy prefix (scope root_path) removed.
+
+    Starlette expects the ASGI path to INCLUDE root_path — the proxy passes
+    the prefix through and routing strips it. Middleware runs on the raw
+    path, so any path comparison here must strip the prefix itself or a
+    prefixed deployment mis-classifies every request (the team gate would
+    redirect `<prefix>/test` to itself forever)."""
+    path = request.url.path
+    root = request.scope.get("root_path", "")
+    if root and path.startswith(root):
+        path = path[len(root):] or "/"
+    return path
+
+
 class TeamModeMiddleware(BaseHTTPMiddleware):
     """When NORA_WEB_TEAM_MODE is on, redirect gated team members (no admin
     cookie) away from any non-`/test` path to `/test`. No-op when the gate is
@@ -26,7 +41,7 @@ class TeamModeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         from core.src.web import team_mode as tm
         if tm.TEAM_MODE and tm.team_restricted(request) and not tm.path_allowed_for_team(
-            request.url.path
+            _route_path(request)
         ):
             # Reverse-proxy safe: scope["root_path"] carries the proxy
             # prefix (FastAPI root_path) — a bare "/test" would bounce
@@ -50,7 +65,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                     _record_request_metric(
                         metrics_store,
                         method=request.method,
-                        path=request.url.path,
+                        path=_route_path(request),
                         status_code=response.status_code,
                         elapsed_ms=elapsed_ms,
                     )

@@ -770,25 +770,38 @@ config); only env-file/.env CHANGES need an `up -d` recreate.
 nora-web can be served under a path prefix behind a reverse proxy. Two
 pieces, one per side:
 
-1. **Proxy side** — the proxy must STRIP the prefix before forwarding
-   (the app serves its routes at `/`). Caddy's `handle_path` does exactly
-   that; `flush_interval -1` keeps the SSE surfaces live (job log
-   streaming, `/api/test/ask-stream`):
+1. **Proxy side** — the proxy must PASS THE PREFIX THROUGH unchanged
+   (do NOT strip it). Starlette's `root_path` contract expects the ASGI
+   path to include the prefix — routing strips it internally, and the
+   mounted `/static` files resolve against the stripped remainder. A
+   prefix-stripping proxy (`handle_path` / `uri strip_prefix`) breaks
+   exactly the mounts: every `/static/...` asset 404s while regular
+   routes appear to work. Use a plain `handle` with a path matcher;
+   `flush_interval -1` keeps the SSE surfaces live (job log streaming,
+   `/api/test/ask-stream`):
 
    ```caddyfile
    example.test {
-       handle_path /nora-v2/* {
+       redir /nora-v2 /nora-v2/ 308
+       @nora-v2 path /nora-v2/*
+       handle @nora-v2 {
            reverse_proxy 127.0.0.1:8001 {
                flush_interval -1
            }
        }
-       handle_path /nora-v1/* {
+       redir /nora-v1 /nora-v1/ 308
+       @nora-v1 path /nora-v1/*
+       handle @nora-v1 {
            reverse_proxy 127.0.0.1:8000 {
                flush_interval -1
            }
        }
    }
    ```
+
+   (For a proxy reached by IP over plain HTTP, use a port-only site
+   label — `:8080 { ... }` — which matches any Host and disables
+   automatic HTTPS.)
 
 2. **App side** — tell each stack its prefix so every generated link,
    redirect, form target, and SSE URL carries it. In that stack's
@@ -804,9 +817,16 @@ pieces, one per side:
    `up -d` to recreate — env-file changes need a recreate, not a
    restart.
 
-Sanity check: `curl -s http://127.0.0.1:8001/ | grep data-root-path`
-should show the prefix; through the proxy, page links and the team-mode
-`/test` redirect stay under `https://<host>/nora-v2/...`.
+Sanity checks:
+- `curl -sL http://127.0.0.1:8001/nora-v2/test | grep data-root-path`
+  shows the prefix (the app accepts prefixed paths natively once
+  `NORA_WEB_ROOT_PATH` is set — direct access works WITH the prefix
+  in the URL, e.g. `http://<host>:8001/nora-v2/`);
+- `curl -sI http://127.0.0.1:8001/nora-v2/static/css/style.css`
+  returns 200 (statics are the piece a mis-configured stripping proxy
+  breaks first);
+- through the proxy, page links and the team-mode `/test` redirect stay
+  under `https://<host>/nora-v2/...`.
 
 Team mode composes with this: gated experts land on
 `<prefix>/test`, and `/admin-unlock?token=...` redirects stay inside the

@@ -103,6 +103,25 @@ class TestMiddleware:
         assert r.status_code == 302
         assert r.headers["location"] == "/nora-v2/test"
 
+    def test_restricted_allows_prefixed_test(self, monkeypatch):
+        """The proxy passes the prefix THROUGH (Starlette root_path semantics:
+        the ASGI path includes root_path), so the gate's allowlist check must
+        compare the stripped path — a raw compare sees `<prefix>/test`, fails
+        the allowlist, and redirects to `<prefix>/test` in an infinite loop."""
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+        c = TestClient(_mini_app(), root_path="/nora-v2")
+        r = c.get("/nora-v2/test")
+        assert r.status_code == 200 and r.text == "test"
+
+    def test_restricted_prefixed_nonwhitelisted_redirects(self, monkeypatch):
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+        c = TestClient(_mini_app(), root_path="/nora-v2")
+        r = c.get("/nora-v2/dashboard", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/nora-v2/test"
+
 
 class TestAdminUnlockProxyPrefix:
     """/admin-unlock redirects (real app) must carry the reverse-proxy
@@ -131,3 +150,19 @@ class TestAdminUnlockProxyPrefix:
         r = self._client().get("/admin-unlock", follow_redirects=False)
         assert r.status_code == 302
         assert r.headers["location"] == "/nora-v2/"
+
+
+class TestStaticUnderProxyPrefix:
+    """Static assets must serve on PREFIXED paths (real app). The mounted
+    StaticFiles strips scope root_path + mount prefix from the request path
+    (Starlette root_path semantics) — so the proxy must pass the prefix
+    through, and `<prefix>/static/...` is the shape that must work. A
+    prefix-stripping proxy sends `/static/...` instead, which the mount
+    resolves to `static/...` INSIDE the static dir → every asset 404s."""
+
+    def test_prefixed_static_serves(self):
+        from core.src.web.app import app
+        c = TestClient(app, root_path="/nora-v2")
+        r = c.get("/nora-v2/static/css/style.css")
+        assert r.status_code == 200
+        assert "text/css" in r.headers["content-type"]
