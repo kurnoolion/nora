@@ -343,3 +343,148 @@ class TestContextNotMaterializedInTree:
         tree = _parse(blocks)
         assert all(r.context == "" for r in tree.requirements)
         assert tree.build_context == "none"  # test profile leaves the default
+
+
+# ── strand mno-b-tables: TABLE/IMAGE attach to the leading-id requirement ──
+
+
+def _table(idx: int, headers: list[str], rows: list[list[str]]) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=1, index=idx),
+        headers=headers,
+        rows=rows,
+        font_info=FontInfo(size=10.0),
+    )
+
+
+def _image(idx: int, path: str) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.IMAGE,
+        position=Position(page=1, index=idx),
+        image_path=path,
+        surrounding_text="",
+        font_info=FontInfo(size=10.0),
+    )
+
+
+class TestTableAttachmentLeadingIdMode:
+    """A table (or image) following a leading-id requirement belongs to that
+    requirement, not the enclosing non-requirement heading — section nodes
+    have no req_id, and downstream chunk consumers drop id-less nodes, so a
+    section-attached table vanishes from the corpus."""
+
+    def _blocks_table_after_req(self) -> list[ContentBlock]:
+        return [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support the bearers below."),
+            _table(3, ["Bearer", "Mode"], [["b1", "m1"], ["b2", "m2"]]),
+            _body(4, "ABC-FOO-002 Unrelated follow-on requirement."),
+        ]
+
+    def test_table_attaches_to_preceding_requirement(self):
+        tree = _parse(self._blocks_table_after_req())
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert len(foo1.tables) == 1
+        assert foo1.tables[0].headers == ["Bearer", "Mode"]
+
+    def test_table_not_on_the_section_heading(self):
+        tree = _parse(self._blocks_table_after_req())
+        sub = next(r for r in tree.requirements if r.section_number == "1.1")
+        assert sub.tables == []
+
+    def test_table_inlined_into_requirement_text_in_order(self):
+        # The markdown rendering lands in the REQUIREMENT's body, after its
+        # prose (document order preserved for the synthesizer).
+        tree = _parse(self._blocks_table_after_req())
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert "Bearer" in foo1.text and "b2" in foo1.text
+        assert foo1.text.index("bearers below") < foo1.text.index("Bearer")
+
+    def test_table_after_continuation_still_attaches_to_requirement(self):
+        # req → continuation paragraph → table: the cursor survives the
+        # continuation, so the table is still the requirement's.
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support the bearers below."),
+            _body(3, "Additional continuation prose."),
+            _table(4, ["Bearer"], [["b1"]]),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert len(foo1.tables) == 1
+
+    def test_table_under_fresh_heading_attaches_to_heading(self):
+        # req in 1.1, then heading 1.2 immediately followed by a table: the
+        # fresh heading resets the cursor — the table is 1.2's, NOT a stale
+        # requirement's from the previous section.
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support bearers."),
+            _heading(3, "1.2 Applicability Matrix"),
+            _table(4, ["Plan", "Applies"], [["p", "yes"]]),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        sec12 = next(r for r in tree.requirements if r.section_number == "1.2")
+        assert foo1.tables == []
+        assert len(sec12.tables) == 1
+
+    def test_table_in_section_preamble_attaches_to_heading(self):
+        # heading → preamble prose → table, before any requirement: no cursor
+        # yet, so the table falls back to the section.
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "Intro prose without a leading id."),
+            _table(3, ["Col"], [["v"]]),
+            _body(4, "ABC-FOO-001 The requirement follows the table."),
+        ]
+        tree = _parse(blocks)
+        sub = next(r for r in tree.requirements if r.section_number == "1.1")
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert len(sub.tables) == 1
+        assert foo1.tables == []
+
+    def test_image_attaches_to_preceding_requirement(self):
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 See the reference diagram."),
+            _image(3, "images/fig1.png"),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        sub = next(r for r in tree.requirements if r.section_number == "1.1")
+        assert [i.path for i in foo1.images] == ["images/fig1.png"]
+        assert sub.images == []
+
+    def test_image_under_fresh_heading_attaches_to_heading(self):
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support bearers."),
+            _heading(3, "1.2 Reference Figures"),
+            _image(4, "images/fig2.png"),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        sec12 = next(r for r in tree.requirements if r.section_number == "1.2")
+        assert foo1.images == []
+        assert [i.path for i in sec12.images] == ["images/fig2.png"]
+
+    def test_heading_mode_table_still_attaches_to_section(self):
+        # Regression guard for the default (MNO-A) path: in heading mode the
+        # table stays on the enclosing section, exactly as before.
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support the bearers below."),
+            _table(3, ["Bearer"], [["b1"]]),
+        ]
+        tree = _parse(blocks, detection_mode="heading")
+        sub = next(r for r in tree.requirements if r.section_number == "1.1")
+        assert len(sub.tables) == 1

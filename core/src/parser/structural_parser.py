@@ -1948,7 +1948,24 @@ class GenericStructuralParser:
                 previous_block_was_heading = False
 
             elif block.type == BlockType.TABLE:
-                if current_section:
+                # D-DRAFT-2 (strand mno-b-tables): in leading-id mode a table
+                # belongs to the requirement whose paragraph precedes it, not
+                # to the enclosing (non-requirement) section heading — nodes
+                # without req_ids never become chunks, so a section-attached
+                # table vanishes from the corpus. Mirror the body-text
+                # branch's routing, including the fresh-heading guard (a
+                # table directly under a new heading is the heading's, not a
+                # stale requirement's from the previous section). The guard
+                # only READS previous_block_was_heading; the flag itself is
+                # left untouched so heading-continuation merging is
+                # unaffected in both detection modes.
+                if self._leading_id_mode and previous_block_was_heading:
+                    current_leading_req = None
+                attach_to = (
+                    (current_leading_req or current_section)
+                    if self._leading_id_mode else current_section
+                )
+                if attach_to:
                     # A layout-provider table carries lossless HTML; its flat
                     # headers/rows only feed the table-anchored req-id path, so
                     # drop them from the stored TableData when anchoring is off —
@@ -1956,7 +1973,7 @@ class GenericStructuralParser:
                     # tables have no HTML and keep headers/rows as before.)
                     drop_grid = bool(block.html) and not (
                         self.profile.enable_table_anchored_extraction)
-                    current_section.tables.append(
+                    attach_to.tables.append(
                         TableData(
                             headers=[] if drop_grid else block.headers,
                             rows=[] if drop_grid else block.rows,
@@ -1973,18 +1990,30 @@ class GenericStructuralParser:
                     # layout-provider table carries lossless HTML (keeps merged
                     # cells) — prefer it; else render the headers/rows grid.
                     self._append_text(
-                        current_section,
+                        attach_to,
                         block.html or render_table_markdown(block.headers, block.rows),
                     )
                     # Defer table-anchored extraction to a second pass —
                     # paragraph_req_ids and struck_req_ids must be
                     # complete before we decide what to anchor (see
-                    # comment at deferred_tables initialization).
-                    deferred_tables.append((block, current_section))
+                    # comment at deferred_tables initialization). The
+                    # deferred parent stays the SECTION even in leading-id
+                    # mode: table-anchored reqs are parented into the section
+                    # hierarchy, not onto a sibling requirement.
+                    if current_section:
+                        deferred_tables.append((block, current_section))
 
             elif block.type == BlockType.IMAGE:
-                if current_section:
-                    current_section.images.append(
+                # Same leading-id routing as TABLE (images belong to the
+                # requirement they illustrate, not the section heading).
+                if self._leading_id_mode and previous_block_was_heading:
+                    current_leading_req = None
+                attach_to = (
+                    (current_leading_req or current_section)
+                    if self._leading_id_mode else current_section
+                )
+                if attach_to:
+                    attach_to.images.append(
                         ImageRef(
                             path=block.image_path,
                             surrounding_text=block.surrounding_text,
