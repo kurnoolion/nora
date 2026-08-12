@@ -80,6 +80,49 @@ def _bbox_overlaps_any(
     return False
 
 
+# Background-band rect filter. Some corpora paint every page with full-bleed,
+# fill-only rectangles (header band / content band / footer band). pdfplumber's
+# default "lines" table strategy treats rect edges as table rules, so on pages
+# with a real ruled table the content band becomes the table's OUTER boundary:
+# the detected bbox spans the whole band, and the extractor's overlap
+# suppression then swallows every paragraph on the page into phantom table
+# rows. A fill-only, stroke-less rect covering half the page can never be a
+# table cell or border, so it is safe to drop before table detection; stroked
+# rects (genuine ruling) are always kept. Depending on how the producer
+# encoded the paint (a `re` rect operator vs an equivalent closed line path),
+# pdfminer surfaces the band as a "rect" OR a "curve" — both feed edges into
+# the lattice, so both are filtered.
+_BG_RECT_PAGE_FRAC = 0.5
+
+
+def _drop_background_rects(plumber_page):
+    """Return `plumber_page` with giant fill-only rects/curves removed.
+
+    No-op (returns the page unfiltered) when the page has no such object, so
+    corpora without background bands take the exact same code path as before.
+    """
+    page_area = float(plumber_page.width) * float(plumber_page.height)
+    if page_area <= 0:
+        return plumber_page
+    threshold = _BG_RECT_PAGE_FRAC * page_area
+
+    def _is_background(obj) -> bool:
+        return (
+            obj.get("object_type") in ("rect", "curve")
+            and bool(obj.get("fill"))
+            and not obj.get("stroke")
+            and float(obj.get("width") or 0.0) * float(obj.get("height") or 0.0)
+            >= threshold
+        )
+
+    if not any(
+        _is_background(o)
+        for o in (list(plumber_page.rects) + list(plumber_page.curves))
+    ):
+        return plumber_page
+    return plumber_page.filter(lambda obj: not _is_background(obj))
+
+
 def _looks_tabular(data: list[list] | None) -> bool:
     """Keep a text-detected table only when it has real tabular shape — >= 2
     columns AND >= 2 rows with content — so prose the text strategy mis-reads
@@ -429,7 +472,13 @@ class PDFExtractor(BaseExtractor):
                     all_blocks, table_bboxes)
                 plumber_tables = []
             else:
-                plumber_tables = list(plumber_page.find_tables())
+                # Background-band guard: giant fill-only rects must not act
+                # as table rules (they inflate the bbox to the whole band and
+                # the overlap suppression below then swallows every paragraph
+                # on the page). Text/word content is untouched by the filter.
+                plumber_tables = list(
+                    _drop_background_rects(plumber_page).find_tables()
+                )
                 # Opt-in: borderless tables. Locate each table REGION by its
                 # persistent column gutters (never page-wide — that mis-reads
                 # prose), then keep it as layout-preserved TEXT wrapped in [TABLE]
