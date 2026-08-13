@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+from html import escape
 from pathlib import Path
 
 from docx import Document as DocxDocument
@@ -48,6 +49,53 @@ _HEADING_DEFAULT_SIZE = {
 _BODY_DEFAULT_SIZE = 11.0
 
 _HEADING_STYLE_RE = re.compile(r"^heading\s*(\d+)$", re.IGNORECASE)
+
+
+def _render_merged_table_html(
+    headers: list[str],
+    rows: list[list[str]],
+    merged_cells: list[MergedCell],
+) -> str:
+    """Render the rectangular grid + merge anchors as lossless table HTML.
+
+    The flat ``headers``/``rows`` matrices blank out merge-continuation
+    positions, so a markdown render flattens merged regions into empty
+    strings and the rowspan/colspan semantics never reach the corpus.
+    This re-encodes them as HTML span attributes — the same shape the
+    layout-provider (Docling) path emits — so the parser's html-preferred
+    inline rule picks it up with no parser change. Continuation positions
+    are omitted from the output (their content lives on the anchor).
+
+    ``merged_cells`` row indices are full-table coordinates (row 0 = the
+    header row), matching ``ContentBlock.merged_cells``.
+    """
+    covered: set[tuple[int, int]] = set()
+    anchors: dict[tuple[int, int], MergedCell] = {}
+    for m in merged_cells:
+        anchors[(m.row, m.col)] = m
+        for r in range(m.row, m.row + m.rowspan):
+            for c in range(m.col, m.col + m.colspan):
+                if (r, c) != (m.row, m.col):
+                    covered.add((r, c))
+
+    parts = ["<table>"]
+    for r, grid_row in enumerate([headers] + rows):
+        tag = "th" if r == 0 else "td"
+        cells = []
+        for c, cell in enumerate(grid_row):
+            if (r, c) in covered:
+                continue
+            attrs = ""
+            m = anchors.get((r, c))
+            if m is not None:
+                if m.rowspan > 1:
+                    attrs += f' rowspan="{m.rowspan}"'
+                if m.colspan > 1:
+                    attrs += f' colspan="{m.colspan}"'
+            cells.append(f"<{tag}{attrs}>{escape(cell or '')}</{tag}>")
+        parts.append("<tr>" + "".join(cells) + "</tr>")
+    parts.append("</table>")
+    return "".join(parts)
 
 
 class DOCXExtractor(BaseExtractor):
@@ -392,6 +440,28 @@ class DOCXExtractor(BaseExtractor):
             row_runs=body_row_runs,
             merged_cells=merged_cells,
         )
+
+        # Merged-cell tables render lossless HTML into block.html (strand
+        # table-fidelity): the flat grid blanks continuation cells, so the
+        # markdown inline flattens merged regions — rowspan/colspan only
+        # survive via HTML. Gated on merges present (the ~97% unmerged
+        # tables stay markdown — cheaper in enrichment prompts) AND on the
+        # table carrying no struck runs: strike drops are parser-side and
+        # profile-gated (D-060), and the parser's html-preferred inline
+        # rule would resurrect struck rows baked into the HTML. Struck
+        # merged tables fall back to the markdown flatten, as before.
+        any_struck = any(
+            run.struck for cell in header_runs for run in cell
+        ) or any(
+            run.struck
+            for row in body_row_runs
+            for cell in row
+            for run in cell
+        )
+        if merged_cells and not any_struck:
+            block.html = _render_merged_table_html(
+                headers, body_rows, merged_cells
+            )
 
         # Whole-table strike [D-060]: header AND every body row fully
         # struck → mark the block so the parser's existing cascade

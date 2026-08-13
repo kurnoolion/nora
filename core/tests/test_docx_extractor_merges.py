@@ -352,3 +352,103 @@ def test_sparse_table_with_one_content_cell_preserved(tmp_path: Path):
     tables = _tables(ir)
     assert len(tables) == 1
     assert tables[0].headers == ["", "Lone content", ""]
+
+
+# ---------------------------------------------------------------------------
+# Merged-cell HTML render (strand table-fidelity) — block.html carries
+# rowspan/colspan so merged structure survives past the markdown flatten.
+# ---------------------------------------------------------------------------
+
+def test_merged_table_emits_html_with_colspan(tmp_path: Path):
+    doc = Document()
+    tbl = doc.add_table(rows=2, cols=3)
+    tbl.style = "Table Grid"
+    tbl.rows[0].cells[2].text = "Date"
+    anchor = tbl.rows[0].cells[0].merge(tbl.rows[0].cells[1])
+    anchor.text = "Revision History"
+    tbl.rows[1].cells[0].text = "1.0"
+    tbl.rows[1].cells[1].text = "Alice"
+    tbl.rows[1].cells[2].text = "2026-01-01"
+
+    p = tmp_path / "html_h.docx"
+    doc.save(p)
+    t = _tables(_extract(p))[0]
+    assert t.html.startswith("<table>")
+    assert '<th colspan="2">Revision History</th>' in t.html
+    # Continuation position omitted — exactly 2 header cells rendered.
+    assert t.html.count("<th") == 2
+    assert "<td>Alice</td>" in t.html
+
+
+def test_merged_table_emits_html_with_rowspan(tmp_path: Path):
+    doc = Document()
+    tbl = doc.add_table(rows=3, cols=2)
+    tbl.style = "Table Grid"
+    tbl.rows[0].cells[1].text = "Desc"
+    tbl.rows[1].cells[1].text = "row1"
+    tbl.rows[2].cells[1].text = "row2"
+    anchor = tbl.rows[0].cells[0].merge(tbl.rows[1].cells[0]).merge(
+        tbl.rows[2].cells[0]
+    )
+    anchor.text = "Same Section"
+
+    p = tmp_path / "html_v.docx"
+    doc.save(p)
+    t = _tables(_extract(p))[0]
+    assert '<th rowspan="3">Same Section</th>' in t.html
+    # Body rows carry only their own cell — no empty continuation <td>.
+    assert "<tr><td>row1</td></tr>" in t.html
+    assert "<tr><td>row2</td></tr>" in t.html
+
+
+def test_unmerged_table_emits_no_html(tmp_path: Path):
+    doc = Document()
+    tbl = doc.add_table(rows=2, cols=2)
+    tbl.style = "Table Grid"
+    tbl.rows[0].cells[0].text = "A"
+    tbl.rows[0].cells[1].text = "B"
+    tbl.rows[1].cells[0].text = "C"
+    tbl.rows[1].cells[1].text = "D"
+
+    p = tmp_path / "html_plain.docx"
+    doc.save(p)
+    t = _tables(_extract(p))[0]
+    assert t.html == ""
+
+
+def test_merged_table_html_escapes_content(tmp_path: Path):
+    doc = Document()
+    tbl = doc.add_table(rows=2, cols=2)
+    tbl.style = "Table Grid"
+    tbl.rows[0].cells[1].text = "Limit"
+    anchor = tbl.rows[0].cells[0].merge(tbl.rows[1].cells[0])
+    anchor.text = "Bands <n78 & n41>"
+    tbl.rows[1].cells[1].text = "x > 5"
+
+    p = tmp_path / "html_esc.docx"
+    doc.save(p)
+    t = _tables(_extract(p))[0]
+    assert "Bands &lt;n78 &amp; n41&gt;" in t.html
+    assert "x &gt; 5" in t.html
+    assert "<n78" not in t.html
+
+
+def test_merged_table_with_struck_run_emits_no_html(tmp_path: Path):
+    """Strike drops are parser-side and profile-gated (D-060); HTML would
+    resurrect struck rows past the parser's row-drop, so a table carrying
+    any struck run falls back to the markdown flatten."""
+    doc = Document()
+    tbl = doc.add_table(rows=2, cols=2)
+    tbl.style = "Table Grid"
+    tbl.rows[0].cells[1].text = "Desc"
+    anchor = tbl.rows[0].cells[0].merge(tbl.rows[1].cells[0])
+    anchor.text = "Merged"
+    cell = tbl.rows[1].cells[1]
+    cell.text = "obsolete row"
+    cell.paragraphs[0].runs[0].font.strike = True
+
+    p = tmp_path / "html_struck.docx"
+    doc.save(p)
+    t = _tables(_extract(p))[0]
+    assert len(t.merged_cells) == 1   # merge metadata still recorded
+    assert t.html == ""               # but no HTML render
