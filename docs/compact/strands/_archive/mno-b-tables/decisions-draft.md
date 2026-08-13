@@ -1,3 +1,5 @@
+> Promoted on 2026-08-12: D-DRAFT-1 → D-183, D-DRAFT-2 → D-184, D-DRAFT-3 → D-185.
+
 ## D-DRAFT-1 — Extractor drops giant fill-only background rects/curves before table detection
 
 **Context:** mno-b's single-PDF corpus paints pages with full-width fill-only,
