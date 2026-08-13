@@ -7,8 +7,8 @@ document position. This checks that invariant end to end:
   * NORA parse — every requirement that has a ``tables`` field must have the
     table inline in its ``text`` (``MISSING_inline`` must be 0, else the parser
     inline regressed).
-  * SIRA corpus — per-cell count of ``corpus.jsonl`` rows that carry a markdown
-    table.
+  * SIRA corpus — per-cell count of ``corpus.jsonl`` rows that carry an inline
+    table (markdown or provider HTML).
   * Cross-check — tables actually reached the corpus (not silently dropped at
     the adapter boundary).
 
@@ -31,11 +31,13 @@ from pathlib import Path
 
 
 def has_inline_table(text: str) -> bool:
-    """True iff `text` carries a markdown table — a line that starts with a pipe
-    (`| col | col |`), inline or at the very start."""
+    """True iff `text` carries an inline table — markdown (a line starting with
+    a pipe, `| col | col |`) or provider HTML (`<table`). Layout-provider
+    corpora (Docling) and merged-cell DOCX tables inline as HTML, not markdown;
+    checking pipes alone false-flags every one of those as MISSING."""
     if not text:
         return False
-    return "\n|" in text or text.lstrip().startswith("|")
+    return "<table" in text or "\n|" in text or text.lstrip().startswith("|")
 
 
 def scan_parse(parse_dir: Path) -> dict:
@@ -70,8 +72,8 @@ def scan_parse(parse_dir: Path) -> dict:
 
 
 def scan_corpus(db_root: Path) -> dict:
-    """Per-cell count of ``corpus.jsonl`` rows whose text carries a markdown
-    table. Returns totals plus a per-cell breakdown."""
+    """Per-cell count of ``corpus.jsonl`` rows whose text carries an inline
+    table (markdown or HTML). Returns totals plus a per-cell breakdown."""
     per: dict[str, dict[str, int]] = {}
     total_rows = total_tbl = 0
     for c in sorted(glob.glob(str(db_root / "*" / "raw" / "corpus.jsonl"))):

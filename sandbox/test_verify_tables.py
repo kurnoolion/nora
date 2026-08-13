@@ -99,3 +99,23 @@ def test_main_crosscheck_fails_when_corpus_has_no_tables(tmp_path, capsys):
 
 def test_main_no_args_errors():
     assert main(["--db-root", ""]) == 2
+
+
+def test_has_inline_table_accepts_html():
+    # Layout-provider (Docling) and merged-cell DOCX tables inline as HTML.
+    assert has_inline_table("intro <table><tr><td>x</td></tr></table> outro")
+    assert has_inline_table("<table><tr><th>Band</th></tr></table>")
+    assert not has_inline_table("prose mentioning a table, no markup")
+
+
+def test_scan_parse_counts_html_inlined(tmp_path):
+    parse = tmp_path / "out" / "parse"
+    _write(parse / "MNOC" / "Jun2026" / "d_tree.json", _tree([
+        {"text": "req <table><tr><td>b1</td></tr></table>",
+         "tables": [{"html": "<table><tr><td>b1</td></tr></table>"}]},   # HTML inlined
+        {"text": "still missing", "tables": [{"headers": ["Band"]}]},    # MISSING
+    ]))
+    res = scan_parse(parse)
+    assert res["tables_field"] == 2
+    assert res["inlined"] == 1
+    assert res["missing"] == 1
