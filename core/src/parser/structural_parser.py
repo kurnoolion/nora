@@ -1948,6 +1948,24 @@ class GenericStructuralParser:
                 previous_block_was_heading = False
 
             elif block.type == BlockType.TABLE:
+                # Empty-table guard (strand table-fidelity): a layout
+                # provider can emit a TABLE block with neither HTML nor any
+                # grid content. Storing it would hang an empty TableData on
+                # the node and append an empty inline, making the node look
+                # table-bearing to consumers while carrying nothing. Skip
+                # the block entirely — including the fresh-heading cursor
+                # clear below, so a phantom table is invisible to the
+                # attachment logic too.
+                if (
+                    not (block.html or "").strip()
+                    and not any((h or "").strip() for h in block.headers)
+                    and not any(
+                        (c or "").strip()
+                        for row in block.rows
+                        for c in row
+                    )
+                ):
+                    continue
                 # D-DRAFT-2 (strand mno-b-tables): in leading-id mode a table
                 # belongs to the requirement whose paragraph precedes it, not
                 # to the enclosing (non-requirement) section heading — nodes

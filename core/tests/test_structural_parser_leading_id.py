@@ -488,3 +488,81 @@ class TestTableAttachmentLeadingIdMode:
         tree = _parse(blocks, detection_mode="heading")
         sub = next(r for r in tree.requirements if r.section_number == "1.1")
         assert len(sub.tables) == 1
+
+
+class TestEmptyTableGuard:
+    # Empty-table guard (strand table-fidelity): a TABLE block with neither
+    # html nor any grid content is skipped entirely — no TableData stored,
+    # no empty inline appended, no effect on attachment cursors.
+
+    def test_empty_table_not_stored_on_requirement(self):
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support bearers."),
+            _table(3, [], []),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert foo1.tables == []
+
+    def test_whitespace_only_table_not_stored(self):
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support bearers."),
+            _table(3, ["", " "], [["", "  "]]),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert foo1.tables == []
+        assert foo1.text.rstrip() == foo1.text  # no trailing empty inline
+
+    def test_empty_table_not_stored_in_heading_mode(self):
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support the bearers."),
+            _table(3, [], []),
+        ]
+        tree = _parse(blocks, detection_mode="heading")
+        sub = next(r for r in tree.requirements if r.section_number == "1.1")
+        assert sub.tables == []
+
+    def test_phantom_table_invisible_to_attachment(self):
+        # req -> empty table -> real table: the real table still attaches
+        # to the requirement (the phantom neither claims it nor clears the
+        # requirement cursor).
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support bearers."),
+            _table(3, [], []),
+            _table(4, ["Bearer"], [["b1"]]),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert len(foo1.tables) == 1
+        assert foo1.tables[0].headers == ["Bearer"]
+
+    def test_html_only_table_is_kept(self):
+        # A provider table with HTML but an empty flat grid has content —
+        # the guard must not skip it.
+        html_block = ContentBlock(
+            type=BlockType.TABLE,
+            position=Position(page=1, index=3),
+            headers=[],
+            rows=[],
+            html="<table><tr><th>Bearer</th></tr><tr><td>b1</td></tr></table>",
+            font_info=FontInfo(size=10.0),
+        )
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support bearers."),
+            html_block,
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert len(foo1.tables) == 1
+        assert "<table" in foo1.text
