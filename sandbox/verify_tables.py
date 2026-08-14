@@ -32,12 +32,19 @@ from pathlib import Path
 
 def has_inline_table(text: str) -> bool:
     """True iff `text` carries an inline table — markdown (a line starting with
-    a pipe, `| col | col |`) or provider HTML (`<table`). Layout-provider
-    corpora (Docling) and merged-cell DOCX tables inline as HTML, not markdown;
-    checking pipes alone false-flags every one of those as MISSING."""
+    a pipe, `| col | col |`), provider HTML (`<table`), or the compact
+    `[Table: …]` collapse the renderer emits for empty-header and headers-only
+    tables. Layout-provider corpora (Docling) and merged-cell DOCX tables
+    inline as HTML, not markdown; checking pipes alone false-flags every one
+    of those as MISSING."""
     if not text:
         return False
-    return "<table" in text or "\n|" in text or text.lstrip().startswith("|")
+    return (
+        "<table" in text
+        or "[Table:" in text
+        or "\n|" in text
+        or text.lstrip().startswith("|")
+    )
 
 
 def scan_parse(parse_dir: Path) -> dict:
@@ -59,7 +66,16 @@ def scan_parse(parse_dir: Path) -> dict:
             if r.get("tables"):
                 with_field += 1
                 d["tables_field"] += 1
-                if has_inline_table(r.get("text") or ""):
+                text = r.get("text") or ""
+                # Table-anchored reqs serialize their single row AS the text
+                # ("Header: value; …") — no pipe/HTML marker, but the content
+                # is present. Rescue: non-empty text + every table exactly one
+                # row (the anchored shape; multi-row or row-less tables still
+                # require a real inline).
+                anchored_ok = text.strip() and all(
+                    len(t.get("rows") or []) == 1 for t in r["tables"]
+                )
+                if has_inline_table(text) or anchored_ok:
                     inlined += 1
                     d["inlined"] += 1
                 else:

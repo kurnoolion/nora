@@ -590,10 +590,13 @@ class TestChunkBuilder:
         assert "VZ_REQ_LTEDATARETRY_2366" in md
 
     def test_table_no_rows(self):
-        """Empty tables produce no output."""
+        """Headers-only tables collapse to the compact [Table: …] line;
+        fully empty tables produce no output."""
         table = {"headers": ["A", "B"], "rows": [], "source": "inline"}
         md = ChunkBuilder._table_to_markdown(table)
-        assert md == ""
+        assert md == "[Table: A | B]"
+        empty = {"headers": [], "rows": [], "source": "inline"}
+        assert ChunkBuilder._table_to_markdown(empty) == ""
 
     def test_table_no_headers(self):
         """Tables without headers still render rows."""

@@ -119,3 +119,27 @@ def test_scan_parse_counts_html_inlined(tmp_path):
     assert res["tables_field"] == 2
     assert res["inlined"] == 1
     assert res["missing"] == 1
+
+
+def test_has_inline_table_accepts_compact_form():
+    # Empty-header and headers-only tables collapse to "[Table: …]".
+    assert has_inline_table("prose [Table: Note] more prose")
+    assert has_inline_table("[Table: h1 | h2]")
+
+
+def test_scan_parse_rescues_anchored_row_serialized(tmp_path):
+    parse = tmp_path / "out" / "parse"
+    _write(parse / "MNOA" / "Rel1" / "d_tree.json", _tree([
+        # anchored shape: text IS the serialized single row — counts inlined
+        {"text": "Band: n78; BW: 100",
+         "tables": [{"headers": ["Band", "BW"], "rows": [["n78", "100"]]}]},
+        # multi-row table with no inline marker — still MISSING
+        {"text": "still missing",
+         "tables": [{"headers": ["Band"], "rows": [["a"], ["b"]]}]},
+        # single-row table but empty text — still MISSING
+        {"text": "", "tables": [{"headers": ["Band"], "rows": [["n78"]]}]},
+    ]))
+    res = scan_parse(parse)
+    assert res["tables_field"] == 3
+    assert res["inlined"] == 1
+    assert res["missing"] == 2

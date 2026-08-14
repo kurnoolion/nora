@@ -170,10 +170,13 @@ def render_table_markdown(headers: list[str], rows: list[list[str]]) -> str:
     at the table's document position (so text is faithful and self-contained), and
     ``ChunkBuilder._table_to_markdown`` delegates here so NORA chunks and the SIRA
     corpus render tables identically. Empty-header artifact tables collapse to a
-    compact ``[Table: …]`` line; headerless tables render rows only.
+    compact ``[Table: …]`` line; headerless tables render rows only; headers-only
+    tables (no body rows — typically 1x1 paragraph-wrapper tables) collapse to
+    the same compact line so their cell content still reaches the text.
     """
     if not rows:
-        return ""
+        cells = [h.strip() for h in (headers or []) if (h or "").strip()]
+        return "[Table: " + " | ".join(cells) + "]" if cells else ""
     if headers and all((h or "") == "" for h in headers):
         cells = [c for row in rows for c in row if (c or "").strip()]
         return "[Table: " + " | ".join(cells) + "]" if cells else ""

@@ -566,3 +566,40 @@ class TestEmptyTableGuard:
         foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
         assert len(foo1.tables) == 1
         assert "<table" in foo1.text
+
+
+class TestHeadersOnlyTableInline:
+    # Headers-only tables (strand table-fidelity): a TABLE block with header
+    # cells but no body rows — typically the 1x1 Word paragraph-wrapper
+    # pattern — must still land its cell content in the text. The renderer
+    # collapses it to the compact "[Table: …]" line.
+
+    def test_render_headers_only_compact_line(self):
+        from core.src.parser.structural_parser import render_table_markdown
+
+        assert render_table_markdown(["Note"], []) == "[Table: Note]"
+        assert render_table_markdown(["h1", "h2"], []) == "[Table: h1 | h2]"
+
+    def test_render_blank_headers_no_rows_empty(self):
+        from core.src.parser.structural_parser import render_table_markdown
+
+        assert render_table_markdown(["", "  "], []) == ""
+        assert render_table_markdown([], []) == ""
+
+    def test_render_with_rows_unchanged(self):
+        from core.src.parser.structural_parser import render_table_markdown
+
+        out = render_table_markdown(["H"], [["v"]])
+        assert out.splitlines() == ["| H |", "| --- |", "| v |"]
+
+    def test_headers_only_table_inlines_and_stores(self):
+        blocks = [
+            _heading(0, "1 General"),
+            _heading(1, "1.1 Bearer Requirements"),
+            _body(2, "ABC-FOO-001 The device shall support bearers."),
+            _table(3, ["Wrapped paragraph content"], []),
+        ]
+        tree = _parse(blocks)
+        foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
+        assert len(foo1.tables) == 1
+        assert "[Table: Wrapped paragraph content]" in foo1.text
