@@ -10,7 +10,7 @@ See `docs/compact/PROJECT.md` for the 1-page identity and `TDD_Telecom_Requireme
 
 ## Session-start ritual
 
-This project uses **COMPACT** — a portable scaffold for team AI-partnered software development. The AI scaffolding lives under `.claude/skills/` and the durable state lives under `docs/compact/`.
+This project uses **COMPACT** — a portable scaffold for team AI-partnered software development. The COMPACT skills are maintained in a separate scaffold repo and installed per-machine at user level (`~/.claude/skills/<skill>`); the durable state lives under `docs/compact/`. Project-specific skills live under `.claude/skills/`.
 
 At the start of every session, invoke `run the session-start skill` (or `/session-start`). It loads Tier 1 context (`PROJECT.md` / `STATUS.md` / `MAP.md` / the active phase prompt) and asks what you're working on. Re-invoke mid-session after Claude Code auto-compaction or any time context feels stale.
 
@@ -51,7 +51,7 @@ Three-tier code organization (D-019..D-024) plus a per-env runtime directory `<e
 - `config/` — per-module settings (currently `config/web.json`; more files land as modules surface configurable knobs).
 - `environments/` — per-environment configs (gitignored except `.gitkeep`); each names an `env_dir` path.
 - `docs/compact/` — COMPACT state files.
-- `.claude/skills/` — COMPACT skills (flat layout: compact-skill, session-start, switch-phase, regen-map, drift-check, close-session, project-init, doctor).
+- `.claude/skills/` — project-specific skills only (COMPACT skills are installed at user level from the scaffold repo).
 - `<env_dir>/` (runtime, user-supplied path; not in repo) — `input/<MNO>/<release>/`, `out/<stage>/`, `state/`, `corrections/`, `reports/`, `eval/`.
 
 ## Conventions
