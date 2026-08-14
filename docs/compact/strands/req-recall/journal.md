@@ -1,0 +1,60 @@
+## 2026-08-14 — Strand opened; recall checker; five validation rounds; recognition fixes
+
+### Done this session
+- Strand opened after team reports of requirements visible in source PDFs
+  but absent downstream (spot-checked and confirmed).
+- Built sandbox/verify_req_recall.py — extract-vs-parse req-id diff per
+  cell, profile-driven, bucketed candidates (MISSING/demoted/table-only/
+  struck-only/section-id/UNPARSED) rather than assertions (84787ac).
+- Baseline against the real corpora: mno-b clean (1.5%), mno-c ~14%,
+  mno-a reported ~40% (later shown to be mostly checker artifact).
+- Recognition fix 1 (d7d2839): end-anchored fused-heading rescue in
+  last_run mode + title cleanup; multi-run no-promotion preserved for
+  mid-text citations. Field-validated as not-needed on the live corpus
+  (the "fused" headings were struck revisions — correctly dropped) but
+  correct for genuinely fused shapes.
+- Recognition fix 2 (d7d2839): announced-requirement path in id_label
+  corpora — standalone labeled-id paragraph spawns its own requirement;
+  following body/table/image blocks attach to it. Validated: mno-c
+  MISSING 876→380 / 829→341, zero ids lost, corpus rows +132/+126.
+- bare_small_font_stamp knob (fa9f24f): opt-in id-after-body stamp.
+  Field validation inverted the premise — bare small-font ids are the
+  corpus's citation style; knob correctly refused all activations and
+  stays dormant everywhere. Unlabeled-id-is-a-reference contract upheld.
+- Checker liveness fixes (4a8f1cb): font-level strikethrough honored;
+  TOC entry lines bucket as toc_only. mno-a MISSING collapsed 6175→1348;
+  true recognition gap ~138/cell (~2%), consistent with zero user
+  reports against that corpus.
+- Backward move + cross_doc (e06346b): trailing announcements (body
+  first, id line last) move their id onto the preceding id-less carrier;
+  checker resolves ids cell-wide so sibling-doc citations never read as
+  gaps.
+- Zone ruling: reference-list, standards-list, revision-history, and
+  introduction/frontmatter sections drop their ids WITH the section by
+  design — bounds the remaining classification to ~50 ids/cell.
+- Also this session: eval-studio-ux-fix merged + landed (2d07ba4);
+  serve-label integrity — all regenerating writers now write temp +
+  atomic rename (afb2aca), field-validated byte-identical labels.
+- Suite 2078 → 2120 passed (42 new tests).
+
+### In progress
+- Final mno-c re-parse validation (backward move) + fixed-checker
+  totals with cross_doc split; doc-title-vs-plan-id check; shell
+  pre-vs-post decisive check; 47/34-id edge bucket.
+
+### Next
+- On validation green: end the enrichment hold with the single combined
+  enrichment batch (ingestion fixes batched into one expensive cycle —
+  the strand's founding constraint).
+- Re-check the original team reports in Eval Studio post-batch — the
+  acceptance criterion for the strand.
+- mno-b user-report context still open (ids exist end to end; likely a
+  serving/retrieval question, tracked independently of parsing).
+
+### Flags
+- table-fidelity strand journal is 2 sessions behind (rounds 2-3:
+  headers-only render fix, checker semantics, close-out validation) and
+  its draft decisions are uncaptured — needs a table-fidelity-bound
+  close or capture at /land-strand.
+- Eval Studio picker/req-browser read parse trees — announced-node and
+  backward-move reshaping will surface there after the next promote.
