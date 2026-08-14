@@ -1,9 +1,9 @@
-## 2026-08-12 — Band-swallow + leading-id attachment fixes; Dyad methodology bootstrapped
+## 2026-08-12 — Band-swallow + leading-id attachment fixes; field-validation loop established
 
 ### Done this session
-- Established the Dyad tandem-dev methodology (Operator / Pilot / Rover); Rover
-  charter written to the scan drop-dir and mirrored to Pilot memory, including
-  redaction placeholder conventions for inter-agent reports.
+- Established the field-validation loop: redaction-safe field reports from
+  the runtime environment drive fix scoping; placeholder conventions for
+  those reports documented.
 - Extraction fix (30c3230): `_drop_background_rects()` filters fill-only,
   stroke-less rects/curves covering >= 50% of page area before `find_tables()`,
   preventing background bands from inflating table bboxes and swallowing body
@@ -13,13 +13,13 @@
   `current_leading_req or current_section` in leading-id mode with a
   fresh-heading guard, mirroring the paragraph branch; heading mode unchanged.
   9 new tests.
-- Full suite 1676 passed / 109 skipped. Rover validated both fixes against the
+- Full suite 1676 passed / 109 skipped. Both fixes validated against the
   real mno-b corpus: swallowed requirements reappeared, tables attach to their
   requirements.
-- Rover evaluated Docling on sample mno-b pages: no fidelity gain over
+- Docling evaluated on sample mno-b pages: no fidelity gain over
   geometric tables — mno-b keeps its current profile (D-DRAFT-3).
-- Reviewed Rover report #2 (verify_tables checker false alarm, mno-a
-  merged-cell fidelity plan); Pilot reply sent (pilot-nora-08122026-2.txt).
+- Reviewed field report #2 (verify_tables checker false alarm, mno-a
+  merged-cell fidelity plan); review verdicts sent back.
 
 ### In progress
 - (nothing — strand scope is complete pending land)
@@ -28,7 +28,7 @@
 - Land this strand (3 draft decisions pending promotion).
 - Open a follow-up strand for table fidelity: verify_tables HTML-aware checker,
   empty-table parser guard, mno-a merged-cell HTML render (docx_extractor).
-- Await Rover's recheck of the mno-a empty-text-node claim on a freshly built
+- Await recheck of the mno-a empty-text-node claim on a freshly built
   cell (suspected stale corpus; contingent input to the new strand's scope).
 
 ### Flags

@@ -6864,7 +6864,7 @@ paragraph branch already used; asymmetry between the branches was the bug.
 The fresh-heading guard prevents a section-preamble table from being claimed
 by the last requirement of the previous section. Deviations (a)/(b) from the
 field fix plan keep the section hierarchy and heading-merge invariants stable;
-both were validated by the Rover against the real corpus.
+both were validated against the real corpus.
 
 **Consequences:** Requirement nodes in leading-id corpora now carry `tables`
 / `images` and their inlined text; consumers see table content under the
