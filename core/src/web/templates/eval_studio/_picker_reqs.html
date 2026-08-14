@@ -21,7 +21,7 @@
   <tbody id="es-req-rows">
   {% for r in rows %}
     {% if r.req_id %}
-    <tr>
+    <tr class="es-req-row">
       <td style="width:26px" class="text-center">
         <input class="form-check-input m-0" type="checkbox" name="req_ids" value="{{ r.req_id }}">
       </td>
@@ -37,8 +37,22 @@
         </form>
       </td>
       <td class="fw-semibold text-nowrap">{{ r.req_id }}</td>
-      <td class="text-truncate" style="max-width:340px" title="{{ r.title }}">{{ r.title or "—" }}
-        {% if r.text %}<br><span class="text-muted">{{ r.text[:160] }}{% if r.text|length > 160 %}…{% endif %}</span>{% endif %}
+      <td>
+        {% if r.text %}
+        {# Native <details> expand — full text already in the payload, so a
+           click reveals it with zero round-trip. Summary stays truncated to
+           keep the collapsed list compact on small monitors. #}
+        <details>
+          <summary class="text-truncate" style="max-width:340px; cursor:pointer" title="{{ r.title }}">
+            {{ r.title or "—" }}
+            <span class="text-muted">— {{ r.text[:160] }}{% if r.text|length > 160 %}…{% endif %}</span>
+          </summary>
+          {% if r.title %}<div class="fw-semibold small mt-1">{{ r.title }}</div>{% endif %}
+          <pre class="small mb-0" style="white-space: pre-wrap; max-height: 18rem; overflow-y: auto">{{ r.text }}</pre>
+        </details>
+        {% else %}
+        <span class="text-truncate d-inline-block align-bottom" style="max-width:340px" title="{{ r.title }}">{{ r.title or "—" }}</span>
+        {% endif %}
       </td>
     </tr>
     {% endif %}

@@ -135,3 +135,12 @@ body {
         margin-left: 0;
     }
 }
+
+/* Eval Studio picker: per-req expand rows carry full requirement text inline
+   (<details> in eval_studio/_picker_reqs.html). content-visibility lets the
+   browser skip rendering off-screen rows so an uncapped plan listing stays
+   cheap — the 400+-row perf posture proven in the enrich_review table. */
+#es-req-rows .es-req-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 3rem;
+}
