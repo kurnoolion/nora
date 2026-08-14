@@ -172,7 +172,9 @@ def render_table_markdown(headers: list[str], rows: list[list[str]]) -> str:
     corpus render tables identically. Empty-header artifact tables collapse to a
     compact ``[Table: …]`` line; headerless tables render rows only; headers-only
     tables (no body rows — typically 1x1 paragraph-wrapper tables) collapse to
-    the same compact line so their cell content still reaches the text.
+    the same compact line so their cell content still reaches the text. The
+    compact form can span multiple lines when a cell contains newlines —
+    consumers must not assume ``[Table: …]`` is single-line.
     """
     if not rows:
         cells = [h.strip() for h in (headers or []) if (h or "").strip()]
