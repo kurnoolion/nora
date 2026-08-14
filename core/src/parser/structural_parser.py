@@ -1792,6 +1792,22 @@ class GenericStructuralParser:
                     if self._id_label_re is not None:
                         _m = self._id_label_re.search(block.text)
                         req_ids = [_m.group(1)] if _m else []
+                        # Opt-in id-after-body stamp (strand req-recall): a
+                        # small-font paragraph that is EXACTLY a solo id,
+                        # closing a section that already carries body text
+                        # and no id of its own, is that section's stamp.
+                        # Gated on the profile knob so the default keeps
+                        # the unlabeled-id-is-a-reference contract.
+                        if (
+                            not req_ids
+                            and self.profile.requirement_id.bare_small_font_stamp
+                            and self._req_id_anchored_re
+                            and self._req_id_anchored_re.match(block.text)
+                            and current_section is not None
+                            and not current_section.req_id
+                            and current_section.text
+                        ):
+                            req_ids = [_canonicalize_req_id(block.text.strip())]
                     else:
                         req_ids = self._find_req_ids(block.text)
                     if req_ids:

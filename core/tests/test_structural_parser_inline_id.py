@@ -345,3 +345,67 @@ def test_body_text_bare_reqid_not_scavenged_with_id_label():
     tree = GenericStructuralParser(prof).parse(ir)
     entry = _by_section(tree, "9.2")
     assert entry.req_id == "" and entry.is_requirement is False   # bare body id not scavenged
+
+
+# ---------------------------------------------------------------------------
+# bare_small_font_stamp — id-after-body corpora (strand req-recall)
+# ---------------------------------------------------------------------------
+#
+# Opt-in knob: a small-font paragraph that is EXACTLY a solo req_id,
+# closing a section that already carries body text and no req_id of its
+# own, is that section's id stamp. Default (knob off) keeps the
+# unlabeled-id-is-a-reference contract.
+
+
+def _stamp_profile(*, stamp: bool):
+    prof = _profile()
+    prof.requirement_id.pattern = r"GP-(?:REQ|SEC)-\d+"
+    prof.requirement_id.requirement_type_pattern = r"GP-REQ-\d+"
+    prof.requirement_id.id_label_pattern = r"ID:\s*(GP-(?:REQ|SEC)-\d+)"
+    prof.requirement_id.bare_small_font_stamp = stamp
+    return prof
+
+
+def test_bare_stamp_assigns_section_id_when_enabled():
+    tree = _parse_prof(_stamp_profile(stamp=True), [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1 Device behavior", size=7.3),
+        _block(2, "The device shall do X.", size=5.0, bold=False),
+        _block(3, "GP-REQ-200", size=2.5, bold=False),   # id-after-body stamp
+    ])
+    sec = _by_section(tree, "4.1")
+    assert sec.req_id == "GP-REQ-200" and sec.is_requirement is True
+    assert "shall do X" in sec.text
+
+
+def test_bare_stamp_needs_preceding_body():
+    # Release-notes shape: bare id directly after the heading, no body —
+    # stays a reference even with the knob on.
+    tree = _parse_prof(_stamp_profile(stamp=True), [
+        _block(0, "9 Release notes", size=9.8),
+        _block(1, "9.1 Change entry", size=7.3),
+        _block(2, "GP-REQ-201", size=2.5, bold=False),
+    ])
+    assert _by_section(tree, "9.1").req_id == ""
+
+
+def test_bare_stamp_ignored_when_section_has_id():
+    tree = _parse_prof(_stamp_profile(stamp=True), [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.2 Behavior ID: GP-REQ-202", size=7.3),
+        _block(2, "Body text.", size=5.0, bold=False),
+        _block(3, "GP-REQ-203", size=2.5, bold=False),   # stray bare id
+    ])
+    sec = _by_section(tree, "4.2")
+    assert sec.req_id == "GP-REQ-202"
+    assert all(r.req_id != "GP-REQ-203" for r in tree.requirements)
+
+
+def test_bare_stamp_off_by_default_keeps_reference_contract():
+    tree = _parse_prof(_stamp_profile(stamp=False), [
+        _block(0, "4 Requirements", size=9.8),
+        _block(1, "4.1 Device behavior", size=7.3),
+        _block(2, "The device shall do X.", size=5.0, bold=False),
+        _block(3, "GP-REQ-204", size=2.5, bold=False),
+    ])
+    assert _by_section(tree, "4.1").req_id == ""

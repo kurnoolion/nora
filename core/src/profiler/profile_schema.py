@@ -147,6 +147,14 @@ class RequirementIdPattern:
         canonical-uppercase elsewhere.
     """
 
+    bare_small_font_stamp: bool = False
+    """Opt-in for id-after-body corpora (strand req-recall): a small-font
+    paragraph that is EXACTLY a solo req_id, closing a section that already
+    carries body text and no req_id of its own, is that section's id stamp
+    rather than a reference. Only consulted when ``id_label_pattern`` is
+    configured — the default (False) preserves the contract that an
+    unlabeled id in an id_label corpus is always a reference."""
+
     detection_mode: str = "heading"
     """Where requirements are detected in the document (D-DRAFT-2):
       - ``"heading"`` (default): requirements are heading-anchored — every
