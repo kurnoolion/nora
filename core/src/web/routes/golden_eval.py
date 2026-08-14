@@ -105,6 +105,24 @@ def _editor_ctx(request: Request, sample: GoldenSample) -> dict:
     }
 
 
+def _gt_panel_ctx(sample: GoldenSample, *, gt_error: str = "",
+                  gt_info: str = "") -> dict:
+    """Context for the standalone ground-truth panel (`_gt_panel.html`).
+
+    Returned by the gt/add, gt/add-bulk and gt/remove routes so only the GT
+    panel is swapped — the picker column is left untouched (its selection and
+    per-row state survive). `oob_count` drives the out-of-band GT-count badge
+    refresh in the tab nav.
+    """
+    return {
+        "sample": sample,
+        "stack_url": _stack_url(),
+        "oob_count": True,
+        "gt_error": gt_error,
+        "gt_info": gt_info,
+    }
+
+
 # ─── Page + board ───────────────────────────────────────────────────
 
 
@@ -277,10 +295,8 @@ def gt_add(
         else:
             sample.ground_truth.append(entry)
             save_sample(env_dir, sample)
-    return _template(request, "eval_studio/_editor.html", {
-        **_editor_ctx(request, sample),
-        "gt_error": gt_error,
-    })
+    return _template(request, "eval_studio/_gt_panel.html",
+                     _gt_panel_ctx(sample, gt_error=gt_error))
 
 
 @router.post("/api/eval-studio/sample/{sid}/gt/add-bulk", response_class=HTMLResponse)
@@ -300,10 +316,9 @@ def gt_add_bulk(
     if isinstance(sample, HTMLResponse):
         return sample
     if not (mno and release):
-        return _template(request, "eval_studio/_editor.html", {
-            **_editor_ctx(request, sample),
-            "gt_error": "bulk add needs the picker's MNO/release selection",
-        })
+        return _template(request, "eval_studio/_gt_panel.html",
+                         _gt_panel_ctx(sample,
+                                       gt_error="bulk add needs the picker's MNO/release selection"))
     existing = {(e.req_id, e.mno, e.release) for e in sample.ground_truth}
     added = skipped = 0
     for rid in req_ids:
@@ -319,14 +334,14 @@ def gt_add_bulk(
         added += 1
     if added:
         save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html", {
-        **_editor_ctx(request, sample),
-        "gt_info": (
+    return _template(request, "eval_studio/_gt_panel.html", _gt_panel_ctx(
+        sample,
+        gt_info=(
             f"Added {added} requirement(s)"
             + (f", {skipped} already present" if skipped else "")
         ) if (added or skipped) else "",
-        "gt_error": "" if (added or skipped) else "No requirements selected",
-    })
+        gt_error="" if (added or skipped) else "No requirements selected",
+    ))
 
 
 @router.post("/api/eval-studio/sample/{sid}/gt/remove", response_class=HTMLResponse)
@@ -346,8 +361,8 @@ def gt_remove(
         if (e.req_id, e.mno, e.release) != key
     ]
     save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html",
-                     _editor_ctx(request, sample))
+    return _template(request, "eval_studio/_gt_panel.html",
+                     _gt_panel_ctx(sample))
 
 
 # ─── Picker cascade (MNO → Plan → Release → requirement list) ───────

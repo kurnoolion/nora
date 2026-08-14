@@ -25,6 +25,13 @@ they're triaged; fixes scoped to the `web` module.
   400+-row perf issue solved with CSS-grid rows + `content-visibility: auto`
   + `contain-intrinsic-size` + offset pagination (`_TABLE_PAGE=100`) — apply
   the same perf posture here since `reqs_for_plan` is uncapped.
+- [ ] **Picker selection reset on add** — clicking `+` (or `Add selected`) in the
+  picker re-rendered the whole `#es-editor`, wiping the picker's MNO/plan/release
+  selection + expanded rows + checkboxes. Fix: split the ground-truth panel into
+  its own swap target (`#es-gt-panel` / `_gt_panel.html`); gt/add, gt/add-bulk,
+  gt/remove swap only that panel + OOB the GT-count badge, never touching the
+  picker column. Double-add already guarded server-side by `(req_id, mno,
+  release)` in both add paths (single `+` errors, bulk skips) — preserved.
 
 ## Notes
 

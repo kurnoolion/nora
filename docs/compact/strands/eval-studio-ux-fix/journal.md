@@ -32,4 +32,31 @@
   - Caveat: `content-visibility` on `<tr>` is honored by Chromium; weaker/ignored
     on some engines (degrades to normal render, no correctness risk). If a real
     plan's listing still janks, escalate to the grid rewrite (option B).
-- Not yet committed — awaiting user review in the browser.
+- Committed on branch `eval-studio-ux-fix` (d8f9717); pushed to origin.
+
+### Feedback #2 — picker selection reset on add
+- Report: clicking `+` (and by extension `Add selected`) reset the whole picker
+  selection; it should persist until the user changes it.
+- Root cause: the picker column is a child of `#es-editor`, and gt/add,
+  gt/add-bulk, gt/remove all re-render `_editor.html` whole (`_editor.html` L1:
+  "re-rendered whole after every mutation") → picker rebuilt from scratch.
+- Fix (user chose: don't touch the picker DOM):
+  - New `eval_studio/_gt_panel.html` = the ground-truth column (list + alerts +
+    direct-add + preview), with an OOB `#es-gt-count` badge (guarded by
+    `oob_count`, mirroring enrich_review's `oob_pending`).
+  - `_editor.html` col-5 now `<div id="es-gt-panel">{% include _gt_panel %}</div>`;
+    tab badge count wrapped in `#es-gt-count` (inline, no OOB in full render).
+  - `_picker_reqs.html` `+` and `Add selected` retargeted `#es-editor` →
+    `#es-gt-panel`. Routes gt_add / gt_add_bulk / gt_remove return `_gt_panel.html`
+    via new `_gt_panel_ctx` helper (sets `oob_count=True`).
+  - Picker column never in the swap → MNO/plan/release, expanded `<details>`,
+    checkboxes and scroll all survive an add/remove.
+- Double-add (user concern: `+` a row then include it in Add-all): already
+  guarded server-side by `(req_id, mno, release)` in both add paths — single `+`
+  returns "already in the ground-truth list", bulk counts it as "already
+  present". Refactor changed only the returned template, not the dedup logic.
+- Verified live on env_demo / gs-0001: picker add returns GT-panel only (0
+  picker markup in response); re-add → dedup error; bulk [dup+new] → "Added 1,
+  1 already present"; store has no dupes; full editor still renders picker +
+  inline count + no stray OOB span.
+- Not yet committed.

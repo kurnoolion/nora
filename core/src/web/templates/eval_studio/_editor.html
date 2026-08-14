@@ -42,67 +42,19 @@
 </div>
 
 <ul class="nav nav-tabs nav-tabs-sm mb-2" role="tablist">
-  <li class="nav-item"><button class="nav-link active small" data-bs-toggle="tab" data-bs-target="#es-tab-gt" type="button">Ground truth ({{ sample.ground_truth|length }})</button></li>
+  <li class="nav-item"><button class="nav-link active small" data-bs-toggle="tab" data-bs-target="#es-tab-gt" type="button">Ground truth (<span id="es-gt-count">{{ sample.ground_truth|length }}</span>)</button></li>
   <li class="nav-item"><button class="nav-link small" data-bs-toggle="tab" data-bs-target="#es-tab-curate" type="button">Golden response {% if sample.golden_response %}<i class="bi bi-check-circle-fill text-success"></i>{% endif %}</button></li>
 </ul>
 
 <div class="tab-content">
 <div class="tab-pane fade show active" id="es-tab-gt">
 
-  {% if gt_error %}
-  <div class="alert alert-warning small py-1">{{ gt_error }}</div>
-  {% endif %}
-  {% if gt_info %}
-  <div class="alert alert-success small py-1">{{ gt_info }}</div>
-  {% endif %}
-
   <div class="row g-2">
     <div class="col-5">
-      <div class="card">
-        <div class="card-header py-1 small fw-semibold">Ground truth</div>
-        <table class="table es-gt-list mb-0">
-          <tbody>
-          {% for e in sample.ground_truth %}
-            <tr>
-              <td>
-                <span class="fw-semibold">{{ e.req_id }}</span><br>
-                <span class="text-muted">{{ e.mno or "?" }} / {{ e.release or "?" }}{% if e.plan %} / {{ e.plan }}{% endif %}</span>
-                <span class="badge text-bg-light">{{ e.source }}</span>
-              </td>
-              <td class="text-end">
-                <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/remove"
-                      hx-target="#es-editor" hx-swap="innerHTML">
-                  <input type="hidden" name="req_id" value="{{ e.req_id }}">
-                  <input type="hidden" name="mno" value="{{ e.mno }}">
-                  <input type="hidden" name="release" value="{{ e.release }}">
-                  <button class="btn btn-sm btn-outline-danger py-0" type="submit">×</button>
-                </form>
-              </td>
-            </tr>
-          {% else %}
-            <tr><td class="text-muted small p-2">Empty — add via the picker, paste, or a preview run.</td></tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-
-      <form class="d-flex gap-1 mt-2"
-            hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/add"
-            hx-target="#es-editor" hx-swap="innerHTML">
-        <input type="hidden" name="source" value="direct">
-        <input class="form-control form-control-sm" name="req_id" placeholder="Paste req_id…" required>
-        <button class="btn btn-sm btn-outline-primary" type="submit">Add</button>
-      </form>
-
-      <div class="mt-3">
-        <button class="btn btn-sm btn-outline-secondary"
-                hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/preview"
-                hx-target="#es-preview" hx-swap="innerHTML"
-                {% if not stack_url or not sample.ground_truth %}disabled{% endif %}>
-          <i class="bi bi-play-circle"></i> Stage-1 preview
-        </button>
-        {% if not stack_url %}<span class="text-muted small">no stack configured</span>{% endif %}
-        <div id="es-preview" class="mt-2"></div>
+      {# Ground-truth panel — its own swap target so add/remove never
+         re-render the picker column (see _gt_panel.html). #}
+      <div id="es-gt-panel">
+        {% include "eval_studio/_gt_panel.html" %}
       </div>
     </div>
 
