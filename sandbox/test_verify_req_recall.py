@@ -193,3 +193,63 @@ def test_load_id_config_empty_pattern_unusable(tmp_path):
     p.write_text(json.dumps({"requirement_id": {"pattern": ""}}))
     assert load_id_config(p) == {}
     assert load_id_config(tmp_path / "absent.json") == {}
+
+
+# ── liveness fixes (msg 0012): font-level strike + TOC echo lines ────
+
+
+def test_scan_ir_font_level_strike_buckets_as_struck():
+    found = scan_ir(_ir([
+        {"type": "heading", "text": "TITLEABC-FOO-301", "struck": False,
+         "position": {"page": 1, "index": 0},
+         "font_info": {"size": 14.0, "strikethrough": True}},
+    ]), ID_CFG)
+    assert found["struck"] == {"ABC-FOO-301"}
+    assert found["body"] == {}
+
+
+def test_scan_ir_toc_entry_lines_bucket_as_toc():
+    cfg = dict(ID_CFG, _toc_entry_pattern=r"\.{4,}\s*\d+$")   # dot leaders + page
+    found = scan_ir(_ir([
+        _block("paragraph", "Some requirement title ABC-FOO-302 ........ 41"),
+        _block("paragraph", "Live body mentioning ABC-FOO-303."),
+    ]), cfg)
+    assert found["toc"] == {"ABC-FOO-302"}
+    assert set(found["body"]) == {"ABC-FOO-303"}
+
+
+def test_check_doc_struck_toc_echo_not_missing(tmp_path):
+    # The msg-0012 shape: a struck heading carries the id; its only live
+    # occurrence is the TOC entry. Must NOT count as MISSING.
+    cfg = dict(ID_CFG, _toc_entry_pattern=r"\.{4,}\s*\d+$")
+    ir = _ir([
+        _block("paragraph", "Struck req title ABC-FOO-304 ........ 12"),  # TOC echo
+        {"type": "heading", "text": "STRUCK TITLEABC-FOO-304", "struck": False,
+         "position": {"page": 12, "index": 1},
+         "font_info": {"size": 14.0, "strikethrough": True}},
+    ])
+    tree = _tree([])
+    ir_path, tree_path = _write_doc(tmp_path, ir, tree)
+    res = check_doc(ir_path, tree_path, cfg)
+    assert res["missing"] == {}
+    assert res["struck_only"] == {"ABC-FOO-304"}
+    assert res["toc_only"] == set()      # struck wins over toc-only
+
+
+def test_check_doc_toc_only_bucket(tmp_path):
+    cfg = dict(ID_CFG, _toc_entry_pattern=r"\.{4,}\s*\d+$")
+    ir = _ir([_block("paragraph", "Ghost entry ABC-FOO-305 ........ 9")])
+    ir_path, tree_path = _write_doc(tmp_path, ir, _tree([]))
+    res = check_doc(ir_path, tree_path, cfg)
+    assert res["toc_only"] == {"ABC-FOO-305"}
+    assert res["missing"] == {}
+
+
+def test_load_id_config_carries_toc_entry_pattern(tmp_path):
+    p = tmp_path / "profile.json"
+    p.write_text(json.dumps({
+        "requirement_id": {"pattern": r"ABC-[A-Z]+-\d{3}"},
+        "toc_detection": {"entry_pattern": r"\.{4,}\s*\d+$"},
+    }))
+    cfg = load_id_config(p)
+    assert cfg["_toc_entry_pattern"] == r"\.{4,}\s*\d+$"

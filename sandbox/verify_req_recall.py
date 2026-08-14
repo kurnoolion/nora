@@ -24,7 +24,14 @@ Buckets (per doc and per cell):
                      anchor are treated as cross-references by design (D-027),
                      so these are informational, not failures.
   * ``struck-only``— id seen only in struck blocks and absent from the tree.
-                     Expected when the profile drops struck content.
+                     Expected when the profile drops struck content. A block
+                     is struck when EITHER the block-level flag OR
+                     ``font_info.strikethrough`` is set (msg 0012: DOCX
+                     revision strikes surface only at font level).
+  * ``toc-only``   — id whose only live occurrence is a TOC entry line
+                     (matches the profile's ``toc_detection.entry_pattern``).
+                     Usually the surviving echo of a struck requirement —
+                     never a body occurrence.
   * ``section-id`` — id matched ``pattern`` but failed the narrower
                      ``requirement_type_pattern`` (structural section ids).
                      Counted, never listed as missing.
@@ -53,14 +60,21 @@ from pathlib import Path
 
 
 def load_id_config(profile_path: Path) -> dict:
-    """Pull the requirement_id block from a materialized cell profile.
-    Returns {} when the file or the pattern is absent (cell not checkable)."""
+    """Pull the requirement_id block from a materialized cell profile,
+    plus the TOC entry pattern (used to classify TOC echo lines as
+    non-body). Returns {} when the file or the pattern is absent (cell
+    not checkable)."""
     try:
         prof = json.load(open(profile_path, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    rid = prof.get("requirement_id") or {}
-    return rid if rid.get("pattern") else {}
+    rid = dict(prof.get("requirement_id") or {})
+    if not rid.get("pattern"):
+        return {}
+    toc = prof.get("toc_detection") or {}
+    if isinstance(toc, dict) and toc.get("entry_pattern"):
+        rid["_toc_entry_pattern"] = toc["entry_pattern"]
+    return rid
 
 
 def _normalize(token: str, mode: str) -> str:
@@ -71,17 +85,29 @@ def scan_ir(ir: dict, id_cfg: dict) -> dict:
     """Scan one IR's blocks for req-id candidates.
 
     Returns {"body": {id: (page, index, block_type)}, "table": set,
-    "struck": set, "section_id": set} — "body" keeps the first-seen location
-    of ids found in live heading/paragraph text (the ones parse is expected
-    to pick up)."""
+    "struck": set, "toc": set, "section_id": set} — "body" keeps the
+    first-seen location of ids found in live heading/paragraph text (the
+    ones parse is expected to pick up).
+
+    Liveness (strand req-recall, msg 0012): a block is struck when EITHER
+    the block-level ``struck`` flag OR ``font_info.strikethrough`` is set
+    — DOCX revision strikes surface only at font level, and the parser's
+    strike machinery honors both. TOC echo lines (blocks matching the
+    profile's ``toc_detection.entry_pattern``) bucket as ``toc``, not
+    body — a struck requirement's id survives in its live TOC entry, and
+    counting that as a body occurrence inflated MISSING ~40x on the
+    strike-heavy corpus."""
     pat = re.compile(id_cfg["pattern"])
     type_pat = (re.compile(id_cfg["requirement_type_pattern"])
                 if id_cfg.get("requirement_type_pattern") else None)
+    toc_pat = (re.compile(id_cfg["_toc_entry_pattern"])
+               if id_cfg.get("_toc_entry_pattern") else None)
     norm = id_cfg.get("normalize", "none")
 
     body: dict[str, tuple] = {}
     table: set[str] = set()
     struck: set[str] = set()
+    toc: set[str] = set()
     section_id: set[str] = set()
 
     def classify(text: str, bucket_add) -> None:
@@ -96,8 +122,13 @@ def scan_ir(ir: dict, id_cfg: dict) -> dict:
         btype = b.get("type", "")
         pos = b.get("position") or {}
         loc = (pos.get("page"), pos.get("index"), btype)
-        if b.get("struck"):
+        font = b.get("font_info") or {}
+        if b.get("struck") or font.get("strikethrough"):
             classify(b.get("text", ""), struck.add)
+            continue
+        if toc_pat is not None and btype != "table" \
+                and toc_pat.search(b.get("text") or ""):
+            classify(b.get("text", ""), toc.add)
             continue
         if btype == "table":
             cells = list(b.get("headers") or [])
@@ -110,7 +141,7 @@ def scan_ir(ir: dict, id_cfg: dict) -> dict:
             continue
         classify(b.get("text", ""),
                  lambda rid, loc=loc: body.setdefault(rid, loc))
-    return {"body": body, "table": table, "struck": struck,
+    return {"body": body, "table": table, "struck": struck, "toc": toc,
             "section_id": section_id}
 
 
@@ -137,7 +168,8 @@ def check_doc(ir_path: Path, tree_path: Path, id_cfg: dict) -> dict:
     found = scan_ir(ir, id_cfg)
     if not tree_path.exists():
         return {"unparsed": True, "found": found, "missing": {},
-                "demoted": set(), "table_only": set(), "struck_only": set()}
+                "demoted": set(), "table_only": set(), "struck_only": set(),
+                "toc_only": set()}
     tree = json.load(open(tree_path, encoding="utf-8"))
     all_ids, req_ids = scan_tree(tree)
 
@@ -149,9 +181,15 @@ def check_doc(ir_path: Path, tree_path: Path, id_cfg: dict) -> dict:
     struck_only = {rid for rid in found["struck"]
                    if rid not in body and rid not in found["table"]
                    and rid not in all_ids}
+    # TOC echo without any other live occurrence: usually the surviving
+    # TOC entry of a struck (correctly dropped) requirement.
+    toc_only = {rid for rid in found["toc"]
+                if rid not in body and rid not in found["table"]
+                and rid not in found["struck"] and rid not in all_ids}
     return {"unparsed": False, "found": found, "missing": missing,
             "demoted": demoted, "table_only": table_only,
-            "struck_only": struck_only, "tree_reqs": len(req_ids)}
+            "struck_only": struck_only, "toc_only": toc_only,
+            "tree_reqs": len(req_ids)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -181,7 +219,8 @@ def main(argv: list[str] | None = None) -> int:
                     else extract_dir.parent / "profile")
 
     grand = {"docs": 0, "unparsed": 0, "missing": 0, "demoted": 0,
-             "table_only": 0, "struck_only": 0, "section_id": 0}
+             "table_only": 0, "struck_only": 0, "toc_only": 0,
+             "section_id": 0}
     failing = False
 
     for cell_dir in sorted(p for p in glob.glob(str(extract_dir / "*" / "*"))
@@ -214,11 +253,13 @@ def main(argv: list[str] | None = None) -> int:
             grand["demoted"] += len(res["demoted"])
             grand["table_only"] += len(res["table_only"])
             grand["struck_only"] += len(res["struck_only"])
+            grand["toc_only"] += len(res["toc_only"])
             line = (f"  {stem}: body_ids={len(f['body'])} "
                     f"tree_reqs={res['tree_reqs']} MISSING={n_miss} "
                     f"demoted={len(res['demoted'])} "
                     f"table_only={len(res['table_only'])} "
-                    f"struck_only={len(res['struck_only'])}")
+                    f"struck_only={len(res['struck_only'])} "
+                    f"toc_only={len(res['toc_only'])}")
             print(line)
             if n_miss:
                 failing = True
@@ -234,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
           f"MISSING={grand['missing']} demoted={grand['demoted']} "
           f"table_only={grand['table_only']} "
           f"struck_only={grand['struck_only']} "
+          f"toc_only={grand['toc_only']} "
           f"section_ids={grand['section_id']}")
     if grand["missing"] or grand["unparsed"]:
         print("[note] MISSING ids need document inspection: recognition gap "
