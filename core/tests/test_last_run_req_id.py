@@ -247,3 +247,67 @@ class TestTrailingTextDefault:
         )
         # No trailing-marker small-font block follows → req_id stays empty.
         assert tree.requirements[0].req_id == ""
+
+
+# ---------------------------------------------------------------------------
+# Fused trailing id — multi-run rescue (strand req-recall)
+# ---------------------------------------------------------------------------
+#
+# DOCX sources whose heading title and id are separated only at layout
+# level (tab stops, run topology) join into ``... TITLEXR-FOO-123`` with a
+# run split that defeats the last-run solo-match (id split across runs, or
+# a trailing whitespace run). An END-anchored match in the text promotes;
+# a mid-heading citation still doesn't.
+
+
+def _fused_profile() -> DocumentProfile:
+    prof = _profile(anchor="last_run")
+    prof.requirement_id.pattern = r"XR-[A-Z]{3}-\d+"
+    return prof
+
+
+def _heading_runs(idx: int, text: str, run_texts: list[str]) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=idx),
+        text=text,
+        font_info=FontInfo(size=14.0, bold=True),
+        runs=[TextRun(text=t, struck=False) for t in run_texts],
+    )
+
+
+class TestFusedTrailingHeading:
+    def test_fused_id_split_across_runs_rescued(self):
+        # id fused to the title in text AND split across runs — no run
+        # solo-matches, previously unrecoverable (multi-run no-promotion).
+        tree = _parse(_fused_profile(), [
+            _heading_runs(0, "1.1 SOME TITLEXR-FOO-123",
+                          ["1.1 SOME TITLE", "XR-FOO-", "123"]),
+            _para(1, "Body text."),
+        ])
+        req = tree.requirements[0]
+        assert req.req_id == "XR-FOO-123"
+        assert "XR-FOO-123" not in req.title      # trailing id stripped from title
+
+    def test_trailing_whitespace_run_rescued(self):
+        tree = _parse(_fused_profile(), [
+            _heading_runs(0, "1.2 TITLE XR-FOO-777 ",
+                          ["1.2 TITLE ", "XR-FOO-777", " "]),
+        ])
+        assert tree.requirements[0].req_id == "XR-FOO-777"
+
+    def test_midtext_citation_still_not_promoted(self):
+        # The no-promotion semantic survives: an id cited mid-heading in a
+        # multi-run block is a reference, not the section's anchor.
+        tree = _parse(_fused_profile(), [
+            _heading_runs(0, "1.3 See XR-FOO-999 for detail",
+                          ["1.3 See ", "XR-FOO-999", " for detail"]),
+        ])
+        assert tree.requirements[0].req_id == ""
+
+    def test_clean_last_run_path_unchanged(self):
+        tree = _parse(_fused_profile(), [
+            _heading_runs(0, "1.4 CLEAN TITLE XR-FOO-555",
+                          ["1.4 CLEAN TITLE ", "XR-FOO-555"]),
+        ])
+        assert tree.requirements[0].req_id == "XR-FOO-555"

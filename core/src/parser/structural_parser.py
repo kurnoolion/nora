@@ -561,6 +561,18 @@ class GenericStructuralParser:
             if profile.requirement_id.pattern
             else None
         )
+        # Trailing req_id regex — same pattern, anchored at the END of the
+        # text (trailing whitespace tolerated) but NOT requiring a word
+        # boundary before it. Rescue for fused headings: DOCX sources whose
+        # heading title and id are visually separated only at layout level
+        # (separate runs, tabs, field artifacts) join into
+        # ``SOME TITLEABC-FOO-123`` — the id survives at the end of the text
+        # even when the run topology defeats ``anchor="last_run"``.
+        self._req_id_trailing_re = (
+            re.compile(rf"(?:{profile.requirement_id.pattern})(?=\s*$)")
+            if profile.requirement_id.pattern
+            else None
+        )
         self._leading_id_mode = (
             profile.requirement_id.detection_mode == "leading_id_body"
         )
@@ -1377,6 +1389,14 @@ class GenericStructuralParser:
         # preamble lands on the heading, not the prior section's last req.
         current_leading_req: Requirement | None = None
 
+        # Announced-req cursor (strand req-recall): in id_label corpora a
+        # standalone announcement paragraph ("(Marker) ID: <id>", nothing
+        # else) anchors its OWN Requirement — the body follows in the NEXT
+        # block(s). ``current_announced_req`` is the append target for those
+        # continuation blocks; reset whenever a fresh heading opens, exactly
+        # like ``current_leading_req``.
+        current_announced_req: Requirement | None = None
+
         # Pending req ID — small font blocks that appear before/after a heading
         pending_req_id: str = ""
 
@@ -1738,9 +1758,29 @@ class GenericStructuralParser:
                 # gates below are PARAGRAPH-only since HEADING blocks
                 # always carry FontInfo and never qualify as small-font
                 # req_id markers.
+                # Announced-req detection (strand req-recall) — BEFORE the
+                # no-font-info gate: layout-provider paragraphs carry no
+                # FontInfo, and the announcement form lives exactly there.
+                # A standalone paragraph that is nothing but the labeled id
+                # (optionally behind a parenthesized marker) anchors a new
+                # Requirement; its body arrives in the following block(s).
+                # Only fires for id_label corpora — bare small-font ids in
+                # trailing-marker corpora keep the pending_req_id path.
+                if block.type == BlockType.PARAGRAPH and not self._leading_id_mode:
+                    ann_id = self._announcement_req_id(block.live_text())
+                    if ann_id:
+                        new_req = self._create_announced_req(
+                            block, ann_id, current_section, sections
+                        )
+                        _record_paragraph_anchor(ann_id)
+                        current_announced_req = new_req
+                        previous_block_was_heading = False
+                        continue
+
                 if block.type == BlockType.PARAGRAPH and not block.font_info:
-                    if current_section:
-                        self._append_text(current_section, block.text)
+                    target = current_announced_req or current_section
+                    if target:
+                        self._append_text(target, block.text)
                     continue
 
                 # Check if this is a requirement ID block (small font)
@@ -1836,6 +1876,21 @@ class GenericStructuralParser:
                     # convention). Uses block.live_text(), so the title-strip above
                     # does not affect it.
                     heading_req_id = self._heading_req_id(block)
+                    # Fused-heading title cleanup (strand req-recall): when a
+                    # last_run corpus heading carried its id fused to the
+                    # title tail (rescued end-anchored above), strip it from
+                    # the title too — both classifier methods flow through
+                    # here, so the numbering path gets the same clean title
+                    # as the docx_styles/TOC path.
+                    if (
+                        heading_req_id
+                        and self.profile.requirement_id.anchor == "last_run"
+                        and self._req_id_trailing_re
+                        and heading_text
+                    ):
+                        _m_fused = self._req_id_trailing_re.search(heading_text)
+                        if _m_fused and _m_fused.start() > 0:
+                            heading_text = heading_text[: _m_fused.start()].strip()
                     section_req_id = heading_req_id or pending_req_id
                     # FR-31: extract the priority marker from the heading. When
                     # the profile scopes priority to requirement headings only
@@ -1872,6 +1927,7 @@ class GenericStructuralParser:
                         self._heading_entries.append(
                             (section_num, new_depth, block.position.index, block.position.page)
                         )
+                        current_announced_req = None
                         previous_block_was_heading = True
                         if new_depth >= 2:
                             seen_deep_section = True
@@ -1902,6 +1958,7 @@ class GenericStructuralParser:
                             _record_paragraph_anchor(pending_req_id)
                         pending_req_id = ""
                         current_section = existing
+                        current_announced_req = None
                         previous_block_was_heading = True
                         if new_depth >= 2:
                             seen_deep_section = True
@@ -1938,7 +1995,12 @@ class GenericStructuralParser:
                     previous_block_was_heading = False
                     continue
 
-                # Body text — append to current section
+                # Body text — append to the open announced req, else the
+                # current section
+                if current_announced_req is not None:
+                    self._append_text(current_announced_req, block.text)
+                    previous_block_was_heading = False
+                    continue
                 if current_section:
                     self._append_text(current_section, block.text)
                     # Also check for inline req IDs in body text. When id_label is
@@ -1990,9 +2052,15 @@ class GenericStructuralParser:
                 # unaffected in both detection modes.
                 if self._leading_id_mode and previous_block_was_heading:
                     current_leading_req = None
+                # Same fresh-heading guard for announced reqs: a table
+                # directly under a new heading belongs to the heading, not
+                # to the previous section's announced requirement.
+                if previous_block_was_heading:
+                    current_announced_req = None
                 attach_to = (
                     (current_leading_req or current_section)
-                    if self._leading_id_mode else current_section
+                    if self._leading_id_mode
+                    else (current_announced_req or current_section)
                 )
                 if attach_to:
                     # A layout-provider table carries lossless HTML; its flat
@@ -2037,9 +2105,12 @@ class GenericStructuralParser:
                 # requirement they illustrate, not the section heading).
                 if self._leading_id_mode and previous_block_was_heading:
                     current_leading_req = None
+                if previous_block_was_heading:
+                    current_announced_req = None
                 attach_to = (
                     (current_leading_req or current_section)
-                    if self._leading_id_mode else current_section
+                    if self._leading_id_mode
+                    else (current_announced_req or current_section)
                 )
                 if attach_to:
                     attach_to.images.append(
@@ -2230,6 +2301,83 @@ class GenericStructuralParser:
         )
         sections.append(new_req)
         if parent_section is not None and req_id and req_id not in parent_section.children:
+            parent_section.children.append(req_id)
+        return new_req
+
+    def _announcement_req_id(self, text: str) -> str:
+        """Req_id of a standalone announcement paragraph, or ``""``.
+
+        Announcement form (strand req-recall, id_label corpora): a body
+        paragraph that is NOTHING but the labeled id — optionally behind a
+        parenthesized marker — announces a requirement whose statement
+        follows in the next block(s): ``(Marker) ID: ABC-FOO-123``. A
+        labeled id embedded in longer prose is NOT an announcement (it
+        stays a reference / the section-scavenge candidate). A BARE solo
+        id (no label) deliberately does NOT announce — under id_label
+        corpora an unlabeled id is a reference by prior contract (see
+        ``test_small_font_bare_reqid_block_ignored_with_id_label``).
+        Inactive unless ``id_label_pattern`` is configured, so
+        trailing-marker corpora keep their small-font ``pending_req_id``
+        path untouched. Ids failing ``requirement_type_pattern`` never
+        announce.
+        """
+        if self._id_label_re is None or self._req_id_re is None:
+            return ""
+        t = (text or "").strip()
+        if not t:
+            return ""
+        normalize = self.profile.requirement_id.normalize
+
+        def _norm(rid: str) -> str:
+            rid = _canonicalize_req_id(rid)
+            return rid.upper() if normalize == "upper" else rid
+
+        rid = ""
+        m = self._id_label_re.search(t)
+        if m and not t[m.end():].strip():
+            prefix = t[: m.start()].strip()
+            if not prefix or re.fullmatch(r"\([^()]{0,80}\)", prefix):
+                rid = _norm(m.group(1))
+        if rid and self._requirement_type_re is not None \
+                and not self._requirement_type_re.search(rid):
+            return ""
+        return rid
+
+    def _create_announced_req(
+        self,
+        block: ContentBlock,
+        req_id: str,
+        parent_section: Requirement | None,
+        sections: list[Requirement],
+    ) -> Requirement:
+        """Append a Requirement anchored by a standalone announcement
+        paragraph (strand req-recall).
+
+        Structurally identical to a leading-id / table-anchored
+        Requirement: no own ``section_number``, linked to the enclosing
+        heading via ``parent_section`` / ``parent_req_id`` and added to its
+        ``children``; ``hierarchy_path`` is filled by
+        ``_propagate_hierarchy_to_table_reqs``. The announcement line
+        carries no statement text — the body arrives in the following
+        block(s) via the ``current_announced_req`` cursor — so ``text``
+        starts empty; the parenthesized marker (if any) is extracted as
+        the priority, mirroring the heading path (FR-31).
+        """
+        priority, _ = self._extract_priority(block.live_text().strip())
+        new_req = Requirement(
+            req_id=req_id,
+            section_number="",   # no own section — anchored by the announcement
+            title="",
+            priority=priority,
+            parent_req_id=parent_section.req_id if parent_section else "",
+            parent_section=parent_section.section_number if parent_section else "",
+            hierarchy_path=[],   # filled in _propagate_hierarchy_to_table_reqs
+            zone_type=parent_section.zone_type if parent_section else "",
+            text="",
+            source_block_idx=block.position.index,
+        )
+        sections.append(new_req)
+        if parent_section is not None and req_id not in parent_section.children:
             parent_section.children.append(req_id)
         return new_req
 
@@ -3301,6 +3449,22 @@ class GenericStructuralParser:
                         text_excerpt=block.text,
                     )
                     return _normalize(ids[-1])
+            # Multi-run rescue (strand req-recall): the id fused to the end
+            # of the text (``... TITLEABC-FOO-123``) with a run topology
+            # where no single run solo-matches (id split across runs, or a
+            # trailing whitespace run). Only an END-anchored match promotes
+            # — a req_id cited mid-heading remains a reference, preserving
+            # the multi-run no-promotion semantic for inline citations.
+            if block.text and len(block.runs) > 1 and self._req_id_trailing_re:
+                m = self._req_id_trailing_re.search(block.text)
+                if m:
+                    self._log_format_error(
+                        "fused_trailing_heading", block,
+                        note="last_run anchor missed; end-anchored req_id extracted from text",
+                        runs_count=len(block.runs),
+                        text_excerpt=block.text,
+                    )
+                    return _normalize(m.group(0))
             return ""
 
         if anchor == "leading_text":
@@ -3474,6 +3638,20 @@ class GenericStructuralParser:
                 last_pos = text.rfind(last_id)
                 if last_pos > 0:
                     text = text[:last_pos].strip()
+
+        # Fused multi-run heading (strand req-recall): mirror the
+        # end-anchored rescue in ``_heading_req_id`` — strip the trailing
+        # id from the title so TOC pair-by-title sees the clean statement.
+        # Mid-heading id mentions are untouched (end-anchored only).
+        if (
+            self.profile.requirement_id.anchor == "last_run"
+            and len(block.runs) > 1
+            and self._req_id_trailing_re
+            and text
+        ):
+            m = self._req_id_trailing_re.search(text)
+            if m and m.start() > 0:
+                text = text[: m.start()].strip()
 
         return text
 
