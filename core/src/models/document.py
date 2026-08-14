@@ -8,6 +8,7 @@ the DocumentProfiler and structural parsers.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
@@ -275,9 +276,14 @@ class DocumentIR:
 
     def save_json(self, path: Path) -> None:
         """Save the IR to a JSON file."""
+        # Temp + atomic rename: re-extracts must land on a fresh inode so
+        # hardlink-shared snapshots of a prior save are never edited in
+        # place (and a crash mid-write can't leave a torn IR JSON).
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
 
     @classmethod
     def load_json(cls, path: Path) -> DocumentIR:
