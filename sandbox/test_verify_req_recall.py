@@ -253,3 +253,40 @@ def test_load_id_config_carries_toc_entry_pattern(tmp_path):
     }))
     cfg = load_id_config(p)
     assert cfg["_toc_entry_pattern"] == r"\.{4,}\s*\d+$"
+
+
+# ── cell-wide id resolution (msg 0014): sibling-doc definitions ──────
+
+
+def test_check_doc_sibling_defined_id_buckets_cross_doc(tmp_path):
+    ir = _ir([_block("paragraph", "Per ABC-FOO-401, the device shall X.")])
+    tree = _tree([])                       # not defined in THIS doc
+    ir_path, tree_path = _write_doc(tmp_path, ir, tree)
+    res = check_doc(ir_path, tree_path, ID_CFG,
+                    cell_ids={"ABC-FOO-401"})   # defined in a sibling doc
+    assert res["missing"] == {}
+    assert res["cross_doc"] == {"ABC-FOO-401"}
+
+
+def test_check_doc_without_cell_ids_unchanged(tmp_path):
+    ir = _ir([_block("paragraph", "Per ABC-FOO-402, the device shall X.")])
+    ir_path, tree_path = _write_doc(tmp_path, ir, _tree([]))
+    res = check_doc(ir_path, tree_path, ID_CFG)
+    assert set(res["missing"]) == {"ABC-FOO-402"}
+    assert res["cross_doc"] == set()
+
+
+def test_main_resolves_ids_cell_wide(tmp_path, capsys):
+    extract, parse = _env(tmp_path)
+    cell_e = tmp_path / "out" / "extract" / "MNOA" / "Rel1"
+    cell_p = tmp_path / "out" / "parse" / "MNOA" / "Rel1"
+    # Second doc defines ABC-FOO-002 (which doc one cites but lacks).
+    (cell_e / "doc2_ir.json").write_text(json.dumps(_ir([
+        _block("heading", "ABC-FOO-002"),
+    ])))
+    (cell_p / "doc2_tree.json").write_text(json.dumps(_tree(
+        [{"req_id": "ABC-FOO-002"}])))
+    rc = main(["--extract", str(extract), "--parse", str(parse), "--strict"])
+    out = capsys.readouterr().out
+    assert rc == 0                          # nothing missing cell-wide
+    assert "MISSING=0" in out and "cross_doc=1" in out

@@ -1396,6 +1396,8 @@ class GenericStructuralParser:
         # continuation blocks; reset whenever a fresh heading opens, exactly
         # like ``current_leading_req``.
         current_announced_req: Requirement | None = None
+        # All announced nodes, for the backward-move post-pass below.
+        announced_nodes: list[Requirement] = []
 
         # Pending req ID — small font blocks that appear before/after a heading
         pending_req_id: str = ""
@@ -1774,6 +1776,7 @@ class GenericStructuralParser:
                         )
                         _record_paragraph_anchor(ann_id)
                         current_announced_req = new_req
+                        announced_nodes.append(new_req)
                         previous_block_was_heading = False
                         continue
 
@@ -2148,6 +2151,38 @@ class GenericStructuralParser:
                 self._extract_table_anchored_reqs(
                     tbl_block, parent_section, sections, skip_set
                 )
+
+        # Backward-move post-pass (strand req-recall, msg 0014): an
+        # announcement can CLOSE its requirement instead of opening it —
+        # body paragraph(s) first, the "(Marker) ID: <id>" line last,
+        # next block a fresh heading. The spawned node then ends the
+        # walk EMPTY, while the statement sits on the node created just
+        # before it (the id-less enclosing section or a sub-numbered
+        # body node). Move the id backward onto that node and drop the
+        # empty shell. Only empty spawns move — announced nodes that
+        # accumulated content are untouched, so the forward
+        # (announcement-first) shape keeps its validated behavior.
+        for node in announced_nodes:
+            if node.text or node.tables or node.images:
+                continue
+            idx = sections.index(node)
+            prev = next(
+                (s for s in reversed(sections[:idx]) if s.text or s.title),
+                None,
+            )
+            if prev is None or prev.req_id:
+                # No carrier, or the carrier already has its own id
+                # (e.g. a preceding announced req) — keep the empty
+                # node; dropping the id would lose recall.
+                continue
+            prev.req_id = node.req_id
+            if node.priority and not prev.priority:
+                prev.priority = node.priority
+            sections.remove(node)
+            # The id stays valid in the parent's children list unless
+            # the carrier IS the parent (then it's the parent's own id).
+            if prev.children and node.req_id in prev.children:
+                prev.children.remove(node.req_id)
 
         return sections
 

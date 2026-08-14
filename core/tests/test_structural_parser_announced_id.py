@@ -201,3 +201,69 @@ def test_announcement_before_any_heading_still_spawns():
     assert req is not None
     assert "Orphan requirement body" in req.text
     assert req.parent_section == "" and req.parent_req_id == ""
+
+
+# ---------------------------------------------------------------------------
+# Backward move (msg 0014): announcement CLOSES its requirement
+# ---------------------------------------------------------------------------
+
+
+def test_trailing_announcement_stamps_idless_section():
+    # Body-first shape, id-less enclosing section: heading → body →
+    # announcement → next heading. The id moves onto the section; the
+    # empty spawned node is dropped.
+    tree = _parse([
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.3 Device behavior"),
+        _para(2, "The device shall do W."),
+        _para(3, "(Mandatory) ID: GP-REQ-110"),
+        _heading(4, "4.4 Next area ID: GP-SEC-97"),
+    ])
+    sec = next(r for r in tree.requirements if r.section_number == "4.3")
+    assert sec.req_id == "GP-REQ-110" and sec.priority == "MANDATORY"
+    assert "shall do W" in sec.text
+    assert sum(r.req_id == "GP-REQ-110" for r in tree.requirements) == 1
+
+
+def test_trailing_announcement_stamps_subnumbered_body_node():
+    # The majority shape from validation: enclosing section has its OWN
+    # id; the body is a sub-numbered heading-shaped paragraph that mints
+    # an id-less node; the announcement follows it, then the next
+    # section. The id lands on the sub-numbered node.
+    tree = _parse([
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.5 Feature ID: GP-SEC-96"),
+        _heading(2, "4.5.1 The device shall do V."),
+        _para(3, "(Optional) ID: GP-REQ-111"),
+        _heading(4, "4.6 Next ID: GP-SEC-95"),
+    ])
+    sub = next(r for r in tree.requirements if r.section_number == "4.5.1")
+    assert sub.req_id == "GP-REQ-111" and sub.priority == "OPTIONAL"
+    assert sum(r.req_id == "GP-REQ-111" for r in tree.requirements) == 1
+
+
+def test_empty_announcement_after_announced_req_keeps_node():
+    # Two consecutive announcements where the second never gets a body:
+    # the preceding content node already has its own id, so the id does
+    # NOT move backward — the empty node stays (recall preserved).
+    tree = _parse([
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.7 Area ID: GP-SEC-94"),
+        _para(2, "(Mandatory) ID: GP-REQ-112"),
+        _para(3, "Body of the first."),
+        _para(4, "(Optional) ID: GP-REQ-113"),
+    ])
+    r113 = _by_id(tree, "GP-REQ-113")
+    assert r113 is not None and r113.text == ""
+    assert _by_id(tree, "GP-REQ-112").text != ""
+
+
+def test_forward_shape_unaffected_by_post_pass():
+    tree = _parse([
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.8 Area ID: GP-SEC-93"),
+        _para(2, "(Mandatory) ID: GP-REQ-114"),
+        _para(3, "Forward body."),
+    ])
+    req = _by_id(tree, "GP-REQ-114")
+    assert "Forward body" in req.text and req.section_number == ""

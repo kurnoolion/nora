@@ -32,6 +32,9 @@ Buckets (per doc and per cell):
                      (matches the profile's ``toc_detection.entry_pattern``).
                      Usually the surviving echo of a struck requirement —
                      never a body occurrence.
+  * ``cross-doc``  — id absent from this doc's tree but defined in a
+                     sibling doc of the same cell: a cross-document
+                     citation, not a recognition gap (msg 0014).
   * ``section-id`` — id matched ``pattern`` but failed the narrower
                      ``requirement_type_pattern`` (structural section ids).
                      Counted, never listed as missing.
@@ -161,20 +164,30 @@ def scan_tree(tree: dict) -> tuple[set[str], set[str]]:
     return all_ids, req_ids
 
 
-def check_doc(ir_path: Path, tree_path: Path, id_cfg: dict) -> dict:
+def check_doc(ir_path: Path, tree_path: Path, id_cfg: dict,
+              cell_ids: set[str] | None = None) -> dict:
     """Diff one document. Returns per-doc buckets; ``unparsed`` True when the
-    tree file is absent."""
+    tree file is absent.
+
+    ``cell_ids`` (msg 0014): the union of tree ids across ALL of the
+    cell's documents. A body id absent from THIS doc's tree but defined
+    in a sibling doc's tree buckets as ``cross_doc`` (a cross-document
+    reference), not MISSING — per-doc diffing alone misread sibling-doc
+    citations as recognition gaps."""
     ir = json.load(open(ir_path, encoding="utf-8"))
     found = scan_ir(ir, id_cfg)
     if not tree_path.exists():
         return {"unparsed": True, "found": found, "missing": {},
                 "demoted": set(), "table_only": set(), "struck_only": set(),
-                "toc_only": set()}
+                "toc_only": set(), "cross_doc": set()}
     tree = json.load(open(tree_path, encoding="utf-8"))
     all_ids, req_ids = scan_tree(tree)
+    known_elsewhere = (cell_ids or set()) - all_ids
 
     body = found["body"]
-    missing = {rid: loc for rid, loc in body.items() if rid not in all_ids}
+    missing = {rid: loc for rid, loc in body.items()
+               if rid not in all_ids and rid not in known_elsewhere}
+    cross_doc = {rid for rid in body if rid in known_elsewhere}
     demoted = {rid for rid in body if rid in all_ids and rid not in req_ids}
     table_only = {rid for rid in found["table"]
                   if rid not in body and rid not in all_ids}
@@ -189,7 +202,7 @@ def check_doc(ir_path: Path, tree_path: Path, id_cfg: dict) -> dict:
     return {"unparsed": False, "found": found, "missing": missing,
             "demoted": demoted, "table_only": table_only,
             "struck_only": struck_only, "toc_only": toc_only,
-            "tree_reqs": len(req_ids)}
+            "cross_doc": cross_doc, "tree_reqs": len(req_ids)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -220,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
 
     grand = {"docs": 0, "unparsed": 0, "missing": 0, "demoted": 0,
              "table_only": 0, "struck_only": 0, "toc_only": 0,
-             "section_id": 0}
+             "cross_doc": 0, "section_id": 0}
     failing = False
 
     for cell_dir in sorted(p for p in glob.glob(str(extract_dir / "*" / "*"))
@@ -234,11 +247,20 @@ def main(argv: list[str] | None = None) -> int:
                   f"requirement_id.pattern")
             continue
         print(f"== {key} ==")
+        # Cell-wide id union (msg 0014): resolve body ids against every
+        # sibling doc's tree so cross-document citations don't read as
+        # per-doc recognition gaps.
+        cell_tree_dir = parse_dir / cell.parts[-2] / cell.parts[-1]
+        cell_ids: set[str] = set()
+        for tp in sorted(cell_tree_dir.glob("*_tree.json")):
+            try:
+                cell_ids |= scan_tree(json.load(open(tp, encoding="utf-8")))[0]
+            except (OSError, json.JSONDecodeError):
+                continue
         for ir_path in sorted(cell.glob("*_ir.json")):
             stem = ir_path.stem.replace("_ir", "")
-            tree_path = (parse_dir / cell.parts[-2] / cell.parts[-1]
-                         / f"{stem}_tree.json")
-            res = check_doc(ir_path, tree_path, id_cfg)
+            tree_path = cell_tree_dir / f"{stem}_tree.json"
+            res = check_doc(ir_path, tree_path, id_cfg, cell_ids)
             grand["docs"] += 1
             f = res["found"]
             grand["section_id"] += len(f["section_id"])
@@ -254,12 +276,14 @@ def main(argv: list[str] | None = None) -> int:
             grand["table_only"] += len(res["table_only"])
             grand["struck_only"] += len(res["struck_only"])
             grand["toc_only"] += len(res["toc_only"])
+            grand["cross_doc"] += len(res["cross_doc"])
             line = (f"  {stem}: body_ids={len(f['body'])} "
                     f"tree_reqs={res['tree_reqs']} MISSING={n_miss} "
                     f"demoted={len(res['demoted'])} "
                     f"table_only={len(res['table_only'])} "
                     f"struck_only={len(res['struck_only'])} "
-                    f"toc_only={len(res['toc_only'])}")
+                    f"toc_only={len(res['toc_only'])} "
+                    f"cross_doc={len(res['cross_doc'])}")
             print(line)
             if n_miss:
                 failing = True
@@ -276,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
           f"table_only={grand['table_only']} "
           f"struck_only={grand['struck_only']} "
           f"toc_only={grand['toc_only']} "
+          f"cross_doc={grand['cross_doc']} "
           f"section_ids={grand['section_id']}")
     if grand["missing"] or grand["unparsed"]:
         print("[note] MISSING ids need document inspection: recognition gap "
