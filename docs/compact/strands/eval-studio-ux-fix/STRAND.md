@@ -32,6 +32,19 @@ they're triaged; fixes scoped to the `web` module.
   gt/remove swap only that panel + OOB the GT-count badge, never touching the
   picker column. Double-add already guarded server-side by `(req_id, mno,
   release)` in both add paths (single `+` errors, bulk skips) — preserved.
+- [ ] **Reverse jump: ground-truth entry → picker** — a locate (⌖) button on each
+  GT entry drives the picker to that entry's MNO/plan/release so the expert can
+  pull more siblings from the same plan. Extracted the picker body into
+  `_picker.html` (parameterized by optional `sel_mno/sel_plan/sel_release` +
+  `plans/releases/rows`), wrapped in `#es-picker-body`; new GET
+  `picker/jump` route renders it fully pre-selected in one round-trip. Composes
+  with feedback #2 (add-more targets `#es-gt-panel`, picker stays put).
+- ~~Already-added checkmark in the picker~~ — **tried, reverted 2026-08-14.**
+  Prototyped (render-time `added_ids` + OOB `<tr>` flips on add/remove). Reverted
+  at the user's call: the added-state marker created a two-way sync liability
+  (delete-all and remove-here vs unselect-there paths could leave the picker's
+  checkmarks stale) for little gain. Server-side `(req_id, mno, release)` dedup
+  already prevents real double-adds, so the picker stays a plain `+` list.
 
 ## Notes
 

@@ -62,30 +62,10 @@
       <div class="card">
         <div class="card-header py-1 small fw-semibold">Picker — MNO → Plan → Release</div>
         <div class="card-body py-2">
-          <div class="d-flex gap-1 mb-2">
-            <select class="form-select form-select-sm" id="es-picker-mno" name="mno"
-                    hx-get="{{ root_path }}/api/eval-studio/picker/plans"
-                    hx-target="#es-picker-plan-wrap" hx-swap="innerHTML"
-                    hx-include="this">
-              <option value="">MNO…</option>
-              {% for m in mnos %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-            </select>
-            <span id="es-picker-plan-wrap" class="w-100">
-              <select class="form-select form-select-sm" disabled><option>Plan…</option></select>
-            </span>
-            <span id="es-picker-release-wrap" class="w-100">
-              <select class="form-select form-select-sm" disabled><option>Release…</option></select>
-            </span>
-          </div>
-          <input class="form-control form-control-sm mb-1" name="filter" id="es-picker-filter"
-                 placeholder="Filter by id or title…"
-                 hx-get="{{ root_path }}/api/eval-studio/picker/reqs"
-                 hx-trigger="keyup changed delay:300ms, es-picker-changed from:body"
-                 hx-target="#es-picker-reqs" hx-swap="innerHTML"
-                 hx-include="#es-picker-mno, #es-picker-plan-wrap select, #es-picker-release-wrap select, #es-picker-sid">
-          <input type="hidden" id="es-picker-sid" name="sid" value="{{ sample.sample_id }}">
-          <div class="es-picker-reqs" id="es-picker-reqs">
-            <div class="text-muted small p-2">Pick MNO, plan, and release.</div>
+          {# Picker body is its own swap target so a ground-truth entry's
+             locate button (picker/jump) can repopulate it pre-selected. #}
+          <div id="es-picker-body">
+            {% with sid=sample.sample_id %}{% include "eval_studio/_picker.html" %}{% endwith %}
           </div>
         </div>
       </div>

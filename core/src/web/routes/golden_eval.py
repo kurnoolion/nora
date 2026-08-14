@@ -417,6 +417,40 @@ def picker_reqs(
     })
 
 
+@router.get("/api/eval-studio/picker/jump", response_class=HTMLResponse)
+def picker_jump(
+    request: Request,
+    sid: str = "",
+    mno: str = "",
+    plan: str = "",
+    release: str = "",
+):
+    """Repopulate the whole picker pre-selected to a cell — driven by a
+    ground-truth entry's locate button, so the expert can pull more sibling
+    requirements from that plan without re-walking the cascade. Unknown /
+    empty release falls back to the plan's latest (matches picker_releases).
+    """
+    env_dir = _env_dir()
+    plans = req_tree.plans_for_mno(env_dir, mno) if mno else {}
+    releases = plans.get(plan, []) if plan else []
+    if releases and release not in releases:
+        release = releases[-1]
+    rows = (
+        req_tree.reqs_for_plan(env_dir, mno, release, plan)
+        if (mno and plan and release) else []
+    )
+    return _template(request, "eval_studio/_picker.html", {
+        "mnos": sorted({c["mno"] for c in req_tree.list_cells(env_dir)}),
+        "sid": sid,
+        "sel_mno": mno,
+        "sel_plan": plan,
+        "sel_release": release,
+        "plans": plans,
+        "releases": releases,
+        "rows": rows,
+    })
+
+
 # ─── Stage-1 preview ────────────────────────────────────────────────
 
 

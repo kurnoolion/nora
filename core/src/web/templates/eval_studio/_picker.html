@@ -1,0 +1,55 @@
+{# Picker body — MNO → Plan → Release cascade + requirement list.
+
+   Rendered two ways:
+   - Included empty inside _editor.html (no sel_* → placeholders); the user
+     drives the cascade via the selects' own hx-get calls.
+   - Returned fully pre-selected by the picker/jump route when the user clicks a
+     ground-truth entry's locate button, so add-more-from-this-plan is one click.
+   sel_mno / sel_plan / sel_release + plans / releases / rows are supplied only
+   on the jump path; undefined (falsy) everywhere else. #}
+<div class="d-flex gap-1 mb-2">
+  <select class="form-select form-select-sm" id="es-picker-mno" name="mno"
+          hx-get="{{ root_path }}/api/eval-studio/picker/plans"
+          hx-target="#es-picker-plan-wrap" hx-swap="innerHTML"
+          hx-include="this">
+    <option value="">MNO…</option>
+    {% for m in mnos %}<option value="{{ m }}" {% if m == sel_mno %}selected{% endif %}>{{ m }}</option>{% endfor %}
+  </select>
+  <span id="es-picker-plan-wrap" class="w-100">
+    {% if sel_mno and plans %}
+    <select class="form-select form-select-sm" name="plan"
+            hx-get="{{ root_path }}/api/eval-studio/picker/releases"
+            hx-target="#es-picker-release-wrap" hx-swap="innerHTML"
+            hx-include="#es-picker-mno, this">
+      <option value="">Plan…</option>
+      {% for p in plans %}<option value="{{ p }}" {% if p == sel_plan %}selected{% endif %}>{{ p }}</option>{% endfor %}
+    </select>
+    {% else %}
+    <select class="form-select form-select-sm" disabled><option>Plan…</option></select>
+    {% endif %}
+  </span>
+  <span id="es-picker-release-wrap" class="w-100">
+    {% if sel_plan and releases %}
+    <select class="form-select form-select-sm"
+            hx-on:change="htmx.trigger(document.body, 'es-picker-changed')">
+      {% for rel in releases %}<option value="{{ rel }}" {% if rel == sel_release %}selected{% endif %}>{{ rel }}</option>{% endfor %}
+    </select>
+    {% else %}
+    <select class="form-select form-select-sm" disabled><option>Release…</option></select>
+    {% endif %}
+  </span>
+</div>
+<input class="form-control form-control-sm mb-1" name="filter" id="es-picker-filter"
+       placeholder="Filter by id or title…"
+       hx-get="{{ root_path }}/api/eval-studio/picker/reqs"
+       hx-trigger="keyup changed delay:300ms, es-picker-changed from:body"
+       hx-target="#es-picker-reqs" hx-swap="innerHTML"
+       hx-include="#es-picker-mno, #es-picker-plan-wrap select, #es-picker-release-wrap select, #es-picker-sid">
+<input type="hidden" id="es-picker-sid" name="sid" value="{{ sid }}">
+<div class="es-picker-reqs" id="es-picker-reqs">
+  {% if sel_mno and sel_plan and sel_release %}
+    {% with mno=sel_mno, plan=sel_plan, release=sel_release %}{% include "eval_studio/_picker_reqs.html" %}{% endwith %}
+  {% else %}
+    <div class="text-muted small p-2">Pick MNO, plan, and release.</div>
+  {% endif %}
+</div>

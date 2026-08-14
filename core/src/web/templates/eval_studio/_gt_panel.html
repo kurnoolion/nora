@@ -26,13 +26,25 @@
           <span class="badge text-bg-light">{{ e.source }}</span>
         </td>
         <td class="text-end">
-          <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/remove"
-                hx-target="#es-gt-panel" hx-swap="innerHTML">
-            <input type="hidden" name="req_id" value="{{ e.req_id }}">
-            <input type="hidden" name="mno" value="{{ e.mno }}">
-            <input type="hidden" name="release" value="{{ e.release }}">
-            <button class="btn btn-sm btn-outline-danger py-0" type="submit">×</button>
-          </form>
+          <div class="d-inline-flex gap-1">
+            {% if e.mno %}
+            {# Locate: drive the picker to this entry's cell to add more
+               siblings from the same plan. #}
+            <button class="btn btn-sm btn-outline-secondary py-0"
+                    title="Jump to this plan in the picker"
+                    hx-get="{{ root_path }}/api/eval-studio/picker/jump?sid={{ sample.sample_id }}&mno={{ e.mno|urlencode }}&plan={{ e.plan|urlencode }}&release={{ e.release|urlencode }}"
+                    hx-target="#es-picker-body" hx-swap="innerHTML">
+              <i class="bi bi-crosshair"></i>
+            </button>
+            {% endif %}
+            <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/remove"
+                  hx-target="#es-gt-panel" hx-swap="innerHTML">
+              <input type="hidden" name="req_id" value="{{ e.req_id }}">
+              <input type="hidden" name="mno" value="{{ e.mno }}">
+              <input type="hidden" name="release" value="{{ e.release }}">
+              <button class="btn btn-sm btn-outline-danger py-0" type="submit">×</button>
+            </form>
+          </div>
         </td>
       </tr>
     {% else %}
