@@ -1176,3 +1176,29 @@ def test_failed_errors_histogram_sanitized(tmp_path):
 
 def test_sanitize_error_caps_length():
     assert len(_sanitize_error("x" * 500)) == 80
+
+
+# ── prune rewrites are atomic (fresh inode) ─────────────────────────
+
+
+def test_prune_rewrite_breaks_hardlinks(tmp_path):
+    """A prune rewrite lands on a fresh inode (temp + atomic rename), so a
+    hardlink-shared snapshot of the pre-prune file keeps its bytes."""
+    run_dir = tmp_path / "run"
+    _write_trace(run_dir / "trace.kept.jsonl", ["A", "B"])
+    path = run_dir / "trace.kept.jsonl"
+    snapshot = tmp_path / "label" / "trace.kept.jsonl"
+    snapshot.parent.mkdir()
+    os.link(path, snapshot)
+    before = snapshot.read_text()
+
+    prune_run_files(run_dir, {"A"})
+
+    assert snapshot.read_text() == before        # snapshot untouched
+    assert os.stat(path).st_nlink == 1           # link broken by the rename
+    remaining = {
+        json.loads(l)["doc_id"]
+        for l in path.read_text().splitlines() if l.strip()
+    }
+    assert remaining == {"B"}
+    assert not path.with_name(path.name + ".tmp").exists()

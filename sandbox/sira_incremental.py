@@ -216,10 +216,19 @@ def _prune_jsonl(path: Path, evict_ids: set[str]) -> int:
             else:
                 kept_lines.append(stripped)
     if dropped:
-        with open(path, "w", encoding="utf-8") as f:
-            for ln in kept_lines:
-                f.write(ln + "\n")
+        _rewrite_atomic(path, kept_lines)
     return dropped
+
+
+def _rewrite_atomic(path: Path, lines: list[str]) -> None:
+    """Temp + atomic rename: prune rewrites must land on a fresh inode so
+    hardlink-shared snapshots (promoted serve labels) are never edited in
+    place — and a crash mid-rewrite can't tear a resume-critical file."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        for ln in lines:
+            f.write(ln + "\n")
+    os.replace(tmp, path)
 
 
 def prune_run_files(run_dir: Path, evict_ids: set[str]) -> dict[str, int]:
@@ -271,9 +280,7 @@ def _prune_jsonl_by_keys(path: Path, evict_keys: set, key_fn) -> int:
             else:
                 kept_lines.append(stripped)
     if dropped:
-        with open(path, "w", encoding="utf-8") as f:
-            for ln in kept_lines:
-                f.write(ln + "\n")
+        _rewrite_atomic(path, kept_lines)
     return dropped
 
 

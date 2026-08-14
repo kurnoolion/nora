@@ -538,3 +538,28 @@ def test_multi_cell_emits_source_json(tmp_path):
     assert src["cells_last_emitted"] == ["MNOA__Feb2026"]
     assert src["env_dir"].endswith("/env")
     assert "generated_at" in src and "repo_git_sha" in src
+
+
+# ── emits are atomic (fresh inode per regeneration) ────────────────
+
+
+def test_emit_corpus_breaks_hardlinks(tmp_path):
+    """Regenerating corpus.jsonl lands on a fresh inode (temp + atomic
+    rename), so a hardlink-shared snapshot keeps the prior bytes."""
+    import os
+
+    tree = _tree_with_req("MNOA", "Rel1", "P", "REQ-1")
+    out = tmp_path / "corpus.jsonl"
+    _emit_corpus([tree], out)
+    snapshot = tmp_path / "label" / "corpus.jsonl"
+    snapshot.parent.mkdir()
+    os.link(out, snapshot)
+    before = snapshot.read_text()
+
+    tree2 = _tree_with_req("MNOA", "Rel1", "P", "REQ-2")
+    _emit_corpus([tree, tree2], out)
+
+    assert snapshot.read_text() == before      # snapshot untouched
+    assert os.stat(out).st_nlink == 1          # link broken by the rename
+    assert {"REQ-1", "REQ-2"} <= _read_ids(out)
+    assert not (tmp_path / "corpus.jsonl.tmp").exists()

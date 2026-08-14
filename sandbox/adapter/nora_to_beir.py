@@ -51,7 +51,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -96,6 +98,17 @@ from sandbox.sira_cells import (  # noqa: E402
     cell_dirname as _cell_dirname,
     is_valid_release as _is_valid_release,
 )
+
+
+@contextlib.contextmanager
+def _atomic_open(path: Path):
+    """Temp + atomic rename: regenerating an existing artifact must land on
+    a fresh inode so hardlink-shared snapshots (promoted serve labels) are
+    never edited in place — and a crash mid-write can't tear the file."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        yield f
+    os.replace(tmp, path)
 
 
 def _first_corpus_id(trees: list[dict[str, Any]]) -> str | None:
@@ -552,7 +565,7 @@ def _emit_corpus(
     dup_ids: list[str] = []
     noid_nodes: list[tuple[str, str]] = []          # (section_number, title)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
+    with _atomic_open(out_path) as f:
         # Per-requirement rows (existing behavior, unchanged shape)
         for tree in trees:
             definitions_map = tree.get("definitions_map") or {}
@@ -749,8 +762,8 @@ def _emit_queries_and_qrels(
     n_qrels = 0
     n_queries = 0
     n_no_qrels = 0
-    with open(queries_path, "w", encoding="utf-8") as qf, \
-         open(qrels_path, "w", encoding="utf-8") as rf:
+    with _atomic_open(queries_path) as qf, \
+         _atomic_open(qrels_path) as rf:
         for q in all_questions:
             qf.write(json.dumps({"_id": q.id, "text": q.question},
                                 ensure_ascii=False) + "\n")
@@ -786,7 +799,7 @@ def _emit_metadata(raw_dir: Path, name: str, num_corpus: int,
             split: {"num_queries": n_queries, "num_qrels": n_qrels},
         },
     }
-    with open(raw_dir / "metadata.json", "w", encoding="utf-8") as f:
+    with _atomic_open(raw_dir / "metadata.json") as f:
         json.dump(metadata, f, indent=2)
 
 

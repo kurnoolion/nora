@@ -476,3 +476,32 @@ def test_parse_log_survives_round_trip(tmp_path):
     tree.save_json(out)
     loaded = RequirementTree.load_json(out)
     assert loaded.parse_log is None  # not embedded; caller re-runs parse to get it
+
+
+# ---------------------------------------------------------------------------
+# save_json is atomic (fresh inode per save)
+# ---------------------------------------------------------------------------
+
+def test_save_json_breaks_hardlinks(tmp_path):
+    """Re-saving a tree lands on a fresh inode (temp + atomic rename), so a
+    hardlink-shared snapshot of the prior save keeps its bytes."""
+    import os
+
+    tree = _parse([
+        _heading(0, "1 Introduction"),
+        _para(1, "body"),
+    ])
+    out = tmp_path / "tree.json"
+    tree.save_json(out)
+    snapshot = tmp_path / "label" / "tree.json"
+    snapshot.parent.mkdir()
+    os.link(out, snapshot)
+    before = snapshot.read_text()
+
+    tree.requirements[0].text = "changed body"
+    tree.save_json(out)
+
+    assert snapshot.read_text() == before      # snapshot untouched
+    assert os.stat(out).st_nlink == 1          # link broken by the rename
+    assert "changed body" in out.read_text()
+    assert not (tmp_path / "tree.json.tmp").exists()
