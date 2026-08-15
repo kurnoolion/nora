@@ -290,3 +290,38 @@ def test_main_resolves_ids_cell_wide(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0                          # nothing missing cell-wide
     assert "MISSING=0" in out and "cross_doc=1" in out
+
+
+# ── whitespace canonicalization (msg 0017) ───────────────────────────
+
+
+def test_space_form_id_matches_canonical_tree_id(tmp_path):
+    # A source family writes ids with a SPACE before the number; the
+    # parser canonicalizes whitespace to underscores before storing.
+    # The checker must diff canonical-vs-canonical, not raw-vs-canonical
+    # — otherwise every id in the family shows as MISSING.
+    cfg = {"pattern": r"ABC[ _]FOO[ _]\d{3}", "normalize": "none"}
+    ir = _ir([_block("paragraph", "ABC FOO 501 body text")])
+    tree = _tree([{"req_id": "ABC_FOO_501", "is_requirement": True}])
+    ir_path, tree_path = _write_doc(tmp_path, ir, tree)
+    res = check_doc(ir_path, tree_path, cfg)
+    assert res["missing"] == {}
+    assert not res["unparsed"]
+
+
+def test_canonicalization_composes_with_upper():
+    cfg = {"pattern": r"(?i)abc[ _]foo[ _]\d{3}", "normalize": "upper"}
+    found = scan_ir(_ir([_block("paragraph", "abc foo 502")]), cfg)
+    assert set(found["body"]) == {"ABC_FOO_502"}
+
+
+def test_separator_adjacent_space_absorbed_not_underscored(tmp_path):
+    # Space-variant ids ("ABC-FOO- 501") canonicalize by ABSORBING the
+    # separator-adjacent space — matching the parser — so the tolerant
+    # pattern's captures diff clean against canonical tree ids.
+    cfg = {"pattern": r"ABC-FOO-\s?\d{3}", "normalize": "none"}
+    ir = _ir([_block("paragraph", "(M) ID: ABC-FOO- 501")])
+    tree = _tree([{"req_id": "ABC-FOO-501", "is_requirement": True}])
+    ir_path, tree_path = _write_doc(tmp_path, ir, tree)
+    res = check_doc(ir_path, tree_path, cfg)
+    assert res["missing"] == {}

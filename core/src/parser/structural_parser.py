@@ -44,6 +44,14 @@ _SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*")
 # requirement isn't tracked under two different identifiers.
 _REQ_ID_WHITESPACE_RE = re.compile(r"\s+")
 
+# Whitespace ADJACENT to an existing separator is a source-formatting
+# artifact ("ABC-FOO- 123" — systematic in one corpus, 44+ labeled
+# announcement occurrences, strand req-recall msg 0018), not a missing
+# separator: it absorbs into the separator instead of becoming an
+# underscore, so the canonical form is "ABC-FOO-123", never
+# "ABC-FOO-_123".
+_REQ_ID_SEP_WHITESPACE_RE = re.compile(r"(?<=[-_])\s+|\s+(?=[-_])")
+
 
 # DOCX heading-style detector (case-insensitive). Drives the
 # ``method="docx_styles"`` classification path: paragraphs whose
@@ -71,8 +79,22 @@ def _normalize_title(s: str) -> str:
 
 
 def _canonicalize_req_id(rid: str) -> str:
-    """Normalize whitespace in a matched req_id to underscores."""
+    """Normalize whitespace in a matched req_id.
+
+    Whitespace touching an existing ``-``/``_`` separator is absorbed
+    into it; whitespace between two bare tokens becomes an underscore.
+    """
+    rid = _REQ_ID_SEP_WHITESPACE_RE.sub("", rid)
     return _REQ_ID_WHITESPACE_RE.sub("_", rid).strip("_")
+
+
+# Absorbed-statement discriminator (strand req-recall, msg 0016): a
+# newline-joined text segment that opens with a dotted multi-level
+# section number ("4.2.1 The device shall ...") is a sub-numbered
+# statement paragraph the no-font-info gate absorbed into the enclosing
+# node, not that node's own prose. Two components minimum — a bare
+# top-level number ("4 Mbps") never qualifies.
+_SUBNUM_SEG_RE = re.compile(r"^(\d+(?:\.\d+)+)\s+\S")
 
 
 def build_context_string(
@@ -2152,37 +2174,70 @@ class GenericStructuralParser:
                     tbl_block, parent_section, sections, skip_set
                 )
 
-        # Backward-move post-pass (strand req-recall, msg 0014): an
-        # announcement can CLOSE its requirement instead of opening it —
-        # body paragraph(s) first, the "(Marker) ID: <id>" line last,
-        # next block a fresh heading. The spawned node then ends the
-        # walk EMPTY, while the statement sits on the node created just
-        # before it (the id-less enclosing section or a sub-numbered
-        # body node). Move the id backward onto that node and drop the
-        # empty shell. Only empty spawns move — announced nodes that
-        # accumulated content are untouched, so the forward
-        # (announcement-first) shape keeps its validated behavior.
-        for node in announced_nodes:
-            if node.text or node.tables or node.images:
-                continue
-            idx = sections.index(node)
-            prev = next(
-                (s for s in reversed(sections[:idx]) if s.text or s.title),
-                None,
-            )
-            if prev is None or prev.req_id:
-                # No carrier, or the carrier already has its own id
-                # (e.g. a preceding announced req) — keep the empty
-                # node; dropping the id would lose recall.
-                continue
-            prev.req_id = node.req_id
-            if node.priority and not prev.priority:
-                prev.priority = node.priority
-            sections.remove(node)
-            # The id stays valid in the parent's children list unless
-            # the carrier IS the parent (then it's the parent's own id).
-            if prev.children and node.req_id in prev.children:
-                prev.children.remove(node.req_id)
+        # Backward-move post-pass (strand req-recall, msg 0014 + 0016):
+        # an announcement can CLOSE its requirement instead of opening
+        # it — body paragraph(s) first, the "(Marker) ID: <id>" line
+        # last, next block a fresh heading. The spawned node then ends
+        # the walk EMPTY. Two recovery shapes:
+        #
+        #   * The preceding content node has NO id of its own — move
+        #     the id (and marker) backward onto it and drop the empty
+        #     shell (msg 0014).
+        #   * The preceding content node ALREADY carries an id (field
+        #     outcome, msg 0016): the statement paragraph was absorbed
+        #     into that node's text by the no-font-info gate before the
+        #     announcement ever spawned, so the id-less carrier never
+        #     existed. Recover by EXTRACTION — split the trailing
+        #     sub-numbered segment(s) back out of the absorber into the
+        #     announced node.
+        #
+        # Runs to fixpoint: chained closing announcements mis-route
+        # each statement one announcement forward (statement N+1 lands
+        # on announced node N), so each extraction can empty the next
+        # absorber for the following sweep. Extraction fills a node at
+        # most once and the plain move removes a node at most once, so
+        # the loop is bounded. Only empty spawns are touched — announced
+        # nodes that accumulated content via the forward
+        # (announcement-first) shape keep their validated behavior.
+        moved_away: set[int] = set()
+        changed = True
+        while changed:
+            changed = False
+            for node in announced_nodes:
+                if id(node) in moved_away:
+                    continue
+                if node.text or node.tables or node.images:
+                    continue
+                idx = sections.index(node)
+                prev = next(
+                    (s for s in reversed(sections[:idx]) if s.text or s.title),
+                    None,
+                )
+                if prev is None:
+                    continue
+                if prev.req_id:
+                    split = self._absorbed_statement_split(prev)
+                    if split is None:
+                        # Nothing claimable in the absorber — keep the
+                        # empty node; dropping the id would lose recall.
+                        continue
+                    kept, moved, subnum = split
+                    prev.text = kept
+                    node.text = moved
+                    if not node.section_number:
+                        node.section_number = subnum
+                    changed = True
+                    continue
+                prev.req_id = node.req_id
+                if node.priority and not prev.priority:
+                    prev.priority = node.priority
+                sections.remove(node)
+                moved_away.add(id(node))
+                # The id stays valid in the parent's children list unless
+                # the carrier IS the parent (then it's the parent's own id).
+                if prev.children and node.req_id in prev.children:
+                    prev.children.remove(node.req_id)
+                changed = True
 
         return sections
 
@@ -3742,6 +3797,47 @@ class GenericStructuralParser:
             section.text += "\n" + text
         else:
             section.text = text
+
+    @staticmethod
+    def _absorbed_statement_split(
+        prev: Requirement,
+    ) -> tuple[str, str, str] | None:
+        """Split an absorbed closing-announcement statement out of ``prev``.
+
+        Field shape (strand req-recall, msg 0016): by post-pass time the
+        closing announcement's statement — a sub-numbered body paragraph —
+        has already been absorbed into the preceding id-bearing node's
+        text, so the id-less carrier the plain backward move looks for
+        never exists. The statement is recoverable from the absorber's
+        newline-joined text: the trailing segment run starting at the
+        LAST segment that opens with a dotted sub-number is the
+        announced requirement's statement (non-numbered segments after
+        it are its continuation lines).
+
+        When the absorber has a section_number of its own, the
+        sub-number must strictly EXTEND it ("4.2" → "4.2.1") — a
+        demoted duplicate of the section's own number is the section's
+        continuation text, not an absorbed statement.
+
+        Returns ``(kept, moved, subnum)``, or None when the absorber's
+        tail carries no claimable sub-numbered statement.
+        """
+        if not prev.text:
+            return None
+        segments = prev.text.split("\n")
+        for i in range(len(segments) - 1, -1, -1):
+            m = _SUBNUM_SEG_RE.match(segments[i])
+            if not m:
+                continue
+            subnum = m.group(1)
+            if prev.section_number and not subnum.startswith(
+                prev.section_number + "."
+            ):
+                return None
+            kept = "\n".join(segments[:i]).rstrip()
+            moved = "\n".join(segments[i:])
+            return kept, moved, subnum
+        return None
 
     # ── Parent-child linking ────────────────────────────────────────
 

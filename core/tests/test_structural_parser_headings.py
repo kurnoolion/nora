@@ -434,6 +434,19 @@ def test_canonicalize_req_id_replaces_internal_whitespace():
     assert _canonicalize_req_id("VZ_REQ_LTEDATARETRY_2377") == "VZ_REQ_LTEDATARETRY_2377"
 
 
+def test_canonicalize_req_id_absorbs_whitespace_at_separators():
+    """Whitespace touching an existing -/_ separator is a source
+    formatting artifact (strand req-recall, space-variant announcement
+    class): it absorbs into the separator instead of becoming an
+    underscore — never "ABC-FOO-_123"."""
+    from core.src.parser.structural_parser import _canonicalize_req_id
+    assert _canonicalize_req_id("ABC-FOO- 123") == "ABC-FOO-123"
+    assert _canonicalize_req_id("ABC-FOO -123") == "ABC-FOO-123"
+    assert _canonicalize_req_id("ABC_FOO_ 123") == "ABC_FOO_123"
+    # Whitespace between bare tokens still becomes an underscore.
+    assert _canonicalize_req_id("ABC FOO- 123") == "ABC_FOO-123"
+
+
 def test_req_id_with_space_artifact_recovered():
     """A small-font req_id block whose underscore was lost in PDF
     extraction (`"VZ_REQ_LTEOTADM 65"`) must still be detected and

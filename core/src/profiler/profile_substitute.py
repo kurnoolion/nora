@@ -48,14 +48,18 @@ GENERIC_PLACEHOLDERS: dict[str, str] = {
     "<MNO>": r"[A-Z]{2,4}",
     # ``<PLAN>`` covers plan-code tokens like LTEOTADM, lteOTADM, VoWiFi,
     # and multi-word forms like "LTE OTADM" / "Voice WiFi". Real corpora
-    # ship all three:
+    # ship all four:
     #   - all-caps (LTEOTADM)
     #   - CamelCase / mixed-case (VoWiFi, lteOTADM)
     #   - space-separated multi-word
+    #   - hyphenated (e.g. "e-SIM OTA") — field-validated class-(b)
+    #     recall loss (strand req-recall): plan families with hyphens
+    #     failed to anchor ANY of their ids, invisibly to the checker,
+    #     because the checker shares this pattern.
     # The full req_id pattern around this still requires the ``VZ_REQ_``
     # prefix and ``_\d+`` suffix, so the broader char class doesn't
     # materially increase false-positive risk on body prose.
-    "<PLAN>": r"[A-Za-z0-9_ ]+",
+    "<PLAN>": r"[A-Za-z0-9_ -]+",
     "<REL>": r"[A-Za-z0-9-]+",
 }
 

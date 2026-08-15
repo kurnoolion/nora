@@ -82,7 +82,7 @@ class TestSubstituteGeneric:
         )
         out = substitute_placeholders(p, {})
         # Mixed-case allowed — real corpora have lteOTADM / VoWiFi-style codes.
-        assert out.requirement_id.pattern == "VZ_REQ_[A-Za-z0-9_ ]+_\\d+"
+        assert out.requirement_id.pattern == "VZ_REQ_[A-Za-z0-9_ -]+_\\d+"
 
     def test_plan_generic_matches_mixed_case_and_spaced_plan_codes(self):
         """Regression for the 2026-05-09 STATUS flag: previous defaults
@@ -101,12 +101,26 @@ class TestSubstituteGeneric:
         assert rx.match("VZ_REQ_LTE OTADM_12345")
         assert rx.match("VZ_REQ_Voice WiFi_37621")
 
+    def test_plan_generic_matches_hyphenated_plan_codes(self):
+        """Field-validated class-(b) recall loss (strand req-recall):
+        hyphenated plan tokens ('e-SIM OTA'-style) failed to anchor any
+        of their ids because the generic class lacked '-'. The checker
+        shares this pattern, so the loss was invisible by construction."""
+        import re
+        p = DocumentProfile(
+            requirement_id=RequirementIdPattern(pattern="VZ_REQ_<PLAN>_\\d+"),
+        )
+        out = substitute_placeholders(p, {})
+        rx = re.compile(out.requirement_id.pattern)
+        assert rx.match("VZ_REQ_e-SIM OTA_12345")
+        assert rx.match("VZ_REQ_Wi-Fi Calling_37621")
+
     def test_digits_generic_to_digit_quantifier(self):
         p = DocumentProfile(
             requirement_id=RequirementIdPattern(pattern="<MNO0>_REQ_<PLAN>_<DIGITS>"),
         )
         out = substitute_placeholders(p, {"MNO0": "VZ"})
-        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ ]+_\d+"
+        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ -]+_\d+"
 
     def test_specific_takes_precedence_over_generic_with_same_root(self):
         # `<PLAN0>` is in the mapping (specific); `<PLAN>` (generic) should
@@ -117,7 +131,7 @@ class TestSubstituteGeneric:
         )
         out = substitute_placeholders(p, {"MNO0": "VZ", "PLAN0": "PLANX"})
         # <PLAN0> resolves to PLANX; <PLAN> falls through to the generic class.
-        assert out.requirement_id.pattern == "VZ_REQ_(PLANX|[A-Za-z0-9_ ]+)"
+        assert out.requirement_id.pattern == "VZ_REQ_(PLANX|[A-Za-z0-9_ -]+)"
 
 
 class TestSubstituteAcrossFields:
@@ -140,8 +154,8 @@ class TestSubstituteAcrossFields:
 
         assert out.heading_detection.numbering_pattern == r"\d+"
         assert out.heading_detection.priority_marker_pattern == "VZ:"
-        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ ]+_\d+"
-        assert out.cross_reference_patterns.requirement_id_refs == r"VZ_REQ_[A-Za-z0-9_ ]+_\d+"
+        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ -]+_\d+"
+        assert out.cross_reference_patterns.requirement_id_refs == r"VZ_REQ_[A-Za-z0-9_ -]+_\d+"
         assert out.cross_reference_patterns.internal_section_refs == r"See VZ §\d+"
         assert out.cross_reference_patterns.standards_citations == [r"[A-Z]{2,4}\s+\w+"]
         assert out.reference_list_section_pattern == "VZ bibliography"
@@ -349,7 +363,7 @@ class TestLoadSubstitutedProfile:
             "mappings": {"MNO0": "VZ"},
         }))
         out = load_substituted_profile(profile_path)
-        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ ]+_\d+"
+        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ -]+_\d+"
 
     def test_with_env_dir_fallback_substitutes(self, tmp_path):
         project, profile_path = self._scaffold_project(tmp_path)
@@ -361,7 +375,7 @@ class TestLoadSubstitutedProfile:
             "version": 1, "mappings": {"VZ": "<MNO0>"},
         }))
         out = load_substituted_profile(profile_path, env_dir=env_dir)
-        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ ]+_\d+"
+        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ -]+_\d+"
 
     def test_no_mapping_still_substitutes_generic_placeholders(self, tmp_path):
         """Generic placeholders (``<PLAN>``, ``<DIGITS>``, ``<MNO>``,
@@ -381,7 +395,7 @@ class TestLoadSubstitutedProfile:
         assert "<MNO0>" in out.requirement_id.pattern
         # Generic placeholder DID substitute even without a mapping.
         assert "<PLAN>" not in out.requirement_id.pattern
-        assert "[A-Za-z0-9_ ]+" in out.requirement_id.pattern
+        assert "[A-Za-z0-9_ -]+" in out.requirement_id.pattern
 
     def test_workaround_user_replaced_specific_in_profile(self, tmp_path):
         """User workaround for missing mapping: edit the profile JSON
@@ -401,7 +415,7 @@ class TestLoadSubstitutedProfile:
         profile_path = project / "customizations" / "profiles" / "bs_test_partial.json"
         profile.save_json(profile_path)
         out = load_substituted_profile(profile_path, env_dir=None)
-        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ ]+_\d+"
+        assert out.requirement_id.pattern == r"VZ_REQ_[A-Za-z0-9_ -]+_\d+"
 
     def test_committed_bs_d7a2c81f_loads(self):
         # Sanity: the placeholdered profile we ship in this commit loads

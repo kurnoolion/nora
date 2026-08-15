@@ -80,7 +80,20 @@ def load_id_config(profile_path: Path) -> dict:
     return rid
 
 
+# The parser canonicalizes whitespace inside a matched id
+# (``_canonicalize_req_id``) before storing it in the tree; the checker
+# must mirror it exactly, or families that write ids with stray spaces
+# diff raw-vs-canonical and show as MISSING (msgs 0017/0018).
+# Whitespace ADJACENT to an existing -/_ separator absorbs into the
+# separator ("ABC-FOO- 123" → "ABC-FOO-123"); whitespace between bare
+# tokens becomes an underscore ("ABC FOO 12" → "ABC_FOO_12").
+_SEP_WS_RE = re.compile(r"(?<=[-_])\s+|\s+(?=[-_])")
+_WS_RE = re.compile(r"\s+")
+
+
 def _normalize(token: str, mode: str) -> str:
+    token = _SEP_WS_RE.sub("", token)
+    token = _WS_RE.sub("_", token).strip("_")
     return token.upper() if mode == "upper" else token
 
 

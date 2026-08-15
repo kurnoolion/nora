@@ -267,3 +267,116 @@ def test_forward_shape_unaffected_by_post_pass():
     ])
     req = _by_id(tree, "GP-REQ-114")
     assert "Forward body" in req.text and req.section_number == ""
+
+
+# ---------------------------------------------------------------------------
+# Absorbed-statement extraction (msg 0016): the closing announcement's
+# statement was merged into the preceding ID-BEARING node's text by the
+# no-font-info gate, so the id-less carrier the plain backward move
+# looks for never exists. The post-pass splits the trailing
+# sub-numbered segment(s) back out into the announced node.
+# ---------------------------------------------------------------------------
+
+
+def test_absorbed_statement_extracted_from_id_bearing_section():
+    tree = _parse([
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.2 Feature ID: GP-SEC-91"),
+        _para(2, "ID: GP-SEC-91"),                    # leaked label line (field shape)
+        _para(3, "4.2.1 The device shall do Z."),     # absorbed statement
+        _para(4, "(Mandatory) ID: GP-REQ-116"),       # closing announcement
+        _heading(5, "4.3 Next ID: GP-SEC-90"),
+    ])
+    req = _by_id(tree, "GP-REQ-116")
+    assert req is not None
+    assert "shall do Z" in req.text
+    assert req.section_number == "4.2.1"
+    assert req.priority == "MANDATORY"
+    sec = _by_id(tree, "GP-SEC-91")
+    assert "shall do Z" not in sec.text
+    assert "ID: GP-SEC-91" in sec.text  # leaked label stays with its section
+
+
+def test_chained_closing_announcements_resolve_via_fixpoint():
+    # Chained closing shape mis-routes each statement one announcement
+    # forward at walk time (statement N+1 lands on announced node N);
+    # the fixpoint sweep unwinds the chain completely.
+    tree = _parse([
+        _heading(0, "5 Requirements", size=9.8),
+        _heading(1, "5.1 Area ID: GP-SEC-89"),
+        _para(2, "5.1.1 First statement body."),
+        _para(3, "(Mandatory) ID: GP-REQ-117"),
+        _para(4, "5.1.2 Second statement body."),
+        _para(5, "(Optional) ID: GP-REQ-118"),
+        _heading(6, "5.2 Next ID: GP-SEC-88"),
+    ])
+    r117 = _by_id(tree, "GP-REQ-117")
+    r118 = _by_id(tree, "GP-REQ-118")
+    assert "First statement" in r117.text and r117.section_number == "5.1.1"
+    assert "Second statement" in r118.text and r118.section_number == "5.1.2"
+    sec = _by_id(tree, "GP-SEC-89")
+    assert "statement body" not in sec.text
+
+
+def test_absorbed_same_number_segment_not_extracted():
+    # A demoted duplicate of the section's OWN number is the section's
+    # continuation text, not an absorbed statement — extraction must
+    # decline and the empty node stays (recall preserved).
+    tree = _parse([
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.9 Area ID: GP-SEC-92"),
+        _para(2, "4.9 Area continued prose."),
+        _para(3, "(Mandatory) ID: GP-REQ-115"),
+    ])
+    r115 = _by_id(tree, "GP-REQ-115")
+    assert r115 is not None and r115.text == ""
+    sec = _by_id(tree, "GP-SEC-92")
+    assert "continued prose" in sec.text
+
+
+def test_space_variant_announcement_canonicalizes_clean():
+    # Space-variant labeled announcement ("ID: GP-REQ- 120" — space
+    # between the final hyphen and the number; systematic source class,
+    # msg 0018). With pattern-side tolerance the announcement anchors,
+    # and separator-adjacent whitespace absorbs into the separator —
+    # canonical id "GP-REQ-120", never "GP-REQ-_120".
+    profile = _profile()
+    profile.requirement_id = RequirementIdPattern(
+        pattern=r"GP-(?:REQ|SEC)-\s?\d+",
+        requirement_type_pattern=r"GP-REQ-\d+",
+        id_label_pattern=r"ID:\s*(GP-(?:REQ|SEC)-\s?\d+)",
+        anchor="leading_text",
+    )
+    blocks = [
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.1 Feature area ID: GP-SEC-99"),
+        _para(2, "(Mandatory) ID: GP-REQ- 120"),
+        _para(3, "The device shall do S."),
+    ]
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    ir = DocumentIR(source_file="fixture.pdf", source_format="pdf",
+                    mno="MNOC", release="Mar2026", content_blocks=blocks)
+    tree = GenericStructuralParser(profile).parse(ir)
+    req = _by_id(tree, "GP-REQ-120")
+    assert req is not None and "shall do S" in req.text
+    assert req.priority == "MANDATORY"
+    assert _by_id(tree, "GP-REQ-_120") is None
+
+
+def test_multiline_absorbed_statement_moves_with_continuation():
+    # Continuation lines after the sub-numbered opener belong to the
+    # statement and move with it.
+    tree = _parse([
+        _heading(0, "6 Requirements", size=9.8),
+        _heading(1, "6.1 Area ID: GP-SEC-87"),
+        _para(2, "6.1.1 The device shall do Q"),
+        _para(3, "under all operating conditions."),
+        _para(4, "(Mandatory) ID: GP-REQ-119"),
+        _heading(5, "6.2 Next ID: GP-SEC-86"),
+    ])
+    req = _by_id(tree, "GP-REQ-119")
+    assert "shall do Q" in req.text
+    assert "operating conditions" in req.text
+    sec = _by_id(tree, "GP-SEC-87")
+    assert "shall do Q" not in sec.text and "operating" not in sec.text
