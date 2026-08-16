@@ -94,6 +94,15 @@ def _table(idx: int, html: str) -> ContentBlock:
     )
 
 
+def _image(idx: int) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.IMAGE,
+        position=Position(page=1, index=idx),
+        image_path="img.png",
+        surrounding_text="figure",
+    )
+
+
 def _parse(blocks: list[ContentBlock]):
     for i, b in enumerate(blocks):
         b.position.index = i
@@ -362,6 +371,44 @@ def test_space_variant_announcement_canonicalizes_clean():
     assert req is not None and "shall do S" in req.text
     assert req.priority == "MANDATORY"
     assert _by_id(tree, "GP-REQ-_120") is None
+
+
+def test_absorbed_statement_claimed_when_node_has_image():
+    # msg 0020 item (a): an announcement followed by an image attaches
+    # the image to the announced node — but its statement text is still
+    # absorbed in the predecessor. Extraction eligibility is text-only,
+    # so the node claims its statement AND keeps the image.
+    tree = _parse([
+        _heading(0, "7 Requirements", size=9.8),
+        _heading(1, "7.1 Area ID: GP-SEC-85"),
+        _para(2, "7.1.1 The device shall do R."),
+        _para(3, "(Mandatory) ID: GP-REQ-121"),
+        _image(4),
+        _heading(5, "7.2 Next ID: GP-SEC-84"),
+    ])
+    req = _by_id(tree, "GP-REQ-121")
+    assert req is not None and len(req.images) == 1
+    assert "shall do R" in req.text and req.section_number == "7.1.1"
+    sec = _by_id(tree, "GP-SEC-85")
+    assert "shall do R" not in sec.text
+
+
+def test_plain_move_declines_when_node_has_image():
+    # Id-less predecessor + attachment-carrying announced node: the
+    # plain backward move would drop the node (and its image) — it must
+    # decline, keeping the node (recall + attachment preserved).
+    tree = _parse([
+        _heading(0, "8 Requirements", size=9.8),
+        _heading(1, "8.1 Device behavior"),
+        _para(2, "The device shall do T."),
+        _para(3, "(Mandatory) ID: GP-REQ-122"),
+        _image(4),
+    ])
+    req = _by_id(tree, "GP-REQ-122")
+    assert req is not None and len(req.images) == 1
+    sec = next(r for r in tree.requirements if r.section_number == "8.1")
+    assert sec.req_id == ""
+    assert "shall do T" in sec.text
 
 
 def test_multiline_absorbed_statement_moves_with_continuation():

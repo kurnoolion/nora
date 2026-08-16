@@ -241,6 +241,34 @@ class TestPairing:
         tree = _parse(blocks)
         assert tree.parse_stats.toc_pair_misses == 0
 
+    def test_level1_chapter_heading_after_heading_anchors(self):
+        """The heading-continuation defense is numbering-path-only
+        (strand req-recall, msg 0020): a styled level-1 chapter heading
+        directly following another heading (e.g. an empty trailing
+        subsection) must create its own anchored section, never be
+        swallowed into the predecessor's title — Word's Heading styles
+        are authoritative, so the PDF split-line artifact the defense
+        targets cannot occur here."""
+        blocks = [
+            _toc_para(0, "12\tOld Chapter\t40", depth=1),
+            _toc_para(1, "12.9\tReserved\t48", depth=2),
+            _toc_para(2, "13\tNetwork VZ_REQ_NET_13\t50", depth=1),
+            _heading(3, 1, "Old Chapter", ""),
+            _heading(4, 2, "Reserved", ""),        # empty trailing subsection
+            _heading(5, 1, "Network ", "VZ_REQ_NET_13"),
+            _para(6, "Chapter preamble."),
+        ]
+        tree = _parse(blocks)
+        chapter = next(
+            (r for r in tree.requirements if r.section_number == "13"), None
+        )
+        assert chapter is not None
+        assert chapter.req_id == "VZ_REQ_NET_13"
+        reserved = next(
+            r for r in tree.requirements if r.section_number == "12.9"
+        )
+        assert reserved.title == "Reserved"        # nothing swallowed
+
 
 # ---------------------------------------------------------------------------
 # docx_styles classification path

@@ -1884,10 +1884,19 @@ class GenericStructuralParser:
                     #     blocks reset the flag).
                     # When all three hold, the new "section" is appended
                     # to the current section's title as a continuation.
-                    # Defense is OA-specific (numbering-pattern path); the
-                    # docx_styles path doesn't suffer this PDF artifact.
+                    # Defense is OA-specific (numbering-pattern path): the
+                    # docx_styles path doesn't suffer this PDF artifact —
+                    # Word's Heading styles are authoritative, a styled
+                    # level-1 heading is never a split-line continuation.
+                    # The method gate is load-bearing (strand req-recall,
+                    # msg 0020): without it, a TOC-paired chapter heading
+                    # directly following another heading (e.g. an empty
+                    # trailing subsection) was swallowed into that
+                    # section's title, id and all — the de-facto level-1
+                    # anchor gate behind the 33-id residue.
                     if (
-                        section_num
+                        self.profile.heading_detection.method != "docx_styles"
+                        and section_num
                         and new_depth == 1
                         and seen_deep_section
                         and previous_block_was_heading
@@ -2206,7 +2215,12 @@ class GenericStructuralParser:
             for node in announced_nodes:
                 if id(node) in moved_away:
                     continue
-                if node.text or node.tables or node.images:
+                # Extraction eligibility is text-only (msg 0020 item a):
+                # an announcement followed by a table/image attaches that
+                # content to the node, but its STATEMENT text can still
+                # be sitting absorbed in the predecessor — a node with
+                # attachments and no text is still owed its statement.
+                if node.text:
                     continue
                 idx = sections.index(node)
                 prev = next(
@@ -2227,6 +2241,10 @@ class GenericStructuralParser:
                     if not node.section_number:
                         node.section_number = subnum
                     changed = True
+                    continue
+                # Plain backward move stays fully-empty-only: removing a
+                # node that carries tables/images would drop them.
+                if node.tables or node.images:
                     continue
                 prev.req_id = node.req_id
                 if node.priority and not prev.priority:
