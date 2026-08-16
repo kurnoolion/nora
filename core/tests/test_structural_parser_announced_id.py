@@ -213,7 +213,7 @@ def test_announcement_before_any_heading_still_spawns():
 
 
 # ---------------------------------------------------------------------------
-# Backward move (msg 0014): announcement CLOSES its requirement
+# Backward move (field report): announcement CLOSES its requirement
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +279,7 @@ def test_forward_shape_unaffected_by_post_pass():
 
 
 # ---------------------------------------------------------------------------
-# Absorbed-statement extraction (msg 0016): the closing announcement's
+# Absorbed-statement extraction (field report): the closing announcement's
 # statement was merged into the preceding ID-BEARING node's text by the
 # no-font-info gate, so the id-less carrier the plain backward move
 # looks for never exists. The post-pass splits the trailing
@@ -346,7 +346,7 @@ def test_absorbed_same_number_segment_not_extracted():
 def test_space_variant_announcement_canonicalizes_clean():
     # Space-variant labeled announcement ("ID: GP-REQ- 120" — space
     # between the final hyphen and the number; systematic source class,
-    # msg 0018). With pattern-side tolerance the announcement anchors,
+    # field report). With pattern-side tolerance the announcement anchors,
     # and separator-adjacent whitespace absorbs into the separator —
     # canonical id "GP-REQ-120", never "GP-REQ-_120".
     profile = _profile()
@@ -374,7 +374,7 @@ def test_space_variant_announcement_canonicalizes_clean():
 
 
 def test_absorbed_statement_claimed_when_node_has_image():
-    # msg 0020 item (a): an announcement followed by an image attaches
+    # Field-reported: an announcement followed by an image attaches
     # the image to the announced node — but its statement text is still
     # absorbed in the predecessor. Extraction eligibility is text-only,
     # so the node claims its statement AND keeps the image.
@@ -412,7 +412,7 @@ def test_plain_move_declines_when_node_has_image():
 
 
 # ---------------------------------------------------------------------------
-# Chained announcement-after-body mechanisms (msg 0022): sibling
+# Chained announcement-after-body mechanisms (field report): sibling
 # sub-numbers are claimable; the inline-trailing announcement form
 # ("<statement> (Marker) ID: <id>" in one paragraph) keeps its own id.
 # ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ _REQ_ID_WHITESPACE_RE = re.compile(r"\s+")
 
 # Whitespace ADJACENT to an existing separator is a source-formatting
 # artifact ("ABC-FOO- 123" — systematic in one corpus, 44+ labeled
-# announcement occurrences, strand req-recall msg 0018), not a missing
+# announcement occurrences, strand req-recall field report), not a missing
 # separator: it absorbs into the separator instead of becoming an
 # underscore, so the canonical form is "ABC-FOO-123", never
 # "ABC-FOO-_123".
@@ -88,7 +88,7 @@ def _canonicalize_req_id(rid: str) -> str:
     return _REQ_ID_WHITESPACE_RE.sub("_", rid).strip("_")
 
 
-# Absorbed-statement discriminator (strand req-recall, msg 0016): a
+# Absorbed-statement discriminator (strand req-recall field report): a
 # newline-joined text segment that opens with a dotted multi-level
 # section number ("4.2.1 The device shall ...") is a sub-numbered
 # statement paragraph the no-font-info gate absorbed into the enclosing
@@ -1803,7 +1803,7 @@ class GenericStructuralParser:
                         continue
 
                 if block.type == BlockType.PARAGRAPH and not block.font_info:
-                    # Inline-trailing announcement defense (msg 0022): a
+                    # Inline-trailing announcement defense (field report): a
                     # paragraph whose text ENDS with its own labeled id
                     # is the next requirement's inline announcement form,
                     # not continuation of the open announced req — close
@@ -1900,7 +1900,7 @@ class GenericStructuralParser:
                     # Word's Heading styles are authoritative, a styled
                     # level-1 heading is never a split-line continuation.
                     # The method gate is load-bearing (strand req-recall,
-                    # msg 0020): without it, a TOC-paired chapter heading
+                    # field report): without it, a TOC-paired chapter heading
                     # directly following another heading (e.g. an empty
                     # trailing subsection) was swallowed into that
                     # section's title, id and all — the de-facto level-1
@@ -2058,7 +2058,7 @@ class GenericStructuralParser:
 
                 # Body text — append to the open announced req, else the
                 # current section.
-                # Inline-trailing announcement defense (msg 0022): a
+                # Inline-trailing announcement defense (field report): a
                 # paragraph ENDING with its own labeled id is the doc's
                 # third announcement form — the NEXT requirement's
                 # statement + id in one block. Swallowing it into the
@@ -2207,7 +2207,7 @@ class GenericStructuralParser:
                     tbl_block, parent_section, sections, skip_set
                 )
 
-        # Backward-move post-pass (strand req-recall, msg 0014 + 0016):
+        # Backward-move post-pass (strand req-recall field reports):
         # an announcement can CLOSE its requirement instead of opening
         # it — body paragraph(s) first, the "(Marker) ID: <id>" line
         # last, next block a fresh heading. The spawned node then ends
@@ -2215,9 +2215,9 @@ class GenericStructuralParser:
         #
         #   * The preceding content node has NO id of its own — move
         #     the id (and marker) backward onto it and drop the empty
-        #     shell (msg 0014).
+        #     shell (field report).
         #   * The preceding content node ALREADY carries an id (field
-        #     outcome, msg 0016): the statement paragraph was absorbed
+        #     outcome, field report): the statement paragraph was absorbed
         #     into that node's text by the no-font-info gate before the
         #     announcement ever spawned, so the id-less carrier never
         #     existed. Recover by EXTRACTION — split the trailing
@@ -2239,7 +2239,7 @@ class GenericStructuralParser:
             for node in announced_nodes:
                 if id(node) in moved_away:
                     continue
-                # Extraction eligibility is text-only (msg 0020 item a):
+                # Extraction eligibility is text-only (field report):
                 # an announcement followed by a table/image attaches that
                 # content to the node, but its STATEMENT text can still
                 # be sitting absorbed in the predecessor — a node with
@@ -2261,7 +2261,7 @@ class GenericStructuralParser:
                         continue
                     kept, moved, subnum = split
                     # A tail carrying a DIFFERENT labeled id belongs to
-                    # that inline-announced requirement (msg 0022), not
+                    # that inline-announced requirement (field report), not
                     # to this node — claiming it would mis-attribute
                     # the statement.
                     if self._id_label_re is not None:
@@ -2283,7 +2283,7 @@ class GenericStructuralParser:
                 if node.tables or node.images:
                     continue
                 # A carrier whose text ENDS with a labeled id owns that
-                # id (inline-trailing announcement form, msg 0022) —
+                # id (inline-trailing announcement form, field report) —
                 # stamping a neighboring announcement's id onto it
                 # displaces the inline anchor.
                 if self._trailing_label_id(prev.text):
@@ -3885,7 +3885,7 @@ class GenericStructuralParser:
     ) -> tuple[str, str, str] | None:
         """Split an absorbed closing-announcement statement out of ``prev``.
 
-        Field shape (strand req-recall, msg 0016): by post-pass time the
+        Field shape (strand req-recall field report): by post-pass time the
         closing announcement's statement — a sub-numbered body paragraph —
         has already been absorbed into the preceding id-bearing node's
         text, so the id-less carrier the plain backward move looks for
@@ -3899,7 +3899,7 @@ class GenericStructuralParser:
         sub-number must be a DIFFERENT branch — a duplicate of the
         absorber's own number is the absorber's continuation text, and
         an ancestor number cannot be a statement absorbed below it.
-        Siblings ARE claimable (msg 0022): chained
+        Siblings ARE claimable (field report): chained
         announcement-after-body docs put statement N+1 in node N, so
         the claimable tail is a sibling of the absorber's number, not
         an extension.

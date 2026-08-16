@@ -195,7 +195,7 @@ def test_load_id_config_empty_pattern_unusable(tmp_path):
     assert load_id_config(tmp_path / "absent.json") == {}
 
 
-# ── liveness fixes (msg 0012): font-level strike + TOC echo lines ────
+# ── liveness fixes (field report): font-level strike + TOC echo lines ────
 
 
 def test_scan_ir_font_level_strike_buckets_as_struck():
@@ -219,7 +219,7 @@ def test_scan_ir_toc_entry_lines_bucket_as_toc():
 
 
 def test_check_doc_struck_toc_echo_not_missing(tmp_path):
-    # The msg-0012 shape: a struck heading carries the id; its only live
+    # The field-reported shape: a struck heading carries the id; its only live
     # occurrence is the TOC entry. Must NOT count as MISSING.
     cfg = dict(ID_CFG, _toc_entry_pattern=r"\.{4,}\s*\d+$")
     ir = _ir([
@@ -255,7 +255,7 @@ def test_load_id_config_carries_toc_entry_pattern(tmp_path):
     assert cfg["_toc_entry_pattern"] == r"\.{4,}\s*\d+$"
 
 
-# ── cell-wide id resolution (msg 0014): sibling-doc definitions ──────
+# ── cell-wide id resolution (field report): sibling-doc definitions ──────
 
 
 def test_check_doc_sibling_defined_id_buckets_cross_doc(tmp_path):
@@ -292,7 +292,7 @@ def test_main_resolves_ids_cell_wide(tmp_path, capsys):
     assert "MISSING=0" in out and "cross_doc=1" in out
 
 
-# ── whitespace canonicalization (msg 0017) ───────────────────────────
+# ── whitespace canonicalization (field report) ───────────────────────────
 
 
 def test_space_form_id_matches_canonical_tree_id(tmp_path):

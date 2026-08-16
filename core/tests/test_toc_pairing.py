@@ -243,7 +243,7 @@ class TestPairing:
 
     def test_level1_chapter_heading_after_heading_anchors(self):
         """The heading-continuation defense is numbering-path-only
-        (strand req-recall, msg 0020): a styled level-1 chapter heading
+        (strand req-recall field report): a styled level-1 chapter heading
         directly following another heading (e.g. an empty trailing
         subsection) must create its own anchored section, never be
         swallowed into the predecessor's title — Word's Heading styles

@@ -26,7 +26,7 @@ Buckets (per doc and per cell):
   * ``struck-only``— id seen only in struck blocks and absent from the tree.
                      Expected when the profile drops struck content. A block
                      is struck when EITHER the block-level flag OR
-                     ``font_info.strikethrough`` is set (msg 0012: DOCX
+                     ``font_info.strikethrough`` is set (field-validated: DOCX
                      revision strikes surface only at font level).
   * ``toc-only``   — id whose only live occurrence is a TOC entry line
                      (matches the profile's ``toc_detection.entry_pattern``).
@@ -34,7 +34,7 @@ Buckets (per doc and per cell):
                      never a body occurrence.
   * ``cross-doc``  — id absent from this doc's tree but defined in a
                      sibling doc of the same cell: a cross-document
-                     citation, not a recognition gap (msg 0014).
+                     citation, not a recognition gap (field report).
   * ``section-id`` — id matched ``pattern`` but failed the narrower
                      ``requirement_type_pattern`` (structural section ids).
                      Counted, never listed as missing.
@@ -83,7 +83,7 @@ def load_id_config(profile_path: Path) -> dict:
 # The parser canonicalizes whitespace inside a matched id
 # (``_canonicalize_req_id``) before storing it in the tree; the checker
 # must mirror it exactly, or families that write ids with stray spaces
-# diff raw-vs-canonical and show as MISSING (msgs 0017/0018).
+# diff raw-vs-canonical and show as MISSING (field reports).
 # Whitespace ADJACENT to an existing -/_ separator absorbs into the
 # separator ("ABC-FOO- 123" → "ABC-FOO-123"); whitespace between bare
 # tokens becomes an underscore ("ABC FOO 12" → "ABC_FOO_12").
@@ -105,7 +105,7 @@ def scan_ir(ir: dict, id_cfg: dict) -> dict:
     first-seen location of ids found in live heading/paragraph text (the
     ones parse is expected to pick up).
 
-    Liveness (strand req-recall, msg 0012): a block is struck when EITHER
+    Liveness (strand req-recall field report): a block is struck when EITHER
     the block-level ``struck`` flag OR ``font_info.strikethrough`` is set
     — DOCX revision strikes surface only at font level, and the parser's
     strike machinery honors both. TOC echo lines (blocks matching the
@@ -182,7 +182,7 @@ def check_doc(ir_path: Path, tree_path: Path, id_cfg: dict,
     """Diff one document. Returns per-doc buckets; ``unparsed`` True when the
     tree file is absent.
 
-    ``cell_ids`` (msg 0014): the union of tree ids across ALL of the
+    ``cell_ids`` (field report): the union of tree ids across ALL of the
     cell's documents. A body id absent from THIS doc's tree but defined
     in a sibling doc's tree buckets as ``cross_doc`` (a cross-document
     reference), not MISSING — per-doc diffing alone misread sibling-doc
@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
                   f"requirement_id.pattern")
             continue
         print(f"== {key} ==")
-        # Cell-wide id union (msg 0014): resolve body ids against every
+        # Cell-wide id union (field report): resolve body ids against every
         # sibling doc's tree so cross-document citations don't read as
         # per-doc recognition gaps.
         cell_tree_dir = parse_dir / cell.parts[-2] / cell.parts[-1]
