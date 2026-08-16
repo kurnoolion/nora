@@ -38,3 +38,32 @@
 
 ### Flags
 - Legacy empty-header `[Table: ...]` inline path still out of scope (cosmetic).
+
+## 2026-08-16 — Catch-up: round-2 validation + field close-out (two sessions)
+
+### Done this session
+- (2026-08-13) Round-2 validation accepted: the 21+137 decomposition
+  (checker semantics vs renderer fix) confirmed to the digit; 106
+  formerly-empty nodes now carry their table content as compact inlines;
+  byte-level diff vs round-1 trees additions-only (zero removals, zero
+  modifications), with 51 headers-only sibling tables recovered that
+  were silently dropped even on table-healthy nodes; multi-line
+  compact-form contract note shipped.
+- (2026-08-14) Field close-out: MISSING_inline 0 on every cell
+  (mno-a REL-2 134→0; mno-c 12→0 and 11→0; mno-b 0 throughout);
+  the tables_field −23 delta exactly accounts the empty-table residue
+  dropped by the guard on rebuild; re-enrichment executed the
+  anticipated plan-stamp backfill (~9200 evictions on mno-a REL-1 —
+  its enrichment carries taxonomy context for the first time); mutated
+  serve-labels written off (the writer-class fix is canonical as D-190).
+
+### In progress
+- (none — field validation complete)
+
+### Next
+- /land-strand table-fidelity: promote D-DRAFT-1..4.
+
+### Flags
+- Coverage boundary parked: id-less table-carrying reqs are excluded
+  from the corpus by design — candidate scope for a future
+  corpus-coverage strand.
