@@ -1803,6 +1803,17 @@ class GenericStructuralParser:
                         continue
 
                 if block.type == BlockType.PARAGRAPH and not block.font_info:
+                    # Inline-trailing announcement defense (msg 0022): a
+                    # paragraph whose text ENDS with its own labeled id
+                    # is the next requirement's inline announcement form,
+                    # not continuation of the open announced req — close
+                    # the cursor so the paragraph routes to the section.
+                    if (
+                        current_announced_req is not None
+                        and (_tl := self._trailing_label_id(block.text))
+                        and _tl != current_announced_req.req_id
+                    ):
+                        current_announced_req = None
                     target = current_announced_req or current_section
                     if target:
                         self._append_text(target, block.text)
@@ -2046,11 +2057,24 @@ class GenericStructuralParser:
                     continue
 
                 # Body text — append to the open announced req, else the
-                # current section
+                # current section.
+                # Inline-trailing announcement defense (msg 0022): a
+                # paragraph ENDING with its own labeled id is the doc's
+                # third announcement form — the NEXT requirement's
+                # statement + id in one block. Swallowing it into the
+                # open announced req loses the label to plain text (the
+                # scavenge below never runs), displacing the id: the
+                # field-observed −1 regression. Close the cursor instead
+                # so the block takes the section path, where the
+                # scavenge anchors the inline label as before.
                 if current_announced_req is not None:
-                    self._append_text(current_announced_req, block.text)
-                    previous_block_was_heading = False
-                    continue
+                    _tl = self._trailing_label_id(block.text)
+                    if _tl and _tl != current_announced_req.req_id:
+                        current_announced_req = None
+                    else:
+                        self._append_text(current_announced_req, block.text)
+                        previous_block_was_heading = False
+                        continue
                 if current_section:
                     self._append_text(current_section, block.text)
                     # Also check for inline req IDs in body text. When id_label is
@@ -2236,6 +2260,18 @@ class GenericStructuralParser:
                         # empty node; dropping the id would lose recall.
                         continue
                     kept, moved, subnum = split
+                    # A tail carrying a DIFFERENT labeled id belongs to
+                    # that inline-announced requirement (msg 0022), not
+                    # to this node — claiming it would mis-attribute
+                    # the statement.
+                    if self._id_label_re is not None:
+                        _fm = self._id_label_re.search(moved)
+                        if _fm is not None:
+                            _frid = _canonicalize_req_id(_fm.group(1))
+                            if self.profile.requirement_id.normalize == "upper":
+                                _frid = _frid.upper()
+                            if _frid != node.req_id:
+                                continue
                     prev.text = kept
                     node.text = moved
                     if not node.section_number:
@@ -2245,6 +2281,12 @@ class GenericStructuralParser:
                 # Plain backward move stays fully-empty-only: removing a
                 # node that carries tables/images would drop them.
                 if node.tables or node.images:
+                    continue
+                # A carrier whose text ENDS with a labeled id owns that
+                # id (inline-trailing announcement form, msg 0022) —
+                # stamping a neighboring announcement's id onto it
+                # displaces the inline anchor.
+                if self._trailing_label_id(prev.text):
                     continue
                 prev.req_id = node.req_id
                 if node.priority and not prev.priority:
@@ -3816,6 +3858,27 @@ class GenericStructuralParser:
         else:
             section.text = text
 
+    def _trailing_label_id(self, text: str) -> str:
+        """Normalized id when ``text`` ENDS with a labeled id; else "".
+
+        The inline-trailing announcement form (strand req-recall, msg
+        0022): "<sub-num> <statement…> (Marker) ID: <id>" — statement
+        and id in ONE paragraph, label last. A label followed by more
+        prose is a citation, not this form, so only an end-of-text
+        match qualifies.
+        """
+        if self._id_label_re is None or not text:
+            return ""
+        m = None
+        for m in self._id_label_re.finditer(text):
+            pass
+        if m is None or text[m.end():].strip():
+            return ""
+        rid = _canonicalize_req_id(m.group(1))
+        if self.profile.requirement_id.normalize == "upper":
+            rid = rid.upper()
+        return rid
+
     @staticmethod
     def _absorbed_statement_split(
         prev: Requirement,
@@ -3833,9 +3896,13 @@ class GenericStructuralParser:
         it are its continuation lines).
 
         When the absorber has a section_number of its own, the
-        sub-number must strictly EXTEND it ("4.2" → "4.2.1") — a
-        demoted duplicate of the section's own number is the section's
-        continuation text, not an absorbed statement.
+        sub-number must be a DIFFERENT branch — a duplicate of the
+        absorber's own number is the absorber's continuation text, and
+        an ancestor number cannot be a statement absorbed below it.
+        Siblings ARE claimable (msg 0022): chained
+        announcement-after-body docs put statement N+1 in node N, so
+        the claimable tail is a sibling of the absorber's number, not
+        an extension.
 
         Returns ``(kept, moved, subnum)``, or None when the absorber's
         tail carries no claimable sub-numbered statement.
@@ -3848,8 +3915,9 @@ class GenericStructuralParser:
             if not m:
                 continue
             subnum = m.group(1)
-            if prev.section_number and not subnum.startswith(
-                prev.section_number + "."
+            if prev.section_number and (
+                subnum == prev.section_number
+                or prev.section_number.startswith(subnum + ".")
             ):
                 return None
             kept = "\n".join(segments[:i]).rstrip()

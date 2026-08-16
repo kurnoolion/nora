@@ -411,6 +411,102 @@ def test_plain_move_declines_when_node_has_image():
     assert "shall do T" in sec.text
 
 
+# ---------------------------------------------------------------------------
+# Chained announcement-after-body mechanisms (msg 0022): sibling
+# sub-numbers are claimable; the inline-trailing announcement form
+# ("<statement> (Marker) ID: <id>" in one paragraph) keeps its own id.
+# ---------------------------------------------------------------------------
+
+
+def _fpara(idx: int, text: str) -> ContentBlock:
+    """Body paragraph WITH FontInfo (takes the scavenging body path)."""
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=idx),
+        text=text,
+        font_info=FontInfo(size=6.5),
+    )
+
+
+def test_sibling_subnumber_tail_is_claimable():
+    # Chained docs put statement N+1 into node N, so the claimable tail
+    # is a SIBLING of the absorber's number (…6 in a …5 node), not an
+    # extension. The absorber here is a minted sub-heading with its own
+    # structural id.
+    tree = _parse([
+        _heading(0, "9 Requirements", size=9.8),
+        _heading(1, "9.1 Area ID: GP-SEC-83"),
+        _heading(2, "9.1.5 Fifth statement summary ID: GP-SEC-70"),
+        _para(3, "9.1.6 Sixth statement text."),
+        _para(4, "(Mandatory) ID: GP-REQ-125"),
+        _heading(5, "9.2 Next ID: GP-SEC-82"),
+    ])
+    req = _by_id(tree, "GP-REQ-125")
+    assert req is not None
+    assert "Sixth statement" in req.text and req.section_number == "9.1.6"
+    absorber = _by_id(tree, "GP-SEC-70")
+    assert "Sixth statement" not in absorber.text
+
+
+def test_same_number_and_ancestor_tails_still_refused():
+    # The relaxation is siblings-only: a duplicate of the absorber's own
+    # number stays its continuation text (regression guard for the
+    # demoted-duplicate shape).
+    tree = _parse([
+        _heading(0, "4 Requirements", size=9.8),
+        _heading(1, "4.9 Area ID: GP-SEC-92"),
+        _para(2, "4.9 Area continued prose."),
+        _para(3, "(Mandatory) ID: GP-REQ-115"),
+    ])
+    r115 = _by_id(tree, "GP-REQ-115")
+    assert r115 is not None and r115.text == ""
+
+
+def test_inline_trailing_announcement_keeps_own_id():
+    # The doc's third announcement form: statement + "(Marker) ID: <id>"
+    # in ONE paragraph. The open announced cursor must NOT swallow it
+    # (the scavenge would never run and the inline id would be displaced
+    # by a neighboring announcement — the field −1 regression). The
+    # cursor closes, the block takes the section path, and the scavenge
+    # anchors the inline id.
+    long_stmt = (
+        "9.3.6 The device shall support the sixth capability under all "
+        "operating conditions including roaming, and shall report the "
+        "corresponding status to the management server whenever the "
+        "configuration changes or the reporting interval elapses, per "
+        "the referenced management specification."
+    )
+    assert len(long_stmt) > 200  # stays a body paragraph, not a heading
+    tree = _parse([
+        _heading(0, "9 Requirements", size=9.8),
+        _heading(1, "9.3 Area ID: GP-SEC-81"),
+        _heading(2, "9.3.5 Fifth statement summary"),
+        _para(3, "(Mandatory) ID: GP-REQ-126"),
+        _fpara(4, long_stmt + " (Optional) ID: GP-REQ-127"),
+        _heading(5, "9.4 Next ID: GP-SEC-80"),
+    ])
+    r127 = _by_id(tree, "GP-REQ-127")
+    assert r127 is not None                      # inline id stays anchored
+    r126 = _by_id(tree, "GP-REQ-126")
+    assert r126 is not None                      # announcement id not displaced
+    assert "sixth capability" not in (r126.text or "")
+
+
+def test_plain_move_refuses_trailing_labeled_carrier():
+    # An id-less carrier whose text ENDS with a labeled id owns that id;
+    # a neighboring announcement must not stamp over it.
+    tree = _parse([
+        _heading(0, "9 Requirements", size=9.8),
+        _heading(1, "9.5 Area"),
+        _para(2, "Statement text. (Optional) ID: GP-REQ-128"),
+        _para(3, "(Mandatory) ID: GP-REQ-129"),
+    ])
+    r129 = _by_id(tree, "GP-REQ-129")
+    assert r129 is not None and r129.text == ""  # kept, not moved
+    sec = next(r for r in tree.requirements if r.section_number == "9.5")
+    assert sec.req_id != "GP-REQ-129"
+
+
 def test_multiline_absorbed_statement_moves_with_continuation():
     # Continuation lines after the sub-numbered opener belong to the
     # statement and move with it.
