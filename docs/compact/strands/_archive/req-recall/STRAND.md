@@ -1,8 +1,8 @@
 # req-recall
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-08-14
-**Landed:**
+**Landed:** 2026-08-16
 **Assignees:** kurnoolion
 **Target modules:** parser, profiler, extraction
 **Active phase:** development
@@ -24,3 +24,5 @@ missing reqs appear post-fix.
 ## Notes
 
 <!-- appended to over the strand's lifetime -->
+
+Landed on 2026-08-16 with 12 promoted decisions: D-186, D-187, D-188, D-189, D-190, D-191, D-192, D-193, D-194, D-195, D-196, D-197.

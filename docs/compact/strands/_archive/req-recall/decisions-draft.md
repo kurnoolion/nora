@@ -1,3 +1,17 @@
+<!-- Promoted at landing on 2026-08-16: -->
+<!-- D-DRAFT-1 -> D-186 -->
+<!-- D-DRAFT-2 -> D-187 -->
+<!-- D-DRAFT-3 -> D-188 -->
+<!-- D-DRAFT-4 -> D-189 -->
+<!-- D-DRAFT-5 -> D-190 -->
+<!-- D-DRAFT-6 -> D-191 -->
+<!-- D-DRAFT-7 -> D-192 -->
+<!-- D-DRAFT-8 -> D-193 -->
+<!-- D-DRAFT-9 -> D-194 -->
+<!-- D-DRAFT-10 -> D-195 -->
+<!-- D-DRAFT-11 -> D-196 -->
+<!-- D-DRAFT-12 -> D-197 -->
+
 <!-- Draft ADRs for req-recall. Promoted to canonical DECISIONS.md
 with sequential D-XXX at /land-strand. One entry per decision. -->
 
