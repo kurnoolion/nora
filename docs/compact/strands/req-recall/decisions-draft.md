@@ -163,3 +163,168 @@ requirements — the exact defect class earlier ingestion work removed.
 **Consequences:** Recall triage treats ids in those zones as explained;
 only ids in body/requirement zones count toward the true gap.
 Doc-title-level ids remain to be classified against plan metadata.
+
+## D-DRAFT-7 — Separator-absorption id canonicalization; parser and checker mirror exactly
+
+**Context:** Source families write ids with stray whitespace: between
+bare tokens ("ABC FOO 12") and adjacent to existing separators
+("ABC-FOO- 123", a systematic labeled-announcement class, 44+ per
+cell). Naive whitespace→underscore canonicalization produced malformed
+"ABC-FOO-_123" forms, and the recall checker diffing raw strings
+against canonical tree ids reported entire doc families as phantom
+MISSING (404/408 on one family).
+
+**Decision:** Whitespace ADJACENT to an existing `-`/`_` separator
+absorbs into the separator; only whitespace between two bare tokens
+becomes an underscore. Implemented identically in the parser
+(`_canonicalize_req_id`) and the checker (`_normalize`) — the two must
+never diff a canonical form differently. Pattern-side tolerance
+(`-\s?\d+`) is profile-tier and safe only because canonicalization
+absorbs the space.
+
+**Why:** Whitespace next to a separator is a source-formatting
+artifact, not a missing separator — treating it as a token boundary
+invents a second identity for the same requirement. The alternative
+(checker-only normalization) leaves the parser storing malformed ids.
+
+**Consequences:** Canonical id forms are stable across space-variant
+sources; any future id-comparing tool must reuse the same two-step
+canonicalization. Field-validated: +19 ids per affected cell, all
+clean forms; phantom family cleared to 4.
+
+## D-DRAFT-8 — Extraction claims sibling tails; displacement guards protect inline-labeled owners
+
+**Context:** Chained announcement-after-body docs put statement N+1
+into announced node N, so the extraction post-pass's claimable tail
+carries a SIBLING sub-number relative to the absorber
+("…6" tail in a "…5" node). The original strictly-extends guard
+refused siblings, leaving field-validated empties unresolved; and an
+absorber whose tail carried a DIFFERENT inline label could be
+mis-claimed or overwritten (the field −1 regression).
+
+**Decision:** The extraction guard refuses only a tail whose number
+EQUALS the absorber's own section number (the demoted-duplicate shape
+the guard was built for) or is an ANCESTOR of it; siblings and
+extensions both claim. Two displacement guards: extraction refuses a
+tail carrying a labeled id different from the claiming node's; the
+plain backward move refuses a carrier whose text ENDS with a labeled
+id.
+
+**Why:** Field block-shapes proved the sibling case is the dominant
+chained-doc reality, not an edge; strict-extends was protecting
+against a shape (same-number duplicates) that the equality check
+covers alone. The label guards keep the relaxation safe: a statement
+carrying its own label always outranks positional inference.
+
+**Consequences:** Any different-branch dotted tail is now claimable —
+a text-level mis-claim sweep is queued as follow-up since coarse id
+audits can't catch one. Field-validated: zero ids lost, chained
+empties resolved.
+
+## D-DRAFT-9 — Inline-trailing announcements: close the cursor, keep the scavenge shape (own-node spawn deferred)
+
+**Context:** A third announcement form puts statement and label in ONE
+paragraph ("<sub-num> <statement> (Marker) ID: <id>"). The
+announced-cursor routing swallowed such paragraphs into the open
+announced node, skipping the scavenge that anchored the inline label —
+the label degraded to plain text and a neighboring announcement's id
+was stamped over the node (field −1 regression).
+
+**Decision:** A body paragraph ENDING with its own labeled id closes
+the open announced cursor and takes the section body path, where the
+existing scavenge anchors the inline id exactly as before the
+announced-req machinery landed. End-of-text match only — mid-prose
+citations keep flowing to the open announced req. The off-by-one node
+shape (statement N+1's text on node N) is deliberately preserved; a
+proper own-node spawn for the inline form is queued as post-batch
+follow-up, not shipped pre-batch.
+
+**Why:** Restoring the proven scavenge anchor was a zero-new-mechanism
+fix on the batch's critical path; an own-node spawn changes node
+topology corpus-wide and deserved its own validation cycle. A fourth
+form (inline labels on numbering-path statements, one doc version)
+needs that mechanism and was explicitly accepted as residue.
+
+**Consequences:** One doc version ships with −1 anchored id + 3 empty
+announced nodes as known state. The follow-up strand inherits the
+own-node spawn design, which will also retire the off-by-one shape.
+
+## D-DRAFT-10 — Heading-continuation defense is numbering-path-only
+
+**Context:** Field validation showed styled level-1 chapter headings
+with solo-id last runs failing to anchor while identically-shaped
+level-2 siblings anchored — an empirical depth gate the design said
+should not exist. Root cause: the heading-continuation defense (a
+guard against PDF split-line artifacts misclassified as phantom
+depth-1 chapters) documented itself as numbering-path-only but never
+checked the detection method, so a TOC-paired chapter heading directly
+following another heading was swallowed into that section's title, id
+and all.
+
+**Decision:** The defense is gated to the numbering classification
+path in code. Word `Heading N` styles are authoritative: a styled
+level-1 heading is never a split-line continuation artifact, so
+docx_styles corpora bypass the defense entirely.
+
+**Why:** The artifact the defense targets is a PDF text-extraction
+failure mode; DOCX style tags cannot produce it. Depth is not a
+definition-vs-citation discriminator anywhere else in the design — the
+anchor-mode rules are — and this was the only (accidental) depth gate.
+
+**Consequences:** Chapter-level requirement ids anchor on docx_styles
+corpora (33-id field residue resolved on re-parse). Numbering-path
+corpora keep the defense unchanged.
+
+## D-DRAFT-11 — Generic <PLAN> placeholder class includes hyphen
+
+**Context:** A live user complaint: an entire plan family absent from
+the eval UI and retrieval. The generic `<PLAN>` placeholder
+materialized to `[A-Za-z0-9_ ]+` — space allowed, hyphen not — so
+every id under a hyphenated plan token failed to anchor (one family
+100% invisible), and the recall checker, sharing the same pattern, was
+blind to the loss by construction (the predicted pattern-blind class
+found live).
+
+**Decision:** The generic class is `[A-Za-z0-9_ -]+`, canonicalized
+core-side in the placeholder table so every profile inheriting the
+placeholder gets the fix; the interim inlined profile edit reverts to
+the generic placeholder.
+
+**Why:** Hyphenated plan tokens are real definitions, not noise; the
+surrounding pattern (fixed prefix + `_\d+` suffix) keeps
+false-positive risk immaterial. Core-side canonicalization beats
+per-profile inlining because profile forks from the generic class
+recreate the blindness.
+
+**Consequences:** +931/+925 ids per affected cell; complaint doc went
+0 → 231/231 anchored. Standing lesson recorded: any pattern the
+checker shares with the parser is a shared blind spot — coverage
+sweeps must scan with broader patterns than the profile's own.
+
+## D-DRAFT-12 — Ship criterion applied: batch once with explicitly accepted residue
+
+**Context:** After nine validation rounds the remaining recall gap was
+one doc version needing a fourth recognition mechanism (inline labels
+on numbering-path statements). Enrichment is hours-long and the hold
+existed to run it exactly once; the original user complaint shipped
+only with the batch.
+
+**Decision:** Run the single combined enrichment batch with the
+residue explicitly accepted and recorded: −1 anchored id + 3 empty
+announced nodes in one doc version, plus a one-occurrence
+prefix-space label sub-variant. Ship criterion: residue demonstrably
+deep (new mechanism, not a fix to existing ones), confined to one doc
+version, and net recall massively positive (checker-missing 13980 →
+1524; ~1900 requirements recovered per largest cell, zero ids lost).
+
+**Why:** Holding the batch for a mechanism that needs its own design
+and validation cycle would have delayed every recovered requirement
+and the complaint fix for a marginal, bounded gain. Accepting residue
+implicitly, by contrast, hides it — the acceptance is recorded with a
+follow-up queue.
+
+**Consequences:** Corpus 37543 → 40097 served; eval-UI acceptance
+passed (original complaint end-to-end, fresh 3-id report resolved by
+pre-existing fixes). Follow-up queue (inline own-node spawn,
+prefix-space tolerance, mis-claim text sweep) is a standing scope
+decision after landing.

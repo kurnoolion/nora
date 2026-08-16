@@ -58,3 +58,40 @@
   close or capture at /land-strand.
 - Eval Studio picker/req-browser read parse trees — announced-node and
   backward-move reshaping will surface there after the next promote.
+
+## 2026-08-16 — Rounds 6–10: recognition fixes converge, batch ships, acceptance passes
+
+### Done this session
+- Absorbed-statement extraction post-pass (fixpoint; text-only eligibility;
+  sibling tails claimable) — closing-announcement statements recovered from
+  id-bearing absorbers; chained docs unwind completely.
+- Inline-trailing announcement defense + displacement guards — third
+  announcement form keeps its own id; field −1 regression fixed.
+- Heading-continuation defense gated to numbering path — the de-facto
+  level-1 anchor gate behind the 33-id chapter residue; docx_styles
+  chapter headings now anchor.
+- Separator-absorption id canonicalization (parser + checker) — space-variant
+  labels anchor with clean canonical ids; generic <PLAN> class gains hyphen
+  (live class-(b) complaint: entire plan families invisible end-to-end).
+- Checker: cell-wide cross_doc resolution and whitespace canonicalization
+  landed; TOTAL MISSING 13980 (strand start) → 1524, honest buckets.
+- Combined enrichment batch ran ONCE per the hold: corpus 37543 → 40097,
+  ~10.8k docs enriched, zero non-benign verify failures, serving healthy.
+- Eval-UI acceptance PASSED: original complaint resolved end-to-end (232
+  rows from 0, live probe top-10); fresh 3-id report resolved by
+  pre-existing fixes. Field validation closed.
+- Code comments swept for internal process references; composition gate
+  extended.
+
+### In progress
+- (none — strand work complete; awaiting /land-strand)
+
+### Next
+- /land-strand req-recall: promote D-DRAFT-1..12, archive the strand.
+- Scope decision on the follow-up queue: inline-form own-node spawn,
+  prefix-space label tolerance, sibling-claim text sweep.
+
+### Flags
+- Accepted residue: one doc version carries −1 anchored id + 3 empty
+  announced nodes (fourth announcement form) — known state, queued.
+- table-fidelity strand journal still 2 sessions behind (pre-existing flag).
