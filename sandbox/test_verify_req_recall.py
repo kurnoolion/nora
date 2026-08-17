@@ -334,18 +334,42 @@ def test_scan_ir_over_capture_guard_recovers_true_id():
     applies — never the welded capture, and never a false MISSING."""
     cfg = {"pattern": r"ABC-[A-Za-z0-9_ -]+-\d+", "normalize": "none"}
     found = scan_ir(_ir([
-        _block("paragraph", "ABC-FOO-1 The device shall attach in under-2"),
+        _block("paragraph",
+               "ABC-FOO-1 The device shall always attach quickly in under-2"),
     ]), cfg)
     assert "ABC-FOO-1" in found["body"]
     assert all(" " not in rid and "under" not in rid for rid in found["body"])
 
 
 def test_scan_ir_over_capture_guard_rejects_unrecoverable():
-    """No whitespace-bounded slice is itself an id → the capture is
-    dropped (visible loss on the extract side, mirroring the parser's
-    no-id skip) rather than surfacing as a welded body id."""
+    """No whitespace-bounded slice is itself an id → the over-bound
+    capture is dropped (visible loss on the extract side, mirroring the
+    parser's no-id skip) rather than surfacing as a welded body id."""
     cfg = {"pattern": r"ABC-[A-Za-z0-9_ -]+-\d+", "normalize": "none"}
     found = scan_ir(_ir([
-        _block("paragraph", "ABC-alpha beta gamma delta epsilon-5"),
+        _block("paragraph", "ABC-alpha beta gamma delta epsilon zeta eta-5"),
+    ]), cfg)
+    assert found["body"] == {}
+
+
+def test_scan_ir_inbound_multiword_id_passes_untouched():
+    """Bounds-first (field-corrected): an in-bound multi-word id passes
+    with no recovery and no rejection — the first deployment truncated /
+    rejected the multi-word plan-token family (~220 ids per cell)."""
+    cfg = {"pattern": r"ABC-[A-Za-z0-9_ -]+-\d+", "normalize": "none"}
+    found = scan_ir(_ir([
+        _block("paragraph", "ABC-Ultra Wide Band Pro Max-99"),
+    ]), cfg)
+    assert "ABC-Ultra_Wide_Band_Pro_Max-99" in found["body"]
+
+
+def test_scan_ir_guard_max_words_knob_threads_from_profile():
+    """The checker reads the SAME profile knob the parser does
+    (requirement_id.guard_max_words) — a divergent bound would diff
+    clean parses as MISSING."""
+    cfg = {"pattern": r"ABC-[A-Za-z0-9_ -]+-\d+", "normalize": "none",
+           "guard_max_words": 2}
+    found = scan_ir(_ir([
+        _block("paragraph", "ABC-Ultra Wide Band Pro Max-99"),
     ]), cfg)
     assert found["body"] == {}

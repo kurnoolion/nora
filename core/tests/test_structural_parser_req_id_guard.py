@@ -6,9 +6,16 @@ prose ending in ``-<digits>`` completes the match — and whitespace
 canonicalization then welds the capture into one silently corrupted
 token. Field-validated on a served corpus (354 corrupted rows under a
 leading anchor; 1 per cell under the end-anchored fused-heading
-rescue). The guard is the core-side backstop: recovery when the true
-id is present at the capture's anchored edge (the weld signature), a
-loud no-id skip otherwise — never a silent weld.
+rescue).
+
+BOUNDS-FIRST semantics (field-corrected): in-bound captures pass
+UNTOUCHED — the first deployment recovered/rejected on every
+whitespace-bearing capture with a word bound of 3, which truncated
+legitimate multi-word ids (plan tokens carry interior ``-<digits>``
+segments) and rejected ~220 legitimate ids per cell on a corpus whose
+plan-token inventory reaches 5 words. Recovery and rejection now engage
+only past the profile-tunable bound (``requirement_id.guard_max_words``,
+default 6).
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ from core.src.models.document import (
 from core.src.parser.structural_parser import (
     GenericStructuralParser,
     RequirementTree,
+    guard_req_id_capture,
 )
 from core.src.profiler.profile_schema import (
     BodyText,
@@ -42,7 +50,10 @@ _PERMISSIVE_PATTERN = r"XPRE-[A-Za-z0-9_ -]+-\d+"
 
 
 def _profile(
-    *, anchor: str = "last_run", detection_mode: str = "heading"
+    *,
+    anchor: str = "last_run",
+    detection_mode: str = "heading",
+    guard_max_words: int = 6,
 ) -> DocumentProfile:
     return DocumentProfile(
         profile_name="test",
@@ -58,6 +69,7 @@ def _profile(
             pattern=_PERMISSIVE_PATTERN,
             anchor=anchor,
             detection_mode=detection_mode,
+            guard_max_words=guard_max_words,
         ),
         plan_metadata=PlanMetadata(),
         document_zones=[],
@@ -107,8 +119,13 @@ def _parse(profile: DocumentProfile, blocks: list[ContentBlock]) -> RequirementT
     return GenericStructuralParser(profile).parse(_doc(blocks))
 
 
+# A weld comfortably past the default bound: true id + 8 words of prose
+# ending in -<digits>.
+_LONG_WELD = "XPRE-PLAN-1 The device shall keep running text until tail-2"
+
+
 # ---------------------------------------------------------------------------
-# _guard_req_id unit behavior
+# _guard_req_id unit behavior (bounds-first)
 # ---------------------------------------------------------------------------
 
 
@@ -120,34 +137,47 @@ class TestGuardUnit:
         assert p._parse_stats.req_id_captures_rejected == 0
 
     def test_weld_recovered_from_start_side(self):
-        # The field weld shape: true id + prose ending in -<digits>.
-        raw = "XPRE-PLAN-1 The device shall support handover-2"
         p = _parser()
-        assert p._guard_req_id(raw) == "XPRE-PLAN-1"
+        assert p._guard_req_id(_LONG_WELD) == "XPRE-PLAN-1"
         assert p._parse_stats.req_id_over_captures_recovered == 1
 
     def test_legit_multiword_plan_passes(self):
-        # Multi-word plan tokens are real corpus shapes — no recovery
-        # candidate fullmatches (no interior -<digits> boundary), and the
-        # capture is within the word bound.
         p = _parser()
         assert p._guard_req_id("XPRE-Voice WiFi-123") == "XPRE-Voice WiFi-123"
         assert p._parse_stats.req_id_over_captures_recovered == 0
         assert p._parse_stats.req_id_captures_rejected == 0
 
+    def test_five_word_inventory_passes(self):
+        # Field-validated inventory shape: 5-word plan token = 5 raw words
+        # (first fuses with the prefix, last with the number). The first
+        # deployment's bound of 3 rejected this whole family.
+        p = _parser()
+        raw = "XPRE-Ultra Wide Band Pro Max-99"
+        assert p._guard_req_id(raw) == raw
+        assert p._parse_stats.req_id_captures_rejected == 0
+
+    def test_inbound_id_with_fullmatching_prefix_is_never_truncated(self):
+        # Field-confirmed hazard of the first deployment: a legitimate
+        # plan token with an interior -<digits> segment has a prefix
+        # slice that fullmatches the pattern. An in-bound capture must
+        # pass UNTOUCHED — recovering here silently replaces a real id
+        # with its truncation.
+        p = _parser()
+        raw = "XPRE-Rel-15 NR Support-123"
+        assert p._guard_req_id(raw) == raw
+        assert p._parse_stats.req_id_over_captures_recovered == 0
+
     def test_end_side_recovery_prefers_trailing_id(self):
-        # End-anchored capture spanning a mid-text citation: the TRUE id
-        # is the trailing one; prefix recovery would resurrect the
-        # citation.
-        raw = "XPRE-CITE-1 something in prose XPRE-FOO-123"
+        # Over-bound end-anchored capture spanning a mid-text citation:
+        # the TRUE id is the trailing one; prefix recovery would
+        # resurrect the citation.
+        raw = "XPRE-CITE-1 some longer prose keeps running here XPRE-FOO-123"
         p = _parser()
         assert p._guard_req_id(raw, side="end") == "XPRE-FOO-123"
         assert p._parse_stats.req_id_over_captures_recovered == 1
 
     def test_unrecoverable_overwide_capture_rejected(self):
-        # No whitespace-bounded slice is itself an id and the capture
-        # exceeds the word bound → loud skip, not a weld.
-        raw = "XPRE-alpha beta gamma delta epsilon-5"
+        raw = "XPRE-alpha beta gamma delta epsilon zeta eta theta-5"
         p = _parser()
         assert p._guard_req_id(raw) == ""
         assert p._parse_stats.req_id_captures_rejected == 1
@@ -157,6 +187,24 @@ class TestGuardUnit:
         raw = "XPRE-" + "A" * 70 + "-1"
         assert p._guard_req_id(raw) == ""
         assert p._parse_stats.req_id_captures_rejected == 1
+
+    def test_profile_knob_tightens_the_bound(self):
+        # guard_max_words is corpus inventory: with a bound of 2, a
+        # 3-word capture is over-bound; no slice fullmatches → reject.
+        p = _parser(guard_max_words=2)
+        assert p._guard_req_id("XPRE-Ultra Wide Band-99") == ""
+        assert p._parse_stats.req_id_captures_rejected == 1
+
+    def test_recovered_slice_must_be_inbound(self):
+        # Recovery honors the same bound: when the only fullmatching
+        # slice is itself over-bound (2 words vs max_words=1), it is not
+        # recovered — the capture rejects.
+        import re as _re
+        raw = "XPRE-Voice WiFi-123 with extra prose tail running long-7"
+        guarded, action = guard_req_id_capture(
+            raw, _re.compile(_PERMISSIVE_PATTERN), max_words=1,
+        )
+        assert (guarded, action) == ("", "rejected")
 
 
 # ---------------------------------------------------------------------------
@@ -168,9 +216,9 @@ class TestSeamIntegration:
     def test_fused_single_run_heading_recovers_true_id(self):
         # ``concatenated_run_heading`` rescue (anchor=last_run, one run):
         # findall over text over-captures; the guard recovers the id.
+        text = "1.1 " + _LONG_WELD
         tree = _parse(_profile(anchor="last_run"), [
-            _heading(0, "1.1 XPRE-PLAN-1 statement prose ending in tail-9",
-                     runs=["1.1 XPRE-PLAN-1 statement prose ending in tail-9"]),
+            _heading(0, text, runs=[text]),
             _para(1, "Body."),
         ])
         assert tree.requirements[0].req_id == "XPRE-PLAN-1"
@@ -180,9 +228,11 @@ class TestSeamIntegration:
         # Multi-run fused heading whose text also carries an earlier
         # citation: the end-anchored rescue match spans from the citation
         # to the end; end-side recovery must return the TRAILING id.
-        text = "1.2 See XPRE-CITE-1 then TITLE XPRE-FOO-123"
+        text = "1.2 See XPRE-CITE-1 then a longer running title XPRE-FOO-123"
         tree = _parse(_profile(anchor="last_run"), [
-            _heading(0, text, runs=["1.2 See XPRE-CITE-1 then TITLE XPRE-", "FOO-123"]),
+            _heading(0, text,
+                     runs=["1.2 See XPRE-CITE-1 then a longer running title XPRE-",
+                           "FOO-123"]),
             _para(1, "Body."),
         ])
         assert tree.requirements[0].req_id == "XPRE-FOO-123"
@@ -191,10 +241,10 @@ class TestSeamIntegration:
     def test_leading_text_anchor_recovers_true_id(self):
         # The served-corpus mechanism: start-anchored, no end bound.
         tree = _parse(_profile(anchor="leading_text"), [
-            _heading(0, "1.3 XPRE-PLAN-2 device shall do things-7"),
+            _heading(0, "1.3 " + _LONG_WELD),
             _para(1, "Body."),
         ])
-        assert tree.requirements[0].req_id == "XPRE-PLAN-2"
+        assert tree.requirements[0].req_id == "XPRE-PLAN-1"
         assert tree.parse_stats.req_id_over_captures_recovered >= 1
 
     def test_leading_id_body_mode_recovers_true_id(self):
@@ -204,12 +254,25 @@ class TestSeamIntegration:
         prof = _profile(anchor="leading_text", detection_mode="leading_id_body")
         tree = _parse(prof, [
             _heading(0, "1 Chapter"),
-            _para(1, "XPRE-PLAN-3 The system shall complete attach in under-4"),
+            _para(1, "XPRE-PLAN-3 The system shall always complete attach "
+                     "procedures with time to spare under-4"),
         ])
         ids = {r.req_id for r in tree.requirements}
         assert "XPRE-PLAN-3" in ids
         # The weld (canonicalized with underscores) must not exist.
         assert not any("_" in rid and "under" in rid for rid in ids)
+
+    def test_multiword_id_survives_full_parse_untouched(self):
+        # A clean 5-word-plan id through the solo-run last_run path:
+        # in-bound → no recovery, no rejection, canonical underscores.
+        tree = _parse(_profile(anchor="last_run"), [
+            _heading(0, "1.5 TITLE XPRE-Ultra Wide Band Pro Max-99",
+                     runs=["1.5 TITLE ", "XPRE-Ultra Wide Band Pro Max-99"]),
+            _para(1, "Body."),
+        ])
+        assert tree.requirements[0].req_id == "XPRE-Ultra_Wide_Band_Pro_Max-99"
+        assert tree.parse_stats.req_id_over_captures_recovered == 0
+        assert tree.parse_stats.req_id_captures_rejected == 0
 
     def test_clean_parse_leaves_counters_zero(self):
         tree = _parse(_profile(anchor="last_run"), [
@@ -230,7 +293,7 @@ class TestSeamIntegration:
 class TestStatsRoundTrip:
     def test_guard_counters_survive_save_load(self, tmp_path):
         tree = _parse(_profile(anchor="leading_text"), [
-            _heading(0, "1.3 XPRE-PLAN-2 device shall do things-7"),
+            _heading(0, "1.3 " + _LONG_WELD),
             _para(1, "Body."),
         ])
         assert tree.parse_stats.req_id_over_captures_recovered >= 1

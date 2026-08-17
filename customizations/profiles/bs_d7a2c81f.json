@@ -9,8 +9,13 @@
     "docs": 2,
     "kinds_with_rules": 7,
     "annotations": 31,
-    "low_prov_kinds": ["toc", "definitions", "reference_list"],
-    "notes": "Replaces the previously-committed leaky profile (removed in this commit + history rewrite). All proprietary tokens replaced with placeholders per D-062. Real values live in customizations/mappings/bs_d7a2c81f.json (owned by Cline; pushed to company-internal git only — public-mirror leak prevented by sync-work.sh pre-push hook)."
+    "low_prov_kinds": [
+      "toc",
+      "definitions",
+      "reference_list"
+    ],
+    "notes": "Replaces the previously-committed leaky profile (removed in this commit + history rewrite). All proprietary tokens replaced with placeholders per D-062. Real values live in customizations/mappings/bs_d7a2c81f.json (owned by Cline; pushed to company-internal git only — public-mirror leak prevented by sync-work.sh pre-push hook).",
+    "guard_max_words": "Over-capture guard word bound (strand id-precision), set from the field-measured plan-token inventory: canonical underscore-segment distribution shows legitimate ids up to 7 segments (= 5 raw whitespace-separated words; segments = words + 2 for this prefix shape) and exactly one 8-segment corrupted weld per cell. A bound of 5 passes the entire legitimate inventory untouched and puts the 6-word weld over-bound, where anchored-side recovery yields its true id. Do not raise without re-measuring the inventory; the module default (6) would let the known weld shape pass."
   },
   "heading_detection": {
     "method": "docx_styles",
@@ -28,6 +33,7 @@
       "number_position": 3
     },
     "anchor": "last_run",
+    "guard_max_words": 5,
     "sample_ids": [],
     "total_found": 0
   },

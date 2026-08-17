@@ -155,6 +155,20 @@ class RequirementIdPattern:
     configured — the default (False) preserves the contract that an
     unlabeled id in an id_label corpus is always a reference."""
 
+    guard_max_words: int = 6
+    """Over-capture guard word bound (strand id-precision): the widest
+    whitespace-separated word count an honest raw id capture can carry for
+    this corpus. Captures within the bound pass UNTOUCHED (no recovery, no
+    rejection — so a legitimate multi-word plan token can never be
+    truncated or dropped); captures over the bound get weld recovery from
+    the anchored side, else a loud no-id skip. Set from the corpus's real
+    plan-token inventory plus headroom: field-validated inventories reach
+    5-word plan tokens (a 5-word plan spans 5 raw words — first word fuses
+    with the prefix, last with the number), and a bound of 3 cost ~220
+    legitimate ids per cell on such a corpus. Default 6 = observed max + 1.
+    Tune DOWN only when the corpus inventory is known to be narrower and a
+    tighter net for short welds is wanted."""
+
     detection_mode: str = "heading"
     """Where requirements are detected in the document (D-DRAFT-2):
       - ``"heading"`` (default): requirements are heading-anchored — every

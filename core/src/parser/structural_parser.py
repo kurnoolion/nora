@@ -44,12 +44,18 @@ _SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*")
 # requirement isn't tracked under two different identifiers.
 _REQ_ID_WHITESPACE_RE = re.compile(r"\s+")
 
-# Over-capture guard bounds (strand id-precision). A legitimate req_id is a
-# prefix + plan token + number; observed plan tokens run to two words
-# ("Voice WiFi"-style), so three whitespace-separated words is the widest
-# honest capture. Length carries generous headroom over every observed
-# inventory. Beyond either bound the capture is prose, not an id.
-_REQ_ID_GUARD_MAX_WORDS = 3
+# Over-capture guard bounds (strand id-precision). The word bound is the
+# profile-tunable ``requirement_id.guard_max_words`` (default mirrored
+# here); the length bound is structural headroom no honest id approaches.
+# BOUNDS-FIRST semantics (field-corrected): an in-bound capture passes
+# UNTOUCHED — the first deployment attempted weld recovery on every
+# whitespace-bearing capture and a too-tight word bound of 3, which
+# (a) truncated legitimate multi-word ids whose plan tokens carry an
+# interior ``-<digits>`` segment (the recovered "shortest slice that
+# fullmatches" was a prefix of the real id), and (b) rejected ~220
+# legitimate ids per cell on a corpus whose plan-token inventory reaches
+# 5 words. Recovery and rejection now engage ONLY past the bounds.
+_REQ_ID_GUARD_MAX_WORDS_DEFAULT = 6
 _REQ_ID_GUARD_MAX_LEN = 64
 
 
@@ -57,6 +63,7 @@ def guard_req_id_capture(
     raw: str,
     pattern_re: re.Pattern | None,
     side: str = "start",
+    max_words: int = _REQ_ID_GUARD_MAX_WORDS_DEFAULT,
 ) -> tuple[str, str]:
     """Over-capture guard for a raw pattern-matched req_id.
 
@@ -70,48 +77,54 @@ def guard_req_id_capture(
     recall checker applies the SAME semantics — a checker that
     over-captures in agreement with the parser hides the corruption.
 
-    Applied to every raw match BEFORE canonicalization:
+    BOUNDS-FIRST, applied to every raw match BEFORE canonicalization:
 
-      1. Whitespace-free captures within the length bound pass.
-      2. Weld recovery: the shortest whitespace-bounded slice from the
-         capture's anchored side that itself fullmatches the pattern is
-         the true id (the weld signature — a corrupted capture contains
-         a complete id at its anchored edge). ``side="start"`` scans
-         prefixes (start-anchored and unanchored matches over-run
-         rightward); ``side="end"`` scans suffixes (end-anchored
-         captures over-run leftward, and the true id is the trailing
-         one — prefix recovery there would resurrect a mid-text
-         citation).
-      3. No recoverable slice and the capture within both bounds →
-         pass (legitimate multi-word plan token).
-      4. Otherwise reject: a visible no-id skip beats a silently
-         corrupted id.
+      1. In-bound captures (≤ ``max_words`` whitespace-separated words
+         AND ≤ the length bound) pass UNTOUCHED — never recovered,
+         never rejected. A legitimate multi-word plan token cannot be
+         truncated even when a prefix slice of it happens to fullmatch
+         the pattern (plan tokens with interior ``-<digits>`` segments
+         are real; field-corrected from the first deployment).
+      2. Over-bound → weld recovery: the shortest whitespace-bounded
+         slice from the capture's ANCHORED side that itself fullmatches
+         the pattern AND is in-bound is the true id (the weld signature
+         — a corrupted capture contains a complete id at its anchored
+         edge). ``side="start"`` scans prefixes (start-anchored and
+         unanchored matches over-run rightward); ``side="end"`` scans
+         suffixes (end-anchored captures over-run leftward, and the
+         true id is the trailing one — prefix recovery there would
+         resurrect a mid-text citation).
+      3. Over-bound with no recoverable slice → reject: a visible
+         no-id skip beats a silently corrupted id.
 
-    Returns ``(guarded_raw, action)`` — action is ``"pass"``,
-    ``"recovered"``, or ``"rejected"`` (guarded_raw is ``""`` on
-    rejection).
+    ``max_words`` comes from the profile
+    (``requirement_id.guard_max_words``) — corpus inventory belongs in
+    the profile, not code. Returns ``(guarded_raw, action)`` — action
+    is ``"pass"``, ``"recovered"``, or ``"rejected"`` (guarded_raw is
+    ``""`` on rejection).
     """
     raw = (raw or "").strip()
     if not raw:
         return "", "rejected"
-    if not _REQ_ID_WHITESPACE_RE.search(raw):
-        if len(raw) <= _REQ_ID_GUARD_MAX_LEN:
-            return raw, "pass"
-        return "", "rejected"
-    if pattern_re is not None:
+    if (
+        len(raw) <= _REQ_ID_GUARD_MAX_LEN
+        and len(raw.split()) <= max(1, max_words)
+    ):
+        return raw, "pass"
+    if pattern_re is not None and _REQ_ID_WHITESPACE_RE.search(raw):
         boundaries = list(_REQ_ID_WHITESPACE_RE.finditer(raw))
         if side == "end":
             candidates = (raw[m.end():].strip() for m in reversed(boundaries))
         else:
             candidates = (raw[: m.start()].strip() for m in boundaries)
         for slice_ in candidates:
-            if slice_ and pattern_re.fullmatch(slice_):
+            if (
+                slice_
+                and len(slice_) <= _REQ_ID_GUARD_MAX_LEN
+                and len(slice_.split()) <= max(1, max_words)
+                and pattern_re.fullmatch(slice_)
+            ):
                 return slice_, "recovered"
-    if (
-        len(raw.split()) <= _REQ_ID_GUARD_MAX_WORDS
-        and len(raw) <= _REQ_ID_GUARD_MAX_LEN
-    ):
-        return raw, "pass"
     return "", "rejected"
 
 # Whitespace ADJACENT to an existing separator is a source-formatting
@@ -675,6 +688,12 @@ class GenericStructuralParser:
         )
         self._leading_id_mode = (
             profile.requirement_id.detection_mode == "leading_id_body"
+        )
+        # Over-capture guard word bound (id-precision) — profile-tuned
+        # corpus inventory; 0/unset falls back to the module default.
+        self._guard_max_words = (
+            profile.requirement_id.guard_max_words
+            or _REQ_ID_GUARD_MAX_WORDS_DEFAULT
         )
         # Requirement-vs-section discriminator (D-DRAFT): a captured req_id is an
         # ACTUAL requirement only when it matches this narrower pattern. None →
@@ -3577,7 +3596,9 @@ class GenericStructuralParser:
         Logs carry the recovered id and structural counts only — never
         the raw tail, which may contain document prose.
         """
-        guarded, action = guard_req_id_capture(raw, self._req_id_re, side=side)
+        guarded, action = guard_req_id_capture(
+            raw, self._req_id_re, side=side, max_words=self._guard_max_words
+        )
         if action == "recovered":
             self._parse_stats.req_id_over_captures_recovered += 1
             logger.warning(

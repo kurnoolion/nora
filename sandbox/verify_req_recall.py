@@ -128,6 +128,8 @@ def scan_ir(ir: dict, id_cfg: dict) -> dict:
     toc: set[str] = set()
     section_id: set[str] = set()
 
+    guard_max_words = int(id_cfg.get("guard_max_words") or 6)
+
     def classify(text: str, bucket_add) -> None:
         for m in pat.finditer(text or ""):
             # Over-capture guard (strand id-precision) — SHARED with the
@@ -136,8 +138,13 @@ def scan_ir(ir: dict, id_cfg: dict) -> dict:
             # checker that over-captures in agreement with the parser
             # hides the corruption. Guarding only one side would instead
             # surface every weld as a false MISSING. finditer matches
-            # over-run rightward, so recovery scans from the start.
-            raw, _action = guard_req_id_capture(m.group(0), pat, side="start")
+            # over-run rightward, so recovery scans from the start. The
+            # word bound comes from the SAME profile knob the parser
+            # reads (requirement_id.guard_max_words) — a divergent bound
+            # would diff clean parses as MISSING.
+            raw, _action = guard_req_id_capture(
+                m.group(0), pat, side="start", max_words=guard_max_words
+            )
             if not raw:
                 continue
             rid = _normalize(raw, norm)
