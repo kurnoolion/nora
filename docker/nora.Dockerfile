@@ -63,6 +63,11 @@ CMD ["uvicorn", "core.src.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
 # ----------------------------------------------------------- nora-pipeline --
 FROM nora-base AS nora-pipeline
 ARG OFFLINE=0
+# Install build essentials for torch._inductor (g++ required by docling/torch
+# tensor-compile path — without a C++ compiler the layout provider aborts).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential g++ \
+    && rm -rf /var/lib/apt/lists/*
 # Docling (CPU): table+figure layout provider for opt-in corpora (D-122).
 # Models are NOT baked — provision into the models volume and set
 # DOCLING_ARTIFACTS=/data/models/docling + HF_HUB_OFFLINE=1 at run time.

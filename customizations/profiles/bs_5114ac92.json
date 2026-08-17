@@ -9,6 +9,7 @@
     "model": "leading_id_body — a single PDF whose top-level chapters are plans; requirements are flat body paragraphs that begin with <PREFIX>-<PLAN>-<DIGITS>; sections/subsections are non-requirement context.",
     "disabled_detections": "revision-history (signal + label), glossary/definitions, and reference-list detection are OFF — this corpus has none of those sections, and the signal-based revhist path false-positived a content table as a changelog.",
     "placeholders": "Proprietary tokens are placeholders per D-062. The literal req_id common prefix is <MNO0> — map it to the real value in customizations/mappings/bs_5114ac92.json (work-PC mapping; pushed to company-internal git only). Structural values (numbering, font sizes, content_start) are literal and corpus-safe.",
+    "id_pattern_precision": "requirement_id.pattern deliberately uses a BOUNDED, space-free plan-token class instead of the generic <PLAN> placeholder. Under this profile's leading_text anchor the id regex is start-anchored with no end bound, so a token class containing a bare space (as generic <PLAN> does) runs greedily across prose and swallows requirement text into the id; whitespace normalization then welds it into one token, silently corrupting ids. Field-validated: the real plan-token inventory contains no spaces and no hyphens, so whitespace tolerance is needed ONLY to heal an id broken beside a separator and is expressed as a scoped \\s? adjacent to each separator. Do NOT reintroduce a bare space or an unbounded run into this class. The length bound carries headroom over the observed inventory; a token exceeding it fails to match and surfaces as a no-id skip in the adapter (visible loss) rather than a corrupted id (silent corruption) — the deliberate trade. Same class is safe under end-bounded anchors (anchor=last_run), so the hazard is class x anchor, not the class alone.",
     "todo_work_pc": [
       "Confirm heading_detection.numbering_pattern against the real chapter/section heading TEXT (currently matches 'Chapter N.' chapters and 'N.M.' subsections with a trailing dot).",
       "Confirm body_text sizes and that the real chapter-heading font size is > font_size_max so the content-start font gate fires (the TOC 'Chapter 3' line is ~10pt and is correctly ignored).",
@@ -24,7 +25,7 @@
     "definitions_section_pattern": ""
   },
   "requirement_id": {
-    "pattern": "<MNO0>-<PLAN>-\\d+",
+    "pattern": "<MNO0>-\\s?[A-Za-z0-9_]{2,8}\\s?-\\s?\\d+",
     "components": {
       "prefix": "<MNO0>",
       "separator": "-",

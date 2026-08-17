@@ -12,6 +12,21 @@ document position. This checks that invariant end to end:
   * Cross-check — tables actually reached the corpus (not silently dropped at
     the adapter boundary).
 
+Where each render class lives (field-validated during the pre-landing
+audit — three audit passes searched the wrong artifact/field before
+this was written down):
+
+  * merged-cell HTML   — node ``text`` (rowspan/colspan attributes in the
+                         inline). ``merged_cells`` is an EXTRACT-IR field,
+                         consumed at render time; it never reaches trees.
+  * compact [Table: …] — node ``text`` (parser-inline; MAY span lines).
+  * markdown flatten   — node ``text`` (pipe rows).
+  * per-table metadata — node ``tables`` field (TableData; counts tables,
+                         carries no render class).
+  Corpus rows are built from node TEXT, so corpus-side counts are per-ROW;
+  tree-side ``tables``-field counts are per-TABLE. State the unit when
+  reporting.
+
 Usage:
     python -m sandbox.verify_tables --parse <env_dir>/out/parse
     python -m sandbox.verify_tables --db-root $NORA_SIRA_DB_ROOT

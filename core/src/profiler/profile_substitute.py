@@ -56,9 +56,18 @@ GENERIC_PLACEHOLDERS: dict[str, str] = {
     #     recall loss (strand req-recall): plan families with hyphens
     #     failed to anchor ANY of their ids, invisibly to the checker,
     #     because the checker shares this pattern.
-    # The full req_id pattern around this still requires the ``VZ_REQ_``
-    # prefix and ``_\d+`` suffix, so the broader char class doesn't
-    # materially increase false-positive risk on body prose.
+    # SAFETY IS ANCHOR-DEPENDENT (field-validated). The prefix + numeric
+    # suffix bound this class only under END-bounded extraction
+    # (anchor=last_run / solo-run / end-anchored rescue). Under a
+    # ``leading_text`` anchor the id regex is start-anchored with NO end
+    # bound, so this space-bearing greedy class runs across body prose
+    # until any downstream ``-<digits>``/``_<digits>`` — swallowing
+    # requirement text into the id, which whitespace canonicalization
+    # then welds into one corrupted token. Leading-anchor profiles must
+    # NOT use this placeholder: use a bounded, space-free class with
+    # scoped ``\s?`` beside separators (see the field-validated profile
+    # provenance notes). The hazard is class x anchor, not the class
+    # alone.
     "<PLAN>": r"[A-Za-z0-9_ -]+",
     "<REL>": r"[A-Za-z0-9-]+",
 }
