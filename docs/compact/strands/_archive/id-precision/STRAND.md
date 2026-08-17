@@ -1,8 +1,8 @@
 # id-precision
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-08-17
-**Landed:**
+**Landed:** 2026-08-17
 **Assignees:** kurnoolion
 **Target modules:** profiler, parser
 **Active phase:** development
@@ -24,3 +24,5 @@ procedure (keep-newest, both files, temp+atomic-rename).
 ## Notes
 
 <!-- appended to over the strand's lifetime -->
+
+Landed on 2026-08-17 with 4 promoted decisions: D-202, D-203, D-204, D-205
