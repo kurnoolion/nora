@@ -1,8 +1,8 @@
 # table-fidelity
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-08-12
-**Landed:**
+**Landed:** 2026-08-17
 **Assignees:** kurnoolion
 **Target modules:** extraction, parser
 **Active phase:** development
@@ -14,3 +14,5 @@ Table fidelity follow-ups from field report #2: (1) fix verify_tables' inline ch
 ## Notes
 
 <!-- appended to over the strand's lifetime -->
+
+Landed on 2026-08-17 with 4 promoted decisions: D-198, D-199, D-200, D-201
