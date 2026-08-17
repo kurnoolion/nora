@@ -44,6 +44,76 @@ _SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*")
 # requirement isn't tracked under two different identifiers.
 _REQ_ID_WHITESPACE_RE = re.compile(r"\s+")
 
+# Over-capture guard bounds (strand id-precision). A legitimate req_id is a
+# prefix + plan token + number; observed plan tokens run to two words
+# ("Voice WiFi"-style), so three whitespace-separated words is the widest
+# honest capture. Length carries generous headroom over every observed
+# inventory. Beyond either bound the capture is prose, not an id.
+_REQ_ID_GUARD_MAX_WORDS = 3
+_REQ_ID_GUARD_MAX_LEN = 64
+
+
+def guard_req_id_capture(
+    raw: str,
+    pattern_re: re.Pattern | None,
+    side: str = "start",
+) -> tuple[str, str]:
+    """Over-capture guard for a raw pattern-matched req_id.
+
+    A permissive plan-token class under a one-sided anchor can run past
+    the real id into surrounding prose — any prose ending in
+    ``-<digits>`` completes the match — and whitespace canonicalization
+    then welds the capture into one silently corrupted token. The
+    hazard is class x anchor (field-validated); this guard is the
+    core-side backstop so no profile pattern can reproduce it
+    regardless of class discipline. Module-level so the extract-side
+    recall checker applies the SAME semantics — a checker that
+    over-captures in agreement with the parser hides the corruption.
+
+    Applied to every raw match BEFORE canonicalization:
+
+      1. Whitespace-free captures within the length bound pass.
+      2. Weld recovery: the shortest whitespace-bounded slice from the
+         capture's anchored side that itself fullmatches the pattern is
+         the true id (the weld signature — a corrupted capture contains
+         a complete id at its anchored edge). ``side="start"`` scans
+         prefixes (start-anchored and unanchored matches over-run
+         rightward); ``side="end"`` scans suffixes (end-anchored
+         captures over-run leftward, and the true id is the trailing
+         one — prefix recovery there would resurrect a mid-text
+         citation).
+      3. No recoverable slice and the capture within both bounds →
+         pass (legitimate multi-word plan token).
+      4. Otherwise reject: a visible no-id skip beats a silently
+         corrupted id.
+
+    Returns ``(guarded_raw, action)`` — action is ``"pass"``,
+    ``"recovered"``, or ``"rejected"`` (guarded_raw is ``""`` on
+    rejection).
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return "", "rejected"
+    if not _REQ_ID_WHITESPACE_RE.search(raw):
+        if len(raw) <= _REQ_ID_GUARD_MAX_LEN:
+            return raw, "pass"
+        return "", "rejected"
+    if pattern_re is not None:
+        boundaries = list(_REQ_ID_WHITESPACE_RE.finditer(raw))
+        if side == "end":
+            candidates = (raw[m.end():].strip() for m in reversed(boundaries))
+        else:
+            candidates = (raw[: m.start()].strip() for m in boundaries)
+        for slice_ in candidates:
+            if slice_ and pattern_re.fullmatch(slice_):
+                return slice_, "recovered"
+    if (
+        len(raw.split()) <= _REQ_ID_GUARD_MAX_WORDS
+        and len(raw) <= _REQ_ID_GUARD_MAX_LEN
+    ):
+        return raw, "pass"
+    return "", "rejected"
+
 # Whitespace ADJACENT to an existing separator is a source-formatting
 # artifact ("ABC-FOO- 123" — systematic in one corpus, 44+ labeled
 # announcement occurrences, strand req-recall field report), not a missing
@@ -345,6 +415,8 @@ class ParseStats:
     defs_extracted: int = 0         # FR-35 [D-032]
     refs_extracted: int = 0         # D-059, D-061 (reference_list_map entries)
     toc_pair_misses: int = 0        # generic-rules pivot — body heading with no TOC entry
+    req_id_over_captures_recovered: int = 0  # id-precision guard: weld recovered to true id
+    req_id_captures_rejected: int = 0        # id-precision guard: over-wide capture dropped
     frontmatter_blocks_dropped: int = 0
     """Generic-rules pivot — blocks ≤ ``max(toc_end, revhist_end)`` that are
     NOT themselves TOC or revhist (typically: doc title heading, preface
@@ -533,6 +605,8 @@ class RequirementTree:
                 defs_extracted=ps.get("defs_extracted", 0),
                 refs_extracted=ps.get("refs_extracted", 0),
                 toc_pair_misses=ps.get("toc_pair_misses", 0),
+                req_id_over_captures_recovered=ps.get("req_id_over_captures_recovered", 0),
+                req_id_captures_rejected=ps.get("req_id_captures_rejected", 0),
                 frontmatter_blocks_dropped=ps.get("frontmatter_blocks_dropped", 0),
             ),
             definitions_map=dict(data.get("definitions_map", {})),
@@ -553,6 +627,10 @@ class GenericStructuralParser:
 
     def __init__(self, profile: DocumentProfile):
         self.profile = profile
+        # Per-parse state (re-initialized in ``parse()``); set here too so
+        # helpers that touch it (the req_id guard) are callable standalone.
+        self._parse_stats = ParseStats()
+        self._doc_source_file = ""
         # Pre-compile regexes from profile
         self._num_re = (
             re.compile(profile.heading_detection.numbering_pattern)
@@ -1157,10 +1235,11 @@ class GenericStructuralParser:
             if self._toc_body_peel_re:
                 pm = self._toc_body_peel_re.match(body)
                 if pm:
-                    title = pm.group("title").strip()
-                    raw = pm.group("req_id")
-                    rid = _canonicalize_req_id(raw)
-                    req_id = rid.upper() if normalize == "upper" else rid
+                    raw = self._guard_req_id(pm.group("req_id"), side="end")
+                    if raw:
+                        title = pm.group("title").strip()
+                        rid = _canonicalize_req_id(raw)
+                        req_id = rid.upper() if normalize == "upper" else rid
 
             entry = TocEntry(
                 depth=depth,
@@ -1843,7 +1922,8 @@ class GenericStructuralParser:
                             and not current_section.req_id
                             and current_section.text
                         ):
-                            req_ids = [_canonicalize_req_id(block.text.strip())]
+                            _g = self._guard_req_id(block.text.strip())
+                            req_ids = [_canonicalize_req_id(_g)] if _g else []
                     else:
                         req_ids = self._find_req_ids(block.text)
                     if req_ids:
@@ -2495,6 +2575,9 @@ class GenericStructuralParser:
         normalize = self.profile.requirement_id.normalize
 
         def _norm(rid: str) -> str:
+            rid = self._guard_req_id(rid)
+            if not rid:
+                return ""
             rid = _canonicalize_req_id(rid)
             return rid.upper() if normalize == "upper" else rid
 
@@ -3482,6 +3565,37 @@ class GenericStructuralParser:
                 return block.position.index
         return -1
 
+    def _guard_req_id(self, raw: str, side: str = "start") -> str:
+        """Over-capture guard for raw pattern-matched req_ids (id-precision).
+
+        Thin wrapper over the module-level ``guard_req_id_capture``
+        (shared with the extract-side recall checker so both sides apply
+        identical semantics — a checker that over-captures in agreement
+        with the parser hides the corruption from the very tool meant to
+        find it). Adds the parser's stats counters and warning logs.
+
+        Logs carry the recovered id and structural counts only — never
+        the raw tail, which may contain document prose.
+        """
+        guarded, action = guard_req_id_capture(raw, self._req_id_re, side=side)
+        if action == "recovered":
+            self._parse_stats.req_id_over_captures_recovered += 1
+            logger.warning(
+                "parser.req_id_guard: recovered %r from an over-wide "
+                "capture (%d chars, %d words, side=%s) doc=%s",
+                guarded, len(raw.strip()), len(raw.split()), side,
+                self._doc_source_file,
+            )
+        elif action == "rejected" and raw.strip():
+            self._parse_stats.req_id_captures_rejected += 1
+            logger.warning(
+                "parser.req_id_guard: rejected over-wide req_id capture "
+                "(%d chars, %d words, side=%s) doc=%s",
+                len(raw.strip()), len(raw.split()), side,
+                self._doc_source_file,
+            )
+        return guarded
+
     def _find_req_ids(self, text: str) -> list[str]:
         """Find all req_id patterns in `text` and canonicalize each.
 
@@ -3489,10 +3603,17 @@ class GenericStructuralParser:
         artifacts (whitespace where an underscore should be) — every
         matched id is normalized via `_canonicalize_req_id` so the same
         requirement is never tracked under two different identifiers.
+        Every match passes the over-capture guard first; rejected
+        captures are dropped from the result.
         """
         if not self._req_id_re or not text:
             return []
-        return [_canonicalize_req_id(rid) for rid in self._req_id_re.findall(text)]
+        out: list[str] = []
+        for rid in self._req_id_re.findall(text):
+            guarded = self._guard_req_id(rid)
+            if guarded:
+                out.append(_canonicalize_req_id(guarded))
+        return out
 
     def _log_format_error(
         self,
@@ -3564,7 +3685,10 @@ class GenericStructuralParser:
         anchor = self.profile.requirement_id.anchor
         normalize = self.profile.requirement_id.normalize
 
-        def _normalize(rid: str) -> str:
+        def _normalize(rid: str, side: str = "start") -> str:
+            rid = self._guard_req_id(rid, side=side)
+            if not rid:
+                return ""
             rid = _canonicalize_req_id(rid)
             return rid.upper() if normalize == "upper" else rid
 
@@ -3630,7 +3754,10 @@ class GenericStructuralParser:
                         runs_count=len(block.runs),
                         text_excerpt=block.text,
                     )
-                    return _normalize(m.group(0))
+                    # End-anchored capture: over-run extends LEFT of the
+                    # true (trailing) id — recovery scans suffixes so a
+                    # mid-heading citation is never resurrected as the id.
+                    return _normalize(m.group(0), side="end")
             return ""
 
         if anchor == "leading_text":

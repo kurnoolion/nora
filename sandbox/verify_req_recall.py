@@ -61,6 +61,8 @@ import re
 import sys
 from pathlib import Path
 
+from core.src.parser.structural_parser import guard_req_id_capture
+
 
 def load_id_config(profile_path: Path) -> dict:
     """Pull the requirement_id block from a materialized cell profile,
@@ -128,7 +130,17 @@ def scan_ir(ir: dict, id_cfg: dict) -> dict:
 
     def classify(text: str, bucket_add) -> None:
         for m in pat.finditer(text or ""):
-            rid = _normalize(m.group(0), norm)
+            # Over-capture guard (strand id-precision) — SHARED with the
+            # parser (guard_req_id_capture): a permissive class under a
+            # one-sided anchor can swallow prose into the match, and a
+            # checker that over-captures in agreement with the parser
+            # hides the corruption. Guarding only one side would instead
+            # surface every weld as a false MISSING. finditer matches
+            # over-run rightward, so recovery scans from the start.
+            raw, _action = guard_req_id_capture(m.group(0), pat, side="start")
+            if not raw:
+                continue
+            rid = _normalize(raw, norm)
             if type_pat and not type_pat.fullmatch(rid):
                 section_id.add(rid)
                 continue

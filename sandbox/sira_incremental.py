@@ -56,6 +56,16 @@ so the trace accumulates):
                   same command, same run_name. (`sira_lane --heal-torn`
                   runs this inline before the lane.)
 
+  dedup         — RECOVERY. Keep only the NEWEST row per resume key in a
+                  stage's kept trace (+ enrichments for doc-enrich),
+                  dropping earlier duplicates. Duplicate kept rows are
+                  reachable by any interrupted or repeated invocation
+                  (field-observed via single-req smoke reruns) and FAIL
+                  `verify-run --strict` — while heal-torn (well-formed
+                  paired rows aren't torn or orphaned), prune (doc
+                  unchanged) and retry-failed (kept, not failed) all
+                  leave them in place. Atomic rewrite; re-verify after.
+
 Usage (work-PC flow, run_name pinned):
   RUN=enrich-stable
   DS=$NORA_SIRA_DB_ROOT/$NORA_SIRA_DATASET
@@ -1096,6 +1106,104 @@ def verify_cell(dataset_dir: Path, run_name: str,
     return rep["verdict"]
 
 
+# ── dedup: newest-wins duplicate-row repair ─────────────────────────────
+#
+# Duplicate kept rows for the same resume key are reachable by any
+# interrupted or repeated invocation (field-observed: single-req smoke
+# reruns each appended a kept + enrichment record for the same doc, with
+# different phrase sets). ``verify-run --strict`` FAILs on them, but no
+# other repair touches them: heal-torn drops torn lines and repairs the
+# cross-file invariant (both rows are well-formed and paired), prune
+# skips unchanged docs, retry-failed evicts failed rows only. This
+# command closes that gap. Newest-wins: rows are appended in run order,
+# so the LAST row per key is the latest enrichment.
+
+_DEDUP_FILES: dict[str, tuple[str, ...]] = {
+    "doc-enrich": ("trace.kept.jsonl", "enrichments.kept.jsonl"),
+    "rerank":     ("trace.kept.jsonl",),
+}
+
+
+def _dedup_jsonl(path: Path, key_fn, *, dry_run: bool = False) -> tuple[int, int]:
+    """Keep the LAST (newest) row per key; drop earlier duplicates.
+
+    Returns (kept, dropped). Unparseable lines and rows whose key
+    contains a None component are kept as-is (defensive — mirroring the
+    prune/retry helpers). Rewrites temp + atomic-rename, never in place
+    (hardlink-shared promoted snapshots must not be edited through a
+    shared inode). No-op if the file is absent or has no duplicates.
+    """
+    if not path.exists():
+        return 0, 0
+    entries: list[tuple[str, object]] = []  # (line, key-or-None)
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                key = key_fn(json.loads(stripped))
+            except json.JSONDecodeError:
+                key = None
+            if isinstance(key, tuple) and any(k is None for k in key):
+                key = None
+            entries.append((stripped, key))
+    last_index: dict[object, int] = {}
+    for i, (_, key) in enumerate(entries):
+        if key is not None:
+            last_index[key] = i
+    kept_lines = [
+        line for i, (line, key) in enumerate(entries)
+        if key is None or last_index[key] == i
+    ]
+    dropped = len(entries) - len(kept_lines)
+    if dropped and not dry_run:
+        _rewrite_atomic(path, kept_lines)
+    return len(kept_lines), dropped
+
+
+def dedup_run_files(
+    run_dir: Path, stage: str, *, dry_run: bool = False
+) -> dict[str, tuple[int, int]]:
+    """Newest-wins dedup of one stage's resume files. Returns
+    {filename: (kept, dropped)} for the stage's dedup-relevant files."""
+    key_fn = _STAGE_KEY_FN[stage]
+    return {
+        name: _dedup_jsonl(run_dir / name, key_fn, dry_run=dry_run)
+        for name in _DEDUP_FILES[stage]
+    }
+
+
+def cmd_dedup(args: argparse.Namespace) -> int:
+    """Repair duplicate resume rows, newest-wins, per stage run dir."""
+    dataset_dir = Path(args.dataset)
+    stages = ("doc-enrich", "rerank") if args.stage == "both" else (args.stage,)
+    label = "would drop" if args.dry_run else "dropped"
+
+    total_dropped = 0
+    for stage in stages:
+        run_dir = dataset_dir / "runs" / stage / args.run_name
+        if not run_dir.is_dir():
+            print(f"{stage}: no run dir at {run_dir} — skipping.")
+            continue
+        counts = dedup_run_files(run_dir, stage, dry_run=args.dry_run)
+        n = sum(d for _, d in counts.values())
+        total_dropped += n
+        print(f"{stage} ({args.run_name}): {n} duplicate row(s) {label}"
+              + "".join(f"\n  {name}: kept {k}, {label} {d}"
+                        for name, (k, d) in counts.items()))
+
+    if args.dry_run:
+        print("\n→ Dry run — nothing rewritten. Re-run without --dry-run "
+              "to repair.")
+    elif total_dropped:
+        print(f"\n→ Re-verify: python -m sandbox.sira_incremental verify-run "
+              f"--dataset {args.dataset} --run-name {args.run_name} --strict")
+    else:
+        print("\n→ No duplicates found; nothing rewritten.")
+    return 0
+
+
 def cmd_verify_run(args: argparse.Namespace) -> int:
     """Read-only health report for ONE cell's doc-enrich run (batch and
     single-req modes), paste-safe. Multi-cell sweeps live at the
@@ -1129,8 +1237,9 @@ def main(argv: list[str] | None = None) -> int:
     pr = sub.add_parser("promote", help="Reconstruct enrichments/doc/<run>.jsonl + best.jsonl from a full-resume run.")
     rf = sub.add_parser("retry-failed", help="Evict failed entries from a stage's resume trace so the next run reprocesses them.")
     ht = sub.add_parser("heal-torn", help="Post-interruption: drop torn JSONL lines and repair the kept/enrichment resume invariant.")
+    dd = sub.add_parser("dedup", help="Repair duplicate resume rows (newest-wins) in a stage's kept trace + enrichments — the verify-run FAIL no other repair command touches.")
     vr = sub.add_parser("verify-run", help="Read-only health report for ONE cell's doc-enrich run (batch or single-req mode): batch stats, trace reconciliation, kept/enrichment invariant, optional cross-run phrase-set diff. Paste-safe (counts only). Multi-cell sweep: sira_multi --verify / sira_lane --verify.")
-    for parser in (pp, pc, pr, rf, ht, vr):
+    for parser in (pp, pc, pr, rf, ht, dd, vr):
         for a, kw in common_args:
             parser.add_argument(*a, **kw)
 
@@ -1198,6 +1307,18 @@ def main(argv: list[str] | None = None) -> int:
                         "doc-enrich only; rerank gets the torn-line drop."
                     ))
 
+    dd.add_argument("--stage", choices=["doc-enrich", "rerank", "both"],
+                    default="both",
+                    help=(
+                        "Which SIRA stage's run dir to dedup. Default 'both'. "
+                        "doc-enrich dedups the kept trace + enrichments; "
+                        "rerank dedups the kept trace."
+                    ))
+    dd.add_argument("--dry-run", action="store_true",
+                    help=(
+                        "Report duplicate counts without rewriting anything."
+                    ))
+
     vr.add_argument("--compare-run", default=None, metavar="NAME",
                     help=(
                         "Second doc-enrich run name to diff phrase sets "
@@ -1215,6 +1336,7 @@ def main(argv: list[str] | None = None) -> int:
         "promote": cmd_promote,
         "retry-failed": cmd_retry_failed,
         "heal-torn": cmd_heal_torn,
+        "dedup": cmd_dedup,
         "verify-run": cmd_verify_run,
     }[args.cmd](args)
 

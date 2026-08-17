@@ -325,3 +325,27 @@ def test_separator_adjacent_space_absorbed_not_underscored(tmp_path):
     ir_path, tree_path = _write_doc(tmp_path, ir, tree)
     res = check_doc(ir_path, tree_path, cfg)
     assert res["missing"] == {}
+
+
+def test_scan_ir_over_capture_guard_recovers_true_id():
+    """Shared over-capture guard (strand id-precision): a permissive
+    space-bearing pattern matching a leading id + prose ending in
+    -<digits> must yield the TRUE id — the same recovery the parser
+    applies — never the welded capture, and never a false MISSING."""
+    cfg = {"pattern": r"ABC-[A-Za-z0-9_ -]+-\d+", "normalize": "none"}
+    found = scan_ir(_ir([
+        _block("paragraph", "ABC-FOO-1 The device shall attach in under-2"),
+    ]), cfg)
+    assert "ABC-FOO-1" in found["body"]
+    assert all(" " not in rid and "under" not in rid for rid in found["body"])
+
+
+def test_scan_ir_over_capture_guard_rejects_unrecoverable():
+    """No whitespace-bounded slice is itself an id → the capture is
+    dropped (visible loss on the extract side, mirroring the parser's
+    no-id skip) rather than surfacing as a welded body id."""
+    cfg = {"pattern": r"ABC-[A-Za-z0-9_ -]+-\d+", "normalize": "none"}
+    found = scan_ir(_ir([
+        _block("paragraph", "ABC-alpha beta gamma delta epsilon-5"),
+    ]), cfg)
+    assert found["body"] == {}

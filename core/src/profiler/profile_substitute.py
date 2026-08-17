@@ -67,7 +67,10 @@ GENERIC_PLACEHOLDERS: dict[str, str] = {
     # NOT use this placeholder: use a bounded, space-free class with
     # scoped ``\s?`` beside separators (see the field-validated profile
     # provenance notes). The hazard is class x anchor, not the class
-    # alone.
+    # alone. The parser additionally guards every raw capture
+    # (structural_parser.guard_req_id_capture — recovery or loud no-id
+    # skip, never a silent weld); that is a backstop, not a license to
+    # widen this class.
     "<PLAN>": r"[A-Za-z0-9_ -]+",
     "<REL>": r"[A-Za-z0-9-]+",
 }
