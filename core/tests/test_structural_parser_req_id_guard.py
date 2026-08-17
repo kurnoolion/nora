@@ -188,6 +188,35 @@ class TestGuardUnit:
         assert p._guard_req_id(raw) == ""
         assert p._parse_stats.req_id_captures_rejected == 1
 
+    def test_containment_catches_inbound_weld(self):
+        # Field experiment: the id+prose+id weld can be NARROWER than the
+        # widest legitimate id, so no word bound separates them. Both
+        # edges fullmatching = two complete ids in one capture → recover
+        # from the anchored side, bounds notwithstanding.
+        raw = "XPRE-PLAN-1 word XPRE-FOO-2"    # 3 words, well in-bound
+        p = _parser()
+        assert p._guard_req_id(raw) == "XPRE-PLAN-1"
+        assert p._parse_stats.req_id_over_captures_recovered == 1
+
+    def test_containment_end_side_returns_trailing_id(self):
+        raw = "XPRE-PLAN-1 word XPRE-FOO-2"
+        p = _parser()
+        assert p._guard_req_id(raw, side="end") == "XPRE-FOO-2"
+
+    def test_containment_adjacent_ids_recover(self):
+        p = _parser()
+        assert p._guard_req_id("XPRE-A-1 XPRE-B-2") == "XPRE-A-1"
+        assert p._parse_stats.req_id_over_captures_recovered == 1
+
+    def test_single_id_prose_tail_inbound_still_passes(self):
+        # The complementary weld shape (id + prose, ONE complete id):
+        # in-bound it passes — that class stays governed by the word
+        # bound and profile class discipline, per the field record.
+        p = _parser()
+        raw = "XPRE-PLAN-1 short tail-here"
+        assert p._guard_req_id(raw) == raw
+        assert p._parse_stats.req_id_over_captures_recovered == 0
+
     def test_profile_knob_tightens_the_bound(self):
         # guard_max_words is corpus inventory: with a bound of 2, a
         # 3-word capture is over-bound; no slice fullmatches → reject.
@@ -261,6 +290,19 @@ class TestSeamIntegration:
         assert "XPRE-PLAN-3" in ids
         # The weld (canonicalized with underscores) must not exist.
         assert not any("_" in rid and "under" in rid for rid in ids)
+
+    def test_fused_heading_inbound_weld_caught_by_containment(self):
+        # The field weld shape: a fused single-run heading whose capture
+        # is id + short prose + id — inside the word envelope, invisible
+        # to any bound; containment recovers the true id.
+        text = "1.6 XPRE-PLAN-1 word XPRE-FOO-2"
+        tree = _parse(_profile(anchor="last_run"), [
+            _heading(0, text, runs=[text]),
+            _para(1, "Body."),
+        ])
+        assert tree.requirements[0].req_id in ("XPRE-PLAN-1", "XPRE-FOO-2")
+        assert "word" not in tree.requirements[0].req_id
+        assert tree.parse_stats.req_id_over_captures_recovered >= 1
 
     def test_multiword_id_survives_full_parse_untouched(self):
         # A clean 5-word-plan id through the solo-run last_run path:

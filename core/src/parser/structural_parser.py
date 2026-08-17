@@ -97,6 +97,19 @@ def guard_req_id_capture(
       3. Over-bound with no recoverable slice → reject: a visible
          no-id skip beats a silently corrupted id.
 
+    CONTAINMENT TRIGGER (bounds-independent, field-measured): a capture
+    whose proper whitespace-bounded PREFIX slice and proper SUFFIX
+    slice each fullmatch the pattern holds at least two complete ids —
+    the ``id + prose + id`` weld shape. That shape can sit INSIDE the
+    legitimate word envelope (field experiment: the known weld capture
+    is narrower than the corpus's widest legitimate id, so no word
+    bound separates them; measured 0 false positives across an entire
+    cell's id inventory — a legitimate multi-word id's edges never both
+    fullmatch, since only one edge carries the literal prefix). It
+    recovers from the anchored side regardless of bounds. The
+    complementary ``id + prose`` (single-id) weld shape stays governed
+    by the word bound and profile class discipline.
+
     ``max_words`` comes from the profile
     (``requirement_id.guard_max_words``) — corpus inventory belongs in
     the profile, not code. Returns ``(guarded_raw, action)`` — action
@@ -106,25 +119,39 @@ def guard_req_id_capture(
     raw = (raw or "").strip()
     if not raw:
         return "", "rejected"
-    if (
-        len(raw) <= _REQ_ID_GUARD_MAX_LEN
-        and len(raw.split()) <= max(1, max_words)
-    ):
-        return raw, "pass"
-    if pattern_re is not None and _REQ_ID_WHITESPACE_RE.search(raw):
-        boundaries = list(_REQ_ID_WHITESPACE_RE.finditer(raw))
-        if side == "end":
-            candidates = (raw[m.end():].strip() for m in reversed(boundaries))
-        else:
-            candidates = (raw[: m.start()].strip() for m in boundaries)
-        for slice_ in candidates:
+    max_w = max(1, max_words)
+
+    def _slices(side_: str):
+        if side_ == "end":
+            return (raw[m.end():].strip() for m in reversed(boundaries))
+        return (raw[: m.start()].strip() for m in boundaries)
+
+    def _first_inbound_id(side_: str) -> str:
+        for slice_ in _slices(side_):
             if (
                 slice_
                 and len(slice_) <= _REQ_ID_GUARD_MAX_LEN
-                and len(slice_.split()) <= max(1, max_words)
+                and len(slice_.split()) <= max_w
                 and pattern_re.fullmatch(slice_)
             ):
-                return slice_, "recovered"
+                return slice_
+        return ""
+
+    boundaries = (
+        list(_REQ_ID_WHITESPACE_RE.finditer(raw))
+        if pattern_re is not None else []
+    )
+    if boundaries:
+        start_id = _first_inbound_id("start")
+        end_id = _first_inbound_id("end")
+        if start_id and end_id:
+            return (end_id if side == "end" else start_id), "recovered"
+    if len(raw) <= _REQ_ID_GUARD_MAX_LEN and len(raw.split()) <= max_w:
+        return raw, "pass"
+    if boundaries:
+        recovered = _first_inbound_id(side)
+        if recovered:
+            return recovered, "recovered"
     return "", "rejected"
 
 # Whitespace ADJACENT to an existing separator is a source-formatting
