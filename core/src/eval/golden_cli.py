@@ -149,6 +149,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="environment name for the compact report header")
     parser.add_argument("--mno", default="",
                         help="run only samples tagged with this carrier (MNO)")
+    parser.add_argument("--answer-prompt-version", default="",
+                        help="stack-stamp field: version of the Stage-2 "
+                             "answer-generation prompt (caller-known)")
+    parser.add_argument("--sira-prompt-scheme", default="",
+                        help="stack-stamp field: enrichment prompt scheme of "
+                             "the SIRA build behind the served data "
+                             "(overrides any healthz-advertised value)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -202,6 +209,9 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         label=args.label,
         timeout=args.timeout,
+        answer_prompt_version=args.answer_prompt_version,
+        llm_identity=args.llm_model or "",
+        sira_prompt_scheme=args.sira_prompt_scheme,
     )
 
     run_dir = write_run(args.env_dir, report, env_name=args.env_name)

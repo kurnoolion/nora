@@ -49,6 +49,10 @@ RUN --mount=type=bind,from=vendor,target=/vendor \
 
 # ---------------------------------------------------------------- nora-web --
 FROM nora-base AS nora-web
+# Serving-code identity (strand golden-eval): baked git sha for eval
+# StackStamp attribution. Pass --build-arg CODE_VERSION="$(git rev-parse --short HEAD)".
+ARG CODE_VERSION=""
+ENV NORA_CODE_VERSION=$CODE_VERSION
 WORKDIR /app
 COPY core/ core/
 COPY customizations/ customizations/

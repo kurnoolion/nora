@@ -100,6 +100,201 @@ def fetch_healthz(stack_url: str, timeout: float = 30.0) -> dict | None:
         return None
 
 
+# ─── Stack stamp ────────────────────────────────────────────────────
+
+
+@dataclass
+class StackStamp:
+    """Runtime-captured identity of the stack a run scored against.
+
+    Stack NAMES (nora1/nora2) are mutable pointers — a stack gets
+    repointed, rebuilt, or re-promoted and keeps its name, and serve
+    labels may be REUSED for cosmetic re-promotions. The stamp
+    dereferences the pointer at run time and freezes the result into
+    the run report, so two rows are comparable exactly when their
+    stamps say so — variant identity is captured from the live stack,
+    not from documentation about it (recipe files stay the authoring
+    convention; the stamp is the attribution record).
+
+    Fields are best-effort: captured from /healthz where the stack
+    advertises them (canonical keys below), from caller-supplied
+    knowledge otherwise, and left empty when unavailable — an empty
+    field means "not comparable on this axis", never a guess.
+
+      * ``serve_label``      — label NAME (human context; reusable, so
+                               not identity by itself).
+      * ``data_fingerprint`` — content digest of the served cells,
+                               advertised by the stack (healthz key
+                               ``data_fingerprint``). The real data
+                               identity: survives label reuse.
+      * ``code_version``     — git sha / image version of the serving
+                               code (healthz key ``code_version``).
+      * ``sira_prompt_scheme`` — enrichment prompt scheme baked into
+                               the SIRA build the served data came from
+                               (e.g. a single corpus-derived prompt vs
+                               per-MNO/per-plan prompts). Explanatory:
+                               the fingerprint already separates the
+                               data; the scheme names WHY it differs.
+      * ``answer_prompt_version`` — the answer-generation prompt used
+                               for Stage-2 regeneration (caller-known;
+                               not the SIRA-side prompts).
+      * ``llm_identity``     — the model that generates Stage-2
+                               responses (the judge is stamped
+                               separately on the report).
+      * ``retrieval_knobs``  — request-shaping settings (top_k, ...).
+      * ``fallback_used_snapshot`` — the stack's refusal-fallback
+                               use counter at run time (per-ROW
+                               fallback attribution needs the
+                               generation path to expose which model
+                               answered — deferred until it does).
+    """
+
+    serve_label: str = ""
+    data_fingerprint: str = ""
+    code_version: str = ""
+    sira_prompt_scheme: str = ""
+    answer_prompt_version: str = ""
+    llm_identity: str = ""
+    retrieval_knobs: dict = field(default_factory=dict)
+    fallback_used_snapshot: int | None = None
+
+    _HEALTHZ_KEYS = {
+        "serve_label": "serve_label",
+        "data_fingerprint": "data_fingerprint",
+        "code_version": "code_version",
+        "sira_prompt_scheme": "sira_prompt_scheme",
+    }
+
+    # Fallback knob harvest for stacks that predate the owned
+    # ``retrieval_knobs`` healthz sub-dict (the sub-dict is the
+    # contract — the service owns its knob list; this whitelist only
+    # keeps older deployments from stamping an empty knob set, which
+    # field validation showed declares different stacks comparable).
+    _LEGACY_KNOB_KEYS = (
+        "max_df_ratio", "max_df_absolute", "expansion_weight",
+        "query_enrich_enabled", "query_enrich_temperature",
+        "default_top_k", "rerank_top_n", "rerank_enabled",
+        "rerank_backend", "rerank_batch_size", "rerank_batch_max_tokens",
+        "rerank_max_tokens", "fusion_balanced", "scale_topk_by_cells",
+        "fanout_enabled", "fanout_per_hit", "use_latest_runs",
+        "query_enrich_run_pinned", "rerank_run_pinned",
+    )
+
+    @classmethod
+    def from_healthz(
+        cls,
+        healthz: dict | None,
+        *,
+        top_k: int | None = None,
+        answer_prompt_version: str = "",
+        llm_identity: str = "",
+        sira_prompt_scheme: str = "",
+    ) -> "StackStamp":
+        """Build a stamp from a healthz snapshot + caller-known fields.
+
+        Caller-supplied values win over healthz (the caller knows what
+        it configured; healthz fills what only the stack knows). Keys
+        the stack does not advertise yet stay empty — the serving side
+        adopts the canonical keys incrementally.
+        """
+        h = healthz or {}
+        stamp = cls(
+            answer_prompt_version=answer_prompt_version,
+            llm_identity=llm_identity or str(h.get("shim_model") or ""),
+            sira_prompt_scheme=(
+                sira_prompt_scheme or str(h.get("sira_prompt_scheme") or "")
+            ),
+        )
+        for attr, key in cls._HEALTHZ_KEYS.items():
+            if not getattr(stamp, attr):
+                val = h.get(key)
+                if isinstance(val, (str, int)):
+                    setattr(stamp, attr, str(val))
+        knobs = h.get("retrieval_knobs")
+        if isinstance(knobs, dict) and knobs:
+            stamp.retrieval_knobs.update(knobs)
+        else:
+            for key in cls._LEGACY_KNOB_KEYS:
+                if key in h and isinstance(h[key], (str, int, float, bool)):
+                    stamp.retrieval_knobs[key] = h[key]
+        if top_k is not None:
+            # The per-run request override — kept distinct from the
+            # stack's own default_top_k knob.
+            stamp.retrieval_knobs["top_k_requested"] = top_k
+        fb = h.get("refusal_fallback")
+        if isinstance(fb, dict) and isinstance(fb.get("used"), int):
+            stamp.fallback_used_snapshot = fb["used"]
+        return stamp
+
+    def _knobs_key(self) -> tuple:
+        return tuple(sorted(
+            (k, str(v)) for k, v in self.retrieval_knobs.items()
+        ))
+
+    def stage1_key(self) -> tuple:
+        """Two runs' Stage-1 scores are comparable iff these match.
+
+        The fingerprint is the data identity; the label name is only
+        the fallback when the stack doesn't advertise one (weaker —
+        label reuse can alias different content under one key).
+        """
+        return (
+            self.data_fingerprint or self.serve_label,
+            self.code_version,
+            self._knobs_key(),
+        )
+
+    def stage2_key(self) -> tuple:
+        """Stage-2 comparability: Stage-1 axes plus the generation
+        side. The judge version lives on the report and must also
+        match — callers compare (stage2_key, judge_version)."""
+        return self.stage1_key() + (
+            self.answer_prompt_version,
+            self.llm_identity,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "serve_label": self.serve_label,
+            "data_fingerprint": self.data_fingerprint,
+            "code_version": self.code_version,
+            "sira_prompt_scheme": self.sira_prompt_scheme,
+            "answer_prompt_version": self.answer_prompt_version,
+            "llm_identity": self.llm_identity,
+            "retrieval_knobs": self.retrieval_knobs,
+            "fallback_used_snapshot": self.fallback_used_snapshot,
+        }
+
+    def compact_line(self) -> str:
+        """One redaction-safe line for the GEV block — identifiers and
+        short digests only, empty fields omitted, never content."""
+        parts = []
+        if self.data_fingerprint:
+            parts.append(f"fp={self.data_fingerprint[:12]}")
+        elif self.serve_label:
+            parts.append(f"label={self.serve_label}")
+        if self.code_version:
+            parts.append(f"code={self.code_version[:12]}")
+        if self.sira_prompt_scheme:
+            parts.append(f"scheme={self.sira_prompt_scheme}")
+        if self.answer_prompt_version:
+            parts.append(f"aprompt={self.answer_prompt_version}")
+        if self.llm_identity:
+            parts.append(f"llm={self.llm_identity}")
+        if self.retrieval_knobs:
+            # Digest, not a dump — the harvested knob set runs to ~20
+            # entries; the full dict lives in report.json. Same digest
+            # = same knob tuple, which is what the line is for.
+            import hashlib
+            digest = hashlib.sha256(
+                repr(self._knobs_key()).encode()
+            ).hexdigest()[:8]
+            parts.append(f"knobs={len(self.retrieval_knobs)}@{digest}")
+        if self.fallback_used_snapshot is not None:
+            parts.append(f"fb_used={self.fallback_used_snapshot}")
+        return "id: " + (" ".join(parts) if parts else "(unstamped)")
+
+
 # ─── Ground-truth matching ──────────────────────────────────────────
 
 
@@ -400,6 +595,7 @@ class GoldenRunReport:
     started_at: str
     judge_version: str = ""
     healthz: dict | None = None
+    stamp: StackStamp | None = None
     stage1: list[Stage1Result] = field(default_factory=list)
     stage2: list[Stage2Result] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
@@ -420,6 +616,7 @@ class GoldenRunReport:
             "started_at": self.started_at,
             "judge_version": self.judge_version,
             "healthz": self.healthz,
+            "stamp": self.stamp.to_dict() if self.stamp else None,
             "stage1": [r.to_dict() for r in self.stage1],
             "stage2": [r.to_dict() for r in self.stage2],
             "errors": self.errors,
@@ -433,6 +630,8 @@ class GoldenRunReport:
             f"GEV {env_name or 'standalone'} {self.stack_label} "
             f"{self.started_at} judge={self.judge_version or '-'}"
         ]
+        if self.stamp:
+            lines.append(self.stamp.compact_line())
         if self.stage1:
             n = len(self.stage1)
             avg = sum(r.recall for r in self.stage1) / n
@@ -501,18 +700,34 @@ def run_all(
     top_k: int | None = None,
     label: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
+    answer_prompt_version: str = "",
+    llm_identity: str = "",
+    sira_prompt_scheme: str = "",
 ) -> GoldenRunReport:
     """Batch run against one stack. Stage-1 for every non-draft sample;
     Stage-2 additionally for golden-ready samples when a pipeline + judge
     are supplied. Per-sample failures are recorded in ``errors`` and the
     run continues — recorded, never silent (fail-loud posture).
+
+    ``answer_prompt_version`` / ``llm_identity`` / ``sira_prompt_scheme``
+    feed the stack stamp — caller-known identity the stack cannot
+    advertise (or advertises less authoritatively than the caller's own
+    config).
     """
+    healthz = fetch_healthz(stack_url)
     report = GoldenRunReport(
         stack_label=stack_label,
         stack_url=stack_url,
         started_at=started_at,
         judge_version=judge_prompt[0] if judge_prompt else "",
-        healthz=fetch_healthz(stack_url),
+        healthz=healthz,
+        stamp=StackStamp.from_healthz(
+            healthz,
+            top_k=top_k,
+            answer_prompt_version=answer_prompt_version,
+            llm_identity=llm_identity,
+            sira_prompt_scheme=sira_prompt_scheme,
+        ),
     )
     stage2_enabled = bool(query_pipeline and judge and judge_prompt)
     for sample in samples:

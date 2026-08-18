@@ -19,18 +19,24 @@
 #
 # Usage:
 #   ./promote.sh --serve-root <nora-data>/serve --label <label> \
-#       [--nora-build <nora-builds/X>] [--sira-build <sira-builds/Y>]
+#       [--nora-build <nora-builds/X>] [--sira-build <sira-builds/Y>] \
+#       [--scheme <sira-prompt-scheme>]
 # At least one of --nora-build / --sira-build is required.
+# --scheme records the SIRA enrichment-prompt scheme (e.g. scheme-v1 /
+#   scheme-v2) in the label MANIFEST so the serving healthz — and through
+#   it every eval run's StackStamp — can attribute served data to the
+#   variant hypothesis it came from.
 # (--include-parse is accepted as a no-op — parse is in the default set.)
 set -euo pipefail
 
-SERVE_ROOT="" LABEL="" NORA_BUILD="" SIRA_BUILD=""
+SERVE_ROOT="" LABEL="" NORA_BUILD="" SIRA_BUILD="" SCHEME=""
 while (( $# > 0 )); do
   case "$1" in
     --serve-root)    SERVE_ROOT="$2"; shift 2;;
     --label)         LABEL="$2"; shift 2;;
     --nora-build)    NORA_BUILD="$2"; shift 2;;
     --sira-build)    SIRA_BUILD="$2"; shift 2;;
+    --scheme)        SCHEME="$2"; shift 2;;
     --include-parse) shift;;   # no-op: parse is in the default serve-set
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
@@ -76,6 +82,7 @@ cat > "$DEST/MANIFEST.json" <<EOF
   "label": "$LABEL",
   "nora_build": "${promoted_nora}",
   "sira_build": "${promoted_sira}",
+  "sira_prompt_scheme": "${SCHEME}",
   "repo_git_sha": "$sha",
   "promoted_at": "$(date -u +%FT%TZ)"
 }
