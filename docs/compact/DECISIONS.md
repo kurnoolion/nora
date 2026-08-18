@@ -7494,3 +7494,63 @@ operational note — the command ships in the sira-batch image, so
 sandbox-side changes require rebaking BOTH images.
 
 _Promoted from strand: id-precision on 2026-08-17._
+
+## D-206: Golden samples carry a carrier tag as authoring metadata only
+**Status**: Active · **Date**: 2026-08-18. *(Retro-captured at merge of strand eval-studio-ux-2 — teammate-authored branch landed with an empty draft file; schema changes meet the DECISIONS filter.)*
+
+**Context:** Experts author golden samples per carrier and asked to
+group and filter them (board filtering, carrier-scoped validation
+runs). The sample schema had an `area` use-case tag but no carrier
+field; recall matching already keys on per-entry
+`(req_id, mno, release)` qualifiers.
+
+**Decision:** `GoldenSample.mno` — an optional carrier tag on the
+SAMPLE, used for board grouping/filters and the runner's `--mno`
+scoped runs. Authoring metadata ONLY: recall matching continues to
+key on per-entry qualifiers, and the tag is deliberately excluded
+from the eval-set identity digests.
+
+**Why:** A sample-level tag serves the human workflow (grouping,
+filtered runs) without touching scoring semantics — a multi-MNO
+sample's ground truth stays per-entry-qualified. Excluding it from
+the set digests means retro-tagging the existing inventory cannot
+invalidate run-to-run comparability; a `--mno`-FILTERED run changes
+which samples score and correctly keys apart via the digest instead.
+
+**Consequences:** Existing samples default to `""` (back-compat
+load); board and runner gain carrier scoping; anyone adding
+sample-level fields follows the same test — scoring-relevant fields
+belong in the digests, workflow metadata stays out.
+
+_Strand: eval-studio-ux-2 (archived); journal is the working record._
+
+## D-207: Direct-entry ids auto-pick the latest release instead of erroring on ambiguity
+**Status**: Active · **Date**: 2026-08-18. *(Retro-captured at merge of strand eval-studio-ux-2 — behavior-contract change; three tests re-encoded.)*
+
+**Context:** Direct-paste ground-truth entry rejected an unqualified
+req_id that resolved in several releases with an ambiguity error.
+Experts pasting ids (now in bulk — comma/space/newline separated)
+almost always mean the current revision; the error made the fastest
+entry path the most frustrating one. MNO is unique per id in practice
+in this corpus, so ambiguity is a release-version question, not a
+carrier question.
+
+**Decision:** An unqualified id matching several cells auto-picks the
+LATEST release (`req_tree.latest_match`, max by release sort key,
+ties resolve to the first match for determinism) and renders a muted
+per-pick notice naming the matched releases and the chosen one —
+user-confirmed presentation. Not-found ids warn; nothing blocks the
+rest of a bulk paste.
+
+**Why:** The expert's intent in the overwhelming case is the current
+revision; surfacing the choice as a visible notice preserves
+auditability without an interruption. Rejected: keeping the error
+(fights the bulk-paste flow it shipped beside); a disambiguation
+prompt per id (unusable at bulk-paste volume).
+
+**Consequences:** An expert who WANTS an older revision must use the
+qualified picker path — direct entry always means latest; the notice
+is the audit trail. Three tests encoding the old error contract were
+re-encoded. The picker cascade remains the fully-qualified path.
+
+_Strand: eval-studio-ux-2 (archived); journal is the working record._
