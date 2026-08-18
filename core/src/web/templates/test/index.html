@@ -65,6 +65,9 @@
               class="form-control"
               placeholder="e.g. What are the IMS registration retry rules in VZW?"
               required></textarea>
+          <div class="form-text">
+            <kbd>Enter</kbd> to ask · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line
+          </div>
         </div>
 
         {# Ask sits directly under the question, with the name inline between
@@ -254,6 +257,22 @@
     let parsed;
     try { parsed = JSON.parse(dataLines.join("\n")); } catch (e) { return null; }
     return { event: eventName, data: parsed };
+  }
+
+  /*
+   * Enter asks; Shift+Enter starts a new line. Questions are nearly always
+   * one-liners, so the common case should not need the mouse. Two guards:
+   * ignore Enter while a query is already in flight (button disabled), and
+   * ignore it mid-IME-composition, where Enter commits the candidate text
+   * rather than meaning "submit".
+   */
+  const questionEl = document.getElementById("test-question");
+  if (questionEl) {
+    questionEl.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      if (!submitBtn.disabled) form.requestSubmit();
+    });
   }
 
   form.addEventListener("submit", async (e) => {
