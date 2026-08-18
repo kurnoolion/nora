@@ -55,6 +55,16 @@ def test_valid_draft_sample_passes():
     assert validate_sample(_sample()) == []
 
 
+def test_mno_tag_round_trips():
+    s = _sample(mno="mno-a")
+    assert s.to_dict()["mno"] == "mno-a"
+    assert GoldenSample.from_dict(s.to_dict()).mno == "mno-a"
+    # Back-compat: a sample dict without the key loads as "".
+    d = s.to_dict()
+    del d["mno"]
+    assert GoldenSample.from_dict(d).mno == ""
+
+
 def test_bad_sample_id_flagged():
     problems = validate_sample(_sample(sample_id="sample-1"))
     assert any("sample_id" in p for p in problems)

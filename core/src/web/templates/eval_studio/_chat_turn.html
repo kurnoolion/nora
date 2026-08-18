@@ -1,15 +1,36 @@
 <div class="es-chat-user"><span class="fw-semibold small">You:</span> {{ user_text }}</div>
-<div class="es-chat-assistant">{{ assistant_text }}</div>
+<div class="es-copywrap">
+  {# Corner copy on the generated draft too — consistent with every text box. #}
+  <button type="button" class="es-copybtn" onclick="esCopyBox(this)" title="Copy"><i class="bi bi-clipboard"></i> Copy</button>
+  <div class="es-chat-assistant es-copytext">{{ assistant_text }}</div>
+</div>
+<div class="text-end mt-1">
+  {# Move this draft straight into the adjacent golden-response box (same tab). #}
+  <button type="button" class="btn btn-sm btn-outline-success py-0" onclick="esUseDraft(this)">
+    Use as golden <i class="bi bi-arrow-right-short"></i>
+  </button>
+</div>
 <script>
 (function () {
+  var draft = {{ assistant_text | tojson }};
   var h = document.getElementById("es-chat-history");
   if (h) {
     var turns = JSON.parse(h.value || "[]");
     turns.push({role: "user", text: {{ user_text | tojson }}});
-    turns.push({role: "assistant", text: {{ assistant_text | tojson }}});
+    turns.push({role: "assistant", text: draft});
     h.value = JSON.stringify(turns);
     var t = document.getElementById("es-golden-turns");
     if (t) t.value = String(turns.length);
+    // Baseline for edit-detection: the latest LLM draft. Using it verbatim
+    // (via the button or a manual copy) counts as LLM-authored; a tweak flags
+    // a manual edit.
+    var g = document.getElementById("es-golden-generated");
+    if (g) g.value = draft;
+  }
+  // Stash the draft on this turn's button so "Use as golden" can move it.
+  if (document.currentScript && document.currentScript.previousElementSibling) {
+    var btn = document.currentScript.previousElementSibling.querySelector("button");
+    if (btn) btn.dataset.draft = draft;
   }
   var log = document.getElementById("es-chat-log");
   if (log) log.scrollTop = log.scrollHeight;

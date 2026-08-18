@@ -3,23 +3,62 @@
 {% endif %}
 <div class="card">
   <div class="card-header py-2 small fw-semibold">
-    Samples ({{ samples|length }})
+    <span>Samples ({{ samples|length }})</span>
+    {# Author + MNO filters — narrow the board to your own samples / one carrier.
+       Both are included on the board's load/refresh triggers (index.html) and on
+       each other's change, so the two compose and survive re-renders. #}
+    <div class="d-flex gap-1 mt-1">
+      <select id="es-board-author" name="author" class="form-select form-select-sm py-0"
+              style="font-size:.72rem"
+              hx-get="{{ root_path }}/api/eval-studio/samples"
+              hx-target="#es-board" hx-swap="innerHTML"
+              hx-trigger="change" hx-include="#es-board-author, #es-board-mno">
+        <option value="">All authors</option>
+        {% for a in authors %}<option value="{{ a }}" {% if a == sel_author %}selected{% endif %}>{{ a }}</option>{% endfor %}
+      </select>
+      <select id="es-board-mno" name="mno" class="form-select form-select-sm py-0"
+              style="font-size:.72rem"
+              hx-get="{{ root_path }}/api/eval-studio/samples"
+              hx-target="#es-board" hx-swap="innerHTML"
+              hx-trigger="change" hx-include="#es-board-author, #es-board-mno">
+        <option value="">All MNOs</option>
+        {% for m in mnos %}<option value="{{ m }}" {% if m == sel_mno %}selected{% endif %}>{{ m }}</option>{% endfor %}
+      </select>
+    </div>
   </div>
-  <table class="table table-hover mb-0">
+  <div class="es-scroll">
+  <table class="table table-hover mb-0" id="es-board-table" data-es-sortable>
+    <thead>
+      <tr class="small text-muted">
+        <th data-sort-key="id">ID<span class="es-sort-arrow"></span></th>
+        <th data-sort-key="area">Area<span class="es-sort-arrow"></span></th>
+        <th data-sort-key="status">Status<span class="es-sort-arrow"></span></th>
+        <th data-sort-key="count">GT<span class="es-sort-arrow"></span></th>
+        <th data-sort-key="user">By<span class="es-sort-arrow"></span></th>
+      </tr>
+    </thead>
     <tbody>
+    {% set _srank = {"draft": 0, "stage1-ready": 1, "golden-ready": 2} %}
     {% for s in samples %}
       <tr style="cursor:pointer"
+          data-sk-id="{{ s.sample_id }}"
+          data-sk-area="{{ s.area }}"
+          data-sk-status="{{ _srank.get(s.status, 9) }}"
+          data-sk-count="{{ s.ground_truth|length }}"
+          data-sk-user="{{ s.created_by }}"
+          data-sk-mno="{{ s.mno }}"
           hx-get="{{ root_path }}/api/eval-studio/sample/{{ s.sample_id }}"
           hx-target="#es-editor" hx-swap="innerHTML">
-        <td class="fw-semibold">{{ s.sample_id }}</td>
+        <td class="fw-semibold">{{ s.sample_id }}{% if s.mno %}<br><span class="badge text-bg-light fw-normal">{{ s.mno }}</span>{% endif %}</td>
         <td class="text-truncate" style="max-width:120px" title="{{ s.area }}">{{ s.area or "—" }}</td>
         <td><span class="badge es-status-{{ s.status }}">{{ s.status }}</span></td>
         <td class="text-muted">{{ s.ground_truth|length }} req</td>
         <td class="text-muted text-truncate" style="max-width:80px">{{ s.created_by }}</td>
       </tr>
     {% else %}
-      <tr><td class="text-muted small p-3">No samples yet.</td></tr>
+      <tr><td colspan="5" class="text-muted small p-3">No samples yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>

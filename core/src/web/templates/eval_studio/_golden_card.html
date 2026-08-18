@@ -1,0 +1,33 @@
+{# Golden-response card. Its own swap target (#es-golden-card) so saving never
+   re-renders the tabs/editor — the expert stays on the Golden tab, same scroll.
+   When returned standalone (oob=True) it OOB-updates the tab's check badge.
+   `generated` = the last in-session LLM draft (filled by _chat_turn.html); the
+   route compares it to the saved text to flag a manual edit. #}
+{% if oob %}<span id="es-golden-check" hx-swap-oob="true">{% if sample.golden_response %}<i class="bi bi-check-circle-fill text-success"></i>{% endif %}</span>{% endif %}
+<div class="card">
+  <div class="card-header py-1 small fw-semibold">Golden response
+    {% if sample.golden_meta.get('edited') %}
+    <span class="badge text-bg-warning ms-1" title="Saved text differs from the LLM draft">manually edited</span>
+    {% endif %}
+  </div>
+  <div class="card-body py-2">
+    <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/golden"
+          hx-target="#es-golden-card" hx-swap="innerHTML">
+      <div class="es-copywrap mb-1">
+        <button type="button" class="es-copybtn" onclick="esCopyBox(this)" title="Copy"><i class="bi bi-clipboard"></i> Copy</button>
+        <textarea class="form-control form-control-sm" name="golden_response" rows="14"
+                  id="es-golden-text" placeholder="Paste / edit the final golden answer here…"
+                  required>{{ sample.golden_response or "" }}</textarea>
+      </div>
+      <input type="hidden" name="chat_turns" id="es-golden-turns" value="{{ sample.golden_meta.get('chat_turns', 0) }}">
+      <input type="hidden" name="model" value="{{ sample.golden_meta.get('model', '') }}">
+      {# Baseline for edit-detection: the last LLM draft produced this session
+         (empty on load — a fresh session has no draft yet). #}
+      <input type="hidden" name="generated" id="es-golden-generated" value="">
+      <button class="btn btn-sm btn-success" type="submit">Save golden response</button>
+      {% if sample.golden_meta.get('curated_at') %}
+      <span class="text-muted small ms-2">curated {{ sample.golden_meta.get('curated_at') }}</span>
+      {% endif %}
+    </form>
+  </div>
+</div>

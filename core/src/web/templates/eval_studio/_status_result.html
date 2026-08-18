@@ -1,0 +1,13 @@
+{# Response for a status change (Batch E). Primary swap → #es-meta-card (badge
+   updates, validation errors show there); OOB refreshes both promote slots so
+   the in-tab buttons reflect the new status, and reloads the board (status
+   column). The tab bar is untouched, so the user keeps their active tab. #}
+{% include "eval_studio/_meta_card.html" %}
+{# OOB divs must carry the same layout classes as the originals in _editor.html —
+   an OOB swap replaces the whole element by id, class attribute included. #}
+<div id="es-promote-gt" class="mb-2 d-flex gap-1 align-items-center justify-content-end" hx-swap-oob="true">{% with slot='gt' %}{% include "eval_studio/_promote.html" %}{% endwith %}</div>
+<div id="es-promote-golden" class="mb-2 d-flex gap-1 align-items-center justify-content-end" hx-swap-oob="true">{% with slot='golden' %}{% include "eval_studio/_promote.html" %}{% endwith %}</div>
+<script>
+htmx.trigger(document.body, "es-board-refresh");
+{% if sample.status == 'golden-ready' %}if (window.esConfetti) esConfetti();{% endif %}
+</script>

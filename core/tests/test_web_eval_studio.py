@@ -83,6 +83,39 @@ class TestSampleCrud:
         assert "requires ground_truth" in r.text
         assert load_sample(sample_path(tmp_path, "gs-0001")).status == "draft"
 
+    def test_create_persists_mno(self, client, tmp_path):
+        client.post("/api/eval-studio/sample", data={
+            "query": "q?", "area": "a", "created_by": "e", "mno": "mno-a"})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).mno == "mno-a"
+
+    def test_status_change_is_tab_preserving_partial(self, client, tmp_path):
+        _create(client)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={"req_id": "REQ_FOO_0002"})
+        r = client.post("/api/eval-studio/sample/gs-0001/status",
+                        data={"status": "stage1-ready"})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).status == "stage1-ready"
+        # Partial: meta card + OOB promote slots, no tab bar re-render.
+        assert "nav-tabs" not in r.text
+        assert 'id="es-promote-golden"' in r.text and 'id="es-promote-gt"' in r.text
+        assert r.text.count('hx-swap-oob="true"') >= 2
+
+    def test_golden_ready_fires_confetti(self, client, tmp_path, monkeypatch):
+        _create(client)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={"req_id": "REQ_FOO_0002"})
+        client.post("/api/eval-studio/sample/gs-0001/golden",
+                    data={"golden_response": "answer", "generated": ""})
+        client.post("/api/eval-studio/sample/gs-0001/status",
+                    data={"status": "stage1-ready"})
+        r = client.post("/api/eval-studio/sample/gs-0001/status",
+                        data={"status": "golden-ready"})
+        assert "esConfetti()" in r.text
+        # A non-golden transition does not fire it.
+        r2 = client.post("/api/eval-studio/sample/gs-0001/status",
+                         data={"status": "stage1-ready"})
+        assert "esConfetti()" not in r2.text
+
     def test_draft_delete_open_to_experts(self, client, tmp_path, monkeypatch):
         _create(client)
         monkeypatch.setattr(ge, "is_admin", lambda request: False)
@@ -136,25 +169,38 @@ class TestGroundTruth:
         e = load_sample(sample_path(tmp_path, "gs-0001")).ground_truth[0]
         assert (e.mno, e.release, e.plan) == ("mno-a", "Jan2026", "PLAN_X")
 
-    def test_direct_add_ambiguous_prompts(self, client, tmp_path):
+    def test_direct_add_ambiguous_picks_latest(self, client, tmp_path):
+        # REQ_FOO_0001 lives in Jan2026 and Apr2026 — auto-pick the latest
+        # revision and note it, rather than erroring on the ambiguity.
         _create(client)
         r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
                         data={"req_id": "REQ_FOO_0001"})
-        assert "found in 2 cells" in r.text
-        assert load_sample(sample_path(tmp_path, "gs-0001")).ground_truth == []
+        assert "matched 2 cells" in r.text and "added latest (Apr2026)" in r.text
+        gt = load_sample(sample_path(tmp_path, "gs-0001")).ground_truth
+        assert [(e.req_id, e.release) for e in gt] == [("REQ_FOO_0001", "Apr2026")]
 
     def test_unknown_id_rejected(self, client, tmp_path):
         _create(client)
         r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
                         data={"req_id": "REQ_NOPE_9999"})
-        assert "not found in any parsed cell" in r.text
+        assert "Not found: REQ_NOPE_9999" in r.text
+        assert load_sample(sample_path(tmp_path, "gs-0001")).ground_truth == []
+
+    def test_direct_add_bulk_split(self, client, tmp_path):
+        # One field, several ids separated by commas/spaces — add all in one go.
+        _create(client)
+        r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                        data={"req_id": "REQ_FOO_0002, REQ_FOO_0001"})
+        assert "Added 2" in r.text
+        gt = load_sample(sample_path(tmp_path, "gs-0001")).ground_truth
+        assert {e.req_id for e in gt} == {"REQ_FOO_0001", "REQ_FOO_0002"}
 
     def test_duplicate_add_rejected_and_remove(self, client, tmp_path):
         _create(client)
         for _ in range(2):
             r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
                             data={"req_id": "REQ_FOO_0002"})
-        assert "already in the ground-truth list" in r.text
+        assert "1 already present" in r.text
         client.post("/api/eval-studio/sample/gs-0001/gt/remove", data={
             "req_id": "REQ_FOO_0002", "mno": "mno-a", "release": "Jan2026",
         })
@@ -211,6 +257,19 @@ class TestPicker:
             "/api/eval-studio/picker/reqs?sid=gs-0001&mno=mno-a"
             "&plan=PLAN_X&release=Jan2026&filter=backoff").text
         assert "REQ_FOO_0002" in filtered and "REQ_FOO_0001" not in filtered
+
+    def test_jump_filters_by_req_id(self, client):
+        # Locate button carries the req_id → picker filtered to it, filter box prefilled.
+        r = client.get(
+            "/api/eval-studio/picker/jump?sid=gs-0001&mno=mno-a"
+            "&plan=PLAN_X&release=Jan2026&req_id=REQ_FOO_0002").text
+        assert "REQ_FOO_0002" in r and "REQ_FOO_0001" not in r
+        assert 'id="es-picker-filter"' in r and 'value="REQ_FOO_0002"' in r
+        # Without req_id the jump still shows every sibling in the cell.
+        r2 = client.get(
+            "/api/eval-studio/picker/jump?sid=gs-0001&mno=mno-a"
+            "&plan=PLAN_X&release=Jan2026").text
+        assert "REQ_FOO_0001" in r2 and "REQ_FOO_0002" in r2
 
 
 class TestPreview:
@@ -298,3 +357,59 @@ class TestCuration:
         r = client.post("/api/eval-studio/sample/gs-0001/status",
                         data={"status": "golden-ready"})
         assert load_sample(sample_path(tmp_path, "gs-0001")).status == "golden-ready"
+
+    def test_golden_edit_flag(self, client, tmp_path):
+        _create(client)
+        # Manual paste with no in-session draft counts as edited.
+        client.post("/api/eval-studio/sample/gs-0001/golden",
+                    data={"golden_response": "hand written", "generated": ""})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).golden_meta["edited"]
+        # Accepting an LLM draft verbatim is not an edit.
+        client.post("/api/eval-studio/sample/gs-0001/golden",
+                    data={"golden_response": "the draft", "generated": "the draft"})
+        s = load_sample(sample_path(tmp_path, "gs-0001"))
+        assert s.golden_meta["edited"] is False
+        # Tweaking a draft flags an edit and stamps edited_at.
+        r = client.post("/api/eval-studio/sample/gs-0001/golden",
+                        data={"golden_response": "the draft, tweaked",
+                              "generated": "the draft"})
+        s = load_sample(sample_path(tmp_path, "gs-0001"))
+        assert s.golden_meta["edited"] is True and s.golden_meta.get("edited_at")
+        # Response is the golden-card partial (OOB tab check), not the whole
+        # editor — so the expert stays on the Golden tab.
+        assert 'id="es-golden-check"' in r.text and 'hx-swap-oob="true"' in r.text
+        assert "nav-tabs" not in r.text
+
+    def test_meta_save_returns_partial(self, client, tmp_path):
+        _create(client)
+        r = client.post("/api/eval-studio/sample/gs-0001/meta",
+                        data={"query": "updated?", "area": "roam"})
+        # Only the meta card returns — no tab bar — so the active tab survives;
+        # the board is refreshed (area shows there).
+        assert "nav-tabs" not in r.text and "es-board-refresh" in r.text
+        assert load_sample(sample_path(tmp_path, "gs-0001")).area == "roam"
+
+    def test_meta_saves_mno_and_board_filters(self, client, tmp_path):
+        _create(client)  # gs-0001
+        _create(client)  # gs-0002
+        client.post("/api/eval-studio/sample/gs-0001/meta",
+                    data={"query": "q?", "area": "", "mno": "mno-a"})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).mno == "mno-a"
+        # Unfiltered board lists both; filtered to mno-a lists only gs-0001.
+        both = client.get("/api/eval-studio/samples").text
+        assert "gs-0001" in both and "gs-0002" in both
+        only = client.get("/api/eval-studio/samples", params={"mno": "mno-a"}).text
+        assert "gs-0001" in only and "gs-0002" not in only
+
+    def test_board_filters_by_author(self, client, tmp_path):
+        # _create uses created_by="expert-a"; make a second sample by someone else.
+        _create(client)  # gs-0001, expert-a
+        client.post("/api/eval-studio/sample", data={
+            "query": "q2?", "area": "", "created_by": "expert-b"})  # gs-0002
+        both = client.get("/api/eval-studio/samples").text
+        assert "gs-0001" in both and "gs-0002" in both
+        mine = client.get("/api/eval-studio/samples",
+                          params={"author": "expert-a"}).text
+        assert "gs-0001" in mine and "gs-0002" not in mine
+        # The author dropdown lists both authors regardless of the active filter.
+        assert "expert-a" in mine and "expert-b" in mine

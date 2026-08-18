@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -106,13 +107,15 @@ def _editor_ctx(request: Request, sample: GoldenSample) -> dict:
 
 
 def _gt_panel_ctx(sample: GoldenSample, *, gt_error: str = "",
-                  gt_info: str = "") -> dict:
+                  gt_info: str = "", gt_notices: list[str] | None = None) -> dict:
     """Context for the standalone ground-truth panel (`_gt_panel.html`).
 
     Returned by the gt/add, gt/add-bulk and gt/remove routes so only the GT
     panel is swapped — the picker column is left untouched (its selection and
     per-row state survive). `oob_count` drives the out-of-band GT-count badge
-    refresh in the tab nav.
+    refresh in the tab nav. `gt_notices` are subtle under-the-hood lines (e.g.
+    a latest-revision auto-pick) shown muted, distinct from the success/warning
+    alerts.
     """
     return {
         "sample": sample,
@@ -120,6 +123,7 @@ def _gt_panel_ctx(sample: GoldenSample, *, gt_error: str = "",
         "oob_count": True,
         "gt_error": gt_error,
         "gt_info": gt_info,
+        "gt_notices": gt_notices or [],
     }
 
 
@@ -134,15 +138,27 @@ def eval_studio_page(request: Request):
 
 
 @router.get("/api/eval-studio/samples", response_class=HTMLResponse)
-def sample_board(request: Request):
+def sample_board(request: Request, mno: str = "", author: str = ""):
+    env_dir = _env_dir()
     try:
-        samples = load_samples(_env_dir())
+        samples = load_samples(env_dir)
         load_error = ""
     except GoldenEvalError as exc:
         samples, load_error = [], f"{exc.code}: sample store unreadable"
+    # Author dropdown lists every author in the store (computed before filtering
+    # so a selection never empties its own option list).
+    authors = sorted({s.created_by for s in samples if s.created_by})
+    if mno:
+        samples = [s for s in samples if s.mno == mno]
+    if author:
+        samples = [s for s in samples if s.created_by == author]
     return _template(request, "eval_studio/_board.html", {
         "samples": samples,
         "load_error": load_error,
+        "mnos": sorted({c["mno"] for c in req_tree.list_cells(env_dir)}),
+        "sel_mno": mno,
+        "authors": authors,
+        "sel_author": author,
     })
 
 
@@ -155,12 +171,14 @@ def sample_create(
     query: str = Form(...),
     area: str = Form(""),
     created_by: str = Form(""),
+    mno: str = Form(""),
 ):
     env_dir = _env_dir()
     sample = GoldenSample(
         sample_id=next_sample_id(env_dir),
         query=query.strip(),
         area=area.strip(),
+        mno=mno.strip(),
         created_by=created_by.strip(),
     )
     try:
@@ -201,15 +219,20 @@ def sample_editor(request: Request, sid: str):
 @router.post("/api/eval-studio/sample/{sid}/meta", response_class=HTMLResponse)
 def sample_meta(
     request: Request, sid: str, query: str = Form(...), area: str = Form(""),
+    mno: str = Form(""),
 ):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
     sample.query = query.strip()
     sample.area = area.strip()
+    sample.mno = mno.strip()
     save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html",
-                     _editor_ctx(request, sample))
+    # Swap only the meta card so the active tab / scroll survive; refresh the
+    # board (area shows there). The chat system prompt is rebuilt from the
+    # query on the next Send, so no chat refresh is needed here.
+    return _template(request, "eval_studio/_meta_card.html", {
+        **_editor_ctx(request, sample), "board_refresh": True})
 
 
 @router.post("/api/eval-studio/sample/{sid}/status", response_class=HTMLResponse)
@@ -222,12 +245,14 @@ def sample_status(request: Request, sid: str, status: str = Form(...)):
     problems = validate_sample(sample)
     if problems:
         sample.status = previous
-        return _template(request, "eval_studio/_editor.html", {
+        # Partial (meta card + OOB promote slots) so the active tab survives;
+        # the error renders in the meta card.
+        return _template(request, "eval_studio/_status_result.html", {
             **_editor_ctx(request, sample),
             "status_error": "; ".join(problems),
         })
     save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html",
+    return _template(request, "eval_studio/_status_result.html",
                      _editor_ctx(request, sample))
 
 
@@ -266,37 +291,62 @@ def gt_add(
     if isinstance(sample, HTMLResponse):
         return sample
     env_dir = _env_dir()
-    req_id = req_id.strip()
+    qualified = bool(mno and release)
+    # One field, possibly many ids: a direct paste may carry a list separated
+    # by commas / whitespace / newlines. Picker adds send a single id.
+    raw_ids = [t for t in re.split(r"[\s,]+", req_id.strip()) if t]
+
+    added = dupes = 0
+    not_found: list[str] = []
+    notices: list[str] = []
+    existing = {(e.req_id, e.mno, e.release) for e in sample.ground_truth}
+
+    for rid in raw_ids:
+        # Picker adds arrive fully qualified — validate within that cell only;
+        # unqualified direct pastes need the corpus-wide scan.
+        matches = req_tree.find_req(env_dir, rid, mno, release)
+        if not matches:
+            not_found.append(rid)
+            continue
+        e_mno, e_release, e_plan = mno, release, plan
+        if not qualified:
+            # Direct entry without qualifiers: auto-qualify. A req_id found in
+            # several releases (e.g. Mar vs Jun) resolves to the latest
+            # revision — the expert wants the current one, with a note.
+            m = matches[0] if len(matches) == 1 else req_tree.latest_match(matches)
+            e_mno, e_release, e_plan = m["mno"], m["release"], m["plan"]
+            if len(matches) > 1:
+                cells = ", ".join(sorted({x["release"] for x in matches}))
+                notices.append(
+                    f"{rid}: matched {len(matches)} cells ({cells}) — "
+                    f"added latest ({e_release})"
+                )
+        key = (rid, e_mno, e_release)
+        if key in existing:
+            dupes += 1
+            continue
+        sample.ground_truth.append(GroundTruthEntry(
+            req_id=rid, mno=e_mno, release=e_release, plan=e_plan, source=source,
+        ))
+        existing.add(key)
+        added += 1
+
+    if added:
+        save_sample(env_dir, sample)
+
+    # Summary: additions/dupes as the success line; not-found as the warning.
+    info_parts: list[str] = []
+    if added:
+        info_parts.append(f"Added {added}")
+    if dupes:
+        info_parts.append(f"{dupes} already present")
+    gt_info = ", ".join(info_parts)
     gt_error = ""
-    # Picker adds arrive fully qualified — validate within that cell only;
-    # unqualified direct pastes need the corpus-wide scan.
-    matches = req_tree.find_req(env_dir, req_id, mno, release)
-    if not matches:
-        gt_error = f"{req_id}: not found in any parsed cell (GEV-E001)"
-    elif not (mno and release):
-        # Direct entry without qualifiers: auto-qualify a unique match,
-        # ask when ambiguous.
-        if len(matches) == 1:
-            m = matches[0]
-            mno, release, plan = m["mno"], m["release"], m["plan"]
-        else:
-            cells = ", ".join(f"{m['mno']}/{m['release']}" for m in matches)
-            gt_error = (
-                f"{req_id}: found in {len(matches)} cells ({cells}) — "
-                "pick one via the dropdowns"
-            )
-    if not gt_error:
-        entry = GroundTruthEntry(
-            req_id=req_id, mno=mno, release=release, plan=plan, source=source,
-        )
-        key = (entry.req_id, entry.mno, entry.release)
-        if any((e.req_id, e.mno, e.release) == key for e in sample.ground_truth):
-            gt_error = f"{req_id}: already in the ground-truth list"
-        else:
-            sample.ground_truth.append(entry)
-            save_sample(env_dir, sample)
+    if not_found:
+        gt_error = f"Not found: {', '.join(not_found)}"
     return _template(request, "eval_studio/_gt_panel.html",
-                     _gt_panel_ctx(sample, gt_error=gt_error))
+                     _gt_panel_ctx(sample, gt_error=gt_error, gt_info=gt_info,
+                                   gt_notices=notices))
 
 
 @router.post("/api/eval-studio/sample/{sid}/gt/add-bulk", response_class=HTMLResponse)
@@ -424,11 +474,15 @@ def picker_jump(
     mno: str = "",
     plan: str = "",
     release: str = "",
+    req_id: str = "",
 ):
     """Repopulate the whole picker pre-selected to a cell — driven by a
     ground-truth entry's locate button, so the expert can pull more sibling
     requirements from that plan without re-walking the cascade. Unknown /
     empty release falls back to the plan's latest (matches picker_releases).
+
+    When ``req_id`` is given the picker's filter box is pre-filled with it and
+    the list is filtered to that requirement (clear the box to see siblings).
     """
     env_dir = _env_dir()
     plans = req_tree.plans_for_mno(env_dir, mno) if mno else {}
@@ -439,6 +493,14 @@ def picker_jump(
         req_tree.reqs_for_plan(env_dir, mno, release, plan)
         if (mno and plan and release) else []
     )
+    needle = req_id.strip().lower()
+    if needle and rows:
+        # Same id/title match as picker_reqs so editing the box behaves the same.
+        rows = [
+            r for r in rows
+            if needle in r.get("req_id", "").lower()
+            or needle in r.get("title", "").lower()
+        ]
     return _template(request, "eval_studio/_picker.html", {
         "mnos": sorted({c["mno"] for c in req_tree.list_cells(env_dir)}),
         "sid": sid,
@@ -448,6 +510,7 @@ def picker_jump(
         "plans": plans,
         "releases": releases,
         "rows": rows,
+        "sel_filter": req_id,
     })
 
 
@@ -576,18 +639,36 @@ def save_golden(
     golden_response: str = Form(...),
     chat_turns: int = Form(0),
     model: str = Form(""),
+    generated: str = Form(""),
 ):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
-    sample.golden_response = golden_response.strip()
+    new_text = golden_response.strip()
+    prev_text = (sample.golden_response or "").strip()
+    gen = generated.strip()
+    # Flag a manual edit: accepting an in-session LLM draft verbatim is not an
+    # edit; a tweak or a manual paste is. An unchanged re-save preserves the
+    # prior flag (we can't re-judge without a fresh draft).
+    if gen and new_text == gen:
+        edited = False
+    elif new_text == prev_text:
+        edited = bool(sample.golden_meta.get("edited", False))
+    else:
+        edited = True
+    sample.golden_response = new_text
     sample.golden_meta = {
         "chat_turns": chat_turns,
         "model": model,
         "curated_at": "",  # stamped by save_sample's updated_at
+        "edited": edited,
     }
     save_sample(_env_dir(), sample)
     sample.golden_meta["curated_at"] = sample.updated_at
+    if edited:
+        sample.golden_meta["edited_at"] = sample.updated_at
     save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html",
-                     _editor_ctx(request, sample))
+    # Swap only the golden card (keeps the expert on the Golden tab); OOB the
+    # tab check badge.
+    return _template(request, "eval_studio/_golden_card.html",
+                     {"sample": sample, "oob": True})

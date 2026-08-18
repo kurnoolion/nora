@@ -8,15 +8,38 @@
 .es-board { width: 340px; flex-shrink: 0; }
 .es-editor { flex: 1; min-width: 0; }
 .es-board .table td { font-size: .82rem; vertical-align: middle; }
+/* Batch E — color-coded status: gray draft, orange stage1, shiny gold golden. */
 .es-status-draft { background: #9ca3af; }
-.es-status-stage1-ready { background: #0d6efd; }
-.es-status-golden-ready { background: #198754; }
+.es-status-stage1-ready { background: #f59e0b; color: #3a2f00; }
+.es-status-golden-ready { background: linear-gradient(135deg, #b8860b, #ffe17a, #b8860b); color: #3a2f00; }
+/* Promote buttons echo the destination status colour. */
+.es-btn-stage1 { background: #f59e0b; border: none; color: #3a2f00; }
+.es-btn-stage1:hover { background: #d98a06; color: #3a2f00; }
+.es-btn-golden { background: linear-gradient(135deg, #b8860b, #ffe17a, #b8860b); border: none; color: #3a2f00; font-weight: 600; }
+.es-btn-golden:hover { filter: brightness(1.05); color: #3a2f00; }
+/* Batch E — golden box grows with the viewport (native scroll past that). */
+#es-golden-text { height: 60vh; min-height: 12rem; }
 .es-gt-list td { font-size: .8rem; }
 .es-picker-reqs { max-height: 320px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 4px; }
 .es-picker-reqs td { font-size: .78rem; }
 .es-chat-log { max-height: 380px; overflow-y: auto; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 8px; }
 .es-chat-user { background: #e7f1ff; border-radius: 6px; padding: 6px 10px; margin: 4px 0; }
 .es-chat-assistant { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 10px; margin: 4px 0; white-space: pre-wrap; }
+/* Batch B — bounded, scrollable lists so add forms / the picker stay in view. */
+.es-scroll { max-height: 420px; overflow-y: auto; }
+.es-board .es-scroll { max-height: 70vh; }
+th[data-sort-key] { cursor: pointer; user-select: none; white-space: nowrap; }
+th[data-sort-key]:hover { background: #f1f3f5; }
+.es-sort-arrow { color: #0d6efd; font-size: .7rem; }
+/* Batch C — reusable corner copy button for any text box / read-only block. */
+.es-copywrap { position: relative; }
+.es-copywrap > .es-copybtn {
+  position: absolute; top: 4px; right: 4px; z-index: 4;
+  padding: 0 6px; line-height: 1.5; font-size: .72rem;
+  border: 1px solid #dee2e6; border-radius: 4px;
+  background: #fff; color: #6c757d; cursor: pointer; opacity: .85;
+}
+.es-copywrap > .es-copybtn:hover { opacity: 1; color: #0d6efd; border-color: #0d6efd; }
 </style>
 {% endblock %}
 
@@ -30,13 +53,19 @@
     <div class="card mb-2">
       <div class="card-header py-2 small fw-semibold">New sample</div>
       <div class="card-body py-2">
-        <form hx-post="{{ root_path }}/api/eval-studio/sample"
+        <form id="es-new-form" hx-post="{{ root_path }}/api/eval-studio/sample"
               hx-target="#es-editor" hx-swap="innerHTML">
           <textarea class="form-control form-control-sm mb-1" name="query" rows="2"
                     placeholder="Representative query…" required></textarea>
-          <div class="d-flex gap-1">
+          <div class="d-flex gap-1 mb-1">
             <input class="form-control form-control-sm" name="area" placeholder="Area / use-case">
             <input class="form-control form-control-sm" name="created_by" placeholder="Your name">
+          </div>
+          <div class="d-flex gap-1">
+            <select class="form-select form-select-sm" name="mno" title="Carrier tag">
+              <option value="">MNO…</option>
+              {% for m in mnos %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            </select>
             <button class="btn btn-sm btn-primary" type="submit">Create</button>
           </div>
         </form>
@@ -45,6 +74,7 @@
     <div id="es-board"
          hx-get="{{ root_path }}/api/eval-studio/samples"
          hx-trigger="load, es-board-refresh from:body"
+         hx-include="#es-board-author, #es-board-mno"
          hx-swap="innerHTML">
       <div class="text-muted small p-2">Loading samples…</div>
     </div>
@@ -62,4 +92,175 @@
     </div>
   </div>
 </div>
+
+<script>
+// Batch E — mini confetti burst (Web Animations API, no library) fired when a
+// sample is promoted to golden-ready.
+function esConfetti() {
+  var colors = ["#ffd700", "#b8860b", "#f59e0b", "#ffe17a", "#fff3b0"];
+  var box = document.createElement("div");
+  box.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2000;overflow:hidden";
+  document.body.appendChild(box);
+  var cx = window.innerWidth / 2, cy = window.innerHeight / 3;
+  for (var i = 0; i < 18; i++) {
+    var p = document.createElement("div");
+    var size = 6 + Math.random() * 6;
+    p.style.cssText = "position:absolute;width:" + size + "px;height:" + size +
+      "px;background:" + colors[i % colors.length] + ";left:" + cx + "px;top:" +
+      cy + "px;border-radius:2px";
+    box.appendChild(p);
+    var angle = Math.random() * Math.PI * 2, dist = 60 + Math.random() * 120;
+    p.animate([
+      { transform: "translate(0,0) rotate(0deg)", opacity: 1 },
+      {
+        transform: "translate(" + Math.cos(angle) * dist + "px," +
+          (Math.sin(angle) * dist + 80) + "px) rotate(" +
+          (Math.random() * 360) + "deg)", opacity: 0,
+      },
+    ], { duration: 700 + Math.random() * 400, easing: "cubic-bezier(.2,.6,.4,1)" });
+  }
+  setTimeout(function () { box.remove(); }, 1200);
+}
+
+// Batch E — remember the last-used Area / Name / MNO so a new sample prefills
+// them (per browser); the query is always fresh so it is not remembered.
+(function () {
+  var KEY = "es-last-meta";
+  var form = document.getElementById("es-new-form");
+  if (!form) return;
+  try {
+    var last = JSON.parse(localStorage.getItem(KEY) || "{}");
+    if (last.area) form.area.value = last.area;
+    if (last.created_by) form.created_by.value = last.created_by;
+    if (last.mno && form.mno) form.mno.value = last.mno;
+  } catch (e) {}
+  form.addEventListener("submit", function () {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({
+        area: form.area.value,
+        created_by: form.created_by.value,
+        mno: form.mno ? form.mno.value : "",
+      }));
+    } catch (e) {}
+  });
+})();
+
+// Batch E — Enter submits, Shift+Enter is a newline, on boxes opted in with
+// data-es-enter-submit (chat message + query). Prose boxes (golden) keep Enter.
+document.body.addEventListener("keydown", function (e) {
+  if (e.key !== "Enter" || e.shiftKey) return;
+  var t = e.target;
+  if (t && t.matches && t.matches("textarea[data-es-enter-submit]")) {
+    var form = t.closest("form");
+    if (form) { e.preventDefault(); form.requestSubmit(); }
+  }
+});
+</script>
+
+<script>
+// Batch B — highlight the sample currently open in the editor. The board
+// re-renders independently, so the open id is tracked here and re-applied on
+// every settle (board reload included).
+window.esActiveSid = window.esActiveSid || "";
+window.esHighlightBoard = function () {
+  var sid = window.esActiveSid;
+  document.querySelectorAll("#es-board tr[data-sk-id]").forEach(function (r) {
+    r.classList.toggle("table-active", r.getAttribute("data-sk-id") === sid);
+  });
+};
+document.body.addEventListener("htmx:afterSettle", function () {
+  window.esHighlightBoard();
+});
+</script>
+
+<script>
+// Batch C — generic corner copy: copies the text box / block inside the same
+// .es-copywrap to the clipboard, with a brief tick. Reusable on any field.
+function esCopyBox(btn) {
+  var wrap = btn.closest(".es-copywrap");
+  if (!wrap) return;
+  var f = wrap.querySelector("textarea, input, pre, .es-copytext");
+  if (!f) return;
+  var text = ("value" in f) ? f.value : f.textContent;
+  navigator.clipboard.writeText(text).then(function () {
+    var orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check2"></i> Copied';
+    setTimeout(function () { btn.innerHTML = orig; }, 1000);
+  });
+}
+
+// Batch C — move a chat draft into the golden-response box (same tab).
+function esUseDraft(btn) {
+  var t = document.getElementById("es-golden-text");
+  if (!t) return;
+  t.value = btn.dataset.draft || "";
+  // Keep the edit-detection baseline in step: using a draft verbatim is not
+  // an edit, so saving right after shows no "manually edited" badge.
+  var g = document.getElementById("es-golden-generated");
+  if (g) g.value = t.value;
+  t.focus();
+  var orig = btn.innerHTML;
+  btn.innerHTML = '<i class="bi bi-check2"></i> Moved';
+  setTimeout(function () { btn.innerHTML = orig; }, 1200);
+}
+
+</script>
+
+<script>
+// Batch B — generic, attribute-driven table sort that survives HTMX swaps.
+// A sortable table carries `data-es-sortable` + a stable `id`; sortable
+// headers carry `data-sort-key`; each row carries `data-sk-<key>` for every
+// key it can be sorted on. A header outside its table points back with
+// `data-sort-table`. State is held per-table id and re-applied on afterSettle,
+// so a server re-render of the panel keeps the chosen order.
+(function () {
+  var state = {};  // { tableId: {key, dir} }  dir: 1 asc, -1 desc
+  function apply(table) {
+    var st = state[table.id];
+    if (!st || !table.tBodies.length) return;
+    var tbody = table.tBodies[0];
+    var attr = "data-sk-" + st.key;
+    var rows = Array.prototype.filter.call(
+      tbody.rows, function (r) { return r.hasAttribute(attr); });
+    if (rows.length > 1) {
+      rows.sort(function (a, b) {
+        var av = a.getAttribute(attr) || "", bv = b.getAttribute(attr) || "";
+        // Numeric when both sides are numbers (GT count, status rank),
+        // case-insensitive text otherwise (id, area, user, req).
+        var an = parseFloat(av), bn = parseFloat(bv);
+        if (av !== "" && bv !== "" && !isNaN(an) && !isNaN(bn)) {
+          return (an - bn) * st.dir;
+        }
+        av = av.toLowerCase(); bv = bv.toLowerCase();
+        return av < bv ? -st.dir : av > bv ? st.dir : 0;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    }
+    table.querySelectorAll("[data-sort-key]").forEach(function (h) {
+      var arrow = h.querySelector(".es-sort-arrow");
+      if (arrow) arrow.textContent =
+        h.getAttribute("data-sort-key") === st.key ? (st.dir > 0 ? " ▲" : " ▼") : "";
+    });
+  }
+  document.body.addEventListener("click", function (e) {
+    var h = e.target.closest("[data-sort-key]");
+    if (!h) return;
+    var table = h.closest("table[data-es-sortable]") ||
+                document.getElementById(h.getAttribute("data-sort-table"));
+    if (!table) return;
+    var key = h.getAttribute("data-sort-key");
+    var st = state[table.id] || { key: null, dir: 1 };
+    st.dir = st.key === key ? -st.dir : 1;
+    st.key = key;
+    state[table.id] = st;
+    apply(table);
+  });
+  document.body.addEventListener("htmx:afterSettle", function () {
+    Object.keys(state).forEach(function (id) {
+      var t = document.getElementById(id);
+      if (t) apply(t);
+    });
+  });
+})();
+</script>
 {% endblock %}

@@ -207,6 +207,17 @@ def find_req(
     return matches
 
 
+def latest_match(matches: list[dict]) -> dict:
+    """Pick the newest cell from ``find_req`` results — the match with the
+    latest release/revision. Used for direct-entry auto-qualification when a
+    req_id appears across several releases (e.g. Mar vs Jun): the expert wants
+    the current revision, not an ambiguity error. Ties (same release, multiple
+    docs/plans) resolve to the first for determinism. Empty in → KeyError is
+    the caller's bug; callers pass a non-empty list.
+    """
+    return max(matches, key=lambda m: _release_sort_key(m["release"]))
+
+
 def reqs_for_plan(
     env_dir_path: Path, mno: str, release: str, plan: str
 ) -> list[dict]:
