@@ -311,3 +311,34 @@ class TestCuration:
         r = client.post("/api/eval-studio/sample/gs-0001/status",
                         data={"status": "golden-ready"})
         assert load_sample(sample_path(tmp_path, "gs-0001")).status == "golden-ready"
+
+    def test_golden_edit_flag(self, client, tmp_path):
+        _create(client)
+        # Manual paste with no in-session draft counts as edited.
+        client.post("/api/eval-studio/sample/gs-0001/golden",
+                    data={"golden_response": "hand written", "generated": ""})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).golden_meta["edited"]
+        # Accepting an LLM draft verbatim is not an edit.
+        client.post("/api/eval-studio/sample/gs-0001/golden",
+                    data={"golden_response": "the draft", "generated": "the draft"})
+        s = load_sample(sample_path(tmp_path, "gs-0001"))
+        assert s.golden_meta["edited"] is False
+        # Tweaking a draft flags an edit and stamps edited_at.
+        r = client.post("/api/eval-studio/sample/gs-0001/golden",
+                        data={"golden_response": "the draft, tweaked",
+                              "generated": "the draft"})
+        s = load_sample(sample_path(tmp_path, "gs-0001"))
+        assert s.golden_meta["edited"] is True and s.golden_meta.get("edited_at")
+        # Response is the golden-card partial (OOB tab check), not the whole
+        # editor — so the expert stays on the Golden tab.
+        assert 'id="es-golden-check"' in r.text and 'hx-swap-oob="true"' in r.text
+        assert "nav-tabs" not in r.text
+
+    def test_meta_save_returns_partial(self, client, tmp_path):
+        _create(client)
+        r = client.post("/api/eval-studio/sample/gs-0001/meta",
+                        data={"query": "updated?", "area": "roam"})
+        # Only the meta card returns — no tab bar — so the active tab survives;
+        # the board is refreshed (area shows there).
+        assert "nav-tabs" not in r.text and "es-board-refresh" in r.text
+        assert load_sample(sample_path(tmp_path, "gs-0001")).area == "roam"

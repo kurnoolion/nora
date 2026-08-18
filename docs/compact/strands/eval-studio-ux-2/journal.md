@@ -73,3 +73,38 @@
   is client JS — verified markup (ids, data-sort-key, data-sk-*, sorter present)
   live; interaction validated in-browser by the user.
 - NOT yet committed — pending user live-validation.
+
+### Batch C — Golden tab UX (feedback items 6, 7, 8, 10)
+- **Move draft (6):** "Use as golden →" button on each generated chat draft
+  (`_chat_turn.html`, `esUseDraft`) moves that draft straight into the adjacent
+  golden textarea (same tab), keeping the edit-detection baseline in step.
+- **Corner copy (6, refined):** reusable `.es-copywrap` + `esCopyBox` — a tiny
+  clipboard glyph in the top-right corner of a text box / read-only block (the
+  website-standard pattern the user asked for). Applied to the golden textarea,
+  the query textarea, and the read-only system-prompt `<pre>`; drop-in for any
+  future field. (Earlier the copy lived as a far-away header button, removed,
+  then re-added in this standard corner form.)
+- **Stay-on-save (7, 10):** extracted the meta card (`_meta_card.html`,
+  #es-meta-card) and golden card (`_golden_card.html`, #es-golden-card) into their
+  own swap targets. `sample_meta` now returns the meta card only (+ `board_refresh`
+  script for the area column); `save_golden` returns the golden card only + an OOB
+  `#es-golden-check` tab badge. The tab bar is no longer re-rendered, so the active
+  tab + scroll survive both saves. Question stays editable; its save reflects into
+  the chat context on the next Send (system prompt rebuilt server-side from query).
+  Status change / sample switch still re-render the whole editor (deliberate).
+- **Edited flag (8):** hidden `generated` baseline in the golden card, filled by
+  `_chat_turn.html` with the latest LLM draft. `save_golden` sets
+  `golden_meta.edited`: verbatim draft → False; tweak or manual paste → True;
+  unchanged re-save preserves the prior flag. `edited_at` stamped when edited.
+  "manually edited" badge on the golden card header. Stored in golden_meta (no
+  schema field).
+- Files: `_editor.html` (split into meta/golden includes + #es-golden-check span),
+  new `_meta_card.html` + `_golden_card.html`, `_chat_turn.html` (baseline),
+  `index.html` (esCopyGolden), `golden_eval.py` (save_golden edit-detection +
+  partial, sample_meta partial).
+- Tests: added `test_golden_edit_flag` (manual/verbatim/tweak + partial response)
+  and `test_meta_save_returns_partial`. 24 eval-studio tests pass.
+- Live smoke (throwaway): partials wired; golden save → OOB partial, no nav-tabs,
+  "manually edited" badge, golden_meta.edited/edited_at set. (Smoke on gs-0001 by
+  mistake — golden artifact cleared afterward; GT left as-is.)
+- NOT yet committed — pending user live-validation.

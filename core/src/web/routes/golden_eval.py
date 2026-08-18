@@ -212,8 +212,11 @@ def sample_meta(
     sample.query = query.strip()
     sample.area = area.strip()
     save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html",
-                     _editor_ctx(request, sample))
+    # Swap only the meta card so the active tab / scroll survive; refresh the
+    # board (area shows there). The chat system prompt is rebuilt from the
+    # query on the next Send, so no chat refresh is needed here.
+    return _template(request, "eval_studio/_meta_card.html", {
+        **_editor_ctx(request, sample), "board_refresh": True})
 
 
 @router.post("/api/eval-studio/sample/{sid}/status", response_class=HTMLResponse)
@@ -605,18 +608,36 @@ def save_golden(
     golden_response: str = Form(...),
     chat_turns: int = Form(0),
     model: str = Form(""),
+    generated: str = Form(""),
 ):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
-    sample.golden_response = golden_response.strip()
+    new_text = golden_response.strip()
+    prev_text = (sample.golden_response or "").strip()
+    gen = generated.strip()
+    # Flag a manual edit: accepting an in-session LLM draft verbatim is not an
+    # edit; a tweak or a manual paste is. An unchanged re-save preserves the
+    # prior flag (we can't re-judge without a fresh draft).
+    if gen and new_text == gen:
+        edited = False
+    elif new_text == prev_text:
+        edited = bool(sample.golden_meta.get("edited", False))
+    else:
+        edited = True
+    sample.golden_response = new_text
     sample.golden_meta = {
         "chat_turns": chat_turns,
         "model": model,
         "curated_at": "",  # stamped by save_sample's updated_at
+        "edited": edited,
     }
     save_sample(_env_dir(), sample)
     sample.golden_meta["curated_at"] = sample.updated_at
+    if edited:
+        sample.golden_meta["edited_at"] = sample.updated_at
     save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html",
-                     _editor_ctx(request, sample))
+    # Swap only the golden card (keeps the expert on the Golden tab); OOB the
+    # tab check badge.
+    return _template(request, "eval_studio/_golden_card.html",
+                     {"sample": sample, "oob": True})

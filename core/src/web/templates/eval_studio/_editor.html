@@ -1,49 +1,14 @@
-{# Sample editor — re-rendered whole after every mutation. #}
-<div class="card mb-2">
-  <div class="card-header py-2 d-flex justify-content-between align-items-center">
-    <span class="small fw-semibold">{{ sample.sample_id }}
-      <span class="badge es-status-{{ sample.status }} ms-1">{{ sample.status }}</span>
-      <span class="text-muted ms-2">{{ sample.created_by }}</span>
-    </span>
-    <span>
-      {% for st in statuses %}
-        {% if st != sample.status %}
-        <form class="d-inline" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/status"
-              hx-target="#es-editor" hx-swap="innerHTML">
-          <input type="hidden" name="status" value="{{ st }}">
-          <button class="btn btn-sm btn-outline-secondary py-0" type="submit">→ {{ st }}</button>
-        </form>
-        {% endif %}
-      {% endfor %}
-      {% if admin or sample.status == 'draft' %}
-      <form class="d-inline ms-2" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/delete"
-            hx-target="#es-board" hx-swap="innerHTML"
-            hx-confirm="Delete {{ 'draft ' if sample.status == 'draft' else '' }}sample {{ sample.sample_id }}? This cannot be undone.">
-        <button class="btn btn-sm btn-outline-danger py-0" type="submit"><i class="bi bi-trash"></i></button>
-      </form>
-      {% endif %}
-    </span>
-  </div>
-  <div class="card-body py-2">
-    {% if status_error %}
-    <div class="alert alert-warning small py-1">{{ status_error }}</div>
-    {% endif %}
-    <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/meta"
-          hx-target="#es-editor" hx-swap="innerHTML">
-      <div class="d-flex gap-1">
-        <textarea class="form-control form-control-sm" name="query" rows="2" required>{{ sample.query }}</textarea>
-        <div class="d-flex flex-column gap-1" style="width:180px">
-          <input class="form-control form-control-sm" name="area" value="{{ sample.area }}" placeholder="Area">
-          <button class="btn btn-sm btn-outline-primary" type="submit">Save</button>
-        </div>
-      </div>
-    </form>
-  </div>
+{# Sample editor. The meta and golden cards are their own swap targets
+   (#es-meta-card / #es-golden-card) so saving the question or the golden
+   response never re-renders the tab bar — the user keeps their active tab and
+   scroll. Only status change / sample switch re-render the whole editor. #}
+<div id="es-meta-card">
+  {% include "eval_studio/_meta_card.html" %}
 </div>
 
 <ul class="nav nav-tabs nav-tabs-sm mb-2" role="tablist">
   <li class="nav-item"><button class="nav-link active small" data-bs-toggle="tab" data-bs-target="#es-tab-gt" type="button">Ground truth (<span id="es-gt-count">{{ sample.ground_truth|length }}</span>)</button></li>
-  <li class="nav-item"><button class="nav-link small" data-bs-toggle="tab" data-bs-target="#es-tab-curate" type="button">Golden response {% if sample.golden_response %}<i class="bi bi-check-circle-fill text-success"></i>{% endif %}</button></li>
+  <li class="nav-item"><button class="nav-link small" data-bs-toggle="tab" data-bs-target="#es-tab-curate" type="button">Golden response <span id="es-golden-check">{% if sample.golden_response %}<i class="bi bi-check-circle-fill text-success"></i>{% endif %}</span></button></li>
 </ul>
 
 <div class="tab-content">
@@ -83,8 +48,11 @@
             <summary class="small text-muted" style="cursor:pointer">
               System prompt (read-only — sent with every message; rebuilt from the query + ground truth)
             </summary>
-            <pre class="small bg-body-tertiary border rounded p-2 mt-1 mb-0"
-                 style="white-space:pre-wrap; max-height:200px; overflow-y:auto">{{ chat_system }}</pre>
+            <div class="es-copywrap mt-1">
+              <button type="button" class="es-copybtn" onclick="esCopyBox(this)" title="Copy"><i class="bi bi-clipboard"></i> Copy</button>
+              <pre class="small bg-body-tertiary border rounded p-2 mb-0"
+                   style="white-space:pre-wrap; max-height:200px; overflow-y:auto">{{ chat_system }}</pre>
+            </div>
           </details>
           <div class="es-chat-log" id="es-chat-log"></div>
           <form class="d-flex gap-1 mt-2" id="es-chat-form"
@@ -104,22 +72,8 @@
       </div>
     </div>
     <div class="col-6">
-      <div class="card">
-        <div class="card-header py-1 small fw-semibold">Golden response</div>
-        <div class="card-body py-2">
-          <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/golden"
-                hx-target="#es-editor" hx-swap="innerHTML">
-            <textarea class="form-control form-control-sm mb-1" name="golden_response" rows="14"
-                      id="es-golden-text" placeholder="Paste / edit the final golden answer here…"
-                      required>{{ sample.golden_response or "" }}</textarea>
-            <input type="hidden" name="chat_turns" id="es-golden-turns" value="{{ sample.golden_meta.get('chat_turns', 0) }}">
-            <input type="hidden" name="model" value="{{ sample.golden_meta.get('model', '') }}">
-            <button class="btn btn-sm btn-success" type="submit">Save golden response</button>
-            {% if sample.golden_meta.get('curated_at') %}
-            <span class="text-muted small ms-2">curated {{ sample.golden_meta.get('curated_at') }}</span>
-            {% endif %}
-          </form>
-        </div>
+      <div id="es-golden-card">
+        {% include "eval_studio/_golden_card.html" %}
       </div>
     </div>
   </div>

@@ -1,0 +1,50 @@
+{# Sample header + query/area meta form. Its own swap target (#es-meta-card)
+   so saving the question/area never re-renders the tabs — the user stays on
+   whatever tab (and scroll) they were on. `board_refresh` fires the board
+   reload when returned standalone (area shows there); omitted when included
+   inside the full editor (the editor script already refreshes the board). #}
+<div class="card mb-2">
+  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+    <span class="small fw-semibold">{{ sample.sample_id }}
+      <span class="badge es-status-{{ sample.status }} ms-1">{{ sample.status }}</span>
+      <span class="text-muted ms-2">{{ sample.created_by }}</span>
+    </span>
+    <span>
+      {% for st in statuses %}
+        {% if st != sample.status %}
+        <form class="d-inline" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/status"
+              hx-target="#es-editor" hx-swap="innerHTML">
+          <input type="hidden" name="status" value="{{ st }}">
+          <button class="btn btn-sm btn-outline-secondary py-0" type="submit">→ {{ st }}</button>
+        </form>
+        {% endif %}
+      {% endfor %}
+      {% if admin or sample.status == 'draft' %}
+      <form class="d-inline ms-2" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/delete"
+            hx-target="#es-board" hx-swap="innerHTML"
+            hx-confirm="Delete {{ 'draft ' if sample.status == 'draft' else '' }}sample {{ sample.sample_id }}? This cannot be undone.">
+        <button class="btn btn-sm btn-outline-danger py-0" type="submit"><i class="bi bi-trash"></i></button>
+      </form>
+      {% endif %}
+    </span>
+  </div>
+  <div class="card-body py-2">
+    {% if status_error %}
+    <div class="alert alert-warning small py-1">{{ status_error }}</div>
+    {% endif %}
+    <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/meta"
+          hx-target="#es-meta-card" hx-swap="innerHTML">
+      <div class="d-flex gap-1">
+        <div class="es-copywrap flex-grow-1">
+          <button type="button" class="es-copybtn" onclick="esCopyBox(this)" title="Copy"><i class="bi bi-clipboard"></i> Copy</button>
+          <textarea class="form-control form-control-sm w-100" name="query" rows="2" required>{{ sample.query }}</textarea>
+        </div>
+        <div class="d-flex flex-column gap-1" style="width:180px">
+          <input class="form-control form-control-sm" name="area" value="{{ sample.area }}" placeholder="Area">
+          <button class="btn btn-sm btn-outline-primary" type="submit">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% if board_refresh %}<script>htmx.trigger(document.body, "es-board-refresh");</script>{% endif %}

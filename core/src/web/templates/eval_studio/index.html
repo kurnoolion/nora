@@ -23,6 +23,15 @@
 th[data-sort-key] { cursor: pointer; user-select: none; white-space: nowrap; }
 th[data-sort-key]:hover { background: #f1f3f5; }
 .es-sort-arrow { color: #0d6efd; font-size: .7rem; }
+/* Batch C — reusable corner copy button for any text box / read-only block. */
+.es-copywrap { position: relative; }
+.es-copywrap > .es-copybtn {
+  position: absolute; top: 4px; right: 4px; z-index: 4;
+  padding: 0 6px; line-height: 1.5; font-size: .72rem;
+  border: 1px solid #dee2e6; border-radius: 4px;
+  background: #fff; color: #6c757d; cursor: pointer; opacity: .85;
+}
+.es-copywrap > .es-copybtn:hover { opacity: 1; color: #0d6efd; border-color: #0d6efd; }
 </style>
 {% endblock %}
 
@@ -68,6 +77,39 @@ th[data-sort-key]:hover { background: #f1f3f5; }
     </div>
   </div>
 </div>
+
+<script>
+// Batch C — generic corner copy: copies the text box / block inside the same
+// .es-copywrap to the clipboard, with a brief tick. Reusable on any field.
+function esCopyBox(btn) {
+  var wrap = btn.closest(".es-copywrap");
+  if (!wrap) return;
+  var f = wrap.querySelector("textarea, input, pre, .es-copytext");
+  if (!f) return;
+  var text = ("value" in f) ? f.value : f.textContent;
+  navigator.clipboard.writeText(text).then(function () {
+    var orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check2"></i> Copied';
+    setTimeout(function () { btn.innerHTML = orig; }, 1000);
+  });
+}
+
+// Batch C — move a chat draft into the golden-response box (same tab).
+function esUseDraft(btn) {
+  var t = document.getElementById("es-golden-text");
+  if (!t) return;
+  t.value = btn.dataset.draft || "";
+  // Keep the edit-detection baseline in step: using a draft verbatim is not
+  // an edit, so saving right after shows no "manually edited" badge.
+  var g = document.getElementById("es-golden-generated");
+  if (g) g.value = t.value;
+  t.focus();
+  var orig = btn.innerHTML;
+  btn.innerHTML = '<i class="bi bi-check2"></i> Moved';
+  setTimeout(function () { btn.innerHTML = orig; }, 1200);
+}
+
+</script>
 
 <script>
 // Batch B — generic, attribute-driven table sort that survives HTMX swaps.
