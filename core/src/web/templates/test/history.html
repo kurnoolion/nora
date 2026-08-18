@@ -151,14 +151,22 @@
           if (drop) drop.addEventListener("click", () => remove(idx));
           return;
         }
-        // Share copies the link, matching the button on the Ask page — the
-        // point is to send this answer to someone, not to open another tab.
-        detailEl.innerHTML =
-          '<div class="d-flex justify-content-end mb-2">'
-          + '<button type="button" class="btn btn-sm btn-outline-primary" data-share="'
-          + esc(entry.path) + '" title="Copy a link to this question and answer">'
-          + '<i class="bi bi-share me-1"></i>Share</button>'
-          + "</div>" + html;
+        detailEl.innerHTML = html;
+        // Share lives in the answer card's own header rather than a row above
+        // it, so both panes start on the same line. Built as a node (not an
+        // HTML string) so the stored path is never parsed as markup, and left
+        // out of _shared_body.html so that partial stays generic — the shared
+        // page itself needs no Share button, its URL is already the share URL.
+        const hdr = detailEl.querySelector(".card-header");
+        if (hdr) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "btn btn-sm btn-outline-primary ms-auto";
+          btn.title = "Copy a link to this question and answer";
+          btn.setAttribute("data-share", entry.path);
+          btn.innerHTML = '<i class="bi bi-share me-1"></i>Share';
+          hdr.appendChild(btn);
+        }
       })
       .catch((err) => {
         detailEl.innerHTML =
