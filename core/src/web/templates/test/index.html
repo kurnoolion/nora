@@ -24,13 +24,27 @@
   </p>
   {% endif %}
 
+  {# Corpus inventory is reference material, not part of asking a question, so
+     it starts collapsed. The fetch still runs on load (as it always has) so the
+     content is ready the instant it is expanded — deferring it to the first
+     expand would trade a cheap local request for a visible "Loading…" stall. #}
   <div class="card mb-3">
-    <div class="card-header py-2"><strong>Ingested corpus</strong></div>
-    <div class="card-body p-2"
-         hx-get="{{ root_path }}/api/test/ingested"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <span class="text-muted">Loading corpus inventory…</span>
+    <div class="card-header py-2">
+      <button class="btn btn-sm btn-link p-0 align-baseline text-decoration-none"
+              type="button" data-bs-toggle="collapse"
+              data-bs-target="#ingested-collapse"
+              aria-expanded="false" aria-controls="ingested-collapse">
+        <strong>Ingested corpus</strong>
+        <span class="text-muted small ms-1">(show)</span>
+      </button>
+    </div>
+    <div class="collapse" id="ingested-collapse">
+      <div class="card-body p-2"
+           hx-get="{{ root_path }}/api/test/ingested"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+        <span class="text-muted">Loading corpus inventory…</span>
+      </div>
     </div>
   </div>
 
