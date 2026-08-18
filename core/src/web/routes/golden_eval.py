@@ -474,11 +474,15 @@ def picker_jump(
     mno: str = "",
     plan: str = "",
     release: str = "",
+    req_id: str = "",
 ):
     """Repopulate the whole picker pre-selected to a cell — driven by a
     ground-truth entry's locate button, so the expert can pull more sibling
     requirements from that plan without re-walking the cascade. Unknown /
     empty release falls back to the plan's latest (matches picker_releases).
+
+    When ``req_id`` is given the picker's filter box is pre-filled with it and
+    the list is filtered to that requirement (clear the box to see siblings).
     """
     env_dir = _env_dir()
     plans = req_tree.plans_for_mno(env_dir, mno) if mno else {}
@@ -489,6 +493,14 @@ def picker_jump(
         req_tree.reqs_for_plan(env_dir, mno, release, plan)
         if (mno and plan and release) else []
     )
+    needle = req_id.strip().lower()
+    if needle and rows:
+        # Same id/title match as picker_reqs so editing the box behaves the same.
+        rows = [
+            r for r in rows
+            if needle in r.get("req_id", "").lower()
+            or needle in r.get("title", "").lower()
+        ]
     return _template(request, "eval_studio/_picker.html", {
         "mnos": sorted({c["mno"] for c in req_tree.list_cells(env_dir)}),
         "sid": sid,
@@ -498,6 +510,7 @@ def picker_jump(
         "plans": plans,
         "releases": releases,
         "rows": rows,
+        "sel_filter": req_id,
     })
 
 

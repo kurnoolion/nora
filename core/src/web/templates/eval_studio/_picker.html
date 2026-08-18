@@ -40,7 +40,7 @@
   </span>
 </div>
 <input class="form-control form-control-sm mb-1" name="filter" id="es-picker-filter"
-       placeholder="Filter by id or title…"
+       placeholder="Filter by id or title…" value="{{ sel_filter or '' }}"
        hx-get="{{ root_path }}/api/eval-studio/picker/reqs"
        hx-trigger="keyup changed delay:300ms, es-picker-changed from:body"
        hx-target="#es-picker-reqs" hx-swap="innerHTML"

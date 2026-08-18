@@ -46,7 +46,7 @@
                siblings from the same plan. #}
             <button class="btn btn-sm btn-outline-secondary py-0"
                     title="Jump to this plan in the picker"
-                    hx-get="{{ root_path }}/api/eval-studio/picker/jump?sid={{ sample.sample_id }}&mno={{ e.mno|urlencode }}&plan={{ e.plan|urlencode }}&release={{ e.release|urlencode }}"
+                    hx-get="{{ root_path }}/api/eval-studio/picker/jump?sid={{ sample.sample_id }}&mno={{ e.mno|urlencode }}&plan={{ e.plan|urlencode }}&release={{ e.release|urlencode }}&req_id={{ e.req_id|urlencode }}"
                     hx-target="#es-picker-body" hx-swap="innerHTML">
               <i class="bi bi-crosshair"></i>
             </button>

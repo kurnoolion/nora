@@ -258,6 +258,19 @@ class TestPicker:
             "&plan=PLAN_X&release=Jan2026&filter=backoff").text
         assert "REQ_FOO_0002" in filtered and "REQ_FOO_0001" not in filtered
 
+    def test_jump_filters_by_req_id(self, client):
+        # Locate button carries the req_id → picker filtered to it, filter box prefilled.
+        r = client.get(
+            "/api/eval-studio/picker/jump?sid=gs-0001&mno=mno-a"
+            "&plan=PLAN_X&release=Jan2026&req_id=REQ_FOO_0002").text
+        assert "REQ_FOO_0002" in r and "REQ_FOO_0001" not in r
+        assert 'id="es-picker-filter"' in r and 'value="REQ_FOO_0002"' in r
+        # Without req_id the jump still shows every sibling in the cell.
+        r2 = client.get(
+            "/api/eval-studio/picker/jump?sid=gs-0001&mno=mno-a"
+            "&plan=PLAN_X&release=Jan2026").text
+        assert "REQ_FOO_0001" in r2 and "REQ_FOO_0002" in r2
+
 
 class TestPreview:
     def test_preview_renders_hits_misses_and_seeding(self, client, tmp_path, monkeypatch):
