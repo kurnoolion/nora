@@ -23,10 +23,17 @@
 
 <div class="card">
   <div class="card-header py-1 small fw-semibold">Ground truth</div>
-  <table class="table es-gt-list mb-0">
+  <div class="es-scroll">
+  <table class="table es-gt-list mb-0" id="es-gt-table" data-es-sortable>
+    <thead>
+      <tr class="small text-muted">
+        <th data-sort-key="req">Requirement<span class="es-sort-arrow"></span></th>
+        <th></th>
+      </tr>
+    </thead>
     <tbody>
     {% for e in sample.ground_truth %}
-      <tr>
+      <tr data-sk-req="{{ e.req_id }}">
         <td>
           <span class="fw-semibold">{{ e.req_id }}</span><br>
           <span class="text-muted">{{ e.mno or "?" }} / {{ e.release or "?" }}{% if e.plan %} / {{ e.plan }}{% endif %}</span>
@@ -55,10 +62,11 @@
         </td>
       </tr>
     {% else %}
-      <tr><td class="text-muted small p-2">Empty — add via the picker, paste, or a preview run.</td></tr>
+      <tr><td colspan="2" class="text-muted small p-2">Empty — add via the picker, paste, or a preview run.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 
 <form class="d-flex gap-1 mt-2"

@@ -50,3 +50,26 @@
   fire on the single-release demo; unit test covers it.)
 - NOT yet committed — pending user live-validation.
 
+
+### Batch B — sort / filter / scroll (feedback items 4, 5)
+- **Scroll (5):** `.es-scroll` (max-height + overflow-y) wraps the samples board
+  table and the ground-truth list, so the add form / picker stay in view as lists
+  grow. (Picker reqs already had its own scroll box + content-visibility.)
+- **Sort (4):** generic attribute-driven client-side sorter added inline in
+  `index.html` — a `data-es-sortable` table with a stable id + `data-sort-key`
+  headers + per-row `data-sk-<key>`; state held per table id and re-applied on
+  `htmx:afterSettle`, so a server re-render of a panel keeps the chosen order. A
+  header outside its table (picker toolbar) points back via `data-sort-table`.
+  - Board: all 5 columns sortable (id / area / status / GT count / user) for
+    consistency — comparator is numeric-aware (GT count int, status by lifecycle
+    rank draft→stage1→golden), text otherwise.
+  - GT list: sort by req_id (new thead).
+  - Picker reqs: sort-by-id toggle button in the toolbar (server filter already
+    present).
+- Filter: picker's id/title filter already existed — left as is.
+- Files: `index.html` (CSS + sorter JS), `_board.html`, `_gt_panel.html`,
+  `_picker_reqs.html`.
+- Tests: 22 eval-studio route tests pass (templates still render). Sort behaviour
+  is client JS — verified markup (ids, data-sort-key, data-sk-*, sorter present)
+  live; interaction validated in-browser by the user.
+- NOT yet committed — pending user live-validation.

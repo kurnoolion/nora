@@ -17,6 +17,12 @@
 .es-chat-log { max-height: 380px; overflow-y: auto; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 8px; }
 .es-chat-user { background: #e7f1ff; border-radius: 6px; padding: 6px 10px; margin: 4px 0; }
 .es-chat-assistant { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 10px; margin: 4px 0; white-space: pre-wrap; }
+/* Batch B — bounded, scrollable lists so add forms / the picker stay in view. */
+.es-scroll { max-height: 420px; overflow-y: auto; }
+.es-board .es-scroll { max-height: 70vh; }
+th[data-sort-key] { cursor: pointer; user-select: none; white-space: nowrap; }
+th[data-sort-key]:hover { background: #f1f3f5; }
+.es-sort-arrow { color: #0d6efd; font-size: .7rem; }
 </style>
 {% endblock %}
 
@@ -62,4 +68,62 @@
     </div>
   </div>
 </div>
+
+<script>
+// Batch B — generic, attribute-driven table sort that survives HTMX swaps.
+// A sortable table carries `data-es-sortable` + a stable `id`; sortable
+// headers carry `data-sort-key`; each row carries `data-sk-<key>` for every
+// key it can be sorted on. A header outside its table points back with
+// `data-sort-table`. State is held per-table id and re-applied on afterSettle,
+// so a server re-render of the panel keeps the chosen order.
+(function () {
+  var state = {};  // { tableId: {key, dir} }  dir: 1 asc, -1 desc
+  function apply(table) {
+    var st = state[table.id];
+    if (!st || !table.tBodies.length) return;
+    var tbody = table.tBodies[0];
+    var attr = "data-sk-" + st.key;
+    var rows = Array.prototype.filter.call(
+      tbody.rows, function (r) { return r.hasAttribute(attr); });
+    if (rows.length > 1) {
+      rows.sort(function (a, b) {
+        var av = a.getAttribute(attr) || "", bv = b.getAttribute(attr) || "";
+        // Numeric when both sides are numbers (GT count, status rank),
+        // case-insensitive text otherwise (id, area, user, req).
+        var an = parseFloat(av), bn = parseFloat(bv);
+        if (av !== "" && bv !== "" && !isNaN(an) && !isNaN(bn)) {
+          return (an - bn) * st.dir;
+        }
+        av = av.toLowerCase(); bv = bv.toLowerCase();
+        return av < bv ? -st.dir : av > bv ? st.dir : 0;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    }
+    table.querySelectorAll("[data-sort-key]").forEach(function (h) {
+      var arrow = h.querySelector(".es-sort-arrow");
+      if (arrow) arrow.textContent =
+        h.getAttribute("data-sort-key") === st.key ? (st.dir > 0 ? " ▲" : " ▼") : "";
+    });
+  }
+  document.body.addEventListener("click", function (e) {
+    var h = e.target.closest("[data-sort-key]");
+    if (!h) return;
+    var table = h.closest("table[data-es-sortable]") ||
+                document.getElementById(h.getAttribute("data-sort-table"));
+    if (!table) return;
+    var key = h.getAttribute("data-sort-key");
+    var st = state[table.id] || { key: null, dir: 1 };
+    st.dir = st.key === key ? -st.dir : 1;
+    st.key = key;
+    state[table.id] = st;
+    apply(table);
+  });
+  document.body.addEventListener("htmx:afterSettle", function () {
+    Object.keys(state).forEach(function (id) {
+      var t = document.getElementById(id);
+      if (t) apply(t);
+    });
+  });
+})();
+</script>
 {% endblock %}

@@ -15,13 +15,16 @@
           hx-post="{{ root_path }}/api/eval-studio/sample/{{ sid }}/gt/add-bulk"
           hx-include="#es-req-rows input[name=req_ids], #es-bulk-quals input"
           hx-target="#es-gt-panel" hx-swap="innerHTML">Add selected</button>
+  <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+          data-sort-key="req" data-sort-table="es-picker-table"
+          title="Sort by requirement id">id <span class="es-sort-arrow"></span></button>
   <span class="text-muted small">{{ rows|length }} listed</span>
 </div>
-<table class="table table-sm table-hover mb-0">
+<table class="table table-sm table-hover mb-0" id="es-picker-table" data-es-sortable>
   <tbody id="es-req-rows">
   {% for r in rows %}
     {% if r.req_id %}
-    <tr class="es-req-row">
+    <tr class="es-req-row" data-sk-req="{{ r.req_id }}">
       <td style="width:26px" class="text-center">
         <input class="form-check-input m-0" type="checkbox" name="req_ids" value="{{ r.req_id }}">
       </td>
