@@ -53,27 +53,14 @@
               required></textarea>
         </div>
 
-        {# Your name stays above the fold — it credits the feedback — and is
-           remembered between asks by the sticky-fields script below. #}
-        <div class="mb-3">
-          <label for="user-name" class="form-label">
-            <strong>Your name</strong>
-            <span class="text-muted small">(optional — for crediting feedback)</span>
-          </label>
-          <input
-              type="text"
-              id="user-name"
-              name="user_name"
-              class="form-control form-control-sm"
-              placeholder="anonymous"
-              maxlength="80">
-        </div>
-
-        {# Ask sits directly under the question. The engineering knobs
-           (retrieval lanes, correction label) collapse behind Options so the
-           everyday flow is just question → Ask → answer. Collapsed inputs are
-           still submitted — collapse hides, it doesn't disable. #}
-        <div class="d-flex align-items-center gap-2">
+        {# Ask sits directly under the question, with the name inline between
+           Ask and Options — one short field doesn't earn a full-width row. It
+           stays above the fold because it credits the feedback, and is
+           remembered between asks by the sticky-fields script below. The
+           engineering knobs (retrieval lanes, correction label) collapse behind
+           Options so the everyday flow is just question → Ask → answer.
+           Collapsed inputs are still submitted — collapse hides, not disables. #}
+        <div class="d-flex align-items-center gap-2 flex-wrap">
           <button id="ask-submit" class="btn btn-primary" type="submit">
             <span id="ask-submit-label">Ask</span>
             <span id="ask-submit-busy" style="display:none;">
@@ -81,6 +68,16 @@
               Querying…
             </span>
           </button>
+          <input
+              type="text"
+              id="user-name"
+              name="user_name"
+              class="form-control form-control-sm"
+              style="max-width: 220px"
+              placeholder="Your name (optional)"
+              aria-label="Your name — optional, credits your feedback"
+              title="Optional — credits your feedback"
+              maxlength="80">
           <button class="btn btn-sm btn-outline-secondary" type="button"
                   data-bs-toggle="collapse" data-bs-target="#ask-options"
                   aria-expanded="false" aria-controls="ask-options">
