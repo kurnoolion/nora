@@ -47,3 +47,26 @@ user sees anyway) and works retroactively for rows already in the DB.
 - Test note: `test_feedback_db.py` fails with "no current event loop" when run
   AFTER `test_web_playground.py` — pre-existing pollution, reproduces identically
   on clean main with these changes stashed. Not caused by this strand; left alone.
+
+### Batch 2 — shareable link (item 4)
+- **Route** `GET /ask/s/{row_id}` (`playground.shared_answer`): reads the stored
+  ask via the existing `FeedbackStore.get_row()`, 404s on an unknown id, decodes
+  `citations_json` / `cited_ids` defensively (corrupt JSON degrades to an empty
+  list rather than a 500). No new storage, no schema change.
+- **Template** `test/shared.html`: read-only snapshot — lane badge, asker, time,
+  model, elapsed, the question, the answer through the same `| md` filter, and the
+  cited requirements. No feedback form, no re-run (a reviewer must see the answer
+  the asker saw). No engineering block: those internals were never persisted.
+- **Share button** in `_answer.html` next to the Engineering-details toggle,
+  rendered only when `row_id` exists. Copy helper `askCopyShare` lives in
+  `index.html`, NOT in the partial — `_answer.html` is injected via innerHTML,
+  which never executes inline `<script>` (Bootstrap's data-bs-toggle still works
+  because it is delegated). Falls back to a prompt() when the clipboard API is
+  unavailable.
+- Verified live on env_demo: `/ask/s/7` → 200 with the real question + rendered
+  markdown answer + cited requirements; bogus id → 404. Rows 3–6 (from the user's
+  own earlier asks, made before this feature) also render — confirming the
+  no-storage-change decision makes existing history shareable retroactively.
+- Tests: `test_shared_answer_renders_stored_row`,
+  `test_shared_answer_unknown_id_is_404`,
+  `test_shared_answer_survives_malformed_json`. 12 pass in test_web_playground.py.

@@ -325,6 +325,26 @@
 })();
 
 /*
+ * Copy a share link for one stored answer. Defined here rather than in
+ * _answer.html because that partial is injected with innerHTML, which never
+ * executes inline <script> tags. `path` is root-relative; the origin is added
+ * so the copied text is a complete, pasteable URL.
+ */
+function askCopyShare(btn, path) {
+  const url = window.location.origin + path;
+  const done = () => {
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Link copied';
+    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+  };
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(done, () => window.prompt("Copy this link:", url));
+  } else {
+    window.prompt("Copy this link:", url);
+  }
+}
+
+/*
  * Sticky fields — the name (and the now-collapsed lane selection + correction
  * label) rarely change between asks, so remember them per browser and prefill
  * on load. Only these; the question is always fresh. Disabled lane checkboxes

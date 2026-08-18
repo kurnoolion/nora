@@ -104,14 +104,26 @@
        timings) is for engineering review, not the everyday ask-a-question
        user — so it is collapsed by default behind one toggle. #}
     <hr class="my-2">
-    <button type="button"
-            class="btn btn-sm btn-outline-secondary py-0"
-            data-bs-toggle="collapse"
-            data-bs-target="#eng-details-{{ row_id }}"
-            aria-expanded="false"
-            aria-controls="eng-details-{{ row_id }}">
-      <i class="bi bi-tools me-1"></i>Engineering details
-    </button>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+      <button type="button"
+              class="btn btn-sm btn-outline-secondary py-0"
+              data-bs-toggle="collapse"
+              data-bs-target="#eng-details-{{ row_id }}"
+              aria-expanded="false"
+              aria-controls="eng-details-{{ row_id }}">
+        <i class="bi bi-tools me-1"></i>Engineering details
+      </button>
+      {% if row_id %}
+      {# Share this stored answer. askCopyShare lives in test/index.html — this
+         partial is injected with innerHTML, which never runs inline scripts. #}
+      <button type="button"
+              class="btn btn-sm btn-outline-primary py-0"
+              onclick="askCopyShare(this, '{{ root_path }}/ask/s/{{ row_id }}')"
+              title="Copy a link to this question and answer">
+        <i class="bi bi-share me-1"></i>Share
+      </button>
+      {% endif %}
+    </div>
     <div class="collapse" id="eng-details-{{ row_id }}">
 
     {# SIRA-specific preamble: only present when this came from the

@@ -96,3 +96,81 @@ def test_test_page_sets_no_cache_header(monkeypatch):
     req = SimpleNamespace(cookies={})            # team_restricted() reads .cookies
     resp = asyncio.run(pg.playground_page(req))
     assert resp.headers["Cache-Control"] == "no-cache"
+
+
+# -- Shared-answer snapshot (/ask/s/{row_id}) --------------------------------
+
+
+def _shared(row, row_id=7):
+    """Call the share route with a stubbed feedback store, capturing the
+    template context instead of rendering."""
+    import asyncio
+    from types import SimpleNamespace
+    from starlette.responses import HTMLResponse
+    from core.src.web.routes import playground as pg
+
+    captured = {}
+
+    class _Store:
+        async def get_row(self, rid):
+            return row if rid == row_id else None
+
+    def _fake_template(request, name, ctx):
+        captured["name"] = name
+        captured["ctx"] = ctx
+        return HTMLResponse("<html></html>")
+
+    req = SimpleNamespace(
+        cookies={},
+        app=SimpleNamespace(state=SimpleNamespace(feedback_store=_Store())),
+    )
+    with patch("core.src.web.app._template_response", _fake_template):
+        resp = asyncio.run(pg.shared_answer(req, row_id))
+    return resp, captured
+
+
+def test_shared_answer_renders_stored_row():
+    row = {
+        "id": 7, "question": "retry rules?", "answer": "Because backoff.",
+        "lane": "nora", "user_name": "hanif", "timestamp": "2026-08-18T11:44:01+00:00",
+        "llm_model": "deepseek-r1:1.5b", "query_elapsed_ms": 1200,
+        "citations_json": '[{"req_id": "REQ_A_1", "plan_id": "PLAN_X"}]',
+        "cited_ids": '["REQ_A_1"]',
+    }
+    resp, cap = _shared(row)
+    assert resp.status_code == 200
+    assert cap["name"] == "test/shared.html"
+    assert cap["ctx"]["row"]["question"] == "retry rules?"
+    # citations_json / cited_ids are decoded for the template
+    assert cap["ctx"]["citations"] == [{"req_id": "REQ_A_1", "plan_id": "PLAN_X"}]
+    assert cap["ctx"]["cited_ids"] == ["REQ_A_1"]
+
+
+def test_shared_answer_unknown_id_is_404():
+    resp, cap = _shared({"id": 7}, row_id=7)
+    # same store, but ask for an id it doesn't have
+    import asyncio
+    from types import SimpleNamespace
+    from core.src.web.routes import playground as pg
+
+    class _Empty:
+        async def get_row(self, rid):
+            return None
+
+    req = SimpleNamespace(
+        cookies={},
+        app=SimpleNamespace(state=SimpleNamespace(feedback_store=_Empty())),
+    )
+    r = asyncio.run(pg.shared_answer(req, 999999))
+    assert r.status_code == 404
+
+
+def test_shared_answer_survives_malformed_json():
+    """A row with corrupt citations JSON must still render the answer, not 500."""
+    row = {
+        "id": 7, "question": "q", "answer": "a", "lane": "sira",
+        "citations_json": "{not json", "cited_ids": None,
+    }
+    resp, cap = _shared(row)
+    assert resp.status_code == 200
+    assert cap["ctx"]["citations"] == [] and cap["ctx"]["cited_ids"] == []

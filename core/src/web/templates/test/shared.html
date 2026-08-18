@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}NORA — Shared answer{% endblock %}
+
+{% block content %}
+{# Read-only snapshot of one stored ask, replayed from its test_feedback row
+   (see playground.shared_answer). Shows what a normal user sees — question,
+   answer, citations, attribution. No feedback form and no re-run: a reviewer
+   must see exactly the answer the asker saw. Chunk text / retrieval scores /
+   prompts are not persisted at ask time, so there is no engineering block. #}
+<div class="container-fluid py-3">
+
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="mb-0">Shared answer</h1>
+    <a class="btn btn-sm btn-outline-primary" href="{{ root_path }}/test">
+      <i class="bi bi-chat-left-text me-1"></i>Ask your own question
+    </a>
+  </div>
+
+  <p class="text-muted">
+    A saved question and answer, shared for review. This is a snapshot of what
+    was answered at the time — opening it does not re-run the query.
+  </p>
+
+  <div class="card mb-3">
+    <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center">
+      {% if row.lane == 'nora' %}
+        <span class="badge bg-success">NORA</span>
+      {% elif row.lane == 'sira' %}
+        <span class="badge bg-primary">SIRA</span>
+      {% endif %}
+      <span class="text-muted small">
+        asked by <strong>{{ row.user_name or "anonymous" }}</strong>
+        · {{ row.timestamp }}
+        {% if row.llm_model %} · model <code>{{ row.llm_model }}</code>{% endif %}
+        {% if row.query_elapsed_ms %} · {{ row.query_elapsed_ms }} ms{% endif %}
+      </span>
+    </div>
+
+    <div class="card-body">
+      <div class="text-muted small mb-2"><strong>Q:</strong> {{ row.question }}</div>
+      <div class="answer-body" style="line-height: 1.5;">{{ row.answer | md }}</div>
+    </div>
+  </div>
+
+  {% if citations %}
+  <div class="card">
+    <div class="card-header py-2 small">
+      <strong>Cited requirements</strong>
+      ({{ citations|length }} requirement{% if citations|length != 1 %}s{% endif %})
+    </div>
+    <div class="card-body py-2">
+      <ul class="list-unstyled mb-0 small">
+        {% for c in citations %}
+          {% if c.req_id %}
+          <li class="mb-1">
+            <code>{{ c.req_id }}</code>
+            {% if c.plan_id %}<span class="badge bg-secondary ms-1">{{ c.plan_id }}</span>{% endif %}
+            {% if c.section_number %} — sec <code>{{ c.section_number }}</code>{% endif %}
+            {% if c.spec %} — {{ c.spec }}{% if c.spec_section %} §{{ c.spec_section }}{% endif %}{% endif %}
+          </li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% elif cited_ids %}
+  <div class="card">
+    <div class="card-header py-2 small"><strong>Cited requirements</strong></div>
+    <div class="card-body py-2 small">
+      {% for rid in cited_ids %}<code class="me-2">{{ rid }}</code>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

@@ -1073,6 +1073,45 @@ async def playground_page(request: Request, section: str = "requirement_bot"):
     return resp
 
 
+@router.get("/ask/s/{row_id}", response_class=HTMLResponse)
+async def shared_answer(request: Request, row_id: int):
+    """Read-only snapshot of one stored question + answer, for sharing a
+    result with a reviewer.
+
+    Renders what a normal user sees — question, answer, citations, attribution —
+    replayed from the `test_feedback` row the ask already wrote. Deliberately
+    NOT a re-run: the reviewer must see the same answer the asker saw. The
+    engineering detail (chunk text, retrieval scores, prompts) is not persisted
+    (`metadata={}` at ask time), so it is not shown.
+
+    One row per lane, so a two-lane ask yields two shareable ids. Ids are
+    sequential and therefore enumerable — the route carries no auth of its own
+    and is reachable by anyone who can reach the Ask page, which is the same
+    audience the stored content already has.
+    """
+    from core.src.web.app import _template_response
+
+    store = getattr(request.app.state, "feedback_store", None)
+    row = await store.get_row(row_id) if store is not None else None
+    if row is None:
+        return HTMLResponse(
+            "<h4>Not found</h4><p>No shared answer with that id.</p>",
+            status_code=404,
+        )
+
+    def _loads(raw, fallback):
+        try:
+            return json.loads(raw) if raw else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    return _template_response(request, "test/shared.html", {
+        "row": row,
+        "citations": _loads(row.get("citations_json"), []),
+        "cited_ids": _loads(row.get("cited_ids"), []),
+    })
+
+
 # -- API: ask + feedback ----------------------------------------------------
 
 
