@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+
+{% block title %}NORA — Your question history{% endblock %}
+
+{% block content %}
+{# Two-pane history. The list is built client-side from localStorage (key
+   nora-ask-history, written by the Ask page's recorder) — there is nothing for
+   the server to render. Clicking an entry fetches /api/ask/s/<id>, which is the
+   same snapshot markup the shared-answer page uses. #}
+<div class="container-fluid py-3">
+
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="mb-0">Your questions</h1>
+    <div class="d-flex gap-2">
+      <button id="hist-clear" class="btn btn-sm btn-outline-danger" type="button">
+        <i class="bi bi-trash me-1"></i>Clear history
+      </button>
+      <a class="btn btn-sm btn-outline-primary" href="{{ root_path }}/test">
+        <i class="bi bi-chat-left-text me-1"></i>Ask a question
+      </a>
+    </div>
+  </div>
+
+  <p class="text-muted">
+    Questions you asked in this browser. Stored locally on this machine only —
+    clearing your browser data clears this list.
+  </p>
+
+  <div class="row g-3">
+    <div class="col-lg-5">
+      <div class="card">
+        <div class="card-header py-2 small fw-semibold d-flex justify-content-between align-items-center">
+          <span>History (<span id="hist-count">0</span>)</span>
+          <span class="text-muted small" id="hist-page-label"></span>
+        </div>
+        <div class="list-group list-group-flush" id="hist-list"></div>
+        <div class="card-footer py-2 d-flex justify-content-between align-items-center">
+          <button id="hist-prev" class="btn btn-sm btn-outline-secondary" type="button">
+            <i class="bi bi-chevron-left"></i> Prev
+          </button>
+          <button id="hist-next" class="btn btn-sm btn-outline-secondary" type="button">
+            Next <i class="bi bi-chevron-right"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-7">
+      <div id="hist-detail">
+        <div class="text-muted p-4 border rounded bg-light">
+          Select a question on the left to see the answer you got.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  const KEY = "nora-ask-history";
+  const ROOT = document.body.getAttribute("data-root-path") || "";
+  const PAGE_SIZE = 10;
+
+  const listEl   = document.getElementById("hist-list");
+  const countEl  = document.getElementById("hist-count");
+  const pageEl   = document.getElementById("hist-page-label");
+  const detailEl = document.getElementById("hist-detail");
+  const prevBtn  = document.getElementById("hist-prev");
+  const nextBtn  = document.getElementById("hist-next");
+
+  let page = 0;
+  let selected = null;
+
+  function read() {
+    try {
+      const v = JSON.parse(localStorage.getItem(KEY) || "[]");
+      return Array.isArray(v) ? v : [];
+    } catch (e) { return []; }
+  }
+  function write(entries) {
+    try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch (e) {}
+  }
+
+  function laneBadge(lane) {
+    if (lane === "nora") return '<span class="badge bg-success">NORA</span>';
+    if (lane === "sira") return '<span class="badge bg-primary">SIRA</span>';
+    return "";
+  }
+
+  function when(ts) {
+    const d = new Date(ts);
+    return isNaN(d) ? "" : d.toLocaleString();
+  }
+
+  // Text from storage is user-authored — always insert it as text, never HTML.
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s == null ? "" : String(s);
+    return d.innerHTML;
+  }
+
+  function show(entry, idx) {
+    selected = idx;
+    render();
+    detailEl.innerHTML = '<div class="text-muted p-4">Loading…</div>';
+    fetch(entry.path)
+      .then((r) => {
+        if (r.status === 404) return null;
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.text();
+      })
+      .then((html) => {
+        if (html === null) {
+          // The row is gone — the store was reset or points at another env.
+          // Say so and offer to drop the dead entry rather than blank the pane.
+          detailEl.innerHTML =
+            '<div class="alert alert-warning">This answer is no longer available. '
+            + 'The stored result may have been cleared on the server.'
+            + '<div class="mt-2"><button class="btn btn-sm btn-outline-danger" id="hist-drop">'
+            + 'Remove from history</button></div></div>';
+          const drop = document.getElementById("hist-drop");
+          if (drop) drop.addEventListener("click", () => remove(idx));
+          return;
+        }
+        detailEl.innerHTML = html;
+      })
+      .catch((err) => {
+        detailEl.innerHTML =
+          '<div class="alert alert-danger">Could not load this answer: '
+          + esc(err.message) + "</div>";
+      });
+  }
+
+  function remove(idx) {
+    const entries = read();
+    entries.splice(idx, 1);
+    write(entries);
+    if (selected === idx) {
+      selected = null;
+      detailEl.innerHTML =
+        '<div class="text-muted p-4 border rounded bg-light">'
+        + "Select a question on the left to see the answer you got.</div>";
+    }
+    const maxPage = Math.max(0, Math.ceil(entries.length / PAGE_SIZE) - 1);
+    if (page > maxPage) page = maxPage;
+    render();
+  }
+
+  function render() {
+    const entries = read();
+    countEl.textContent = entries.length;
+
+    if (!entries.length) {
+      listEl.innerHTML =
+        '<div class="list-group-item text-muted small">'
+        + "No history yet — questions you ask will appear here.</div>";
+      pageEl.textContent = "";
+      prevBtn.disabled = nextBtn.disabled = true;
+      return;
+    }
+
+    const pages = Math.ceil(entries.length / PAGE_SIZE);
+    if (page >= pages) page = pages - 1;
+    const start = page * PAGE_SIZE;
+    const slice = entries.slice(start, start + PAGE_SIZE);
+
+    listEl.innerHTML = slice.map((e, i) => {
+      const idx = start + i;
+      const active = idx === selected ? " active" : "";
+      return (
+        '<div class="list-group-item list-group-item-action' + active + '" data-idx="' + idx + '">'
+        + '<div class="d-flex justify-content-between align-items-start gap-2">'
+        +   '<div class="flex-grow-1" role="button" data-open="' + idx + '">'
+        +     '<div class="small">' + esc(e.q) + "</div>"
+        +     '<div class="text-muted small mt-1">' + laneBadge(e.lane)
+        +       ' <span class="ms-1">' + esc(when(e.ts)) + "</span></div>"
+        +   "</div>"
+        +   '<button class="btn btn-sm btn-outline-danger py-0" data-del="' + idx + '" '
+        +     'title="Remove from history">&times;</button>'
+        + "</div></div>"
+      );
+    }).join("");
+
+    pageEl.textContent = "page " + (page + 1) + " of " + pages;
+    prevBtn.disabled = page === 0;
+    nextBtn.disabled = page >= pages - 1;
+  }
+
+  listEl.addEventListener("click", (ev) => {
+    const del = ev.target.closest("[data-del]");
+    if (del) { remove(parseInt(del.getAttribute("data-del"), 10)); return; }
+    const open = ev.target.closest("[data-open]");
+    if (open) {
+      const idx = parseInt(open.getAttribute("data-open"), 10);
+      const entry = read()[idx];
+      if (entry) show(entry, idx);
+    }
+  });
+
+  prevBtn.addEventListener("click", () => { if (page > 0) { page--; render(); } });
+  nextBtn.addEventListener("click", () => { page++; render(); });
+
+  document.getElementById("hist-clear").addEventListener("click", () => {
+    if (!read().length) return;
+    if (!window.confirm("Clear your question history on this browser? This cannot be undone.")) return;
+    write([]);
+    selected = null;
+    page = 0;
+    detailEl.innerHTML =
+      '<div class="text-muted p-4 border rounded bg-light">'
+      + "Select a question on the left to see the answer you got.</div>";
+    render();
+  });
+
+  render();
+})();
+</script>
+{% endblock %}

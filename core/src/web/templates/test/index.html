@@ -5,7 +5,12 @@
 
 {% block content %}
 <div class="container-fluid py-3">
-  <h1 class="mb-2">Ask Requirement Questions</h1>
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="mb-0">Ask Requirement Questions</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ root_path }}/ask/history">
+      <i class="bi bi-clock-history me-1"></i>History
+    </a>
+  </div>
   {% if team_restricted %}
   <p class="text-muted">
     Ask a question and the answer comes from the <strong>SIRA</strong> retrieval
@@ -279,7 +284,10 @@
     e.preventDefault();
     const fd = new FormData(form);
     const lanes = fd.getAll("lanes");
-    if (!fd.get("question").toString().trim()) return;
+    // Captured now, not read from the DOM at done-time, so an edited box
+    // can't mislabel the history entry.
+    const askedQuestion = fd.get("question").toString().trim();
+    if (!askedQuestion) return;
     if (lanes.length === 0) {
       answerEl.innerHTML = '<div class="alert alert-warning mb-0">'
         + 'Please select at least one retrieval lane (NORA or SIRA).</div>';
@@ -341,6 +349,7 @@
           } else if (parsed.event === "done") {
             answerEl.innerHTML = parsed.data.html || "";
             hideProgress();
+            askRecordHistory(askedQuestion);
           }
         }
       }
@@ -372,6 +381,51 @@ function askCopyShare(btn, path) {
   } else {
     window.prompt("Copy this link:", url);
   }
+}
+
+/*
+ * Ask history — a per-browser index over the share links each ask already
+ * mints. Stored in localStorage (key below) rather than server-side: user_name
+ * is optional free text defaulting to anonymous, so a server-side "my history"
+ * would merge every anonymous user's questions and be spoofable by typing
+ * someone else's name.
+ *
+ * One entry per lane answer: a two-lane ask records two badged entries, which
+ * is identical to per-question for SIRA-only users and gives engineers the
+ * lane-compare workflow. Answers with no stored row carry no data-share-path,
+ * so nothing is recorded — correct, as there would be no link to open.
+ */
+const ASK_HISTORY_KEY = "nora-ask-history";
+
+function askReadHistory() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ASK_HISTORY_KEY) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function askWriteHistory(entries) {
+  try {
+    localStorage.setItem(ASK_HISTORY_KEY, JSON.stringify(entries));
+  } catch (e) { /* quota/blocked — history is best-effort, never break the ask */ }
+}
+
+function askRecordHistory(question, root) {
+  const found = document.querySelectorAll("#test-answer [data-share-path]");
+  if (!found.length) return;
+  const entries = askReadHistory();
+  const ts = new Date().toISOString();
+  found.forEach((el) => {
+    entries.unshift({
+      q: question,
+      path: el.getAttribute("data-share-path"),
+      lane: el.getAttribute("data-lane") || "",
+      ts: ts,
+    });
+  });
+  askWriteHistory(entries);
 }
 
 /*

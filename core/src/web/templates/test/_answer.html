@@ -75,7 +75,12 @@
     </div>
   </div>
 {% else %}
-  <div class="border rounded p-3 mb-3 bg-light">
+  {# data-share-path / data-lane are the contract the Ask page's history
+     recorder reads after a swap — an explicit hook beats parsing the Share
+     button's onclick. Absent when there is no stored row (render error), in
+     which case there is correctly nothing to record. #}
+  <div class="border rounded p-3 mb-3 bg-light"
+       {% if row_id %}data-share-path="{{ root_path }}/ask/s/{{ row_id }}" data-lane="{{ lane or '' }}"{% endif %}>
     <div class="text-muted small mb-2">
       <strong>Q:</strong> {{ question }}
     </div>

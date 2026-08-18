@@ -174,3 +174,78 @@ def test_shared_answer_survives_malformed_json():
     resp, cap = _shared(row)
     assert resp.status_code == 200
     assert cap["ctx"]["citations"] == [] and cap["ctx"]["cited_ids"] == []
+
+
+# -- History page + snapshot fragment ---------------------------------------
+
+
+def test_shared_fragment_is_body_only():
+    """The History pane fetches the same snapshot markup as the shared page,
+    but without page chrome — one template, two surfaces, no drift."""
+    row = {
+        "id": 7, "question": "q", "answer": "a", "lane": "nora",
+        "citations_json": "[]", "cited_ids": "[]",
+    }
+    resp, cap = _shared(row)          # full page
+    assert cap["name"] == "test/shared.html"
+
+    import asyncio
+    from types import SimpleNamespace
+    from starlette.responses import HTMLResponse
+    from core.src.web.routes import playground as pg
+
+    captured = {}
+
+    class _Store:
+        async def get_row(self, rid):
+            return row if rid == 7 else None
+
+    def _fake_template(request, name, ctx):
+        captured["name"] = name
+        return HTMLResponse("<div></div>")
+
+    req = SimpleNamespace(
+        cookies={},
+        app=SimpleNamespace(state=SimpleNamespace(feedback_store=_Store())),
+    )
+    with patch("core.src.web.app._template_response", _fake_template):
+        r = asyncio.run(pg.shared_answer_fragment(req, 7))
+    assert r.status_code == 200
+    assert captured["name"] == "test/_shared_body.html"
+
+
+def test_shared_fragment_unknown_id_is_404():
+    """A stale history entry must 404 so the pane can say so, not blank out."""
+    import asyncio
+    from types import SimpleNamespace
+    from core.src.web.routes import playground as pg
+
+    class _Empty:
+        async def get_row(self, rid):
+            return None
+
+    req = SimpleNamespace(
+        cookies={},
+        app=SimpleNamespace(state=SimpleNamespace(feedback_store=_Empty())),
+    )
+    r = asyncio.run(pg.shared_answer_fragment(req, 424242))
+    assert r.status_code == 404
+
+
+def test_history_page_renders():
+    import asyncio
+    from types import SimpleNamespace
+    from starlette.responses import HTMLResponse
+    from core.src.web.routes import playground as pg
+
+    captured = {}
+
+    def _fake_template(request, name, ctx):
+        captured["name"] = name
+        return HTMLResponse("<html></html>")
+
+    req = SimpleNamespace(cookies={})
+    with patch("core.src.web.app._template_response", _fake_template):
+        r = asyncio.run(pg.ask_history_page(req))
+    assert r.status_code == 200
+    assert captured["name"] == "test/history.html"
