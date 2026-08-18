@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -106,13 +107,15 @@ def _editor_ctx(request: Request, sample: GoldenSample) -> dict:
 
 
 def _gt_panel_ctx(sample: GoldenSample, *, gt_error: str = "",
-                  gt_info: str = "") -> dict:
+                  gt_info: str = "", gt_notices: list[str] | None = None) -> dict:
     """Context for the standalone ground-truth panel (`_gt_panel.html`).
 
     Returned by the gt/add, gt/add-bulk and gt/remove routes so only the GT
     panel is swapped — the picker column is left untouched (its selection and
     per-row state survive). `oob_count` drives the out-of-band GT-count badge
-    refresh in the tab nav.
+    refresh in the tab nav. `gt_notices` are subtle under-the-hood lines (e.g.
+    a latest-revision auto-pick) shown muted, distinct from the success/warning
+    alerts.
     """
     return {
         "sample": sample,
@@ -120,6 +123,7 @@ def _gt_panel_ctx(sample: GoldenSample, *, gt_error: str = "",
         "oob_count": True,
         "gt_error": gt_error,
         "gt_info": gt_info,
+        "gt_notices": gt_notices or [],
     }
 
 
@@ -266,37 +270,62 @@ def gt_add(
     if isinstance(sample, HTMLResponse):
         return sample
     env_dir = _env_dir()
-    req_id = req_id.strip()
+    qualified = bool(mno and release)
+    # One field, possibly many ids: a direct paste may carry a list separated
+    # by commas / whitespace / newlines. Picker adds send a single id.
+    raw_ids = [t for t in re.split(r"[\s,]+", req_id.strip()) if t]
+
+    added = dupes = 0
+    not_found: list[str] = []
+    notices: list[str] = []
+    existing = {(e.req_id, e.mno, e.release) for e in sample.ground_truth}
+
+    for rid in raw_ids:
+        # Picker adds arrive fully qualified — validate within that cell only;
+        # unqualified direct pastes need the corpus-wide scan.
+        matches = req_tree.find_req(env_dir, rid, mno, release)
+        if not matches:
+            not_found.append(rid)
+            continue
+        e_mno, e_release, e_plan = mno, release, plan
+        if not qualified:
+            # Direct entry without qualifiers: auto-qualify. A req_id found in
+            # several releases (e.g. Mar vs Jun) resolves to the latest
+            # revision — the expert wants the current one, with a note.
+            m = matches[0] if len(matches) == 1 else req_tree.latest_match(matches)
+            e_mno, e_release, e_plan = m["mno"], m["release"], m["plan"]
+            if len(matches) > 1:
+                cells = ", ".join(sorted({x["release"] for x in matches}))
+                notices.append(
+                    f"{rid}: matched {len(matches)} cells ({cells}) — "
+                    f"added latest ({e_release})"
+                )
+        key = (rid, e_mno, e_release)
+        if key in existing:
+            dupes += 1
+            continue
+        sample.ground_truth.append(GroundTruthEntry(
+            req_id=rid, mno=e_mno, release=e_release, plan=e_plan, source=source,
+        ))
+        existing.add(key)
+        added += 1
+
+    if added:
+        save_sample(env_dir, sample)
+
+    # Summary: additions/dupes as the success line; not-found as the warning.
+    info_parts: list[str] = []
+    if added:
+        info_parts.append(f"Added {added}")
+    if dupes:
+        info_parts.append(f"{dupes} already present")
+    gt_info = ", ".join(info_parts)
     gt_error = ""
-    # Picker adds arrive fully qualified — validate within that cell only;
-    # unqualified direct pastes need the corpus-wide scan.
-    matches = req_tree.find_req(env_dir, req_id, mno, release)
-    if not matches:
-        gt_error = f"{req_id}: not found in any parsed cell (GEV-E001)"
-    elif not (mno and release):
-        # Direct entry without qualifiers: auto-qualify a unique match,
-        # ask when ambiguous.
-        if len(matches) == 1:
-            m = matches[0]
-            mno, release, plan = m["mno"], m["release"], m["plan"]
-        else:
-            cells = ", ".join(f"{m['mno']}/{m['release']}" for m in matches)
-            gt_error = (
-                f"{req_id}: found in {len(matches)} cells ({cells}) — "
-                "pick one via the dropdowns"
-            )
-    if not gt_error:
-        entry = GroundTruthEntry(
-            req_id=req_id, mno=mno, release=release, plan=plan, source=source,
-        )
-        key = (entry.req_id, entry.mno, entry.release)
-        if any((e.req_id, e.mno, e.release) == key for e in sample.ground_truth):
-            gt_error = f"{req_id}: already in the ground-truth list"
-        else:
-            sample.ground_truth.append(entry)
-            save_sample(env_dir, sample)
+    if not_found:
+        gt_error = f"Not found: {', '.join(not_found)}"
     return _template(request, "eval_studio/_gt_panel.html",
-                     _gt_panel_ctx(sample, gt_error=gt_error))
+                     _gt_panel_ctx(sample, gt_error=gt_error, gt_info=gt_info,
+                                   gt_notices=notices))
 
 
 @router.post("/api/eval-studio/sample/{sid}/gt/add-bulk", response_class=HTMLResponse)

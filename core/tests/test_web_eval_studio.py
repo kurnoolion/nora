@@ -136,25 +136,38 @@ class TestGroundTruth:
         e = load_sample(sample_path(tmp_path, "gs-0001")).ground_truth[0]
         assert (e.mno, e.release, e.plan) == ("mno-a", "Jan2026", "PLAN_X")
 
-    def test_direct_add_ambiguous_prompts(self, client, tmp_path):
+    def test_direct_add_ambiguous_picks_latest(self, client, tmp_path):
+        # REQ_FOO_0001 lives in Jan2026 and Apr2026 — auto-pick the latest
+        # revision and note it, rather than erroring on the ambiguity.
         _create(client)
         r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
                         data={"req_id": "REQ_FOO_0001"})
-        assert "found in 2 cells" in r.text
-        assert load_sample(sample_path(tmp_path, "gs-0001")).ground_truth == []
+        assert "matched 2 cells" in r.text and "added latest (Apr2026)" in r.text
+        gt = load_sample(sample_path(tmp_path, "gs-0001")).ground_truth
+        assert [(e.req_id, e.release) for e in gt] == [("REQ_FOO_0001", "Apr2026")]
 
     def test_unknown_id_rejected(self, client, tmp_path):
         _create(client)
         r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
                         data={"req_id": "REQ_NOPE_9999"})
-        assert "not found in any parsed cell" in r.text
+        assert "Not found: REQ_NOPE_9999" in r.text
+        assert load_sample(sample_path(tmp_path, "gs-0001")).ground_truth == []
+
+    def test_direct_add_bulk_split(self, client, tmp_path):
+        # One field, several ids separated by commas/spaces — add all in one go.
+        _create(client)
+        r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                        data={"req_id": "REQ_FOO_0002, REQ_FOO_0001"})
+        assert "Added 2" in r.text
+        gt = load_sample(sample_path(tmp_path, "gs-0001")).ground_truth
+        assert {e.req_id for e in gt} == {"REQ_FOO_0001", "REQ_FOO_0002"}
 
     def test_duplicate_add_rejected_and_remove(self, client, tmp_path):
         _create(client)
         for _ in range(2):
             r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
                             data={"req_id": "REQ_FOO_0002"})
-        assert "already in the ground-truth list" in r.text
+        assert "1 already present" in r.text
         client.post("/api/eval-studio/sample/gs-0001/gt/remove", data={
             "req_id": "REQ_FOO_0002", "mno": "mno-a", "release": "Jan2026",
         })

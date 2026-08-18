@@ -13,6 +13,13 @@
 {% if gt_info %}
 <div class="alert alert-success small py-1">{{ gt_info }}</div>
 {% endif %}
+{% if gt_notices %}
+{# Subtle under-the-hood feedback (e.g. latest-revision auto-pick) — muted,
+   not an alert, so it informs without shouting. #}
+<div class="small text-muted mb-1">
+  {% for n in gt_notices %}<div><i class="bi bi-info-circle"></i> {{ n }}</div>{% endfor %}
+</div>
+{% endif %}
 
 <div class="card">
   <div class="card-header py-1 small fw-semibold">Ground truth</div>
@@ -58,7 +65,8 @@
       hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/gt/add"
       hx-target="#es-gt-panel" hx-swap="innerHTML">
   <input type="hidden" name="source" value="direct">
-  <input class="form-control form-control-sm" name="req_id" placeholder="Paste req_id…" required>
+  <input class="form-control form-control-sm" name="req_id"
+         placeholder="Paste req_id(s) — comma or space separated…" required>
   <button class="btn btn-sm btn-outline-primary" type="submit">Add</button>
 </form>
 
