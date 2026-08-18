@@ -164,12 +164,14 @@ def sample_create(
     query: str = Form(...),
     area: str = Form(""),
     created_by: str = Form(""),
+    mno: str = Form(""),
 ):
     env_dir = _env_dir()
     sample = GoldenSample(
         sample_id=next_sample_id(env_dir),
         query=query.strip(),
         area=area.strip(),
+        mno=mno.strip(),
         created_by=created_by.strip(),
     )
     try:
@@ -236,12 +238,14 @@ def sample_status(request: Request, sid: str, status: str = Form(...)):
     problems = validate_sample(sample)
     if problems:
         sample.status = previous
-        return _template(request, "eval_studio/_editor.html", {
+        # Partial (meta card + OOB promote slots) so the active tab survives;
+        # the error renders in the meta card.
+        return _template(request, "eval_studio/_status_result.html", {
             **_editor_ctx(request, sample),
             "status_error": "; ".join(problems),
         })
     save_sample(_env_dir(), sample)
-    return _template(request, "eval_studio/_editor.html",
+    return _template(request, "eval_studio/_status_result.html",
                      _editor_ctx(request, sample))
 
 

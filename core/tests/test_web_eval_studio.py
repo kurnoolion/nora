@@ -83,6 +83,23 @@ class TestSampleCrud:
         assert "requires ground_truth" in r.text
         assert load_sample(sample_path(tmp_path, "gs-0001")).status == "draft"
 
+    def test_create_persists_mno(self, client, tmp_path):
+        client.post("/api/eval-studio/sample", data={
+            "query": "q?", "area": "a", "created_by": "e", "mno": "mno-a"})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).mno == "mno-a"
+
+    def test_status_change_is_tab_preserving_partial(self, client, tmp_path):
+        _create(client)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={"req_id": "REQ_FOO_0002"})
+        r = client.post("/api/eval-studio/sample/gs-0001/status",
+                        data={"status": "stage1-ready"})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).status == "stage1-ready"
+        # Partial: meta card + OOB promote slots, no tab bar re-render.
+        assert "nav-tabs" not in r.text
+        assert 'id="es-promote-golden" hx-swap-oob="true"' in r.text
+        assert 'id="es-promote-gt" hx-swap-oob="true"' in r.text
+
     def test_draft_delete_open_to_experts(self, client, tmp_path, monkeypatch):
         _create(client)
         monkeypatch.setattr(ge, "is_admin", lambda request: False)

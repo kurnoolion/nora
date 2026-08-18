@@ -1,0 +1,17 @@
+{# Status promote / revert buttons for one panel (Batch E). slot='gt' offers
+   draft/stage1-ready; slot='golden' offers stage1-ready/golden-ready. Buttons
+   post to /status targeting the meta card (#es-meta-card) so the active tab is
+   preserved; the route OOB-refreshes both slots + the board. Colours echo the
+   destination status (orange stage1, shiny gold golden-ready). #}
+{% set slot_statuses = ['draft', 'stage1-ready'] if slot == 'gt' else ['stage1-ready', 'golden-ready'] %}
+{% for st in slot_statuses %}
+  {% if st != sample.status %}
+  <form class="d-inline" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/status"
+        hx-target="#es-meta-card" hx-swap="innerHTML">
+    <input type="hidden" name="status" value="{{ st }}">
+    <button class="btn btn-sm py-0 {{ 'es-btn-golden' if st == 'golden-ready' else 'es-btn-stage1' if st == 'stage1-ready' else 'btn-outline-secondary' }}" type="submit">
+      {% if st == 'golden-ready' %}★ {% endif %}→ {{ st }}
+    </button>
+  </form>
+  {% endif %}
+{% endfor %}

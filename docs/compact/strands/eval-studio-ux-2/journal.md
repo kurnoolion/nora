@@ -140,3 +140,30 @@
   (set esActiveSid). Verified live; 25 eval-studio tests pass.
 - Grouped with the Batch D commit (both board/metadata polish); flagged in the
   commit message as item 9.
+
+## 2026-08-18 — Batch E (second feedback round, 5 items)
+
+- **E1 sticky values:** New-sample form gains an MNO dropdown; `sample_create`
+  accepts `mno`. Last-used Area / Name / MNO cached in browser localStorage
+  (`es-last-meta`) and prefilled on load — query stays fresh. index.html JS.
+- **E2 Generate:** curation-chat "Send" button → "Generate"; placeholder updated.
+- **E3 adaptive golden height:** `#es-golden-text { height: 60vh; min-height: 12rem }`
+  so the golden box uses vertical space and scrolls natively (chat log unchanged).
+- **E4 Enter-to-submit:** generic keydown handler — Enter submits, Shift+Enter =
+  newline — on boxes marked `data-es-enter-submit` (chat message + query). Golden
+  stays Enter=newline (prose).
+- **E5 status in-context + color:** promote/revert buttons moved out of the meta
+  header into per-tab slots (`_promote.html`: `#es-promote-gt` = draft/stage1 on the
+  Ground-truth tab, `#es-promote-golden` = stage1/golden on the Golden tab).
+  `sample_status` now returns `_status_result.html` — swaps the meta card (badge +
+  errors) and OOB-refreshes both promote slots + board, leaving the tab bar intact
+  (promoting from the Golden tab no longer snaps to Ground truth). Badges/buttons
+  color-coded: draft gray, stage1 orange, golden-ready shiny gold (recolored the
+  `.es-status-*` classes, which the board reuses).
+- Files: `index.html`, `_editor.html`, `_meta_card.html`, new `_promote.html` +
+  `_status_result.html`, `golden_eval.py` (sample_create +mno, sample_status
+  partial). Tests: `test_create_persists_mno`,
+  `test_status_change_is_tab_preserving_partial`. 103 pass across the suites.
+- Live smoke (throwaway): MNO dropdown + sticky JS present; create mno=DEMO saved;
+  chat button "Generate"; golden 60vh; promote slots render; promote → stage1
+  returns a partial (OOB slots, no nav-tabs), status saved.
