@@ -493,3 +493,53 @@ reusing old labels (journaled as a flag). The SERVE-set definition now
 tracks web serve-time reads: any future surface that reads a new
 out/<stage> at request time must add that stage to promote.sh in the
 same change.
+
+## D-DRAFT-14 — Eval runs carry a runtime-captured stack stamp; recipe-tree materialization is not an eval prerequisite (amends D-DRAFT-11)
+
+**Context**: The golden set is shared across variant stacks by design —
+comparability is the whole point. What must be per-result is the
+identity of the stack a score came from. D-DRAFT-11 records variant
+identity in authored recipe files (RECIPE.md + MANIFEST.json per build
+env); but stack NAMES (nora1/nora2) are mutable pointers, serve labels
+may be REUSED for cosmetic re-promotions (owner's stated workflow —
+and this project's "cosmetic" ingestion fixes have repeatedly moved
+served content), and authored docs can lag the running thing. An eval
+row attributed only by name or label can silently alias different
+data, making a recall delta unattributable (corpus change vs retrieval
+regression look identical).
+
+**Decision**: Every golden-eval run captures a StackStamp at run time
+from the live stack (healthz canonical keys + caller-known config) and
+freezes it into the run report: serve label (human context), data
+fingerprint (content digest — the real data identity, survives label
+reuse), code version, SIRA enrichment-prompt scheme (the v1/v2
+experimental axis, explanatory), answer-prompt version and LLM
+identity (Stage-2 generation axes), retrieval knobs, and a
+refusal-fallback counter snapshot. Comparability is code:
+``stage1_key()`` (data + code + knobs) and ``stage2_key()`` (+ prompt
++ LLM; judge version compared alongside from the report). Empty field
+= "not comparable on this axis", never a guess. Materializing the
+D-DRAFT-11 recipe tree is NOT a prerequisite for eval batches —
+recipes remain the authoring convention for builds; the stamp is the
+attribution record. Serving-side adoption is incremental: the stack
+advertises the canonical healthz keys (data_fingerprint, code_version,
+serve_label, sira_prompt_scheme) as they are implemented; per-row
+fallback attribution waits until the generation path exposes which
+model answered (the counter snapshot stands in).
+
+**Why**: Identity captured from the running stack cannot drift from
+reality, which documentation-derived identity can; a fingerprint next
+to the label reconciles label reuse with attribution instead of
+forbidding reuse. Rejected: per-variant eval sets (destroys
+comparability); label immutability as policy (fights the owner's
+workflow and one missed re-promotion silently breaks it); recipe-tree
+materialization before first eval batches (ceremony ahead of need with
+two stacks on known axes).
+
+**Consequences**: The serving side owes the healthz identity keys
+(follow-up work — until then those stamp fields ride empty and
+comparisons fall back to the weaker label key); eval rows are
+self-attributing, so A/B legitimacy is checkable mechanically
+(stage1/stage2 key equality) rather than by convention; adding a
+retrieval knob later means adding it to the stamp in the same change
+or accepting unattributable variance.
