@@ -7,6 +7,7 @@ fixtures are synthetic, no proprietary content (NFR-8).
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 
 import pytest
@@ -197,8 +198,41 @@ class TestStackStamp:
         assert s.code_version == "deadbeefcafe0123"
         assert s.sira_prompt_scheme == "per-plan-v2"
         assert s.llm_identity == "modelA"          # shim_model fallback
-        assert s.retrieval_knobs == {"top_k": 8}
+        assert s.retrieval_knobs == {"top_k_requested": 8}
         assert s.fallback_used_snapshot == 7
+
+    def test_owned_knob_subdict_harvested_wholesale(self):
+        # The service owns its knob list via the retrieval_knobs
+        # sub-dict; the stamp copies it — a knob added serving-side
+        # reaches comparability with no eval change.
+        h = dict(self._HEALTHZ,
+                 retrieval_knobs={"default_top_k": 8, "rerank_enabled": True})
+        s = golden_runner.StackStamp.from_healthz(h, top_k=12)
+        assert s.retrieval_knobs == {
+            "default_top_k": 8, "rerank_enabled": True,
+            "top_k_requested": 12,
+        }
+
+    def test_legacy_toplevel_knobs_harvested_as_fallback(self):
+        # Stacks predating the sub-dict still publish knob values at the
+        # healthz top level — the whitelist keeps their stamps from
+        # carrying an empty knob set (the field-found false-comparable).
+        h = dict(self._HEALTHZ, default_top_k=8, rerank_enabled=True,
+                 expansion_weight=0.4)
+        s = golden_runner.StackStamp.from_healthz(h)
+        assert s.retrieval_knobs["default_top_k"] == 8
+        assert s.retrieval_knobs["rerank_enabled"] is True
+        assert s.retrieval_knobs["expansion_weight"] == 0.4
+
+    def test_different_knobs_break_stage1_comparability(self):
+        # Field-found failure: with identity fields empty AND knobs
+        # empty, two different stacks compared equal. Knob harvest must
+        # separate them even before the identity keys are served.
+        a = golden_runner.StackStamp.from_healthz(
+            {"retrieval_knobs": {"default_top_k": 8}})
+        b = golden_runner.StackStamp.from_healthz(
+            {"retrieval_knobs": {"default_top_k": 16}})
+        assert a.stage1_key() != b.stage1_key()
 
     def test_caller_supplied_fields_win_over_healthz(self):
         s = golden_runner.StackStamp.from_healthz(
@@ -250,7 +284,7 @@ class TestStackStamp:
         assert line.startswith("id: fp=abcdef012345 ")
         assert "code=deadbeefcafe" in line
         assert "scheme=per-plan-v2" in line
-        assert "knobs=top_k:8" in line
+        assert re.search(r"knobs=1@[0-9a-f]{8}", line)   # digest, not a dump
         assert "fb_used=7" in line
 
 

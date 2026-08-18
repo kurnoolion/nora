@@ -731,6 +731,36 @@ Each variant's stack gets its own reverse-proxy path prefix
 (`NORA_WEB_ROOT_PATH=/nora1`, `/nora2`, …) — see "Serving behind a
 reverse proxy (Caddy)" below.
 
+## Golden-eval runbook notes (field-learned)
+
+1. **A code change rebakes FOUR build targets across the two
+   dockerfiles**, not two: the ingest/eval pair (`nora-pipeline`,
+   `sira-batch`) AND every stack's serving images (`nora-web`,
+   `sira-query` per stack tag). A stale image surfaces as a missing CLI
+   subcommand or as eval behavior that ignores the change you just
+   pulled.
+2. **Bake the code version into serving images** so eval StackStamps
+   attribute scores to the code that served them:
+   `--build-arg CODE_VERSION="$(git rev-parse --short HEAD)"` on
+   `nora-web` and `sira-query` builds (surfaces as `code_version` on
+   `/healthz`).
+3. **Promote with `--scheme <sira-prompt-scheme>`** so the label
+   MANIFEST records which enrichment-prompt scheme produced the served
+   data; the serving healthz (and through it every eval run) then
+   attributes automatically. `SIRA_PROMPT_SCHEME` in the stack env
+   overrides for already-promoted labels.
+4. **`--stack-url` must point at the QUERY SERVICE, not the web app.**
+   The web app answers `/healthz` with its HTML catch-all (HTTP 200),
+   so a run against it reports "healthz snapshot unavailable", scores
+   n=0, and emits GEV-E002 per sample — a plausible-looking failure
+   with no obvious cause.
+5. **`GOLDEN_DIR` is a SERVING-env variable** — a builds wiring env
+   copied from a stack env may lack it, and the eval CLI under the
+   ingest profile then mounts the build dir's own empty `eval/golden`
+   and aborts with "No golden samples". Set `GOLDEN_DIR` in the env
+   file you run the eval CLI under (it is pooled state, same path for
+   every env).
+
 ## Two stacks, two LLMs (A/B)
 
 The two-variant instance of the lineage pattern above (with the LLM as

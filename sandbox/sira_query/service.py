@@ -290,6 +290,120 @@ _doc_enrich_applied_docs: int = 0
 _query_prompt_source: str | None = None
 _rerank_prompt_source: str | None = None
 
+# ── Serving identity (strand golden-eval) ──────────────────────────
+#
+# Canonical healthz identity keys consumed by the golden-eval
+# StackStamp: serve_label, data_fingerprint, code_version,
+# sira_prompt_scheme. Stack names and serve labels are mutable
+# pointers; the fingerprint is the content identity that survives a
+# label being reused — computed ONCE at load time from the bytes the
+# service actually serves (per-cell corpus + the applied enrichment
+# phrases file), never per-request.
+#
+#   * serve_label / promote provenance — read from the label's
+#     MANIFEST.json (promote.sh writes it at the label root, one level
+#     above the sira db_root the service mounts).
+#   * code_version — NORA_CODE_VERSION env (image-baked at build), git
+#     fallback for source-tree runs.
+#   * sira_prompt_scheme — SIRA_PROMPT_SCHEME env override first, then
+#     the manifest (promote.sh --scheme records it with the label).
+
+_data_fingerprint: str = ""
+_data_fingerprint_cells: dict[str, str] = {}
+_serve_manifest: dict = {}
+
+
+def _sha256_files(paths: list[Path]) -> str:
+    """Streamed sha256 over the concatenated bytes of *paths* (absent
+    paths contribute a marker so 'no enrichment' hashes distinctly)."""
+    import hashlib
+    h = hashlib.sha256()
+    for p in paths:
+        if p and p.is_file():
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+        else:
+            h.update(b"<absent>")
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _read_serve_manifest() -> dict:
+    """Best-effort MANIFEST.json lookup: at the db_root, then one level
+    up (promote.sh writes it at the label root; the service mounts the
+    label's sira/ subdir). {} when absent/unreadable."""
+    if not _DB_ROOT:
+        return {}
+    for base in (Path(_DB_ROOT), Path(_DB_ROOT).parent):
+        mpath = base / "MANIFEST.json"
+        try:
+            if mpath.is_file():
+                data = json.loads(mpath.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except (OSError, json.JSONDecodeError):
+            logger.warning("unreadable MANIFEST.json at %s", mpath)
+    return {}
+
+
+def _code_version() -> str:
+    """Serving-code version: image-baked env first, git for source runs."""
+    env = os.getenv("NORA_CODE_VERSION", "").strip()
+    if env:
+        return env
+    try:
+        import subprocess
+        repo = Path(__file__).resolve().parents[2]
+        out = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _compute_identity() -> None:
+    """Fill the identity globals from the loaded serving state. Called
+    at the end of both load paths; cheap enough to run once, and load
+    failures leave the fields empty rather than raising (healthz posture)."""
+    global _data_fingerprint, _data_fingerprint_cells, _serve_manifest
+    _serve_manifest = _read_serve_manifest()
+    per_cell: dict[str, str] = {}
+    try:
+        if _cells:
+            db_root = Path(_DB_ROOT)
+            for cell in sorted(_cells):
+                cstate = _cells[cell]
+                base = db_root / cell_dirname(cell)
+                phrases = (
+                    Path(cstate.doc_enrich_source)
+                    if cstate.doc_enrich_source else None
+                )
+                per_cell[cell_dirname(cell)] = _sha256_files(
+                    [base / "raw" / "corpus.jsonl", phrases]
+                )
+        elif _DB_ROOT:
+            base = Path(_DB_ROOT) / _DATASET
+            phrases = Path(_doc_enrich_source) if _doc_enrich_source else None
+            per_cell[_DATASET] = _sha256_files(
+                [base / "raw" / "corpus.jsonl", phrases]
+            )
+        _data_fingerprint_cells = per_cell
+        if per_cell:
+            import hashlib
+            h = hashlib.sha256()
+            for name in sorted(per_cell):
+                h.update(f"{name}:{per_cell[name]}\n".encode())
+            _data_fingerprint = h.hexdigest()
+        else:
+            _data_fingerprint = ""
+    except OSError as exc:
+        logger.warning("data fingerprint unavailable: %s", exc)
+        _data_fingerprint = ""
+        _data_fingerprint_cells = {}
+
 
 # ── Multi-MNO cells (multi-mno-sira) ───────────────────────────────
 #
@@ -568,6 +682,7 @@ def _load_state() -> None:
         len(_doc_ids), _max_df_absolute, _EXPANSION_WEIGHT, _RERANK_TOP_N,
         _doc_enrich_applied_docs,
     )
+    _compute_identity()
 
 
 # ── Multi-cell loading + fusion query path (multi-mno-sira) ────────
@@ -766,6 +881,7 @@ def _load_cells() -> None:
             "Multi-cell mode: loaded %d cell(s): %s",
             len(_cells), ", ".join(cell_dirname(c) for c in sorted(_cells)),
         )
+    _compute_identity()
 
 
 def _build_retrieve_fn(query: str, raw_phrases: list[str], label: str = ""):
@@ -1388,6 +1504,54 @@ def healthz() -> dict[str, Any]:
         ),
         "query_prompt_source": _query_prompt_source or "(none)",
         "rerank_prompt_source": _rerank_prompt_source or "(none)",
+        # Serving identity (strand golden-eval) — canonical keys the
+        # eval StackStamp consumes. Empty string = not available, the
+        # stamp treats it as "not comparable on this axis".
+        "serve_label": str(
+            _serve_manifest.get("label")
+            or os.getenv("NORA_SERVE_LABEL", "")
+        ),
+        "data_fingerprint": _data_fingerprint,
+        "data_fingerprint_cells": _data_fingerprint_cells,
+        "code_version": _code_version(),
+        "sira_prompt_scheme": (
+            os.getenv("SIRA_PROMPT_SCHEME", "").strip()
+            or str(_serve_manifest.get("sira_prompt_scheme") or "")
+        ),
+        "serve_manifest": {
+            k: _serve_manifest[k]
+            for k in ("repo_git_sha", "promoted_at")
+            if k in _serve_manifest
+        },
+        # Retrieval knobs as ONE owned sub-dict (strand golden-eval):
+        # the eval StackStamp copies this wholesale into its stage-1
+        # comparability key, so the SERVICE owns the knob list — a new
+        # knob added here reaches every future stamp automatically,
+        # instead of silently missing from comparability (field-found:
+        # scattered top-level keys never reached the stamp and two
+        # different stacks compared as equal). Values duplicate
+        # top-level keys by design; this dict is the contract.
+        "retrieval_knobs": {
+            "max_df_ratio": _MAX_DF_RATIO,
+            "max_df_absolute": _max_df_absolute,
+            "expansion_weight": _EXPANSION_WEIGHT,
+            "query_enrich_enabled": _QUERY_ENRICH_ENABLED,
+            "query_enrich_temperature": _QUERY_ENRICH_TEMPERATURE,
+            "default_top_k": _DEFAULT_TOP_K,
+            "rerank_top_n": _RERANK_TOP_N,
+            "rerank_enabled": _RERANK_ENABLED,
+            "rerank_backend": _RERANK_BACKEND,
+            "rerank_batch_size": _RERANK_BATCH_SIZE,
+            "rerank_batch_max_tokens": _RERANK_BATCH_MAX_TOKENS,
+            "rerank_max_tokens": _RERANK_MAX_TOKENS,
+            "fusion_balanced": _FUSION_BALANCED,
+            "scale_topk_by_cells": _SCALE_TOPK_BY_CELLS,
+            "fanout_enabled": _FANOUT_ENABLED,
+            "fanout_per_hit": _FANOUT_PER_HIT,
+            "use_latest_runs": _USE_LATEST,
+            "query_enrich_run_pinned": _QUERY_ENRICH_RUN or "",
+            "rerank_run_pinned": _RERANK_RUN or "",
+        },
         "doc_enrich_run_pinned": _DOC_ENRICH_RUN or "(unset)",
         "enrich_model_name_override": _ENRICH_MODEL_NAME or "(unset)",
         "query_enrich_run_pinned": _QUERY_ENRICH_RUN or "(unset)",

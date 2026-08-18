@@ -165,6 +165,21 @@ class StackStamp:
         "sira_prompt_scheme": "sira_prompt_scheme",
     }
 
+    # Fallback knob harvest for stacks that predate the owned
+    # ``retrieval_knobs`` healthz sub-dict (the sub-dict is the
+    # contract — the service owns its knob list; this whitelist only
+    # keeps older deployments from stamping an empty knob set, which
+    # field validation showed declares different stacks comparable).
+    _LEGACY_KNOB_KEYS = (
+        "max_df_ratio", "max_df_absolute", "expansion_weight",
+        "query_enrich_enabled", "query_enrich_temperature",
+        "default_top_k", "rerank_top_n", "rerank_enabled",
+        "rerank_backend", "rerank_batch_size", "rerank_batch_max_tokens",
+        "rerank_max_tokens", "fusion_balanced", "scale_topk_by_cells",
+        "fanout_enabled", "fanout_per_hit", "use_latest_runs",
+        "query_enrich_run_pinned", "rerank_run_pinned",
+    )
+
     @classmethod
     def from_healthz(
         cls,
@@ -195,8 +210,17 @@ class StackStamp:
                 val = h.get(key)
                 if isinstance(val, (str, int)):
                     setattr(stamp, attr, str(val))
+        knobs = h.get("retrieval_knobs")
+        if isinstance(knobs, dict) and knobs:
+            stamp.retrieval_knobs.update(knobs)
+        else:
+            for key in cls._LEGACY_KNOB_KEYS:
+                if key in h and isinstance(h[key], (str, int, float, bool)):
+                    stamp.retrieval_knobs[key] = h[key]
         if top_k is not None:
-            stamp.retrieval_knobs["top_k"] = top_k
+            # The per-run request override — kept distinct from the
+            # stack's own default_top_k knob.
+            stamp.retrieval_knobs["top_k_requested"] = top_k
         fb = h.get("refusal_fallback")
         if isinstance(fb, dict) and isinstance(fb.get("used"), int):
             stamp.fallback_used_snapshot = fb["used"]
@@ -258,11 +282,14 @@ class StackStamp:
         if self.llm_identity:
             parts.append(f"llm={self.llm_identity}")
         if self.retrieval_knobs:
-            parts.append(
-                "knobs=" + ",".join(
-                    f"{k}:{v}" for k, v in sorted(self.retrieval_knobs.items())
-                )
-            )
+            # Digest, not a dump — the harvested knob set runs to ~20
+            # entries; the full dict lives in report.json. Same digest
+            # = same knob tuple, which is what the line is for.
+            import hashlib
+            digest = hashlib.sha256(
+                repr(self._knobs_key()).encode()
+            ).hexdigest()[:8]
+            parts.append(f"knobs={len(self.retrieval_knobs)}@{digest}")
         if self.fallback_used_snapshot is not None:
             parts.append(f"fb_used={self.fallback_used_snapshot}")
         return "id: " + (" ".join(parts) if parts else "(unstamped)")

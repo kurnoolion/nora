@@ -114,6 +114,11 @@ RUN if [ "$OFFLINE" = "1" ]; then echo "offline: clone pre-patched by prep-offli
 
 # --------------------------------------------------------------- sira-query --
 FROM sira-base AS sira-query
+# Serving-code identity for /healthz (strand golden-eval): bake the git
+# sha at build so eval StackStamps attribute scores to the code that
+# served them. Pass --build-arg CODE_VERSION="$(git rev-parse --short HEAD)".
+ARG CODE_VERSION=""
+ENV NORA_CODE_VERSION=$CODE_VERSION
 ENV NORA_SIRA_DB_ROOT=/data/db
 EXPOSE 8040
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
