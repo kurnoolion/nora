@@ -1,8 +1,8 @@
 # eval-studio-ux-2
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-08-17
-**Landed:**
+**Landed:** 2026-08-18 (via PR from branch `eval-studio-ux-2`)
 **Assignees:** hanifm
 **Target modules:** web
 **Active phase:** development
