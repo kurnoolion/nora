@@ -151,6 +151,12 @@ class StackStamp:
 
     serve_label: str = ""
     data_fingerprint: str = ""
+    # Diagnostic, NOT part of the comparability keys: the combined
+    # fingerprint carries comparability; the per-cell map answers
+    # "which cell changed" when two runs' keys differ. Captured into
+    # the stamp (field-found: published-but-not-captured values keep
+    # turning out to matter — same shape as the knobs gap).
+    data_fingerprint_cells: dict = field(default_factory=dict)
     code_version: str = ""
     sira_prompt_scheme: str = ""
     answer_prompt_version: str = ""
@@ -210,6 +216,9 @@ class StackStamp:
                 val = h.get(key)
                 if isinstance(val, (str, int)):
                     setattr(stamp, attr, str(val))
+        cells_map = h.get("data_fingerprint_cells")
+        if isinstance(cells_map, dict):
+            stamp.data_fingerprint_cells = dict(cells_map)
         knobs = h.get("retrieval_knobs")
         if isinstance(knobs, dict) and knobs:
             stamp.retrieval_knobs.update(knobs)
@@ -257,6 +266,7 @@ class StackStamp:
         return {
             "serve_label": self.serve_label,
             "data_fingerprint": self.data_fingerprint,
+            "data_fingerprint_cells": self.data_fingerprint_cells,
             "code_version": self.code_version,
             "sira_prompt_scheme": self.sira_prompt_scheme,
             "answer_prompt_version": self.answer_prompt_version,
@@ -273,6 +283,8 @@ class StackStamp:
             parts.append(f"fp={self.data_fingerprint[:12]}")
         elif self.serve_label:
             parts.append(f"label={self.serve_label}")
+        if self.data_fingerprint_cells:
+            parts.append(f"cells={len(self.data_fingerprint_cells)}")
         if self.code_version:
             parts.append(f"code={self.code_version[:12]}")
         if self.sira_prompt_scheme:

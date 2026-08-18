@@ -87,6 +87,14 @@ cat > "$DEST/MANIFEST.json" <<EOF
   "promoted_at": "$(date -u +%FT%TZ)"
 }
 EOF
+# Copy the manifest INSIDE each promoted subdir too: containers mount
+# <label>/sira (or <label>/nora) as their data root, so the label-root
+# copy is unreachable from inside the mount (field-found — the serving
+# healthz could only see the label via env override). The subdir copy
+# makes the manifest self-describing wherever the mount boundary falls.
+for sub in nora sira; do
+  [ -d "$DEST/$sub" ] && cp "$DEST/MANIFEST.json" "$DEST/$sub/MANIFEST.json"
+done
 echo ""
 echo "promoted -> $DEST"
 echo "point the stack .env at it and restart:"

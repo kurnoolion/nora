@@ -307,3 +307,20 @@ def test_run_all_builds_stamp_and_report_carries_it(monkeypatch):
     assert d["stamp"]["code_version"] == "deadbeefcafe0123"
     assert any(l.startswith("id: fp=") for l in
                report.compact_report().splitlines())
+
+
+def test_per_cell_fingerprint_map_captured_diagnostic_only():
+    # Field-found (same shape as the knobs gap): the per-cell map was
+    # published on healthz but not captured. It rides the stamp as a
+    # diagnostic — NOT part of the comparability keys (the combined
+    # fingerprint carries those); it answers "which cell changed".
+    h = {"data_fingerprint": "fpX",
+         "data_fingerprint_cells": {"c1": "aaa", "c2": "bbb"}}
+    s = golden_runner.StackStamp.from_healthz(h)
+    assert s.data_fingerprint_cells == {"c1": "aaa", "c2": "bbb"}
+    assert s.to_dict()["data_fingerprint_cells"] == {"c1": "aaa", "c2": "bbb"}
+    assert "cells=2" in s.compact_line()
+    # Same combined fp, different map → still comparable (map is not a key).
+    t = golden_runner.StackStamp.from_healthz(
+        {"data_fingerprint": "fpX", "data_fingerprint_cells": {"c1": "zzz"}})
+    assert s.stage1_key() == t.stage1_key()
