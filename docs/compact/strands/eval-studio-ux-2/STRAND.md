@@ -29,6 +29,13 @@ d8f9717 / c063567 / ebcd4bf). Fixes scoped to the `web` module.
 - [x] **10 Edit question in place** — question save no longer resets the tab (C)
 - [x] **11 Sample MNO metadata** — tag + board filter + runner --mno (D)
 
+### Round 2 (Batch E)
+- [x] **E1 Sticky values** — New-sample form remembers Area/Name/MNO (localStorage)
+- [x] **E2 Generate** — curation-chat "Send" → "Generate"
+- [x] **E3 Adaptive golden height** — golden box grows with the viewport
+- [x] **E4 Enter-to-submit** — Enter submits / Shift+Enter newline (chat + query)
+- [x] **E5 In-context status** — promote buttons in tabs, tab-preserving, gold/orange/gray
+
 ## Notes
 
 <!-- appended to over the strand's lifetime -->
