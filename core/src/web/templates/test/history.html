@@ -6,10 +6,18 @@
 <style>
 /* Grid columns are flex items and default to min-width:auto, so a wide child —
    a long requirement id, a code block, an unbroken string in the answer —
-   refuses to shrink and pushes the 5/7 split out of shape. min-width:0 lets
+   refuses to shrink and pushes the split out of shape. min-width:0 lets
    them shrink; the overflow rules keep wide content inside its own pane
    instead of stretching it. Same fix as .es-editor in the Eval Studio. */
 #hist-list-col, #hist-detail-col { min-width: 0; }
+/* The answer deserves the room; the question list only needs enough to scan.
+   The 12-column grid can't express 30/70 (4/8 gives 33/67), so set it exactly
+   here. Only from the lg breakpoint up — below that the columns stack, where a
+   percentage split would be meaningless. */
+@media (min-width: 992px) {
+  #hist-list-col   { flex: 0 0 30%; max-width: 30%; }
+  #hist-detail-col { flex: 0 0 70%; max-width: 70%; }
+}
 #hist-detail { min-width: 0; overflow-wrap: anywhere; }
 #hist-detail pre,
 #hist-detail table { max-width: 100%; overflow-x: auto; }
@@ -43,7 +51,7 @@
   </p>
 
   <div class="row g-3">
-    <div class="col-lg-5" id="hist-list-col">
+    <div class="col-lg-4" id="hist-list-col">
       <div class="card">
         <div class="card-header py-2 small fw-semibold d-flex justify-content-between align-items-center">
           <span>History (<span id="hist-count">0</span>)</span>
@@ -61,7 +69,7 @@
       </div>
     </div>
 
-    <div class="col-lg-7" id="hist-detail-col">
+    <div class="col-lg-8" id="hist-detail-col">
       <div id="hist-detail">
         <div class="text-muted p-4 border rounded bg-light">
           Select a question on the left to see the answer you got.
