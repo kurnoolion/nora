@@ -247,7 +247,7 @@ class TestStackStamp:
 
     def test_missing_healthz_yields_empty_stamp(self):
         s = golden_runner.StackStamp.from_healthz(None)
-        assert s.stage1_key() == ("", "", ())
+        assert s.stage1_key() == ("", "", (), "")
         assert s.compact_line() == "id: (unstamped)"
 
     def test_stage1_key_prefers_fingerprint_over_label(self):
@@ -324,3 +324,80 @@ def test_per_cell_fingerprint_map_captured_diagnostic_only():
     t = golden_runner.StackStamp.from_healthz(
         {"data_fingerprint": "fpX", "data_fingerprint_cells": {"c1": "zzz"}})
     assert s.stage1_key() == t.stage1_key()
+
+
+# ─── Eval-set identity (field-found: golden set drifted mid-strand) ───
+
+
+def _set_sample(sid, query="q?", status="golden-ready", gt=None, resp="golden"):
+    from core.src.eval.golden import GoldenSample, GroundTruthEntry
+    return GoldenSample(
+        sample_id=sid, query=query, status=status,
+        ground_truth=gt or [GroundTruthEntry(req_id=f"R-{sid}")],
+        golden_response=resp,
+    )
+
+
+class TestEvalSetIdentity:
+    def test_digests_stable_across_load_order(self):
+        a = golden_runner.StackStamp()
+        a.set_eval_set([_set_sample("s1"), _set_sample("s2")])
+        b = golden_runner.StackStamp()
+        b.set_eval_set([_set_sample("s2"), _set_sample("s1")])
+        assert a.eval_set_count == 2
+        assert a.eval_set_digest == b.eval_set_digest
+        assert a.eval_set_stage2_digest == b.eval_set_stage2_digest
+
+    def test_set_growth_breaks_stage1_comparability(self):
+        # The field incident: curation landed mid-strand, 36 -> 38
+        # scorable, byte-identical stack stamps scored different sets.
+        a = golden_runner.StackStamp()
+        a.set_eval_set([_set_sample("s1")])
+        b = golden_runner.StackStamp()
+        b.set_eval_set([_set_sample("s1"), _set_sample("s2")])
+        assert a.stage1_key() != b.stage1_key()
+
+    def test_draft_samples_do_not_count(self):
+        a = golden_runner.StackStamp()
+        a.set_eval_set([_set_sample("s1"), _set_sample("s2", status="draft")])
+        assert a.eval_set_count == 1
+
+    def test_response_recuration_breaks_stage2_only(self):
+        # Two digests, not one: a golden-response edit must invalidate
+        # Stage-2 comparability WITHOUT falsely invalidating Stage-1,
+        # which never reads responses.
+        a = golden_runner.StackStamp()
+        a.set_eval_set([_set_sample("s1", resp="old response")])
+        b = golden_runner.StackStamp()
+        b.set_eval_set([_set_sample("s1", resp="new response")])
+        assert a.stage1_key() == b.stage1_key()
+        assert a.stage2_key() != b.stage2_key()
+
+    def test_ground_truth_edit_breaks_both(self):
+        from core.src.eval.golden import GroundTruthEntry
+        a = golden_runner.StackStamp()
+        a.set_eval_set([_set_sample("s1", gt=[GroundTruthEntry(req_id="R-1")])])
+        b = golden_runner.StackStamp()
+        b.set_eval_set([_set_sample("s1", gt=[GroundTruthEntry(req_id="R-2")])])
+        assert a.stage1_key() != b.stage1_key()
+        assert a.stage2_key() != b.stage2_key()
+
+    def test_compact_line_and_dict_carry_set(self):
+        s = golden_runner.StackStamp()
+        s.set_eval_set([_set_sample("s1"), _set_sample("s2")])
+        assert "set=2@" in s.compact_line()
+        d = s.to_dict()
+        assert d["eval_set_count"] == 2
+        assert len(d["eval_set_digest"]) == 64
+        assert len(d["eval_set_stage2_digest"]) == 64
+
+    def test_run_all_freezes_set_into_stamp(self, monkeypatch):
+        monkeypatch.setattr(
+            golden_runner, "_get_json", lambda url, timeout: {})
+        report = golden_runner.run_all(
+            [_set_sample("s1", status="draft")],
+            "http://127.0.0.1:1", "stackA", "2026-08-18T00:00:00",
+        )
+        # Draft-only set: count 0, digests empty — visible, not a guess.
+        assert report.stamp.eval_set_count == 0
+        assert report.stamp.eval_set_digest == ""

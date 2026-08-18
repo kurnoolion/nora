@@ -163,6 +163,17 @@ class StackStamp:
     llm_identity: str = ""
     retrieval_knobs: dict = field(default_factory=dict)
     fallback_used_snapshot: int | None = None
+    # Eval-SET identity (field-found: the golden set drifted mid-strand
+    # as curation landed, so byte-identical stack stamps had scored
+    # DIFFERENT sample sets — the stack-side false-comparable reopened
+    # on the data-in side; third instance of the
+    # published-but-not-captured pattern). Two digests, not one: a
+    # golden-response re-curation must invalidate Stage-2
+    # comparability WITHOUT falsely invalidating Stage-1, which never
+    # reads responses.
+    eval_set_count: int = 0
+    eval_set_digest: str = ""          # non-draft: (id, query, ground truth)
+    eval_set_stage2_digest: str = ""   # golden-ready: + golden_response
 
     _HEALTHZ_KEYS = {
         "serve_label": "serve_label",
@@ -235,6 +246,39 @@ class StackStamp:
             stamp.fallback_used_snapshot = fb["used"]
         return stamp
 
+    def set_eval_set(self, samples: list) -> None:
+        """Freeze the scored sample set's identity into the stamp.
+
+        Called with the samples the run will score. Stage-1 identity
+        covers every non-draft sample's (id, query, ground truth);
+        Stage-2 identity covers golden-ready samples plus their
+        curated responses. Canonical JSON, sorted by sample_id —
+        stable across load order and dict churn.
+        """
+        import hashlib
+
+        def _digest(rows: list) -> str:
+            blob = json.dumps(rows, sort_keys=True, ensure_ascii=False)
+            return hashlib.sha256(blob.encode()).hexdigest()
+
+        scorable = sorted(
+            (s for s in samples if s.status != STATUS_DRAFT),
+            key=lambda s: s.sample_id,
+        )
+        self.eval_set_count = len(scorable)
+        self.eval_set_digest = _digest([
+            [s.sample_id, s.query,
+             [e.to_dict() for e in s.ground_truth]]
+            for s in scorable
+        ]) if scorable else ""
+        golden_ready = [s for s in scorable if s.status == STATUS_GOLDEN_READY]
+        self.eval_set_stage2_digest = _digest([
+            [s.sample_id, s.query,
+             [e.to_dict() for e in s.ground_truth],
+             s.golden_response or ""]
+            for s in golden_ready
+        ]) if golden_ready else ""
+
     def _knobs_key(self) -> tuple:
         return tuple(sorted(
             (k, str(v)) for k, v in self.retrieval_knobs.items()
@@ -245,21 +289,26 @@ class StackStamp:
 
         The fingerprint is the data identity; the label name is only
         the fallback when the stack doesn't advertise one (weaker —
-        label reuse can alias different content under one key).
+        label reuse can alias different content under one key). The
+        eval-set digest makes a changed golden set break comparability
+        the same way changed served data does.
         """
         return (
             self.data_fingerprint or self.serve_label,
             self.code_version,
             self._knobs_key(),
+            self.eval_set_digest,
         )
 
     def stage2_key(self) -> tuple:
         """Stage-2 comparability: Stage-1 axes plus the generation
-        side. The judge version lives on the report and must also
-        match — callers compare (stage2_key, judge_version)."""
+        side and the golden-response-bearing set identity. The judge
+        version lives on the report and must also match — callers
+        compare (stage2_key, judge_version)."""
         return self.stage1_key() + (
             self.answer_prompt_version,
             self.llm_identity,
+            self.eval_set_stage2_digest,
         )
 
     def to_dict(self) -> dict:
@@ -273,6 +322,9 @@ class StackStamp:
             "llm_identity": self.llm_identity,
             "retrieval_knobs": self.retrieval_knobs,
             "fallback_used_snapshot": self.fallback_used_snapshot,
+            "eval_set_count": self.eval_set_count,
+            "eval_set_digest": self.eval_set_digest,
+            "eval_set_stage2_digest": self.eval_set_stage2_digest,
         }
 
     def compact_line(self) -> str:
@@ -302,6 +354,10 @@ class StackStamp:
                 repr(self._knobs_key()).encode()
             ).hexdigest()[:8]
             parts.append(f"knobs={len(self.retrieval_knobs)}@{digest}")
+        if self.eval_set_digest:
+            parts.append(
+                f"set={self.eval_set_count}@{self.eval_set_digest[:8]}"
+            )
         if self.fallback_used_snapshot is not None:
             parts.append(f"fb_used={self.fallback_used_snapshot}")
         return "id: " + (" ".join(parts) if parts else "(unstamped)")
@@ -741,6 +797,7 @@ def run_all(
             sira_prompt_scheme=sira_prompt_scheme,
         ),
     )
+    report.stamp.set_eval_set(samples)
     stage2_enabled = bool(query_pipeline and judge and judge_prompt)
     for sample in samples:
         if sample.status == STATUS_DRAFT:
