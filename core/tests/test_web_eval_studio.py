@@ -342,3 +342,15 @@ class TestCuration:
         # the board is refreshed (area shows there).
         assert "nav-tabs" not in r.text and "es-board-refresh" in r.text
         assert load_sample(sample_path(tmp_path, "gs-0001")).area == "roam"
+
+    def test_meta_saves_mno_and_board_filters(self, client, tmp_path):
+        _create(client)  # gs-0001
+        _create(client)  # gs-0002
+        client.post("/api/eval-studio/sample/gs-0001/meta",
+                    data={"query": "q?", "area": "", "mno": "mno-a"})
+        assert load_sample(sample_path(tmp_path, "gs-0001")).mno == "mno-a"
+        # Unfiltered board lists both; filtered to mno-a lists only gs-0001.
+        both = client.get("/api/eval-studio/samples").text
+        assert "gs-0001" in both and "gs-0002" in both
+        only = client.get("/api/eval-studio/samples", params={"mno": "mno-a"}).text
+        assert "gs-0001" in only and "gs-0002" not in only

@@ -60,6 +60,7 @@ th[data-sort-key]:hover { background: #f1f3f5; }
     <div id="es-board"
          hx-get="{{ root_path }}/api/eval-studio/samples"
          hx-trigger="load, es-board-refresh from:body"
+         hx-include="#es-board-mno"
          hx-swap="innerHTML">
       <div class="text-muted small p-2">Loading samples…</div>
     </div>
@@ -77,6 +78,22 @@ th[data-sort-key]:hover { background: #f1f3f5; }
     </div>
   </div>
 </div>
+
+<script>
+// Batch B — highlight the sample currently open in the editor. The board
+// re-renders independently, so the open id is tracked here and re-applied on
+// every settle (board reload included).
+window.esActiveSid = window.esActiveSid || "";
+window.esHighlightBoard = function () {
+  var sid = window.esActiveSid;
+  document.querySelectorAll("#es-board tr[data-sk-id]").forEach(function (r) {
+    r.classList.toggle("table-active", r.getAttribute("data-sk-id") === sid);
+  });
+};
+document.body.addEventListener("htmx:afterSettle", function () {
+  window.esHighlightBoard();
+});
+</script>
 
 <script>
 // Batch C — generic corner copy: copies the text box / block inside the same

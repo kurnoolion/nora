@@ -138,15 +138,20 @@ def eval_studio_page(request: Request):
 
 
 @router.get("/api/eval-studio/samples", response_class=HTMLResponse)
-def sample_board(request: Request):
+def sample_board(request: Request, mno: str = ""):
+    env_dir = _env_dir()
     try:
-        samples = load_samples(_env_dir())
+        samples = load_samples(env_dir)
         load_error = ""
     except GoldenEvalError as exc:
         samples, load_error = [], f"{exc.code}: sample store unreadable"
+    if mno:
+        samples = [s for s in samples if s.mno == mno]
     return _template(request, "eval_studio/_board.html", {
         "samples": samples,
         "load_error": load_error,
+        "mnos": sorted({c["mno"] for c in req_tree.list_cells(env_dir)}),
+        "sel_mno": mno,
     })
 
 
@@ -205,12 +210,14 @@ def sample_editor(request: Request, sid: str):
 @router.post("/api/eval-studio/sample/{sid}/meta", response_class=HTMLResponse)
 def sample_meta(
     request: Request, sid: str, query: str = Form(...), area: str = Form(""),
+    mno: str = Form(""),
 ):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
     sample.query = query.strip()
     sample.area = area.strip()
+    sample.mno = mno.strip()
     save_sample(_env_dir(), sample)
     # Swap only the meta card so the active tab / scroll survive; refresh the
     # board (area shows there). The chat system prompt is rebuilt from the

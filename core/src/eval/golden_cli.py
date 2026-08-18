@@ -147,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--judge-prompt-version", default=None)
     parser.add_argument("--env-name", default="",
                         help="environment name for the compact report header")
+    parser.add_argument("--mno", default="",
+                        help="run only samples tagged with this carrier (MNO)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -159,6 +161,12 @@ def main(argv: list[str] | None = None) -> int:
     if not samples:
         print(f"No golden samples under {args.env_dir}/eval/golden/samples/")
         return 2
+    if args.mno:
+        samples = [s for s in samples if s.mno == args.mno]
+        if not samples:
+            print(f"No golden samples tagged mno={args.mno}")
+            return 2
+        print(f"Filtered to mno={args.mno}")
     print(f"Loaded {len(samples)} golden sample(s)")
 
     query_pipeline = judge = judge_prompt = None

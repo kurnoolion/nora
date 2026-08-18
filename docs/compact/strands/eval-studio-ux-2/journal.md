@@ -108,3 +108,35 @@
   "manually edited" badge, golden_meta.edited/edited_at set. (Smoke on gs-0001 by
   mistake — golden artifact cleared afterward; GT left as-is.)
 - NOT yet committed — pending user live-validation.
+
+### Batch D — sample-level MNO metadata (feedback item 11)
+- **Schema:** added optional `mno: str = ""` to `GoldenSample` (+ to_dict/from_dict).
+  Additive, back-compat (missing key → ""); authoring metadata only, not used by
+  recall matching (that keys on per-entry (req_id, mno, release)).
+- **UI:** MNO dropdown in the meta form (reuses `mnos` from _editor_ctx), saved via
+  `sample_meta`. Board gains an MNO filter select (server-side: `sample_board`
+  takes `?mno=`), included on the board's load/refresh triggers so it survives
+  re-renders; each sample row shows a small MNO badge. Soft, display-only warning
+  in the meta card when a GT entry's mno disagrees with the sample tag
+  (selectattr 'ne') — non-blocking.
+- **Runner:** `golden_cli.py` gains `--mno` to run only samples tagged with that
+  carrier (filters the loaded list before run_all).
+- Files: `golden.py` (schema), `golden_eval.py` (sample_meta +mno, sample_board
+  filter), `golden_cli.py` (--mno), `_meta_card.html` (dropdown + mismatch warn),
+  `_board.html` (filter + badge + data-sk-mno), `index.html` (board hx-include).
+- Tests: `test_mno_tag_round_trips`, `test_meta_saves_mno_and_board_filters`.
+  90+ pass across golden + eval-studio suites.
+- Live smoke (throwaway): dropdown present, mno=DEMO saved, board All/DEMO show it,
+  a non-existent MNO filters it out.
+- NOT yet committed — pending user live-validation.
+
+### Feedback item 9 — highlight the selected question (plan gap, added)
+- Item 9 was accidentally dropped from the A–D plan batching; caught before PR.
+- The open sample's board row gets `.table-active`. The board re-renders
+  independently, so the open id is tracked in `window.esActiveSid` (set by the
+  editor's closing script from sample_id) and re-applied by `esHighlightBoard`
+  on every `htmx:afterSettle` (board reload included).
+- Files: `index.html` (esActiveSid + esHighlightBoard + afterSettle), `_editor.html`
+  (set esActiveSid). Verified live; 25 eval-studio tests pass.
+- Grouped with the Batch D commit (both board/metadata polish); flagged in the
+  commit message as item 9.

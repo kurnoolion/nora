@@ -81,5 +81,7 @@
 </div>
 
 <script>
+  window.esActiveSid = {{ sample.sample_id|tojson }};
   htmx.trigger(document.body, "es-board-refresh");
+  if (window.esHighlightBoard) window.esHighlightBoard();
 </script>

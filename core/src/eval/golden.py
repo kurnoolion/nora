@@ -87,6 +87,10 @@ class GoldenSample:
     sample_id: str
     query: str
     area: str = ""
+    # Carrier tag for grouping / filtered runs (FR-39 round-2). Authoring
+    # metadata only — not used by recall matching, which keys on the per-entry
+    # (req_id, mno, release). Optional; existing samples default to "".
+    mno: str = ""
     created_by: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -100,6 +104,7 @@ class GoldenSample:
             "sample_id": self.sample_id,
             "query": self.query,
             "area": self.area,
+            "mno": self.mno,
             "created_by": self.created_by,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -115,6 +120,7 @@ class GoldenSample:
             sample_id=str(d.get("sample_id", "")),
             query=str(d.get("query", "")),
             area=str(d.get("area", "")),
+            mno=str(d.get("mno", "")),
             created_by=str(d.get("created_by", "")),
             created_at=str(d.get("created_at", "")),
             updated_at=str(d.get("updated_at", "")),
