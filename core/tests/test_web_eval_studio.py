@@ -97,8 +97,24 @@ class TestSampleCrud:
         assert load_sample(sample_path(tmp_path, "gs-0001")).status == "stage1-ready"
         # Partial: meta card + OOB promote slots, no tab bar re-render.
         assert "nav-tabs" not in r.text
-        assert 'id="es-promote-golden" hx-swap-oob="true"' in r.text
-        assert 'id="es-promote-gt" hx-swap-oob="true"' in r.text
+        assert 'id="es-promote-golden"' in r.text and 'id="es-promote-gt"' in r.text
+        assert r.text.count('hx-swap-oob="true"') >= 2
+
+    def test_golden_ready_fires_confetti(self, client, tmp_path, monkeypatch):
+        _create(client)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={"req_id": "REQ_FOO_0002"})
+        client.post("/api/eval-studio/sample/gs-0001/golden",
+                    data={"golden_response": "answer", "generated": ""})
+        client.post("/api/eval-studio/sample/gs-0001/status",
+                    data={"status": "stage1-ready"})
+        r = client.post("/api/eval-studio/sample/gs-0001/status",
+                        data={"status": "golden-ready"})
+        assert "esConfetti()" in r.text
+        # A non-golden transition does not fire it.
+        r2 = client.post("/api/eval-studio/sample/gs-0001/status",
+                         data={"status": "stage1-ready"})
+        assert "esConfetti()" not in r2.text
 
     def test_draft_delete_open_to_experts(self, client, tmp_path, monkeypatch):
         _create(client)

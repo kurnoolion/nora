@@ -94,6 +94,34 @@ th[data-sort-key]:hover { background: #f1f3f5; }
 </div>
 
 <script>
+// Batch E — mini confetti burst (Web Animations API, no library) fired when a
+// sample is promoted to golden-ready.
+function esConfetti() {
+  var colors = ["#ffd700", "#b8860b", "#f59e0b", "#ffe17a", "#fff3b0"];
+  var box = document.createElement("div");
+  box.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2000;overflow:hidden";
+  document.body.appendChild(box);
+  var cx = window.innerWidth / 2, cy = window.innerHeight / 3;
+  for (var i = 0; i < 18; i++) {
+    var p = document.createElement("div");
+    var size = 6 + Math.random() * 6;
+    p.style.cssText = "position:absolute;width:" + size + "px;height:" + size +
+      "px;background:" + colors[i % colors.length] + ";left:" + cx + "px;top:" +
+      cy + "px;border-radius:2px";
+    box.appendChild(p);
+    var angle = Math.random() * Math.PI * 2, dist = 60 + Math.random() * 120;
+    p.animate([
+      { transform: "translate(0,0) rotate(0deg)", opacity: 1 },
+      {
+        transform: "translate(" + Math.cos(angle) * dist + "px," +
+          (Math.sin(angle) * dist + 80) + "px) rotate(" +
+          (Math.random() * 360) + "deg)", opacity: 0,
+      },
+    ], { duration: 700 + Math.random() * 400, easing: "cubic-bezier(.2,.6,.4,1)" });
+  }
+  setTimeout(function () { box.remove(); }, 1200);
+}
+
 // Batch E — remember the last-used Area / Name / MNO so a new sample prefills
 // them (per browser); the query is always fresh so it is not remembered.
 (function () {

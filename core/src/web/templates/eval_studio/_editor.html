@@ -16,7 +16,7 @@
 
   {# Promote controls in context — mark Stage 1 ready here once the ground
      truth is set (see _promote.html). #}
-  <div id="es-promote-gt" class="mb-2 d-flex gap-1 align-items-center">
+  <div id="es-promote-gt" class="mb-2 d-flex gap-1 align-items-center justify-content-end">
     {% with slot='gt' %}{% include "eval_studio/_promote.html" %}{% endwith %}
   </div>
 
@@ -46,7 +46,7 @@
 
 <div class="tab-pane fade" id="es-tab-curate">
   {# Promote to Golden ready here once the golden response is written. #}
-  <div id="es-promote-golden" class="mb-2 d-flex gap-1 align-items-center">
+  <div id="es-promote-golden" class="mb-2 d-flex gap-1 align-items-center justify-content-end">
     {% with slot='golden' %}{% include "eval_studio/_promote.html" %}{% endwith %}
   </div>
   <div class="row g-2">
