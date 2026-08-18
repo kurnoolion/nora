@@ -38,3 +38,19 @@
 - Tests: fragment renders the partial (vs the page), fragment 404s, history page
   renders. 15 pass in test_web_playground.py; full suite 1756 passed (same 8
   pre-existing macOS test_web_config failures).
+
+### Fix — detail pane rendered the whole page
+- Symptom (user screenshot): the right pane showed the shared page's own chrome —
+  an <h1> "Shared answer", the History / Ask-your-own buttons, the explainer
+  paragraph — squeezed into the column.
+- Cause: history entries store the *share* URL (`/ask/s/<id>`), and `show()`
+  fetched `entry.path` verbatim, hitting the full page instead of the fragment
+  endpoint built for this. My own wiring bug, not a CSS problem — the earlier
+  min-width theory was wrong.
+- Fix: fetch `entry.path.replace("/ask/s/", "/api/ask/s/")`. Substring swap so a
+  root_path prefix survives (/nora/ask/s/13 → /nora/api/ask/s/13). Verified both
+  forms, and that the fragment carries zero page chrome while the page keeps it.
+- Kept the min-width/overflow CSS: it wasn't the cause but is correct defensive
+  styling for wide answer content in a narrow column.
+- Added an "Open shareable page" link in the pane so the /ask/s/ URL a user would
+  actually send is one click away.
