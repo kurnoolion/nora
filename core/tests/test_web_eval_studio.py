@@ -387,3 +387,16 @@ class TestCuration:
         assert "gs-0001" in both and "gs-0002" in both
         only = client.get("/api/eval-studio/samples", params={"mno": "mno-a"}).text
         assert "gs-0001" in only and "gs-0002" not in only
+
+    def test_board_filters_by_author(self, client, tmp_path):
+        # _create uses created_by="expert-a"; make a second sample by someone else.
+        _create(client)  # gs-0001, expert-a
+        client.post("/api/eval-studio/sample", data={
+            "query": "q2?", "area": "", "created_by": "expert-b"})  # gs-0002
+        both = client.get("/api/eval-studio/samples").text
+        assert "gs-0001" in both and "gs-0002" in both
+        mine = client.get("/api/eval-studio/samples",
+                          params={"author": "expert-a"}).text
+        assert "gs-0001" in mine and "gs-0002" not in mine
+        # The author dropdown lists both authors regardless of the active filter.
+        assert "expert-a" in mine and "expert-b" in mine

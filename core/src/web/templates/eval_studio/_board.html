@@ -2,18 +2,29 @@
 <div class="alert alert-danger small">{{ load_error }}</div>
 {% endif %}
 <div class="card">
-  <div class="card-header py-2 small fw-semibold d-flex justify-content-between align-items-center gap-2">
+  <div class="card-header py-2 small fw-semibold">
     <span>Samples ({{ samples|length }})</span>
-    {# MNO filter — groups the board by carrier tag. Included on the board's
-       load / refresh triggers (index.html) so it survives re-renders. #}
-    <select id="es-board-mno" name="mno" class="form-select form-select-sm w-auto py-0"
-            style="font-size:.72rem"
-            hx-get="{{ root_path }}/api/eval-studio/samples"
-            hx-target="#es-board" hx-swap="innerHTML"
-            hx-trigger="change" hx-include="this">
-      <option value="">All MNOs</option>
-      {% for m in mnos %}<option value="{{ m }}" {% if m == sel_mno %}selected{% endif %}>{{ m }}</option>{% endfor %}
-    </select>
+    {# Author + MNO filters — narrow the board to your own samples / one carrier.
+       Both are included on the board's load/refresh triggers (index.html) and on
+       each other's change, so the two compose and survive re-renders. #}
+    <div class="d-flex gap-1 mt-1">
+      <select id="es-board-author" name="author" class="form-select form-select-sm py-0"
+              style="font-size:.72rem"
+              hx-get="{{ root_path }}/api/eval-studio/samples"
+              hx-target="#es-board" hx-swap="innerHTML"
+              hx-trigger="change" hx-include="#es-board-author, #es-board-mno">
+        <option value="">All authors</option>
+        {% for a in authors %}<option value="{{ a }}" {% if a == sel_author %}selected{% endif %}>{{ a }}</option>{% endfor %}
+      </select>
+      <select id="es-board-mno" name="mno" class="form-select form-select-sm py-0"
+              style="font-size:.72rem"
+              hx-get="{{ root_path }}/api/eval-studio/samples"
+              hx-target="#es-board" hx-swap="innerHTML"
+              hx-trigger="change" hx-include="#es-board-author, #es-board-mno">
+        <option value="">All MNOs</option>
+        {% for m in mnos %}<option value="{{ m }}" {% if m == sel_mno %}selected{% endif %}>{{ m }}</option>{% endfor %}
+      </select>
+    </div>
   </div>
   <div class="es-scroll">
   <table class="table table-hover mb-0" id="es-board-table" data-es-sortable>

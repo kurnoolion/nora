@@ -74,7 +74,7 @@ th[data-sort-key]:hover { background: #f1f3f5; }
     <div id="es-board"
          hx-get="{{ root_path }}/api/eval-studio/samples"
          hx-trigger="load, es-board-refresh from:body"
-         hx-include="#es-board-mno"
+         hx-include="#es-board-author, #es-board-mno"
          hx-swap="innerHTML">
       <div class="text-muted small p-2">Loading samples…</div>
     </div>

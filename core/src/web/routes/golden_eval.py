@@ -138,20 +138,27 @@ def eval_studio_page(request: Request):
 
 
 @router.get("/api/eval-studio/samples", response_class=HTMLResponse)
-def sample_board(request: Request, mno: str = ""):
+def sample_board(request: Request, mno: str = "", author: str = ""):
     env_dir = _env_dir()
     try:
         samples = load_samples(env_dir)
         load_error = ""
     except GoldenEvalError as exc:
         samples, load_error = [], f"{exc.code}: sample store unreadable"
+    # Author dropdown lists every author in the store (computed before filtering
+    # so a selection never empties its own option list).
+    authors = sorted({s.created_by for s in samples if s.created_by})
     if mno:
         samples = [s for s in samples if s.mno == mno]
+    if author:
+        samples = [s for s in samples if s.created_by == author]
     return _template(request, "eval_studio/_board.html", {
         "samples": samples,
         "load_error": load_error,
         "mnos": sorted({c["mno"] for c in req_tree.list_cells(env_dir)}),
         "sel_mno": mno,
+        "authors": authors,
+        "sel_author": author,
     })
 
 
