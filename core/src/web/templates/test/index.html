@@ -53,45 +53,8 @@
               required></textarea>
         </div>
 
-        <div class="mb-3">
-          <div class="form-label"><strong>Retrieval lanes</strong></div>
-          <div class="form-check form-check-inline">
-            <input
-                type="checkbox"
-                class="form-check-input"
-                id="lane-nora"
-                name="lanes"
-                value="nora"
-                {% if team_restricted %}disabled{% else %}checked{% endif %}>
-            <label class="form-check-label" for="lane-nora">
-              <span class="badge bg-success">NORA</span> hybrid (KG + RAG)
-            </label>
-          </div>
-          <div class="form-check form-check-inline">
-            <input
-                type="checkbox"
-                class="form-check-input"
-                id="lane-sira"
-                name="lanes"
-                value="sira"
-                checked{% if team_restricted %} disabled{% endif %}>
-            <label class="form-check-label" for="lane-sira">
-              <span class="badge bg-primary">SIRA</span> BM25 + LLM rerank
-            </label>
-          </div>
-          {% if team_restricted %}
-          {# Disabled checkboxes aren't submitted (FormData skips them), so carry
-             the locked SIRA lane in a hidden input — passes the client-side
-             "at least one lane" check and the POST. Server also force-sets it. #}
-          <input type="hidden" name="lanes" value="sira">
-          <div class="form-text">SIRA-only eval (lane selection locked).</div>
-          {% endif %}
-          <div class="form-text">
-            Both checked → side-by-side compare. One checked → single-lane
-            full-width.
-          </div>
-        </div>
-
+        {# Your name stays above the fold — it credits the feedback — and is
+           remembered between asks by the sticky-fields script below. #}
         <div class="mb-3">
           <label for="user-name" class="form-label">
             <strong>Your name</strong>
@@ -106,28 +69,80 @@
               maxlength="80">
         </div>
 
-        <div class="mb-3">
-          <label for="ask-label" class="form-label">
-            <strong>Correction label</strong>
-            <span class="text-muted small">(optional — SIRA lane only: query
-              your enrichment-review label's view instead of the default)</span>
-          </label>
-          <input
-              type="text"
-              id="ask-label"
-              name="label"
-              class="form-control form-control-sm"
-              placeholder="default (main) view"
-              maxlength="80">
+        {# Ask sits directly under the question. The engineering knobs
+           (retrieval lanes, correction label) collapse behind Options so the
+           everyday flow is just question → Ask → answer. Collapsed inputs are
+           still submitted — collapse hides, it doesn't disable. #}
+        <div class="d-flex align-items-center gap-2">
+          <button id="ask-submit" class="btn btn-primary" type="submit">
+            <span id="ask-submit-label">Ask</span>
+            <span id="ask-submit-busy" style="display:none;">
+              <span class="spinner-border spinner-border-sm me-1"></span>
+              Querying…
+            </span>
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#ask-options"
+                  aria-expanded="false" aria-controls="ask-options">
+            <i class="bi bi-sliders me-1"></i>Options
+          </button>
         </div>
 
-        <button id="ask-submit" class="btn btn-primary" type="submit">
-          <span id="ask-submit-label">Ask</span>
-          <span id="ask-submit-busy" style="display:none;">
-            <span class="spinner-border spinner-border-sm me-1"></span>
-            Querying…
-          </span>
-        </button>
+        <div class="collapse mt-3" id="ask-options">
+          <div class="mb-3">
+            <div class="form-label"><strong>Retrieval lanes</strong></div>
+            <div class="form-check form-check-inline">
+              <input
+                  type="checkbox"
+                  class="form-check-input"
+                  id="lane-nora"
+                  name="lanes"
+                  value="nora"
+                  {% if team_restricted %}disabled{% else %}checked{% endif %}>
+              <label class="form-check-label" for="lane-nora">
+                <span class="badge bg-success">NORA</span> hybrid (KG + RAG)
+              </label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input
+                  type="checkbox"
+                  class="form-check-input"
+                  id="lane-sira"
+                  name="lanes"
+                  value="sira"
+                  checked{% if team_restricted %} disabled{% endif %}>
+              <label class="form-check-label" for="lane-sira">
+                <span class="badge bg-primary">SIRA</span> BM25 + LLM rerank
+              </label>
+            </div>
+            {% if team_restricted %}
+            {# Disabled checkboxes aren't submitted (FormData skips them), so carry
+               the locked SIRA lane in a hidden input — passes the client-side
+               "at least one lane" check and the POST. Server also force-sets it. #}
+            <input type="hidden" name="lanes" value="sira">
+            <div class="form-text">SIRA-only eval (lane selection locked).</div>
+            {% endif %}
+            <div class="form-text">
+              Both checked → side-by-side compare. One checked → single-lane
+              full-width.
+            </div>
+          </div>
+
+          <div class="mb-0">
+            <label for="ask-label" class="form-label">
+              <strong>Correction label</strong>
+              <span class="text-muted small">(optional — SIRA lane only: query
+                your enrichment-review label's view instead of the default)</span>
+            </label>
+            <input
+                type="text"
+                id="ask-label"
+                name="label"
+                class="form-control form-control-sm"
+                placeholder="default (main) view"
+                maxlength="80">
+          </div>
+        </div>
       </form>
 
       {# Per-lane progress display — fed by SSE events from
@@ -306,6 +321,41 @@
     } finally {
       setBusy(false);
     }
+  });
+})();
+
+/*
+ * Sticky fields — the name (and the now-collapsed lane selection + correction
+ * label) rarely change between asks, so remember them per browser and prefill
+ * on load. Only these; the question is always fresh. Disabled lane checkboxes
+ * (team-restricted mode) are left alone — the server owns that choice.
+ */
+(function () {
+  const KEY = "ask-last-fields";
+  const form = document.getElementById("ask-form");
+  if (!form) return;
+  const nameEl  = document.getElementById("user-name");
+  const labelEl = document.getElementById("ask-label");
+  const nora    = document.getElementById("lane-nora");
+  const sira    = document.getElementById("lane-sira");
+
+  try {
+    const last = JSON.parse(localStorage.getItem(KEY) || "{}");
+    if (last.user_name && nameEl)  nameEl.value  = last.user_name;
+    if (last.label     && labelEl) labelEl.value = last.label;
+    if (nora && !nora.disabled && typeof last.nora === "boolean") nora.checked = last.nora;
+    if (sira && !sira.disabled && typeof last.sira === "boolean") sira.checked = last.sira;
+  } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
+
+  form.addEventListener("submit", function () {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({
+        user_name: nameEl ? nameEl.value : "",
+        label:     labelEl ? labelEl.value : "",
+        nora:      nora ? nora.checked : undefined,
+        sira:      sira ? sira.checked : undefined,
+      }));
+    } catch (e) { /* storage full/blocked — sticky fields are best-effort */ }
   });
 })();
 </script>

@@ -80,13 +80,47 @@
       <strong>Q:</strong> {{ question }}
     </div>
 
+    {# Failure alerts stay above the fold — they explain a missing or
+       degraded answer, so a normal user needs them even though the rest of
+       the SIRA preamble is engineering detail (collapsed further down). #}
+    {% if sira_results is defined %}
+      {% if sira_notes %}
+        <div class="alert alert-warning small mb-2 py-2">
+          {% for note in sira_notes %}<div>⚠ {{ note }}</div>{% endfor %}
+        </div>
+      {% endif %}
+      {% if synth_error %}
+        <div class="alert alert-warning mb-2">
+          <strong>Synthesizer error:</strong> {{ synth_error }}
+          <div class="small mt-1">SIRA retrieval succeeded; answer composition failed. Expand engineering details for the SIRA retrieval cards.</div>
+        </div>
+      {% endif %}
+    {% endif %}
+
+    <div class="answer-body" style="line-height: 1.5;">{{ answer | md }}</div>
+
+    {# ── Engineering details ───────────────────────────────────────────
+       Everything below (retrieval internals, citations, chunks, prompts,
+       timings) is for engineering review, not the everyday ask-a-question
+       user — so it is collapsed by default behind one toggle. #}
+    <hr class="my-2">
+    <button type="button"
+            class="btn btn-sm btn-outline-secondary py-0"
+            data-bs-toggle="collapse"
+            data-bs-target="#eng-details-{{ row_id }}"
+            aria-expanded="false"
+            aria-controls="eng-details-{{ row_id }}">
+      <i class="bi bi-tools me-1"></i>Engineering details
+    </button>
+    <div class="collapse" id="eng-details-{{ row_id }}">
+
     {# SIRA-specific preamble: only present when this came from the
        SIRA Retrieval tab. Shows which pipeline ran + per-stage timing
        + the score-filter summary. The rest of the answer rendering
-       (citations, RAG chunks, citation audit, LLM prompt, feedback
-       widget) is shared with the requirement_bot tab below. #}
+       (citations, RAG chunks, citation audit, LLM prompt) is shared
+       with the requirement_bot tab below. #}
     {% if sira_results is defined %}
-      <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+      <div class="d-flex align-items-center gap-2 mb-2 mt-2 flex-wrap">
         <span class="badge bg-secondary">SIRA retrieval → NORA synthesizer</span>
         {% if sira_synth_mode in ('select-synth', 'llm-select') %}
           <span class="badge bg-info">select-synth</span>
@@ -130,20 +164,7 @@
           {% endif %}
         </div>
       {% endif %}
-      {% if sira_notes %}
-        <div class="alert alert-warning small mb-2 py-2">
-          {% for note in sira_notes %}<div>⚠ {{ note }}</div>{% endfor %}
-        </div>
-      {% endif %}
-      {% if synth_error %}
-        <div class="alert alert-warning mb-2">
-          <strong>Synthesizer error:</strong> {{ synth_error }}
-          <div class="small mt-1">SIRA retrieval succeeded; answer composition failed. Inspect SIRA retrieval cards below.</div>
-        </div>
-      {% endif %}
     {% endif %}
-
-    <div class="answer-body" style="line-height: 1.5;">{{ answer | md }}</div>
 
     {# Stage 1 + Stage 3 visibility — what the analyzer (taxonomy-aware)
        and the graph scoper produced BEFORE retrieval ran. Helps users
@@ -502,6 +523,8 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
       retrieved in {{ elapsed_ms }} ms
       {% if candidate_count %} · {{ candidate_count }} candidates from graph{% endif %}
     </div>
+
+    </div>{# /#eng-details — engineering detail collapse #}
   </div>
 
   {# Feedback widget — legacy (vote up/down) or merged-tab (score +
