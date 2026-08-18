@@ -239,3 +239,96 @@ def test_run_all_statuses_and_error_capture(monkeypatch):
     assert [r.sample_id for r in rep.stage2] == ["gs-0001"]
     codes = {e["sample_id"]: e["code"] for e in rep.errors}
     assert codes == {"gs-0002": "GEV-E002", "gs-0003": "GEV-W001"}
+
+
+# ─── SIRA-lane Stage-2 (field-found: legacy path needs graph+vectorstore
+#     the SIRA-only lane never builds; skip was silent) ───────────────
+
+
+class _FakeSynthLLM:
+    """LLMProvider fake for the SiraRowsPipeline's synthesizer."""
+
+    def __init__(self, answer="Synthesized from retrieved rows."):
+        self.answer = answer
+        self.prompts = []
+
+    def complete(self, prompt, system=None, temperature=0.0, max_tokens=None):
+        self.prompts.append((system or "") + "\n" + prompt)
+        return self.answer
+
+
+def _rows():
+    return [
+        {"req_id": "REQ_FOO_0001", "title": "Retry",
+         "text": "Widgets shall retry with backoff.", "mno": "m", "release": "r"},
+        {"req_id": "REQ_FOO_0009", "title": "Cap",
+         "text": "Backoff shall be capped.", "mno": "m", "release": "r"},
+    ]
+
+
+class TestSiraRowsPipeline:
+    def test_synthesizes_over_bound_rows_in_pinned_order(self):
+        llm = _FakeSynthLLM()
+        p = golden_runner.SiraRowsPipeline(llm)
+        p.bind_rows(_rows())
+        resp = p.query("widget retry?",
+                       pinned_chunk_ids=["req:REQ_FOO_0009", "req:REQ_FOO_0001"])
+        assert resp.answer == "Synthesized from retrieved rows."
+        sent = llm.prompts[0]
+        assert "Backoff shall be capped." in sent
+        assert "Widgets shall retry with backoff." in sent
+        # Pinned order respected: 0009's text appears before 0001's.
+        assert sent.index("capped") < sent.index("retry with backoff")
+
+    def test_no_bound_text_raises_loud(self):
+        p = golden_runner.SiraRowsPipeline(_FakeSynthLLM())
+        p.bind_rows([])
+        with pytest.raises(GoldenEvalError) as exc:
+            p.query("q", pinned_chunk_ids=["req:REQ_FOO_0001"])
+        assert exc.value.code == "GEV-E003"
+
+    def test_run_all_sira_mode_binds_rows_and_scores(self, monkeypatch):
+        monkeypatch.setattr(
+            golden_runner, "_get_json", lambda url, timeout: {})
+
+        def fake_post(url, payload, timeout):
+            # want_row_text must request full text from the service.
+            assert payload.get("text_chars")
+            return {"results": [
+                dict(rank=i + 1, req_id=r["req_id"], mno="m", release="r",
+                     title=r["title"], text=r["text"]) for i, r in
+                enumerate(_rows())
+            ]}
+
+        monkeypatch.setattr(golden_runner, "_post_json", fake_post)
+        pipeline = golden_runner.SiraRowsPipeline(_FakeSynthLLM())
+        judge = _FakeJudge()
+        report = run_all(
+            [_sample()], "http://127.0.0.1:1", "stackA", _NOW,
+            query_pipeline=pipeline, judge=judge,
+            judge_prompt=("v1", "<<QUERY>> <<GOLDEN>> <<CANDIDATE>>"),
+        )
+        assert report.stage2_mode == "sira-rows"
+        assert report.stage2_skip_reason == ""
+        assert len(report.stage2) == 1
+        assert report.stage2[0].score == 7.5
+
+    def test_skip_reason_lands_in_report_and_compact(self, monkeypatch):
+        monkeypatch.setattr(
+            golden_runner, "_get_json", lambda url, timeout: {})
+        monkeypatch.setattr(
+            golden_runner, "_post_json",
+            lambda url, payload, timeout: {"results": []})
+        report = run_all(
+            [_sample()], "http://127.0.0.1:1", "stackA", _NOW,
+            stage2_skip_reason="vector store missing",
+        )
+        assert report.stage2_mode == ""
+        assert report.stage2_skip_reason == "vector store missing"
+        assert report.to_dict()["stage2_skip_reason"] == "vector store missing"
+        assert "s2: SKIPPED (vector store missing)" in report.compact_report()
+
+    def test_rows_never_serialized(self):
+        s1 = _stage1()
+        s1.retrieved_rows = _rows()
+        assert "retrieved_rows" not in s1.to_dict()

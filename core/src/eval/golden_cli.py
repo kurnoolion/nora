@@ -177,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Loaded {len(samples)} golden sample(s)")
 
     query_pipeline = judge = judge_prompt = None
+    stage2_skip_reason = ""
     if args.stage == "all":
         try:
             judge_prompt = load_judge_prompt(args.judge_prompt_version)
@@ -191,9 +192,25 @@ def main(argv: list[str] | None = None) -> int:
             vs_dir = args.vectorstore_dir or (
                 args.env_dir / "out" / "vectorstore"
             )
-            query_pipeline = _build_query_pipeline(graph_path, vs_dir, synth_llm)
-            print(f"Stage 2 enabled — judge prompt {judge_prompt[0]}")
+            if vs_dir.is_dir():
+                query_pipeline = _build_query_pipeline(
+                    graph_path, vs_dir, synth_llm
+                )
+                print(f"Stage 2 enabled (pipeline) — judge prompt "
+                      f"{judge_prompt[0]}")
+            else:
+                # SIRA-only lane: this deployment never builds
+                # out/graph or out/vectorstore (field-found — Stage-2
+                # was structurally unrunnable and skipped SILENTLY).
+                # Synthesize over the rows Stage-1 actually retrieved
+                # with the same production synthesizer prompt.
+                from .golden_runner import SiraRowsPipeline
+                query_pipeline = SiraRowsPipeline(synth_llm)
+                print(f"Stage 2 enabled (sira-rows: no vector store — "
+                      f"synthesizing over Stage-1 retrieved rows) — "
+                      f"judge prompt {judge_prompt[0]}")
         except (GoldenEvalError, ConnectionError, ValueError) as exc:
+            stage2_skip_reason = str(exc)
             print(f"Stage 2 setup failed, running Stage 1 only: {exc}")
             query_pipeline = judge = judge_prompt = None
 
@@ -212,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         answer_prompt_version=args.answer_prompt_version,
         llm_identity=args.llm_model or "",
         sira_prompt_scheme=args.sira_prompt_scheme,
+        stage2_skip_reason=stage2_skip_reason,
     )
 
     run_dir = write_run(args.env_dir, report, env_name=args.env_name)

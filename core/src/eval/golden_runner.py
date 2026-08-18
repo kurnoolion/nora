@@ -66,15 +66,22 @@ def query_stack(
     top_k: int | None = None,
     label: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
+    text_chars: int | None = None,
 ) -> dict:
     """POST /sira-query on a stack. Raises GoldenEvalError (GEV-E002) on
     any transport or protocol failure — a sample is never silently skipped.
+
+    ``text_chars`` opts into full row text (the service's Path-B knob) —
+    the SIRA-lane Stage-2 synthesizes over the rows Stage-1 actually
+    retrieved, so those rows must carry their chunk text.
     """
     payload: dict = {"query": query}
     if top_k:
         payload["top_k"] = top_k
     if label:
         payload["label"] = label
+    if text_chars:
+        payload["text_chars"] = text_chars
     url = stack_url.rstrip("/") + "/sira-query"
     try:
         body = _post_json(url, payload, timeout)
@@ -441,6 +448,11 @@ class Stage1Result:
     # Every retrieved req_id in rank order (deduped) — Stage-2 pins these,
     # not just the ground-truth hits (D-DRAFT-3).
     retrieved_req_ids: list[str] = field(default_factory=list)
+    # TRANSIENT (never serialized — proprietary chunk text stays out of
+    # to_dict): the retrieved rows with their text, retained only when
+    # ``want_row_text=True`` so the SIRA-lane Stage-2 synthesizes over
+    # exactly what retrieval served.
+    retrieved_rows: list[dict] = field(default_factory=list)
 
     @property
     def gt_count(self) -> int:
@@ -471,12 +483,17 @@ def run_stage1(
     top_k: int | None = None,
     label: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
+    want_row_text: bool = False,
 ) -> Stage1Result:
     """Score one sample's retrieval recall against one stack.
 
     Requires non-empty ground truth (GEV-W001 otherwise — status gating
     across a whole run belongs to the batch runner, but an entry-less
     sample can't be scored at all).
+
+    ``want_row_text=True`` requests full row text and retains the
+    retrieved rows on the result (transient, never serialized) so a
+    SIRA-lane Stage-2 can synthesize over exactly what retrieval served.
     """
     if not sample.ground_truth:
         raise GoldenEvalError(
@@ -484,7 +501,8 @@ def run_stage1(
             f"sample {sample.sample_id} has no ground truth; not scorable",
         )
     body = query_stack(
-        stack_url, sample.query, top_k=top_k, label=label, timeout=timeout
+        stack_url, sample.query, top_k=top_k, label=label, timeout=timeout,
+        text_chars=_STAGE2_ROW_TEXT_CHARS if want_row_text else None,
     )
     results = body["results"]
     hits, misses = match_ground_truth(sample.ground_truth, results)
@@ -496,7 +514,7 @@ def run_stage1(
         if rid and rid not in seen:
             seen.add(rid)
             retrieved_req_ids.append(rid)
-    return Stage1Result(
+    result = Stage1Result(
         sample_id=sample.sample_id,
         recall=(len(hits) / total) if total else 0.0,
         hits=hits,
@@ -507,9 +525,95 @@ def run_stage1(
         resolved_cells=[str(c) for c in body.get("resolved_cells", [])],
         retrieved_req_ids=retrieved_req_ids,
     )
+    if want_row_text:
+        result.retrieved_rows = [
+            {
+                "req_id": str(r.get("req_id", "")),
+                "title": str(r.get("title", "") or ""),
+                "text": str(r.get("text", "") or ""),
+                "mno": str(r.get("mno", "") or ""),
+                "release": str(r.get("release", "") or ""),
+            }
+            for r in results if r.get("req_id")
+        ]
+    return result
 
 
 # ─── Stage 2 ────────────────────────────────────────────────────────
+
+# Per-row text cap requested from the serving stack when Stage-2 will
+# synthesize over the retrieved rows (matches the service's own rerank
+# text budget order of magnitude).
+_STAGE2_ROW_TEXT_CHARS = 4000
+
+
+class SiraRowsPipeline:
+    """Duck-typed Stage-2 pipeline for the SIRA-only lane.
+
+    The legacy Stage-2 path builds a ``QueryPipeline`` from
+    ``out/graph`` + ``out/vectorstore`` — artifacts the SIRA-only lane
+    never produces, which made Stage-2 structurally unrunnable on
+    SIRA-serving stacks (field-found: all golden-ready samples skipped
+    silently). This pipeline needs neither: it synthesizes with the
+    SAME production ``LLMSynthesizer`` prompt over the rows Stage-1
+    actually retrieved (full text via the service's ``text_chars``
+    knob) — production-faithful by construction, since what retrieval
+    served is what an answer would be built from. Context enrichment
+    uses an empty graph (the established RAG-only degradation).
+
+    Duck-type contract (same as ``QueryPipeline`` for the runner):
+    ``query(text, pinned_chunk_ids=...) -> QueryResponse``. The runner
+    binds each sample's retrieved rows via ``bind_rows`` before its
+    Stage-2 call.
+    """
+
+    def __init__(self, llm, max_context_chars: int = 30000):
+        import networkx as nx
+
+        from core.src.query.context_builder import ContextBuilder
+        from core.src.query.synthesizer import LLMSynthesizer
+
+        self._builder = ContextBuilder(nx.DiGraph())
+        self._synth = LLMSynthesizer(llm, max_tokens=max_context_chars // 4)
+        self._max_context_chars = max_context_chars
+        self._rows: list[dict] = []
+
+    def bind_rows(self, rows: list[dict]) -> None:
+        self._rows = rows or []
+
+    def query(self, text: str, pinned_chunk_ids: list[str] | None = None):
+        from core.src.query.schema import QueryIntent, QueryType, RetrievedChunk
+
+        by_id = {f"req:{r['req_id']}": r for r in self._rows if r.get("req_id")}
+        order = [p for p in (pinned_chunk_ids or []) if p in by_id]
+        chunks = [
+            RetrievedChunk(
+                chunk_id=pid,
+                text=(
+                    f"{by_id[pid]['title']}\n{by_id[pid]['text']}".strip()
+                ),
+                metadata={
+                    "req_id": by_id[pid]["req_id"],
+                    "mno": by_id[pid]["mno"],
+                    "release": by_id[pid]["release"],
+                },
+            )
+            for pid in order
+            if (by_id[pid]["text"] or by_id[pid]["title"])
+        ]
+        if not chunks:
+            raise GoldenEvalError(
+                "GEV-E003",
+                "no retrieved-row text bound for synthesis — Stage-1 must "
+                "run with want_row_text (rows carry text via text_chars)",
+            )
+        context = self._builder.build(
+            text, chunks, QueryType.GENERAL,
+            max_context_chars=self._max_context_chars,
+        )
+        intent = QueryIntent(raw_query=text, query_type=QueryType.GENERAL)
+        return self._synth.synthesize(context, intent)
+
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _JUDGE_FILE_RE = re.compile(r"^judge_v(\d+)\.txt$")
@@ -664,6 +768,13 @@ class GoldenRunReport:
     judge_version: str = ""
     healthz: dict | None = None
     stamp: StackStamp | None = None
+    # Stage-2 execution status (field-found defect: a Stage-2 setup
+    # failure downgraded to Stage-1-only with only a stdout line — the
+    # REPORT carried no marker, so "Stage-2 never ran" was
+    # indistinguishable from "ran and scored nothing").
+    # stage2_mode: "" (not attempted) | "pipeline" | "sira-rows".
+    stage2_mode: str = ""
+    stage2_skip_reason: str = ""
     stage1: list[Stage1Result] = field(default_factory=list)
     stage2: list[Stage2Result] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
@@ -685,6 +796,8 @@ class GoldenRunReport:
             "judge_version": self.judge_version,
             "healthz": self.healthz,
             "stamp": self.stamp.to_dict() if self.stamp else None,
+            "stage2_mode": self.stage2_mode,
+            "stage2_skip_reason": self.stage2_skip_reason,
             "stage1": [r.to_dict() for r in self.stage1],
             "stage2": [r.to_dict() for r in self.stage2],
             "errors": self.errors,
@@ -715,10 +828,13 @@ class GoldenRunReport:
             lines.append("s1: n=0")
         scores = self._judge_scores()
         if scores:
+            mode = f" mode={self.stage2_mode}" if self.stage2_mode else ""
             lines.append(
                 f"s2: n={len(scores)} judge_avg={sum(scores)/len(scores):.1f} "
-                f"judge_med={statistics.median(scores):.1f}"
+                f"judge_med={statistics.median(scores):.1f}{mode}"
             )
+        elif self.stage2_skip_reason:
+            lines.append(f"s2: SKIPPED ({self.stage2_skip_reason})")
         else:
             lines.append("s2: n=0")
         if self.errors:
@@ -771,6 +887,7 @@ def run_all(
     answer_prompt_version: str = "",
     llm_identity: str = "",
     sira_prompt_scheme: str = "",
+    stage2_skip_reason: str = "",
 ) -> GoldenRunReport:
     """Batch run against one stack. Stage-1 for every non-draft sample;
     Stage-2 additionally for golden-ready samples when a pipeline + judge
@@ -780,7 +897,9 @@ def run_all(
     ``answer_prompt_version`` / ``llm_identity`` / ``sira_prompt_scheme``
     feed the stack stamp — caller-known identity the stack cannot
     advertise (or advertises less authoritatively than the caller's own
-    config).
+    config). ``stage2_skip_reason`` records WHY Stage-2 was not
+    attempted (caller-known setup failure) so the report — not just
+    stdout — distinguishes "never ran" from "ran and scored nothing".
     """
     healthz = fetch_healthz(stack_url)
     report = GoldenRunReport(
@@ -799,6 +918,13 @@ def run_all(
     )
     report.stamp.set_eval_set(samples)
     stage2_enabled = bool(query_pipeline and judge and judge_prompt)
+    sira_rows_mode = stage2_enabled and hasattr(query_pipeline, "bind_rows")
+    if stage2_enabled:
+        report.stage2_mode = "sira-rows" if sira_rows_mode else "pipeline"
+    else:
+        report.stage2_skip_reason = (
+            stage2_skip_reason or "stage-2 prerequisites not supplied"
+        )
     for sample in samples:
         if sample.status == STATUS_DRAFT:
             report.errors.append({
@@ -809,7 +935,8 @@ def run_all(
             continue
         try:
             s1 = run_stage1(
-                sample, stack_url, top_k=top_k, label=label, timeout=timeout
+                sample, stack_url, top_k=top_k, label=label, timeout=timeout,
+                want_row_text=sira_rows_mode,
             )
             report.stage1.append(s1)
         except GoldenEvalError as exc:
@@ -820,6 +947,8 @@ def run_all(
             })
             continue
         if stage2_enabled and sample.status == STATUS_GOLDEN_READY:
+            if sira_rows_mode:
+                query_pipeline.bind_rows(s1.retrieved_rows)
             try:
                 report.stage2.append(
                     run_stage2(sample, s1, query_pipeline, judge, judge_prompt)
