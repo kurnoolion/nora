@@ -61,3 +61,27 @@ Three-tier code organization (D-019..D-024) plus a per-env runtime directory `<e
 - CLI per module: `core/src/<module>/<module>_cli.py` with `main()` entrypoint; invoked as `python -m core.src.<module>.<module>_cli`.
 - Protocol-based abstractions: `LLMProvider`, `EmbeddingProvider`, `VectorStoreProvider`.
 - No proprietary document content in logs, error messages, compact reports, or test fixtures.
+
+## Branch flow (all contributors)
+
+When a strand is worked on a feature branch and closed there, the COMPACT
+rituals ride the branch — they are part of the deliverable, not something the
+merge cleans up afterwards:
+
+- **Run `/close-session` before the strand-closing commit.** It drafts the
+  decisions and audits MODULE.md edits. A choice where an alternative was
+  seriously considered and rejected (e.g. "server-side X rejected because
+  ...") belongs in `decisions-draft.md`, not only in the journal — the
+  journal narrates, the decision log is what future sessions consult. Three
+  merged branches have arrived with well-argued rejections in the journal
+  and an empty draft file; each needed retro-capture at merge.
+- **MODULE.md updates ship in the same branch as the public-surface changes
+  they describe** (new routes, schema fields, CLI flags). A merged branch
+  that leaves MODULE.md teaching the old contract creates drift the audit
+  can no longer catch, because the session that knew the context is gone.
+- **Integration surfaces are part of the feature.** New web routes must be
+  checked against the team-mode gate allowlist (`web/team_mode.py`) — and
+  verified with the gate ON, not only in an ungated dev run. The same
+  applies to serve-set contents, healthz keys, and env-file wiring: if a
+  deployed configuration can make the feature invisible, the branch tests
+  that configuration before the strand is called shipped.
