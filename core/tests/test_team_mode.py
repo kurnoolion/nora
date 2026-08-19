@@ -166,3 +166,17 @@ class TestStaticUnderProxyPrefix:
         r = c.get("/nora-v2/static/css/style.css")
         assert r.status_code == 200
         assert "text/css" in r.headers["content-type"]
+
+
+class TestSharedAnswerPaths:
+    def test_share_and_history_paths_allowed(self):
+        """Merged-in finding (strands ask-page-ux / ask-history): the share
+        + history routes were not allowlisted, so a gated team member
+        opening a teammate's shared link was redirected — defeating the
+        share feature in gated deployments. Shared answers carry the
+        normal user view only (D-209), so they are team-safe."""
+        assert tm.path_allowed_for_team("/ask/s/123") is True
+        assert tm.path_allowed_for_team("/api/ask/s/123") is True
+        assert tm.path_allowed_for_team("/ask/history") is True
+        # Unrelated /ask paths are NOT blanket-admitted.
+        assert tm.path_allowed_for_team("/ask/admin") is False

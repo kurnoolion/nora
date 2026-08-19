@@ -30,7 +30,15 @@ ADMIN_TOKEN = os.getenv(ENV_ADMIN_TOKEN, "")
 # Path prefixes a gated team member may reach. Everything else → /test.
 _TEAM_ALLOWED = ("/test", "/api/test", "/static", "/api/health", "/admin-unlock", "/favicon",
                  "/enrichment-review", "/api/enrich-review",
-                 "/eval-studio", "/api/eval-studio")
+                 "/eval-studio", "/api/eval-studio",
+                 # Shared-answer + history surfaces (strand ask-page-ux /
+                 # ask-history): a shared link reproduces the NORMAL user
+                 # view only (no engineering internals persisted — D-209),
+                 # so gated team members may open teammates' links; history
+                 # is browser-local. Merged without these — a gated expert
+                 # opening a shared link was redirected, defeating the
+                 # feature in exactly the deployments that gate.
+                 "/ask/s/", "/api/ask/s/", "/ask/history")
 
 
 def is_admin(request: Request) -> bool:

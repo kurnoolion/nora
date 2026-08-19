@@ -7554,3 +7554,60 @@ is the audit trail. Three tests encoding the old error contract were
 re-encoded. The picker cascade remains the fully-qualified path.
 
 _Strand: eval-studio-ux-2 (archived); journal is the working record._
+
+## D-208: Question history is browser-local; server-side history rejected on identity grounds
+**Status**: Active · **Date**: 2026-08-18. *(Retro-captured at merge of strand ask-history — teammate-authored branch landed with an empty draft file; the rejected alternative meets the DECISIONS filter.)*
+
+**Context:** Users asked for a history of the questions they asked on
+the Ask page, each linking to its stored answer. The app has no auth:
+``user_name`` is optional free text defaulting to anonymous.
+
+**Decision:** History is a browser-localStorage list (unlimited
+retention, paging, per-entry delete + clear), each entry linking to
+the shared-answer snapshot (``/ask/s/{row_id}``). No server-side
+history, no schema change. Stale entries (store reset, different
+env dir) 404 and the pane offers removal rather than rendering blank.
+
+**Why:** A server-side "my history" keyed on an optional free-text
+name would merge every anonymous user's questions and be spoofable by
+typing someone else's name — worse than no history. Browser-local
+scoping matches the actual identity boundary the app has (the
+browser), at zero schema cost. Revisit only if real authentication
+arrives.
+
+**Consequences:** History does not follow a user across browsers or
+machines and is lost with browser storage; the detail pane reuses the
+shared-answer markup via a body-only endpoint so the two surfaces
+cannot drift; the history surface rides the same team-gate allowlist
+entry as shared answers.
+
+_Strand: ask-history (archived); journal is the working record._
+
+## D-209: A shared answer reproduces the normal user view; engineering internals are not persisted at ask time
+**Status**: Active · **Date**: 2026-08-18. *(Retro-captured at merge of strand ask-page-ux — persistent-data-shape decision with a recorded revisit trigger.)*
+
+**Context:** Shareable links to a stored ask (``/ask/s/{row_id}``)
+render question, answer, citations, attribution. The Ask page's
+engineering detail (chunk text, retrieval scores, taxonomy, prompts)
+lives only in the live request; the stored row's metadata is empty at
+ask time.
+
+**Decision:** A shared link reproduces the NORMAL user view only. The
+engineering internals are deliberately not persisted, so they cannot
+be replayed from a share; asks already in the DB are retroactively
+shareable because no schema change was needed. Revisit trigger
+recorded: reviewers asking to see retrieval internals in a shared
+link.
+
+**Why:** Persisting per-ask internals is a storage-shape commitment
+with review/redaction surface (chunk text is proprietary content) —
+not worth taking for a share feature whose audience is the normal
+user view; the owner chose not to start storing them.
+
+**Consequences:** Share-driven debugging still requires re-asking
+live; the normal-view-only constraint is what makes shared answers
+safe to admit through the team-mode gate (gated experts may open
+teammates' links — allowlist entry added at merge, the gate having
+been missed on the branch).
+
+_Strand: ask-page-ux (archived); journal is the working record._
