@@ -149,11 +149,18 @@ class StackStamp:
                                responses (the judge is stamped
                                separately on the report).
       * ``retrieval_knobs``  — request-shaping settings (top_k, ...).
-      * ``fallback_used_snapshot`` — the stack's refusal-fallback
-                               use counter at run time (per-ROW
-                               fallback attribution needs the
-                               generation path to expose which model
-                               answered — deferred until it does).
+      * ``fallback_used_snapshot`` — the stack's refusal-fallback use
+                               counter at run START (printed as
+                               ``fb_pre`` — field-found: printed as
+                               ``fb_used`` it read as "no fallback
+                               this run", which was false).
+      * ``fallback_used_delta`` — end-of-run counter minus the start
+                               snapshot. STACK-scoped over the run
+                               window (concurrent traffic counts too),
+                               so it bounds rather than equals this
+                               run's own fallback usage; per-row
+                               attribution still needs the generation
+                               path to expose which model answered.
     """
 
     serve_label: str = ""
@@ -170,6 +177,7 @@ class StackStamp:
     llm_identity: str = ""
     retrieval_knobs: dict = field(default_factory=dict)
     fallback_used_snapshot: int | None = None
+    fallback_used_delta: int | None = None
     # Eval-SET identity (field-found: the golden set drifted mid-strand
     # as curation landed, so byte-identical stack stamps had scored
     # DIFFERENT sample sets — the stack-side false-comparable reopened
@@ -329,6 +337,7 @@ class StackStamp:
             "llm_identity": self.llm_identity,
             "retrieval_knobs": self.retrieval_knobs,
             "fallback_used_snapshot": self.fallback_used_snapshot,
+            "fallback_used_delta": self.fallback_used_delta,
             "eval_set_count": self.eval_set_count,
             "eval_set_digest": self.eval_set_digest,
             "eval_set_stage2_digest": self.eval_set_stage2_digest,
@@ -366,7 +375,9 @@ class StackStamp:
                 f"set={self.eval_set_count}@{self.eval_set_digest[:8]}"
             )
         if self.fallback_used_snapshot is not None:
-            parts.append(f"fb_used={self.fallback_used_snapshot}")
+            parts.append(f"fb_pre={self.fallback_used_snapshot}")
+        if self.fallback_used_delta is not None:
+            parts.append(f"fb_delta={self.fallback_used_delta}")
         return "id: " + (" ".join(parts) if parts else "(unstamped)")
 
 
@@ -646,22 +657,66 @@ def load_judge_prompt(
     return f"v{best[0]}", best[1].read_text(encoding="utf-8")
 
 
+def _iter_balanced_objects(raw: str):
+    """Yield every balanced top-level ``{...}`` substring of *raw*, string-
+    and escape-aware. Field-found: first-brace/last-brace slicing fails on
+    judge responses that embed prose between multiple objects, and misses
+    nothing-but-prose responses entirely."""
+    i, n = 0, len(raw)
+    while i < n:
+        if raw[i] != "{":
+            i += 1
+            continue
+        depth, j, in_str, esc = 0, i, False, False
+        while j < n:
+            c = raw[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    yield raw[i : j + 1]
+                    break
+            j += 1
+        i = j + 1 if j > i else i + 1
+
+
 def _parse_judge_verdict(raw: str) -> dict:
     """Extract the JSON verdict from a judge completion. Raises ValueError
-    on anything unusable (caller wraps into GEV-E004).
+    on anything unusable (caller wraps into GEV-E004 after a retry).
+
+    Tries every balanced JSON object in the response (judges ramble —
+    field-measured at 15% of samples on the first real cell) and accepts
+    the first one carrying a numeric ``score``.
     """
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("no JSON object in judge response")
-    data = json.loads(raw[start : end + 1])
-    score = data.get("score")
-    if not isinstance(score, (int, float)):
-        raise ValueError("judge verdict has no numeric score")
-    return {
-        "score": max(0.0, min(10.0, float(score))),
-        "missing": [str(s) for s in data.get("missing", [])],
-        "contradicting": [str(s) for s in data.get("contradicting", [])],
-    }
+    last_err = "no JSON object in judge response"
+    for candidate in _iter_balanced_objects(raw or ""):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            last_err = "unparseable JSON object in judge response"
+            continue
+        if not isinstance(data, dict):
+            continue
+        score = data.get("score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            last_err = "judge verdict has no numeric score"
+            continue
+        return {
+            "score": max(0.0, min(10.0, float(score))),
+            "missing": [str(s) for s in data.get("missing", [])],
+            "contradicting": [str(s) for s in data.get("contradicting", [])],
+        }
+    raise ValueError(last_err)
 
 
 @dataclass
@@ -678,6 +733,10 @@ class Stage2Result:
     pinned_count: int = 0
     candidate_chars: int = 0
     skipped_reason: str = ""
+    # The verdict came from the strict-format retry (first judge response
+    # was unparseable). Kept per-row so parse-difficulty correlation with
+    # scores stays checkable.
+    judge_retried: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -689,6 +748,7 @@ class Stage2Result:
             "pinned_count": self.pinned_count,
             "candidate_chars": self.candidate_chars,
             "skipped_reason": self.skipped_reason,
+            "judge_retried": self.judge_retried,
         }
 
 
@@ -732,15 +792,30 @@ def run_stage2(
         .replace("<<GOLDEN>>", sample.golden_response or "")
         .replace("<<CANDIDATE>>", candidate)
     )
+    judge_retried = False
     try:
         raw = judge.complete(prompt, temperature=0.0)
-        verdict = _parse_judge_verdict(raw)
+        try:
+            verdict = _parse_judge_verdict(raw)
+        except ValueError:
+            # One strict-format retry (field-measured: 15% of samples lost
+            # to unparseable judge output on the first real cell — and a
+            # parse-failure subset mean is BIASED if failure correlates
+            # with answer difficulty, not merely smaller).
+            judge_retried = True
+            raw = judge.complete(
+                prompt + "\n\nRespond with ONLY the JSON object — "
+                "no explanation, no surrounding text.",
+                temperature=0.0,
+            )
+            verdict = _parse_judge_verdict(raw)
     except GoldenEvalError:
         raise
     except Exception as exc:
         raise GoldenEvalError(
             "GEV-E004",
-            f"judge failed for {sample.sample_id}: {exc}",
+            f"judge failed for {sample.sample_id}"
+            f"{' (after strict-format retry)' if judge_retried else ''}: {exc}",
         ) from exc
     return Stage2Result(
         sample_id=sample.sample_id,
@@ -750,6 +825,7 @@ def run_stage2(
         contradicting=verdict["contradicting"],
         pinned_count=len(pinned),
         candidate_chars=len(candidate),
+        judge_retried=judge_retried,
     )
 
 
@@ -959,6 +1035,20 @@ def run_all(
                     "code": exc.code,
                     "message": exc.message,
                 })
+    # Run-window fallback delta (field-found: the start snapshot printed
+    # as "fb_used=0" while the run itself routed to the fallback — a
+    # false "none occurred" reading). Best-effort second healthz fetch.
+    end_healthz = fetch_healthz(stack_url)
+    if (
+        report.stamp is not None
+        and report.stamp.fallback_used_snapshot is not None
+        and isinstance(end_healthz, dict)
+    ):
+        fb = end_healthz.get("refusal_fallback")
+        if isinstance(fb, dict) and isinstance(fb.get("used"), int):
+            report.stamp.fallback_used_delta = (
+                fb["used"] - report.stamp.fallback_used_snapshot
+            )
     return report
 
 

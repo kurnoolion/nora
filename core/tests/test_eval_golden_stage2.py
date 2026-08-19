@@ -332,3 +332,85 @@ class TestSiraRowsPipeline:
         s1 = _stage1()
         s1.retrieved_rows = _rows()
         assert "retrieved_rows" not in s1.to_dict()
+
+
+# ─── Judge parse robustness + retry (field-measured 15% parse loss) ───
+
+
+class _FlakyJudge:
+    """First response is unparseable prose; the strict-format retry
+    returns clean JSON."""
+
+    def __init__(self):
+        self.prompts = []
+
+    def complete(self, prompt, system=None, temperature=0.0, max_tokens=None):
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            return "The candidate is fairly good overall, I would say."
+        return '{"score": 6.0, "missing": [], "contradicting": []}'
+
+
+class TestJudgeParseRobustness:
+    def test_json_embedded_in_prose_parses(self):
+        v = golden_runner._parse_judge_verdict(
+            'Sure! Here is my verdict: {"score": 8, "missing": ["x"], '
+            '"contradicting": []} — hope that helps.')
+        assert v["score"] == 8.0 and v["missing"] == ["x"]
+
+    def test_first_scoreless_object_skipped(self):
+        v = golden_runner._parse_judge_verdict(
+            '{"note": "thinking"} then finally {"score": 3.5, '
+            '"missing": [], "contradicting": []}')
+        assert v["score"] == 3.5
+
+    def test_braces_in_strings_do_not_break_scan(self):
+        v = golden_runner._parse_judge_verdict(
+            '{"score": 5, "missing": ["uses { and } in text"], '
+            '"contradicting": []}')
+        assert v["missing"] == ["uses { and } in text"]
+
+    def test_no_json_still_raises(self):
+        with pytest.raises(ValueError):
+            golden_runner._parse_judge_verdict("no json here at all")
+
+    def test_strict_format_retry_recovers_and_is_marked(self):
+        judge = _FlakyJudge()
+        r = run_stage2(
+            _sample(), _stage1(), _FakePipeline(), judge,
+            ("v1", "<<QUERY>> <<GOLDEN>> <<CANDIDATE>>"),
+        )
+        assert r.score == 6.0
+        assert r.judge_retried is True
+        assert len(judge.prompts) == 2
+        assert "ONLY the JSON object" in judge.prompts[1]
+        assert r.to_dict()["judge_retried"] is True
+
+    def test_double_failure_raises_gev_e004(self):
+        judge = _FakeJudge(raw="still just prose, twice")
+        with pytest.raises(GoldenEvalError) as exc:
+            run_stage2(
+                _sample(), _stage1(), _FakePipeline(), judge,
+                ("v1", "<<QUERY>> <<GOLDEN>> <<CANDIDATE>>"),
+            )
+        assert exc.value.code == "GEV-E004"
+        assert "strict-format retry" in exc.value.message
+
+
+def test_fallback_delta_from_end_of_run_healthz(monkeypatch):
+    # fb_pre is the start snapshot; fb_delta is the run-window movement
+    # (field-found: the snapshot printed as fb_used=0 while the run
+    # routed to the fallback 5 times — a false "none occurred" reading).
+    calls = {"n": 0}
+
+    def fake_get(url, timeout):
+        calls["n"] += 1
+        return {"refusal_fallback": {"configured": True,
+                                     "used": 2 if calls["n"] == 1 else 7}}
+
+    monkeypatch.setattr(golden_runner, "_get_json", fake_get)
+    report = run_all([], "http://127.0.0.1:1", "stackA", _NOW)
+    assert report.stamp.fallback_used_snapshot == 2
+    assert report.stamp.fallback_used_delta == 5
+    line = report.stamp.compact_line()
+    assert "fb_pre=2" in line and "fb_delta=5" in line

@@ -285,7 +285,7 @@ class TestStackStamp:
         assert "code=deadbeefcafe" in line
         assert "scheme=per-plan-v2" in line
         assert re.search(r"knobs=1@[0-9a-f]{8}", line)   # digest, not a dump
-        assert "fb_used=7" in line
+        assert "fb_pre=7" in line
 
 
 def test_run_all_builds_stamp_and_report_carries_it(monkeypatch):
