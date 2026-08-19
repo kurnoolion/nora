@@ -5,7 +5,12 @@
 
 {% block content %}
 <div class="container-fluid py-3">
-  <h1 class="mb-2">Ask Requirement Questions</h1>
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="mb-0">Ask Requirement Questions</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ root_path }}/ask/history">
+      <i class="bi bi-clock-history me-1"></i>History
+    </a>
+  </div>
   {% if team_restricted %}
   <p class="text-muted">
     Ask a question and the answer comes from the <strong>SIRA</strong> retrieval
@@ -24,13 +29,27 @@
   </p>
   {% endif %}
 
+  {# Corpus inventory is reference material, not part of asking a question, so
+     it starts collapsed. The fetch still runs on load (as it always has) so the
+     content is ready the instant it is expanded — deferring it to the first
+     expand would trade a cheap local request for a visible "Loading…" stall. #}
   <div class="card mb-3">
-    <div class="card-header py-2"><strong>Ingested corpus</strong></div>
-    <div class="card-body p-2"
-         hx-get="{{ root_path }}/api/test/ingested"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <span class="text-muted">Loading corpus inventory…</span>
+    <div class="card-header py-2">
+      <button class="btn btn-sm btn-link p-0 align-baseline text-decoration-none"
+              type="button" data-bs-toggle="collapse"
+              data-bs-target="#ingested-collapse"
+              aria-expanded="false" aria-controls="ingested-collapse">
+        <strong>Ingested corpus</strong>
+        <span class="text-muted small ms-1">(show)</span>
+      </button>
+    </div>
+    <div class="collapse" id="ingested-collapse">
+      <div class="card-body p-2"
+           hx-get="{{ root_path }}/api/test/ingested"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+        <span class="text-muted">Loading corpus inventory…</span>
+      </div>
     </div>
   </div>
 
@@ -51,83 +70,98 @@
               class="form-control"
               placeholder="e.g. What are the IMS registration retry rules in VZW?"
               required></textarea>
-        </div>
-
-        <div class="mb-3">
-          <div class="form-label"><strong>Retrieval lanes</strong></div>
-          <div class="form-check form-check-inline">
-            <input
-                type="checkbox"
-                class="form-check-input"
-                id="lane-nora"
-                name="lanes"
-                value="nora"
-                {% if team_restricted %}disabled{% else %}checked{% endif %}>
-            <label class="form-check-label" for="lane-nora">
-              <span class="badge bg-success">NORA</span> hybrid (KG + RAG)
-            </label>
-          </div>
-          <div class="form-check form-check-inline">
-            <input
-                type="checkbox"
-                class="form-check-input"
-                id="lane-sira"
-                name="lanes"
-                value="sira"
-                checked{% if team_restricted %} disabled{% endif %}>
-            <label class="form-check-label" for="lane-sira">
-              <span class="badge bg-primary">SIRA</span> BM25 + LLM rerank
-            </label>
-          </div>
-          {% if team_restricted %}
-          {# Disabled checkboxes aren't submitted (FormData skips them), so carry
-             the locked SIRA lane in a hidden input — passes the client-side
-             "at least one lane" check and the POST. Server also force-sets it. #}
-          <input type="hidden" name="lanes" value="sira">
-          <div class="form-text">SIRA-only eval (lane selection locked).</div>
-          {% endif %}
-          <div class="form-text">
-            Both checked → side-by-side compare. One checked → single-lane
-            full-width.
+          <div class="form-text text-muted" style="font-size:.72rem; opacity:.65;">
+            Enter to ask · Shift+Enter for a new line
           </div>
         </div>
 
-        <div class="mb-3">
-          <label for="user-name" class="form-label">
-            <strong>Your name</strong>
-            <span class="text-muted small">(optional — for crediting feedback)</span>
-          </label>
+        {# Ask sits directly under the question, with the name inline between
+           Ask and Options — one short field doesn't earn a full-width row. It
+           stays above the fold because it credits the feedback, and is
+           remembered between asks by the sticky-fields script below. The
+           engineering knobs (retrieval lanes, correction label) collapse behind
+           Options so the everyday flow is just question → Ask → answer.
+           Collapsed inputs are still submitted — collapse hides, not disables. #}
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <button id="ask-submit" class="btn btn-primary" type="submit">
+            <span id="ask-submit-label">Ask</span>
+            <span id="ask-submit-busy" style="display:none;">
+              <span class="spinner-border spinner-border-sm me-1"></span>
+              Querying…
+            </span>
+          </button>
           <input
               type="text"
               id="user-name"
               name="user_name"
               class="form-control form-control-sm"
-              placeholder="anonymous"
+              style="max-width: 220px"
+              placeholder="Your name (optional)"
+              aria-label="Your name — optional, credits your feedback"
+              title="Optional — credits your feedback"
               maxlength="80">
+          <button class="btn btn-sm btn-outline-secondary" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#ask-options"
+                  aria-expanded="false" aria-controls="ask-options">
+            <i class="bi bi-sliders me-1"></i>Options
+          </button>
         </div>
 
-        <div class="mb-3">
-          <label for="ask-label" class="form-label">
-            <strong>Correction label</strong>
-            <span class="text-muted small">(optional — SIRA lane only: query
-              your enrichment-review label's view instead of the default)</span>
-          </label>
-          <input
-              type="text"
-              id="ask-label"
-              name="label"
-              class="form-control form-control-sm"
-              placeholder="default (main) view"
-              maxlength="80">
-        </div>
+        <div class="collapse mt-3" id="ask-options">
+          <div class="mb-3">
+            <div class="form-label"><strong>Retrieval lanes</strong></div>
+            <div class="form-check form-check-inline">
+              <input
+                  type="checkbox"
+                  class="form-check-input"
+                  id="lane-nora"
+                  name="lanes"
+                  value="nora"
+                  {% if team_restricted %}disabled{% else %}checked{% endif %}>
+              <label class="form-check-label" for="lane-nora">
+                <span class="badge bg-success">NORA</span> hybrid (KG + RAG)
+              </label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input
+                  type="checkbox"
+                  class="form-check-input"
+                  id="lane-sira"
+                  name="lanes"
+                  value="sira"
+                  checked{% if team_restricted %} disabled{% endif %}>
+              <label class="form-check-label" for="lane-sira">
+                <span class="badge bg-primary">SIRA</span> BM25 + LLM rerank
+              </label>
+            </div>
+            {% if team_restricted %}
+            {# Disabled checkboxes aren't submitted (FormData skips them), so carry
+               the locked SIRA lane in a hidden input — passes the client-side
+               "at least one lane" check and the POST. Server also force-sets it. #}
+            <input type="hidden" name="lanes" value="sira">
+            <div class="form-text">SIRA-only eval (lane selection locked).</div>
+            {% endif %}
+            <div class="form-text">
+              Both checked → side-by-side compare. One checked → single-lane
+              full-width.
+            </div>
+          </div>
 
-        <button id="ask-submit" class="btn btn-primary" type="submit">
-          <span id="ask-submit-label">Ask</span>
-          <span id="ask-submit-busy" style="display:none;">
-            <span class="spinner-border spinner-border-sm me-1"></span>
-            Querying…
-          </span>
-        </button>
+          <div class="mb-0">
+            <label for="ask-label" class="form-label">
+              <strong>Correction label</strong>
+              <span class="text-muted small">(optional — SIRA lane only: query
+                your enrichment-review label's view instead of the default)</span>
+            </label>
+            <input
+                type="text"
+                id="ask-label"
+                name="label"
+                class="form-control form-control-sm"
+                placeholder="default (main) view"
+                maxlength="80">
+          </div>
+        </div>
       </form>
 
       {# Per-lane progress display — fed by SSE events from
@@ -230,11 +264,30 @@
     return { event: eventName, data: parsed };
   }
 
+  /*
+   * Enter asks; Shift+Enter starts a new line. Questions are nearly always
+   * one-liners, so the common case should not need the mouse. Two guards:
+   * ignore Enter while a query is already in flight (button disabled), and
+   * ignore it mid-IME-composition, where Enter commits the candidate text
+   * rather than meaning "submit".
+   */
+  const questionEl = document.getElementById("test-question");
+  if (questionEl) {
+    questionEl.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      if (!submitBtn.disabled) form.requestSubmit();
+    });
+  }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
     const lanes = fd.getAll("lanes");
-    if (!fd.get("question").toString().trim()) return;
+    // Captured now, not read from the DOM at done-time, so an edited box
+    // can't mislabel the history entry.
+    const askedQuestion = fd.get("question").toString().trim();
+    if (!askedQuestion) return;
     if (lanes.length === 0) {
       answerEl.innerHTML = '<div class="alert alert-warning mb-0">'
         + 'Please select at least one retrieval lane (NORA or SIRA).</div>';
@@ -296,6 +349,7 @@
           } else if (parsed.event === "done") {
             answerEl.innerHTML = parsed.data.html || "";
             hideProgress();
+            askRecordHistory(askedQuestion);
           }
         }
       }
@@ -306,6 +360,106 @@
     } finally {
       setBusy(false);
     }
+  });
+})();
+
+/*
+ * Copy a share link for one stored answer. Defined here rather than in
+ * _answer.html because that partial is injected with innerHTML, which never
+ * executes inline <script> tags. `path` is root-relative; the origin is added
+ * so the copied text is a complete, pasteable URL.
+ */
+function askCopyShare(btn, path) {
+  const url = window.location.origin + path;
+  const done = () => {
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Link copied';
+    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+  };
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(done, () => window.prompt("Copy this link:", url));
+  } else {
+    window.prompt("Copy this link:", url);
+  }
+}
+
+/*
+ * Ask history — a per-browser index over the share links each ask already
+ * mints. Stored in localStorage (key below) rather than server-side: user_name
+ * is optional free text defaulting to anonymous, so a server-side "my history"
+ * would merge every anonymous user's questions and be spoofable by typing
+ * someone else's name.
+ *
+ * One entry per lane answer: a two-lane ask records two badged entries, which
+ * is identical to per-question for SIRA-only users and gives engineers the
+ * lane-compare workflow. Answers with no stored row carry no data-share-path,
+ * so nothing is recorded — correct, as there would be no link to open.
+ */
+const ASK_HISTORY_KEY = "nora-ask-history";
+
+function askReadHistory() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ASK_HISTORY_KEY) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function askWriteHistory(entries) {
+  try {
+    localStorage.setItem(ASK_HISTORY_KEY, JSON.stringify(entries));
+  } catch (e) { /* quota/blocked — history is best-effort, never break the ask */ }
+}
+
+function askRecordHistory(question, root) {
+  const found = document.querySelectorAll("#test-answer [data-share-path]");
+  if (!found.length) return;
+  const entries = askReadHistory();
+  const ts = new Date().toISOString();
+  found.forEach((el) => {
+    entries.unshift({
+      q: question,
+      path: el.getAttribute("data-share-path"),
+      lane: el.getAttribute("data-lane") || "",
+      ts: ts,
+    });
+  });
+  askWriteHistory(entries);
+}
+
+/*
+ * Sticky fields — the name (and the now-collapsed lane selection + correction
+ * label) rarely change between asks, so remember them per browser and prefill
+ * on load. Only these; the question is always fresh. Disabled lane checkboxes
+ * (team-restricted mode) are left alone — the server owns that choice.
+ */
+(function () {
+  const KEY = "ask-last-fields";
+  const form = document.getElementById("ask-form");
+  if (!form) return;
+  const nameEl  = document.getElementById("user-name");
+  const labelEl = document.getElementById("ask-label");
+  const nora    = document.getElementById("lane-nora");
+  const sira    = document.getElementById("lane-sira");
+
+  try {
+    const last = JSON.parse(localStorage.getItem(KEY) || "{}");
+    if (last.user_name && nameEl)  nameEl.value  = last.user_name;
+    if (last.label     && labelEl) labelEl.value = last.label;
+    if (nora && !nora.disabled && typeof last.nora === "boolean") nora.checked = last.nora;
+    if (sira && !sira.disabled && typeof last.sira === "boolean") sira.checked = last.sira;
+  } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
+
+  form.addEventListener("submit", function () {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({
+        user_name: nameEl ? nameEl.value : "",
+        label:     labelEl ? labelEl.value : "",
+        nora:      nora ? nora.checked : undefined,
+        sira:      sira ? sira.checked : undefined,
+      }));
+    } catch (e) { /* storage full/blocked — sticky fields are best-effort */ }
   });
 })();
 </script>

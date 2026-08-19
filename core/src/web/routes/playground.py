@@ -1073,6 +1073,77 @@ async def playground_page(request: Request, section: str = "requirement_bot"):
     return resp
 
 
+def _decode_json_column(raw, fallback):
+    """Decode a JSON text column defensively. A corrupt value degrades to the
+    fallback rather than 500-ing a page whose main content (the answer) is
+    perfectly readable."""
+    try:
+        return json.loads(raw) if raw else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+async def _render_stored_ask(request: Request, row_id: int, template: str):
+    """Load one `test_feedback` row and render it through `template` — shared by
+    the full shared-answer page and the History page's fragment endpoint."""
+    from core.src.web.app import _template_response
+
+    store = getattr(request.app.state, "feedback_store", None)
+    row = await store.get_row(row_id) if store is not None else None
+    if row is None:
+        return HTMLResponse(
+            "<h4>Not found</h4><p>No shared answer with that id.</p>",
+            status_code=404,
+        )
+    return _template_response(request, template, {
+        "row": row,
+        "citations": _decode_json_column(row.get("citations_json"), []),
+        "cited_ids": _decode_json_column(row.get("cited_ids"), []),
+    })
+
+
+@router.get("/ask/s/{row_id}", response_class=HTMLResponse)
+async def shared_answer(request: Request, row_id: int):
+    """Read-only snapshot of one stored question + answer, for sharing a
+    result with a reviewer.
+
+    Renders what a normal user sees — question, answer, citations, attribution —
+    replayed from the `test_feedback` row the ask already wrote. Deliberately
+    NOT a re-run: the reviewer must see the same answer the asker saw. The
+    engineering detail (chunk text, retrieval scores, prompts) is not persisted
+    (`metadata={}` at ask time), so it is not shown.
+
+    One row per lane, so a two-lane ask yields two shareable ids. Ids are
+    sequential and therefore enumerable — the route carries no auth of its own
+    and is reachable by anyone who can reach the Ask page, which is the same
+    audience the stored content already has.
+    """
+    return await _render_stored_ask(request, row_id, "test/shared.html")
+
+
+@router.get("/api/ask/s/{row_id}", response_class=HTMLResponse)
+async def shared_answer_fragment(request: Request, row_id: int):
+    """The same stored-ask snapshot as `/ask/s/{row_id}` but body-only, for the
+    History page's detail pane. Shares one template with the full page so the
+    two cannot drift."""
+    return await _render_stored_ask(request, row_id, "test/_shared_body.html")
+
+
+@router.get("/ask/history", response_class=HTMLResponse)
+async def ask_history_page(request: Request):
+    """History of questions asked from this browser.
+
+    The list itself lives in the visitor's localStorage — there is nothing to
+    render server-side. `user_name` is optional free text defaulting to
+    anonymous, so a server-side "my history" would merge every anonymous user's
+    questions together and be spoofable; per-browser storage is both simpler and
+    accurate about what *this* user asked.
+    """
+    from core.src.web.app import _template_response
+
+    return _template_response(request, "test/history.html", {})
+
+
 # -- API: ask + feedback ----------------------------------------------------
 
 

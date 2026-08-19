@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}NORA — Shared answer{% endblock %}
+
+{% block content %}
+{# Read-only snapshot of one stored ask, replayed from its test_feedback row
+   (see playground.shared_answer). Shows what a normal user sees — question,
+   answer, citations, attribution. No feedback form and no re-run: a reviewer
+   must see exactly the answer the asker saw. Chunk text / retrieval scores /
+   prompts are not persisted at ask time, so there is no engineering block.
+   The body lives in _shared_body.html because the History page's right pane
+   renders the same markup as a fragment. #}
+<div class="container-fluid py-3">
+
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="mb-0">Shared answer</h1>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ root_path }}/ask/history">
+        <i class="bi bi-clock-history me-1"></i>History
+      </a>
+      <a class="btn btn-sm btn-outline-primary" href="{{ root_path }}/test">
+        <i class="bi bi-chat-left-text me-1"></i>Ask your own question
+      </a>
+    </div>
+  </div>
+
+  <p class="text-muted">
+    A saved question and answer, shared for review. This is a snapshot of what
+    was answered at the time — opening it does not re-run the query.
+  </p>
+
+  {% include "test/_shared_body.html" %}
+
+</div>
+{% endblock %}
