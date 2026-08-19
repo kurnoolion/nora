@@ -49,7 +49,12 @@ def _build_llm(model: str | None = None, timeout: int | None = None):
     provider = resolve_llm_provider()
     model = resolve_llm_model(cli_value=model)
     timeout = resolve_llm_timeout(cli_value=timeout)
-    if provider == "openai":
+    # Match the CANONICAL provider value from env.config.LLM_PROVIDERS
+    # ("openai-compatible"), mirroring pipeline/runner.py. Field-found:
+    # this compared against "openai" — a value the resolver can never
+    # return — so the branch was unreachable dead code and every eval
+    # LLM dialed Ollama regardless of configuration.
+    if provider == "openai-compatible":
         from core.src.llm.openai_provider import OpenAICompatibleProvider
 
         llm = OpenAICompatibleProvider(

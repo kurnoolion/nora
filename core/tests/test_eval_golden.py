@@ -168,3 +168,24 @@ def test_next_sample_id(tmp_path: Path):
     save_sample(tmp_path, _sample(sample_id="gs-0001"), now=_NOW)
     save_sample(tmp_path, _sample(sample_id="gs-0007"), now=_NOW)
     assert next_sample_id(tmp_path) == "gs-0008"
+
+
+def test_build_llm_honors_openai_compatible_provider(monkeypatch):
+    """Field-found dead branch: _build_llm compared provider against
+    "openai" — a value resolve_llm_provider can never return (canonical
+    set: ollama / openai-compatible / mock) — so every eval LLM dialed
+    Ollama regardless of configuration. The dispatch must match the
+    CANONICAL value, mirroring pipeline/runner.py."""
+    from core.src.eval.golden_cli import _build_llm
+    from core.src.llm.openai_provider import OpenAICompatibleProvider
+
+    monkeypatch.setenv("NORA_LLM_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("NORA_LLM_MODEL", "test-model")
+    monkeypatch.setenv("NORA_LLM_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.delenv("NORA_SIRA_ENRICH_FALLBACK_LLM_URL", raising=False)
+    llm = _build_llm()
+    # The refusal-fallback wrap may or may not apply depending on env;
+    # unwrap defensively before the type check.
+    inner = getattr(llm, "_primary", None) or getattr(llm, "_llm", None) or llm
+    assert isinstance(inner, OpenAICompatibleProvider) or isinstance(
+        llm, OpenAICompatibleProvider)
