@@ -543,3 +543,64 @@ self-attributing, so A/B legitimacy is checkable mechanically
 (stage1/stage2 key equality) rather than by convention; adding a
 retrieval knob later means adding it to the stamp in the same change
 or accepting unattributable variance.
+
+## D-DRAFT-15 — Multi-cell golden runs execute against a frozen snapshot; the live set never freezes
+
+**Context**: Multi-cell campaigns (sweeps, repeat-series for floors) run
+for many hours while the golden set is continuously curated by teammates
+through Eval Studio. A campaign run against the live set drifted
+mid-flight (set digest 38@b56d6a31 → 39@1ce270b2 between cells): the
+stamp machinery correctly refused cross-digest pooling, but the campaign
+itself was lost — only one cell existed on the final set. The freeze had
+been ruled as procedure earlier but was not structurally enforced, and
+one launch skipped it.
+
+**Decision**: Every multi-cell golden run executes against a frozen
+snapshot copy of the golden set (a run-local copy wired in via the
+golden-dir mount override). The live set stays writable to contributors
+at all times. Fixes and additions made mid-sweep ride the next campaign;
+an active snapshot is never re-copied or patched.
+
+**Why**: The rejected alternative — freezing or coordinating contributor
+activity for the duration of a sweep — throttles the team's curation
+loop for hours and still fails on a single forgotten coordination. A
+snapshot costs one copy, makes per-campaign comparability structural,
+and cleanly separates each campaign's reports (they land under the
+snapshot's own runs/ root). The stamp's set digest remains the
+enforcement backstop: a drifted cell still refuses to pool.
+
+**Consequences**: Snapshot directories accumulate one per campaign
+(cheap; they double as the campaign's report archive). Campaign results
+never reflect same-day curation fixes. The snapshot copy is a mandatory
+launch step, and re-copying into an active snapshot is a procedure
+violation even when a known-bad sample is being fixed live.
+
+## D-DRAFT-16 — Golden-eval CLI runs under the serving env file of the stack being scored
+
+**Context**: Two env-file families exist: serving stack envs and builds
+wiring envs. Field-hit failure chain from running eval under the wrong
+family: a builds env lacks GOLDEN_DIR (the CLI mounts an empty golden
+dir — runbook note 5), joins the wrong compose project (the stack's
+query service is unreachable), and resolves a different image name — an
+eval image rebaked under one env family left the run-time family
+resolving a months-stale image, surfacing as "No module named
+…golden_cli" mid-campaign.
+
+**Decision**: Golden-eval CLI invocations always run under the serving
+env file of the stack being scored, and image rebuilds intended for eval
+target that same env file, so build-time and run-time image names
+resolve identically.
+
+**Why**: The serving env is the one file that carries all three bindings
+at once — the pooled GOLDEN_DIR, the stack's compose project/network,
+and the image-name variables. Builds envs exist for ingestion variants
+and intentionally lack serving state; using them for eval recreates
+three separate failure modes, two of them silent until deep into a
+campaign.
+
+**Consequences**: Per-stack eval means per-stack env file, and the
+stack-label ↔ env-file pairing is kept honest by hand (nothing
+mechanical cross-checks the cosmetic label). Serving env files carry
+image/build variables even though serving never builds. A rebuilt eval
+image must be verified under the run-time env file (import probe), not
+just observed to exist.

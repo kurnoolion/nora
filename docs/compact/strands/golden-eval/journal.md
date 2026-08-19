@@ -299,3 +299,44 @@
 - Labels promoted before 3757c22 lack out/parse — any stack repointed at
   an old label serves an empty Eval Studio picker; re-promote rather
   than reuse.
+
+## 2026-08-19 — sweep forensics, snapshot discipline exercised, relaunch
+
+### Done this session
+- Reconstructed the stalled 12-cell sweep's true state purely from run
+  artifacts (StackStamp `id:` lines): the code-version boundary separated
+  pre-rebuild rounds from campaign runs; eval-set digest drift
+  (38@b56d6a31 → 39@1ce270b2) proved the sweep had been running against
+  the LIVE golden set — the snapshot-freeze step had never actually
+  happened; knob digests decoded the 2-stacks × 2-arms grid
+  (launch-spacing corroborated: ~8 min ≈ enrichment ON, seconds ≈ OFF).
+  Net: only ~1 of 12 cells existed on the final build + set.
+- Froze a true snapshot (66 sample files; the live set grew 39→66 via
+  Eval Studio additions mid-week) and re-pointed eval runs at it via the
+  golden-dir mount override — studio contributions now ride the next
+  campaign by construction, with no freeze imposed on contributors.
+- Diagnosed and fixed a stale eval-CLI image on the second stack
+  (pre-eval-module bake; "No module named …golden_cli" = the runbook's
+  stale-image signature): rebuilt under the serving env file so the
+  build-time and run-time image names match; verified both stacks serve
+  code_version 3359a74.
+- Relaunched: detached script, 2 stacks × 2 arms × 3 repeats, labels
+  v{1,2}-{on,off}-r{N}; ON block (6 cells) running.
+
+### In progress
+- ON block executing on the field machine; OFF block follows a manual
+  arm flip (env edit + `up -d` + healthz knob verification per stack).
+
+### Next
+- Verify cell 1's identity line (`set=N@digest` constant thereafter,
+  knobs digest per arm) and wall-clock → real sweep ETA (the 66-sample
+  set will exceed the old 55 min/cell estimate).
+- On grid completion: first Stage-2 floors (per stack, 3 repeats) and
+  the enrichment verdict; judge-loss check (GEV-E004 well below 15%).
+
+### Flags
+- All pre-relaunch campaign runs (set=38 group and the single set=39
+  run) are incomparable with the new sweep — excluded by digest, no
+  cleanup needed.
+- Mid-campaign eval-set growth was legitimate teammate activity, not
+  error; the snapshot procedure is now exercised, not just ruled.
