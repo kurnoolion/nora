@@ -61,7 +61,48 @@ promoted.
 
 ## Running an eval
 
-One invocation scores one stack. From the repo root:
+One invocation scores one stack.
+
+**On a docker deployment** (the normal case), the CLI runs as a
+one-shot job in the `nora-pipeline` container, which mounts the pooled
+golden set at `/data/env/eval/golden`:
+
+```bash
+cd docker
+docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-pipeline \
+    python -m core.src.eval.golden_cli \
+    --env-dir /data/env \
+    --stack-url http://host.docker.internal:PORT \
+    --stack-label v2 \
+    --env-name my-env
+```
+
+Notes for this form (field-learned — see "Golden-eval runbook notes"
+in `docker/README.md` for the full list):
+
+- `--env-dir` is the **container** path `/data/env`; run artifacts
+  print as `/data/env/eval/golden/runs/<run_id>` but land host-side
+  under `${GOLDEN_DIR}/runs/<run_id>`.
+- `GOLDEN_DIR` must be set in the env file you run under — without it
+  the ingest profile mounts the build dir's own empty `eval/golden`
+  and aborts with "No golden samples".
+- `--stack-url` must point at the **query service**, not the web app
+  (the web app's HTML catch-all answers `/healthz` with HTTP 200, so
+  the failure mode is a plausible-looking run with n=0 and one
+  GEV-E002 per sample). `host.docker.internal` is wired in the compose
+  file to reach host-published ports.
+- After a code change, rebuild **both** the `nora-pipeline` image and
+  the serving images — a stale image surfaces as a missing CLI flag or
+  as eval behavior ignoring the change.
+- `--stack-url` / `--stack-label` / `--env-name` are **explicit CLI
+  arguments — nothing is inherited from the env file**. The
+  `--env-file` choice selects the execution environment (the pooled
+  `GOLDEN_DIR` mount, the Stage-2 LLM wiring); the scoring target is
+  chosen independently per invocation — that's what makes the release
+  A/B "same env, two `--stack-url`s" possible. Read the port off the
+  target stack's `SIRA_QUERY_PORT` when composing the URL.
+
+**On a dev checkout** (stack reachable directly), from the repo root:
 
 ```bash
 python -m core.src.eval.golden_cli \
@@ -170,6 +211,11 @@ the run dir with the report inspector:
 ```bash
 python -m core.src.eval.golden_report_cli <env_dir>/eval/golden/runs/<run_id> [--misses]
 ```
+
+On a docker deployment, no container is needed: the inspector is
+host-runnable by design — point it at the host-side run dir,
+`${GOLDEN_DIR}/runs/<run_id>` (the container path a run prints maps
+there).
 
 Per sample, it prints the ground-truth req_ids (with the rank each was
 found at, or `MISS`) beside everything retrieval returned in rank
