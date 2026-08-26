@@ -1,0 +1,217 @@
+# Golden Eval Guide
+
+How to run the golden evaluation (FR-38) against a serving stack, read
+the compact result block, and inspect a run in detail. One guide for
+whoever operates the eval — on a dev box or on a deployment machine
+next to the serving stacks.
+
+For designing the *eval set itself* (queries + ground truth in BEIR
+shape for SIRA), see `sandbox/EVAL_PREP.md`. For the module contract,
+see `core/src/eval/MODULE.md`.
+
+## What the golden eval measures
+
+Expert-curated samples — each a real question, the requirement IDs an
+expert says the answer must draw on (ground truth), and optionally a
+curated reference answer (golden response) — scored against a live
+serving stack in two stages:
+
+- **Stage 1 — retrieval recall.** Each sample's query is POSTed to the
+  stack's `/sira-query` endpoint (black-box, over HTTP — the metric
+  measures what the stack actually serves). Recall = fraction of
+  ground-truth req_ids present in the retrieved results; per-hit ranks
+  are recorded, so recall@5 / recall@10 derive from the same run.
+- **Stage 2 — judged answer quality.** A candidate answer is
+  regenerated from the rows Stage 1 actually retrieved, using the same
+  production synthesis prompt, then an LLM judge scores it against the
+  expert's golden response (1–10). The judge prompt is versioned
+  (`core/src/eval/prompts/judge_v<N>.txt`); scores are comparable only
+  within one judge version.
+
+## Where things live
+
+Everything proprietary lives under the runtime env dir, never in the
+repo:
+
+```
+<env_dir>/eval/golden/
+├── samples/gs-NNNN.json      # one file per sample (Eval Studio writes these)
+└── runs/<run_id>/            # one dir per run, e.g. 20260101T120000-v2
+    ├── report.json           # full detail: per-sample hits/misses/ranks
+    └── report.txt            # the redacted GEV compact block
+```
+
+Samples are authored and curated in the web app's **Eval Studio**; this
+guide assumes the samples already exist.
+
+### Sample status gates what runs
+
+Each sample carries a status:
+
+| Status | Stage 1 | Stage 2 |
+|---|---|---|
+| `draft` | skipped (`GEV-W001`) | skipped |
+| `stage1-ready` | scored | skipped (`GEV-W001` — no golden response) |
+| `golden-ready` | scored | scored |
+
+So a runs' scored count is usually smaller than the number of sample
+files — every skip is accounted for as a `GEV-W001` warning, never
+silent. Teammates' in-progress drafts ride along invisibly until
+promoted.
+
+## Running an eval
+
+One invocation scores one stack. From the repo root:
+
+```bash
+python -m core.src.eval.golden_cli \
+    --env-dir <env_dir> \
+    --stack-url http://127.0.0.1:PORT \
+    --stack-label v2 \
+    --env-name my-env
+```
+
+Useful flags:
+
+- `--stage 1` — retrieval recall only (no LLM needed). Default
+  `--stage all` runs both stages.
+- `--stack-label` — short name stamped into the run id and GEV block
+  (e.g. `v1` / `v2`); make it meaningful, it's how you tell runs apart.
+- `--top-k N` / `--label OVERLAY` — retrieval overrides passed to
+  `/sira-query`.
+- `--mno <carrier>` — run only samples tagged with that carrier. The
+  filter applies before the eval-set digest freezes, so filtered runs
+  key apart from full runs (they are not comparable to them).
+- `--llm-model` / `--judge-model` — Stage-2 synthesis and judge model
+  overrides (judge defaults to the synthesis model). Provider selection
+  follows the standard env resolver chain (CLI > env var >
+  `config/llm.json` > default).
+- `--judge-prompt-version vN` — pin the judge prompt (default: highest
+  version present).
+- `--answer-prompt-version` / `--sira-prompt-scheme` — caller-known
+  identity fields stamped into the run for comparability (see the `id:`
+  line below).
+
+**Stage-2 mode is auto-selected.** If `<env_dir>/out/vectorstore`
+exists, Stage 2 regenerates through the full `QueryPipeline`
+(`mode=pipeline`). On SIRA-only deployments that never build a graph or
+vector store, it synthesizes directly over the rows Stage 1 retrieved
+(`mode=sira-rows`) — same production synthesizer prompt. If Stage-2
+setup fails, the run continues Stage-1-only and the block prints
+`s2: SKIPPED (<reason>)` — a Stage 2 that never ran is always
+distinguishable from one that scored nothing.
+
+**Release A/B** = run twice with different `--stack-url` /
+`--stack-label`, then compare the two GEV blocks (the `set=` digest
+must match verbatim — see below).
+
+Exit codes: `0` clean (W-level skips allowed), `1` hard `GEV-E` errors
+occurred, `2` setup failure (no samples / unreadable sample file).
+
+## Reading the GEV compact block
+
+The block printed at the end (and saved as `report.txt`) is the
+**chat-pasteable summary** — counts, percentages, digests, and error
+codes only, never sample content. Example (generic):
+
+```
+GEV my-env v2 2026-01-01T12:00:00 judge=v1
+id: fp=abcdef123456 cells=5 code=1234abc scheme=scheme-v2 aprompt=ans-v1 llm=<model> knobs=19@aabbccdd set=39@11223344 fb_pre=0 fb_delta=0
+s1: n=39 recall_avg=0.66 r@5=0.43 r@10=0.49 full=19 zero=5
+s2: n=38 judge_avg=5.1 judge_med=5.0 mode=sira-rows
+err: GEV-E004(1), GEV-W001(27)
+```
+
+Line by line:
+
+- **Header** — env name, stack label, start timestamp, judge prompt
+  version.
+- **`id:` (stack stamp)** — the run's comparability identity, captured
+  from the stack's `/healthz` plus caller-supplied fields. Empty fields
+  are omitted (empty = "not comparable on this axis", never a guess):
+  - `fp=` — served-data fingerprint (12-hex prefix); `cells=` — number
+    of per-cell fingerprints behind it.
+  - `code=` — serving code version (e.g. git sha).
+  - `scheme=` / `aprompt=` / `llm=` — SIRA enrichment prompt scheme,
+    Stage-2 answer-prompt version, LLM identity.
+  - `knobs=N@digest` — count + 8-hex digest of the stack's retrieval
+    knob tuple. Same digest = same knob settings; the full dict is in
+    `report.json`.
+  - `set=N@digest` — scored-sample count + digest of the frozen eval
+    set. **Two runs are comparable only when `set=` matches
+    verbatim** (same samples, same ground truth).
+  - `fb_pre=` / `fb_delta=` — the stack's LLM-fallback counter at run
+    start and its growth during the run. A non-zero delta means some
+    answers came from a fallback path, not the primary LLM.
+- **`s1:`** — scored sample count, mean recall, recall@5/@10, and how
+  many samples had full (1.0) vs zero recall.
+- **`s2:`** — judged count, judge mean/median, Stage-2 mode
+  (`pipeline` | `sira-rows`); or `SKIPPED (<reason>)` / `n=0`.
+- **`err:`** — every error/warning code with its count, or `none`.
+
+### GEV codes
+
+| Code | Level | Meaning |
+|---|---|---|
+| `GEV-E001` | error | Sample file unreadable / schema-invalid — the load aborts (fail-loud; fix the file). |
+| `GEV-E002` | error | Stack `/sira-query` failed or returned no results list. |
+| `GEV-E003` | error | Stage-2 pipeline setup problem (e.g. empty vector store). |
+| `GEV-E004` | error | Judge failure — missing prompt file, or unparseable verdict after a strict-format retry. |
+| `GEV-W001` | warning | Sample skipped, with reason: `draft` status, empty ground truth (Stage-1 unscorable), or no golden response (Stage-2 unscorable). |
+
+`E`-codes fail the invocation (exit 1) — a run with hard errors is not
+a clean data point. `W`-codes are bookkeeping for skipped samples.
+
+## Inspecting a run in detail
+
+The GEV block tells you *that* recall is 0.66; to see *why*, inspect
+the run dir with the report inspector:
+
+```bash
+python -m core.src.eval.golden_report_cli <env_dir>/eval/golden/runs/<run_id> [--misses]
+```
+
+Per sample, it prints the ground-truth req_ids (with the rank each was
+found at, or `MISS`) beside everything retrieval returned in rank
+order. Retrieved ids that are ground truth are starred. Example
+(generic ids):
+
+```
+=== gs-0001  recall=0.50  (1/2 found, 3 retrieved)
+    Q: what is foo?
+    EXPECTED    STATUS   ACTUAL (rank order)
+    REQ-1       hit r2   REQ-9
+    REQ-2       MISS     REQ-1 *
+                         REQ-8
+
+1/2 samples shown (misses only)
+```
+
+The two columns are independent lists aligned for scanning — they are
+not row-paired.
+
+- `--misses` — show only samples with at least one missed ground-truth
+  entry (the triage view).
+- `--samples-dir DIR` — where to read query text from; defaults to the
+  run dir's sibling `samples/`, which matches the standard layout.
+
+The tool is read-only and deliberately stdlib-only with no package
+imports: you can copy the single file
+`core/src/eval/golden_report_cli.py` to any machine with Python 3 and
+run it directly (`python3 golden_report_cli.py <run-dir>`) — no repo
+checkout needed.
+
+For programmatic digging, `report.json` carries the same data: each
+`stage1[]` entry has `hits` (with ranks), `misses`, `retrieved_req_ids`
+(rank order), `recall`, `recall_at_5`, `recall_at_10`, and the
+retrieval knobs actually used.
+
+## The sharing boundary (NFR-8)
+
+- **Chat-pasteable:** the GEV compact block (`report.txt`) and the
+  `format_ab_delta` line — counts, percentages, digests, error codes.
+- **Local inspection only:** `report.json`, the inspector's output, and
+  everything under `samples/` — these carry proprietary queries,
+  req_ids, and responses. When discussing a miss remotely, describe it
+  structurally ("expected entry absent from top-10; qualifier mismatch
+  at rank 3") rather than pasting rows.
