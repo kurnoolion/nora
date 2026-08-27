@@ -340,3 +340,44 @@
   cleanup needed.
 - Mid-campaign eval-set growth was legitimate teammate activity, not
   error; the snapshot procedure is now exercised, not just ruled.
+
+## 2026-08-27 — run-inspection tooling + operator runbook
+
+### Done this session
+- Verified the first ON-block sweep cell (v2-on-r1) against the campaign
+  anchors: identity line repeats the frozen-set digest verbatim, the
+  serving code sha, and the ON-arm knobs digest — the baseline every
+  remaining cell must match.
+- golden_report_cli (2a1a897): read-only per-sample inspector over a
+  run's report.json — expected vs retrieved req_ids with ranks,
+  `--misses` triage filter, `--samples-dir` override; 5 tests;
+  MODULE.md public-surface entry. Deliberately stdlib-only and
+  single-file so a field machine runs it with bare Python 3 — no repo
+  checkout, no container.
+- docs/golden-eval-guide.md (04e7273): operator runbook — running an
+  eval, decoding the GEV block (stamp fields, GEV codes), inspecting a
+  run dir, and the NFR-8 sharing boundary; pointer added in
+  core/src/eval/MODULE.md.
+- Guide corrected to deployment reality (f1c4645): dockerized
+  nora-pipeline one-shot invocation now leads, with the field-learned
+  gotchas (GOLDEN_DIR mount trap, query-service-not-web-app target,
+  image rebuild rule); documented that --stack-url / --stack-label /
+  --env-name are explicit CLI args, nothing env-file-inherited — the
+  decoupling that makes same-env release A/B possible.
+
+### In progress
+- ON block (6 cells) running detached on the field machine; OFF block
+  awaits the manual arm flip (env edit + `up -d` + healthz knob
+  verification per stack).
+
+### Next
+- Verify each pasted GEV block against the campaign anchors (set digest
+  verbatim; knobs digest per arm).
+- After the ON block: arm flip, then the detached OFF block.
+- On grid completion: first Stage-2 floors (per stack, 3 repeats) +
+  enrichment verdict; judge-loss check (GEV-E004 well below 15%).
+
+### Flags
+- Strand paused 2026-08-27 — session rebinds to `team-operations`.
+  Sweep monitoring continues reactively; `/land-strand` still queued
+  (16 drafts; D-DRAFT-10 + D-DRAFT-12 promote together).

@@ -604,3 +604,34 @@ mechanical cross-checks the cosmetic label). Serving env files carry
 image/build variables even though serving never builds. A rebuilt eval
 image must be verified under the run-time env file (import probe), not
 just observed to exist.
+
+## D-DRAFT-17 — golden_report_cli is stdlib-only and single-file; it re-parses report.json rather than importing eval-package loaders
+
+**Context:** The GEV block says *that* recall dropped; triaging *why*
+requires per-sample expected-vs-retrieved detail from a run's
+report.json. That inspection happens on deployment machines next to the
+serving stacks — where report.json lives (NFR-8: it never leaves the
+machine) — and those hosts have bare Python 3 but no repo checkout, and
+running a container for a read-only field inspection is friction. The
+obvious implementation reuses the eval package's loaders
+(golden.load_samples, the report dataclasses).
+
+**Decision:** core/src/eval/golden_report_cli.py imports nothing from
+the package — stdlib only, one file, read-only. It re-parses
+report.json and sample JSON directly. The file is copy-portable: scp it
+anywhere and run `python3 golden_report_cli.py <run-dir>`.
+
+**Why:** Portability was the requirement, not code reuse. An import of
+any core.src module drags in the package path and its transitive
+dependencies, which means a checkout or an image — exactly the friction
+the tool exists to remove. report.json is a stable, versioned artifact
+written by the same strand; duplicating its read side is cheap and the
+schema coupling is local to one strand.
+
+**Consequences:** Two readers of the report.json schema now exist —
+golden_runner (writer) and golden_report_cli (independent reader); a
+schema change must touch both (tests cover the reader). The inspector
+must stay import-free: any future convenience import from core.src
+silently breaks copy-portability, which nothing mechanical checks.
+Output is terminal-only detail that stays on the machine (NFR-8) — the
+tool deliberately has no redacted/pasteable mode.
