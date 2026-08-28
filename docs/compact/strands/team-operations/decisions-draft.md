@@ -216,3 +216,112 @@ and the architect parse them by eye; changing fields is a breaking
 change worth a decision). A stale baseline file misleads staged
 promotes — upkeep is an eval-operator duty the campaign-discipline
 notes must teach.
+
+## D-DRAFT-9 — serve-push transfers without owner/group; ownership comes from the pusher + setgid
+
+**Context:** The cross-host push copies a promoted label from the build
+machine to the serving host over rsync as the operator's own account.
+Build-machine files carry that host's numeric user/group ids; the
+serving host and the NAS mapping may not agree with them, and the
+serve/ tree must stay group-writable so any operator can GC labels.
+
+**Decision:** `serve-push.sh` uses `rsync -rlptD --chmod=ug+rwX,Dg+s`
+— `-a` minus `-o`/`-g` — so files land owned by the pushing account,
+group inherited from the setgid `serve/` tree, group-writable, setgid
+re-applied on directories. Source hardlinks become plain files on the
+remote by design.
+
+**Why:** Preserving owner/group (`-a`) requires identical numeric ids
+on both hosts (and on the NAS) and would let a build-machine mode bit
+decide whether a serving-host operator can later remove the label.
+Per-file attribution to the pusher is the audit property wanted; the
+group is the access property; neither needs the source's ids. The
+de-linking from `builds/` is what makes the remote label immune to
+build wipes without a same-filesystem constraint across hosts.
+
+**Consequences:** Remote labels are real copies (disk cost = serve-set
+size per label; GC = move to archive). The pusher must be in nora-ops
+on the serving host (checked by `SPUSH-E011`). Ownership on the two
+hosts intentionally differs for the same label.
+
+## D-DRAFT-10 — Detached phases signal completion via a CYC-EXIT trailer the driver appends to the phase's own log
+
+**Context:** parse, taxonomy and enrich run for hours as detached
+`compose run -d --rm` jobs. The driver needs to know when a phase
+finished and how, without a daemon, and without depending on the wording
+of lane logs it does not own.
+
+**Decision:** `cycle.sh` wraps every detached phase's inner command as
+`( <cmd> ) > <log> 2>&1; echo "CYC-EXIT rc=$?" >> <log>` and reads the
+trailing `CYC-EXIT` line to derive the phase state (`ok` / `failed` /
+`running`). `CYCLE.json` records the log path; `status` and every
+precondition re-derive state from the log, never from the recorded
+status alone.
+
+**Why:** Parsing `run_cli` / `sira_lane` output couples the driver to
+log formats owned by other modules. `docker wait` or `ps` leaves no
+record once `--rm` removes the container and needs the driver process
+to stay alive. Foreground execution ties an hours-long job to a
+terminal. The trailer is written by the same shell that ran the job,
+survives the container, and is independent of what the job printed.
+
+**Consequences:** A phase whose log lacks the trailer is `running`
+forever if the container was killed from outside (host reboot, OOM);
+the operator's signal is a stale `running` in `status` with no live
+container — a `--heal`/orphan-detection verb is a possible later
+addition. Logs gain one foreign line at the end.
+
+## D-DRAFT-11 — cycle.sh promote resumes at push when the local label already belongs to the active build
+
+**Context:** Promote is two steps under one verb: `promote.sh` (local
+hardlink snapshot, refuses an existing label) then `serve-push.sh`
+(cross-host). A push can fail after the local label exists (ssh, disk,
+checksum). Re-running the verb would hit `promote.sh`'s refusal, so a
+failed push could only be retried by promoting under a new label.
+
+**Decision:** `cycle.sh promote` checks `serve/<label>/MANIFEST.json`
+first; if its `sira_build` names the active build, it skips
+`promote.sh` and proceeds straight to the push. The cycle stays open
+(baton held) until the push succeeds.
+
+**Why:** A label is meant to name one serve-set; forcing a fresh label
+per push attempt produces labels that differ only by attempt number and
+breaks the immutability story ("same label = same data"). The MANIFEST
+check ties the resume to the build, so a label that exists from a
+different build is still refused. `promote.sh` itself stays unchanged
+(immutability on the local side is its contract).
+
+**Consequences:** `promote.sh`'s refusal is bypassed only inside the
+driver and only for the active build. A partially pushed remote label
+is never visible (staging + atomic mv on the push side). Operators
+re-run the same `promote` command; the guide's recovery table depends
+on this.
+
+## D-DRAFT-12 — Driver gates are advisory: they present evidence and record who confirmed, they do not block
+
+**Context:** The cycle has human decision points (prompt sets for new
+MNOs, enrichment verification, promote mode). The driver could enforce
+them (refuse to proceed with a missing prompt set, refuse WARN, refuse
+override) or present the evidence and record the operator's call.
+
+**Decision:** Gates are verbs that show evidence, require an explicit
+typed `yes`, and record `confirmed_by` in CYCLE.json and the CYC block.
+`prompts` confirms even with missing per-MNO sets (generic fallback,
+counted in the block); `verify-enrich` refuses only on FAIL (structural
+break) and confirms on WARN; `serve-flip` records `staged` / `expedited`
+/ `override` and never enforces the staged protocol. Mis-shaped prompt
+files and FAIL verdicts remain hard errors.
+
+**Why:** Hard-blocking gates on judgment calls push operators to run
+phases by hand around the driver — which every phase deliberately
+allows — and the audit trail is lost exactly when a deviation happens.
+Recording the deviation (who, when, the counts in the block) is the
+property the team needs; the reviewer can see it in the pasted block
+sequence. Structural breaks are not judgment calls and stay blocking.
+
+**Consequences:** A new MNO can be enriched on fallback prompts if an
+operator confirms it; the CYC block shows `missing=N` so the deviation
+is visible, not silent. Override promotes are legitimate and logged.
+If a deviation is ever confirmed by mistake, the fix is procedural
+(guide + review of blocks), not a driver change — unless the pattern
+repeats (journal flag).
