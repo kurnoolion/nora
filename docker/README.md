@@ -161,6 +161,16 @@ the taxonomy stage consumes the **derived** corpus overviews. The taxonomy
 cache auto-busts when overview files change (fingerprint includes their
 hash), so nothing needs `--force` bookkeeping.
 
+**Driver:** `./cycle.sh` wraps Phases 0.3–6 as phase-gated verbs
+(`start <build-id>` / `status` / `parse` / `prompts` / `taxonomy` /
+`enrich [--cell C] [--retry-failed]` / `verify-enrich` / `promote --label L
+[--host H]` / `abandon`). It runs exactly the commands below, records
+one cycle at a time in `<builds>/ACTIVE` + `<build>/CYCLE.json`, checks
+each phase's artifacts before the next, and emits a paste-safe `CYC`
+block per phase under `<build>/reports/`. Image snapshot/rebake (0.1–0.2)
+and Phase 2 stay manual; `prompts` and `verify-enrich` are explicit-yes
+gates. `./cycle.sh -h` for the layout env vars (`NORA_ROOT=/srv/nora`).
+
 Ingest jobs run against the BUILD dirs — never against a promoted serve
 label. Placeholders: `<MNO>` / `<MMMYYYY>` = cell coordinates as they appear
 under `requirements/`; `<you>` = your home dir; `<build>` = new build name
