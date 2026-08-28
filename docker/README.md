@@ -670,8 +670,34 @@ shape — including pre-docker bare-metal artifacts (an env_dir with
 `out/{vectorstore,graph,taxonomy}`, a db_root with `<MNO>__<MMMYYYY>` cells) —
 so existing deployments promote their current data as the first label.
 
+**Cross-host promote (build machine → serving host).** When builds and
+serving live on different hosts, Phase 6 is three commands — the label
+snapshot, the transfer, and the flip — each refusing to overwrite an
+existing label:
+
+```bash
+# build machine
+./promote.sh --serve-root /srv/nora/serve --label <YYYY-MM-DD-a> \
+    --nora-build /srv/nora/builds/nora/<build> --sira-build /srv/nora/builds/sira/<build> \
+    --scheme <sira-prompt-scheme>
+./serve-push.sh <YYYY-MM-DD-a> <serving-host>   # rsync into serve/.incoming/, verify -c, atomic mv
+# serving host
+./serve-flip.sh <stack> <YYYY-MM-DD-a>          # MANIFEST diff, explicit yes, env rewrite,
+                                                # recreate, healthz serve_label check, PROMOTE_LOG
+```
+
+`serve-flip.sh` defaults are `staged` mode (flip the secondary stack, run
+the golden eval against `${GOLDEN_DIR}/baselines/<stack>.txt`, then flip
+production with `--eval-run <id>`); `--mode expedited` is the direct/hotfix
+flip and `--mode override --note "<why>"` records a knowingly-regressed
+promote. The mode is recorded in `serve/PROMOTE_LOG`, never enforced.
+Rollback is the same command with the previous label (the flip prints
+it). Both scripts read `NORA_SERVE_ROOT` / `NORA_ENV_ROOT` (default
+`/srv/nora/{serve,env}`) and accept `--dry-run`.
+
 Rollback levers, most→least granular:
-- serve data: repoint stack .env at the previous serve label, `up -d`;
+- serve data: `./serve-flip.sh <stack> <previous-label> --mode expedited`
+  (or by hand: repoint stack .env at the previous serve label, `up -d`);
 - enrichment only: previous `--run-name` is still on disk (runs are pinned);
 - images: `./pull.sh` the Phase-0 snapshot tag, or retag the local
   `:pre-<cycle>` aliases back to `:dev`.
