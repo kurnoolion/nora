@@ -252,6 +252,130 @@ For programmatic digging, `report.json` carries the same data: each
 (rank order), `recall`, `recall_at_5`, `recall_at_10`, and the
 retrieval knobs actually used.
 
+## Campaign discipline
+
+A *campaign* is any multi-cell golden run — a sweep over stacks × arms
+× repeats, or a repeat series to establish floors — whose cells must be
+comparable with each other afterwards. A single ad-hoc run needs none
+of this; a campaign needs all of it, because the field record shows
+what happens otherwise: a 12-cell sweep whose golden set grew
+mid-flight left one usable cell. Each rule below exists because it was
+violated once.
+
+### 1. Fix the anchors before launch
+
+Write down, for each stack in the grid, the identity the cells must
+carry — read them off `/healthz` right before launch:
+
+- `code=` — serving code version, same on every stack in the grid
+  (rebuild + recreate any stack that differs — a campaign never
+  compares code versions by accident);
+- `fp=` — served-data fingerprint per stack (this is what the campaign
+  compares, so it is expected to differ between stacks and must not
+  change within one);
+- `knobs=N@digest` per **arm** — flip the arm on a stack, read the new
+  digest, flip back; you now know both digests before any cell runs.
+
+A cell whose `id:` line disagrees with its anchors is not a data point;
+stop and find out why before running the next one.
+
+### 2. Freeze a snapshot; never touch it again
+
+Copy the live golden set into a campaign-local snapshot and point the
+runs at it:
+
+```bash
+SNAP=${GOLDEN_DIR}/snapshots/<campaign-id>        # e.g. 2026-09-sweep-enrich
+mkdir -p $SNAP && cp -r ${GOLDEN_DIR}/samples $SNAP/
+```
+
+Run every cell with `GOLDEN_DIR=$SNAP` (a copy of the serving env with
+that one line changed — never edit the stack's own env for this). The
+snapshot's `set=N@digest` is the campaign's second anchor: **verbatim
+identical on every cell**, or the cell does not belong.
+
+The live set stays open to Eval Studio contributors for the whole
+campaign — that is the point of the snapshot. A fix or addition made
+during the campaign rides the *next* campaign. Re-copying into an
+active snapshot, even to fix a known-bad sample, invalidates every cell
+already run; if the sample is that bad, abandon the campaign and
+re-snapshot.
+
+The snapshot dir doubles as the campaign archive: its `runs/` holds
+every cell's report, so nothing has to be collected afterwards.
+
+### 3. Run under the serving env file of the stack being scored
+
+Each cell runs as the one-shot `nora-pipeline` job under
+`.env.<stack>` (the stack it scores) — never a builds wiring env. That
+file carries the three things a cell needs at once: the pooled
+`GOLDEN_DIR` mount (overridden to the snapshot as above), the stack's
+compose project so `host.docker.internal:PORT` is the right query
+service, and the image-name variables. Before the first cell, probe the
+image under that same env file:
+
+```bash
+docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-pipeline \
+    python -c "import core.src.eval.golden_cli"          # silent = fresh image
+```
+
+"No module named …golden_cli" mid-campaign is the stale-image
+signature; the probe costs seconds.
+
+### 4. Launch detached, label every cell, log the plan
+
+One detached script per block (all cells of one arm), so a terminal
+hang-up cannot end the campaign, with `--stack-label` encoding the grid
+coordinate — `v1-on-r2` reads as stack v1, ON arm, repeat 2 — and the
+campaign id as `--env-name`. Record the plan in `$SNAP/CAMPAIGN.md`
+before launching: anchors (code, fp per stack, knobs digest per arm,
+set digest), the grid, who launched, when. It is paste-safe by
+construction (digests and counts only) and it is the document the
+results are read against.
+
+Campaigns and promotes never overlap: a running campaign holds the
+serving host the way an open cycle holds the build machine. A flip
+under a campaign changes `fp=` mid-grid and orphans every cell after
+it.
+
+### 5. Verify each cell as it lands, flip arms deliberately
+
+For every GEV block that arrives, check the `id:` line against
+`CAMPAIGN.md`: `set=` verbatim, `code=` equal, `fp=` equal to that
+stack's anchor, `knobs=` equal to that arm's digest, `err:` free of
+`GEV-E002` (a stack that went unreachable) and with `GEV-E004` well
+below 15% of `s2: n` (judge loss above that makes Stage-2 medians
+meaningless). Note the wall-clock per cell after the first one — that,
+not any earlier estimate, is the campaign's ETA.
+
+The arm flip between blocks is a by-hand act on every stack in the
+grid: edit the knob in `.env.sira-query.<stack>`, `docker compose
+--env-file .env.<stack> --profile serve up -d` (recreate — a restart
+does not re-read env files), then `curl` the healthz and confirm the
+knobs digest is the anchored one for the new arm **and `code=`/`fp=`
+did not move**. Only then launch the next block. A flip on one stack
+but not the other produces a grid where the arms are not the same
+experiment.
+
+### 6. Read results by pooling rules, then refresh the baseline
+
+- Cells pool only when `set=`, `code=`, `fp=`, and `knobs=` all match
+  — i.e. repeats of one grid coordinate. Floors are read over pooled
+  repeats (min and mean of `recall_avg`, median of `judge_med`).
+- Compare **arms on the same stack** (same `fp=`) and **stacks on the
+  same arm** (same `knobs=`); never a diagonal.
+- A cell excluded by any anchor mismatch is excluded silently — its
+  digest already says why; no clean-up of run dirs is needed.
+
+When a campaign establishes what a stack currently serves — the
+accepted floor for its label — copy that cell's GEV block to
+`${GOLDEN_DIR}/baselines/<stack>.txt`. That file is what a staged
+promote's eval is compared against (`docs/ingestion-guide.md` §6f),
+so it must always describe the label the stack serves *now*: refresh it
+from the first accepted run after every production flip, never from a
+`--mno`-filtered or snapshot-of-another-campaign run, and note the
+campaign id and date in a comment line above the block.
+
 ## The sharing boundary (NFR-8)
 
 - **Chat-pasteable:** the GEV compact block (`report.txt`) and the
