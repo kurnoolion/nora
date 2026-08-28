@@ -334,7 +334,11 @@ promote)
   args=(--serve-root "$SERVE_ROOT" --label "$LABEL" --sira-build "$SB")
   (( SIRA_ONLY )) || { [ -d "$NB/out" ] && args+=(--nora-build "$NB"); }
   [ -n "$SCHEME" ] && args+=(--scheme "$SCHEME")
-  "$HERE/promote.sh" "${args[@]}"
+  if [ -f "$SERVE_ROOT/$LABEL/MANIFEST.json" ] && grep -q "\"sira_build\": *\"$SB\"" "$SERVE_ROOT/$LABEL/MANIFEST.json"; then
+    echo "label $LABEL already promoted from this build — resuming at push"
+  else
+    "$HERE/promote.sh" "${args[@]}"
+  fi
   pushed="local-only"
   if [ -n "$HOST" ]; then
     "$HERE/serve-push.sh" "$LABEL" "$HOST" --serve-root "$SERVE_ROOT"
