@@ -191,7 +191,10 @@ start)
   [ ! -e "$NB" ] && [ ! -e "$SB" ] || die 022 "build dirs for $BUILD already exist" "pick a new build-id (builds are never reused)"
   [ -d "$REQS" ] && [ -n "$(cells)" ] || die 023 "no <MNO>/<MMMYYYY> cells under $REQS" "stage the source docs first (README Phase 0.3)"
   [ -f "$WIRING" ] || die 003 "no builds wiring env at $ENV_ROOT/.env.builds (nor docker/)" "README Phase 0: cp <stack env> .env.builds"
-  # profile bindings (Phase 0.4): explicit path, a previous build-id, or the last promoted build
+  # profile bindings (Phase 0.4): an explicit path or a previous build-id.
+  # Deliberately NO automatic fallback: omitted --profiles means the build
+  # opens without bindings (NOTE below) and parse refuses at CYC-E030 —
+  # bindings encode document-structure judgment and are chosen, not inherited.
   src=""
   if [ -n "$PROFILES" ]; then
     if [ -f "$PROFILES" ]; then src="$PROFILES"; elif [ -f "$BUILDS/nora/$PROFILES/profiles.json" ]; then src="$BUILDS/nora/$PROFILES/profiles.json"; fi
