@@ -99,11 +99,13 @@ def _bubble_html(req_id: str, nth: int) -> str:
     # reflow happened to occur, which reads as "stuck on Loading…".
     return (
         f'<span class="req-bubble">'
-        f'<a class="badge bg-light text-primary border text-decoration-none" '
+        f'<a class="req-bubble-badge badge bg-primary-subtle text-primary-emphasis '
+        f'border border-primary-subtle text-decoration-none" '
         f'role="button" data-bs-toggle="collapse" href="#{target}" '
-        f'aria-expanded="false" '
+        f'aria-expanded="false" title="Show requirement {safe}" '
         f'hx-get="REQ_ENDPOINT/{safe}" hx-target="#{target}-body" '
-        f'hx-trigger="click once" hx-swap="innerHTML">{safe}</a>'
+        f'hx-trigger="click once" hx-swap="innerHTML">{safe}'
+        f'<i class="bi bi-chevron-down req-bubble-caret ms-1"></i></a>'
         f'<span class="collapse" id="{target}">'
         f'<span class="req-bubble-body d-block border rounded p-2 my-2 small" '
         f'id="{target}-body">'

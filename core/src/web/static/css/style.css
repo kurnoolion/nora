@@ -144,3 +144,39 @@ body {
     content-visibility: auto;
     contain-intrinsic-size: auto 3rem;
 }
+
+/* Req-ID bubbles in an answer (strand req-id-bubbles). The badge sits inline
+   in running prose, so it has to read as a control rather than as emphasised
+   text — tinted fill + border + a caret that flips when its panel opens. */
+.req-bubble-badge {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    vertical-align: baseline;
+    transition: background-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.req-bubble-badge:hover,
+.req-bubble-badge:focus-visible {
+    background-color: var(--bs-primary) !important;
+    color: #fff !important;
+    border-color: var(--bs-primary) !important;
+}
+
+.req-bubble-caret {
+    font-size: 0.7em;
+    opacity: 0.75;
+    transition: transform 0.15s ease;
+    display: inline-block;
+}
+
+.req-bubble-badge[aria-expanded="true"] .req-bubble-caret {
+    transform: rotate(180deg);
+}
+
+/* The expanded panel is a quotation of the corpus, not part of the answer:
+   left rule + inset fill keep that boundary obvious when it lands mid-prose. */
+.req-bubble-body {
+    background-color: var(--bs-tertiary-bg);
+    border-left: 3px solid var(--bs-primary) !important;
+}

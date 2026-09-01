@@ -112,7 +112,7 @@ class TestNonVzwIdShapes:
         out = render_markdown_bubbles(text, ["VZ_REQ_A_1", "VZ_REQ_A_12"])
         # the longer id must match whole, not as "VZ_REQ_A_1" + stray "2"
         assert 'hx-get="/api/req/VZ_REQ_A_12"' in out
-        assert ">VZ_REQ_A_12</a>" in out
+        assert ">VZ_REQ_A_12<i " in out  # badge text, then the caret icon
 
 
 # ── Markup safety ──────────────────────────────────────────────
