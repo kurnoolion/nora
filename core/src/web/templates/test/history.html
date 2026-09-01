@@ -152,6 +152,10 @@
           return;
         }
         detailEl.innerHTML = html;
+        // Same reason as the Ask page's SSE handler: raw innerHTML leaves any
+        // hx-* inside the fragment (the req-ID bubbles) unwired until htmx is
+        // told to scan it.
+        if (window.htmx) window.htmx.process(detailEl);
         // Share lives in the answer card's own header rather than a row above
         // it, so both panes start on the same line. Built as a node (not an
         // HTML string) so the stored path is never parsed as markup, and left

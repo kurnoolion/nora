@@ -38,7 +38,12 @@ _TEAM_ALLOWED = ("/test", "/api/test", "/static", "/api/health", "/admin-unlock"
                  # is browser-local. Merged without these — a gated expert
                  # opening a shared link was redirected, defeating the
                  # feature in exactly the deployments that gate.
-                 "/ask/s/", "/api/ask/s/", "/ask/history")
+                 "/ask/s/", "/api/ask/s/", "/ask/history",
+                 # Requirement fragments behind the answer bubbles (strand
+                 # req-id-bubbles). Parse-layer read only, and it backs the
+                 # shared/history surfaces above — without it a gated expert
+                 # opening a teammate's link gets bubbles that 302 to /test.
+                 "/api/req/")
 
 
 def is_admin(request: Request) -> bool:

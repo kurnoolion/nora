@@ -102,7 +102,7 @@
       {% endif %}
     {% endif %}
 
-    <div class="answer-body" style="line-height: 1.5;">{{ answer | md }}</div>
+    <div class="answer-body" style="line-height: 1.5;">{{ answer | md_bubbles(bubble_req_ids, root_path) }}</div>
 
     {# ── Engineering details ───────────────────────────────────────────
        Everything below (retrieval internals, citations, chunks, prompts,
