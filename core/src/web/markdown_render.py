@@ -92,15 +92,21 @@ def _bubble_html(req_id: str, nth: int) -> str:
     """
     safe = escape(req_id)
     target = f"reqb-{nth}-" + re.sub(r"[^A-Za-z0-9_-]", "-", req_id)
+    # The fetch hangs off the BADGE's click, not the panel's visibility.
+    # `hx-trigger="revealed"` looks natural here and is a trap: htmx evaluates
+    # `revealed` on scroll events, and a panel hidden by .collapse fires no
+    # scroll when it opens — so the request only went out when an unrelated
+    # reflow happened to occur, which reads as "stuck on Loading…".
     return (
         f'<span class="req-bubble">'
         f'<a class="badge bg-light text-primary border text-decoration-none" '
         f'role="button" data-bs-toggle="collapse" href="#{target}" '
-        f'aria-expanded="false">{safe}</a>'
+        f'aria-expanded="false" '
+        f'hx-get="REQ_ENDPOINT/{safe}" hx-target="#{target}-body" '
+        f'hx-trigger="click once" hx-swap="innerHTML">{safe}</a>'
         f'<span class="collapse" id="{target}">'
         f'<span class="req-bubble-body d-block border rounded p-2 my-2 small" '
-        f'hx-get="REQ_ENDPOINT/{safe}" hx-trigger="revealed once" '
-        f'hx-swap="innerHTML">'
+        f'id="{target}-body">'
         f'<span class="text-muted">Loading {safe}…</span>'
         f"</span></span></span>"
     )

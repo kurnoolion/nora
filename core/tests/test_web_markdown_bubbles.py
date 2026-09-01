@@ -49,7 +49,24 @@ class TestBubbles:
     def test_bubble_body_loads_lazily_not_eagerly(self):
         # find_req scans parse trees; N bubbles must cost 0 lookups until clicked
         out = render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"])
-        assert 'hx-trigger="revealed once"' in out
+        assert 'hx-trigger="click once"' in out
+
+    def test_fetch_triggers_on_click_never_on_reveal(self):
+        """Regression: `revealed` is evaluated by htmx on SCROLL events, and a
+        panel hidden inside .collapse fires no scroll when it opens — the
+        request went out only when an unrelated reflow happened to occur, so
+        the bubble sat on "Loading…" indefinitely. The trigger must hang off
+        the badge's own click."""
+        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
+        assert "revealed" not in out
+        # hx-get sits on the <a> (the clicked element), not on the panel
+        anchor = out[out.index("<a "):out.index("</a>")]
+        assert "hx-get=" in anchor and 'hx-trigger="click once"' in anchor
+
+    def test_fetch_targets_its_own_panel(self):
+        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
+        target = re.search(r'hx-target="#([^"]+)"', out).group(1)
+        assert f'id="{target}"' in out
 
     def test_root_path_prefixes_the_endpoint(self):
         out = render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"], root_path="/nora2")
@@ -70,7 +87,10 @@ class TestBubbles:
         text = "VZ_REQ_A_1 and again VZ_REQ_A_1."
         out = render_markdown_bubbles(text, ["VZ_REQ_A_1"])
         ids = re.findall(r'id="(reqb-[^"]+)"', str(out))
-        assert len(ids) == 2 and len(set(ids)) == 2
+        # every emitted id is unique (collapse panels AND their swap targets)
+        assert len(ids) == len(set(ids))
+        panels = [i for i in ids if not i.endswith("-body")]
+        assert len(panels) == 2
 
 
 # ── Corpus-agnostic: non-VZW id shapes ─────────────────────────

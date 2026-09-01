@@ -348,6 +348,11 @@
             applyProgressEvent(parsed.data);
           } else if (parsed.event === "done") {
             answerEl.innerHTML = parsed.data.html || "";
+            // htmx only wires elements it swapped itself. This partial is
+            // injected with raw innerHTML, so any hx-* inside it (the req-ID
+            // bubbles) stays inert until htmx is told to scan the subtree —
+            // the bubble would sit on "Loading…" with no request ever sent.
+            if (window.htmx) window.htmx.process(answerEl);
             hideProgress();
             askRecordHistory(askedQuestion);
           }
