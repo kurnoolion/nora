@@ -306,7 +306,7 @@
   <header class="masthead">
     <div class="eyebrow">Strand · llm-model-choice</div>
     <h1>The 15-Second Answer</h1>
-    <p class="dek">Why RAG synthesis is slow, what one control in the Ask lane would let us find out, and why model choice waits for a second endpoint.</p>
+    <p class="dek">Why RAG synthesis is slow, and the two controls that let anyone find out: which model answers, and whether it should think.</p>
     <div class="meta">
       <span><b>Status</b> proposal for review</span>
       <span><b>Date</b> 2026-09-01</span>
@@ -372,7 +372,7 @@
     <div class="phase">
       <div class="phase-head">
         <span class="phase-num">Phase 1</span>
-        <p>Ask page · openai-compatible provider · reasoning effort only · both lanes</p>
+        <p>Ask page · named providers · Fast / Think · both lanes</p>
       </div>
       <ol class="steps">
         <li>Probe the deployed vLLM for <code>reasoning_effort</code> versus <code>chat_template_kwargs</code>.
@@ -385,12 +385,14 @@
           <span class="verify"><b>Verify</b> cold-start cost is unchanged on a second query, and a query with no override still uses the cached provider.</span></li>
         <li>Thread the level from the form to every synthesis path on the page. The background-job plumbing this step originally called for turned out to be unnecessary: the Ask page runs its query directly, so the jobs table is untouched.
           <span class="verify"><b>Verify</b> all six synthesis paths — both lanes, the streaming variant, the two legacy paths and the disambiguation follow-up — pass the level through.</span></li>
-        <li>One control on the Ask page: a reasoning level. Blank means "use the configured settings".
-          <span class="verify"><b>Verify</b> the same question answered with reasoning off is measurably faster than with it on.</span></li>
-        <li>Record the model that answered and the reasoning level on the answer row, reusing columns that already exist. The model is recorded, not chosen.
-          <span class="verify"><b>Verify</b> two asks at different reasoning levels produce two rows that differ.</span></li>
+        <li>Two controls on the Ask page: a <strong>provider</strong> picker showing named endpoints ("130B — DGX", "14B — internal"), and a <strong>Fast / Think</strong> toggle. Fast skips thinking; Think sends no reasoning field at all, so the deployment's own behaviour applies — we never assert an effort level on its behalf. Names say what the infrastructure is, because "primary" means nothing to the person asking.
+          <span class="verify"><b>Verify</b> the same question is measurably faster on Fast, and each provider logs its own model.</span></li>
+        <li>Reasoning support is <strong>declared per provider</strong>, never detected — no endpoint advertises the capability, and a probe only catches outright rejection, since a server can accept the field and silently ignore it. Declaring it means a provider with no knob shows "Not supported" instead of offering a choice that would do nothing. Note this is about the endpoint honouring the knob, not about whether the model reasons: a thinking model with no exposed control is still "no".
+          <span class="verify"><b>Verify</b> the control reads "Not supported" on an endpoint declaring no control, and no reasoning field is sent.</span></li>
+        <li>Record the provider, the mode and the model that answered on the answer row, reusing columns that already exist — so an answer is attributable to a (provider, mode, model) triple.
+          <span class="verify"><b>Verify</b> two asks at different settings produce two rows that differ.</span></li>
       </ol>
-      <div class="callout">Out of Phase 1: model choice, the provider roster, Ollama reasoning, evaluation, enrichment, taxonomy.</div>
+      <div class="callout"><b>Configuration.</b> An optional <code>providers</code> list in <code>config/llm.json</code>, with <code>config/llm.json.example</code> as the copy-from reference. Keys are referenced by env-var name, never written in a committed file. <b>Omit the list — the normal case — and nothing changes:</b> the controls are not rendered and the single-provider chain runs exactly as before.<br><br>Out of Phase 1: Ollama reasoning, evaluation, enrichment, taxonomy.</div>
     </div>
 
     <div class="phase">

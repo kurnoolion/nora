@@ -267,3 +267,46 @@
   decision, to be surfaced in the PR, not assumed.
 - PR #11's title and body still describe the old 4-level knob and must be
   rewritten before review continues.
+
+## 2026-09-01 (later) — UI iterations, a rename, and a copy-from example
+
+### Done
+- Four rounds of UI feedback on the Ask controls, each caught by Hanif looking
+  at the rendered page rather than the markup:
+  1. The unsupported-provider note was a full sentence at body size, competing
+     with the controls. Shrunk to a muted "ⓘ not supported".
+  2. It used `hidden`, so showing it reflowed the right-aligned row and moved
+     the Ask button. Switched to `invisible` to reserve the slot.
+  3. Reserving the slot left a permanent gap between the toggle and the button.
+     Moved the note out of the row entirely, onto its own line below.
+  4. A disabled select still reading "Fast" promises something the endpoint
+     cannot deliver. The select now shows **"Not supported"** itself and the
+     separate note is gone — one place carries the message.
+  Each step was verified by measuring the Ask button's x/y across provider
+  switches, not by eye.
+- **Renamed `supports_reasoning` → `supports_reasoning_control`.** Hanif's
+  point: a model can BE a thinking model and still expose no knob. The flag
+  means "this endpoint honours the knob", but the old name read as "this model
+  reasons" — someone would have ticked it for exactly such a model and the UI
+  would have offered a live control that did nothing. Renamed across code,
+  config docs, the template data attribute, tests and MODULE.md; nothing ships
+  a roster, so no migration.
+- Added `config/llm.json.example`, matching the repo's existing `.example`
+  convention (`docker/env.*.example`). Three tests keep it from drifting: it
+  must parse through the real loader, name every `LLMProviderEntry` field, and
+  contain no literal API key.
+
+### Verified
+- Suite 1854 passed, same 8 pre-existing failures.
+- Ask button holds x=1406 / y=472 across capable → unsupported → capable.
+
+### Corrected
+- `plan.html` and the published artifact had gone stale — they still described
+  the 4-level dropdown while `plan.md` had moved on. STRAND.md says to edit
+  both together; that slipped for several commits. Re-rendered and republished.
+
+### Next
+- Push the branch and refresh PR #11 (its body predates the rename, the
+  "Not supported" control and the example file).
+- Phase 3 still held for the manager. Phase 2 (eval) sits on
+  `llm-model-choice-eval`, unpushed, no PR — it follows #11.
