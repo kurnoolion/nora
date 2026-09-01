@@ -117,8 +117,7 @@
               name="mode"
               class="form-select form-select-sm"
               style="max-width: 150px"
-              aria-label="How hard the model thinks"
-              title="Fast skips the model's thinking step. Think lets it think as the deployment configured. Recorded with the answer.">
+              aria-label="How hard the model thinks">
             <option value="fast">Fast</option>
             <option value="think">Think</option>
           </select>
@@ -134,19 +133,6 @@
             </span>
           </button>
         </div>
-
-        {# Its own line under the action row. Kept OUT of that row on purpose:
-           the row is right-aligned, so anything that appears inside it shifts
-           every control and makes the Ask button move. Here it can come and go
-           without touching the controls' positions. #}
-        {% if providers %}
-        <div class="text-end mt-1">
-          <span id="ask-mode-note" class="text-muted small" hidden
-                title="This endpoint exposes no control over how much the model thinks — the model may still reason, we just cannot change it.">
-            <i class="bi bi-info-circle"></i> no thinking control
-          </span>
-        </div>
-        {% endif %}
 
         <div class="collapse mt-3" id="ask-options">
           <div class="mb-3">
@@ -521,11 +507,29 @@ function askRecordHistory(question, root) {
     const opt = providerEl.options[providerEl.selectedIndex];
     const supported = opt && opt.dataset.supportsReasoningControl === "1";
     modeEl.disabled = !supported;
-    const note = document.getElementById("ask-mode-note");
-    // Lives on its own line below the action row, so showing it cannot move
-    // any control.
-    if (note) note.hidden = supported;
-    if (supported && opt.dataset.defaultMode && !modeEl.dataset.userSet) {
+
+    // A disabled select still showing "Fast" reads as a promise the endpoint
+    // cannot keep, so the control says what is true instead: this provider
+    // exposes no knob. The option is added and removed rather than hidden,
+    // because a hidden-but-selected option still renders its label.
+    let placeholder = modeEl.querySelector("option[data-unsupported]");
+    if (!supported) {
+      if (!placeholder) {
+        placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.dataset.unsupported = "1";
+        placeholder.textContent = "Not supported";
+        modeEl.appendChild(placeholder);
+      }
+      modeEl.value = "";
+      modeEl.title = "This endpoint exposes no control over how much the "
+        + "model thinks — it may still reason, we just cannot change it.";
+      return;
+    }
+    if (placeholder) placeholder.remove();
+    modeEl.title = "Fast skips the model's thinking step. Think lets it think "
+      + "as the deployment configured. Recorded with the answer.";
+    if (opt.dataset.defaultMode && !modeEl.dataset.userSet) {
       modeEl.value = opt.dataset.defaultMode;
     }
   }
