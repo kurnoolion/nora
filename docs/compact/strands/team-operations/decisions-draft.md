@@ -325,3 +325,72 @@ is visible, not silent. Override promotes are legitimate and logged.
 If a deviation is ever confirmed by mistake, the fix is procedural
 (guide + review of blocks), not a driver change — unless the pattern
 repeats (journal flag).
+
+---
+
+## D-DRAFT-13 — UI-only changes deploy by web-only image rebuild; eval anchors never move
+
+**Context:** req-id-bubbles merged mid-sweep. Campaign discipline pins
+`code=` equal grid-wide, so the normal deploy (rebuild all four images,
+recreate stacks) would advance sira-query's healthz `code_version` and
+split the campaign's pooling — for a change that is provably web-only
+(zero files outside `core/src/web/` + tests + docs in the merge diff).
+
+**Decision:** a UI-only change deploys by rebuilding and recreating
+ONLY the nora-web service: tag a rollback point, `compose build
+nora-web`, `up -d nora-web`. The sira-query image is not rebuilt.
+Precondition, checked not assumed: `git diff --name-only` against the
+merge base shows nothing outside `core/src/web/`, tests, and docs.
+Post-check: healthz on the query port reports unchanged label/fp/code.
+
+**Why:** eval and the query lanes run in the sira-query container; the
+web app is a separate container from the same repo. Rebuilding
+everything changes the `code=` anchor with zero behavioral difference
+for scoring — forcing either a campaign split or documented
+anchor-equivalence bookkeeping. Rejected: hold the deploy until the
+sweep completes (delays a shipped feature for no risk reduction);
+rebuild-all plus a CAMPAIGN.md equivalence note (bookkeeping and a
+pooling boundary bought for nothing).
+
+**Consequences:**
+- Fleet images diverge temporarily — nora-web runs a newer sha than
+  sira-query, and healthz `code=` no longer names the web code's sha.
+  The next cycle's Phase 0.2 rebake re-unifies; baselines refresh from
+  the first accepted run after that per campaign discipline.
+- The precondition is the whole safety argument: any non-web source
+  change disqualifies this path, full stop.
+- Journaled flag until re-unified so the divergence is visible.
+
+---
+
+## D-DRAFT-14 — Cross-build taxonomy seeding by plain copy; validity delegated to the stage's own cache
+
+**Context:** cycle.sh builds are self-contained, so a fresh build has a
+cold taxonomy cache and re-extracts every plan — full-corpus LLM cost
+on every incremental release. The stage already carries a two-level
+self-validating cache: a corpus fingerprint (stamped only on
+zero-failure runs) and a per-plan ledger keyed by content hash of the
+winning tree plus a prompt-files hash.
+
+**Decision:** seed the new build with a plain `cp -r` of the previous
+build's `out/taxonomy/` (after parse, before the first taxonomy run)
+and let the stage decide per-plan validity itself. Never a hardlink
+copy. Documented as an operator step in the ingestion guide; no driver
+flag yet.
+
+**Why:** the cache is content-hashed and self-validating — a stale or
+wrong seed costs nothing (those plans re-extract), so a manual copy is
+safe without driver support. `cp -al` rejected: the stage rewrites
+`extraction_state.json` in place after every unit, so hardlinks would
+corrupt the previous build's ledger (hardlinking is promote.sh's trick
+and is safe there only because labels are immutable). A
+`--seed-taxonomy` driver flag deferred until the manual step proves
+tree byte-stability across builds.
+
+**Consequences:**
+- First seeded cycle must check the stage stats: `cached` ≈ plans the
+  new release didn't touch. A silent full re-extract is safe but means
+  trees are not byte-stable across builds — itself worth knowing.
+- The guide carries the step; the driver flag is the enhancement path.
+- The same seeding idea for enrichment (much larger cost) remains open
+  and undesigned.

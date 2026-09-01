@@ -107,3 +107,58 @@
 - cycle.sh gates are advisory by design: `prompts` lets an operator
   confirm with missing per-MNO sets (generic fallback) — revisit if a
   new MNO ever ships on fallback prompts by accident.
+
+## 2026-09-01 — bubbles merge integrated; ops docs hardened by operator questions
+
+### Done this session
+- Merged req-id-bubbles (a0d5cd3): branch-flow review (team-gate
+  allowlist + tests, MODULE.md in-branch, non-empty decisions-draft,
+  redaction gates clean), full suite green in a worktree (1833/0),
+  --no-ff per house style. Landed the strand (27d4ef3): D-210..D-213
+  promoted, folder archived.
+- Deployed via web-only image rebuild (D-DRAFT-13): sira-query image
+  untouched, sweep anchors intact. Field-verified bubbles on both
+  lanes AND a gated shared link — which also verified that strand's
+  open assumption (SIRA-lane req_id byte-identity with parse trees).
+- team-operations end-to-end verification plan written (chat): fully
+  sandboxed drill on the work PC (env-var overrides, STACK_NAME test
+  stack, localhost push, failure drills incl. push-resume and
+  promote-resume), then recomposed for the real topology — CIFS
+  requirements share (ro mount), PC-1 ingest / PC-2 artifacts +
+  services, dedicated service user owning ~/nora with JOB ids pinned
+  in stack env files, pushers on their own PC-2 accounts.
+- ingestion-guide: Multiple operators section (11de3b6 — per-build env
+  dir, baton hand-over, one phase in flight, personal runs never
+  promoted, promoter owns GC); taxonomy seeding step (7e3cf27,
+  D-DRAFT-14 — plain cp -r, never hardlinks).
+- Incremental-ingest dependency inventory verified in code:
+  profiles.json is the one prev-build hand-off (cycle start);
+  prompts + profiles come from the repo (+ baked image); the
+  enrichment-review overlay and golden dir are pooled outside builds
+  and labels; taxonomy has a two-level content-hashed cache
+  (stage corpus fingerprint + per-plan tree_sha ledger + prompt hash,
+  zero-failure stamping) — the user corrected an initial wrong claim
+  that taxonomy rebuilds blind. Stale --profiles comment in cycle.sh
+  fixed (03e43d4): no last-promoted fallback exists, by design.
+
+### In progress
+- team-operations tooling still not adopted operationally — the README
+  manual flow stays canonical until the verification drill runs.
+
+### Next
+- Run the sandboxed drill (stages 0–6) on the work PC; then the
+  real-topology provisioning (service user, CIFS fstab, PC-2 operator
+  accounts) and the A8 hand-over cycle.
+- NAS §A4 asks; serving-host migration §B after the sweep (unchanged).
+- First seeded cycle: read taxonomy `cached` vs `extracted` — tree
+  byte-stability across builds is unverified.
+- Full-corpus re-enrichment cost per cycle: design a seed-from-prev
+  path before the second real cycle if the cost bites.
+
+### Flags
+- Fleet images temporarily diverge after the web-only deploy
+  (nora-web ahead of sira-query; healthz code= names the query code
+  only). Re-unify at the next Phase 0.2 rebake, then refresh
+  baselines.
+- PC-2 service-user topology is planned, not executed — capture it as
+  a draft decision when actually provisioned (deferred this session).
