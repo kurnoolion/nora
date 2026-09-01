@@ -347,7 +347,6 @@ class TestReasoningEffort:
         with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
             p.complete("ping")
         assert captured["body"]["reasoning_effort"] == "none"
-        assert p.reasoning == "none"
 
     @pytest.mark.parametrize("level", ["none", "low", "medium", "high"])
     def test_each_level_passes_through(self, level):
@@ -370,4 +369,3 @@ class TestReasoningEffort:
             with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
                 p.complete("ping")
             assert "reasoning_effort" not in captured["body"]
-            assert p.reasoning == ""

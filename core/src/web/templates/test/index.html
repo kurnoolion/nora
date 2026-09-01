@@ -75,35 +75,48 @@
           </div>
         </div>
 
-        {# Ask sits directly under the question, with the name inline between
-           Ask and Options — one short field doesn't earn a full-width row. It
-           stays above the fold because it credits the feedback, and is
-           remembered between asks by the sticky-fields script below. The
-           engineering knobs (retrieval lanes, correction label) collapse behind
-           Options so the everyday flow is just question → Ask → answer.
+        {# Action bar, right-aligned so it reads left-to-right into the
+           primary action: Options · name · reasoning · Ask. The name credits
+           the feedback and is remembered between asks by the sticky-fields
+           script below. Reasoning sits here rather than behind Options because
+           it is a per-question choice made at the moment of asking, unlike the
+           engineering knobs (retrieval lanes, correction label) that collapse.
            Collapsed inputs are still submitted — collapse hides, not disables. #}
-        <div class="d-flex align-items-center gap-2 flex-wrap">
-          <button id="ask-submit" class="btn btn-primary" type="submit">
-            <span id="ask-submit-label">Ask</span>
-            <span id="ask-submit-busy" style="display:none;">
-              <span class="spinner-border spinner-border-sm me-1"></span>
-              Querying…
-            </span>
+        <div class="d-flex align-items-center justify-content-end gap-2 flex-wrap">
+          <button class="btn btn-sm btn-outline-secondary" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#ask-options"
+                  aria-expanded="false" aria-controls="ask-options">
+            <i class="bi bi-sliders me-1"></i>Options
           </button>
           <input
               type="text"
               id="user-name"
               name="user_name"
               class="form-control form-control-sm"
-              style="max-width: 220px"
+              style="max-width: 200px"
               placeholder="Your name (optional)"
               aria-label="Your name — optional, credits your feedback"
               title="Optional — credits your feedback"
               maxlength="80">
-          <button class="btn btn-sm btn-outline-secondary" type="button"
-                  data-bs-toggle="collapse" data-bs-target="#ask-options"
-                  aria-expanded="false" aria-controls="ask-options">
-            <i class="bi bi-sliders me-1"></i>Options
+          <select
+              id="ask-reasoning"
+              name="reasoning"
+              class="form-select form-select-sm"
+              style="max-width: 200px"
+              aria-label="Reasoning effort — optional, for models that support it"
+              title="Sent as reasoning_effort. Models that don't support it ignore it. Recorded with the answer.">
+            <option value="" selected>Reasoning: default</option>
+            <option value="none">Reasoning: none (fastest)</option>
+            <option value="low">Reasoning: low</option>
+            <option value="medium">Reasoning: medium</option>
+            <option value="high">Reasoning: high</option>
+          </select>
+          <button id="ask-submit" class="btn btn-primary" type="submit">
+            <span id="ask-submit-label">Ask</span>
+            <span id="ask-submit-busy" style="display:none;">
+              <span class="spinner-border spinner-border-sm me-1"></span>
+              Querying…
+            </span>
           </button>
         </div>
 
@@ -144,29 +157,6 @@
             <div class="form-text">
               Both checked → side-by-side compare. One checked → single-lane
               full-width.
-            </div>
-          </div>
-
-          <div class="mb-3">
-            <label for="ask-reasoning" class="form-label">
-              <strong>Reasoning effort</strong>
-              <span class="text-muted small">(optional — for models that support
-                it; lower is faster)</span>
-            </label>
-            <select
-                id="ask-reasoning"
-                name="reasoning"
-                class="form-select form-select-sm"
-                style="max-width: 24rem;">
-              <option value="" selected>Endpoint default</option>
-              <option value="none">None — skip thinking (fastest)</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-            <div class="form-text">
-              Sent as <code>reasoning_effort</code>; models that don't support
-              it ignore it. Recorded with the answer so runs stay comparable.
             </div>
           </div>
 
@@ -468,6 +458,7 @@ function askRecordHistory(question, root) {
   if (!form) return;
   const nameEl  = document.getElementById("user-name");
   const labelEl = document.getElementById("ask-label");
+  const reasonEl = document.getElementById("ask-reasoning");
   const nora    = document.getElementById("lane-nora");
   const sira    = document.getElementById("lane-sira");
 
@@ -475,6 +466,13 @@ function askRecordHistory(question, root) {
     const last = JSON.parse(localStorage.getItem(KEY) || "{}");
     if (last.user_name && nameEl)  nameEl.value  = last.user_name;
     if (last.label     && labelEl) labelEl.value = last.label;
+    // Restore only a level the select still offers — a value from an older
+    // page would otherwise leave the control blank while the server falls
+    // back to the endpoint default, so the UI would lie about what was sent.
+    if (last.reasoning && reasonEl &&
+        [...reasonEl.options].some(o => o.value === last.reasoning)) {
+      reasonEl.value = last.reasoning;
+    }
     if (nora && !nora.disabled && typeof last.nora === "boolean") nora.checked = last.nora;
     if (sira && !sira.disabled && typeof last.sira === "boolean") sira.checked = last.sira;
   } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
@@ -484,6 +482,7 @@ function askRecordHistory(question, root) {
       localStorage.setItem(KEY, JSON.stringify({
         user_name: nameEl ? nameEl.value : "",
         label:     labelEl ? labelEl.value : "",
+        reasoning: reasonEl ? reasonEl.value : "",
         nora:      nora ? nora.checked : undefined,
         sira:      sira ? sira.checked : undefined,
       }));

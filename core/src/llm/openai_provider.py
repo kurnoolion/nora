@@ -283,11 +283,6 @@ class OpenAICompatibleProvider:
         return self._model
 
     @property
-    def reasoning(self) -> str:
-        """Reasoning effort sent with each call; empty when unset."""
-        return self._reasoning or ""
-
-    @property
     def call_count(self) -> int:
         return self._call_count
 
