@@ -260,6 +260,49 @@ After production is on the new label, the eval operator refreshes the
 baseline file from the next accepted golden run on that stack (the
 flip prints the reminder).
 
+## Multiple operators
+
+The env dir belongs to the **build, not the operator**:
+`builds/nora/<build-id>` (with its `builds/sira/<build-id>` twin) is
+created by `cycle.sh start`, named by the build id, and shared by the
+whole group. The setgid tree + `umask 002` + per-operator `JOB_UID` /
+`JOB_GID` exist precisely so that any group member can re-run,
+`--force`, retry, or clean up what another member's containers wrote.
+
+**Cycles are serialized, never parallel.** The baton (`builds/ACTIVE`)
+admits one open cycle; a second `start` refuses with CYC-E021 and names
+the owner. What IS supported is **hand-over**: any group member can run
+the next phase, confirm a gate, or retry a failed enrich on the open
+cycle — `CYCLE.json` records the owner, and every phase and gate
+records who ran or confirmed it (`by`, `confirmed_by`), so a cycle
+started by one operator and promoted by another keeps a full trail.
+Non-owner phases print a NOTE, not a refusal. Rehearse this once with
+two operators (the provisioning checklist's hand-over cycle) before
+relying on it.
+
+Within the open cycle, keep it to **one phase in flight at a time**.
+The phase gates enforce ordering, but they cannot see two detached
+containers writing the same build concurrently — one operator running
+`taxonomy` while another launches `enrich` is the failure mode the
+baton cannot catch. Whoever's turn it is runs the phase; everyone else
+watches `./cycle.sh status`.
+
+**Personal runs stay out of the team tree.** A parser experiment, a
+profile debug, a what-if rebuild — anything that shouldn't wait for the
+baton — runs against a private tree (own `--env-dir` /
+`NORA_BUILDS_ROOT`, own copy of the wiring env) and is **never
+promoted**. Promotion goes only through the baton'd cycle;
+`promote.sh` refusing existing labels is the backstop, not the rule.
+The shared `.env.builds` wiring is repointed only by `cycle.sh start`
+on the team tree.
+
+**Cleanup follows the promoter.** Builds are transient once their
+label is pushed and the flip is verified: the operator who ran
+`promote` archives the build if the team keeps archives (include
+`CYCLE.json` — it is the who-did-what record) and then GCs
+`builds/{nora,sira}/<build-id>`. `serve/PROMOTE_LOG` on the serving
+host is the durable history either way.
+
 ## Reporting
 
 Each phase writes a `CYC` block under `builds/nora/<build>/reports/`
