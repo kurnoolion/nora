@@ -383,8 +383,8 @@
           <span class="verify"><b>Verify</b> an Ask with no override resolves the same provider as before.</span></li>
         <li>Decouple the LLM from the cached pipeline: the query call accepts a synthesizer for that one question, so a request carrying a reasoning level gets its own provider while the expensive pipeline — graph, embedder, vector store, keyword index — stays cached. Provider construction costs no network call.
           <span class="verify"><b>Verify</b> cold-start cost is unchanged on a second query, and a query with no override still uses the cached provider.</span></li>
-        <li>Thread the level from the form through the background job to the synthesizer, as an argument rather than a stored job field, so the jobs table is untouched.
-          <span class="verify"><b>Verify</b> the level reaches the synthesizer; jobs schema unchanged.</span></li>
+        <li>Thread the level from the form to every synthesis path on the page. The background-job plumbing this step originally called for turned out to be unnecessary: the Ask page runs its query directly, so the jobs table is untouched.
+          <span class="verify"><b>Verify</b> all six synthesis paths — both lanes, the streaming variant, the two legacy paths and the disambiguation follow-up — pass the level through.</span></li>
         <li>One control on the Ask page: a reasoning level. Blank means "use the configured settings".
           <span class="verify"><b>Verify</b> the same question answered with reasoning off is measurably faster than with it on.</span></li>
         <li>Record the model that answered and the reasoning level on the answer row, reusing columns that already exist. The model is recorded, not chosen.

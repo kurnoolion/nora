@@ -1346,6 +1346,7 @@ async def playground_ask(request: Request):
             try:
                 synth_result = await asyncio.to_thread(
                     _run_query_for_test, question, request.app, pinned_chunk_ids,
+                    reasoning=reasoning or None,
                 )
                 if "error" in synth_result:
                     synth_error = synth_result["error"]
@@ -1646,6 +1647,7 @@ async def playground_synthesize_group(request: Request):
     try:
         result = await asyncio.to_thread(
             _run_query_for_test, question, request.app, chunk_ids,
+            reasoning=_form_reasoning(form) or None,
         )
     except Exception as e:
         logger.exception("Synthesize-group query failed")
