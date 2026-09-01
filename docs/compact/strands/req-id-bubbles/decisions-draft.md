@@ -120,3 +120,50 @@ in an ungated dev run.
   in backticks gets a bubble or is left as literal code. Decide before coding.
 
 ---
+## D-DRAFT-4 — Hand-injected HTML must be handed to `htmx.process`; the convention is the fix, not the two call sites
+
+**Context:** The req bubbles rendered and expanded but never fetched — no
+request was attempted at all. Cause: both the Ask page's SSE handler
+(`test/index.html`) and the History detail pane (`test/history.html`) assign
+the rendered answer with raw `innerHTML`. htmx only wires elements it swapped
+itself, so every `hx-*` attribute inside that subtree was inert. The symptom is
+badly misleading — Bootstrap's collapse uses delegated listeners on `document`,
+so the badge rendered and the panel opened normally, which reads as a slow or
+flaky request rather than an unprocessed DOM. It cost most of a debugging
+session, and the diagnostic that cracked it was noticing the surfaces behaved
+differently (`/ask/history` worked, `/test` did not) depending on how each
+received its HTML.
+
+**Decision:** Any code path that inserts server-rendered HTML into the page
+without htmx performing the swap MUST call `htmx.process(container)` on the
+inserted subtree. This is a standing convention for the whole template set, not
+a local fix to the two sites the bubbles happened to expose. Both existing
+sites now do this and carry a comment saying why.
+
+**Why:** The failure is silent, survives every server-side test, and mimics a
+network problem rather than a wiring problem — a combination that costs hours
+each time it recurs. This template set injects HTML by hand in several places
+(SSE `done` events, JS-driven pane fills), and each is a latent instance: the
+next `hx-*` added inside any of them is dead on arrival. Making it a stated
+convention means the next author meets it as a rule instead of rediscovering it
+as a bug. Rejected: fixing only the two observed sites (leaves the trap armed
+everywhere else); routing every injection through htmx swaps instead of
+`innerHTML` (correct in principle, but a broad refactor of working streaming
+code for no user-visible gain); a lint rule (nothing in this repo lints
+templates today, and the rule would need to reason about JS string assignment
+targets).
+
+**Consequences:**
+- Every future hand-injected fragment carrying `hx-*` needs the
+  `htmx.process()` line; omitting it is a review finding, not a mystery bug.
+- Server-side tests cannot catch a violation. Nothing in this repo exercises a
+  browser, so the class stays manual-check territory — which is what let it
+  ship here in the first place. A browser-level smoke test would close it, and
+  is not proposed in this strand.
+- The comments at the two fixed sites are load-bearing documentation, not
+  decoration; they should survive refactors of the surrounding code.
+- `_answer.html` is rendered from ~10 call sites; only the two that inject it
+  by hand need this. Server-rendered page loads and htmx-driven swaps are
+  already wired.
+
+---
