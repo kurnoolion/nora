@@ -241,12 +241,29 @@ def _find_env_config_for_web():
     return None
 
 
-def _build_llm_from_env_or_default(reasoning: str | None = None):
+def _build_llm_from_env_or_default(
+    provider_id: str | None = None,
+    mode: str | None = None,
+):
     """Construct the LLM provider for /query and /test.
 
-    `reasoning` is a per-call reasoning effort ("none" / "low" / "medium" /
-    "high") for providers that support it. None — the default — sends no
-    reasoning field at all, which is the pre-existing behaviour.
+    `provider_id` picks a named entry from the `config/llm.json` roster;
+    empty or unknown falls back to the roster's first entry. When no roster
+    is configured — the normal case today — this is ignored entirely and the
+    single-provider chain below runs unchanged.
+
+    `mode` is the asker's Fast/Think choice:
+      * "fast"  -> `reasoning_effort: "none"` (skip thinking)
+      * "think" -> send NO reasoning field, so the model does whatever the
+                   deployment already does. We never invent an effort level
+                   on its behalf.
+    A mode on a provider that declares `supports_reasoning: false` is
+    ignored with a warning — the field would be silently dropped anyway, and
+    pretending otherwise would let the UI lie about what was sent.
+
+    A roster-built provider is deliberately NOT refusal-wrapped: the roster
+    names WHICH endpoint answers, so silently rerouting to a different one
+    would defeat the choice the asker just made.
 
     Resolves provider / model / timeout / base_url / api_key via the
     unified resolver chain: CLI flag (n/a here) > **Config-page DB
@@ -262,6 +279,29 @@ def _build_llm_from_env_or_default(reasoning: str | None = None):
     failure (web path is non-fail-loud — falls back to mock so the
     UI keeps responding).
     """
+    from core.src.env.config import resolve_llm_timeout, resolve_provider
+
+    entry = resolve_provider(provider_id)
+    if entry is not None:
+        reasoning = _reasoning_for(entry, mode)
+        from core.src.llm.openai_provider import OpenAICompatibleProvider
+
+        timeout = resolve_llm_timeout(
+            config_store_value=_config_store_get("llm", "llm_timeout"),
+        )
+        logger.info(
+            "Web LLM resolved: provider=%s (%s) model=%s mode=%s reasoning=%s",
+            entry.id, entry.name, entry.model, mode or entry.default_mode,
+            reasoning or "<none sent>",
+        )
+        return OpenAICompatibleProvider(
+            model=entry.model,
+            base_url=entry.base_url,
+            api_key=entry.api_key or None,
+            timeout=timeout,
+            reasoning=reasoning,
+        )
+
     from core.src.env.config import (
         resolve_llm_provider,
         resolve_llm_model,
@@ -312,6 +352,24 @@ def _build_llm_from_env_or_default(reasoning: str | None = None):
     # (NORA_LLM_FALLBACK_* + NORA_LLM_REFUSAL_MARKERS) — synthesis, the
     # /test lanes, and the Eval Studio curation chat inherit it.
     return ctx.create_llm_provider(require_real=False)
+
+def _reasoning_for(entry, mode: str | None) -> str | None:
+    """Map the asker's Fast/Think choice onto a reasoning_effort value.
+
+    Falls back to the entry's own `default_mode` when the asker expressed
+    no preference, so a provider that should think by default does.
+    """
+    if not entry.supports_reasoning:
+        if mode:
+            logger.warning(
+                "Provider %r declares no reasoning support — ignoring "
+                "mode=%r.", entry.id, mode,
+            )
+        return None
+    effective = (mode or entry.default_mode or "think").lower()
+    # "think" sends nothing: the model does what the deployment configured.
+    return "none" if effective == "fast" else None
+
 
 # Context budget for the answer synthesizer. Named because both the cached
 # build and the per-query reasoning path construct an LLMSynthesizer.
@@ -559,7 +617,8 @@ def _run_query_sync(
     query_text: str,
     app=None,
     pinned_chunk_ids: list[str] | None = None,
-    reasoning: str | None = None,
+    provider_id: str | None = None,
+    mode: str | None = None,
 ) -> dict:
     """Run the query pipeline synchronously (called via asyncio.to_thread).
 
@@ -604,8 +663,10 @@ def _run_query_sync(
     # Chroma, BM25) stay cached; provider construction costs no network call.
     # Mutating the cached provider instead would race across concurrent queries.
     query_synthesizer = None
-    if reasoning:
-        per_query_llm = _build_llm_from_env_or_default(reasoning=reasoning)
+    if provider_id or mode:
+        per_query_llm = _build_llm_from_env_or_default(
+            provider_id=provider_id, mode=mode,
+        )
         if per_query_llm is not None and not getattr(per_query_llm, "_is_mock", False):
             from core.src.query.synthesizer import LLMSynthesizer
             query_synthesizer = LLMSynthesizer(
@@ -614,8 +675,9 @@ def _run_query_sync(
             llm = per_query_llm
         else:
             logger.warning(
-                "Reasoning override %r requested but no real LLM resolved — "
-                "answering with the cached provider.", reasoning,
+                "Per-question override (provider=%r mode=%r) requested but "
+                "no real LLM resolved — answering with the cached provider.",
+                provider_id, mode,
             )
 
     llm_calls_before = llm.call_count if llm else 0

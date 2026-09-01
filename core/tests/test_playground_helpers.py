@@ -126,21 +126,24 @@ def test_nora_snapshot_pulls_from_result_dict(monkeypatch):
         "llm_model": "internal-llm",
         "query_intent": "general",
         "candidate_count": 12,
-        # Empty = the asker didn't pick a level, so the answer came from
-        # whatever the endpoint defaults to. Recorded either way.
-        "reasoning_effort": "",
+        # Empty = the asker expressed no preference, so the provider's own
+        # default applied. Recorded either way.
+        "llm_provider_id": "",
+        "llm_mode": "",
     }
 
 
-def test_nora_snapshot_records_the_reasoning_level(monkeypatch):
+def test_nora_snapshot_records_provider_and_mode(monkeypatch):
     for env in (
         "NORA_LLM_MODEL", "NORA_QUERY_RERANK_ENABLED",
         "NORA_QUERY_BROAD_TOP_K", "NORA_QUERY_NARROW_TOP_K",
         "NORA_INCLUDE_PARENT_BODY",
     ):
         monkeypatch.delenv(env, raising=False)
-    snap = _snapshot_nora_lane_config({"llm_model": "m"}, reasoning="none")
-    assert snap["reasoning_effort"] == "none"
+    snap = _snapshot_nora_lane_config(
+        {"llm_model": "m"}, provider_id="dgx-130b", mode="fast")
+    assert snap["llm_provider_id"] == "dgx-130b"
+    assert snap["llm_mode"] == "fast"
 
 
 def test_nora_snapshot_includes_set_env_vars(monkeypatch):
@@ -199,7 +202,7 @@ def test_nora_lane_runner_emits_progress_on_start_and_done():
         msgs.append(m)
 
     # Stub _run_query_for_test to return a successful, well-shaped result.
-    def _fake_run(q, app, pinned_chunk_ids=None, reasoning=None):
+    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
         return {
             "answer": "OK",
             "rag_chunks": [{"req_id": "R-1"}, {"req_id": "R-2"}],
@@ -229,7 +232,7 @@ def test_nora_lane_runner_emits_progress_on_error():
     async def emit(m: str) -> None:
         msgs.append(m)
 
-    def _fake_run(q, app, pinned_chunk_ids=None, reasoning=None):
+    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
         raise RuntimeError("boom")
 
     with patch.object(pg, "_run_query_for_test", _fake_run):
@@ -248,7 +251,7 @@ def test_nora_lane_runner_works_without_callback():
     """emit_progress is optional — runners must work when it's None."""
     from core.src.web.routes import playground as pg
 
-    def _fake_run(q, app, pinned_chunk_ids=None, reasoning=None):
+    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
         return {"answer": "OK", "rag_chunks": [], "llm_citations": []}
 
     with patch.object(pg, "_run_query_for_test", _fake_run):
@@ -276,7 +279,7 @@ def test_sira_lane_runner_emits_progress_at_stage_boundaries():
             "notes": [],
         }
 
-    def _fake_run_query(q, app, pinned_chunk_ids=None, reasoning=None):
+    def _fake_run_query(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
         return {"answer": "ok", "rag_chunks": [], "llm_citations": []}
 
     async def _fake_snapshot():
@@ -641,7 +644,7 @@ def test_select_synth_answer_carries_epilogue(monkeypatch):
 
     monkeypatch.setattr(
         query_routes, "_build_llm_from_env_or_default",
-        lambda reasoning=None: _NamedLLM())
+        lambda provider_id=None, mode=None: _NamedLLM())
     out = pg._select_synth_synthesize(
         "widget retry?",
         [{"req_id": "REQ_FOO_0001", "text": "Widgets shall retry.",

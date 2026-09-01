@@ -219,3 +219,51 @@
   say so plainly.
 - The plan artifact is private; it needs sharing from its share menu before the
   manager can open it.
+
+## 2026-09-01 (later) — Phase 1 reworked: named providers + Fast/Think
+
+### Done
+- Reworked the Phase 1 control surface after a UX review. The 4-level reasoning
+  select and the half-built primary/fallback endpoint select are both gone,
+  replaced by: a **provider** select over an optional `providers` list in
+  `config/llm.json`, and a **Fast / Think** toggle. Neither shipped, so nothing
+  was unpicked in the field.
+- `env/config.py`: `LLMProviderEntry`, `_parse_providers`, `resolve_providers()`
+  and `resolve_provider(id)`. Malformed entries drop with a warning rather than
+  failing the load; an unknown id falls back to the first entry.
+- `query.py`: `_reasoning_for(entry, mode)` — Fast → `"none"`, Think → send
+  nothing. One place owns that mapping.
+- `playground.py`: `_form_provider` / `_form_mode` replace the two old
+  validators; threaded through all six Ask synthesis paths; `lane_config` now
+  carries `llm_provider_id` + `llm_mode`.
+- Template: the two controls, sticky, with the option-existence guard; the
+  toggle disables itself (with a reason) on a provider declaring no support,
+  driven by a data attribute — no round trip.
+- MODULE.md contracts for env / llm / web, plus the **missing `refusal.py`
+  STRUCTURE block** in `llm/MODULE.md` — a pre-existing gap, not something this
+  work introduced.
+
+### Verified
+- Suite 1851 passed, same 8 pre-existing failures.
+- Live, two named entries through Ollama's `/v1`: picking each logged a
+  different model; warm timings on the reasoning-capable entry were
+  **Fast ~1s vs Think ~7s**, repeatable. The unsupported entry logged the
+  "declares no reasoning support" warning and sent no field.
+- First timing pass was discarded: the numbers included pipeline cold start and
+  showed Fast slower than Think. Re-measured warm with repeats.
+
+### Judgement calls, stated so they can be overruled
+- Config lives in `config/llm.json` (existing LLM config home, already in the
+  documented chain) rather than env vars or a new Config-page field type.
+- Think sends **no** reasoning field rather than asserting "high"/"medium" — we
+  don't choose an effort level on the deployment's behalf.
+- Unsupported providers disable the toggle with a reason rather than hiding it;
+  a control that silently vanishes leaves the user hunting.
+
+### Flags
+- Still unverified whether the internal primary honours `reasoning_effort`.
+  Needs one `llm_debug --complete` on the infra.
+- Routing user traffic to the DGX box changes its load profile — a manager
+  decision, to be surfaced in the PR, not assumed.
+- PR #11's title and body still describe the old 4-level knob and must be
+  rewritten before review continues.

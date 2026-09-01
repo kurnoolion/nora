@@ -48,6 +48,81 @@ DEFAULT_LLM_CONFIG_PATH = _PROJECT_ROOT / "config" / "llm.json"
 
 
 @dataclass
+class LLMProviderEntry:
+    """One named endpoint the Ask page can send a question to.
+
+    `name` is what a user sees — say what the infrastructure IS
+    ("130B — DGX"), not its role, so the choice is recognisable.
+
+    `supports_reasoning` is DECLARED, never detected: no OpenAI-compatible
+    endpoint advertises the capability, and probing only catches outright
+    rejection — a server may accept `reasoning_effort` and silently ignore
+    it, which is indistinguishable from honouring it. Declaring it is what
+    lets the UI stop offering a control that would do nothing.
+
+    `api_key_env` names an environment variable; keys are never written in
+    this committed file.
+    """
+
+    id: str
+    name: str
+    base_url: str
+    model: str
+    api_key_env: str = ""
+    supports_reasoning: bool = False
+    default_mode: str = "think"
+
+    @property
+    def api_key(self) -> str:
+        return os.getenv(self.api_key_env, "") if self.api_key_env else ""
+
+
+def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
+    """Parse the optional `providers` list. Entries missing a required
+    field are dropped with a warning rather than failing the load — a
+    half-written roster must not take the whole app down, and the warning
+    is what makes the omission visible."""
+    if not isinstance(raw, list):
+        return []
+    out: list[LLMProviderEntry] = []
+    seen: set[str] = set()
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            logger.warning("%s: providers[%d] is not an object — skipped",
+                           config_path, i)
+            continue
+        pid = str(item.get("id", "") or "").strip()
+        base_url = str(item.get("base_url", "") or "").strip()
+        model = str(item.get("model", "") or "").strip()
+        if not (pid and base_url and model):
+            logger.warning(
+                "%s: providers[%d] needs id + base_url + model — skipped",
+                config_path, i)
+            continue
+        if pid in seen:
+            logger.warning("%s: duplicate provider id %r — skipped",
+                           config_path, pid)
+            continue
+        mode = str(item.get("default_mode", "think") or "think").strip().lower()
+        if mode not in ("fast", "think"):
+            logger.warning(
+                "%s: providers[%d] default_mode %r is not fast/think — "
+                "using think", config_path, i, mode)
+            mode = "think"
+        seen.add(pid)
+        out.append(LLMProviderEntry(
+            id=pid,
+            name=str(item.get("name", "") or "").strip() or pid,
+            base_url=base_url,
+            model=model,
+            api_key_env=str(item.get("api_key_env", "") or "").strip(),
+            supports_reasoning=bool(item.get("supports_reasoning", False)),
+            default_mode=mode,
+        ))
+    return out
+
+
+@dataclass
 class LLMConfigFile:
     """Schema for `config/llm.json`. Empty/zero values mean "fall through".
 
@@ -77,6 +152,10 @@ class LLMConfigFile:
     reranker_base_url: str = ""
     reranker_api_key: str = ""
     reranker_batch_size: int = 1
+    # Named provider roster (optional). Empty list = no roster; the
+    # single-provider resolution chain below is unchanged, which is what
+    # every deployment that never edits this key keeps getting.
+    providers: list[LLMProviderEntry] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
@@ -111,6 +190,7 @@ class LLMConfigFile:
             reranker_base_url=str(data.get("reranker_base_url", "") or "").strip(),
             reranker_api_key=str(data.get("reranker_api_key", "") or "").strip(),
             reranker_batch_size=int(data.get("reranker_batch_size", 1) or 1),
+            providers=_parse_providers(data.get("providers"), config_path),
         )
 
 
@@ -656,6 +736,39 @@ EMBEDDING_PROVIDER_ENV_VAR: str = "NORA_EMBEDDING_PROVIDER"
 EMBEDDING_MODEL_ENV_VAR: str = "NORA_EMBEDDING_MODEL"
 EMBEDDING_BASE_URL_ENV_VAR: str = "NORA_EMBEDDING_BASE_URL"
 EMBEDDING_API_KEY_ENV_VAR: str = "NORA_EMBEDDING_API_KEY"
+
+
+def resolve_providers() -> list[LLMProviderEntry]:
+    """The named provider roster from `config/llm.json`, or `[]`.
+
+    Empty is the normal case and means "no roster" — callers then use the
+    single-provider chain (`resolve_llm_provider` and friends) exactly as
+    before. There is no env-var or CLI tier here: a roster is a set of
+    named endpoints, which is a file-shaped thing, not a flag.
+    """
+    return list(_llm_config().providers)
+
+
+def resolve_provider(provider_id: str | None) -> LLMProviderEntry | None:
+    """Look up one roster entry by id.
+
+    Returns the DEFAULT entry (the first) when `provider_id` is empty or
+    unknown, and None when there is no roster at all. Unknown ids degrade
+    rather than raise: a stale bookmark or an edited roster must not fail
+    someone's question.
+    """
+    providers = resolve_providers()
+    if not providers:
+        return None
+    if provider_id:
+        for p in providers:
+            if p.id == provider_id:
+                return p
+        logger.warning(
+            "Unknown provider id %r — falling back to %r",
+            provider_id, providers[0].id,
+        )
+    return providers[0]
 
 
 def resolve_embedding_provider(

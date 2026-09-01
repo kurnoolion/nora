@@ -66,3 +66,47 @@ other and record provenance that does not match the answer.
 supported knobs. Unnecessary: vLLM accepts the OpenAI-standard
 `reasoning_effort` and maps it to `enable_thinking` server-side, so the
 normalization we would have hand-maintained already exists.
+
+## D-DRAFT-4 — Named provider roster + a Fast/Think toggle, instead of an effort dropdown
+
+**Context.** Phase 1 shipped a 4-level reasoning select, and a "primary /
+fallback" endpoint select was half-built on top of it. Reviewing the UX: users
+should not have to reason about effort levels, and "primary/secondary" says
+nothing about which infrastructure answers a question.
+
+**Decision.** One optional `providers` list in `config/llm.json` — named entries
+(`{id, name, base_url, model, api_key_env, supports_reasoning, default_mode}`) —
+surfaced on the Ask page as a provider select plus a two-way Fast/Think toggle.
+Fast sends `reasoning_effort: "none"`; Think sends no reasoning field at all.
+
+**Why this shape.**
+- A name like "130B — DGX" tells the asker what will answer; "primary" does not.
+- Two states beat five: the question is "should it think?", not "how much".
+- Think sending *nothing* means we never assert an effort level the deployment
+  did not choose for itself.
+- Keys are referenced by env-var name, never written in a committed file.
+
+**Rejected alternative — reasoning=none implies the fallback endpoint.** Raised
+as the minimal way to reach a reasoning-capable model when the primary may not
+support it. Rejected on three grounds: it welds two independent axes into one
+control, so a reader of two answers cannot tell which variable moved; it gives
+`RefusalFallbackProvider.used` two meanings (refusals and deliberate routing),
+and eval reads that counter as `fb_pre` / `fb_delta`; and `llm_identity` would
+name one model while another answered.
+
+**Capability is declared, not detected.** No OpenAI-compatible endpoint
+advertises reasoning support, and a probe only catches outright rejection — a
+server can accept `reasoning_effort` and silently ignore it, which is
+indistinguishable from honouring it. Observed both in one session (Ollama's
+`/v1` honoured it; llama.cpp would likely ignore it). So each entry declares it,
+and the toggle renders disabled with a reason where it would do nothing.
+
+**Consequences.**
+- No roster configured = today's behaviour exactly; the controls are not
+  rendered and the single-provider chain runs unchanged. No migration.
+- A roster-built provider is not refusal-wrapped: the roster names *which*
+  endpoint answers, so silently rerouting would defeat the choice just made.
+- Ask flow only. `golden_cli` keeps explicit `--reasoning {none,low,medium,
+  high}` — an analyst running a campaign wants the exact level, not a toggle.
+- Routing user traffic to a named box (e.g. the DGX) changes its load profile.
+  That is a deployment decision, surfaced in the PR rather than assumed.

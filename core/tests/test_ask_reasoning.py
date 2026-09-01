@@ -1,9 +1,10 @@
-"""Per-question reasoning effort on the Ask page (Phase 1).
+"""Per-question provider + Fast/Think mode on the Ask page (Phase 1).
 
 Covers the two seams the feature adds:
   - `QueryPipeline.query(synthesizer=...)` — a per-call synthesizer override,
     so a request can vary the LLM without rebuilding the cached pipeline.
-  - `_form_reasoning` — validation of the level submitted by the Ask form.
+  - `_form_mode` / `_form_provider` — what the Ask form is allowed to send.
+  - `_reasoning_for` — how a Fast/Think choice becomes a wire value.
 
 No network: the store, embedder and synthesizers are all doubles.
 """
@@ -15,7 +16,7 @@ import networkx as nx
 from core.src.query.pipeline import QueryPipeline
 from core.src.query.schema import QueryResponse
 from core.src.vectorstore.store_base import QueryResult
-from core.src.web.routes.playground import _form_reasoning
+from core.src.web.routes.playground import _form_mode, _form_provider
 
 
 class _FixedEmbedder:
@@ -134,19 +135,113 @@ class TestSynthesizerOverride:
         assert "cached" in resp.answer
 
 
-class TestFormReasoning:
-    def test_accepts_known_levels(self):
-        for level in ("none", "low", "medium", "high"):
-            assert _form_reasoning({"reasoning": level}) == level
+class TestFormMode:
+    def test_accepts_fast_and_think(self):
+        assert _form_mode({"mode": "fast"}) == "fast"
+        assert _form_mode({"mode": "think"}) == "think"
 
     def test_normalizes_case_and_whitespace(self):
-        assert _form_reasoning({"reasoning": "  HIGH "}) == "high"
+        assert _form_mode({"mode": "  FAST "}) == "fast"
 
-    def test_missing_or_blank_means_endpoint_default(self):
-        assert _form_reasoning({}) == ""
-        assert _form_reasoning({"reasoning": ""}) == ""
-        assert _form_reasoning({"reasoning": "   "}) == ""
+    def test_missing_means_provider_default(self):
+        assert _form_mode({}) == ""
+        assert _form_mode({"mode": "   "}) == ""
 
-    def test_unknown_value_degrades_to_default(self):
-        """A stale page or a hand-rolled POST must not fail the question."""
-        assert _form_reasoning({"reasoning": "ludicrous"}) == ""
+    def test_unknown_value_degrades(self):
+        """A stale page must not cost someone their answer."""
+        assert _form_mode({"mode": "ultra"}) == ""
+
+
+class TestFormProvider:
+    def test_reads_the_id(self):
+        assert _form_provider({"provider": "dgx-130b"}) == "dgx-130b"
+
+    def test_missing_is_empty(self):
+        assert _form_provider({}) == ""
+
+    def test_unknown_ids_are_not_rejected_here(self):
+        """Validation belongs to env.config.resolve_provider, which falls
+        back to the default entry — one owner for that rule."""
+        assert _form_provider({"provider": "nope"}) == "nope"
+
+
+class TestModeToReasoning:
+    """Fast means "skip thinking"; Think means "send nothing and let the
+    deployment decide" — we never invent an effort level for it."""
+
+    def _entry(self, supports, default_mode="think"):
+        from core.src.env.config import LLMProviderEntry
+        return LLMProviderEntry(
+            id="p", name="P", base_url="u", model="m",
+            supports_reasoning=supports, default_mode=default_mode,
+        )
+
+    def test_fast_sends_none(self):
+        from core.src.web.routes.query import _reasoning_for
+        assert _reasoning_for(self._entry(True), "fast") == "none"
+
+    def test_think_sends_nothing(self):
+        from core.src.web.routes.query import _reasoning_for
+        assert _reasoning_for(self._entry(True), "think") is None
+
+    def test_absent_mode_uses_the_provider_default(self):
+        from core.src.web.routes.query import _reasoning_for
+        assert _reasoning_for(self._entry(True, "fast"), "") == "none"
+        assert _reasoning_for(self._entry(True, "think"), "") is None
+
+    def test_unsupported_provider_sends_nothing_whatever_the_mode(self):
+        """The field would be dropped anyway; pretending otherwise would let
+        the UI claim a change that never reached the wire."""
+        from core.src.web.routes.query import _reasoning_for
+        assert _reasoning_for(self._entry(False), "fast") is None
+        assert _reasoning_for(self._entry(False), "think") is None
+
+
+class TestRosterResolution:
+    def _write(self, tmp_path, entries):
+        import json
+        from core.src.env import config as cfg
+        path = tmp_path / "llm.json"
+        path.write_text(json.dumps({"providers": entries}))
+        cfg._LLM_CONFIG_CACHE = cfg.LLMConfigFile.load(path)
+        return cfg
+
+    def test_no_roster_returns_none(self, tmp_path):
+        cfg = self._write(tmp_path, [])
+        try:
+            assert cfg.resolve_providers() == []
+            assert cfg.resolve_provider("anything") is None
+        finally:
+            cfg._reset_llm_config_cache()
+
+    def test_unknown_id_falls_back_to_first_entry(self, tmp_path):
+        cfg = self._write(tmp_path, [
+            {"id": "a", "name": "130B", "base_url": "u", "model": "m1"},
+            {"id": "b", "name": "14B", "base_url": "u", "model": "m2"},
+        ])
+        try:
+            assert cfg.resolve_provider("ghost").id == "a"
+            assert cfg.resolve_provider("b").id == "b"
+        finally:
+            cfg._reset_llm_config_cache()
+
+    def test_incomplete_entry_is_dropped_not_fatal(self, tmp_path):
+        cfg = self._write(tmp_path, [
+            {"id": "half"},                                    # no url/model
+            {"id": "ok", "base_url": "u", "model": "m"},
+        ])
+        try:
+            assert [p.id for p in cfg.resolve_providers()] == ["ok"]
+        finally:
+            cfg._reset_llm_config_cache()
+
+    def test_name_defaults_to_id_and_bad_mode_defaults_to_think(self, tmp_path):
+        cfg = self._write(tmp_path, [
+            {"id": "solo", "base_url": "u", "model": "m", "default_mode": "zoom"},
+        ])
+        try:
+            p = cfg.resolve_provider("")
+            assert p.name == "solo"
+            assert p.default_mode == "think"
+        finally:
+            cfg._reset_llm_config_cache()

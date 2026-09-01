@@ -98,19 +98,34 @@
               aria-label="Your name — optional, credits your feedback"
               title="Optional — credits your feedback"
               maxlength="80">
+          {% if providers %}
           <select
-              id="ask-reasoning"
-              name="reasoning"
+              id="ask-provider"
+              name="provider"
               class="form-select form-select-sm"
-              style="max-width: 200px"
-              aria-label="Reasoning effort — optional, for models that support it"
-              title="Sent as reasoning_effort. Models that don't support it ignore it. Recorded with the answer.">
-            <option value="" selected>Reasoning: default</option>
-            <option value="none">Reasoning: none (fastest)</option>
-            <option value="low">Reasoning: low</option>
-            <option value="medium">Reasoning: medium</option>
-            <option value="high">Reasoning: high</option>
+              style="max-width: 210px"
+              aria-label="Which model answers">
+            {% for p in providers %}
+            <option value="{{ p.id }}"
+                    data-supports-reasoning="{{ 1 if p.supports_reasoning else 0 }}"
+                    data-default-mode="{{ p.default_mode }}"
+                    {% if loop.first %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
           </select>
+          <select
+              id="ask-mode"
+              name="mode"
+              class="form-select form-select-sm"
+              style="max-width: 150px"
+              aria-label="How hard the model thinks"
+              title="Fast skips the model's thinking step. Think lets it think as the deployment configured. Recorded with the answer.">
+            <option value="fast">Fast</option>
+            <option value="think">Think</option>
+          </select>
+          <span id="ask-mode-note" class="form-text ms-1" hidden>
+            This model ignores thinking settings.
+          </span>
+          {% endif %}
           <button id="ask-submit" class="btn btn-primary" type="submit">
             <span id="ask-submit-label">Ask</span>
             <span id="ask-submit-busy" style="display:none;">
@@ -458,7 +473,8 @@ function askRecordHistory(question, root) {
   if (!form) return;
   const nameEl  = document.getElementById("user-name");
   const labelEl = document.getElementById("ask-label");
-  const reasonEl = document.getElementById("ask-reasoning");
+  const providerEl = document.getElementById("ask-provider");
+  const modeEl = document.getElementById("ask-mode");
   const nora    = document.getElementById("lane-nora");
   const sira    = document.getElementById("lane-sira");
 
@@ -469,20 +485,48 @@ function askRecordHistory(question, root) {
     // Restore only a level the select still offers — a value from an older
     // page would otherwise leave the control blank while the server falls
     // back to the endpoint default, so the UI would lie about what was sent.
-    if (last.reasoning && reasonEl &&
-        [...reasonEl.options].some(o => o.value === last.reasoning)) {
-      reasonEl.value = last.reasoning;
+    // Restore only values the controls still offer — a provider removed
+    // from the roster would otherwise leave the select blank while the
+    // server quietly used the default, so the UI would misreport.
+    if (last.provider && providerEl &&
+        [...providerEl.options].some(o => o.value === last.provider)) {
+      providerEl.value = last.provider;
+    }
+    if (last.mode && modeEl &&
+        [...modeEl.options].some(o => o.value === last.mode)) {
+      modeEl.value = last.mode;
     }
     if (nora && !nora.disabled && typeof last.nora === "boolean") nora.checked = last.nora;
     if (sira && !sira.disabled && typeof last.sira === "boolean") sira.checked = last.sira;
   } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
+
+  // The toggle is disabled — not hidden — on a provider that declares no
+  // reasoning support, with the reason shown. Hiding it would leave the
+  // user hunting for a control that silently vanished.
+  function syncMode() {
+    if (!providerEl || !modeEl) return;
+    const opt = providerEl.options[providerEl.selectedIndex];
+    const supported = opt && opt.dataset.supportsReasoning === "1";
+    modeEl.disabled = !supported;
+    const note = document.getElementById("ask-mode-note");
+    if (note) note.hidden = supported;
+    if (supported && opt.dataset.defaultMode && !modeEl.dataset.userSet) {
+      modeEl.value = opt.dataset.defaultMode;
+    }
+  }
+  if (providerEl) providerEl.addEventListener("change", syncMode);
+  if (modeEl) modeEl.addEventListener("change", function () {
+    modeEl.dataset.userSet = "1";
+  });
+  syncMode();
 
   form.addEventListener("submit", function () {
     try {
       localStorage.setItem(KEY, JSON.stringify({
         user_name: nameEl ? nameEl.value : "",
         label:     labelEl ? labelEl.value : "",
-        reasoning: reasonEl ? reasonEl.value : "",
+        provider: providerEl ? providerEl.value : "",
+        mode:      modeEl ? modeEl.value : "",
         nora:      nora ? nora.checked : undefined,
         sira:      sira ? sira.checked : undefined,
       }));

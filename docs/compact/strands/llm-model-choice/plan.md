@@ -116,13 +116,27 @@ concern. Both of the page's synthesis lanes are in scope.
 3d. **Both lanes honour the knob** — the select-synth lane already builds per
    call, so it takes the level directly.
    *Verify:* both lanes answer the same question at reasoning=none.
-4. **One ASK page control** — a reasoning select
-   (`default / none / low / medium / high`). Blank = use configured settings.
-   *Verify:* asking with reasoning=none is measurably faster than default on
-   the same question.
-5. **Record what answered** — pass the served `llm_model` and put the reasoning
-   level in `lane_config` on `record_qa()`. Existing columns, no migration.
-   The model is recorded, not chosen. Note `record_qa` is called from
+4. **Two ASK page controls** — a **provider** select showing named entries from
+   an optional `providers` list in `config/llm.json` ("130B — DGX", "14B —
+   internal"), and a **Fast / Think** toggle. Fast sends
+   `reasoning_effort: "none"`; Think sends no reasoning field, so the
+   deployment's own behaviour applies — we never invent an effort level on its
+   behalf. Blank mode = the provider's declared `default_mode`.
+   *Superseded the original 4-level select (never shipped): users should not
+   have to reason about effort levels, and "primary/secondary" told them
+   nothing about which infrastructure answers.*
+   **Capability is declared, not detected** (`supports_reasoning` per entry) —
+   no OpenAI-compatible endpoint advertises it, and probing only catches
+   outright rejection; a server can accept `reasoning_effort` and silently
+   ignore it. The toggle renders disabled, with the reason, on an entry that
+   declares no support.
+   **No roster configured = the pre-roster page unchanged**, controls not
+   rendered.
+   *Verify:* Fast is measurably faster than Think on a reasoning-capable
+   provider, and picking each entry logs a different model.
+5. **Record what answered** — pass the served `llm_model` and put the provider
+   id + mode in `lane_config` on `record_qa()`. Existing columns, no migration.
+   The model is now chosen (by provider), and recorded either way. Note `record_qa` is called from
    `playground.py` only (four sites); `query.py` does not record.
    *Verify:* two asks at different reasoning levels produce two rows that differ.
 
