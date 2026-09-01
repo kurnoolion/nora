@@ -162,6 +162,28 @@ log; do not paste the log itself (it names documents).
 Expect `features=` ≈ the number of distinct plans across all MNOs
 (newest release wins per plan), not plans × releases.
 
+**Seeding (optional — skips re-extracting unchanged plans):** a fresh
+build starts with a cold taxonomy cache, so every plan re-extracts
+even when only one release changed. After `parse` is ok and before the
+first `taxonomy` run, copy the previous build's taxonomy output in:
+
+```bash
+cp -r builds/nora/<prev-build>/out/taxonomy builds/nora/<build>/out/
+./cycle.sh taxonomy
+```
+
+The stage validates the seed itself — every cached plan carries a
+content hash of the tree it was extracted from, the prompt files are
+hashed too, and the stage-level fingerprint is only stamped on
+zero-failure runs — so a stale or wrong seed costs nothing: those
+plans simply re-extract. Only plans whose winning tree changed (the
+new release's plans, typically) hit the LLM. The stage stats show
+whether the seed took: expect `cached` ≈ plans untouched by the new
+release, `extracted` ≈ plans it added or changed. Use a plain
+`cp -r`, never a hardlink copy (`cp -al`) — the stage rewrites the
+ledger in place, and hardlinks would corrupt the previous build's
+copy. `--force` ignores the seed entirely.
+
 ### 5. Enrich
 
 ```bash
