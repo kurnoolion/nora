@@ -107,3 +107,54 @@
 ### Flags
 - The published page and plan carried the wrong module for a day. If the plan
   was already shown to anyone, the corrected version is the one to re-share.
+
+## 2026-09-01 (later still) — Phase 1 implemented
+
+### Done
+- Implemented Phase 1 against the corrected map. `reasoning_effort` chosen over
+  `chat_template_kwargs` on the strength of a recent vLLM; the fallback is one
+  line, named in a comment at the payload site.
+- `OpenAICompatibleProvider(reasoning=...)` adds `reasoning_effort` to the
+  request body; omitted entirely when unset, so the default path is unchanged.
+  `reasoning` property added for provenance.
+- `PipelineContext.llm_reasoning` threads the level into provider construction.
+- `QueryPipeline.query(..., synthesizer=...)` — keyword-only per-call override
+  at both synthesize sites. This is the decoupling step: a request with a
+  reasoning level gets its own provider + `LLMSynthesizer` while the expensive
+  pipeline stays cached.
+- `_run_query_sync(reasoning=...)` builds that per-query provider and falls back
+  to the cached one with a warning when no real LLM resolves. `llm_calls_before`
+  now measures the per-query instance.
+- Ask page: `_form_reasoning()` validates against
+  `("none", "low", "medium", "high")` and degrades an unknown value to "" rather
+  than failing the question. Both handlers (`/api/test/ask`,
+  `/api/test/ask-stream`) read it; NORA, SIRA and select-synth lanes all honour
+  it. A `reasoning` select was added to the Ask form's Options panel.
+- Provenance: `reasoning_effort` rides the existing `lane_config` column for
+  both lanes. No migration.
+
+### Verified
+- 15 new tests, all passing: provider payload with/without the field and across
+  all four levels; the synthesizer override replacing the cached one for exactly
+  one call and not persisting; form validation including the unknown-value case.
+- Full suite: 1808 passed. Baseline before these changes failed the same 8
+  tests (`test_web_config` x6, `test_enrich_overlay_store`,
+  `test_embedding_ollama`) — zero regressions, all 8 pre-existing.
+- Team-mode gate: no new routes, and `/test` + `/api/test` are already
+  prefix-allowed. The control still applies under the gated SIRA-only lane.
+
+### Corrected from the plan
+- Step 3c (thread the level through the job queue) turned out unnecessary. The
+  Ask page calls `_run_query_sync` directly; only the older `/query` page uses
+  `JobQueue`. `jobs.py` untouched.
+
+### Next
+- Unverified against a real endpoint — no infra access from outside. On the
+  internal network: ask the same question at default and at `none`, confirm the
+  latency drop and that `reasoning_effort` isn't rejected. If it 400s, swap the
+  payload line for `chat_template_kwargs`.
+- Then decide the control's default value (still the real latency decision).
+
+### Flags
+- **No end-to-end run has happened.** Everything above is unit-tested and
+  reasoned from the vLLM docs; nothing has spoken to a live model.

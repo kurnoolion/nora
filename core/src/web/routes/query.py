@@ -241,8 +241,12 @@ def _find_env_config_for_web():
     return None
 
 
-def _build_llm_from_env_or_default():
+def _build_llm_from_env_or_default(reasoning: str | None = None):
     """Construct the LLM provider for /query and /test.
+
+    `reasoning` is a per-call reasoning effort ("none" / "low" / "medium" /
+    "high") for providers that support it. None — the default — sends no
+    reasoning field at all, which is the pre-existing behaviour.
 
     Resolves provider / model / timeout / base_url / api_key via the
     unified resolver chain: CLI flag (n/a here) > **Config-page DB
@@ -302,11 +306,16 @@ def _build_llm_from_env_or_default():
         model_timeout=timeout,
         llm_base_url=base_url,
         llm_api_key=api_key,
+        llm_reasoning=reasoning or "",
     )
     # create_llm_provider applies the permanent-refusal fallback wrap
     # (NORA_LLM_FALLBACK_* + NORA_LLM_REFUSAL_MARKERS) — synthesis, the
     # /test lanes, and the Eval Studio curation chat inherit it.
     return ctx.create_llm_provider(require_real=False)
+
+# Context budget for the answer synthesizer. Named because both the cached
+# build and the per-query reasoning path construct an LLMSynthesizer.
+_SYNTH_MAX_TOKENS = 30000 // 4
 
 router = APIRouter()
 
@@ -465,7 +474,7 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     synthesizer = None
     if llm is not None and not getattr(llm, "_is_mock", False):
         from core.src.query.synthesizer import LLMSynthesizer
-        synthesizer = LLMSynthesizer(llm, max_tokens=30000 // 4)
+        synthesizer = LLMSynthesizer(llm, max_tokens=_SYNTH_MAX_TOKENS)
     else:
         logger.info("No real LLM configured, falling back to mock synthesizer")
 
@@ -550,6 +559,7 @@ def _run_query_sync(
     query_text: str,
     app=None,
     pinned_chunk_ids: list[str] | None = None,
+    reasoning: str | None = None,
 ) -> dict:
     """Run the query pipeline synchronously (called via asyncio.to_thread).
 
@@ -588,9 +598,33 @@ def _run_query_sync(
     except _PipelineBuildError as e:
         return {"error": str(e)}
 
+    # Per-question reasoning: the cached pipeline holds a provider built at
+    # cold start, so a request-scoped level gets its own provider + synthesizer
+    # for this query only. The expensive parts of the pipeline (graph, embedder,
+    # Chroma, BM25) stay cached; provider construction costs no network call.
+    # Mutating the cached provider instead would race across concurrent queries.
+    query_synthesizer = None
+    if reasoning:
+        per_query_llm = _build_llm_from_env_or_default(reasoning=reasoning)
+        if per_query_llm is not None and not getattr(per_query_llm, "_is_mock", False):
+            from core.src.query.synthesizer import LLMSynthesizer
+            query_synthesizer = LLMSynthesizer(
+                per_query_llm, max_tokens=_SYNTH_MAX_TOKENS
+            )
+            llm = per_query_llm
+        else:
+            logger.warning(
+                "Reasoning override %r requested but no real LLM resolved — "
+                "answering with the cached provider.", reasoning,
+            )
+
     llm_calls_before = llm.call_count if llm else 0
     llm_start = time.time()
-    response = pipeline.query(query_text, pinned_chunk_ids=pinned_chunk_ids)
+    response = pipeline.query(
+        query_text,
+        pinned_chunk_ids=pinned_chunk_ids,
+        synthesizer=query_synthesizer,
+    )
     llm_elapsed = time.time() - llm_start
     elapsed = time.time() - start
     llm_calls_after = llm.call_count if llm else 0

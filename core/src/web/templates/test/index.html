@@ -147,6 +147,29 @@
             </div>
           </div>
 
+          <div class="mb-3">
+            <label for="ask-reasoning" class="form-label">
+              <strong>Reasoning effort</strong>
+              <span class="text-muted small">(optional — for models that support
+                it; lower is faster)</span>
+            </label>
+            <select
+                id="ask-reasoning"
+                name="reasoning"
+                class="form-select form-select-sm"
+                style="max-width: 24rem;">
+              <option value="" selected>Endpoint default</option>
+              <option value="none">None — skip thinking (fastest)</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+            <div class="form-text">
+              Sent as <code>reasoning_effort</code>; models that don't support
+              it ignore it. Recorded with the answer so runs stay comparable.
+            </div>
+          </div>
+
           <div class="mb-0">
             <label for="ask-label" class="form-label">
               <strong>Correction label</strong>

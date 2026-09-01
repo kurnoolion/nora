@@ -115,6 +115,11 @@ class OpenAICompatibleProvider:
         timeout: Per-request timeout in seconds (default: 300; cloud LLMs need it).
         extra_headers: Optional headers merged into every request (e.g. OpenRouter's
             HTTP-Referer / X-Title for analytics).
+        reasoning: Reasoning effort for models that support it — one of
+            "none" / "low" / "medium" / "high". Sent as the OpenAI-standard
+            `reasoning_effort` field; vLLM maps it to the model's
+            `enable_thinking` chat-template kwarg ("none" disables thinking).
+            None omits the field entirely, which is the pre-existing behaviour.
     """
 
     def __init__(
@@ -124,6 +129,7 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         timeout: int = _DEFAULT_TIMEOUT,
         extra_headers: dict[str, str] | None = None,
+        reasoning: str | None = None,
     ) -> None:
         # Constructor args win over env vars; env vars are fallback only.
         resolved_model = model or os.environ.get(ENV_MODEL)
@@ -149,12 +155,13 @@ class OpenAICompatibleProvider:
         self._api_key = resolved_api_key or ""
         self._timeout = timeout
         self._extra_headers = dict(extra_headers or {})
+        self._reasoning = (reasoning or "").strip() or None
         self._call_count = 0
         self._last_call_stats: dict = {}
 
         logger.info(
             f"OpenAICompatibleProvider ready: model={self._model}, "
-            f"base_url={self._base_url}"
+            f"base_url={self._base_url}, reasoning={self._reasoning or '<default>'}"
         )
 
     def complete(
@@ -178,6 +185,14 @@ class OpenAICompatibleProvider:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # Reasoning effort, when the caller asked for one. vLLM accepts the
+        # OpenAI-standard field and injects the model's `enable_thinking`
+        # chat-template kwarg itself ("none" -> false, low/medium/high -> true),
+        # so no per-model mapping table is needed here. Older servers that
+        # reject `reasoning_effort` take the equivalent:
+        #     payload["chat_template_kwargs"] = {"enable_thinking": False}
+        if self._reasoning:
+            payload["reasoning_effort"] = self._reasoning
 
         body = json.dumps(payload).encode("utf-8")
         headers = {
@@ -266,6 +281,11 @@ class OpenAICompatibleProvider:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def reasoning(self) -> str:
+        """Reasoning effort sent with each call; empty when unset."""
+        return self._reasoning or ""
 
     @property
     def call_count(self) -> int:

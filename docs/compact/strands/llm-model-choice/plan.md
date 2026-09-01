@@ -108,12 +108,11 @@ concern. Both of the page's synthesis lanes are in scope.
    `OpenAICompatibleProvider.__init__` does no network, unlike `OllamaProvider`.
    *Verify:* cold-start cost is unchanged for a second query, and a query with
    no reasoning override still uses the cached provider.
-3c. **Thread the level through the job path** — `submit_query` form field →
-   `run_query_background` → `_run_query_sync`. Passed as an argument, not
-   persisted on the job row, so `JobQueue.submit` and the jobs schema are
-   untouched.
-   *Verify:* a submitted job with a reasoning level reaches the synthesizer with
-   that level; jobs table schema unchanged.
+3c. ~~**Thread the level through the job path.**~~ **Not needed.** The Ask page
+   calls `_run_query_sync` directly through `_run_query_for_test`; only the
+   older `/query` page goes through `JobQueue`. The level travels as a function
+   argument from the form handler to the lane runners. `jobs.py` untouched, and
+   the `/query` page keeps its existing behaviour via the `None` default.
 3d. **Both lanes honour the knob** — the select-synth lane already builds per
    call, so it takes the level directly.
    *Verify:* both lanes answer the same question at reasoning=none.

@@ -260,7 +260,29 @@ async def _snapshot_sira_lane_config() -> dict[str, Any]:
         return {"_error": f"healthz parse failed: {exc}"[:200]}
 
 
-def _snapshot_nora_lane_config(result: dict[str, Any]) -> dict[str, Any]:
+# Reasoning-effort levels the Ask form may send. "" means "don't send a
+# reasoning field at all", i.e. whatever the endpoint defaults to. vLLM maps
+# the named levels onto the model's enable_thinking chat-template kwarg.
+_REASONING_LEVELS = ("none", "low", "medium", "high")
+
+
+def _form_reasoning(form) -> str:
+    """Read + validate the reasoning level from an Ask form post.
+
+    Anything unrecognized (including a stale value from an older page) falls
+    back to "", so a bad value degrades to the endpoint default rather than
+    failing the question.
+    """
+    value = (form.get("reasoning") or "").strip().lower()
+    if value and value not in _REASONING_LEVELS:
+        logger.warning("Ignoring unknown reasoning level %r", value)
+        return ""
+    return value
+
+
+def _snapshot_nora_lane_config(
+    result: dict[str, Any], reasoning: str = "",
+) -> dict[str, Any]:
     """Compose NORA's lane_config snapshot from what the query pipeline
     returned for this request plus the few env knobs that shape it.
     Pure / synchronous; takes the result dict produced by
@@ -273,6 +295,10 @@ def _snapshot_nora_lane_config(result: dict[str, Any]) -> dict[str, Any]:
         "llm_model": result.get("llm_model"),
         "query_intent": result.get("query_intent"),
         "candidate_count": result.get("candidate_count"),
+        # Empty when the asker didn't pick a level — the answer then came from
+        # whatever the endpoint defaults to. Recorded either way so two runs of
+        # the same question stay comparable.
+        "reasoning_effort": reasoning or "",
     }
     for env in (
         "NORA_LLM_MODEL",
@@ -305,6 +331,7 @@ async def _run_nora_lane_for_merged(
     question: str, request: Request,
     *,
     emit_progress: "Callable[[str], Awaitable[None]] | None" = None,
+    reasoning: str = "",
 ) -> dict[str, Any]:
     """Run NORA's hybrid pipeline for the merged tab. Returns a
     standardized dict the merged branch consumes:
@@ -330,7 +357,10 @@ async def _run_nora_lane_for_merged(
     await _say("Running NORA hybrid pipeline (retrieve + rerank + synthesize)…")
     start = time.time()
     try:
-        result = await asyncio.to_thread(_run_query_for_test, question, request.app)
+        result = await asyncio.to_thread(
+            _run_query_for_test, question, request.app,
+            reasoning=reasoning or None,
+        )
     except Exception as exc:
         logger.exception("NORA lane failed in merged tab")
         await _say(f"NORA error: {exc}")
@@ -353,7 +383,7 @@ async def _run_nora_lane_for_merged(
         "retrieved_ids": list(retrieved_ids),
         "reranked_ids": None,
         "cited_ids": _flatten_cited_ids(result.get("llm_citations") or []),
-        "lane_config": _snapshot_nora_lane_config(result),
+        "lane_config": _snapshot_nora_lane_config(result, reasoning=reasoning),
     }
 
 
@@ -362,6 +392,7 @@ async def _run_sira_lane_for_merged(
     *,
     label: str = "",
     emit_progress: "Callable[[str], Awaitable[None]] | None" = None,
+    reasoning: str = "",
 ) -> dict[str, Any]:
     """Run SIRA's BM25→rerank pipeline + NORA's synthesizer pinned to
     the SIRA top results, for the merged tab. Returns a standardized
@@ -379,7 +410,9 @@ async def _run_sira_lane_for_merged(
 
     start = time.time()
     if _SELECT_SYNTH_ENABLED:
-        return await _run_select_synth_lane(question, _say, start, label=label)
+        return await _run_select_synth_lane(
+            question, _say, start, label=label, reasoning=reasoning,
+        )
     await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
         sira_result = await _call_sira_query(question, label=label)
@@ -410,6 +443,7 @@ async def _run_sira_lane_for_merged(
         try:
             synth_result = await asyncio.to_thread(
                 _run_query_for_test, question, request.app, pinned_chunk_ids,
+                reasoning=reasoning or None,
             )
             # Surface NORA-synthesizer latency alongside SIRA's retrieval
             # timings (expand/search/rerank) so the test page shows the full
@@ -433,6 +467,7 @@ async def _run_sira_lane_for_merged(
 
     retrieved_ids = [r["req_id"] for r in sira_results if r.get("req_id")]
     lane_config = await _snapshot_sira_lane_config()
+    lane_config["reasoning_effort"] = reasoning or ""
     # SIRA's `results` are already in rerank-score order when rerank is on
     # (per service.py:832). When rerank is off they're in BM25 order and
     # there's no separate reranked view, so log None.
@@ -697,11 +732,13 @@ def _select_synth_extract_citations(answer: str, packed: list[dict[str, Any]]) -
     return out
 
 
-def _select_synth_synthesize(question: str, packed: list[dict[str, Any]]) -> dict[str, Any]:
+def _select_synth_synthesize(
+    question: str, packed: list[dict[str, Any]], reasoning: str | None = None,
+) -> dict[str, Any]:
     """One LLM call over all packed chunks: the model selects relevant ones and
     synthesizes. Returns the dict shape the merged template consumes."""
     from core.src.web.routes.query import _build_llm_from_env_or_default
-    llm = _build_llm_from_env_or_default()
+    llm = _build_llm_from_env_or_default(reasoning=reasoning)
     if llm is None or getattr(llm, "_is_mock", False):
         return {"error": "select-synth needs a real LLM (NORA_LLM_* not configured)"}
     context_text = _build_select_synth_context(question, packed)
@@ -745,6 +782,7 @@ def _select_synth_synthesize(question: str, packed: list[dict[str, Any]]) -> dic
 async def _run_select_synth_lane(
     question: str, _say: "Callable[[str], Awaitable[None]]", start: float,
     label: str = "",
+    reasoning: str = "",
 ) -> dict[str, Any]:
     """select-synth lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
     that selects relevant chunks + synthesizes. Same dict shape as the default
@@ -775,7 +813,9 @@ async def _run_select_synth_lane(
     )
 
     synth_start = time.time()
-    synth_result = await asyncio.to_thread(_select_synth_synthesize, question, packed)
+    synth_result = await asyncio.to_thread(
+        _select_synth_synthesize, question, packed, reasoning=reasoning or None,
+    )
     synth_ms = int((time.time() - synth_start) * 1000)
     timings = sira_result.setdefault("timings_ms", {})
     if isinstance(timings, dict):
@@ -790,6 +830,7 @@ async def _run_select_synth_lane(
 
     retrieved_ids = [r["req_id"] for r in sira_results if r.get("req_id")]
     lane_config = await _snapshot_sira_lane_config()
+    lane_config["reasoning_effort"] = reasoning or ""
     return {
         "result": {} if synth_error else synth_result,
         "sira_result": sira_result,
@@ -1223,6 +1264,7 @@ async def playground_ask(request: Request):
     section = (form.get("section") or "requirement_bot").strip()
     # corrections-overlay label view (branching) — SIRA lane only
     label = (form.get("label") or "").strip()
+    reasoning = _form_reasoning(form)
 
     if not question:
         return _template_response(request, "test/_answer.html", {
@@ -1248,10 +1290,13 @@ async def playground_ask(request: Request):
         # one lane failing does not block the other from rendering.
         runners: dict[str, Any] = {}
         if "nora" in lanes_checked:
-            runners["nora"] = _run_nora_lane_for_merged(question, request)
+            runners["nora"] = _run_nora_lane_for_merged(
+                question, request, reasoning=reasoning,
+            )
         if "sira" in lanes_checked:
             runners["sira"] = _run_sira_lane_for_merged(question, request,
-                                                        label=label)
+                                                        label=label,
+                                                        reasoning=reasoning)
         outputs = dict(zip(runners.keys(),
                            await asyncio.gather(*runners.values(),
                                                 return_exceptions=False)))
@@ -1387,7 +1432,10 @@ async def playground_ask(request: Request):
     # existing /query path's pipeline construction.
     start = time.time()
     try:
-        result = await asyncio.to_thread(_run_query_for_test, question, request.app)
+        result = await asyncio.to_thread(
+            _run_query_for_test, question, request.app,
+            reasoning=reasoning or None,
+        )
     except Exception as e:
         logger.exception("Test query failed")
         return _template_response(request, "test/_answer.html", {
@@ -1464,6 +1512,7 @@ async def playground_ask_stream(request: Request):
     user_name = (form.get("user_name") or "").strip() or None
     # corrections-overlay label view (branching) — SIRA lane only
     label = (form.get("label") or "").strip()
+    reasoning = _form_reasoning(form)
 
     if section != "merged":
         return JSONResponse(
@@ -1495,11 +1544,13 @@ async def playground_ask_stream(request: Request):
     if "nora" in lanes_checked:
         runners["nora"] = _run_nora_lane_for_merged(
             question, request, emit_progress=_make_emitter("nora"),
+            reasoning=reasoning,
         )
     if "sira" in lanes_checked:
         runners["sira"] = _run_sira_lane_for_merged(
             question, request, label=label,
             emit_progress=_make_emitter("sira"),
+            reasoning=reasoning,
         )
 
     async def event_stream():
@@ -1735,6 +1786,7 @@ def _run_query_for_test(
     question: str,
     app=None,
     pinned_chunk_ids: list[str] | None = None,
+    reasoning: str | None = None,
 ) -> dict:
     """Adapt the existing /query pipeline runner into a dict shape
     the test page templates can consume directly. Re-imports the
@@ -1757,7 +1809,9 @@ def _run_query_for_test(
     """
     from core.src.web.routes.query import _run_query_sync
 
-    raw = _run_query_sync(question, app=app, pinned_chunk_ids=pinned_chunk_ids)
+    raw = _run_query_sync(
+        question, app=app, pinned_chunk_ids=pinned_chunk_ids, reasoning=reasoning,
+    )
     if "error" in raw:
         return {"error": raw["error"]}
 
