@@ -1,8 +1,8 @@
 # req-id-bubbles
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-08-31
-**Landed:**
+**Landed:** 2026-09-01
 **Assignees:** Hanif
 **Target modules:** web
 **Active phase:** development
@@ -61,3 +61,5 @@ endpoint, not a redesign.
 ```
 
 Steps 1-5 are local. Step 6 is the office gate.
+
+Landed on 2026-09-01 with 4 promoted decisions: D-210, D-211, D-212, D-213
