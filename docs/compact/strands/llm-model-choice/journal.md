@@ -158,3 +158,64 @@
 ### Flags
 - **No end-to-end run has happened.** Everything above is unit-tested and
   reasoned from the vLLM docs; nothing has spoken to a live model.
+
+## 2026-09-01 (session close) — Wiring gap, rebase, cosmetics
+
+### Done
+- **Wiring gap closed.** The Phase 1 commit claimed every lane honoured the
+  level; only the merged path read the form field. The legacy `sira_retrieval`
+  branch and `POST /api/test/synthesize-group` still ignored it and would have
+  written a `lane_config` that looked like an endpoint-default answer whatever
+  the asker chose. All six synthesis paths now wired.
+- **MODULE.md contracts** updated in-branch for llm / query / pipeline / web,
+  per the CLAUDE.md branch rule. The llm entry carries an invariant that
+  reasoning is injected at construction and never through `complete()` — the
+  thing a future contributor would otherwise "fix" by widening the Protocol.
+- **Rebased onto `origin/main`** (`a0d5cd3`, the `req-id-bubbles` merge). One
+  conflict, in `core/src/web/MODULE.md`: both sides had edited the same Routers
+  line. Resolved by keeping both additions — their `GET /api/req/{req_id}` bubble
+  route and our `reasoning` form-field note. `playground.py` and
+  `templates/test/index.html` auto-merged; both features verified present after.
+  Force-pushed with `--force-with-lease`.
+- **Ran the app** at `127.0.0.1:8000/test` against `~/work/env_demo` (the sample
+  corpus lives outside the repo; `config/web.json` ships `env_dir: ""`).
+- **Exercised the real provider class.** This machine's shell sets
+  `NORA_LLM_PROVIDER=ollama`, which sits above `config/llm.json` in the chain and
+  forces the legacy native path — nothing to do with how the team deploys.
+  Hanif pointed out Ollama also serves an OpenAI-compatible surface; the probe
+  confirmed it, so re-pointing at `http://localhost:11434/v1` exercises
+  `OpenAICompatibleProvider` itself. The log then shows both providers:
+  `reasoning=<default>` (cached at pipeline build) and `reasoning=none` (built
+  for the one query). That is the decoupling working end to end on the class the
+  deployment actually uses. It also made a planned fake-endpoint harness
+  unnecessary.
+- **Cosmetics.** Action bar right-aligned, reading into the primary action:
+  Options · name · reasoning · Ask. The reasoning select moved out of the
+  collapsed Options panel — a per-question choice belongs at the moment of
+  asking. Moved, not copied: two inputs named `reasoning` would both submit.
+  Sticky across asks, restoring a stored value only if the select still offers
+  it, so the control can never sit blank while the server uses the default.
+- **Deleted the `reasoning` property** added in Phase 1. Justified as provenance,
+  but provenance records the form value, so its only readers were its own tests.
+
+### Verified
+- Full suite 1840 passed. Zero regressions: `origin/main` alone fails the same 8
+  (`test_web_config` x6, `test_enrich_overlay_store`, `test_embedding_ollama`).
+- Browser-driven: set `none` → submit → reload → still `none`; a planted stale
+  value falls back to the default option rather than rendering blank.
+
+### Next
+- Decide what the control defaults to. Blank = endpoint default = reasoning on,
+  so ~15s remains the experience for anyone who never touches the dropdown.
+  Still the real latency decision.
+- Probe vLLM for `reasoning_effort` vs `chat_template_kwargs`, and confirm the
+  latency drop.
+- `/land-strand` once the work merges, to promote D-DRAFT-1..3.
+
+### Flags
+- **Still never run against vLLM.** The plumbing, validation and payload shape
+  are tested, and the provider path is exercised against Ollama's `/v1`, but the
+  central claim — reasoning off cuts the ~15s — remains unverified. Any PR should
+  say so plainly.
+- The plan artifact is private; it needs sharing from its share menu before the
+  manager can open it.
