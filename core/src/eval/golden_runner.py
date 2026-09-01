@@ -148,6 +148,14 @@ class StackStamp:
       * ``llm_identity``     — the model that generates Stage-2
                                responses (the judge is stamped
                                separately on the report).
+      * ``reasoning_effort`` — reasoning level sent with Stage-2
+                               generation ("none"/"low"/"medium"/
+                               "high"; empty = the endpoint's default).
+                               Recorded and printed, but deliberately
+                               NOT part of the comparability keys —
+                               pooling stays the analyst's call, so the
+                               line surfaces the difference rather than
+                               refusing the comparison.
       * ``retrieval_knobs``  — request-shaping settings (top_k, ...).
       * ``fallback_used_snapshot`` — the stack's refusal-fallback use
                                counter at run START (printed as
@@ -175,6 +183,7 @@ class StackStamp:
     sira_prompt_scheme: str = ""
     answer_prompt_version: str = ""
     llm_identity: str = ""
+    reasoning_effort: str = ""
     retrieval_knobs: dict = field(default_factory=dict)
     fallback_used_snapshot: int | None = None
     fallback_used_delta: int | None = None
@@ -220,6 +229,7 @@ class StackStamp:
         top_k: int | None = None,
         answer_prompt_version: str = "",
         llm_identity: str = "",
+        reasoning_effort: str = "",
         sira_prompt_scheme: str = "",
     ) -> "StackStamp":
         """Build a stamp from a healthz snapshot + caller-known fields.
@@ -233,6 +243,7 @@ class StackStamp:
         stamp = cls(
             answer_prompt_version=answer_prompt_version,
             llm_identity=llm_identity or str(h.get("shim_model") or ""),
+            reasoning_effort=reasoning_effort,
             sira_prompt_scheme=(
                 sira_prompt_scheme or str(h.get("sira_prompt_scheme") or "")
             ),
@@ -335,6 +346,7 @@ class StackStamp:
             "sira_prompt_scheme": self.sira_prompt_scheme,
             "answer_prompt_version": self.answer_prompt_version,
             "llm_identity": self.llm_identity,
+            "reasoning_effort": self.reasoning_effort,
             "retrieval_knobs": self.retrieval_knobs,
             "fallback_used_snapshot": self.fallback_used_snapshot,
             "fallback_used_delta": self.fallback_used_delta,
@@ -361,6 +373,11 @@ class StackStamp:
             parts.append(f"aprompt={self.answer_prompt_version}")
         if self.llm_identity:
             parts.append(f"llm={self.llm_identity}")
+        if self.reasoning_effort:
+            # Not a comparability key, so the line is the only place two
+            # runs at different levels visibly differ. Omitted when unset
+            # so existing lines are byte-identical.
+            parts.append(f"rsn={self.reasoning_effort}")
         if self.retrieval_knobs:
             # Digest, not a dump — the harvested knob set runs to ~20
             # entries; the full dict lives in report.json. Same digest
@@ -962,6 +979,7 @@ def run_all(
     timeout: float = _DEFAULT_TIMEOUT,
     answer_prompt_version: str = "",
     llm_identity: str = "",
+    reasoning_effort: str = "",
     sira_prompt_scheme: str = "",
     stage2_skip_reason: str = "",
 ) -> GoldenRunReport:
@@ -989,6 +1007,7 @@ def run_all(
             top_k=top_k,
             answer_prompt_version=answer_prompt_version,
             llm_identity=llm_identity,
+            reasoning_effort=reasoning_effort,
             sira_prompt_scheme=sira_prompt_scheme,
         ),
     )

@@ -189,3 +189,38 @@ def test_build_llm_honors_openai_compatible_provider(monkeypatch):
     inner = getattr(llm, "_primary", None) or getattr(llm, "_llm", None) or llm
     assert isinstance(inner, OpenAICompatibleProvider) or isinstance(
         llm, OpenAICompatibleProvider)
+
+
+# ─── Reasoning effort (Phase 2 — eval lane) ──────────────────────────
+
+
+class TestEvalReasoningEffort:
+    """`--reasoning` reaches the Stage-2 synthesis provider, and only it."""
+
+    def _provider(self, monkeypatch, reasoning):
+        from unittest.mock import patch
+        from core.src.eval import golden_cli
+
+        monkeypatch.setenv("NORA_LLM_PROVIDER", "openai-compatible")
+        monkeypatch.setenv("NORA_LLM_BASE_URL", "https://example.test/v1")
+        monkeypatch.setenv("NORA_LLM_API_KEY", "k")
+        monkeypatch.setenv("NORA_LLM_MODEL", "m")
+        # No refusal fallback configured — keep the provider unwrapped.
+        monkeypatch.delenv("NORA_LLM_REFUSAL_MARKERS", raising=False)
+        monkeypatch.delenv("NORA_LLM_FALLBACK_BASE_URL", raising=False)
+        with patch.object(golden_cli, "__name__", golden_cli.__name__):
+            return golden_cli._build_llm(model="m", reasoning=reasoning)
+
+    def test_level_reaches_the_provider(self, monkeypatch):
+        llm = self._provider(monkeypatch, "none")
+        assert llm._reasoning == "none"
+
+    def test_absent_level_sends_nothing(self, monkeypatch):
+        llm = self._provider(monkeypatch, None)
+        assert llm._reasoning is None
+
+    def test_empty_string_is_treated_as_unset(self, monkeypatch):
+        # argparse default is "" — it must mean "endpoint default",
+        # not a literal empty reasoning_effort field on the wire.
+        llm = self._provider(monkeypatch, "")
+        assert llm._reasoning is None

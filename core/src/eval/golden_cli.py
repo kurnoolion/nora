@@ -31,10 +31,18 @@ from .golden_runner import load_judge_prompt, run_all, write_run
 logger = logging.getLogger(__name__)
 
 
-def _build_llm(model: str | None = None, timeout: int | None = None):
+def _build_llm(
+    model: str | None = None,
+    timeout: int | None = None,
+    reasoning: str | None = None,
+):
     """Construct the LLM provider via the public env resolver chain
     (CLI > env var > config/llm.json > default). The Config-page DB tier
     doesn't apply headless — this CLI runs outside the web process.
+
+    `reasoning` is the per-run reasoning effort for openai-compatible
+    endpoints. The Ollama branch ignores it — its native API uses a
+    different knob (see llm/MODULE.md non-goals).
     """
     from core.src.env.config import (
         resolve_llm_api_key,
@@ -62,6 +70,7 @@ def _build_llm(model: str | None = None, timeout: int | None = None):
             base_url=resolve_llm_base_url(),
             api_key=resolve_llm_api_key(),
             timeout=timeout,
+            reasoning=reasoning or None,
         )
     else:
         from core.src.llm.ollama_provider import OllamaProvider
@@ -147,6 +156,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vectorstore-dir", type=Path, default=None)
     parser.add_argument("--llm-model", default=None,
                         help="synthesis model override")
+    parser.add_argument(
+        "--reasoning", default="",
+        choices=["", "none", "low", "medium", "high"],
+        help=(
+            "Reasoning effort for Stage-2 SYNTHESIS (openai-compatible "
+            "endpoints only; the judge keeps the endpoint default). "
+            "Empty sends no reasoning field at all. Recorded on the run "
+            "stamp and printed as rsn= on the identity line, but NOT a "
+            "comparability key — pooling runs at different levels stays "
+            "the analyst's call."
+        ),
+    )
     parser.add_argument("--judge-model", default=None,
                         help="judge model override (default: synthesis model)")
     parser.add_argument("--judge-prompt-version", default=None)
@@ -186,7 +207,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.stage == "all":
         try:
             judge_prompt = load_judge_prompt(args.judge_prompt_version)
-            synth_llm = _build_llm(model=args.llm_model)
+            synth_llm = _build_llm(
+                model=args.llm_model, reasoning=args.reasoning,
+            )
             judge = (
                 _build_llm(model=args.judge_model)
                 if args.judge_model else synth_llm
@@ -233,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         timeout=args.timeout,
         answer_prompt_version=args.answer_prompt_version,
         llm_identity=args.llm_model or "",
+        reasoning_effort=args.reasoning,
         sira_prompt_scheme=args.sira_prompt_scheme,
         stage2_skip_reason=stage2_skip_reason,
     )
