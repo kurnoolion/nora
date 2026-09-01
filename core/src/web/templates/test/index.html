@@ -122,8 +122,12 @@
             <option value="fast">Fast</option>
             <option value="think">Think</option>
           </select>
-          <span id="ask-mode-note" class="form-text ms-1" hidden>
-            This model ignores thinking settings.
+          {# Quiet by design: the disabled toggle already carries the signal,
+             so this only has to name the reason. Full sentence lives in the
+             tooltip. #}
+          <span id="ask-mode-note" class="text-muted small ms-1" hidden
+                title="This provider ignores reasoning settings, so the toggle has no effect.">
+            <i class="bi bi-info-circle"></i> not supported
           </span>
           {% endif %}
           <button id="ask-submit" class="btn btn-primary" type="submit">
