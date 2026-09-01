@@ -1178,10 +1178,19 @@ async def req_fragment(request: Request, req_id: str):
             status_code=404,
         )
     best = req_tree.latest_match(matches)
-    return _template_response(request, "test/_req_bubble.html", {
+    resp = _template_response(request, "test/_req_bubble.html", {
         "req": {**best, "req_id": req_id},
         "other_releases": len(matches) - 1,
     })
+    # htmx's `once` already stops a single bubble from refetching, but the same
+    # req can appear as several badges in one answer, and again on a reload or
+    # in another answer. Those are the repeats this collapses. Short window on
+    # purpose: the bubble's whole point is the CURRENT requirement text, so it
+    # must not outlive a re-ingestion by long. `private` — one reader's view,
+    # never a shared proxy cache. Misses stay uncached: a 404 usually means the
+    # corpus is mid-rebuild, and freezing that for 5 minutes would be wrong.
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    return resp
 
 
 @router.get("/ask/history", response_class=HTMLResponse)

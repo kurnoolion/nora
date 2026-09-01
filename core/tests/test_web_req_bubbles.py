@@ -98,6 +98,18 @@ class TestReqEndpoint:
         assert r.status_code == 404
         assert "not found" in r.text.lower()
 
+    def test_hit_is_browser_cacheable_briefly(self, client):
+        """Collapses the repeats `once` cannot: duplicate badges for one req in
+        the same answer, reloads, and the same req cited by another answer."""
+        r = client.get("/api/req/VZ_REQ_A_1")
+        assert r.headers["cache-control"] == "private, max-age=300"
+
+    def test_miss_is_not_cached(self, client):
+        """A 404 usually means the corpus is mid-rebuild — freezing that for
+        five minutes would keep showing "not found" after it came back."""
+        r = client.get("/api/req/VZ_REQ_NOPE_9")
+        assert "cache-control" not in r.headers
+
     def test_id_in_several_releases_shows_the_latest(self, client):
         """D-207's latest-on-conflict contract, reused rather than re-invented."""
         r = client.get("/api/req/VZ_REQ_A_1")
