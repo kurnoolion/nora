@@ -19,7 +19,7 @@
 
   <div class="card-body">
     <div class="text-muted small mb-2"><strong>Q:</strong> {{ row.question }}</div>
-    <div class="answer-body" style="line-height: 1.5;">{{ row.answer | md }}</div>
+    <div class="answer-body" style="line-height: 1.5;">{{ row.answer | md_bubbles(bubble_req_ids, root_path) }}</div>
   </div>
 </div>
 

@@ -248,7 +248,9 @@ templates.env.globals["is_team_restricted"] = _team_restricted
 # *italic*) to HTML. Returns Jinja-safe Markup so the template can
 # interpolate as `{{ answer | md }}` without an explicit |safe.
 from core.src.web.markdown_render import render_markdown as _render_md
+from core.src.web.markdown_render import render_markdown_bubbles as _render_md_bubbles
 templates.env.filters["md"] = _render_md
+templates.env.filters["md_bubbles"] = _render_md_bubbles
 
 
 def _template_response(

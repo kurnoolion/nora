@@ -1,0 +1,17 @@
+{# One requirement, loaded into an answer bubble (strand req-id-bubbles).
+   Rendered by GET /api/req/{req_id}; swapped into the bubble's body. #}
+<span class="d-flex justify-content-between gap-2 mb-1">
+  <code class="fw-semibold">{{ req.req_id }}</code>
+  <span class="text-muted">
+    {% if req.plan %}{{ req.plan }}{% endif %}
+    {% if req.mno %} · {{ req.mno }}{% endif %}
+    {% if req.release %} · {{ req.release }}{% endif %}
+  </span>
+</span>
+{% if req.title %}<span class="d-block fw-semibold mb-1">{{ req.title }}</span>{% endif %}
+<span class="d-block" style="white-space: pre-wrap;">{{ req.text }}</span>
+{% if other_releases %}
+  <span class="d-block text-muted mt-1">
+    Showing the latest of {{ other_releases + 1 }} releases carrying this id.
+  </span>
+{% endif %}

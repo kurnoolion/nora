@@ -17,10 +17,11 @@ are pure text and pass through unchanged.
 
 from __future__ import annotations
 
+import itertools
 import re
 
 import markdown as _markdown
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 
 _MD_EXTENSIONS = (
@@ -65,3 +66,81 @@ def render_markdown(text: str) -> Markup:
 
     html = _markdown.markdown(cleaned, extensions=list(_MD_EXTENSIONS))
     return Markup(html)
+
+
+# Req-ID bubbles (strand req-id-bubbles). The ids come from the answer's own
+# retrieval payload — never a req-ID regex — so this works on any MNO's id
+# format. See core/src/web/MODULE.md.
+#
+# Substitution runs over the RENDERED html, alternating on tags so a match
+# inside a tag's attributes can never be rewritten, and skipping the contents
+# of <a> (no nested links) and <pre> (fenced blocks stay verbatim). Inline
+# <code> is deliberately NOT skipped: LLMs routinely backtick req IDs, and
+# skipping it would drop most bubbles.
+_SKIP_SPANS_RE = re.compile(r"<(a|pre)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _bubble_html(req_id: str, nth: int) -> str:
+    """One collapsed badge + the panel its click expands. The panel body is
+    loaded from `/api/req/<req_id>` on first open (hx-trigger revealed), so an
+    answer with N bubbles costs zero requirement lookups until clicked.
+
+    `nth` makes the collapse target unique: the same req ID cited twice in one
+    answer would otherwise emit duplicate DOM ids, and Bootstrap would open the
+    first panel when the second badge is clicked.
+    """
+    safe = escape(req_id)
+    target = f"reqb-{nth}-" + re.sub(r"[^A-Za-z0-9_-]", "-", req_id)
+    return (
+        f'<span class="req-bubble">'
+        f'<a class="badge bg-light text-primary border text-decoration-none" '
+        f'role="button" data-bs-toggle="collapse" href="#{target}" '
+        f'aria-expanded="false">{safe}</a>'
+        f'<span class="collapse" id="{target}">'
+        f'<span class="req-bubble-body d-block border rounded p-2 my-2 small" '
+        f'hx-get="REQ_ENDPOINT/{safe}" hx-trigger="revealed once" '
+        f'hx-swap="innerHTML">'
+        f'<span class="text-muted">Loading {safe}…</span>'
+        f"</span></span></span>"
+    )
+
+
+def _linkify_req_ids(html: str, req_ids, root_path: str = "") -> str:
+    ids = sorted({r for r in (req_ids or []) if r and isinstance(r, str)},
+                 key=len, reverse=True)
+    if not ids:
+        return html
+    id_re = re.compile("|".join(re.escape(r) for r in ids))
+    counter = itertools.count()
+
+    def sub_text(text: str) -> str:
+        return id_re.sub(
+            lambda m: _bubble_html(m.group(0), next(counter)).replace(
+                "REQ_ENDPOINT", f"{root_path}/api/req"),
+            text,
+        )
+
+    out: list[str] = []
+    pos = 0
+    # Walk the html, copying protected spans and tags through untouched and
+    # substituting only in the text between them.
+    for m in re.finditer(f"{_SKIP_SPANS_RE.pattern}|{_TAG_RE.pattern}",
+                         html, re.IGNORECASE | re.DOTALL):
+        out.append(sub_text(html[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(sub_text(html[pos:]))
+    return "".join(out)
+
+
+def render_markdown_bubbles(text: str, req_ids=None, root_path: str = "") -> Markup:
+    """`render_markdown` plus click-to-expand req-ID bubbles.
+
+    Degrades to plain `render_markdown` output when `req_ids` is empty, so a
+    lane or a stored row that carries no ids renders exactly as before.
+    """
+    rendered = render_markdown(text)
+    if not req_ids:
+        return rendered
+    return Markup(_linkify_req_ids(str(rendered), req_ids, root_path))

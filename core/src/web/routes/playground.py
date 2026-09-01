@@ -212,6 +212,24 @@ def _flatten_cited_ids(citations: list[Any] | None) -> list[str]:
     return sorted(seen)
 
 
+def _bubble_req_ids(result: dict[str, Any] | None) -> list[str]:
+    """Req IDs eligible to become answer bubbles (strand req-id-bubbles).
+
+    The union of what retrieval returned and what the synthesizer cited —
+    both already populated identically for the nora and sira lanes, so this
+    needs no branch on `lane`. Literal ids, never a req-ID pattern: that is
+    what keeps bubbles working on non-VZW corpora.
+    """
+    if not result:
+        return []
+    ids: set[str] = set()
+    for c in (result.get("rag_chunks") or []):
+        if isinstance(c, dict) and isinstance(c.get("req_id"), str) and c["req_id"]:
+            ids.add(c["req_id"])
+    ids.update(_flatten_cited_ids(result.get("llm_citations") or []))
+    return sorted(ids)
+
+
 def _pick_sira_snapshot(healthz_body: dict[str, Any]) -> dict[str, Any]:
     """Subset a /healthz response to the keys that affect retrieval
     reproducibility for the lane_config snapshot. Pure / network-free
@@ -497,6 +515,9 @@ async def _build_merged_response_html(
             "llm_citations": result.get("llm_citations", []),
             "rag_chunks": result.get("rag_chunks", []),
             "rag_chunk_count": result.get("rag_chunk_count", 0),
+            # Bubble anchors, derived in the block BOTH lanes pass through so
+            # the feature cannot work on one lane and fail on the other.
+            "bubble_req_ids": _bubble_req_ids(result),
             "candidate_count": result.get("candidate_count"),
             "llm_model": result.get("llm_model"),
             "elapsed_ms": out["elapsed_ms"],
@@ -1095,10 +1116,14 @@ async def _render_stored_ask(request: Request, row_id: int, template: str):
             "<h4>Not found</h4><p>No shared answer with that id.</p>",
             status_code=404,
         )
+    cited_ids = _decode_json_column(row.get("cited_ids"), [])
+    retrieved_ids = _decode_json_column(row.get("retrieved_ids"), [])
     return _template_response(request, template, {
         "row": row,
         "citations": _decode_json_column(row.get("citations_json"), []),
-        "cited_ids": _decode_json_column(row.get("cited_ids"), []),
+        "cited_ids": cited_ids,
+        # Same union as the live path, via its persisted carriers.
+        "bubble_req_ids": sorted(set(cited_ids) | set(retrieved_ids)),
     })
 
 
@@ -1127,6 +1152,36 @@ async def shared_answer_fragment(request: Request, row_id: int):
     History page's detail pane. Shares one template with the full page so the
     two cannot drift."""
     return await _render_stored_ask(request, row_id, "test/_shared_body.html")
+
+
+@router.get("/api/req/{req_id:path}", response_class=HTMLResponse)
+async def req_fragment(request: Request, req_id: str):
+    """Requirement body behind an answer bubble (strand req-id-bubbles).
+
+    Read-only, parse-layer only. Resolves through the shared `req_tree`
+    helpers so it agrees with the Requirement Browser and the Eval Studio
+    picker; a req_id carried by several releases shows the latest, per
+    D-207's latest-on-conflict contract.
+    """
+    from core.src.web.app import _template_response, config
+    from core.src.web import req_tree
+
+    try:
+        matches = req_tree.find_req(config.env_dir_path(), req_id)
+    except Exception:  # noqa: BLE001 — a missing/!unreadable parse layer is a 404 here
+        logger.exception("req bubble lookup failed for %s", req_id)
+        matches = []
+    if not matches:
+        return HTMLResponse(
+            '<span class="text-muted">Requirement not found in the parsed '
+            "corpus.</span>",
+            status_code=404,
+        )
+    best = req_tree.latest_match(matches)
+    return _template_response(request, "test/_req_bubble.html", {
+        "req": {**best, "req_id": req_id},
+        "other_releases": len(matches) - 1,
+    })
 
 
 @router.get("/ask/history", response_class=HTMLResponse)

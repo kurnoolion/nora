@@ -180,3 +180,13 @@ class TestSharedAnswerPaths:
         assert tm.path_allowed_for_team("/ask/history") is True
         # Unrelated /ask paths are NOT blanket-admitted.
         assert tm.path_allowed_for_team("/ask/admin") is False
+
+    def test_req_bubble_fragments_allowed(self):
+        """Strand req-id-bubbles: the bubbles inside a shared answer fetch
+        their body from /api/req/. Without the allowlist entry a gated
+        expert opening a teammate's link gets bubbles that redirect to
+        /test — the same miss the share paths above shipped with once."""
+        assert tm.path_allowed_for_team("/api/req/VZ_REQ_A_1") is True
+        assert tm.path_allowed_for_team("/api/req/REQ-TMO-5G-42") is True
+        # Not a blanket /api admit.
+        assert tm.path_allowed_for_team("/api/config/save") is False
