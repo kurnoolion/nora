@@ -75,7 +75,7 @@ should not have to reason about effort levels, and "primary/secondary" says
 nothing about which infrastructure answers a question.
 
 **Decision.** One optional `providers` list in `config/llm.json` — named entries
-(`{id, name, base_url, model, api_key_env, supports_reasoning, default_mode}`) —
+(`{id, name, base_url, model, api_key_env, supports_reasoning_control, default_mode}`) —
 surfaced on the Ask page as a provider select plus a two-way Fast/Think toggle.
 Fast sends `reasoning_effort: "none"`; Think sends no reasoning field at all.
 

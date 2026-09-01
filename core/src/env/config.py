@@ -54,11 +54,17 @@ class LLMProviderEntry:
     `name` is what a user sees — say what the infrastructure IS
     ("130B — DGX"), not its role, so the choice is recognisable.
 
-    `supports_reasoning` is DECLARED, never detected: no OpenAI-compatible
-    endpoint advertises the capability, and probing only catches outright
-    rejection — a server may accept `reasoning_effort` and silently ignore
-    it, which is indistinguishable from honouring it. Declaring it is what
-    lets the UI stop offering a control that would do nothing.
+    `supports_reasoning_control` says the endpoint **honours the knob** — not
+    that the model reasons. The two are independent: a thinking model with no
+    exposed control is `False`, because nothing we send can change how much it
+    thinks. Naming it after the model's nature is the mistake to avoid; someone
+    would tick it for a reasoning model that ignores `reasoning_effort`, and
+    the UI would then offer a live control that does nothing.
+
+    It is DECLARED, never detected: no OpenAI-compatible endpoint advertises
+    the capability, and probing only catches outright rejection — a server may
+    accept `reasoning_effort` and silently ignore it, which is
+    indistinguishable from honouring it.
 
     `api_key_env` names an environment variable; keys are never written in
     this committed file.
@@ -69,7 +75,7 @@ class LLMProviderEntry:
     base_url: str
     model: str
     api_key_env: str = ""
-    supports_reasoning: bool = False
+    supports_reasoning_control: bool = False
     default_mode: str = "think"
 
     @property
@@ -116,7 +122,7 @@ def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
             base_url=base_url,
             model=model,
             api_key_env=str(item.get("api_key_env", "") or "").strip(),
-            supports_reasoning=bool(item.get("supports_reasoning", False)),
+            supports_reasoning_control=bool(item.get("supports_reasoning_control", False)),
             default_mode=mode,
         ))
     return out

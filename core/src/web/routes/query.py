@@ -257,7 +257,7 @@ def _build_llm_from_env_or_default(
       * "think" -> send NO reasoning field, so the model does whatever the
                    deployment already does. We never invent an effort level
                    on its behalf.
-    A mode on a provider that declares `supports_reasoning: false` is
+    A mode on a provider that declares `supports_reasoning_control: false` is
     ignored with a warning — the field would be silently dropped anyway, and
     pretending otherwise would let the UI lie about what was sent.
 
@@ -359,7 +359,7 @@ def _reasoning_for(entry, mode: str | None) -> str | None:
     Falls back to the entry's own `default_mode` when the asker expressed
     no preference, so a provider that should think by default does.
     """
-    if not entry.supports_reasoning:
+    if not entry.supports_reasoning_control:
         if mode:
             logger.warning(
                 "Provider %r declares no reasoning support — ignoring "

@@ -107,7 +107,7 @@
               aria-label="Which model answers">
             {% for p in providers %}
             <option value="{{ p.id }}"
-                    data-supports-reasoning="{{ 1 if p.supports_reasoning else 0 }}"
+                    data-supports-reasoning-control="{{ 1 if p.supports_reasoning_control else 0 }}"
                     data-default-mode="{{ p.default_mode }}"
                     {% if loop.first %}selected{% endif %}>{{ p.name }}</option>
             {% endfor %}
@@ -130,8 +130,8 @@
              right-aligned, so removing this from the flow would shift every
              control and make the Ask button jump as you switch providers. #}
           <span id="ask-mode-note" class="text-muted small ms-1 invisible"
-                title="This provider ignores reasoning settings, so the toggle has no effect.">
-            <i class="bi bi-info-circle"></i> not supported
+                title="This endpoint exposes no control over how much the model thinks — the model may still reason, we just cannot change it.">
+            <i class="bi bi-info-circle"></i> no thinking control
           </span>
           {% endif %}
           <button id="ask-submit" class="btn btn-primary" type="submit">
@@ -514,7 +514,7 @@ function askRecordHistory(question, root) {
   function syncMode() {
     if (!providerEl || !modeEl) return;
     const opt = providerEl.options[providerEl.selectedIndex];
-    const supported = opt && opt.dataset.supportsReasoning === "1";
+    const supported = opt && opt.dataset.supportsReasoningControl === "1";
     modeEl.disabled = !supported;
     const note = document.getElementById("ask-mode-note");
     // Visibility, not display — see the note's markup: this row is

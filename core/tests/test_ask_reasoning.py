@@ -173,7 +173,7 @@ class TestModeToReasoning:
         from core.src.env.config import LLMProviderEntry
         return LLMProviderEntry(
             id="p", name="P", base_url="u", model="m",
-            supports_reasoning=supports, default_mode=default_mode,
+            supports_reasoning_control=supports, default_mode=default_mode,
         )
 
     def test_fast_sends_none(self):

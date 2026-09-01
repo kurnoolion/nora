@@ -125,7 +125,7 @@ concern. Both of the page's synthesis lanes are in scope.
    *Superseded the original 4-level select (never shipped): users should not
    have to reason about effort levels, and "primary/secondary" told them
    nothing about which infrastructure answers.*
-   **Capability is declared, not detected** (`supports_reasoning` per entry) —
+   **Capability is declared, not detected** (`supports_reasoning_control` per entry) —
    no OpenAI-compatible endpoint advertises it, and probing only catches
    outright rejection; a server can accept `reasoning_effort` and silently
    ignore it. The toggle renders disabled, with the reason, on an entry that
