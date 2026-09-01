@@ -143,9 +143,10 @@ concern. Both of the page's synthesis lanes are in scope.
 Not in Phase 1: model choice, provider roster, Ollama reasoning, eval,
 enrichment, taxonomy.
 
-## 5. Phase 1.5 — eval (immediate second, different shape)
+## 5. Phase 2 — eval (different shape) — BUILT 2026-09-01
 
-Eval is next, but it is **not** the ASK control moved sideways. Golden-eval has
+Built on branch `llm-model-choice-eval`. Eval is **not** the ASK control moved
+sideways. Golden-eval has
 snapshot freeze and a serving-env rule (`docs/golden-eval-guide.md`). A
 per-question override reaching an eval run would silently break cell
 comparability. Correct shape: model + reasoning are **properties of a campaign
@@ -153,7 +154,7 @@ cell**, fixed for the run and recorded in the campaign manifest — an arm to fl
 not a control to twiddle. Designed when we get there, not now. Phase 1 must not
 expose an override that eval can inherit by accident.
 
-## 6. Phase 2 — the provider roster (decision needed)
+## 6. Phase 3 — the provider roster (awaiting manager feedback)
 
 The horizontal goal — "LLM providers become a component anyone configures" —
 means named provider entries in settings (name, provider type, model, base_url,
