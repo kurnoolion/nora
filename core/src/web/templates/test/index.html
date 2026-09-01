@@ -125,14 +125,6 @@
           {# Quiet by design: the disabled toggle already carries the signal,
              so this only has to name the reason. Full sentence lives in the
              tooltip. #}
-          {# Always occupies its space — toggled with `invisible`
-             (visibility:hidden), never `hidden` (display:none). The row is
-             right-aligned, so removing this from the flow would shift every
-             control and make the Ask button jump as you switch providers. #}
-          <span id="ask-mode-note" class="text-muted small ms-1 invisible"
-                title="This endpoint exposes no control over how much the model thinks — the model may still reason, we just cannot change it.">
-            <i class="bi bi-info-circle"></i> no thinking control
-          </span>
           {% endif %}
           <button id="ask-submit" class="btn btn-primary" type="submit">
             <span id="ask-submit-label">Ask</span>
@@ -142,6 +134,19 @@
             </span>
           </button>
         </div>
+
+        {# Its own line under the action row. Kept OUT of that row on purpose:
+           the row is right-aligned, so anything that appears inside it shifts
+           every control and makes the Ask button move. Here it can come and go
+           without touching the controls' positions. #}
+        {% if providers %}
+        <div class="text-end mt-1">
+          <span id="ask-mode-note" class="text-muted small" hidden
+                title="This endpoint exposes no control over how much the model thinks — the model may still reason, we just cannot change it.">
+            <i class="bi bi-info-circle"></i> no thinking control
+          </span>
+        </div>
+        {% endif %}
 
         <div class="collapse mt-3" id="ask-options">
           <div class="mb-3">
@@ -517,9 +522,9 @@ function askRecordHistory(question, root) {
     const supported = opt && opt.dataset.supportsReasoningControl === "1";
     modeEl.disabled = !supported;
     const note = document.getElementById("ask-mode-note");
-    // Visibility, not display — see the note's markup: this row is
-    // right-aligned, so reflowing it moves the Ask button.
-    if (note) note.classList.toggle("invisible", supported);
+    // Lives on its own line below the action row, so showing it cannot move
+    // any control.
+    if (note) note.hidden = supported;
     if (supported && opt.dataset.defaultMode && !modeEl.dataset.userSet) {
       modeEl.value = opt.dataset.defaultMode;
     }
