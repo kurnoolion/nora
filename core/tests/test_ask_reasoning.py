@@ -11,6 +11,8 @@ No network: the store, embedder and synthesizers are all doubles.
 
 from __future__ import annotations
 
+import pathlib
+
 import networkx as nx
 
 from core.src.query.pipeline import QueryPipeline
@@ -245,3 +247,41 @@ class TestRosterResolution:
             assert p.default_mode == "think"
         finally:
             cfg._reset_llm_config_cache()
+
+
+class TestExampleConfigStaysValid:
+    """`config/llm.json.example` is the file people copy from, so it has to
+    parse and to name every field — an example that drifts is worse than none."""
+
+    _PATH = pathlib.Path(__file__).resolve().parents[2] / "config" / "llm.json.example"
+
+    def test_it_parses_and_yields_its_providers(self):
+        from core.src.env.config import LLMConfigFile
+
+        cfg = LLMConfigFile.load(self._PATH)
+        assert [p.id for p in cfg.providers] == ["dgx-130b", "internal-14b"]
+        assert cfg.providers[0].supports_reasoning_control is True
+        assert cfg.providers[1].supports_reasoning_control is False
+
+    def test_it_documents_every_entry_field(self):
+        """A field added to LLMProviderEntry must reach the example, or the
+        next person copying it silently misses the new knob."""
+        import dataclasses
+        import json
+
+        from core.src.env.config import LLMProviderEntry
+
+        raw = json.loads(self._PATH.read_text())
+        documented = set(raw["providers"][0]) | set(raw["providers"][1])
+        expected = {f.name for f in dataclasses.fields(LLMProviderEntry)}
+        assert expected <= documented, f"undocumented: {expected - documented}"
+
+    def test_it_contains_no_literal_keys(self):
+        """Keys are referenced by env-var NAME. A literal here would be a
+        secret in a committed file."""
+        import json
+
+        raw = json.loads(self._PATH.read_text())
+        for entry in raw["providers"]:
+            assert "api_key" not in entry
+            assert entry["api_key_env"].startswith("NORA_")

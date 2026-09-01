@@ -22,6 +22,8 @@ Per-environment scoped workspace configuration. An environment names a workspace
 - `resolve_providers()` / `resolve_provider(provider_id)` (config.py) — the optional named provider roster from `config/llm.json` (`LLMProviderEntry`: id, name, base_url, model, api_key_env, supports_reasoning_control, default_mode). `resolve_providers()` returns `[]` when no roster is configured — the normal case, and the signal to callers to use the single-provider chain unchanged. `resolve_provider()` falls back to the first entry for an empty or unknown id, so a stale bookmark degrades instead of failing a request. No env/CLI tier: a roster is a set of named endpoints, which is file-shaped, not a flag
 
 **Invariants**
+- `config/llm.json.example` is the copy-from reference for the whole schema, including the optional roster. It is never read by the app, and `test_ask_reasoning.py::TestExampleConfigStaysValid` fails if it stops parsing, omits an `LLMProviderEntry` field, or grows a literal API key — an example that drifts is worse than none.
+
 - `supports_reasoning_control` says the endpoint **honours the knob**, not that the model reasons — a thinking model with no exposed control is `False`, because nothing we send changes how much it thinks. It is **declared, never detected**. No OpenAI-compatible endpoint advertises the capability, and probing only catches outright rejection — a server can accept `reasoning_effort` and silently ignore it, which is indistinguishable from honouring it. Declaring it is what lets the UI avoid offering a control that would do nothing.
 - A malformed roster entry is dropped with a warning, never fatal — a half-written `providers` list must not take the app down, and the warning is what makes the omission visible.
 
