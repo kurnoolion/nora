@@ -44,10 +44,23 @@ The reasoning level is an optional constructor argument on
 `OpenAICompatibleProvider`, added to the request body.
 
 **Why.** `core/src/llm/MODULE.md` marks a Protocol signature change as a
-coordinated break across taxonomy, query and eval. The web ASK lane already
-builds its provider per request (`core/src/web/routes/query.py:244`, called at
-`:464`, uncached), so construction-time injection needs no new plumbing and
-costs nothing at the seam.
+coordinated break across taxonomy, query and eval. Construction-time injection
+avoids that break entirely.
+
+**Corrected 2026-09-01 (same session).** An earlier version of this draft
+claimed the ASK lane already builds its provider per request, so the change was
+free. That was wrong. The Ask page is `/test` (`playground.py`), and its
+pipeline lane reuses a provider cached with the pipeline on
+`app.state.query_pipeline` until process restart. Construction-time injection
+still holds, but it costs real plumbing: a keyword-only `synthesizer=None`
+override on `QueryPipeline.query()`, a per-query provider built in
+`_run_query_sync`, and the level threaded from the form through
+`run_query_background`.
+
+**Rejected alternative (2).** Mutating the cached provider before each call
+(`llm.reasoning = x`). Queries run via `asyncio.create_task` →
+`asyncio.to_thread`, so concurrent asks at different levels would clobber each
+other and record provenance that does not match the answer.
 
 **Rejected alternative.** A per-model capability registry so the UI only offers
 supported knobs. Unnecessary: vLLM accepts the OpenAI-standard

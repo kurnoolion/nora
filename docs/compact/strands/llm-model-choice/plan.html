@@ -344,7 +344,8 @@
     <ul class="findings">
       <li><div><strong>The provider seam has no reasoning parameter</strong> — and changing it is a coordinated break across taxonomy, query and eval. We do not touch it.<span class="ref">core/src/llm/base.py · complete(prompt, system, temperature, max_tokens)</span></div></li>
       <li><div><strong>Configuration resolves one provider, not a roster.</strong> Config page → env var → config file → environment JSON → default, as flat hand-curated fields.<span class="ref">core/src/web/config_schema.py · D-044 / D-053</span></div></li>
-      <li><div><strong>The Ask lane already builds its provider per request</strong>, with no caching — so per-question model and reasoning need no new plumbing.<span class="ref">core/src/web/routes/query.py:244, called at :464</span></div></li>
+      <li><div><strong>The Ask page has two synthesis lanes, with opposite caching behaviour</strong> — and this is the plumbing cost of the whole feature. The pipeline lane builds its provider and synthesizer once and caches them until the process restarts, so a per-question knob cannot reach it without a change there. The select-synth lane builds one per call and is free.<span class="ref">core/src/web/routes/playground.py — pipeline lane via query.py:513 (cached on app.state) · select-synth at playground.py:683 (per call)</span></div></li>
+      <li><div><strong>Mutating the cached provider per request is not an option.</strong> Queries run on background threads, so two concurrent asks at different levels would clobber each other and record provenance that does not match the answer.<span class="ref">asyncio.create_task → asyncio.to_thread</span></div></li>
       <li><div><strong>Our existing reasoning code strips output; it does not disable thinking.</strong> Chain-of-thought is discarded after generation, so the latency is still paid in full. This is why earlier work here did not make answers faster.<span class="ref">core/src/llm/openai_provider.py · _strip_reasoning, NORA_LLM_REASONING_SENTINEL</span></div></li>
       <li><div><strong>We can already record what produced an answer.</strong> The model column and a config JSON column both exist and are already accepted by the write path — no migration.<span class="ref">core/src/web/feedback_db.py · test_feedback.llm_model, lane_config</span></div></li>
     </ul>
@@ -371,7 +372,7 @@
     <div class="phase">
       <div class="phase-head">
         <span class="phase-num">Phase 1</span>
-        <p>Ask lane · openai-compatible provider · reasoning effort only</p>
+        <p>Ask page · openai-compatible provider · reasoning effort only · both lanes</p>
       </div>
       <ol class="steps">
         <li>Probe the deployed vLLM for <code>reasoning_effort</code> versus <code>chat_template_kwargs</code>.
@@ -380,6 +381,10 @@
           <span class="verify"><b>Verify</b> a unit test asserts the body carries the field when set — and is byte-identical to today when it is not.</span></li>
         <li>Let the Ask request override the resolved reasoning level; an absent value keeps today's behaviour exactly. The model stays whatever configuration resolves.
           <span class="verify"><b>Verify</b> an Ask with no override resolves the same provider as before.</span></li>
+        <li>Decouple the LLM from the cached pipeline: the query call accepts a synthesizer for that one question, so a request carrying a reasoning level gets its own provider while the expensive pipeline — graph, embedder, vector store, keyword index — stays cached. Provider construction costs no network call.
+          <span class="verify"><b>Verify</b> cold-start cost is unchanged on a second query, and a query with no override still uses the cached provider.</span></li>
+        <li>Thread the level from the form through the background job to the synthesizer, as an argument rather than a stored job field, so the jobs table is untouched.
+          <span class="verify"><b>Verify</b> the level reaches the synthesizer; jobs schema unchanged.</span></li>
         <li>One control on the Ask page: a reasoning level. Blank means "use the configured settings".
           <span class="verify"><b>Verify</b> the same question answered with reasoning off is measurably faster than with it on.</span></li>
         <li>Record the model that answered and the reasoning level on the answer row, reusing columns that already exist. The model is recorded, not chosen.

@@ -38,10 +38,21 @@ Verified in code, not assumed:
 - **One active provider, not a roster.** Resolution chain (D-044 / D-053):
   Config-page DB > `NORA_LLM_*` env > `config/llm.json` > environment JSON >
   default. Fields are flat and hand-curated in `core/src/web/config_schema.py`.
-- **The web ASK lane already builds its provider per request** —
-  `_build_llm_from_env_or_default()` at `core/src/web/routes/query.py:244`,
-  called at `:464`, no caching. So per-request model/reasoning needs no new
-  plumbing and no Protocol change.
+- **The Ask page is `/test` (`core/src/web/routes/playground.py`)**, not
+  `/query`. The nav item "Ask Requirement Questions" points at `/test`.
+- **It has two synthesis lanes, with opposite caching behaviour** — and this is
+  the plumbing cost of the whole feature:
+  - *Pipeline lane* — `_run_query_for_test` → `_run_query_sync` →
+    `_get_or_build_pipeline` (`core/src/web/routes/query.py:513`). The provider
+    **and** the `LLMSynthesizer` holding it are built once inside
+    `_build_pipeline` and cached on `app.state.query_pipeline` until process
+    restart. A per-question knob cannot reach it without a change here.
+  - *Select-synth lane* — `_select_synth_synthesize`
+    (`core/src/web/routes/playground.py:683`) builds a provider per call and
+    calls `complete()` directly. Free.
+  - Mutating the cached provider per request is **not** an option: queries run
+    via `asyncio.create_task` → `asyncio.to_thread`, so concurrent asks at
+    different levels would clobber each other and mislabel provenance.
 - **Existing reasoning code strips, it does not disable.** `_strip_reasoning`,
   `NORA_LLM_REASONING_SENTINEL`, `FINAL_ANSWER_MARKER` in
   `core/src/llm/openai_provider.py` discard chain-of-thought *after* generation.
@@ -74,8 +85,9 @@ instead — same UI, different body key.
 
 ## 4. Phase 1 — the minimum that solves the ask
 
-Scope: ASK lane, openai-compatible provider, one endpoint, **reasoning effort
-only**. No model picker — see §6 for why that is a Phase 2 concern.
+Scope: Ask page (`/test`), openai-compatible provider, one endpoint,
+**reasoning effort only**. No model picker — see §6 for why that is a Phase 2
+concern. Both of the page's synthesis lanes are in scope.
 
 1. **Probe** the deployed vLLM for `reasoning_effort` vs `chat_template_kwargs`.
    *Verify:* one form returns 200 with visibly lower latency and empty reasoning.
@@ -87,13 +99,32 @@ only**. No model picker — see §6 for why that is a Phase 2 concern.
    overrides the resolved chain; `None` keeps today's behaviour exactly. The
    model stays whatever the chain resolves.
    *Verify:* existing ASK request with no override resolves the same provider.
+3b. **Decouple the LLM from the cached pipeline.** `QueryPipeline.query()` takes
+   a keyword-only `synthesizer=None` override (two call sites use
+   `self._synthesizer`: `core/src/query/pipeline.py:400` and `:630`). When a
+   request carries a reasoning level, `_run_query_sync` builds a provider +
+   `LLMSynthesizer` for that query and passes it through; the expensive pipeline
+   (graph, embedder, Chroma, BM25) stays cached. Construction is cheap —
+   `OpenAICompatibleProvider.__init__` does no network, unlike `OllamaProvider`.
+   *Verify:* cold-start cost is unchanged for a second query, and a query with
+   no reasoning override still uses the cached provider.
+3c. **Thread the level through the job path** — `submit_query` form field →
+   `run_query_background` → `_run_query_sync`. Passed as an argument, not
+   persisted on the job row, so `JobQueue.submit` and the jobs schema are
+   untouched.
+   *Verify:* a submitted job with a reasoning level reaches the synthesizer with
+   that level; jobs table schema unchanged.
+3d. **Both lanes honour the knob** — the select-synth lane already builds per
+   call, so it takes the level directly.
+   *Verify:* both lanes answer the same question at reasoning=none.
 4. **One ASK page control** — a reasoning select
    (`default / none / low / medium / high`). Blank = use configured settings.
    *Verify:* asking with reasoning=none is measurably faster than default on
    the same question.
 5. **Record what answered** — pass the served `llm_model` and put the reasoning
    level in `lane_config` on `record_qa()`. Existing columns, no migration.
-   The model is recorded, not chosen.
+   The model is recorded, not chosen. Note `record_qa` is called from
+   `playground.py` only (four sites); `query.py` does not record.
    *Verify:* two asks at different reasoning levels produce two rows that differ.
 
 Not in Phase 1: model choice, provider roster, Ollama reasoning, eval,

@@ -64,3 +64,46 @@
 - Branch `llm-model-choice` is committed but **not pushed**. The artifact is
   private — it must be shared from the page's share menu before the manager can
   open it.
+
+## 2026-09-01 (later) — Correction: the plan pointed at the wrong module
+
+### Done
+- Started Phase 1 implementation and found two errors in yesterday's plan
+  before writing any code.
+- **The Ask page is `/test` → `core/src/web/routes/playground.py`**, not
+  `/query` → `query.py`. The nav item "Ask Requirement Questions" links to
+  `/test`. The plan, the journal, D-DRAFT-3 and the published page all named
+  the wrong module.
+- **"The ASK lane builds its provider per request" was false for the lane that
+  matters.** The Ask page has two synthesis lanes:
+  - Pipeline lane (`_run_query_for_test` → `_run_query_sync` →
+    `_get_or_build_pipeline`, `query.py:513`) — provider *and* `LLMSynthesizer`
+    are built inside `_build_pipeline` and cached on `app.state.query_pipeline`
+    until process restart.
+  - Select-synth lane (`playground.py:683`) — builds a provider per call.
+    Free, as originally claimed.
+- Ruled out the shortcut: mutating the cached provider per request is a data
+  race (queries run `asyncio.create_task` → `asyncio.to_thread`), and it would
+  mislabel provenance — the exact failure the provenance step exists to prevent.
+- Corrected `plan.md` §2 and §4 (new steps 3b/3c/3d), corrected D-DRAFT-3 with
+  the correction noted in place, and republished `plan.html`.
+
+### Consequence for Phase 1
+- No longer "the seam is free". Still no Protocol change, but the plumbing is:
+  a keyword-only `synthesizer=None` override on `QueryPipeline.query()` (two
+  call sites, `pipeline.py:400` and `:630`), a per-query provider + synthesizer
+  in `_run_query_sync`, and the level threaded from the form POST through
+  `run_query_background`. Passed as an argument, so `JobQueue.submit` and the
+  jobs schema stay untouched.
+- `_run_query_sync` reads `llm.call_count` before/after for timing; a per-query
+  provider starts at zero, so that arithmetic has to follow the new instance.
+
+### Next
+- Implement Phase 1 against the corrected map.
+- Probe deferred: no infra access from outside. Implementing `reasoning_effort`
+  on the assumption of a recent vLLM, with `chat_template_kwargs` kept one line
+  away as the fallback.
+
+### Flags
+- The published page and plan carried the wrong module for a day. If the plan
+  was already shown to anyone, the corrected version is the one to re-share.
