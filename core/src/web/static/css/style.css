@@ -148,6 +148,10 @@ body {
 /* Req-ID bubbles in an answer (strand req-id-bubbles). The badge sits inline
    in running prose, so it has to read as a control rather than as emphasised
    text — tinted fill + border + a caret that flips when its panel opens. */
+.req-bubble {
+    position: relative;
+}
+
 .req-bubble-badge {
     font-weight: 600;
     letter-spacing: 0.01em;
@@ -174,9 +178,32 @@ body {
     transform: rotate(180deg);
 }
 
-/* The expanded panel is a quotation of the corpus, not part of the answer:
-   left rule + inset fill keep that boundary obvious when it lands mid-prose. */
+/* The panel floats OVER the page rather than expanding inline: an inline
+   panel reflows the paragraph it lands in, splitting the sentence the reader
+   is mid-way through. Anchored under its own badge, flipped to the right edge
+   by app.js when it would otherwise overflow the viewport. */
+.req-bubble > .collapse,
+.req-bubble > .collapsing {
+    position: absolute;
+    z-index: 1070;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    min-width: min(26rem, 92vw);
+    max-width: min(40rem, 92vw);
+}
+
+.req-bubble > .req-bubble-flip {
+    left: auto;
+    right: 0;
+}
+
+/* Darker surface + elevation so the panel reads as a layer above the answer,
+   not as more answer. It is a quotation of the corpus, not the LLM's prose. */
 .req-bubble-body {
-    background-color: var(--bs-tertiary-bg);
+    background-color: var(--bs-secondary-bg);
+    border: 1px solid var(--bs-border-color) !important;
     border-left: 3px solid var(--bs-primary) !important;
+    box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.18);
+    text-align: left;
+    white-space: normal;
 }
