@@ -16,7 +16,7 @@ from markupsafe import Markup
 from core.src.web.markdown_render import render_markdown, render_markdown_bubbles
 
 
-ANSWER = "Device shall follow VZ_REQ_LTEAT_45 before detach."
+ANSWER = "Device shall follow VZ_REQ_PLANX_45 before detach."
 
 
 # ── Degradation ────────────────────────────────────────────────
@@ -30,7 +30,7 @@ class TestNoIds:
         assert render_markdown_bubbles(ANSWER, None) == render_markdown(ANSWER)
 
     def test_empty_text_returns_empty_markup(self):
-        assert render_markdown_bubbles("", ["VZ_REQ_LTEAT_45"]) == Markup("")
+        assert render_markdown_bubbles("", ["VZ_REQ_PLANX_45"]) == Markup("")
 
     def test_id_not_present_in_text_bubbles_nothing(self):
         out = render_markdown_bubbles(ANSWER, ["VZ_REQ_OTHER_1"])
@@ -42,13 +42,13 @@ class TestNoIds:
 
 class TestBubbles:
     def test_req_id_in_prose_becomes_a_bubble(self):
-        out = render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"])
+        out = render_markdown_bubbles(ANSWER, ["VZ_REQ_PLANX_45"])
         assert "req-bubble" in out
-        assert 'hx-get="/api/req/VZ_REQ_LTEAT_45"' in out
+        assert 'hx-get="/api/req/VZ_REQ_PLANX_45"' in out
 
     def test_bubble_body_loads_lazily_not_eagerly(self):
         # find_req scans parse trees; N bubbles must cost 0 lookups until opened
-        out = render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"])
+        out = render_markdown_bubbles(ANSWER, ["VZ_REQ_PLANX_45"])
         assert 'hx-trigger="bubbleopen once"' in out
 
     def test_fetch_is_open_path_agnostic_never_reveal(self):
@@ -60,7 +60,7 @@ class TestBubbles:
         a panel hidden inside .collapse fires no scroll when it opens, so the
         request went out only when an unrelated reflow happened and the bubble
         sat on "Loading…" indefinitely."""
-        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
+        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_PLANX_45"]))
         assert "revealed" not in out
         anchor = out[out.index("<a "):out.index("</a>")]
         assert "hx-get=" in anchor and 'hx-trigger="bubbleopen once"' in anchor
@@ -70,7 +70,7 @@ class TestBubbles:
         panel itself, so clicking a bubble hover had already opened would CLOSE
         it — dismissing the thing the user just reached for. JS owns show/hide;
         the badge is a focusable control only."""
-        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
+        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_PLANX_45"]))
         assert "data-bs-toggle" not in out
         anchor = out[out.index("<a "):out.index("</a>")]
         assert 'tabindex="0"' in anchor        # reachable by keyboard
@@ -78,17 +78,17 @@ class TestBubbles:
         assert "aria-controls=" in anchor
 
     def test_fetch_targets_its_own_panel(self):
-        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
+        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_PLANX_45"]))
         target = re.search(r'hx-target="#([^"]+)"', out).group(1)
         assert f'id="{target}"' in out
 
     def test_root_path_prefixes_the_endpoint(self):
-        out = render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"], root_path="/nora2")
-        assert 'hx-get="/nora2/api/req/VZ_REQ_LTEAT_45"' in out
+        out = render_markdown_bubbles(ANSWER, ["VZ_REQ_PLANX_45"], root_path="/nora2")
+        assert 'hx-get="/nora2/api/req/VZ_REQ_PLANX_45"' in out
 
     def test_inline_code_is_bubbled(self):
         # LLMs routinely backtick req IDs; skipping <code> would drop most bubbles
-        out = render_markdown_bubbles("See `VZ_REQ_LTEAT_45` here.", ["VZ_REQ_LTEAT_45"])
+        out = render_markdown_bubbles("See `VZ_REQ_PLANX_45` here.", ["VZ_REQ_PLANX_45"])
         assert "req-bubble" in out
 
     def test_every_occurrence_is_bubbled(self):
