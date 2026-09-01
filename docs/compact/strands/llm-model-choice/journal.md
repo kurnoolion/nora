@@ -310,3 +310,42 @@
   "Not supported" control and the example file).
 - Phase 3 still held for the manager. Phase 2 (eval) sits on
   `llm-model-choice-eval`, unpushed, no PR — it follows #11.
+
+## 2026-09-01 (session close) — Pushed, PR current, decision gaps closed
+
+### Done
+- Pushed 8 commits; PR #11 verified current on all three axes — title, head
+  (`4bb413b` = local HEAD), and body (carries `supports_reasoning_control`,
+  "Not supported", the example file, "ships no roster"; zero mentions of the
+  old 4-level dropdown).
+- **Closed two decision-log gaps found in triage:**
+  - `D-DRAFT-5` (on the eval branch) — the eval comparability decision existed
+    only in prose. Recorded, not enforced: `reasoning_effort` stays out of
+    `stage1_key()`/`stage2_key()` so runs at different levels still pool, with
+    both rejected alternatives and the consequence that makes the printed
+    `rsn=` line load-bearing.
+  - `D-DRAFT-2` annotated as superseded by `D-DRAFT-4` — it said model choice
+    was deferred out of Phase 1, which D-DRAFT-4 reverses. Left promotable,
+    `/land-strand` would have carried a contradiction into DECISIONS.md.
+- Tooling (not project state): statusline now shows the active strand and the
+  configured caveman level; caveman default set to lite for all sessions.
+
+### State at close
+| | |
+|---|---|
+| Phase 1 (Ask) | pushed, PR #11 open, awaiting review |
+| Phase 2 (eval) | committed on `llm-model-choice-eval`, unpushed, no PR — follows #11 |
+| Phase 3 (roster + primary/secondary failover) | held for the manager |
+
+### Waiting on people, not code
+- Manager: is routing user traffic to the DGX box acceptable, and which roster
+  entry becomes everyone's default?
+- One probe on the infra: does the internal primary honour `reasoning_effort`?
+  Until then we do not know whether the toggle is live on it at all.
+
+### Flags
+- The strand now spans two branches with one journal. `/land-strand` must run
+  after BOTH merge, or D-DRAFT-5 is left behind on the eval branch.
+- `plan.md` and `plan.html` drifted five commits apart this session before
+  being caught. They live apart, so the STRAND.md "edit both together" note is
+  the only thing holding them in step.
