@@ -83,8 +83,8 @@ _TAG_RE = re.compile(r"<[^>]*>")
 
 def _bubble_html(req_id: str, nth: int) -> str:
     """One collapsed badge + the panel its click expands. The panel body is
-    loaded from `/api/req/<req_id>` on first open (hx-trigger revealed), so an
-    answer with N bubbles costs zero requirement lookups until clicked.
+    loaded from `/api/req/<req_id>` on first open, so an answer with N bubbles
+    costs zero requirement lookups until one is actually opened.
 
     `nth` makes the collapse target unique: the same req ID cited twice in one
     answer would otherwise emit duplicate DOM ids, and Bootstrap would open the
@@ -92,19 +92,23 @@ def _bubble_html(req_id: str, nth: int) -> str:
     """
     safe = escape(req_id)
     target = f"reqb-{nth}-" + re.sub(r"[^A-Za-z0-9_-]", "-", req_id)
-    # The fetch hangs off the BADGE's click, not the panel's visibility.
-    # `hx-trigger="revealed"` looks natural here and is a trap: htmx evaluates
-    # `revealed` on scroll events, and a panel hidden by .collapse fires no
-    # scroll when it opens — so the request only went out when an unrelated
-    # reflow happened to occur, which reads as "stuck on Loading…".
+    # The fetch fires on a custom `bubbleopen` event that app.js dispatches
+    # from Bootstrap's `show.bs.collapse`, so EVERY open path — hover, click,
+    # keyboard focus — loads the body through one route and no path can be
+    # forgotten. `once` keeps it to a single request per badge.
+    #
+    # Do not be tempted back to `hx-trigger="revealed"`: htmx evaluates that on
+    # scroll events, and a panel hidden by .collapse fires no scroll when it
+    # opens, so the request only went out when an unrelated reflow happened —
+    # which reads as "stuck on Loading…".
     return (
         f'<span class="req-bubble">'
         f'<a class="req-bubble-badge badge bg-primary-subtle text-primary-emphasis '
         f'border border-primary-subtle text-decoration-none" '
-        f'role="button" data-bs-toggle="collapse" href="#{target}" '
+        f'role="button" tabindex="0" aria-controls="{target}" '
         f'aria-expanded="false" title="Show requirement {safe}" '
         f'hx-get="REQ_ENDPOINT/{safe}" hx-target="#{target}-body" '
-        f'hx-trigger="click once" hx-swap="innerHTML">{safe}'
+        f'hx-trigger="bubbleopen once" hx-swap="innerHTML">{safe}'
         f'<i class="bi bi-chevron-down req-bubble-caret ms-1"></i></a>'
         f'<span class="collapse" id="{target}">'
         f'<span class="req-bubble-body d-block border rounded p-2 my-2 small" '

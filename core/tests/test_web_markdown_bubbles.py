@@ -47,21 +47,35 @@ class TestBubbles:
         assert 'hx-get="/api/req/VZ_REQ_LTEAT_45"' in out
 
     def test_bubble_body_loads_lazily_not_eagerly(self):
-        # find_req scans parse trees; N bubbles must cost 0 lookups until clicked
+        # find_req scans parse trees; N bubbles must cost 0 lookups until opened
         out = render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"])
-        assert 'hx-trigger="click once"' in out
+        assert 'hx-trigger="bubbleopen once"' in out
 
-    def test_fetch_triggers_on_click_never_on_reveal(self):
-        """Regression: `revealed` is evaluated by htmx on SCROLL events, and a
-        panel hidden inside .collapse fires no scroll when it opens — the
-        request went out only when an unrelated reflow happened to occur, so
-        the bubble sat on "Loading…" indefinitely. The trigger must hang off
-        the badge's own click."""
+    def test_fetch_is_open_path_agnostic_never_reveal(self):
+        """The body must load however the panel was opened — hover, click or
+        keyboard focus. app.js dispatches one `bubbleopen` event from
+        show.bs.collapse so no path can be forgotten.
+
+        Regression guard on `revealed`: htmx evaluates it on SCROLL events, and
+        a panel hidden inside .collapse fires no scroll when it opens, so the
+        request went out only when an unrelated reflow happened and the bubble
+        sat on "Loading…" indefinitely."""
         out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
         assert "revealed" not in out
-        # hx-get sits on the <a> (the clicked element), not on the panel
         anchor = out[out.index("<a "):out.index("</a>")]
-        assert "hx-get=" in anchor and 'hx-trigger="click once"' in anchor
+        assert "hx-get=" in anchor and 'hx-trigger="bubbleopen once"' in anchor
+
+    def test_badge_does_not_carry_bootstraps_own_toggle(self):
+        """Regression: with data-bs-toggle="collapse" Bootstrap toggles the
+        panel itself, so clicking a bubble hover had already opened would CLOSE
+        it — dismissing the thing the user just reached for. JS owns show/hide;
+        the badge is a focusable control only."""
+        out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
+        assert "data-bs-toggle" not in out
+        anchor = out[out.index("<a "):out.index("</a>")]
+        assert 'tabindex="0"' in anchor        # reachable by keyboard
+        assert 'role="button"' in anchor
+        assert "aria-controls=" in anchor
 
     def test_fetch_targets_its_own_panel(self):
         out = str(render_markdown_bubbles(ANSWER, ["VZ_REQ_LTEAT_45"]))
