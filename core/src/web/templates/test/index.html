@@ -125,7 +125,11 @@
           {# Quiet by design: the disabled toggle already carries the signal,
              so this only has to name the reason. Full sentence lives in the
              tooltip. #}
-          <span id="ask-mode-note" class="text-muted small ms-1" hidden
+          {# Always occupies its space — toggled with `invisible`
+             (visibility:hidden), never `hidden` (display:none). The row is
+             right-aligned, so removing this from the flow would shift every
+             control and make the Ask button jump as you switch providers. #}
+          <span id="ask-mode-note" class="text-muted small ms-1 invisible"
                 title="This provider ignores reasoning settings, so the toggle has no effect.">
             <i class="bi bi-info-circle"></i> not supported
           </span>
@@ -513,7 +517,9 @@ function askRecordHistory(question, root) {
     const supported = opt && opt.dataset.supportsReasoning === "1";
     modeEl.disabled = !supported;
     const note = document.getElementById("ask-mode-note");
-    if (note) note.hidden = supported;
+    // Visibility, not display — see the note's markup: this row is
+    // right-aligned, so reflowing it moves the Ask button.
+    if (note) note.classList.toggle("invisible", supported);
     if (supported && opt.dataset.defaultMode && !modeEl.dataset.userSet) {
       modeEl.value = opt.dataset.defaultMode;
     }
