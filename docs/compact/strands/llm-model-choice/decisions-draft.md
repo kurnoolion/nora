@@ -22,6 +22,15 @@ ASK control defaults to, which is still open.
 
 ## D-DRAFT-2 — Phase 1 scope is reasoning effort only; model choice deferred
 
+> **SUPERSEDED 2026-09-01 by D-DRAFT-4.** Model choice IS in Phase 1, via the
+> named provider picker. The reasoning below still explains why a *free-text
+> model field* was wrong — one `vllm serve` process loads one model — and that
+> argument survives: the picker chooses an ENDPOINT, each of which pins its own
+> model, rather than asking for a model name against a single endpoint. Kept
+> rather than deleted because the constraint it records is still true, and a
+> future roster entry that lists several models per endpoint must re-read it.
+> Promote D-DRAFT-4; promote this one only as historical context, if at all.
+
 **Context.** The original framing was "choose a model and its reasoning level".
 
 **Decision.** Phase 1 ships one control: reasoning effort. No model picker.
