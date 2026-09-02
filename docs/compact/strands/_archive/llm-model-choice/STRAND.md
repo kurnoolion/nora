@@ -1,8 +1,8 @@
 # llm-model-choice
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-01
-**Landed:**
+**Landed:** 2026-09-02
 **Assignees:** Hanif
 **Target modules:** llm, web, env, query
 **Active phase:**
@@ -31,3 +31,4 @@ extends to eval and enrichment.
   https://claude.ai/code/artifact/10e4b8ba-947c-4eb5-9dc9-44b469d7113b
   Source of record is `plan.md`; `plan.html` is its rendering and the file to
   republish to that same URL (pass the URL as `url`). Edit both together.
+- Landed on 2026-09-02 with 3 promoted decisions: D-214, D-215, D-216 (D-DRAFT-2 deferred to archive as superseded historical context).

@@ -1,8 +1,8 @@
 # llm-model-choice-eval
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-01
-**Landed:**
+**Landed:** 2026-09-02
 **Assignees:** Hanif
 **Target modules:** eval
 **Active phase:**
@@ -27,3 +27,4 @@ comparability keys.
   `llm-model-choice`, not `main`.
 - Phase 3 (provider roster + primary/secondary failover) gets its own strand
   when it starts — it should reuse neither of these.
+- Landed on 2026-09-02 with 1 promoted decision: D-217.

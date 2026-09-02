@@ -7786,3 +7786,141 @@ targets).
   already wired.
 
 _Promoted from strand: req-id-bubbles on 2026-09-01._
+
+## D-214: vLLM serving default stays reasoning-on; the knob lives in the ASK request
+**Status**: Active · **Date**: 2026-09-02.
+
+**Context.** RAG synthesis takes ~15s because the Qwen3 30B model runs in
+reasoning mode on our vLLM endpoint; the thinking tokens are stripped before
+display, so the wait is paid for output nobody sees.
+
+**Alternative considered and rejected.** Launching vLLM with
+`--reasoning-parser <parser> --default-chat-template-kwargs '{"enable_thinking": false}'`
+removes the latency server-wide with zero code. Rejected (manager, 2026-09-01):
+committing the whole serving stack to non-reasoning forecloses the experiment
+we are trying to run. Reasoning stays enabled by default at the server; the
+control belongs per request, in the ASK lane.
+
+**Consequence accepted knowingly.** With the serving default unchanged,
+reasoning-on remains the default experience — ~15s stays the default latency
+until a user turns it down. The latency decision therefore moves to what the
+ASK control defaults to, which is still open.
+
+_Promoted from strand: llm-model-choice on 2026-09-02._
+
+## D-215: No `LLMProvider` Protocol change; reasoning is injected at construction
+**Status**: Active · **Date**: 2026-09-02.
+
+**Decision.** `complete(prompt, system, temperature, max_tokens)` is untouched.
+The reasoning level is an optional constructor argument on
+`OpenAICompatibleProvider`, added to the request body.
+
+**Why.** `core/src/llm/MODULE.md` marks a Protocol signature change as a
+coordinated break across taxonomy, query and eval. Construction-time injection
+avoids that break entirely.
+
+**Corrected 2026-09-01 (same session).** An earlier version of this draft
+claimed the ASK lane already builds its provider per request, so the change was
+free. That was wrong. The Ask page is `/test` (`playground.py`), and its
+pipeline lane reuses a provider cached with the pipeline on
+`app.state.query_pipeline` until process restart. Construction-time injection
+still holds, but it costs real plumbing: a keyword-only `synthesizer=None`
+override on `QueryPipeline.query()`, a per-query provider built in
+`_run_query_sync`, and the level threaded from the form through
+`run_query_background`.
+
+**Rejected alternative (2).** Mutating the cached provider before each call
+(`llm.reasoning = x`). Queries run via `asyncio.create_task` →
+`asyncio.to_thread`, so concurrent asks at different levels would clobber each
+other and record provenance that does not match the answer.
+
+**Rejected alternative.** A per-model capability registry so the UI only offers
+supported knobs. Unnecessary: vLLM accepts the OpenAI-standard
+`reasoning_effort` and maps it to `enable_thinking` server-side, so the
+normalization we would have hand-maintained already exists.
+
+_Promoted from strand: llm-model-choice on 2026-09-02._
+
+## D-216: Named provider roster + a Fast/Think toggle, instead of an effort dropdown
+**Status**: Active · **Date**: 2026-09-02.
+
+**Context.** Phase 1 shipped a 4-level reasoning select, and a "primary /
+fallback" endpoint select was half-built on top of it. Reviewing the UX: users
+should not have to reason about effort levels, and "primary/secondary" says
+nothing about which infrastructure answers a question.
+
+**Decision.** One optional `providers` list in `config/llm.json` — named entries
+(`{id, name, base_url, model, api_key_env, supports_reasoning_control, default_mode}`) —
+surfaced on the Ask page as a provider select plus a two-way Fast/Think toggle.
+Fast sends `reasoning_effort: "none"`; Think sends no reasoning field at all.
+
+**Why this shape.**
+- A name like "130B — DGX" tells the asker what will answer; "primary" does not.
+- Two states beat five: the question is "should it think?", not "how much".
+- Think sending *nothing* means we never assert an effort level the deployment
+  did not choose for itself.
+- Keys are referenced by env-var name, never written in a committed file.
+
+**Rejected alternative — reasoning=none implies the fallback endpoint.** Raised
+as the minimal way to reach a reasoning-capable model when the primary may not
+support it. Rejected on three grounds: it welds two independent axes into one
+control, so a reader of two answers cannot tell which variable moved; it gives
+`RefusalFallbackProvider.used` two meanings (refusals and deliberate routing),
+and eval reads that counter as `fb_pre` / `fb_delta`; and `llm_identity` would
+name one model while another answered.
+
+**Capability is declared, not detected.** No OpenAI-compatible endpoint
+advertises reasoning support, and a probe only catches outright rejection — a
+server can accept `reasoning_effort` and silently ignore it, which is
+indistinguishable from honouring it. Observed both in one session (Ollama's
+`/v1` honoured it; llama.cpp would likely ignore it). So each entry declares it,
+and the toggle renders disabled with a reason where it would do nothing.
+
+**Consequences.**
+- No roster configured = today's behaviour exactly; the controls are not
+  rendered and the single-provider chain runs unchanged. No migration.
+- A roster-built provider is not refusal-wrapped: the roster names *which*
+  endpoint answers, so silently rerouting would defeat the choice just made.
+- Ask flow only. `golden_cli` keeps explicit `--reasoning {none,low,medium,
+  high}` — an analyst running a campaign wants the exact level, not a toggle.
+- Routing user traffic to a named box (e.g. the DGX) changes its load profile.
+  That is a deployment decision, surfaced in the PR rather than assumed.
+
+_Promoted from strand: llm-model-choice on 2026-09-02._
+
+## D-217: Reasoning effort is recorded on eval runs, not enforced as a comparability key
+**Status**: Active · **Date**: 2026-09-02.
+
+**Context.** `golden_cli --reasoning` varies how Stage-2 synthesis generates.
+`StackStamp` carries comparability keys — `stage1_key()` / `stage2_key()` — and
+two runs are treated as comparable when those keys match. Reasoning effort
+plainly changes generation behaviour, so the question was whether it belongs in
+the key.
+
+**Decision (Hanif, 2026-09-01).** No. `reasoning_effort` is recorded on the
+stamp, carried into `to_dict()`, and printed as `rsn=` on the GEV `id:` line,
+but is deliberately kept OUT of both keys. Two runs at different levels still
+pool.
+
+**Why.** "We shouldn't stop anyone from comparing." The tool's job is to record
+and surface what produced a run; deciding which runs are legitimately
+comparable is the analyst's call. A hard gate would refuse comparisons a human
+knows are meaningful.
+
+**Alternatives considered.**
+- *Add it to `stage2_key()`* — argued for on the grounds that pooling runs at
+  different levels silently mixes conditions. Rejected as too restrictive; it
+  would also have changed the key's tuple shape, breaking comparison against
+  every historical run unless backfilled.
+- *Fold it into `llm_identity`* (e.g. `model@none`) — would have preserved the
+  tuple shape while still gating. Rejected for the same reason: it gates.
+
+**Consequences accepted.**
+- The printed `rsn=` line is the ONLY place two otherwise-identical runs at
+  different levels visibly differ. That makes the line load-bearing, so tests
+  assert both halves: that the keys stay equal, and that `rsn=` appears when a
+  level was set. Unset leaves the line byte-identical to before.
+- An analyst pooling runs without reading the `id:` line can mix conditions
+  without the tool objecting. That is the deliberate trade.
+
+_Promoted from strand: llm-model-choice-eval on 2026-09-02._
