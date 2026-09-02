@@ -10,25 +10,5 @@
   "ollama_url": "",
   "ollama_timeout_s": 0,
   "skip_taxonomy": true,
-  "skip_graph": true,
-  "providers": [
-    {
-      "id": "qwen3-8b",
-      "name": "8B \u2014 Ollama (thinking)",
-      "base_url": "http://localhost:11434/v1",
-      "model": "qwen3:8b",
-      "api_key_env": "NORA_LLM_API_KEY",
-      "supports_reasoning_control": true,
-      "default_mode": "fast"
-    },
-    {
-      "id": "llama-3b",
-      "name": "3B \u2014 Ollama (no knob)",
-      "base_url": "http://localhost:11434/v1",
-      "model": "llama3.2:3b",
-      "api_key_env": "NORA_LLM_API_KEY",
-      "supports_reasoning_control": false,
-      "default_mode": "think"
-    }
-  ]
+  "skip_graph": true
 }
