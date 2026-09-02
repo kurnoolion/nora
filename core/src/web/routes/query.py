@@ -346,7 +346,9 @@ def _build_llm_from_env_or_default(
         model_timeout=timeout,
         llm_base_url=base_url,
         llm_api_key=api_key,
-        llm_reasoning=reasoning or "",
+        # No roster entry here, so no declared reasoning capability — never
+        # send a reasoning field on the single-provider chain.
+        llm_reasoning="",
     )
     # create_llm_provider applies the permanent-refusal fallback wrap
     # (NORA_LLM_FALLBACK_* + NORA_LLM_REFUSAL_MARKERS) — synthesis, the

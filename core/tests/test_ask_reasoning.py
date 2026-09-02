@@ -285,3 +285,41 @@ class TestExampleConfigStaysValid:
         for entry in raw["providers"]:
             assert "api_key" not in entry
             assert entry["api_key_env"].startswith("NORA_")
+
+
+class TestNoRosterBuildPath:
+    """Regression: with no roster configured, `_build_llm_from_env_or_default`
+    falls through to the single-provider chain — which crashed with
+    UnboundLocalError on the `reasoning` local (assigned only in the roster
+    branch). Every earlier run exercised the roster branch, because the tree
+    under test still carried a committed dev roster; this test pins the
+    designed "no roster = chain unchanged" case by running the real fallback
+    path end to end."""
+
+    def _no_roster(self, tmp_path):
+        import json
+        from core.src.env import config as cfg
+        path = tmp_path / "llm.json"
+        path.write_text(json.dumps({}))
+        cfg._LLM_CONFIG_CACHE = cfg.LLMConfigFile.load(path)
+        return cfg
+
+    def test_no_roster_build_does_not_raise(self, tmp_path, monkeypatch):
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        cfg = self._no_roster(tmp_path)
+        monkeypatch.setenv("NORA_LLM_PROVIDER", "mock")
+        try:
+            assert _build_llm_from_env_or_default() is not None
+        finally:
+            cfg._reset_llm_config_cache()
+
+    def test_stale_mode_without_roster_is_ignored_not_fatal(self, tmp_path, monkeypatch):
+        """A stale page can still post mode=fast after a roster is removed;
+        the chain has no declared capability, so the mode is dropped."""
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        cfg = self._no_roster(tmp_path)
+        monkeypatch.setenv("NORA_LLM_PROVIDER", "mock")
+        try:
+            assert _build_llm_from_env_or_default(mode="fast") is not None
+        finally:
+            cfg._reset_llm_config_cache()
