@@ -75,35 +75,62 @@
           </div>
         </div>
 
-        {# Ask sits directly under the question, with the name inline between
-           Ask and Options — one short field doesn't earn a full-width row. It
-           stays above the fold because it credits the feedback, and is
-           remembered between asks by the sticky-fields script below. The
-           engineering knobs (retrieval lanes, correction label) collapse behind
-           Options so the everyday flow is just question → Ask → answer.
+        {# Action bar, right-aligned so it reads left-to-right into the
+           primary action: Options · name · reasoning · Ask. The name credits
+           the feedback and is remembered between asks by the sticky-fields
+           script below. Reasoning sits here rather than behind Options because
+           it is a per-question choice made at the moment of asking, unlike the
+           engineering knobs (retrieval lanes, correction label) that collapse.
            Collapsed inputs are still submitted — collapse hides, not disables. #}
-        <div class="d-flex align-items-center gap-2 flex-wrap">
-          <button id="ask-submit" class="btn btn-primary" type="submit">
-            <span id="ask-submit-label">Ask</span>
-            <span id="ask-submit-busy" style="display:none;">
-              <span class="spinner-border spinner-border-sm me-1"></span>
-              Querying…
-            </span>
+        <div class="d-flex align-items-center justify-content-end gap-2 flex-wrap">
+          <button class="btn btn-sm btn-outline-secondary" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#ask-options"
+                  aria-expanded="false" aria-controls="ask-options">
+            <i class="bi bi-sliders me-1"></i>Options
           </button>
           <input
               type="text"
               id="user-name"
               name="user_name"
               class="form-control form-control-sm"
-              style="max-width: 220px"
+              style="max-width: 200px"
               placeholder="Your name (optional)"
               aria-label="Your name — optional, credits your feedback"
               title="Optional — credits your feedback"
               maxlength="80">
-          <button class="btn btn-sm btn-outline-secondary" type="button"
-                  data-bs-toggle="collapse" data-bs-target="#ask-options"
-                  aria-expanded="false" aria-controls="ask-options">
-            <i class="bi bi-sliders me-1"></i>Options
+          {% if providers %}
+          <select
+              id="ask-provider"
+              name="provider"
+              class="form-select form-select-sm"
+              style="max-width: 210px"
+              aria-label="Which model answers">
+            {% for p in providers %}
+            <option value="{{ p.id }}"
+                    data-supports-reasoning-control="{{ 1 if p.supports_reasoning_control else 0 }}"
+                    data-default-mode="{{ p.default_mode }}"
+                    {% if loop.first %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+          </select>
+          <select
+              id="ask-mode"
+              name="mode"
+              class="form-select form-select-sm"
+              style="max-width: 150px"
+              aria-label="How hard the model thinks">
+            <option value="fast">Fast</option>
+            <option value="think">Think</option>
+          </select>
+          {# Quiet by design: the disabled toggle already carries the signal,
+             so this only has to name the reason. Full sentence lives in the
+             tooltip. #}
+          {% endif %}
+          <button id="ask-submit" class="btn btn-primary" type="submit">
+            <span id="ask-submit-label">Ask</span>
+            <span id="ask-submit-busy" style="display:none;">
+              <span class="spinner-border spinner-border-sm me-1"></span>
+              Querying…
+            </span>
           </button>
         </div>
 
@@ -445,6 +472,8 @@ function askRecordHistory(question, root) {
   if (!form) return;
   const nameEl  = document.getElementById("user-name");
   const labelEl = document.getElementById("ask-label");
+  const providerEl = document.getElementById("ask-provider");
+  const modeEl = document.getElementById("ask-mode");
   const nora    = document.getElementById("lane-nora");
   const sira    = document.getElementById("lane-sira");
 
@@ -452,15 +481,71 @@ function askRecordHistory(question, root) {
     const last = JSON.parse(localStorage.getItem(KEY) || "{}");
     if (last.user_name && nameEl)  nameEl.value  = last.user_name;
     if (last.label     && labelEl) labelEl.value = last.label;
+    // Restore only a level the select still offers — a value from an older
+    // page would otherwise leave the control blank while the server falls
+    // back to the endpoint default, so the UI would lie about what was sent.
+    // Restore only values the controls still offer — a provider removed
+    // from the roster would otherwise leave the select blank while the
+    // server quietly used the default, so the UI would misreport.
+    if (last.provider && providerEl &&
+        [...providerEl.options].some(o => o.value === last.provider)) {
+      providerEl.value = last.provider;
+    }
+    if (last.mode && modeEl &&
+        [...modeEl.options].some(o => o.value === last.mode)) {
+      modeEl.value = last.mode;
+    }
     if (nora && !nora.disabled && typeof last.nora === "boolean") nora.checked = last.nora;
     if (sira && !sira.disabled && typeof last.sira === "boolean") sira.checked = last.sira;
   } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
+
+  // The toggle is disabled — not hidden — on a provider that declares no
+  // reasoning support, with the reason shown. Hiding it would leave the
+  // user hunting for a control that silently vanished.
+  function syncMode() {
+    if (!providerEl || !modeEl) return;
+    const opt = providerEl.options[providerEl.selectedIndex];
+    const supported = opt && opt.dataset.supportsReasoningControl === "1";
+    modeEl.disabled = !supported;
+
+    // A disabled select still showing "Fast" reads as a promise the endpoint
+    // cannot keep, so the control says what is true instead: this provider
+    // exposes no knob. The option is added and removed rather than hidden,
+    // because a hidden-but-selected option still renders its label.
+    let placeholder = modeEl.querySelector("option[data-unsupported]");
+    if (!supported) {
+      if (!placeholder) {
+        placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.dataset.unsupported = "1";
+        placeholder.textContent = "Not supported";
+        modeEl.appendChild(placeholder);
+      }
+      modeEl.value = "";
+      modeEl.title = "This endpoint exposes no control over how much the "
+        + "model thinks — it may still reason, we just cannot change it.";
+      return;
+    }
+    if (placeholder) placeholder.remove();
+    modeEl.title = "Fast skips the model's thinking step. Think lets it think "
+      + "as the deployment configured. Recorded with the answer.";
+    if (opt.dataset.defaultMode && !modeEl.dataset.userSet) {
+      modeEl.value = opt.dataset.defaultMode;
+    }
+  }
+  if (providerEl) providerEl.addEventListener("change", syncMode);
+  if (modeEl) modeEl.addEventListener("change", function () {
+    modeEl.dataset.userSet = "1";
+  });
+  syncMode();
 
   form.addEventListener("submit", function () {
     try {
       localStorage.setItem(KEY, JSON.stringify({
         user_name: nameEl ? nameEl.value : "",
         label:     labelEl ? labelEl.value : "",
+        provider: providerEl ? providerEl.value : "",
+        mode:      modeEl ? modeEl.value : "",
         nora:      nora ? nora.checked : undefined,
         sira:      sira ? sira.checked : undefined,
       }));

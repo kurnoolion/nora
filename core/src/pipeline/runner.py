@@ -43,6 +43,9 @@ class PipelineContext:
     model_timeout: int = 600
     llm_base_url: str = ""
     llm_api_key: str = ""
+    # Reasoning effort for providers that support it ("none"/"low"/"medium"/
+    # "high"). Empty = send nothing, i.e. the endpoint's own default.
+    llm_reasoning: str = ""
 
     # Embedding config (local providers only)
     embedding_provider: str = "sentence-transformers"
@@ -176,6 +179,7 @@ class PipelineContext:
                         timeout=self.model_timeout,
                         base_url=self.llm_base_url or None,
                         api_key=self.llm_api_key or None,
+                        reasoning=self.llm_reasoning or None,
                     )
                     logger.info(f"Using OpenAI-compatible LLM: {self.model_name}")
                     return provider

@@ -1,0 +1,445 @@
+<title>The 15-Second Answer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  :root {
+    --ground:    #eef1f4;
+    --surface:   #ffffff;
+    --sunk:      #e4e8ec;
+    --ink:       #131a22;
+    --ink-soft:  #4d5a67;
+    --ink-faint: #78848f;
+    --rule:      #d7dde3;
+    --accent:    #2f4a8f;
+    --fast:      #0e6f63;
+    --cost:      #8f5f10;
+
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:    #0d1218;
+      --surface:   #151c24;
+      --sunk:      #1b232c;
+      --ink:       #e7ecf1;
+      --ink-soft:  #a2aeba;
+      --ink-faint: #7b8794;
+      --rule:      #28313b;
+      --accent:    #93aaeb;
+      --fast:      #4dc1ad;
+      --cost:      #d3a44f;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:    #0d1218;
+    --surface:   #151c24;
+    --sunk:      #1b232c;
+    --ink:       #e7ecf1;
+    --ink-soft:  #a2aeba;
+    --ink-faint: #7b8794;
+    --rule:      #28313b;
+    --accent:    #93aaeb;
+    --fast:      #4dc1ad;
+    --cost:      #d3a44f;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.25rem;
+  }
+
+  /* ---- masthead ---- */
+
+  .masthead { display: flex; flex-direction: column; gap: 1rem; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(2.1rem, 6vw, 3rem);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .dek {
+    font-size: 1.14rem;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 34rem;
+    text-wrap: pretty;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--ink-faint);
+  }
+  .meta b { color: var(--ink-soft); font-weight: 500; }
+
+  /* ---- sections ---- */
+
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.32rem;
+    letter-spacing: -0.01em;
+    margin: 0;
+    padding-bottom: 0.55rem;
+    border-bottom: 2px solid var(--ink);
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1rem;
+    margin: 0;
+    letter-spacing: -0.005em;
+  }
+
+  p { margin: 0; text-wrap: pretty; }
+
+  strong { font-weight: 600; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, .verdict:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.855em;
+    background: var(--sunk);
+    padding: 0.08em 0.34em;
+    border-radius: 3px;
+    overflow-wrap: anywhere;
+  }
+
+  pre {
+    margin: 0;
+    background: var(--sunk);
+    border-left: 2px solid var(--accent);
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.79rem;
+    line-height: 1.7;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+
+  /* ---- the two-problem split ---- */
+
+  .split {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1rem;
+  }
+
+  .problem {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 1.2rem 1.3rem 1.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .problem .tag {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+  }
+  .problem p { font-size: 0.96rem; color: var(--ink-soft); }
+  .problem .verdict {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin-top: auto;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--rule);
+  }
+  .problem--ops { border-top: 3px solid var(--fast); }
+  .problem--ops .tag, .problem--ops .verdict { color: var(--fast); }
+  .problem--feature { border-top: 3px solid var(--cost); }
+  .problem--feature .tag, .problem--feature .verdict { color: var(--cost); }
+
+  /* ---- findings ---- */
+
+  .findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.95rem; }
+  .findings li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.85rem;
+    align-items: baseline;
+  }
+  .findings li::before {
+    content: "";
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translateY(-0.15em);
+  }
+  .findings .ref {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    margin-top: 0.2rem;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- phases ---- */
+
+  .phase {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 1.4rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .phase-head { display: flex; align-items: baseline; gap: 0.9rem; }
+  .phase-num {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--surface);
+    background: var(--ink);
+    padding: 0.2rem 0.5rem;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .phase--later .phase-num { background: var(--ink-faint); }
+  .phase-head p { font-size: 0.9rem; color: var(--ink-faint); font-family: var(--display); }
+
+  ol.steps { margin: 0; padding-left: 1.35rem; display: flex; flex-direction: column; gap: 0.9rem; }
+  ol.steps li { padding-left: 0.25rem; }
+  ol.steps li::marker { font-family: var(--mono); font-size: 0.82rem; color: var(--ink-faint); }
+  .verify {
+    display: block;
+    margin-top: 0.3rem;
+    padding-left: 0.75rem;
+    border-left: 2px solid var(--fast);
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+  }
+  .verify b {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--fast);
+    font-weight: 500;
+  }
+
+  .callout {
+    background: var(--sunk);
+    border-radius: 2px;
+    padding: 1rem 1.2rem;
+    font-size: 0.96rem;
+    color: var(--ink-soft);
+  }
+  .callout b { color: var(--ink); }
+
+  /* ---- lists ---- */
+
+  ul.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.7rem; }
+  ul.plain li { padding-left: 1.2rem; position: relative; font-size: 0.98rem; color: var(--ink-soft); }
+  ul.plain li::before {
+    content: "\2014";
+    position: absolute;
+    left: 0;
+    color: var(--ink-faint);
+  }
+
+  ol.questions { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: 0.8rem; }
+  ol.questions li::marker { font-family: var(--mono); font-size: 0.85rem; color: var(--accent); }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.1rem;
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    line-height: 1.8;
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">Strand · llm-model-choice</div>
+    <h1>The 15-Second Answer</h1>
+    <p class="dek">Why RAG synthesis is slow, and the two controls that let anyone find out: which model answers, and whether it should think.</p>
+    <div class="meta">
+      <span><b>Status</b> proposal for review</span>
+      <span><b>Date</b> 2026-09-01</span>
+      <span><b>Branch</b> llm-model-choice</span>
+      <span><b>Modules</b> llm · web · env · query</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>Two problems, currently fused</h2>
+    <p>Synthesis takes roughly 15 seconds. We traced it to the Qwen3 30B model running in reasoning mode on our vLLM endpoint — it generates thinking tokens we then throw away. That produced a feature idea: let people choose the model and reasoning level per question.</p>
+    <p>Those are two different things and should be decided separately.</p>
+
+    <div class="split">
+      <div class="problem problem--ops">
+        <div class="tag">Problem A · latency</div>
+        <h3>Thinking tokens we never show</h3>
+        <p>The model reasons, we strip the reasoning, the user waits for it anyway. Nothing in the product needs this.</p>
+        <div class="verdict">Addressed per request, at the Ask knob — not at the server.</div>
+      </div>
+      <div class="problem problem--feature">
+        <div class="tag">Problem B · capability</div>
+        <h3>No way to compare setups</h3>
+        <p>One provider is resolved process-wide. Trying a different model or reasoning level means editing config and restarting.</p>
+        <div class="verdict">This plan. Worth doing on its own merits.</div>
+      </div>
+    </div>
+
+    <div class="callout"><b>Decided:</b> a server-wide off switch exists and would remove the latency with zero code — and we are deliberately not using it. The serving default stays reasoning-<b>on</b>; the knob belongs in the Ask lane, per request, so we can try both rather than commit the whole serving stack to one mode.<br><br><b>The consequence to accept knowingly:</b> with the server default unchanged, reasoning-on stays the default experience, so ~15 seconds remains the default latency until a user turns it down. That makes <em>what the Ask control defaults to</em> the real latency decision — see the open questions.</div>
+  </section>
+
+  <section>
+    <h2>What the code already does</h2>
+    <p>All verified in the repository, not assumed:</p>
+    <ul class="findings">
+      <li><div><strong>The provider seam has no reasoning parameter</strong> — and changing it is a coordinated break across taxonomy, query and eval. We do not touch it.<span class="ref">core/src/llm/base.py · complete(prompt, system, temperature, max_tokens)</span></div></li>
+      <li><div><strong>Configuration resolves one provider, not a roster.</strong> Config page → env var → config file → environment JSON → default, as flat hand-curated fields.<span class="ref">core/src/web/config_schema.py · D-044 / D-053</span></div></li>
+      <li><div><strong>The Ask page has two synthesis lanes, with opposite caching behaviour</strong> — and this is the plumbing cost of the whole feature. The pipeline lane builds its provider and synthesizer once and caches them until the process restarts, so a per-question knob cannot reach it without a change there. The select-synth lane builds one per call and is free.<span class="ref">core/src/web/routes/playground.py — pipeline lane via query.py:513 (cached on app.state) · select-synth at playground.py:683 (per call)</span></div></li>
+      <li><div><strong>Mutating the cached provider per request is not an option.</strong> Queries run on background threads, so two concurrent asks at different levels would clobber each other and record provenance that does not match the answer.<span class="ref">asyncio.create_task → asyncio.to_thread</span></div></li>
+      <li><div><strong>Our existing reasoning code strips output; it does not disable thinking.</strong> Chain-of-thought is discarded after generation, so the latency is still paid in full. This is why earlier work here did not make answers faster.<span class="ref">core/src/llm/openai_provider.py · _strip_reasoning, NORA_LLM_REASONING_SENTINEL</span></div></li>
+      <li><div><strong>We can already record what produced an answer.</strong> The model column and a config JSON column both exist and are already accepted by the write path — no migration.<span class="ref">core/src/web/feedback_db.py · test_feedback.llm_model, lane_config</span></div></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The reasoning control on vLLM</h2>
+    <p>From the vLLM stable documentation, <em>Reasoning Outputs</em>. Three forms, two of them per-request:</p>
+<pre><code>// per request — Qwen3, broadly supported
+"chat_template_kwargs": { "enable_thinking": false }
+
+// per request — OpenAI-standard; vLLM maps it to enable_thinking itself
+"reasoning_effort": "none" | "low" | "medium" | "high"
+
+// server default — available, deliberately NOT used
+--reasoning-parser &lt;parser&gt; --default-chat-template-kwargs '{"enable_thinking": false}'</code></pre>
+    <p><code>reasoning_effort</code> is the standard field and vLLM does the mapping to <code>enable_thinking</code> server-side. That kills the capability registry I first sketched: we need one passthrough field, not a per-model support table.</p>
+    <div class="callout"><b>Known risk:</b> <code>reasoning_effort</code> support is vLLM-version dependent; <code>chat_template_kwargs</code> is the older, safer path. Step 1 below is a five-minute probe against the deployed server. Same interface either way — only the request body key changes.</div>
+  </section>
+
+  <section>
+    <h2>The work, in phases</h2>
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-num">Phase 1</span>
+        <p>Ask page · named providers · Fast / Think · both lanes</p>
+      </div>
+      <ol class="steps">
+        <li>Probe the deployed vLLM for <code>reasoning_effort</code> versus <code>chat_template_kwargs</code>.
+          <span class="verify"><b>Verify</b> one form returns 200 with visibly lower latency and an empty reasoning field.</span></li>
+        <li>Give the openai-compatible provider an optional reasoning argument at construction, adding the corresponding key to the request body. The shared provider interface is untouched.
+          <span class="verify"><b>Verify</b> a unit test asserts the body carries the field when set — and is byte-identical to today when it is not.</span></li>
+        <li>Let the Ask request override the resolved reasoning level; an absent value keeps today's behaviour exactly. The model stays whatever configuration resolves.
+          <span class="verify"><b>Verify</b> an Ask with no override resolves the same provider as before.</span></li>
+        <li>Decouple the LLM from the cached pipeline: the query call accepts a synthesizer for that one question, so a request carrying a reasoning level gets its own provider while the expensive pipeline — graph, embedder, vector store, keyword index — stays cached. Provider construction costs no network call.
+          <span class="verify"><b>Verify</b> cold-start cost is unchanged on a second query, and a query with no override still uses the cached provider.</span></li>
+        <li>Thread the level from the form to every synthesis path on the page. The background-job plumbing this step originally called for turned out to be unnecessary: the Ask page runs its query directly, so the jobs table is untouched.
+          <span class="verify"><b>Verify</b> all six synthesis paths — both lanes, the streaming variant, the two legacy paths and the disambiguation follow-up — pass the level through.</span></li>
+        <li>Two controls on the Ask page: a <strong>provider</strong> picker showing named endpoints ("130B — DGX", "14B — internal"), and a <strong>Fast / Think</strong> toggle. Fast skips thinking; Think sends no reasoning field at all, so the deployment's own behaviour applies — we never assert an effort level on its behalf. Names say what the infrastructure is, because "primary" means nothing to the person asking.
+          <span class="verify"><b>Verify</b> the same question is measurably faster on Fast, and each provider logs its own model.</span></li>
+        <li>Reasoning support is <strong>declared per provider</strong>, never detected — no endpoint advertises the capability, and a probe only catches outright rejection, since a server can accept the field and silently ignore it. Declaring it means a provider with no knob shows "Not supported" instead of offering a choice that would do nothing. Note this is about the endpoint honouring the knob, not about whether the model reasons: a thinking model with no exposed control is still "no".
+          <span class="verify"><b>Verify</b> the control reads "Not supported" on an endpoint declaring no control, and no reasoning field is sent.</span></li>
+        <li>Record the provider, the mode and the model that answered on the answer row, reusing columns that already exist — so an answer is attributable to a (provider, mode, model) triple.
+          <span class="verify"><b>Verify</b> two asks at different settings produce two rows that differ.</span></li>
+      </ol>
+      <div class="callout"><b>Configuration.</b> An optional <code>providers</code> list in <code>config/llm.json</code>, with <code>config/llm.json.example</code> as the copy-from reference. Keys are referenced by env-var name, never written in a committed file. <b>Omit the list — the normal case — and nothing changes:</b> the controls are not rendered and the single-provider chain runs exactly as before.<br><br>Out of Phase 1: Ollama reasoning, evaluation, enrichment, taxonomy.</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-num">Phase 1.5</span>
+        <p>Evaluation — next, but a different shape</p>
+      </div>
+      <p>Evaluation is the immediate second lane, and it is <strong>not</strong> the Ask control moved sideways. Golden eval depends on snapshot freeze and a fixed serving environment; a per-question override leaking into a run would silently break comparability between cells.</p>
+      <p>The right shape: model and reasoning are properties of a <strong>campaign cell</strong> — fixed for the run, recorded in the manifest, an arm to flip rather than a control to twiddle. Designed when we get there. Phase 1's only obligation is to not expose an override that evaluation can inherit by accident.</p>
+    </div>
+
+    <div class="phase phase--later">
+      <div class="phase-head">
+        <span class="phase-num">Phase 2</span>
+        <p>The provider roster — needs a decision</p>
+      </div>
+      <p>The horizontal goal — LLM providers as a component anyone configures — means named provider entries in settings, with Ask and later components choosing between them.</p>
+      <p><strong>Model choice belongs here, not in Phase 1.</strong> A vLLM process loads a single model, and the endpoint's model list returns exactly one entry — so a model picker against today's deployment is a control with nothing to pick, where any value but the loaded one is a 404. Model choice becomes meaningful the moment a second endpoint exists, which is the same moment the roster does. If an endpoint later serves several models, the list is read from the server rather than typed by hand.</p>
+      <p><strong>Honest position:</strong> the problem in front of us does not require it. One endpoint plus the reasoning knob solves the ask. A roster earns its keep when we actually have several endpoints to switch between, and it is a real migration of the settings schema from flat fields to a list.</p>
+      <p><strong>Recommendation:</strong> ship Phase 1, run the experiments it enables, and build the roster when a second endpoint exists. Nothing in Phase 1 blocks it — adding a model field beside the reasoning field is the same code path.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Deliberately not doing</h2>
+    <ul class="plain">
+      <li>No change to the shared provider interface.</li>
+      <li>No reasoning control for the local Ollama provider — different API, different knob.</li>
+      <li>No change to the existing reasoning-stripping code; it stays harmless with thinking off.</li>
+      <li>No model picker. One vLLM process serves one model, so there is nothing to choose until a second endpoint exists. Model choice is deferred, not withheld.</li>
+      <li>No new settings mechanism — Phase 2 extends the one we have.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Open questions</h2>
+    <ol class="questions">
+      <li>Which vLLM version is deployed? It decides the request field — though the Phase 1 probe answers it either way.</li>
+      <li><strong>What does the Ask control default to?</strong> The serving default stays reasoning-on, so "no override" means everyone keeps paying ~15 seconds. Either inherit the server default and stay slow-by-default, or default the Ask lane to no reasoning and let people opt in. This is the latency decision now.</li>
+      <li>Phase 2 roster: build it now, or when a second endpoint actually exists?</li>
+      <li>Ask gains request fields rather than new routes — confirm the team-mode gated path still passes before Phase 1 is called shipped.</li>
+    </ol>
+  </section>
+
+  <footer>
+    Source of record: docs/compact/strands/llm-model-choice/plan.md<br>
+    Decisions drafted, not built. Nothing in this plan has been implemented.
+  </footer>
+
+</div>

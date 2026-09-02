@@ -241,8 +241,29 @@ def _find_env_config_for_web():
     return None
 
 
-def _build_llm_from_env_or_default():
+def _build_llm_from_env_or_default(
+    provider_id: str | None = None,
+    mode: str | None = None,
+):
     """Construct the LLM provider for /query and /test.
+
+    `provider_id` picks a named entry from the `config/llm.json` roster;
+    empty or unknown falls back to the roster's first entry. When no roster
+    is configured — the normal case today — this is ignored entirely and the
+    single-provider chain below runs unchanged.
+
+    `mode` is the asker's Fast/Think choice:
+      * "fast"  -> `reasoning_effort: "none"` (skip thinking)
+      * "think" -> send NO reasoning field, so the model does whatever the
+                   deployment already does. We never invent an effort level
+                   on its behalf.
+    A mode on a provider that declares `supports_reasoning_control: false` is
+    ignored with a warning — the field would be silently dropped anyway, and
+    pretending otherwise would let the UI lie about what was sent.
+
+    A roster-built provider is deliberately NOT refusal-wrapped: the roster
+    names WHICH endpoint answers, so silently rerouting to a different one
+    would defeat the choice the asker just made.
 
     Resolves provider / model / timeout / base_url / api_key via the
     unified resolver chain: CLI flag (n/a here) > **Config-page DB
@@ -258,6 +279,29 @@ def _build_llm_from_env_or_default():
     failure (web path is non-fail-loud — falls back to mock so the
     UI keeps responding).
     """
+    from core.src.env.config import resolve_llm_timeout, resolve_provider
+
+    entry = resolve_provider(provider_id)
+    if entry is not None:
+        reasoning = _reasoning_for(entry, mode)
+        from core.src.llm.openai_provider import OpenAICompatibleProvider
+
+        timeout = resolve_llm_timeout(
+            config_store_value=_config_store_get("llm", "llm_timeout"),
+        )
+        logger.info(
+            "Web LLM resolved: provider=%s (%s) model=%s mode=%s reasoning=%s",
+            entry.id, entry.name, entry.model, mode or entry.default_mode,
+            reasoning or "<none sent>",
+        )
+        return OpenAICompatibleProvider(
+            model=entry.model,
+            base_url=entry.base_url,
+            api_key=entry.api_key or None,
+            timeout=timeout,
+            reasoning=reasoning,
+        )
+
     from core.src.env.config import (
         resolve_llm_provider,
         resolve_llm_model,
@@ -302,11 +346,34 @@ def _build_llm_from_env_or_default():
         model_timeout=timeout,
         llm_base_url=base_url,
         llm_api_key=api_key,
+        llm_reasoning=reasoning or "",
     )
     # create_llm_provider applies the permanent-refusal fallback wrap
     # (NORA_LLM_FALLBACK_* + NORA_LLM_REFUSAL_MARKERS) — synthesis, the
     # /test lanes, and the Eval Studio curation chat inherit it.
     return ctx.create_llm_provider(require_real=False)
+
+def _reasoning_for(entry, mode: str | None) -> str | None:
+    """Map the asker's Fast/Think choice onto a reasoning_effort value.
+
+    Falls back to the entry's own `default_mode` when the asker expressed
+    no preference, so a provider that should think by default does.
+    """
+    if not entry.supports_reasoning_control:
+        if mode:
+            logger.warning(
+                "Provider %r declares no reasoning support — ignoring "
+                "mode=%r.", entry.id, mode,
+            )
+        return None
+    effective = (mode or entry.default_mode or "think").lower()
+    # "think" sends nothing: the model does what the deployment configured.
+    return "none" if effective == "fast" else None
+
+
+# Context budget for the answer synthesizer. Named because both the cached
+# build and the per-query reasoning path construct an LLMSynthesizer.
+_SYNTH_MAX_TOKENS = 30000 // 4
 
 router = APIRouter()
 
@@ -465,7 +532,7 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     synthesizer = None
     if llm is not None and not getattr(llm, "_is_mock", False):
         from core.src.query.synthesizer import LLMSynthesizer
-        synthesizer = LLMSynthesizer(llm, max_tokens=30000 // 4)
+        synthesizer = LLMSynthesizer(llm, max_tokens=_SYNTH_MAX_TOKENS)
     else:
         logger.info("No real LLM configured, falling back to mock synthesizer")
 
@@ -550,6 +617,8 @@ def _run_query_sync(
     query_text: str,
     app=None,
     pinned_chunk_ids: list[str] | None = None,
+    provider_id: str | None = None,
+    mode: str | None = None,
 ) -> dict:
     """Run the query pipeline synchronously (called via asyncio.to_thread).
 
@@ -588,9 +657,36 @@ def _run_query_sync(
     except _PipelineBuildError as e:
         return {"error": str(e)}
 
+    # Per-question reasoning: the cached pipeline holds a provider built at
+    # cold start, so a request-scoped level gets its own provider + synthesizer
+    # for this query only. The expensive parts of the pipeline (graph, embedder,
+    # Chroma, BM25) stay cached; provider construction costs no network call.
+    # Mutating the cached provider instead would race across concurrent queries.
+    query_synthesizer = None
+    if provider_id or mode:
+        per_query_llm = _build_llm_from_env_or_default(
+            provider_id=provider_id, mode=mode,
+        )
+        if per_query_llm is not None and not getattr(per_query_llm, "_is_mock", False):
+            from core.src.query.synthesizer import LLMSynthesizer
+            query_synthesizer = LLMSynthesizer(
+                per_query_llm, max_tokens=_SYNTH_MAX_TOKENS
+            )
+            llm = per_query_llm
+        else:
+            logger.warning(
+                "Per-question override (provider=%r mode=%r) requested but "
+                "no real LLM resolved — answering with the cached provider.",
+                provider_id, mode,
+            )
+
     llm_calls_before = llm.call_count if llm else 0
     llm_start = time.time()
-    response = pipeline.query(query_text, pinned_chunk_ids=pinned_chunk_ids)
+    response = pipeline.query(
+        query_text,
+        pinned_chunk_ids=pinned_chunk_ids,
+        synthesizer=query_synthesizer,
+    )
     llm_elapsed = time.time() - llm_start
     elapsed = time.time() - start
     llm_calls_after = llm.call_count if llm else 0

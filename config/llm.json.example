@@ -1,0 +1,45 @@
+{
+  "_comment": "Annotated example for config/llm.json — copy the blocks you need into the real file. This file is never read by the app; it exists so the schema is discoverable without going to the source. JSON has no comments, so the notes live in _comment* keys, which the loader ignores. Resolution priority for the single-provider fields (highest first): CLI flag (e.g. --llm-provider) > env var (e.g. NORA_LLM_PROVIDER) > this file > built-in default.",
+
+  "_comment_single_provider": "The single active provider — what every lane uses when no `providers` roster is configured. Leave a field empty to fall through to the next tier. llm_provider is one of: ollama | openai-compatible | mock. llm_base_url must include /v1 for openai-compatible endpoints.",
+  "llm_provider": "",
+  "llm_model": "",
+  "llm_timeout": 0,
+  "llm_base_url": "",
+  "llm_api_key": "",
+
+  "_comment_embeddings": "Embeddings are resolved separately from the chat LLM — a deployment commonly runs local embeddings against a remote chat endpoint.",
+  "embedding_provider": "ollama",
+  "embedding_model": "qwen3-embedding:4b-q8_0",
+  "ollama_url": "",
+  "ollama_timeout_s": 0,
+
+  "_comment_stages": "Pipeline stages to skip on a re-run. Both default to false in code; this file is where a deployment pins them.",
+  "skip_taxonomy": true,
+  "skip_graph": true,
+
+  "_comment_providers": "OPTIONAL named roster for the Ask page. Omit the key entirely (the normal case) and nothing changes: the controls are not rendered and the single-provider fields above are used exactly as before. Add entries and the Ask page gains a provider picker plus a Fast/Think toggle. Order matters — the FIRST entry is the default for everyone who never touches the picker.",
+  "_comment_providers_fields": "id: stable slug, recorded on every answer as llm_provider_id. name: what the user sees — say what the infrastructure IS ('130B — DGX'), not its role ('primary'), because the role means nothing to the person asking. base_url: include /v1. model: the model tag on that endpoint. api_key_env: the NAME of an env var holding the key — never put a key in this committed file. supports_reasoning_control: see below. default_mode: fast | think, applied when the asker expresses no preference.",
+  "_comment_supports_reasoning_control": "Whether the ENDPOINT HONOURS THE KNOB — not whether the model reasons. These are independent: a thinking model with no exposed control is false, because nothing we send changes how much it thinks. Set it false and the toggle renders as 'Not supported' instead of offering a choice that would do nothing. It cannot be auto-detected: no OpenAI-compatible endpoint advertises the capability, and a probe only catches outright rejection — a server can accept reasoning_effort and silently ignore it. Verify with: python -m core.src.llm.llm_debug --complete --text 'ping'",
+  "_comment_modes": "fast sends reasoning_effort='none' (skip thinking). think sends NO reasoning field, so the model does whatever the deployment already configured — we never assert an effort level on its behalf.",
+  "providers": [
+    {
+      "id": "dgx-130b",
+      "name": "130B — DGX",
+      "base_url": "https://dgx.internal.example/v1",
+      "model": "qwen3-130b",
+      "api_key_env": "NORA_LLM_DGX_KEY",
+      "supports_reasoning_control": true,
+      "default_mode": "fast"
+    },
+    {
+      "id": "internal-14b",
+      "name": "14B — internal",
+      "base_url": "https://llm.internal.example/v1",
+      "model": "internal-14b",
+      "api_key_env": "NORA_LLM_API_KEY",
+      "supports_reasoning_control": false,
+      "default_mode": "think"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "_comment": "LLM + embedding configuration. Empty values fall through. Resolution priority for each field (highest first): CLI flag (e.g. --llm-provider) > matching env var (e.g. NORA_LLM_PROVIDER) > value in this file > built-in default. The legacy LLM fields under environments/<name>.json (model_provider / model_name / model_timeout / embedding_provider / embedding_model) are still honored as a back-compat fallback below this file but are deprecated; prefer setting them here.",
+  "_comment": "LLM + embedding configuration. Empty values fall through. Resolution priority for each field (highest first): CLI flag (e.g. --llm-provider) > matching env var (e.g. NORA_LLM_PROVIDER) > value in this file > built-in default. The legacy LLM fields under environments/<name>.json (model_provider / model_name / model_timeout / embedding_provider / embedding_model) are still honored as a back-compat fallback below this file but are deprecated; prefer setting them here. Optional `providers`: a list of named endpoints the Ask page offers ({id, name, base_url, model, api_key_env, supports_reasoning_control, default_mode}). `name` is what the user sees \u2014 say what the infrastructure IS (\"130B \u2014 DGX\"), not its role. `api_key_env` names an env var; never put a key in this committed file. `supports_reasoning_control` is declared, not detected \u2014 no OpenAI-compatible endpoint advertises it, and a server may accept `reasoning_effort` and silently ignore it. Absent or empty = no roster, and the single-provider chain above is used unchanged.",
   "llm_provider": "",
   "llm_model": "",
   "llm_timeout": 0,
@@ -10,5 +10,5 @@
   "ollama_url": "",
   "ollama_timeout_s": 0,
   "skip_taxonomy": true,
-  "skip_graph": true 
+  "skip_graph": true
 }

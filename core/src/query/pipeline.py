@@ -346,6 +346,8 @@ class QueryPipeline:
         query_text: str,
         verbose: bool = False,
         pinned_chunk_ids: list[str] | None = None,
+        *,
+        synthesizer=None,
     ) -> QueryResponse:
         """Run the full query pipeline.
 
@@ -362,6 +364,12 @@ class QueryPipeline:
                 proper query_type. Unknown chunk IDs are dropped with a
                 warning; if no IDs resolve, returns the not-found
                 response.
+            synthesizer: Keyword-only. Use this synthesizer for Stage 6
+                instead of the one bound at construction. Lets a caller
+                vary the LLM per query (e.g. a per-question reasoning
+                level) while reusing the expensive cached pipeline —
+                graph, embedder, vector store and BM25 index. None keeps
+                the constructed synthesizer.
 
         Returns:
             QueryResponse with answer and citations.
@@ -397,7 +405,7 @@ class QueryPipeline:
                 query_text, chunks, intent.query_type,
                 max_context_chars=self._max_context_chars,
             )
-            response = self._synthesizer.synthesize(context, intent)
+            response = (synthesizer or self._synthesizer).synthesize(context, intent)
             response.candidate_count = 0
             response.retrieved_chunks = chunks
             response.assembled_context = context
@@ -627,7 +635,7 @@ class QueryPipeline:
             )
 
         # Stage 6: LLM Synthesis
-        response = self._synthesizer.synthesize(context, intent)
+        response = (synthesizer or self._synthesizer).synthesize(context, intent)
         response.candidate_count = candidates.total
         # Surface the retrieval set for the UI / Test page. This is
         # the post-rerank top-K returned by Stage 4 (RAG) — it's what

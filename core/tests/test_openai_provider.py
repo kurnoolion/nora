@@ -321,3 +321,51 @@ class TestComplete:
         assert out == "ok"
         assert p.last_call_stats["eval_count"] == 0
         assert p.last_call_stats["prompt_eval_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Reasoning effort (Phase 1 — per-question control)
+# ---------------------------------------------------------------------------
+
+
+class TestReasoningEffort:
+    def test_field_absent_when_unset(self):
+        """The default path must be byte-identical to the pre-existing one."""
+        captured: dict = {}
+        with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
+            _make_provider().complete("ping")
+        assert "reasoning_effort" not in captured["body"]
+
+    def test_field_sent_when_set(self):
+        captured: dict = {}
+        p = OpenAICompatibleProvider(
+            model="qwen/qwen3-235b-a22b",
+            base_url="https://example.test/v1",
+            api_key="sk-test",
+            reasoning="none",
+        )
+        with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
+            p.complete("ping")
+        assert captured["body"]["reasoning_effort"] == "none"
+
+    @pytest.mark.parametrize("level", ["none", "low", "medium", "high"])
+    def test_each_level_passes_through(self, level):
+        captured: dict = {}
+        p = OpenAICompatibleProvider(
+            model="m", base_url="https://example.test/v1",
+            api_key="k", reasoning=level,
+        )
+        with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
+            p.complete("ping")
+        assert captured["body"]["reasoning_effort"] == level
+
+    def test_blank_and_whitespace_are_unset(self):
+        for value in ("", "   ", None):
+            captured: dict = {}
+            p = OpenAICompatibleProvider(
+                model="m", base_url="https://example.test/v1",
+                api_key="k", reasoning=value,
+            )
+            with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
+                p.complete("ping")
+            assert "reasoning_effort" not in captured["body"]

@@ -161,13 +161,37 @@ def maybe_wrap_with_refusal_fallback(llm, timeout: int = 600):
         return llm
     if getattr(llm, "_is_mock", False):
         return llm
+    fallback = build_fallback_provider(timeout=timeout)
+    if fallback is None:          # defensive: checked above, kept honest
+        return llm
+    logger.info("Refusal fallback active (fallback model: %s)", model)
+    return RefusalFallbackProvider(llm, fallback, markers)
+
+
+def build_fallback_provider(timeout: int = 600, reasoning: str | None = None):
+    """Construct a provider for the configured fallback endpoint, or None
+    when it isn't configured.
+
+    Two callers, deliberately: `maybe_wrap_with_refusal_fallback` uses it as
+    the second half of the refusal decorator, and the web Ask lane uses it to
+    address the fallback endpoint DIRECTLY when the asker picks it. Keeping
+    the `NORA_LLM_FALLBACK_*` names in one place stops the two from drifting.
+
+    Note what the direct caller gives up: a provider built here is not wrapped
+    in the refusal decorator, so a refusal from this endpoint has nowhere to
+    go. That is the honest shape — it IS the fallback; there is nothing behind
+    it.
+    """
+    base_url = os.getenv("NORA_LLM_FALLBACK_BASE_URL", "").strip()
+    model = os.getenv("NORA_LLM_FALLBACK_MODEL", "").strip()
+    if not (base_url and model):
+        return None
     from core.src.llm.openai_provider import OpenAICompatibleProvider
 
-    fallback = OpenAICompatibleProvider(
+    return OpenAICompatibleProvider(
         model=model,
         base_url=base_url,
         api_key=os.getenv("NORA_LLM_FALLBACK_API_KEY", "") or None,
         timeout=timeout,
+        reasoning=reasoning or None,
     )
-    logger.info("Refusal fallback active (fallback model: %s)", model)
-    return RefusalFallbackProvider(llm, fallback, markers)

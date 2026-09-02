@@ -7,10 +7,10 @@ LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method st
 - `LLMProvider` (base.py) — `@runtime_checkable Protocol`; the only LLM interface the rest of the project sees
 - `answering_model(llm)` (base.py) — name of the model that produced the last answer (`last_model` over static `model`; empty for mocks) — the provenance source for synthesis epilogues
 - `OllamaProvider` (ollama_provider.py) — local Ollama HTTP client via stdlib `urllib`; `model`, `call_count`, `last_call_stats` (total_duration_s, eval_count, prompt_eval_count, tokens_per_second, model) for observability
-- `OpenAICompatibleProvider` (openai_provider.py) — Chat-Completions client for any OpenAI-compatible cloud endpoint (OpenRouter, Together AI, DeepInfra, Groq, Fireworks, vLLM, OpenAI). Stdlib `urllib` only. Reads `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY` / `NORA_LLM_MODEL` env vars when constructor args are None. Same `model` / `call_count` / `last_call_stats` surface as `OllamaProvider`.
+- `OpenAICompatibleProvider` (openai_provider.py) — Chat-Completions client for any OpenAI-compatible cloud endpoint (OpenRouter, Together AI, DeepInfra, Groq, Fireworks, vLLM, OpenAI). Stdlib `urllib` only. Reads `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY` / `NORA_LLM_MODEL` env vars when constructor args are None. Same `model` / `call_count` / `last_call_stats` surface as `OllamaProvider`. Optional `reasoning` constructor arg ("none" / "low" / "medium" / "high") sends the OpenAI-standard `reasoning_effort` field; unset omits the field entirely.
 - `MockLLMProvider` (mock_provider.py) — deterministic keyword-based stub for tests and offline runs; `call_count`
 - `HardwareInfo`, `ModelSpec`, `ModelChoice` (model_picker.py); `detect_hardware()`, `pick_model(hw, prefer=None)`, `list_available_ollama_models()`, `check_model_available()` — auto-select the best Ollama model that fits detected RAM/VRAM
-- `parse_markers`, `is_permanent_refusal`, `RefusalFallbackProvider`, `maybe_wrap_with_refusal_fallback` (refusal.py) — permanent-refusal detection + provider decorator: a marker-prefixed, JSON-free response is retried once on a fallback endpoint (`NORA_LLM_REFUSAL_MARKERS` + `NORA_LLM_FALLBACK_BASE_URL/_MODEL/_API_KEY`). Applied inside `PipelineContext.create_llm_provider` (so every pipeline stage, the debug/miner CLIs, and the web query/chat lane inherit it) plus golden_cli's own builder; idempotent, so double-wrapping is safe. `used` counter for content-free visibility (NFR-8)
+- `parse_markers`, `is_permanent_refusal`, `RefusalFallbackProvider`, `maybe_wrap_with_refusal_fallback`, `build_fallback_provider(timeout, reasoning=None)` (refusal.py) — permanent-refusal detection + provider decorator: a marker-prefixed, JSON-free response is retried once on a fallback endpoint (`NORA_LLM_REFUSAL_MARKERS` + `NORA_LLM_FALLBACK_BASE_URL/_MODEL/_API_KEY`). `build_fallback_provider` constructs the fallback endpoint's provider on its own — it returns `None` when unconfigured, so callers degrade rather than failing. Applied inside `PipelineContext.create_llm_provider` (so every pipeline stage, the debug/miner CLIs, and the web query/chat lane inherit it) plus golden_cli's own builder; idempotent, so double-wrapping is safe. `used` counter for content-free visibility (NFR-8)
 - Debug CLI (`llm_debug.py`):
   - `--probe <URL>` — probes the four interesting routes (`GET /api/tags`, `GET /v1/models`, `POST /api/chat`, `POST /v1/chat/completions`) and reports whether the endpoint speaks native Ollama, OpenAI-compatible, or both. Prints a copy-pasteable `NORA_LLM_*` env-var config recommendation. Use before configuring a new custom Ollama URL or proprietary-LLM proxy.
   - `--check` — resolves the active provider via the unified D-044 chain (CLI > env > config/llm.json > default) and sends a one-line "ping" completion. Reports the resolved provider class and whether construction landed on a mock fallback. Useful when web UI answers don't match what `NORA_LLM_*` says.
@@ -21,6 +21,8 @@ LLM abstraction layer. Defines the `LLMProvider` Protocol — a single-method st
 - `complete()` returns plain text — JSON parsing is the caller's responsibility. Keeps the Protocol minimal and portable to providers without structured-output modes.
 - Default `temperature=0.0` — all offline extraction paths want determinism.
 - `OllamaProvider.__init__` pings `/api/tags` and raises `ConnectionError` on failure, and logs a warning if the requested model isn't pulled — fail fast with a diagnosable message.
+- The fallback endpoint's env names (`NORA_LLM_FALLBACK_*`) are read in exactly one place (`build_fallback_provider`), so a second reader cannot drift from it.
+- Reasoning effort is injected at **construction**, never through `complete()`. The Protocol stays four-arg; varying reasoning per call means constructing a provider for that call. Widening `complete()` instead would be the coordinated break this module exists to avoid.
 - `OpenAICompatibleProvider.__init__` validates that model + base_url + api_key are all resolvable (constructor arg or env var) and raises `ValueError` with a precise message otherwise — fail before the first request, not on the first 401.
 - `last_call_stats` schema is identical across providers (`total_duration_s`, `eval_count`, `prompt_eval_count`, `tokens_per_second`, `model`). Swapping providers does not change the metrics shape.
 
@@ -108,6 +110,21 @@ _Alphabetical, regenerated by regen-map._
 - `_THINK_TAGS` — constant — internal
 - `_strip_reasoning` — function — internal — Remove reasoning from model output. Handles (1) a prompt-driven
 - `logger` — constant — pub
+
+`refusal.py`
+- `MARKER_SEP` — constant — pub
+- `RefusalFallbackProvider` — class — pub — LLMProvider decorator: primary first; a permanently-refused call
+  - `__init__` — constructor — internal
+  - `complete` — method — pub
+  - `model` — property — pub — Provider-surface parity: the primary model's name.
+- `_FENCE_RE` — constant — internal
+- `_THINK_SPAN_RE` — constant — internal
+- `_contains_json_payload` — function — internal — True when the text carries a parseable JSON object or array
+- `build_fallback_provider` — function — pub — Construct a provider for the configured fallback endpoint, or None
+- `is_permanent_refusal` — function — pub — True when the response is a permanent refusal
+- `logger` — constant — pub
+- `maybe_wrap_with_refusal_fallback` — function — pub — Wrap `llm` with the refusal fallback when fully configured.
+- `parse_markers` — function — pub — `NORA_LLM_REFUSAL_MARKERS` → marker tuple
 <!-- END:STRUCTURE -->
 
 **Depends on**
