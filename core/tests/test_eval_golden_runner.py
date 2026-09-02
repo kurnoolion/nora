@@ -245,6 +245,32 @@ class TestStackStamp:
         assert s.sira_prompt_scheme == "single-v1"
         assert s.answer_prompt_version == "ap-3"
 
+    def test_reasoning_effort_recorded_but_not_comparability_gating(self):
+        """Deliberate: reasoning effort is stamped and printed, but two
+        runs at different levels must still pool. Restricting the
+        comparison is the analyst's call, not the tool's."""
+        a = golden_runner.StackStamp.from_healthz(
+            self._HEALTHZ, llm_identity="modelB", reasoning_effort="none")
+        b = golden_runner.StackStamp.from_healthz(
+            self._HEALTHZ, llm_identity="modelB", reasoning_effort="high")
+        assert a.reasoning_effort == "none"
+        assert b.reasoning_effort == "high"
+        assert a.stage1_key() == b.stage1_key()
+        assert a.stage2_key() == b.stage2_key()
+        assert a.to_dict()["reasoning_effort"] == "none"
+
+    def test_reasoning_effort_visible_on_the_identity_line(self):
+        """Since it does not gate comparability, the compact line is the
+        only place the difference shows — so it has to show."""
+        s = golden_runner.StackStamp.from_healthz(
+            self._HEALTHZ, reasoning_effort="none")
+        assert "rsn=none" in s.compact_line()
+
+    def test_unset_reasoning_leaves_the_line_unchanged(self):
+        s = golden_runner.StackStamp.from_healthz(self._HEALTHZ)
+        assert s.reasoning_effort == ""
+        assert "rsn=" not in s.compact_line()
+
     def test_missing_healthz_yields_empty_stamp(self):
         s = golden_runner.StackStamp.from_healthz(None)
         assert s.stage1_key() == ("", "", (), "")
