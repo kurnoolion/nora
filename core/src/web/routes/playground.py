@@ -34,6 +34,7 @@ from core.src.llm.openai_provider import (
 )
 from core.src.web.feedback_db import CATEGORIES
 from core.src.web.team_mode import team_restricted
+from core.src.web.timeline import build_timeline
 
 logger = logging.getLogger(__name__)
 
@@ -578,6 +579,18 @@ async def _build_merged_response_html(
             "query_intent": result.get("query_intent"),
             "graph_candidates": result.get("graph_candidates"),
         }
+        # One normalized timeline for whichever lane ran. The
+        # denominator is the wall clock the user actually waited
+        # (`elapsed_ms`), not the sum of the stages, so setup and
+        # transport surface as an explicit `unaccounted` segment
+        # instead of disappearing between the bars.
+        ctx["timeline"] = build_timeline(
+            (out.get("sira_result") or {}).get("timings_ms")
+            if lane == "sira"
+            else result.get("timings_ms"),
+            out.get("elapsed_ms"),
+            lane,
+        )
         if lane == "sira":
             ctx.update({
                 # The SIRA lane synthesizes from SIRA-pinned chunks (retrieval is
@@ -1425,6 +1438,9 @@ async def playground_ask(request: Request):
             "sira_pin_max": _PIN_MAX,
             "sira_synth_mode": _SYNTH_MODE,
             "elapsed_ms": elapsed_ms,
+            "timeline": build_timeline(
+                sira_result.get("timings_ms"), elapsed_ms, "sira",
+            ),
             # Synthesizer view — pass the SAME fields requirement_bot
             # passes, so the shared template renders citation audit /
             # LLM prompt / fragment view consistently across tabs.
@@ -1500,6 +1516,9 @@ async def playground_ask(request: Request):
         "rag_chunks": result.get("rag_chunks", []),
         "rag_chunk_count": result.get("rag_chunk_count", 0),
         "elapsed_ms": elapsed_ms,
+        "timeline": build_timeline(
+            result.get("timings_ms"), elapsed_ms, "nora",
+        ),
         "candidate_count": result.get("candidate_count"),
         "section": section,
         "disambiguation_required": result.get("disambiguation_required", False),
@@ -1715,6 +1734,12 @@ async def playground_synthesize_group(request: Request):
         "rag_chunks": result.get("rag_chunks", []),
         "rag_chunk_count": result.get("rag_chunk_count", 0),
         "elapsed_ms": elapsed_ms,
+        # Pinned-chunks re-run: the timeline shows `fetch_pinned` +
+        # assemble/synthesize/audit only, because Stages 2-4.7 really
+        # did not run on this path.
+        "timeline": build_timeline(
+            result.get("timings_ms"), elapsed_ms, "nora",
+        ),
         "candidate_count": result.get("candidate_count"),
         "section": section,
         # On the synthesis re-run, disambiguation cannot fire (we're
@@ -1868,4 +1893,5 @@ def _run_query_for_test(
         "citation_audit": raw.get("citation_audit"),
         "query_intent": raw.get("query_intent"),
         "graph_candidates": raw.get("graph_candidates"),
+        "timings_ms": raw.get("timings_ms") or {},
     }

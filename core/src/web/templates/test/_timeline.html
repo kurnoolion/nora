@@ -1,0 +1,104 @@
+{# ── Query timeline ────────────────────────────────────────────────
+   Where the seconds went, for one answer. Rendered for BOTH lanes from
+   the normalized structure built by `core.src.web.timeline`, so the
+   NORA lane (Stage 1..6.5) and the SIRA lane (expand/search/rerank/
+   synth) draw the same component despite different stage vocabularies.
+
+   Deliberately NOT inside the "Engineering details" collapse: answer
+   latency is the everyday user's complaint, not an engineering-review
+   detail, so the bar and totals are visible by default while the
+   per-stage breakdown is one click away.
+
+   Expects `timeline` — None when the lane reported no stage timings,
+   in which case the caller renders nothing.
+
+   The collapse target is keyed on lane AND row_id because the merged
+   tab composes BOTH lanes' `_answer.html` fragments into one DOM
+   (`_render_template_to_string`), and `row_id` is None whenever
+   `record_qa` fails. Two cards keyed on row_id alone would then share
+   an id, and Bootstrap's collapse targets the first match — so
+   "breakdown" on one card would toggle the other card's table.
+#}
+<div class="query-timeline mt-2 mb-1">
+  <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+    {# Sub-second queries (a warm cache hit can be single-digit ms)
+       would render as "0.0 s", which reads as a broken timer. Show
+       milliseconds below 1 s and seconds above it. #}
+    <span class="text-muted small">
+      <i class="bi bi-stopwatch me-1"></i>Took
+      <strong>
+        {%- if timeline.total_ms < 1000 -%}
+          {{ timeline.total_ms }} ms
+        {%- else -%}
+          {{ '%.1f'|format(timeline.total_ms / 1000) }} s
+        {%- endif -%}
+      </strong>
+    </span>
+    {% for band in timeline.bands %}
+      {% if band.band != 'unaccounted' %}
+        <span class="text-muted small">
+          · {{ band.band }} {{ band.pct }}%
+        </span>
+      {% endif %}
+    {% endfor %}
+    <button type="button"
+            class="btn btn-sm btn-link p-0 small text-decoration-none"
+            data-bs-toggle="collapse"
+            data-bs-target="#timeline-detail-{{ timeline.lane }}-{{ row_id }}"
+            aria-expanded="false"
+            aria-controls="timeline-detail-{{ timeline.lane }}-{{ row_id }}">
+      breakdown
+    </button>
+  </div>
+
+  {# Stacked bar. Every segment carries a title so hovering gives the
+     exact numbers without expanding. `min-width` keeps a sub-percent
+     stage from rendering as an invisible zero-width sliver. #}
+  <div class="progress" style="height: 14px;" role="img"
+       aria-label="Query stage timing breakdown">
+    {% for seg in timeline.segments %}
+      {% if seg.ms > 0 %}
+        <div class="progress-bar {{ {
+                 'prep': 'bg-info',
+                 'retrieval': 'bg-primary',
+                 'synthesis': 'bg-success',
+                 'post': 'bg-warning',
+                 'unaccounted': 'bg-secondary bg-opacity-25',
+               }.get(seg.band, 'bg-secondary') }}"
+             style="width: {{ seg.pct }}%; min-width: 2px;"
+             title="{{ seg.label }} — {{ seg.ms }} ms ({{ seg.pct }}%)"></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <div class="collapse" id="timeline-detail-{{ timeline.lane }}-{{ row_id }}">
+    <table class="table table-sm small mt-2 mb-1">
+      <thead>
+        <tr>
+          <th scope="col">Stage</th>
+          <th scope="col">Phase</th>
+          <th scope="col" class="text-end">ms</th>
+          <th scope="col" class="text-end">%</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for seg in timeline.segments %}
+          <tr {% if seg.band == 'unaccounted' %}class="text-muted"{% endif %}>
+            <td>{{ seg.label }}</td>
+            <td class="text-muted">{{ seg.band }}</td>
+            <td class="text-end">{{ seg.ms }}</td>
+            <td class="text-end">{{ seg.pct }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="small text-muted mb-1">
+      Only the stages that actually ran are listed — a stage that was
+      bypassed is absent rather than shown as 0&nbsp;ms.
+      <strong>Unaccounted</strong> is the wall clock minus the measured
+      stages: pipeline setup, service round-trips, and anything else not
+      instrumented. A large unaccounted share means the time is going
+      somewhere these stage timers do not reach.
+    </p>
+  </div>
+</div>

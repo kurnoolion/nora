@@ -909,6 +909,12 @@ def _run_query_sync(
         "rag_chunks": rag_chunks,
         "rag_chunk_count": len(rag_chunks),
         "timing": f"{elapsed:.1f}",
+        # Per-stage NORA timings (Stage 1..6.5). `total_ms` here covers
+        # only QueryPipeline.query(); `elapsed` above additionally
+        # includes pipeline construction, which is cold-start expensive.
+        # The timeline renderer treats the difference as unaccounted
+        # rather than folding it into a stage.
+        "timings_ms": dict(response.timings_ms),
         "disambiguation_required": bool(response.disambiguation_required),
         "groups": groups_payload,
         "llm_system_prompt": llm_system_prompt,
