@@ -83,6 +83,28 @@
            engineering knobs (retrieval lanes, correction label) that collapse.
            Collapsed inputs are still submitted — collapse hides, not disables. #}
         <div class="d-flex align-items-center justify-content-end gap-2 flex-wrap">
+          {# Recents + Re-run (strand ask-rerun). Left-aligned via me-auto so
+             Ask stays the rightmost primary action. Both start hidden and are
+             revealed by askRenderRecents() only when history is non-empty —
+             a first-time user sees no dead controls. Choosing a recent
+             question LOADS it into the box rather than asking, so it can be
+             edited first; Re-run last submits immediately, which is the
+             tight alpha loop: change a knob, re-ask the same question. #}
+          <div class="dropdown me-auto d-none" id="ask-recents-wrap">
+            <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                    type="button" id="ask-recents-btn"
+                    data-bs-toggle="dropdown" aria-expanded="false"
+                    title="Load a recent question back into the box">
+              <i class="bi bi-clock-history me-1"></i>Recent
+            </button>
+            <ul class="dropdown-menu" id="ask-recents-menu"
+                style="max-width: 34rem"></ul>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary d-none" type="button"
+                  id="ask-rerun-last"
+                  title="Ask the most recent question again, with the current settings">
+            <i class="bi bi-arrow-repeat me-1"></i>Re-run last
+          </button>
           <button class="btn btn-sm btn-outline-secondary" type="button"
                   data-bs-toggle="collapse" data-bs-target="#ask-options"
                   aria-expanded="false" aria-controls="ask-options">
@@ -325,6 +347,7 @@
     // ask is really going out. An ask that then fails still shows up in
     // recents, which is the whole point of re-running after a fix.
     const historyId = askBeginHistory(askedQuestion);
+    askRenderRecents();          // the question is available to re-run at once
 
     setBusy(true);
     answerEl.innerHTML = "";
@@ -400,6 +423,7 @@
       // No-op on the success path (phase 2 already consumed the entry); on a
       // stream failure it drops the marker from the entry that stays pathless.
       askFinishHistory(historyId);
+      askRenderRecents();
     }
   });
 })();
@@ -484,6 +508,60 @@ function askBeginHistory(question) {
 }
 
 /*
+ * Recents control (strand ask-rerun). Deduped by question text, newest wins,
+ * so a two-lane ask shows once and repeated verification of one question does
+ * not crowd the list. The history page keeps every per-lane row — those give
+ * engineers the lane-compare view; the dedupe is display-only here.
+ *
+ * The store stays unlimited; this cap is a UI choice, not a retention policy.
+ */
+const ASK_RECENTS_SHOWN = 20;
+
+function askRecentQuestions() {
+  const seen = new Set();
+  const out = [];
+  for (const e of askReadHistory()) {
+    const q = e && typeof e.q === "string" ? e.q.trim() : "";
+    if (!q || seen.has(q)) continue;
+    seen.add(q);
+    out.push(q);
+    if (out.length >= ASK_RECENTS_SHOWN) break;
+  }
+  return out;
+}
+
+function askRenderRecents() {
+  const wrap = document.getElementById("ask-recents-wrap");
+  const rerun = document.getElementById("ask-rerun-last");
+  const menu = document.getElementById("ask-recents-menu");
+  if (!wrap || !rerun || !menu) return;
+
+  const questions = askRecentQuestions();
+  wrap.classList.toggle("d-none", questions.length === 0);
+  rerun.classList.toggle("d-none", questions.length === 0);
+
+  menu.textContent = "";
+  questions.forEach((q) => {
+    const li = document.createElement("li");
+    const a = document.createElement("button");
+    a.type = "button";
+    a.className = "dropdown-item text-truncate";
+    // textContent, never innerHTML: these strings are user-authored and come
+    // back out of localStorage — the same rule history.html's esc() enforces.
+    a.textContent = q;
+    a.title = q;
+    a.addEventListener("click", () => {
+      const box = document.getElementById("test-question");
+      if (!box) return;
+      box.value = q;
+      box.focus();
+    });
+    li.appendChild(a);
+    menu.appendChild(li);
+  });
+}
+
+/*
  * Drops the internal pending marker if phase 2 never ran — a stream that fails
  * before "done" would otherwise leave it on the entry forever. Idempotent: on
  * the success path phase 2 has already removed the entry it was on.
@@ -522,6 +600,30 @@ function askRecordHistory(question, pendingId) {
   entries.splice(at, 1, ...rows);
   askWriteHistory(entries);
 }
+
+/*
+ * Re-run last. Sets the question and submits through the form's own path, so
+ * every existing behaviour applies unchanged: the empty/lane guards, the
+ * sticky-fields write, the streaming handler, history recording, and the
+ * sidebar collapse-on-ask from strand collapsible-sidebar. A parallel ask
+ * path would have to be kept in step with all of that.
+ *
+ * Uses the CURRENT form settings, not the ones the question was first asked
+ * with — the changed knob is the whole point of re-running.
+ */
+(function () {
+  const btn = document.getElementById("ask-rerun-last");
+  const form = document.getElementById("ask-form");
+  const box = document.getElementById("test-question");
+  if (!btn || !form || !box) return;
+  btn.addEventListener("click", () => {
+    const last = askRecentQuestions()[0];
+    if (!last) return;
+    box.value = last;
+    form.requestSubmit();
+  });
+  askRenderRecents();
+})();
 
 /*
  * Sticky fields — the name (and the now-collapsed lane selection + correction
