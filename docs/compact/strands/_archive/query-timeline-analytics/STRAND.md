@@ -1,8 +1,8 @@
 # query-timeline-analytics
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-03
-**Landed:**
+**Landed:** 2026-09-03
 **Assignees:** Hanif
 **Target modules:** query, web
 **Active phase:**
@@ -41,3 +41,5 @@ mode, single-lane). It is ignored here by decision, not oversight.
 - Flag (out of scope here, one-line fix): relabel the `/query` nav entry at
   `base.html:62-65` to "Query (legacy)" to end the ambiguity without deciding
   the page's future.
+
+Landed on 2026-09-03 with 4 promoted decisions: D-227, D-228, D-229, D-230.

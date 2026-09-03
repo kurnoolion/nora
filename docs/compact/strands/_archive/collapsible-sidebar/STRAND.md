@@ -1,8 +1,8 @@
 # collapsible-sidebar
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-02
-**Landed:**
+**Landed:** 2026-09-03
 **Assignees:** Hanif
 **Target modules:** web
 **Active phase:**
@@ -13,3 +13,5 @@ Make the left sidebar collapsible to an icon-only rail (~56px) so page content c
 
 ## Notes
 
+
+Landed on 2026-09-03 with 4 promoted decisions: D-231, D-232, D-233, D-234.

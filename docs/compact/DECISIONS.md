@@ -7924,3 +7924,434 @@ knows are meaningful.
   without the tool objecting. That is the deliberate trade.
 
 _Promoted from strand: llm-model-choice-eval on 2026-09-02._
+
+## D-218: Roster entry is independent of the Config-page DB (reverses a DECIDED item)
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** The Ask page's named provider roster bypassed the Config-page DB
+except for one borrowed value (`llm_timeout`). The manager brief of 2026-09-03
+listed the fix under DECIDED — "Roster sits BELOW the Config-page DB — do not
+relitigate" — with item 6 requiring DB values to win over a selected entry.
+
+**Decision (Hanif, 2026-09-03).** The opposite: a selected roster entry owns its
+`model`, `base_url`, `api_key` and `timeout` outright, and nothing in the roster
+branch reads the DB.
+
+**Why.** A roster entry is a NAMED endpoint ("130B — DGX"), and D-216 chose those
+names deliberately so the choice is recognisable. If the DB can override
+`base_url`, picking that name can silently send the question elsewhere — the
+label then lies, which is worse than having no label. Independence also made the
+change smaller: item 6 as briefed would have threaded DB lookups into the roster
+branch; independence deleted the one read that was there.
+
+**Consequences.**
+- Config-page LLM fields do not affect Ask synthesis while a roster is
+  configured. Item 11's labels say so on the fields themselves, including
+  `llm_timeout`, which the brief did not list but D-219 makes equally inert.
+- Roster credentials come ONLY from the env var each entry names
+  (`LLMProviderEntry.api_key` is a property over `os.getenv`). A deployment must
+  ship the roster file AND export those vars; miss the second and the endpoint
+  401s with nothing local explaining it. Mitigated by D-223.
+- This reversed a DECIDED item and was approved by the manager before merge.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-219: Entry `timeout` falls back to DEFAULT_LLM_TIMEOUT, not the resolver chain
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Item 7 moves `timeout` onto `LLMProviderEntry`. The roster branch
+previously borrowed the global via `resolve_llm_timeout()`, which consults the
+Config-page DB and `NORA_LLM_TIMEOUT`.
+
+**Decision.** Unset entry `timeout` resolves to `DEFAULT_LLM_TIMEOUT` (600).
+
+**Why.** Routing this one field through the resolver would leave the entry
+independent for every field except it — the inconsistency D-218 exists to
+remove.
+
+**Consequences.** `NORA_LLM_TIMEOUT` no longer reaches the roster path. Nothing
+depends on the old behaviour: no deployment could ship a roster before #18, which
+is the bug this strand fixes.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-220: Refusal fallback restored on the roster path (reverses a prior in-code decision)
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** `query.py`'s roster docstring stated the roster provider was
+*deliberately* not refusal-wrapped: "the roster names WHICH endpoint answers, so
+silently rerouting to a different one would defeat the choice the asker just
+made." The effect was that merely configuring a roster removed refusal coverage
+from Ask, while the no-roster chain kept it via `create_llm_provider`. Nothing
+asserted the wrap on either path, so the gap was invisible.
+
+**Decision.** The roster path is wrapped when the roster names a
+`fallback_provider`, and the answering endpoint is disclosed (D-221).
+
+**Why.** The original objection was to a SILENT reroute, not to rerouting. With
+the answering endpoint named on the answer card, the asker's choice stays visible
+AND a refusal no longer costs them their answer. The docstring arguing the
+opposite is rewritten in the same change — leaving it contradicting the code
+would be worse than either state.
+
+**Consequences.** Selecting the fallback entry itself is not wrapped in itself: it
+IS the fallback, and a refusal there has nowhere to go. Without markers
+(`NORA_LLM_REFUSAL_MARKERS`) there is nothing to detect a refusal with, so the
+wrap is skipped rather than added as a decorator that can never fire.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-221: Reroute disclosed via the synthesis epilogue, not a new template block
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Item 9 requires the endpoint that actually answered to be visible.
+Two synthesis paths already append a provenance epilogue ("Synthesized by X")
+using `answering_model()`, which reads `last_model` and so already reflects a
+reroute at the MODEL level.
+
+**Decision.** A companion `reroute_note(llm)` appends "(rerouted to X after Y
+declined)" at both existing epilogue sites. Shown only when a reroute happened.
+
+**Why.** Model names alone cannot report a reroute — two roster endpoints may
+serve the same model tag, so comparing names would miss it;
+`RefusalFallbackProvider.last_was_fallback` records it per call instead.
+Extending the epilogue reuses a mechanism that already lands in the answer body
+every asker reads, and touches no template. Rejected: a new above-the-fold
+template notice, which would have needed a new result key threaded through every
+synthesis path for the same visible outcome.
+
+**Consequences.** The note is empty unless the endpoints are NAMED. The roster
+path attaches names; the env-var fallback path does not, and inventing a label
+for an unnamed endpoint would say less than nothing. Only shown on reroute, so
+the common case gains no clutter.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-222: `fallback=` parameter on `maybe_wrap_with_refusal_fallback`
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Item 8 said to reuse `maybe_wrap_with_refusal_fallback` AND to take
+the fallback endpoint from the roster's `fallback_provider` entry. Those conflict
+as written: that function sources its endpoint only from `NORA_LLM_FALLBACK_*`
+via `build_fallback_provider`.
+
+**Decision.** An optional `fallback=None` parameter; when supplied, endpoint
+construction is skipped.
+
+**Why.** Marker parsing, the idempotence check and the mock guard stay in one
+place, and the roster concept never enters `core/src/llm/`. Rejected: adding
+`base_url`/`model` overrides to `build_fallback_provider`, which pushes
+roster-shaped inputs down into the llm module against the brief's "roster is
+scoped to the Ask flow" boundary; and constructing `RefusalFallbackProvider`
+inline at the call site, which reimplements the marker parse and the
+partial-config warning — exactly how two paths drift.
+
+**Consequences.** `NORA_LLM_REFUSAL_MARKERS` stays an env var and does not move
+— it is the hand-synced twin of `sandbox/llm_refusal.py` across the D-111
+boundary.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-223: `/api/health` reports a source flag, basename and key presence, not the resolved path
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Item 4 asked for the resolved config path on "/healthz". NORA's web
+app has no `/healthz` — that name belongs to the external SIRA service it fetches;
+its own endpoint is `/api/health` (`app.py`), which is team-allowlisted
+(`team_mode.py`) and polled by the navbar status dot.
+
+**Decision.** Report `llm_config_source` (`env`|`default`), `llm_config_file`
+(basename), `roster_size`, `effective_provider`, and `roster_keys` giving per-entry
+api_key presence — never the absolute path, never a key value.
+
+**Why.** An absolute container path on a team-allowlisted route hands gated
+non-admin users something they otherwise cannot see. A source flag plus basename
+answers the actual operator question ("did my NORA_LLM_CONFIG take effect?")
+while leaking nothing, and needs no `is_admin` gating or `Request` injection —
+the simpler change as well as the safer one. Key presence is the mitigation for
+D-218's env-var-only credential path. Rejected: full path gated to admins
+(more machinery), and full path for everyone (the leak).
+
+**Consequences.** An operator debugging a wrong-FILE problem gets the filename,
+not the directory. Provenance is recorded on `LLMConfigFile` at load rather than
+recomputed, because re-resolving per poll would re-log the resolver's warning
+every few seconds.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-224: `use_roster=False` for the Eval Studio curation chat
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Item 10 requires the curation chat to bypass the roster. Passing no
+`provider_id` cannot achieve it: after D-225, `resolve_provider(None)` returns
+the roster's default entry.
+
+**Decision.** A keyword-only `use_roster: bool = True` on
+`_build_llm_from_env_or_default`; the curation route passes `False`.
+
+**Why.** Curation is not the Ask flow. A golden response curated against whichever
+endpoint happened to be the roster default would not be reproducible. The Ask
+flow's cached default deliberately STAYS on the roster, since a per-request
+choice overrides it anyway.
+
+**Consequences.** Two pre-existing `test_web_eval_studio.py` monkeypatch sites
+stubbed this function with a zero-arg lambda — they patch exactly this seam.
+Their stubs now accept the keyword, and the bypass is covered against the REAL
+function in `test_ask_reasoning.py`, per the brief's requirement that new tests
+exercise the real builder in both roster and no-roster configurations.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-225: `default_provider` replaces positional-first roster resolution
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** `resolve_provider(None)` returned `providers[0]`, making the default
+an accident of list order.
+
+**Decision.** New top-level `default_provider` / `fallback_provider` ids into
+`providers`. `resolve_provider(None)` returns the `default_provider` entry, or the
+first entry when the key is unset.
+
+**Why.** An explicit key states intent; positional order states nothing. Keeping
+the positional fallback means rosters written before the key behave unchanged.
+Unknown ids are dropped with a warning at LOAD time rather than raising, matching
+`_parse_providers` — a half-edited roster must not fail someone's question, and a
+typo in `fallback_provider` surfaces at startup instead of at refusal time.
+
+**Consequences.** Which endpoint the cached pipeline default resolves to changes
+when `default_provider` is set. Intended, and stated in the PR rather than left
+for a reviewer to notice.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-226: `NORA_LLM_CONFIG` selects the config FILE; a bad value warns and falls through
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** `config/llm.json` is committed and baked into the web image, so no
+deployment could supply a roster — 1a3575f reverted an attempt to ship one in the
+committed file.
+
+**Decision.** `NORA_LLM_CONFIG` names the file to read;
+`DEFAULT_LLM_CONFIG_PATH` becomes the fallback. A value naming a missing or
+unreadable file warns loudly and falls through; it never raises.
+
+**Why.** A bad env var must not take the app down. More subtly, it must not
+degrade silently to `providers == []`, which is indistinguishable from "no roster
+configured" — the operator would see an empty picker and no explanation. By
+contrast a missing DEFAULT path stays silent: that IS the normal no-roster case,
+and warning there would fire on every deployment that never configures a roster.
+
+**Consequences.** `LLMConfigFile` carries `config_path` / `config_source`, marked
+`compare=False` so provenance is not part of config identity — two instances with
+the same content stay equal whatever file they came from, which is what existing
+equality assertions rely on.
+
+_Promoted from strand: llm-roster-deploy on 2026-09-03._
+
+## D-227: The query timeline's denominator is the route's wall clock, not the sum of the stages
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Per-stage timings never cover the whole request. The NORA
+lane's `total_ms` measures `QueryPipeline.query()` only, excluding
+pipeline construction (~5-15s cold, per the `query.py` cache comment).
+The SIRA lane's `expand_ms` / `search_ms` / `rerank_ms` come from the
+SIRA service and exclude the HTTP round-trip. Rendering percentages of
+the measured sum would produce a bar that always totals 100% while
+silently hiding the time the user actually waited.
+
+**Decision.** `web.timeline.build_timeline` takes the route-measured
+wall clock as `total_ms` and emits `total_ms - sum(stages)` as an
+explicit `unaccounted` segment, rendered in the bar and named in the
+breakdown table.
+
+**Alternatives rejected.**
+
+- *Denominator = sum of measured stages.* Segments would sum cleanly
+  and the bar would look tidier. Rejected: it hides exactly the latency
+  the strand exists to explain. A cold request whose time went almost
+  entirely into pipeline construction would render as a
+  fast, fully-accounted query — the opposite of the truth.
+- *Distribute the remainder proportionally across the stages.* Rejected
+  as actively misleading: it invents attribution the timers did not
+  measure, and would make a construction-dominated request look like a
+  uniformly slow pipeline.
+- *Omit the remainder and renormalize.* Same defect as the first
+  option, with the added problem that the SIRA lane's large
+  round-trip gap would vanish without trace.
+
+**Consequence.** On cold requests the `unaccounted` segment dominates.
+That is intended — it is the signal that the time is going somewhere
+the stage timers do not reach.
+
+_Promoted from strand: query-timeline-analytics on 2026-09-03._
+
+## D-228: A skipped stage is absent from `timings_ms`, not zero
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Stages 3 (graph scoping), 3.5 (rewrite), 4.5 (threshold)
+and 4.7 (grouping) are all conditional. Stage 3 in particular is fully
+bypassed in pure-RAG mode.
+
+**Decision.** `_StageTimer` only records stages that execute, so a
+bypassed stage has no key in `QueryResponse.timings_ms`. Consumers
+treat a missing key as "did not run". `build_timeline` tests
+`is None` rather than truthiness, so a stage that genuinely ran in
+under a millisecond still renders.
+
+**Alternative rejected.** *Emit `0` for every stage in `STAGE_ORDER`,
+so the dict shape is uniform.* Rejected: a uniform shape is easier to
+consume but renders a bypassed stage as instantaneous, which is a
+different and wrong claim. Distinguishing "instant" from "did not
+happen" is the whole diagnostic value on the RAG-only path.
+
+_Promoted from strand: query-timeline-analytics on 2026-09-03._
+
+## D-229: One normalized timeline shape for both lanes, with coarse bands for comparability
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** The two `/test` lanes do not share a stage vocabulary.
+NORA has ten labelled stages (Stage 1..6.5); SIRA has four from its own
+service (`expand` / `search` / `rerank` / `synth`). The user's stated
+interest is in reading BOTH flows.
+
+**Decision.** `build_timeline(stages_ms, total_ms, lane)` maps either
+vocabulary onto one structure, and every stage carries a coarse `band`
+(`prep` / `retrieval` / `synthesis` / `post`, plus `unaccounted`).
+Stage detail stays lane-native in the breakdown table; the band
+summary above the bar is what makes the two lanes comparable at a
+glance. `STAGE_ORDER` and `BAND_ORDER` live in `query.schema` as the
+single naming authority.
+
+**Alternatives rejected.**
+
+- *Two separate components, one per lane.* Rejected: it defeats the
+  side-by-side reading the strand was opened for, and doubles the
+  template surface for no gain.
+- *Force SIRA's four stages into NORA's ten-slug vocabulary.* Rejected:
+  the mapping would be a lie in both directions — SIRA's `search`
+  is not NORA's Stage 4, and NORA has no equivalent of SIRA's
+  service-side expand. Bands abstract at the level where the two
+  genuinely correspond.
+
+_Promoted from strand: query-timeline-analytics on 2026-09-03._
+
+## D-230: The timeline renders above the engineering-details fold
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** `test/_answer.html` collapses retrieval internals,
+citations, chunks, prompts and timings behind one "Engineering
+details" toggle, explicitly "not for the everyday ask-a-question
+user". The SIRA per-stage timing line lived inside that collapse.
+
+**Decision.** The timeline bar, total, and band summary render
+immediately below the answer body, visible by default; the per-stage
+table sits behind its own small "breakdown" toggle.
+
+**Rationale.** The strand's motivating complaint — "it takes a lot of
+time" — comes from the everyday user, not from engineering review. A
+latency explanation that is only visible to someone who knows to
+expand engineering details does not reach the person complaining.
+
+**Consequence.** The old `SIRA timing:` text line was reduced to just
+its rerank call-distribution stats (`count` / `mean` / `p50` / `p95` /
+`max`), which the timeline does not carry. The per-stage numbers it
+used to print are now in the timeline, so keeping both would have been
+duplication.
+
+_Promoted from strand: query-timeline-analytics on 2026-09-03._
+
+## D-231: Sidebar collapse state persists in localStorage, not server-side
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** The collapsed rail has to survive navigation: NORA's nav is
+server-rendered Jinja, so every click reloads the page and an in-memory flag
+would reset constantly.
+
+**Decision.** Persist the collapsed state per-browser in localStorage, read back
+by a pre-paint inline script in base.html.
+
+**Why.** A server-side per-user preference would need a new route, and in this
+codebase a new route is not a small thing — it lands in the `web/team_mode.py`
+gate allowlist and owes a gate-ON verification per the CLAUDE.md branch flow.
+That is a large integration surface for what is a per-browser view preference
+with no cross-device value.
+
+**Consequences.** The preference does not follow a user across browsers or
+devices, and is lost when site data is cleared. Every localStorage access is
+wrapped in try/catch so blocked storage degrades to "toggle works, does not
+persist" rather than a dead button. No route, no allowlist entry, no MODULE.md
+route-contract change.
+
+_Promoted from strand: collapsible-sidebar on 2026-09-03._
+
+## D-232: Asking a question collapses the sidebar stickily
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Answers on /test run long and render NORA and SIRA lanes
+side-by-side, so the 240px sidebar costs real reading width exactly when the
+user stops needing the nav.
+
+**Decision.** Submitting the ask form collapses the sidebar and writes the
+localStorage preference — the same effect as tapping the toggle. Bound to the
+form's `submit` event, not the Enter key, so the Ask button behaves identically.
+Guarded on the breakpoint and on a non-empty question.
+
+**Why.** Chosen over a transient reading mode (collapse without writing the
+preference) and over a variant that auto-collapses only when the user has never
+touched the toggle. Both alternatives were surfaced with the overwrite cost
+named. Sticky won on being the simplest code with one state to reason about:
+the toggle and the ask path write the same preference by the same route, and
+there is no second, transient notion of "collapsed" to keep straight.
+
+**Consequences.** A user who deliberately keeps the sidebar expanded loses that
+choice the first time they ask anything, with no notification — this was raised
+before implementing and accepted. The manual toggle remains the way back, and
+the state is per-browser as in D-231.
+
+_Promoted from strand: collapsible-sidebar on 2026-09-03._
+
+## D-233: Rail CSS is scoped to a media query rather than managed by a resize listener
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** The sidebar already had an off-canvas behaviour below 768px
+(`.sidebar.show`, translateX). Adding a desktop rail meant two behaviours on one
+control, and a user who collapses at desktop width can then narrow the window.
+
+**Decision.** Every rail rule lives inside `@media (min-width: 769px)`, the exact
+complement of the existing `max-width: 768px` block. The JS only branches on
+`matchMedia("(min-width: 769px)")` at click time.
+
+**Why.** The alternative was a `matchMedia` change listener that strips the
+class when the viewport narrows. Scoping the CSS instead makes a stale
+`.sidebar-collapsed` class simply inert below the breakpoint — the state can be
+wrong without the rendering being wrong, so there is no listener to forget, and
+no ordering problem between the class and the breakpoint.
+
+**Consequences.** The two breakpoint values must stay in step: 768px in the
+existing mobile block, 769px in the rail block and in the JS matchMedia string.
+A future change to one is a change to three.
+
+_Promoted from strand: collapsible-sidebar on 2026-09-03._
+
+## D-234: Nav labels wrapped in spans rather than clipped by CSS
+**Status**: Active · **Date**: 2026-09-03.
+
+**Context.** Sidebar labels were bare text nodes after each icon
+(`<i class="bi ..."></i>Dashboard`). CSS cannot target a bare text node, so
+hiding labels in the rail required a structural change to base.html.
+
+**Decision.** Wrap all 15 labels in `<span class="nav-label">` and add a `title`
+to each anchor.
+
+**Why.** The alternative — clipping with `overflow: hidden` on a 56px sidebar —
+needs no template edit, but at that width it leaves a sliver of the first letter
+visible next to the icon, and it provides no hook for a tooltip. Icon-only
+navigation needs tooltips: two items (Corrections, SIRA Enrichment Review) share
+`bi-pencil-square`, and the `title` is the only thing distinguishing them.
+
+**Consequences.** base.html's sidebar markup now has a required shape — a new nav
+item that forgets the span will show a stray label in the rail. This is what
+`core/tests/test_web_sidebar.py` exists to catch, in both gate branches. The
+duplicate icon was deliberately left as-is rather than reassigned.
+
+_Promoted from strand: collapsible-sidebar on 2026-09-03._

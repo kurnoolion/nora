@@ -1,8 +1,8 @@
 # llm-roster-deploy
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-03
-**Landed:**
+**Landed:** 2026-09-03
 **Assignees:** Hanif
 **Target modules:** env, web, llm
 **Active phase:**
@@ -29,4 +29,6 @@ deprecated. Builds on D-214..D-217 (archived strands llm-model-choice and
 llm-model-choice-eval).
 
 ## Notes
+
+Landed on 2026-09-03 with 9 promoted decisions: D-218, D-219, D-220, D-221, D-222, D-223, D-224, D-225, D-226.
 
