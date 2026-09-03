@@ -127,6 +127,18 @@
   function show(entry, idx) {
     selected = idx;
     render();
+    // Pathless entry (strand ask-rerun): the question was asked but produced no
+    // stored answer — it errored, or minted no row. Recording those is
+    // deliberate, since they are what a user re-runs after a fix. Bail before
+    // the fetch below, which would throw on `entry.path.replace`.
+    if (!entry.path) {
+      detailEl.innerHTML =
+        '<div class="alert alert-secondary">No stored answer for this question — '
+        + 'it was asked but did not produce a saved result.'
+        + '<div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="'
+        + '{{ root_path }}/test">Ask it again</a></div></div>';
+      return;
+    }
     detailEl.innerHTML = '<div class="text-muted p-4">Loading…</div>';
     // Entries store the *share* URL (/ask/s/<id>) because that is what a user
     // copies. The pane needs the body-only fragment, so swap in the API path —
@@ -221,6 +233,7 @@
         +   '<div class="flex-grow-1" role="button" data-open="' + idx + '">'
         +     '<div class="small">' + esc(e.q) + "</div>"
         +     '<div class="text-muted small mt-1">' + laneBadge(e.lane)
+        +       (e.path ? "" : '<span class="badge bg-light text-secondary border">no saved answer</span>')
         +       ' <span class="ms-1">' + esc(when(e.ts)) + "</span></div>"
         +   "</div>"
         +   '<button class="btn btn-sm btn-outline-danger py-0" data-del="' + idx + '" '
