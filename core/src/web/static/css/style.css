@@ -136,6 +136,52 @@ body {
     }
 }
 
+/* Collapsed rail (strand collapsible-sidebar).
+   Scoped to the complement of the mobile block above: below 769px the
+   .sidebar-collapsed class is inert, so narrowing the window hands control back
+   to the off-canvas behaviour without a resize listener. Every consumer reads
+   --sidebar-width, so redefining it on body (which outranks the :root value at
+   the top of this file) moves the sidebar and the content offset together. */
+@media (min-width: 769px) {
+    body.sidebar-collapsed {
+        --sidebar-width: 56px;
+    }
+
+    .sidebar,
+    .main-content {
+        transition: width 0.2s ease, margin-left 0.2s ease;
+    }
+
+    body.sidebar-collapsed .nav-label {
+        display: none;
+    }
+
+    body.sidebar-collapsed .sidebar .nav-link {
+        padding-left: 0;
+        padding-right: 0;
+        text-align: center;
+    }
+
+    body.sidebar-collapsed .sidebar .nav-link .bi {
+        margin-right: 0;
+    }
+
+    /* The headings are the only thing dividing Navigation from Settings, so the
+       rail trades the text for a rule rather than dropping it outright. */
+    body.sidebar-collapsed .sidebar-heading {
+        height: 0;
+        padding: 0;
+        margin: 0.75rem 0.6rem 0.5rem;
+        overflow: hidden;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    body.sidebar-collapsed .sidebar-heading:first-of-type {
+        border-top: none;
+        margin-top: 0.5rem;
+    }
+}
+
 /* Eval Studio picker: per-req expand rows carry full requirement text inline
    (<details> in eval_studio/_picker_reqs.html). content-visibility lets the
    browser skip rendering off-screen rows so an uncapped plan listing stays

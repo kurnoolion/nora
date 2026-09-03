@@ -186,3 +186,67 @@ function refreshStatus() {
     document.addEventListener("shown.bs.collapse", function (e) { syncBadge(e.target, true); });
     document.addEventListener("hidden.bs.collapse", function (e) { syncBadge(e.target, false); });
 })();
+
+
+/*
+ * Collapsible sidebar (strand collapsible-sidebar).
+ *
+ * One control, two behaviours, split at the same 768px breakpoint style.css
+ * uses. At desktop widths the button toggles a rail (body.sidebar-collapsed,
+ * which redefines --sidebar-width); below it, the button keeps the original
+ * off-canvas behaviour (.sidebar.show). The rail CSS is scoped to a min-width
+ * media query, so a stale .sidebar-collapsed class is inert on a narrow window
+ * and no resize listener is needed to unstick it.
+ *
+ * The class is applied pre-paint by an inline script in base.html; this block
+ * only handles the toggle and writes the preference back.
+ */
+(function () {
+    var KEY = "nora-sidebar-collapsed";
+    var btn = document.getElementById("sidebar-toggle");
+    if (!btn) return;
+
+    var wide = window.matchMedia("(min-width: 769px)");
+
+    // Storage is best-effort: private mode and blocked site data must degrade to
+    // "toggle works, preference does not persist", never to a dead button.
+    function remember(collapsed) {
+        try { localStorage.setItem(KEY, collapsed ? "1" : "0"); } catch (e) { /* ignore */ }
+    }
+
+    function syncButton() {
+        var collapsed = document.body.classList.contains("sidebar-collapsed");
+        btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        btn.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+    }
+
+    btn.addEventListener("click", function () {
+        if (wide.matches) {
+            var collapsed = document.body.classList.toggle("sidebar-collapsed");
+            remember(collapsed);
+            syncButton();
+        } else {
+            document.querySelector(".sidebar").classList.toggle("show");
+        }
+    });
+
+    // Asking is what the Ask page is for, and the answer runs long, so a submit
+    // makes room to read it. Sticky by request: this writes the preference just
+    // like tapping the button, so it does overwrite a deliberate "keep it open".
+    // Bound to submit rather than the Enter key so the Ask button behaves the
+    // same way. Guarded on a non-empty question because the page's own handler
+    // bails on an empty one — a stray Enter should not collapse the sidebar for
+    // an answer that is not coming.
+    var askForm = document.getElementById("ask-form");
+    if (askForm) {
+        askForm.addEventListener("submit", function () {
+            var q = askForm.querySelector("#test-question");
+            if (!wide.matches || !q || !q.value.trim()) return;
+            document.body.classList.add("sidebar-collapsed");
+            remember(true);
+            syncButton();
+        });
+    }
+
+    syncButton();
+})();
