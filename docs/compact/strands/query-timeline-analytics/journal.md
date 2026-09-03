@@ -132,3 +132,69 @@ test-ordering artifact, not a regression.
 - No accumulated cross-query comparison. Display-only by decision;
   `feedback_db` already has `query_elapsed_ms` if that is wanted
   later, but per-stage persistence would be a schema change.
+
+---
+
+## 2026-09-03 — close-session: live LLM profile, ollama two-model bring-up
+
+### Done this session
+
+- Strand opened, worktree `query-timeline-analytics` branched off `origin/main` at `c1a6d8c`.
+- Per-stage timing capture on the NORA lane + normalized two-lane timeline
+  rendered on `/test` (commit `88e667f`).
+- Collapse-id collision and sub-second formatting fixed after browser
+  verification (commit `ece772c`).
+- MODULE.md updated for `query` and `web`; four decision drafts written.
+- **Ollama brought up locally serving two chat models concurrently**
+  (`OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_KEEP_ALIVE=30m`): `qwen3:1.7b`
+  pulled fresh, `qwen3:8b` already local. Both resident, 7.8 GB combined.
+- Web app run on port **8010** (`--port`) so it cannot collide with the
+  session working `llm-roster-deploy` on 8000.
+
+### The measurement that justifies the strand
+
+With a real LLM and a warm pipeline, the same question profiles as:
+
+| Model | Total | Synthesize | Retrieve | Unaccounted |
+|---|---|---|---|---|
+| `qwen3:1.7b` | 3.1 s | 3059 ms (99.7%) | 8 ms | 2 ms |
+| `qwen3:8b` | 7.6 s | 7552 ms (99.8%) | 12 ms | 2 ms |
+
+**Warm, the answer latency is ~99.8% LLM synthesis.** Retrieval is 8-12 ms.
+Two consequences worth carrying forward:
+
+1. Reasoning effort and model choice are effectively the ENTIRE latency
+   budget. There is no retrieval optimization worth doing for latency —
+   it would be fighting over 12 ms of a 7600 ms wait. This is direct
+   support for the Fast/Think toggle (D-217) being the right lever.
+2. Cold start is a separate, invisible second lever: the first query after
+   a process restart carried **2922 ms** of pipeline construction on top,
+   which never appears in warm numbers. It is why the first user of the
+   day complains loudest.
+
+The embedding side never touches ollama — `env_demo`'s vectorstore was
+built with `sentence-transformers/all-MiniLM-L6-v2` and that is pinned at
+build time, so both ollama slots are free for chat models.
+
+### Next
+
+- **SIRA lane timeline still unseen on a live query** — no local
+  `sandbox/sira_query` service. Unit-tested and Jinja-rendered only. First
+  task on a box with the service up.
+- Re-run the cold-vs-warm split on the work PC against the real corpus;
+  the `env_demo` numbers are shape-correct but tiny-corpus.
+- Optional: per-stage persistence for cross-query comparison. Display-only
+  by decision this cut; `feedback_db.query_elapsed_ms` already exists.
+
+### Flags
+
+- **Pre-existing DOM id collisions on the merged tab, not fixed here.**
+  `eng-details-None`, `ff-None`, `vote-up-None`, `vote-down-None` all
+  collide when both lanes render and `record_qa` fails, same root cause as
+  the timeline bug fixed in `ece772c` (both lanes compose into one DOM via
+  `_render_template_to_string`, `row_id` is None on failure). Worth a
+  follow-up pass; out of scope for this strand.
+- **`/query` vs `/test` naming** — carried from strand open. `/test` is
+  labelled "Ask Requirement Questions"; `/query` is the legacy admin-only
+  single-lane page. Proposed one-line relabel to "Query (legacy)" at
+  `base.html:62-65`, deliberately not taken here.
