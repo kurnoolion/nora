@@ -160,6 +160,30 @@ class TestPartialRenders:
         html = self._render(build_timeline({"synthesize": 900}, 2500, "nora"))
         assert "2.5 s" in html
 
+    def test_sub_second_total_rendered_in_milliseconds(self):
+        # A warm cache hit is single-digit ms; "0.0 s" reads as a
+        # broken timer rather than a fast query.
+        html = self._render(build_timeline({"retrieve": 8}, 9, "nora"))
+        assert "9 ms" in html
+        assert "0.0 s" not in html
+
+    def test_collapse_id_is_lane_scoped_when_row_id_is_none(self):
+        """The merged tab composes BOTH lanes into one DOM, and row_id
+        is None whenever record_qa fails. Keyed on row_id alone, the two
+        cards would collide and Bootstrap would toggle the wrong table.
+        """
+        nora = self._render(
+            build_timeline({"synthesize": 900}, 1000, "nora"), row_id=None,
+        )
+        sira = self._render(
+            build_timeline({"synth_ms": 900}, 1000, "sira"), row_id=None,
+        )
+        assert 'id="timeline-detail-nora-None"' in nora
+        assert 'id="timeline-detail-sira-None"' in sira
+        # The ids the two cards would put in one document must differ.
+        assert "timeline-detail-nora-None" not in sira
+        assert "timeline-detail-sira-None" not in nora
+
 
 class TestClamping:
     def test_measured_exceeding_wall_clock_clamps_unaccounted_to_zero(self):

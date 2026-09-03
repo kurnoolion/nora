@@ -11,12 +11,28 @@
 
    Expects `timeline` — None when the lane reported no stage timings,
    in which case the caller renders nothing.
+
+   The collapse target is keyed on lane AND row_id because the merged
+   tab composes BOTH lanes' `_answer.html` fragments into one DOM
+   (`_render_template_to_string`), and `row_id` is None whenever
+   `record_qa` fails. Two cards keyed on row_id alone would then share
+   an id, and Bootstrap's collapse targets the first match — so
+   "breakdown" on one card would toggle the other card's table.
 #}
 <div class="query-timeline mt-2 mb-1">
   <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+    {# Sub-second queries (a warm cache hit can be single-digit ms)
+       would render as "0.0 s", which reads as a broken timer. Show
+       milliseconds below 1 s and seconds above it. #}
     <span class="text-muted small">
       <i class="bi bi-stopwatch me-1"></i>Took
-      <strong>{{ '%.1f'|format(timeline.total_ms / 1000) }} s</strong>
+      <strong>
+        {%- if timeline.total_ms < 1000 -%}
+          {{ timeline.total_ms }} ms
+        {%- else -%}
+          {{ '%.1f'|format(timeline.total_ms / 1000) }} s
+        {%- endif -%}
+      </strong>
     </span>
     {% for band in timeline.bands %}
       {% if band.band != 'unaccounted' %}
@@ -28,9 +44,9 @@
     <button type="button"
             class="btn btn-sm btn-link p-0 small text-decoration-none"
             data-bs-toggle="collapse"
-            data-bs-target="#timeline-detail-{{ row_id }}"
+            data-bs-target="#timeline-detail-{{ timeline.lane }}-{{ row_id }}"
             aria-expanded="false"
-            aria-controls="timeline-detail-{{ row_id }}">
+            aria-controls="timeline-detail-{{ timeline.lane }}-{{ row_id }}">
       breakdown
     </button>
   </div>
@@ -55,7 +71,7 @@
     {% endfor %}
   </div>
 
-  <div class="collapse" id="timeline-detail-{{ row_id }}">
+  <div class="collapse" id="timeline-detail-{{ timeline.lane }}-{{ row_id }}">
     <table class="table table-sm small mt-2 mb-1">
       <thead>
         <tr>

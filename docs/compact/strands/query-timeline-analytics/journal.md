@@ -69,16 +69,66 @@ file is run alongside `test_query.py` / `test_web_playground.py`; also
 reproduced on the pristine checkout, so it is a pre-existing
 test-ordering artifact, not a regression.
 
+**Browser + gate verification (done this session).** App run against
+`~/work/env_demo` (`ENV_DIR=...`), real queries through
+`POST /api/test/ask`:
+
+- **Cold query: 2475 ms total, 97.3% unaccounted, retrieve 66 ms.**
+  This is D-DRAFT-1 earning its keep on the first real query. The
+  seconds were almost entirely `QueryPipeline` construction, which no
+  stage timer covers. Under the rejected stage-sum denominator this
+  would have rendered as "66 ms, fully accounted" — a flat lie about a
+  2.5-second wait.
+- **Warm query (pipeline cached on `app.state`): 9 ms total, 11%
+  unaccounted, retrieve 88.9%.** The timeline cleanly separates
+  cold-start cost from steady-state cost, which is the distinction the
+  latency complaint actually needs.
+- The warm run took the threshold-not-found early return (no
+  synthesis rows), so that short-circuit's timings were exercised for
+  real, not just in tests.
+- **Team-mode gate ON** (`NORA_WEB_TEAM_MODE=1`): `/test` serves 200
+  and renders the timeline; `/query` correctly 302s. No allowlist
+  change was needed — the strand adds fields to existing responses,
+  no new routes.
+- Browser render confirmed in Chrome: segments lay out side by side
+  with correct widths, hover titles carry exact ms + pct, the
+  breakdown toggle works. Screenshot in the session transcript.
+
+**Two defects caught after the first commit, both now fixed.**
+
+1. *Collapse-id collision.* The merged tab composes BOTH lanes'
+   `_answer.html` fragments into one DOM
+   (`_render_template_to_string`), and `row_id` is None whenever
+   `record_qa` raises. Keyed on `row_id` alone, the two cards shared
+   `id="timeline-detail-None"` and Bootstrap's collapse targets the
+   first match — clicking "breakdown" on the SIRA card would toggle
+   the NORA card's table. Target is now lane-scoped; regression test
+   added. **Pre-existing instances of the same flaw that this strand
+   did NOT touch**, surfaced by the same check: `eng-details-None`,
+   `ff-None`, `vote-up-None`, `vote-down-None` all collide in the
+   merged DOM when both lanes fail to record. Worth a follow-up.
+2. *Sub-second totals rendered as "0.0 s".* A warm 9 ms query read as
+   a broken timer. Now shows ms below 1 s, seconds above.
+
+**Checked and cleared (raised in review, not defects).**
+
+- Vendored Bootstrap is **5.3.3**, where multiple `.progress-bar`
+  children inside one `.progress` is the older markup. Verified
+  against the vendored CSS: `.progress` is `display:flex` and the
+  `width:100%` override applies only under `.progress-stacked > 
+  .progress`, so the inline per-segment widths govern. Confirmed
+  visually in the browser.
+- The merged-tab ctx block cannot fire on a lane error — the loop
+  `continue`s on `if "error" in out` before reaching it.
+
 **Not done / next.**
 
-- Not verified in a running browser against `~/work/env_demo`. The
-  partial is render-tested through Jinja for both lanes, but nobody
-  has looked at the bar on a real query yet. That is the first task
-  next session.
-- Not verified with the team-mode gate ON. No new routes were added
-  (fields on existing responses only), so no allowlist change is
-  needed — but per CLAUDE.md's branch-flow rule this should still be
-  eyeballed with the gate on before the strand is called shipped.
+- **The SIRA lane's timeline has not been seen on a live query.** The
+  local box has no `sandbox/sira_query` service running (and no
+  ollama), so only the NORA lane was exercised end-to-end. SIRA is
+  covered by unit tests and a Jinja render, but its real
+  `timings_ms` payload has not round-tripped through the page. First
+  task on a box with the service up.
 - No accumulated cross-query comparison. Display-only by decision;
   `feedback_db` already has `query_elapsed_ms` if that is wanted
   later, but per-stage persistence would be a schema change.
