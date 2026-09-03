@@ -434,19 +434,9 @@
  * executes inline <script> tags. `path` is root-relative; the origin is added
  * so the copied text is a complete, pasteable URL.
  */
-function askCopyShare(btn, path) {
-  const url = window.location.origin + path;
-  const done = () => {
-    const orig = btn.innerHTML;
-    btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Link copied';
-    setTimeout(() => { btn.innerHTML = orig; }, 1500);
-  };
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(url).then(done, () => window.prompt("Copy this link:", url));
-  } else {
-    window.prompt("Copy this link:", url);
-  }
-}
+// askCopyShare now lives in static/js/app.js, which every page loads — the
+// same logic was duplicated here and in history.html, window.prompt fallback
+// included, so a fix could land in one and not the other.
 
 /*
  * Ask history — a per-browser index over the share links each ask already

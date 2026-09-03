@@ -262,17 +262,9 @@
   detailEl.addEventListener("click", (ev) => {
     const btn = ev.target.closest("[data-share]");
     if (!btn) return;
-    const url = window.location.origin + btn.getAttribute("data-share");
-    const done = () => {
-      const orig = btn.innerHTML;
-      btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Link copied';
-      setTimeout(() => { btn.innerHTML = orig; }, 1500);
-    };
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(url).then(done, () => window.prompt("Copy this link:", url));
-    } else {
-      window.prompt("Copy this link:", url);
-    }
+    // Shared with the Ask page's Share button via static/js/app.js — the
+    // clipboard/fallback logic used to be copy-pasted here.
+    askCopyShare(btn, btn.getAttribute("data-share"));
   });
 
   prevBtn.addEventListener("click", () => { if (page > 0) { page--; render(); } });
