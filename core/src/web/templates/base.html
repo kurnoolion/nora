@@ -18,11 +18,22 @@
 </head>
 <body data-root-path="{{ root_path }}">
 
+    <!-- Restore the collapsed rail before first paint: nav is server-rendered, so
+         without this every click flashes an expanded sidebar then snaps it shut.
+         Must live inside <body> — document.body does not exist yet in <head>. -->
+    <script>
+      try {
+        if (localStorage.getItem("nora-sidebar-collapsed") === "1") {
+          document.body.classList.add("sidebar-collapsed");
+        }
+      } catch (e) { /* blocked storage — render expanded */ }
+    </script>
+
     <!-- Top navbar -->
     <nav class="top-navbar navbar navbar-dark bg-dark px-3">
         <div class="d-flex align-items-center">
-            <button class="btn btn-dark d-md-none me-2" type="button"
-                    onclick="document.querySelector('.sidebar').classList.toggle('show')">
+            <button class="btn btn-dark me-2" type="button" id="sidebar-toggle"
+                    aria-expanded="true" aria-label="Collapse sidebar">
                 <i class="bi bi-list"></i>
             </button>
             <a class="navbar-brand mb-0" href="{{ root_path }}/">NORA</a>
@@ -42,69 +53,69 @@
             {% if not team %}
             <li class="nav-item">
                 <a class="nav-link {% block nav_dashboard %}{% endblock %}"
-                   href="{{ root_path }}/">
-                    <i class="bi bi-speedometer2"></i>Dashboard
+                   href="{{ root_path }}/" title="Dashboard">
+                    <i class="bi bi-speedometer2"></i><span class="nav-label">Dashboard</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_pipeline %}{% endblock %}"
-                   href="{{ root_path }}/pipeline">
-                    <i class="bi bi-diagram-3"></i>Pipeline
+                   href="{{ root_path }}/pipeline" title="Pipeline">
+                    <i class="bi bi-diagram-3"></i><span class="nav-label">Pipeline</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_jobs %}{% endblock %}"
-                   href="{{ root_path }}/jobs">
-                    <i class="bi bi-list-task"></i>Jobs
+                   href="{{ root_path }}/jobs" title="Jobs">
+                    <i class="bi bi-list-task"></i><span class="nav-label">Jobs</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_query %}{% endblock %}"
-                   href="{{ root_path }}/query">
-                    <i class="bi bi-search"></i>Query
+                   href="{{ root_path }}/query" title="Query">
+                    <i class="bi bi-search"></i><span class="nav-label">Query</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_corrections %}{% endblock %}"
-                   href="{{ root_path }}/corrections">
-                    <i class="bi bi-pencil-square"></i>Corrections
+                   href="{{ root_path }}/corrections" title="Corrections">
+                    <i class="bi bi-pencil-square"></i><span class="nav-label">Corrections</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_parse_review %}{% endblock %}"
-                   href="{{ root_path }}/parse-review">
-                    <i class="bi bi-clipboard-check"></i>Parse Review
+                   href="{{ root_path }}/parse-review" title="Parse Review">
+                    <i class="bi bi-clipboard-check"></i><span class="nav-label">Parse Review</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_resolve_review %}{% endblock %}"
-                   href="{{ root_path }}/resolve-review">
-                    <i class="bi bi-link-45deg"></i>Resolve Review
+                   href="{{ root_path }}/resolve-review" title="Resolve Review">
+                    <i class="bi bi-link-45deg"></i><span class="nav-label">Resolve Review</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_req_browser %}{% endblock %}"
-                   href="{{ root_path }}/req-browser">
-                    <i class="bi bi-journal-text"></i>Req Browser
+                   href="{{ root_path }}/req-browser" title="Req Browser">
+                    <i class="bi bi-journal-text"></i><span class="nav-label">Req Browser</span>
                 </a>
             </li>
             {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% block nav_test %}{% endblock %}"
-                   href="{{ root_path }}/test">
-                    <i class="bi bi-chat-left-text"></i>Ask Requirement Questions
+                   href="{{ root_path }}/test" title="Ask Requirement Questions">
+                    <i class="bi bi-chat-left-text"></i><span class="nav-label">Ask Requirement Questions</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_enrich_review %}{% endblock %}"
-                   href="{{ root_path }}/enrichment-review">
-                    <i class="bi bi-pencil-square"></i>SIRA Enrichment Review
+                   href="{{ root_path }}/enrichment-review" title="SIRA Enrichment Review">
+                    <i class="bi bi-pencil-square"></i><span class="nav-label">SIRA Enrichment Review</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_eval_studio %}{% endblock %}"
-                   href="{{ root_path }}/eval-studio">
-                    <i class="bi bi-clipboard-data"></i>Eval Studio
+                   href="{{ root_path }}/eval-studio" title="Eval Studio">
+                    <i class="bi bi-clipboard-data"></i><span class="nav-label">Eval Studio</span>
                 </a>
             </li>
         </ul>
@@ -114,26 +125,26 @@
         <ul class="nav flex-column">
             <li class="nav-item">
                 <a class="nav-link {% block nav_environments %}{% endblock %}"
-                   href="{{ root_path }}/environments">
-                    <i class="bi bi-gear"></i>Environments
+                   href="{{ root_path }}/environments" title="Environments">
+                    <i class="bi bi-gear"></i><span class="nav-label">Environments</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_files %}{% endblock %}"
-                   href="{{ root_path }}/files">
-                    <i class="bi bi-folder2-open"></i>Files
+                   href="{{ root_path }}/files" title="Files">
+                    <i class="bi bi-folder2-open"></i><span class="nav-label">Files</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_metrics %}{% endblock %}"
-                   href="{{ root_path }}/metrics">
-                    <i class="bi bi-graph-up"></i>Metrics
+                   href="{{ root_path }}/metrics" title="Metrics">
+                    <i class="bi bi-graph-up"></i><span class="nav-label">Metrics</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link {% block nav_config %}{% endblock %}"
-                   href="{{ root_path }}/config">
-                    <i class="bi bi-sliders"></i>Config
+                   href="{{ root_path }}/config" title="Config">
+                    <i class="bi bi-sliders"></i><span class="nav-label">Config</span>
                 </a>
             </li>
         </ul>
