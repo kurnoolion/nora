@@ -6,8 +6,10 @@ Per-environment scoped workspace configuration. An environment names a workspace
 **Public surface**
 - `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `requirements_dir` (documents-root override, D-DRAFT-6 docker-distro), `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`, `embedding_provider/model`, `standards_source`, `skip_taxonomy`, `skip_graph`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path(key)`, `input_path(mno, release)`, `input_root` (the effective documents root: `requirements_dir` when set, else `<env_dir>/input`), `out_path(stage)`, `state_path()`, `corrections_path()`, `correction_file(artifact)`, `reports_path()`, `eval_path()`, `init_directories()`
 - `ProfileBindings` (profile_bindings.py, D-DRAFT-7) — per-cell profile resolution from `<env_dir>/profiles.json`. `ProfileBinding(mno, release, profile)` rows; `load_profile_bindings(env_dir, override=None) -> ProfileBindings`; `resolve(mno, release) -> Path` with precedence `--profile override > exact (mno,release) > (mno,"*") > default > fail-loud (PIP-E003)`; `covers(mno, release)` / `uncovered(cells)` for coverage validation. MNO match case-insensitive; release exact with `"*"` wildcard. Lives in `env` (not `pipeline`) to avoid the `pipeline → env` import cycle
-- `LLMConfigFile` (config.py) — schema for `config/llm.json`: `llm_provider`, `llm_model`, `llm_timeout`, `llm_base_url`, `llm_api_key`, `embedding_provider`, `embedding_model`, `ollama_url`, `ollama_timeout_s`, `skip_taxonomy`, `skip_graph`. Empty/zero values fall through. `load(path=None)` with malformed/missing tolerance.
-- Registry constants: `PIPELINE_STAGES`, `PIPELINE_LANES` (D-DRAFT-5 docker-distro — named stage ranges: `ingestion` = extract..standards, `nora` = taxonomy..eval; consumed by `run_cli --lane`), `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`, `DEFAULT_LLM_CONFIG_PATH`
+- `LLMConfigFile` (config.py) — schema for `config/llm.json`: `llm_provider`, `llm_model`, `llm_timeout`, `llm_base_url`, `llm_api_key`, `embedding_provider`, `embedding_model`, `ollama_url`, `ollama_timeout_s`, `skip_taxonomy`, `skip_graph`. Empty/zero values fall through. `load(path=None)` with malformed/missing tolerance. Also carries `config_path` / `config_source` (`"env"` | `"default"` | `"explicit"`) recording where the instance was loaded from — `compare=False`, so provenance is not part of config identity; two instances with the same content are equal whatever file they came from.
+- `LLM_CONFIG_PATH_ENV_VAR` = `NORA_LLM_CONFIG` (config.py) — selects the llm.json FILE rather than a value in it, so a deployment can supply a roster without baking it into the committed image (`config/llm.json` ships without one, 1a3575f). `DEFAULT_LLM_CONFIG_PATH` is now the FALLBACK, not the sole location. A value naming a missing or unreadable file warns and falls through — never raises, because a bad env var must not take the app down, and a typo must not degrade silently to `providers == []`, which is indistinguishable from "no roster configured". A missing DEFAULT path stays silent by contrast: that is the normal no-roster case.
+- `llm_config_provenance() -> (source, filename)` (config.py) — which llm.json was actually loaded, for `/api/health`. Returns the BASENAME only; the caller is team-allowlisted and an absolute container path is not something a gated user should be handed. Reads the cached config rather than re-resolving, so polling does not re-log the resolver's warning.
+- Registry constants: `PIPELINE_STAGES`, `PIPELINE_LANES` (D-DRAFT-5 docker-distro — named stage ranges: `ingestion` = extract..standards, `nora` = taxonomy..eval; consumed by `run_cli --lane`), `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`, `DEFAULT_LLM_CONFIG_PATH` (fallback location — see `LLM_CONFIG_PATH_ENV_VAR`)
 - Resolvers (3-tier — CLI > env var > config/llm.json > env-config back-compat > default):
   - `resolve_llm_provider(cli, env_cfg)` — `--llm-provider` / `NORA_LLM_PROVIDER` / `llm_provider`
   - `resolve_embedding_provider(cli, env_cfg)` — `--embedding-provider` / `NORA_EMBEDDING_PROVIDER` / `embedding_provider`
@@ -19,7 +21,9 @@ Per-environment scoped workspace configuration. An environment names a workspace
 - `resolve_stage(value)` — accepts either stage name or 1-based number, returns canonical name
 - `env_cli.main` — CLI: `stages | create | list | show | init | delete`
 
-- `resolve_providers()` / `resolve_provider(provider_id)` (config.py) — the optional named provider roster from `config/llm.json` (`LLMProviderEntry`: id, name, base_url, model, api_key_env, supports_reasoning_control, default_mode). `resolve_providers()` returns `[]` when no roster is configured — the normal case, and the signal to callers to use the single-provider chain unchanged. `resolve_provider()` falls back to the first entry for an empty or unknown id, so a stale bookmark degrades instead of failing a request. No env/CLI tier: a roster is a set of named endpoints, which is file-shaped, not a flag
+- `resolve_providers()` / `resolve_provider(provider_id)` (config.py) — the optional named provider roster from `config/llm.json` (`LLMProviderEntry`: id, name, base_url, model, api_key_env, supports_reasoning_control, default_mode). `resolve_providers()` returns `[]` when no roster is configured — the normal case, and the signal to callers to use the single-provider chain unchanged. `resolve_provider()` falls back to the roster's `default_provider` entry for an empty or unknown id — or the FIRST entry when that key is unset, which is what rosters written before the key existed rely on — so a stale bookmark degrades instead of failing a request. No env/CLI tier: a roster is a set of named endpoints, which is file-shaped, not a flag
+- `default_provider` / `fallback_provider` (config.py) — top-level `llm.json` ids into `providers`. `default_provider` is what an asker who never touches the picker gets; `fallback_provider` is where a permanent refusal reroutes. Validated at load: an id matching no entry is dropped with a warning, so a typo surfaces at startup rather than at refusal time. `resolve_fallback_provider()` returns the fallback entry, or None when unset/unknown — kept separate from `resolve_provider()` because the fallback is never something an asker picks
+- `LLMProviderEntry.timeout` — per-endpoint request ceiling; 0/unset means `DEFAULT_LLM_TIMEOUT`. Deliberately NOT resolved through `resolve_llm_timeout()`: a selected roster entry is independent of the Config-page DB and `NORA_LLM_TIMEOUT`, and routing this one field through the resolver would leave the entry independent for everything except it
 
 **Invariants**
 - `config/llm.json.example` is the copy-from reference for the whole schema, including the optional roster. It is never read by the app, and `test_ask_reasoning.py::TestExampleConfigStaysValid` fails if it stops parsing, omits an `LLMProviderEntry` field, or grows a literal API key — an example that drifts is worse than none.
@@ -99,6 +103,7 @@ _Alphabetical, regenerated by regen-map._
 - `LLM_BASE_URL_ENV_VAR` — constant — pub
 - `LLM_MODEL_ENV_VAR` — constant — pub
 - `LLM_PROVIDERS` — constant — pub
+- `LLM_CONFIG_PATH_ENV_VAR` — constant — pub
 - `LLM_PROVIDER_ENV_VAR` — constant — pub
 - `LLM_TIMEOUT_ENV_VAR` — constant — pub
 - `NARROW_QUERY_TOP_K_ENV_VAR` — constant — pub
@@ -137,6 +142,7 @@ _Alphabetical, regenerated by regen-map._
 - `_retrieval_config` — function — internal
 - `_truthy` — function — internal — Treat env-var strings as bool. `1 / true / yes / on` → True.
 - `is_broad_query_type` — function — pub — True when the query_type belongs to the broad bucket. Unknown
+- `llm_config_provenance` — function — pub — `(source, filename)` of the `llm.json` actually loaded.
 - `logger` — constant — pub
 - `resolve_bm25_weight` — function — pub — Resolve the BM25 weight for the RRF fusion at query time.
 - `resolve_embedding_api_key` — function — pub — Resolve the effective embedding API key (Bearer token for
@@ -151,6 +157,7 @@ _Alphabetical, regenerated by regen-map._
 - `resolve_llm_provider` — function — pub — Resolve the effective LLM provider.
 - `resolve_llm_timeout` — function — pub — Resolve the effective LLM request timeout (seconds).
 - `resolve_requirements_dir` — function — pub — Resolve the source-documents root override.
+- `resolve_fallback_provider` — function — pub — The roster entry a permanent refusal reroutes to, or None.
 - `resolve_provider` — function — pub — Look up one roster entry by id.
 - `resolve_providers` — function — pub — The named provider roster from `config/llm.json`, or `[]`.
 - `resolve_reranker_api_key` — function — pub — Resolve the reranker endpoint API key (bearer token) for

@@ -50,6 +50,7 @@ class LLMSynthesizer:
         prompt = context.context_text
 
         epilogue_model = ""
+        epilogue_reroute = ""
         try:
             answer = self._llm.complete(
                 prompt=prompt,
@@ -57,15 +58,16 @@ class LLMSynthesizer:
                 temperature=0.0,
                 max_tokens=self._max_tokens,
             )
-            from core.src.llm.base import answering_model
+            from core.src.llm.base import answering_model, reroute_note
 
             epilogue_model = answering_model(self._llm)
+            epilogue_reroute = reroute_note(self._llm)
         except Exception as e:
             logger.error(f"LLM synthesis failed: {e}")
             answer = f"[LLM synthesis failed: {e}]"
 
         if epilogue_model:
-            answer = f"{answer}\n\nSynthesized by {epilogue_model}"
+            answer = f"{answer}\n\nSynthesized by {epilogue_model}{epilogue_reroute}"
 
         # Extract citations from the answer text
         citations = self._extract_citations(answer)

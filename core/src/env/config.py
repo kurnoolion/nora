@@ -77,6 +77,12 @@ class LLMProviderEntry:
     api_key_env: str = ""
     supports_reasoning_control: bool = False
     default_mode: str = "think"
+    # 0 = unset -> DEFAULT_LLM_TIMEOUT. Per-entry because a 130B endpoint and a
+    # small one do not want the same ceiling. NOT resolved through
+    # resolve_llm_timeout(): that would reintroduce the Config-page DB and
+    # NORA_LLM_TIMEOUT tiers, leaving the entry independent for every field
+    # except this one.
+    timeout: int = 0
 
     @property
     def api_key(self) -> str:
@@ -124,8 +130,58 @@ def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
             api_key_env=str(item.get("api_key_env", "") or "").strip(),
             supports_reasoning_control=bool(item.get("supports_reasoning_control", False)),
             default_mode=mode,
+            timeout=int(item.get("timeout", 0) or 0),
         ))
     return out
+
+
+def _validated_provider_id(raw, providers, key: str, config_path) -> str:
+    """Check that `default_provider` / `fallback_provider` names a real entry.
+
+    Returns `""` for an unknown id, having warned. Degrading rather than
+    raising matches `_parse_providers`: a half-edited roster must not take the
+    app down, and the warning is what makes the mistake visible. An empty
+    result means "no opinion", so resolution falls back to the first entry.
+    """
+    pid = str(raw or "").strip()
+    if not pid:
+        return ""
+    if any(p.id == pid for p in providers):
+        return pid
+    logger.warning(
+        "%s: %s=%r does not match any provider id (%s) — ignoring",
+        config_path, key, pid, ", ".join(p.id for p in providers) or "none",
+    )
+    return ""
+
+
+def _resolve_llm_config_path() -> tuple[Path, str]:
+    """Which `llm.json` to read when no explicit path is given.
+
+    Returns `(path, source)` where source is `"env"` or `"default"`.
+
+    `NORA_LLM_CONFIG` lets a deployment supply a roster without baking it into
+    the committed image — `config/llm.json` ships without one (1a3575f), so
+    before this there was no way to deploy a roster at all.
+
+    A value naming a missing or unreadable file WARNS and falls through to the
+    default. The failure mode being avoided: a typo degrading silently to
+    `providers == []`, which is indistinguishable from "no roster configured".
+    A missing DEFAULT path stays silent by contrast — that IS the normal
+    no-roster case, not an error.
+    """
+    raw = os.getenv(LLM_CONFIG_PATH_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_LLM_CONFIG_PATH, "default"
+    candidate = Path(raw)
+    if not (candidate.is_file() and os.access(candidate, os.R_OK)):
+        logger.warning(
+            "%s=%s is missing or unreadable — falling back to %s. "
+            "No roster will load from the env var.",
+            LLM_CONFIG_PATH_ENV_VAR, raw, DEFAULT_LLM_CONFIG_PATH,
+        )
+        return DEFAULT_LLM_CONFIG_PATH, "default"
+    return candidate, "env"
 
 
 @dataclass
@@ -162,19 +218,40 @@ class LLMConfigFile:
     # single-provider resolution chain below is unchanged, which is what
     # every deployment that never edits this key keeps getting.
     providers: list[LLMProviderEntry] = field(default_factory=list)
+    # Ids into `providers`. `default_provider` is what an asker who never
+    # touches the picker gets; `fallback_provider` is where a permanent refusal
+    # reroutes. Both empty = no roster opinion, and `resolve_provider(None)`
+    # keeps returning the first entry, which is what rosters written before
+    # these keys existed rely on.
+    default_provider: str = ""
+    fallback_provider: str = ""
+
+    # Provenance of THIS instance, for /api/health diagnostics. Not part of the
+    # JSON schema — populated by load(). Recorded rather than recomputed
+    # because /api/health is polled by the navbar status dot, and re-running
+    # the resolver per poll would re-log its warning every few seconds.
+    # compare=False: provenance is not part of the config's identity. Two
+    # instances with the same content ARE the same config whatever file they
+    # came from, and equality is what existing tests assert on.
+    config_path: Path | None = field(default=None, compare=False)
+    config_source: str = field(default="default", compare=False)  # env|default|explicit
 
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
-        config_path = path or DEFAULT_LLM_CONFIG_PATH
+        if path is not None:
+            config_path, source = path, "explicit"
+        else:
+            config_path, source = _resolve_llm_config_path()
         if not config_path.exists():
-            return cls()
+            return cls(config_path=config_path, config_source=source)
         try:
             with open(config_path) as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.warning("Could not parse %s: %s — using empty defaults",
                            config_path, e)
-            return cls()
+            return cls(config_path=config_path, config_source=source)
+        providers = _parse_providers(data.get("providers"), config_path)
         return cls(
             llm_provider=str(data.get("llm_provider", "") or "").strip(),
             llm_model=str(data.get("llm_model", "") or "").strip(),
@@ -196,7 +273,15 @@ class LLMConfigFile:
             reranker_base_url=str(data.get("reranker_base_url", "") or "").strip(),
             reranker_api_key=str(data.get("reranker_api_key", "") or "").strip(),
             reranker_batch_size=int(data.get("reranker_batch_size", 1) or 1),
-            providers=_parse_providers(data.get("providers"), config_path),
+            providers=providers,
+            default_provider=_validated_provider_id(
+                data.get("default_provider"), providers,
+                "default_provider", config_path),
+            fallback_provider=_validated_provider_id(
+                data.get("fallback_provider"), providers,
+                "fallback_provider", config_path),
+            config_path=config_path,
+            config_source=source,
         )
 
 
@@ -583,6 +668,10 @@ LLM_MODEL_ENV_VAR: str = "NORA_LLM_MODEL"
 LLM_TIMEOUT_ENV_VAR: str = "NORA_LLM_TIMEOUT"
 LLM_BASE_URL_ENV_VAR: str = "NORA_LLM_BASE_URL"
 LLM_API_KEY_ENV_VAR: str = "NORA_LLM_API_KEY"
+# Location of config/llm.json itself. Unlike the names above this does not
+# select a VALUE — it selects the FILE the values come from, so a deployment
+# can supply a roster that is not baked into the committed image.
+LLM_CONFIG_PATH_ENV_VAR: str = "NORA_LLM_CONFIG"
 
 
 def resolve_llm_provider(
@@ -755,13 +844,47 @@ def resolve_providers() -> list[LLMProviderEntry]:
     return list(_llm_config().providers)
 
 
+def resolve_fallback_provider() -> LLMProviderEntry | None:
+    """The roster entry a permanent refusal reroutes to, or None.
+
+    Separate from `resolve_provider()` because the fallback is never something
+    an asker picks — it is where the answer comes from when their pick refuses.
+    Returns None when no roster is configured or `fallback_provider` is unset
+    or unknown (the id is validated at load time).
+    """
+    fallback_id = _llm_config().fallback_provider
+    if not fallback_id:
+        return None
+    for p in resolve_providers():
+        if p.id == fallback_id:
+            return p
+    return None
+
+
+def llm_config_provenance() -> tuple[str, str]:
+    """`(source, filename)` of the `llm.json` actually loaded.
+
+    Source is `"env"` when `NORA_LLM_CONFIG` supplied the path. Returns the
+    BASENAME only — the caller is `/api/health`, which is team-allowlisted, and
+    an absolute container path is not something a gated user should be handed.
+
+    Reads the cached config rather than re-resolving, so polling the endpoint
+    does not re-log the resolver's warning.
+    """
+    cfg = _llm_config()
+    return cfg.config_source, (cfg.config_path.name if cfg.config_path else "")
+
+
 def resolve_provider(provider_id: str | None) -> LLMProviderEntry | None:
     """Look up one roster entry by id.
 
-    Returns the DEFAULT entry (the first) when `provider_id` is empty or
-    unknown, and None when there is no roster at all. Unknown ids degrade
-    rather than raise: a stale bookmark or an edited roster must not fail
-    someone's question.
+    Returns the DEFAULT entry when `provider_id` is empty or unknown, and None
+    when there is no roster at all. Unknown ids degrade rather than raise: a
+    stale bookmark or an edited roster must not fail someone's question.
+
+    The default is the `default_provider` entry when that key is set, else the
+    first entry — positional order was the only signal before the key existed,
+    so rosters written against it keep working.
     """
     providers = resolve_providers()
     if not providers:
@@ -771,9 +894,14 @@ def resolve_provider(provider_id: str | None) -> LLMProviderEntry | None:
             if p.id == provider_id:
                 return p
         logger.warning(
-            "Unknown provider id %r — falling back to %r",
-            provider_id, providers[0].id,
+            "Unknown provider id %r — falling back to the default entry",
+            provider_id,
         )
+    default_id = _llm_config().default_provider
+    if default_id:
+        for p in providers:
+            if p.id == default_id:
+                return p
     return providers[0]
 
 

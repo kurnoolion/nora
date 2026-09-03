@@ -302,10 +302,36 @@ async def health_check():
             ollama_ok = resp.status_code == 200
     except Exception:
         pass
+    # Roster diagnostics (strand llm-roster-deploy, #18 item 4). This endpoint
+    # is the operator's only way to tell whether a deployment picked up the
+    # roster file it was given — the Config page shows none of this. Basename
+    # and counts only: /api/health is team-allowlisted (team_mode.py), so an
+    # absolute container path would be readable by gated users.
+    from core.src.env.config import (
+        llm_config_provenance,
+        resolve_provider,
+        resolve_providers,
+    )
+
+    llm_source, llm_file = llm_config_provenance()
+    roster = resolve_providers()
+    effective = resolve_provider(None)
     return {
         "status": "ok",
         "ollama": ollama_ok,
         "uptime_seconds": round(uptime, 1),
+        "llm_config_source": llm_source,
+        "llm_config_file": llm_file,
+        "roster_size": len(roster),
+        "effective_provider": effective.id if effective else "",
+        # Presence, never the value. A roster entry's key comes only from the
+        # env var it names (LLMProviderEntry.api_key), so a roster file that
+        # deploys without its keys exported fails at the endpoint with a 401
+        # and no local explanation. This is what makes that debuggable.
+        "roster_keys": [
+            {"id": e.id, "api_key": "set" if e.api_key else "unset"}
+            for e in roster
+        ],
     }
 
 

@@ -102,6 +102,11 @@ class RefusalFallbackProvider:
         # falls back) — callers stamping provenance (e.g. the synthesis
         # epilogue) read this instead of assuming one model.
         self.last_model = getattr(primary, "model", "")
+        # Whether the LAST answer came from the fallback. Per-call, unlike
+        # `used` which accumulates for the process. Model names alone cannot
+        # answer this: two endpoints may serve the same model tag, so the Ask
+        # page could not tell a reroute from a normal answer by comparing them.
+        self.last_was_fallback = False
 
     @property
     def model(self):
@@ -121,6 +126,7 @@ class RefusalFallbackProvider:
         )
         if not is_permanent_refusal(answer, self._markers):
             self.last_model = getattr(self._primary, "model", "")
+            self.last_was_fallback = False
             return answer
         self.used += 1
         logger.info(
@@ -132,10 +138,11 @@ class RefusalFallbackProvider:
             max_tokens=max_tokens,
         )
         self.last_model = getattr(self._fallback, "model", "")
+        self.last_was_fallback = True
         return answer
 
 
-def maybe_wrap_with_refusal_fallback(llm, timeout: int = 600):
+def maybe_wrap_with_refusal_fallback(llm, timeout: int = 600, fallback=None):
     """Wrap `llm` with the refusal fallback when fully configured.
 
     Returns `llm` unchanged when: it is already wrapped (idempotent —
@@ -144,10 +151,32 @@ def maybe_wrap_with_refusal_fallback(llm, timeout: int = 600):
     mock provider (nothing real to fall back from). Partial config logs
     a warning so a half-wired env file is visible instead of silently
     off.
+
+    `fallback` supplies the second endpoint explicitly, for the Ask page's
+    roster path where it comes from the roster's `fallback_provider` entry
+    rather than the `NORA_LLM_FALLBACK_*` env vars. Markers still come from
+    `NORA_LLM_REFUSAL_MARKERS` either way — that name is the hand-synced twin
+    of `sandbox/llm_refusal.py` across the D-111 boundary and does not move.
+    Keeping the wrap here rather than at the call site is what stops the marker
+    parse, the idempotence check and the mock guard from being reimplemented
+    per caller and drifting.
     """
     if isinstance(llm, RefusalFallbackProvider):
         return llm
     markers = parse_markers(os.getenv("NORA_LLM_REFUSAL_MARKERS"))
+    if fallback is not None:
+        # Endpoint supplied by the caller: markers are the only remaining
+        # requirement, and without them there is nothing to detect a refusal.
+        if not markers:
+            logger.warning(
+                "Refusal fallback endpoint supplied but "
+                "NORA_LLM_REFUSAL_MARKERS is unset — running WITHOUT fallback",
+            )
+            return llm
+        if getattr(llm, "_is_mock", False):
+            return llm
+        logger.info("Refusal fallback active (explicit fallback endpoint)")
+        return RefusalFallbackProvider(llm, fallback, markers)
     base_url = os.getenv("NORA_LLM_FALLBACK_BASE_URL", "").strip()
     model = os.getenv("NORA_LLM_FALLBACK_MODEL", "").strip()
     if not (markers or base_url):

@@ -190,3 +190,81 @@ class TestSharedAnswerPaths:
         assert tm.path_allowed_for_team("/api/req/REQ-TMO-5G-42") is True
         # Not a blanket /api admit.
         assert tm.path_allowed_for_team("/api/config/save") is False
+
+
+# ---------------------------------------------------------------------------
+# /api/health roster diagnostics (strand llm-roster-deploy, #18 item 4)
+# ---------------------------------------------------------------------------
+
+class TestHealthRosterDiagnostics:
+    """`/api/health` is the operator's only window onto which llm.json a
+    deployment actually loaded. It is also team-allowlisted, so it must expose
+    enough to debug a wrong-file problem without handing a gated user an
+    absolute container path."""
+
+    @staticmethod
+    def _roster_file(tmp_path):
+        import json
+        p = tmp_path / "deployed-roster.json"
+        p.write_text(json.dumps({
+            "providers": [
+                {"id": "dgx-130b", "name": "130B — DGX",
+                 "base_url": "http://dgx.invalid/v1", "model": "m",
+                 "api_key_env": "NORA_TEST_KEY_PRESENT"},
+                {"id": "small", "name": "Small",
+                 "base_url": "http://small.invalid/v1", "model": "m",
+                 "api_key_env": "NORA_TEST_KEY_ABSENT"},
+            ],
+        }))
+        return p
+
+    def _get_health(self, monkeypatch, tmp_path, team_mode: bool):
+        from starlette.testclient import TestClient
+
+        from core.src.env import config as env_cfg
+        from core.src.web import team_mode as tm
+        from core.src.web.app import app
+
+        monkeypatch.setattr(tm, "TEAM_MODE", team_mode)
+        if team_mode:
+            monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+        monkeypatch.setenv(env_cfg.LLM_CONFIG_PATH_ENV_VAR,
+                           str(self._roster_file(tmp_path)))
+        monkeypatch.setenv("NORA_TEST_KEY_PRESENT", "shhh")
+        monkeypatch.delenv("NORA_TEST_KEY_ABSENT", raising=False)
+        env_cfg._reset_llm_config_cache()
+        try:
+            return TestClient(app).get("/api/health").json()
+        finally:
+            env_cfg._reset_llm_config_cache()
+
+    def test_reports_roster_loaded_from_env_var(self, monkeypatch, tmp_path):
+        body = self._get_health(monkeypatch, tmp_path, team_mode=False)
+        assert body["llm_config_source"] == "env"
+        assert body["llm_config_file"] == "deployed-roster.json"
+        assert body["roster_size"] == 2
+        assert body["effective_provider"] == "dgx-130b"
+
+    def test_reports_api_key_presence_not_values(self, monkeypatch, tmp_path):
+        """A roster entry's key comes only from the env var it names, so a file
+        deployed without its keys exported 401s at the endpoint with nothing
+        local to explain it. Presence makes that visible; the value never
+        leaves the process."""
+        body = self._get_health(monkeypatch, tmp_path, team_mode=False)
+        assert body["roster_keys"] == [
+            {"id": "dgx-130b", "api_key": "set"},
+            {"id": "small", "api_key": "unset"},
+        ]
+        assert "shhh" not in str(body)
+
+    def test_gated_user_sees_diagnostics_but_no_absolute_path(
+        self, monkeypatch, tmp_path,
+    ):
+        """Gate ON, no admin cookie: /api/health is allowlisted so it still
+        serves (verified with the gate ON per CLAUDE.md), and the body carries
+        no filesystem path."""
+        body = self._get_health(monkeypatch, tmp_path, team_mode=True)
+        assert body["status"] == "ok"
+        assert body["roster_size"] == 2
+        assert "/" not in body["llm_config_file"]
+        assert str(tmp_path) not in str(body)

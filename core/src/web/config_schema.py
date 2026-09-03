@@ -61,12 +61,14 @@ _LLM_FIELDS: list[ConfigField] = [
             "Backend used for query synthesis. 'openai-compatible' "
             "covers OpenAI / OpenRouter / Together / DeepInfra / "
             "vLLM / proxy frontends that expose /v1/chat/completions."
+            " NOTE: does not affect Ask-page synthesis while a named provider roster is configured in llm.json — a selected roster entry owns its own settings."
         ),
     ),
     ConfigField(
         module="llm", key="llm_model",
         label="LLM Model", kind="string", category="value",
-        help="Provider-specific model name (e.g. 'gemma3:12b', 'qwen/qwen3-235b-a22b').",
+        help=("Provider-specific model name (e.g. 'gemma3:12b', "
+              "'qwen/qwen3-235b-a22b'). NOTE: does not affect Ask-page synthesis while a named provider roster is configured in llm.json — a selected roster entry owns its own settings."),
     ),
     ConfigField(
         module="llm", key="llm_base_url",
@@ -74,6 +76,7 @@ _LLM_FIELDS: list[ConfigField] = [
         help=(
             "OpenAI-compatible API root, ending in /v1. "
             "(Ignored when provider is 'ollama'.)"
+            " NOTE: does not affect Ask-page synthesis while a named provider roster is configured in llm.json — a selected roster entry owns its own settings."
         ),
     ),
     ConfigField(
@@ -82,12 +85,16 @@ _LLM_FIELDS: list[ConfigField] = [
         help=(
             "Bearer token for OpenAI-compatible endpoints. "
             "Pass any non-empty string for native-Ollama proxies."
+            " NOTE: does not affect Ask-page synthesis while a named provider roster is configured in llm.json — a selected roster entry owns its own settings."
         ),
     ),
     ConfigField(
         module="llm", key="llm_timeout",
         label="LLM Timeout (s)", kind="int", category="tunable",
-        help="Per-request timeout in seconds. 0 = use default (600).",
+        help=("Per-request timeout in seconds. 0 = use default (600)."
+              " NOTE: does not affect Ask-page synthesis while a named provider"
+              " roster is configured in llm.json — a roster entry carries its"
+              " own `timeout`."),
     ),
     ConfigField(
         module="llm", key="embedding_provider",

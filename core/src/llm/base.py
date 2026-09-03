@@ -87,3 +87,27 @@ def answering_model(llm) -> str:
     neither (e.g. the mock) — callers skip provenance stamping then.
     """
     return getattr(llm, "last_model", "") or getattr(llm, "model", "") or ""
+
+
+def reroute_note(llm) -> str:
+    """"(rerouted to X after Y declined)" when the last answer came from a
+    fallback endpoint, else empty.
+
+    Companion to `answering_model`, which names the model but cannot say a
+    reroute happened: two roster endpoints may serve the same model tag, so
+    comparing names would miss it. `RefusalFallbackProvider.last_was_fallback`
+    records it per call instead.
+
+    Returns empty unless the ENDPOINTS are named — the Ask page's roster path
+    attaches those names, the env-var fallback path does not, and inventing a
+    label for an unnamed endpoint would say less than nothing. This is what
+    keeps a reroute from being silent, which was the whole objection to
+    wrapping the roster path in the first place.
+    """
+    if not getattr(llm, "last_was_fallback", False):
+        return ""
+    to_name = getattr(llm, "fallback_entry_name", "")
+    from_name = getattr(llm, "primary_entry_name", "")
+    if not (to_name and from_name):
+        return ""
+    return f" (rerouted to {to_name} after {from_name} declined)"
