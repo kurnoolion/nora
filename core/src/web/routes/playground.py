@@ -770,11 +770,11 @@ def _select_synth_synthesize(
     cites = _select_synth_extract_citations(answer, packed)
     # Provenance epilogue — same stamp as LLMSynthesizer's; names the
     # fallback model when a refused call was rerouted.
-    from core.src.llm.base import answering_model
+    from core.src.llm.base import answering_model, reroute_note
 
     epilogue_model = answering_model(llm)
     if epilogue_model:
-        answer = f"{answer}\n\nSynthesized by {epilogue_model}"
+        answer = f"{answer}\n\nSynthesized by {epilogue_model}{reroute_note(llm)}"
     rag_chunks = [
         {
             "req_id": c.get("req_id"),

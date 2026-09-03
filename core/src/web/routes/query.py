@@ -244,13 +244,29 @@ def _find_env_config_for_web():
 def _build_llm_from_env_or_default(
     provider_id: str | None = None,
     mode: str | None = None,
+    *,
+    use_roster: bool = True,
 ):
     """Construct the LLM provider for /query and /test.
 
-    `provider_id` picks a named entry from the `config/llm.json` roster;
-    empty or unknown falls back to the roster's first entry. When no roster
-    is configured — the normal case today — this is ignored entirely and the
-    single-provider chain below runs unchanged.
+    `use_roster=False` ignores a configured roster entirely and takes the
+    single-provider chain — for callers that are not the Ask flow and should
+    not follow an asker's endpoint choice (the Eval Studio curation chat).
+    Passing no `provider_id` does NOT achieve this: `resolve_provider(None)`
+    returns the roster's default entry, which is the point of that default.
+
+    `provider_id` picks a named entry from the `config/llm.json` roster; empty
+    or unknown falls back to the roster's `default_provider` entry, or its
+    first entry when that key is unset. When no roster is configured — the
+    normal case today — this is ignored entirely and the single-provider chain
+    below runs unchanged.
+
+    A selected roster entry is INDEPENDENT of the Config-page DB: it owns its
+    model, base_url, api_key and timeout outright, and nothing in this branch
+    reads the DB. That is what lets the roster label be honest — picking
+    "130B — DGX" always means that endpoint. The consequence is that the
+    Config-page LLM fields do not affect Ask synthesis while a roster is
+    configured, which `config_schema.py` says on the fields themselves.
 
     `mode` is the asker's Fast/Think choice:
       * "fast"  -> `reasoning_effort: "none"` (skip thinking)
@@ -261,9 +277,14 @@ def _build_llm_from_env_or_default(
     ignored with a warning — the field would be silently dropped anyway, and
     pretending otherwise would let the UI lie about what was sent.
 
-    A roster-built provider is deliberately NOT refusal-wrapped: the roster
-    names WHICH endpoint answers, so silently rerouting to a different one
-    would defeat the choice the asker just made.
+    A roster-built provider IS refusal-wrapped when the roster names a
+    `fallback_provider`. This reverses the original design, which left it
+    unwrapped on the argument that rerouting defeats the asker's explicit
+    choice. The objection was to a SILENT reroute: the answer card now names
+    whichever endpoint actually answered, so the choice is still visible and a
+    refusal no longer costs the asker their answer. The fallback endpoint comes
+    from the roster, not the `NORA_LLM_FALLBACK_*` env vars — the whole roster
+    is configured in one file.
 
     Resolves provider / model / timeout / base_url / api_key via the
     unified resolver chain: CLI flag (n/a here) > **Config-page DB
@@ -279,28 +300,57 @@ def _build_llm_from_env_or_default(
     failure (web path is non-fail-loud — falls back to mock so the
     UI keeps responding).
     """
-    from core.src.env.config import resolve_llm_timeout, resolve_provider
+    from core.src.env.config import (
+        DEFAULT_LLM_TIMEOUT,
+        resolve_fallback_provider,
+        resolve_provider,
+    )
+    from core.src.llm.refusal import maybe_wrap_with_refusal_fallback
 
-    entry = resolve_provider(provider_id)
+    entry = resolve_provider(provider_id) if use_roster else None
     if entry is not None:
         reasoning = _reasoning_for(entry, mode)
         from core.src.llm.openai_provider import OpenAICompatibleProvider
 
-        timeout = resolve_llm_timeout(
-            config_store_value=_config_store_get("llm", "llm_timeout"),
-        )
+        # Entry-owned, NOT resolve_llm_timeout(): a selected roster entry is
+        # independent of the Config-page DB, so nothing here consults it.
+        timeout = entry.timeout or DEFAULT_LLM_TIMEOUT
         logger.info(
-            "Web LLM resolved: provider=%s (%s) model=%s mode=%s reasoning=%s",
+            "Web LLM resolved: provider=%s (%s) model=%s mode=%s reasoning=%s "
+            "timeout=%ds",
             entry.id, entry.name, entry.model, mode or entry.default_mode,
-            reasoning or "<none sent>",
+            reasoning or "<none sent>", timeout,
         )
-        return OpenAICompatibleProvider(
+        provider = OpenAICompatibleProvider(
             model=entry.model,
             base_url=entry.base_url,
             api_key=entry.api_key or None,
             timeout=timeout,
             reasoning=reasoning,
         )
+        # Without this the roster path loses refusal coverage that the
+        # no-roster chain gets for free via create_llm_provider — so merely
+        # configuring a roster would silently remove it from Ask.
+        fb_entry = resolve_fallback_provider()
+        if fb_entry is not None and fb_entry.id != entry.id:
+            fallback = OpenAICompatibleProvider(
+                model=fb_entry.model,
+                base_url=fb_entry.base_url,
+                api_key=fb_entry.api_key or None,
+                timeout=fb_entry.timeout or DEFAULT_LLM_TIMEOUT,
+            )
+            wrapped = maybe_wrap_with_refusal_fallback(
+                provider, timeout=timeout, fallback=fallback,
+            )
+            if wrapped is not provider:
+                # Names for the two endpoints, so the answer card can say who
+                # answered. The wrapper tracks WHETHER it fell back; only here
+                # do we know WHICH roster entries those sides are.
+                wrapped.primary_entry_name = entry.name
+                wrapped.fallback_entry_name = fb_entry.name
+                wrapped.fallback_entry_id = fb_entry.id
+            provider = wrapped
+        return provider
 
     from core.src.env.config import (
         resolve_llm_provider,

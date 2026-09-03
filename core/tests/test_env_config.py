@@ -1141,3 +1141,94 @@ def test_llm_config_missing_default_path_stays_silent(monkeypatch, tmp_path, cap
         assert caplog.records == []
     finally:
         env_cfg._reset_llm_config_cache()
+
+
+# ---------------------------------------------------------------------------
+# default_provider / fallback_provider (strand llm-roster-deploy, #19 item 5)
+# ---------------------------------------------------------------------------
+
+def _two_entry_roster(**top) -> str:
+    import json
+    doc = {
+        "providers": [
+            {"id": "first", "name": "First", "base_url": "http://a.invalid/v1",
+             "model": "m"},
+            {"id": "second", "name": "Second", "base_url": "http://b.invalid/v1",
+             "model": "m"},
+        ],
+    }
+    doc.update(top)
+    return json.dumps(doc)
+
+
+def _load_roster(monkeypatch, tmp_path, body: str):
+    from core.src.env import config as env_cfg
+    p = tmp_path / "llm.json"
+    p.write_text(body)
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    monkeypatch.delenv(env_cfg.LLM_CONFIG_PATH_ENV_VAR, raising=False)
+    env_cfg._reset_llm_config_cache()
+    return env_cfg
+
+
+def test_default_provider_beats_positional_first(monkeypatch, tmp_path):
+    """Before this key the first entry was the default by position alone, which
+    made the default an accident of list order."""
+    env_cfg = _load_roster(monkeypatch, tmp_path,
+                           _two_entry_roster(default_provider="second"))
+    try:
+        assert env_cfg.resolve_provider(None).id == "second"
+        # An explicit id still wins over the default.
+        assert env_cfg.resolve_provider("first").id == "first"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_absent_default_provider_keeps_positional_first(monkeypatch, tmp_path):
+    """Rosters written before the key existed relied on position — they must
+    keep resolving the same way."""
+    env_cfg = _load_roster(monkeypatch, tmp_path, _two_entry_roster())
+    try:
+        assert env_cfg.resolve_provider(None).id == "first"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_unknown_default_provider_warns_and_degrades(monkeypatch, tmp_path, caplog):
+    """A half-edited roster must not fail a question. The id is dropped with a
+    warning and resolution falls back to the first entry."""
+    import logging
+
+    env_cfg = _load_roster(monkeypatch, tmp_path,
+                           _two_entry_roster(default_provider="typo"))
+    try:
+        with caplog.at_level(logging.WARNING, logger=env_cfg.logger.name):
+            cfg = env_cfg.LLMConfigFile.load()
+        assert cfg.default_provider == ""
+        assert any("default_provider" in r.getMessage() for r in caplog.records)
+        assert env_cfg.resolve_provider(None).id == "first"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_fallback_provider_parsed_and_validated(monkeypatch, tmp_path, caplog):
+    """`fallback_provider` names where a permanent refusal reroutes (item 8).
+    Validated on load so a typo surfaces at startup, not at refusal time."""
+    import logging
+
+    env_cfg = _load_roster(monkeypatch, tmp_path,
+                           _two_entry_roster(fallback_provider="second"))
+    try:
+        assert env_cfg.LLMConfigFile.load().fallback_provider == "second"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+    env_cfg = _load_roster(monkeypatch, tmp_path,
+                           _two_entry_roster(fallback_provider="nope"))
+    try:
+        with caplog.at_level(logging.WARNING, logger=env_cfg.logger.name):
+            cfg = env_cfg.LLMConfigFile.load()
+        assert cfg.fallback_provider == ""
+        assert any("fallback_provider" in r.getMessage() for r in caplog.records)
+    finally:
+        env_cfg._reset_llm_config_cache()

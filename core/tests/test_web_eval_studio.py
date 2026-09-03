@@ -314,7 +314,12 @@ class TestCuration:
                     data={"req_id": "REQ_FOO_0002"})
         import core.src.web.routes.query as query_routes
         monkeypatch.setattr(
-            query_routes, "_build_llm_from_env_or_default", lambda: _FakeLLM())
+            query_routes, "_build_llm_from_env_or_default",
+            # **kw so the stub tolerates use_roster=False, which the curation
+            # route now passes. These two tests are about the chat UI; the
+            # roster bypass itself is covered against the REAL function in
+            # test_ask_reasoning.py::TestCurationBypassesRoster.
+            lambda **kw: _FakeLLM())
         # Empty message, empty history -> kickoff draft.
         r = client.post("/api/eval-studio/sample/gs-0001/chat",
                         data={"message": "", "history": "[]"})
@@ -336,7 +341,12 @@ class TestCuration:
                     data={"req_id": "REQ_FOO_0002"})
         import core.src.web.routes.query as query_routes
         monkeypatch.setattr(
-            query_routes, "_build_llm_from_env_or_default", lambda: _FakeLLM())
+            query_routes, "_build_llm_from_env_or_default",
+            # **kw so the stub tolerates use_roster=False, which the curation
+            # route now passes. These two tests are about the chat UI; the
+            # roster bypass itself is covered against the REAL function in
+            # test_ask_reasoning.py::TestCurationBypassesRoster.
+            lambda **kw: _FakeLLM())
         r = client.post("/api/eval-studio/sample/gs-0001/chat", data={
             "message": "Draft an answer",
             "history": "[]",

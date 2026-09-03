@@ -18,8 +18,13 @@
   "skip_taxonomy": true,
   "skip_graph": true,
 
-  "_comment_providers": "OPTIONAL named roster for the Ask page. Omit the key entirely (the normal case) and nothing changes: the controls are not rendered and the single-provider fields above are used exactly as before. Add entries and the Ask page gains a provider picker plus a Fast/Think toggle. Order matters — the FIRST entry is the default for everyone who never touches the picker.",
-  "_comment_providers_fields": "id: stable slug, recorded on every answer as llm_provider_id. name: what the user sees — say what the infrastructure IS ('130B — DGX'), not its role ('primary'), because the role means nothing to the person asking. base_url: include /v1. model: the model tag on that endpoint. api_key_env: the NAME of an env var holding the key — never put a key in this committed file. supports_reasoning_control: see below. default_mode: fast | think, applied when the asker expresses no preference.",
+  "_comment_providers": "OPTIONAL named roster for the Ask page. Omit the key entirely (the normal case) and nothing changes: the controls are not rendered and the single-provider fields above are used exactly as before. Add entries and the Ask page gains a provider picker plus a Fast/Think toggle. A roster entry is INDEPENDENT of the Config-page DB — a named endpoint always means that endpoint, so the Config-page LLM fields do not affect Ask synthesis while a roster is configured.",
+
+  "_comment_default_fallback": "Ids into `providers`. default_provider is what an asker who never touches the picker gets. fallback_provider is where a permanent refusal reroutes (the answer card names whichever endpoint actually answered, so a reroute is never silent). Omit both and the FIRST entry is the default, which is how rosters written before these keys existed behave. An id matching no entry is dropped with a warning rather than failing the app.",
+  "default_provider": "dgx-130b",
+  "fallback_provider": "internal-14b",
+
+  "_comment_providers_fields": "id: stable slug, recorded on every answer as llm_provider_id. name: what the user sees — say what the infrastructure IS ('130B — DGX'), not its role ('primary'), because the role means nothing to the person asking. base_url: include /v1. model: the model tag on that endpoint. api_key_env: the NAME of an env var holding the key — never put a key in this committed file. supports_reasoning_control: see below. default_mode: fast | think, applied when the asker expresses no preference. timeout: per-request seconds for THIS endpoint; omit or 0 to use the built-in default (600) — a 130B endpoint and a small one rarely want the same ceiling.",
   "_comment_supports_reasoning_control": "Whether the ENDPOINT HONOURS THE KNOB — not whether the model reasons. These are independent: a thinking model with no exposed control is false, because nothing we send changes how much it thinks. Set it false and the toggle renders as 'Not supported' instead of offering a choice that would do nothing. It cannot be auto-detected: no OpenAI-compatible endpoint advertises the capability, and a probe only catches outright rejection — a server can accept reasoning_effort and silently ignore it. Verify with: python -m core.src.llm.llm_debug --complete --text 'ping'",
   "_comment_modes": "fast sends reasoning_effort='none' (skip thinking). think sends NO reasoning field, so the model does whatever the deployment already configured — we never assert an effort level on its behalf.",
   "providers": [
@@ -30,7 +35,8 @@
       "model": "qwen3-130b",
       "api_key_env": "NORA_LLM_DGX_KEY",
       "supports_reasoning_control": true,
-      "default_mode": "fast"
+      "default_mode": "fast",
+      "timeout": 900
     },
     {
       "id": "internal-14b",

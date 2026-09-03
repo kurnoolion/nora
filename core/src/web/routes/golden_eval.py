@@ -586,7 +586,11 @@ def curation_chat(
         return sample
     from core.src.web.routes.query import _build_llm_from_env_or_default
 
-    llm = _build_llm_from_env_or_default()
+    # Curation chat is not the Ask flow: it must not follow an asker's endpoint
+    # choice, and a golden response curated against whichever endpoint happened
+    # to be the roster default would not be reproducible. use_roster=False is
+    # required — passing no provider_id would still resolve the default entry.
+    llm = _build_llm_from_env_or_default(use_roster=False)
     if llm is None or getattr(llm, "_is_mock", False):
         return HTMLResponse(
             '<div class="alert alert-warning small">No real LLM configured — '
