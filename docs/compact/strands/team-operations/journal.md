@@ -162,3 +162,55 @@
   baselines.
 - PC-2 service-user topology is planned, not executed — capture it as
   a draft decision when actually provisioned (deferred this session).
+
+## 2026-09-03 — two teammate merge waves landed; roster deployed and field-debugged
+
+### Done this session
+- Wave 1 (09-02): reviewed + merged llm-model-choice and llm-model-choice-eval
+  (a020be3, 4d26c97 — stacked pair, parent first); stripped the committed dev
+  roster (1a3575f, roster stays opt-in, schema in llm.json.example). Landed
+  both strands (6675f46): D-214..D-217. Remote branches deleted.
+- Hotfix: no-roster LLM build path crashed with UnboundLocalError after the
+  web-only deploy — masked in CI because the tree under test carried the
+  committed dev roster and targeted tests patch the construction seam. Fixed
+  + TestNoRosterBuildPath regression tests (c1a6d8c); field-verified on both
+  lanes.
+- Wave 2 (09-03): reviewed + merged llm-roster-deploy,
+  worktree-query-timeline-analytics, collapsible-sidebar (d22c0ea, c663924,
+  4269663) — independent siblings off c1a6d8c, zero conflicts, 1930/0 full
+  suite in a detached-worktree rehearsal, merged tree byte-identical to the
+  rehearsal. Landed all three (364c26e): D-218..D-234. Remote branches
+  deleted; only the pre-retrofit docx-strike-style-parser relic remains.
+- Governance: the D-218 reversal of a DECIDED brief item (roster entry
+  independent of the Config-page DB) was surfaced before merge and approved
+  explicitly; D-218/D-225 supersede parts of D-216 in the canonical log.
+- Deploy support: roster live via NORA_LLM_CONFIG. Debug ladder that worked:
+  /api/health llm_config_source (env|default) → in-container env + file
+  visibility → byte/length check of the var → root cause: the container was
+  never recreated from the edited env file. Ops takeaway: after any env-file
+  edit, `docker compose up -d --force-recreate` is the reliable move — plain
+  `restart` never reapplies env files, and `up -d` can skip recreation.
+
+### In progress
+- team-operations tooling still not operationally adopted — the sandboxed
+  drill (stages 0–6) remains the gating item; nothing advanced this session.
+
+### Next
+- Sandboxed drill on the work PC; then real-topology provisioning and the A8
+  hand-over cycle (unchanged).
+- NAS §A4 asks; serving-host migration §B after the sweep completes
+  (unchanged).
+- Notify the teammate: five strands landed/archived across the two waves —
+  pull + /list-strands; D-218/D-225 supersede parts of D-216.
+
+### Flags
+- Fleet divergence widened: nora-web is now several web-only rebuilds ahead
+  of sira-query. Re-unify at the next Phase 0.2 rebake, then refresh
+  baselines.
+- image-ingestion and nora-retrieval-quality strands crossed 30-day staleness
+  on 2026-09-03 — triage whether they are still live efforts.
+- golden-eval landing (17 drafts) still queued.
+- Worktree lesson (09-02): `git worktree add <path> main` refuses while main
+  is checked out, and the failed `cd` let merge commands run in the live
+  checkout — recovered by hard reset before push. Rehearsals always use
+  `git worktree add --detach`.
