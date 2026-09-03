@@ -323,6 +323,38 @@ class Citation:
     llm_cited: bool = False
 
 
+# ── Stage timing vocabulary ─────────────────────────────────────
+
+#: Canonical per-stage timing slugs, in pipeline execution order.
+#:
+#: Each entry is ``(slug, display_label, band)``. `slug` is the key
+#: written into `QueryResponse.timings_ms`; `display_label` is what the
+#: UI shows; `band` is the coarse phase the stage belongs to.
+#:
+#: The bands exist so the NORA lane (ten stages) and the SIRA lane
+#: (expand / search / rerank / synth) can be read side by side — the
+#: stage names are not comparable across lanes, but the bands are.
+STAGE_ORDER: tuple[tuple[str, str, str], ...] = (
+    ("analyze",      "Analyze",        "prep"),
+    ("resolve_scope", "Resolve scope", "prep"),
+    ("graph_scope",  "Graph scope",    "prep"),
+    ("rewrite",      "Rewrite",        "prep"),
+    ("fetch_pinned", "Fetch pinned",   "retrieval"),
+    ("retrieve",     "Retrieve (RAG)", "retrieval"),
+    ("threshold",    "Threshold",      "retrieval"),
+    ("group",        "Group",          "retrieval"),
+    ("assemble",     "Assemble",       "synthesis"),
+    ("synthesize",   "Synthesize",     "synthesis"),
+    ("audit",        "Citation audit", "post"),
+)
+
+#: Coarse bands in render order. `unaccounted` is not a stage — it is
+#: the difference between the measured total and the sum of the parts,
+#: and it is rendered explicitly so the timeline never over-claims
+#: coverage it does not have.
+BAND_ORDER: tuple[str, ...] = ("prep", "retrieval", "synthesis", "post", "unaccounted")
+
+
 @dataclass
 class QueryResponse:
     """Final pipeline output.
@@ -370,6 +402,31 @@ class QueryResponse:
     # bypassed (RAG-only mode).
     graph_candidates: "CandidateSet | None" = None
 
+    # Per-stage wall-clock timings in milliseconds, populated by
+    # QueryPipeline.query() on every return path. Keys are the stage
+    # slugs in `STAGE_ORDER`, plus `total_ms` for the whole call.
+    #
+    # A stage that did not run is ABSENT, not zero — Stages 3, 3.5,
+    # 4.5 and 4.7 are all conditional, and a zero would render a
+    # bypassed stage as instantaneous rather than skipped. Consumers
+    # must treat a missing key as "did not run".
+    #
+    # The per-stage values do not sum to `total_ms`; the remainder is
+    # un-instrumented overhead. Use `unaccounted_ms` to render it
+    # honestly rather than letting the segments silently under-report.
+    timings_ms: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def unaccounted_ms(self) -> int:
+        """`total_ms` minus the sum of the per-stage timings.
+
+        Never negative — a clock that disagrees with itself clamps to 0
+        rather than rendering a negative segment.
+        """
+        total = self.timings_ms.get("total_ms", 0)
+        parts = sum(v for k, v in self.timings_ms.items() if k != "total_ms")
+        return max(0, total - parts)
+
     def to_dict(self) -> dict[str, Any]:
         d = {
             "answer": self.answer,
@@ -377,6 +434,7 @@ class QueryResponse:
             "candidate_count": self.candidate_count,
             "retrieved_count": self.retrieved_count,
             "context_tokens_approx": self.context_tokens_approx,
+            "timings_ms": dict(self.timings_ms),
         }
         if self.query_intent:
             d["query_intent"] = self.query_intent.to_dict()

@@ -15,6 +15,8 @@ combination of analyzer, embedder, store, LLM, and graph.
 from __future__ import annotations
 
 import logging
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import networkx as nx
@@ -27,6 +29,43 @@ from core.src.query.context_builder import ContextBuilder
 from core.src.query.synthesizer import MockSynthesizer
 from core.src.query.rewriter import MockQueryRewriter, expand_query
 from core.src.query.schema import QueryResponse, CandidateSet, QueryType
+
+
+class _StageTimer:
+    """Accumulates per-stage wall-clock timings for one `query()` call.
+
+    Only stages that actually run get a key — a bypassed stage is
+    absent rather than zero, so the UI can distinguish "took no time"
+    from "did not happen". See `QueryResponse.timings_ms`.
+
+    Re-entering the same stage adds to that stage's total, which is
+    what the multi-cell retrieval loop needs.
+    """
+
+    def __init__(self) -> None:
+        self._t0 = time.perf_counter()
+        self._stages: dict[str, float] = {}
+
+    @contextmanager
+    def stage(self, name: str):
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._stages[name] = (
+                self._stages.get(name, 0.0) + (time.perf_counter() - start)
+            )
+
+    def as_dict(self) -> dict[str, int]:
+        """Snapshot the timings, including `total_ms` measured to now.
+
+        Safe to call at any return point; each call re-reads the clock
+        for the total, so an early return reports the time it actually
+        took rather than the time a full run would have taken.
+        """
+        out = {k: int(v * 1000) for k, v in self._stages.items()}
+        out["total_ms"] = int((time.perf_counter() - self._t0) * 1000)
+        return out
 
 # "Not found" answer returned when every retrieved chunk scores below the
 # quality bar set by max_distance_threshold. The pipeline returns this
@@ -374,8 +413,11 @@ class QueryPipeline:
         Returns:
             QueryResponse with answer and citations.
         """
+        timer = _StageTimer()
+
         # Stage 1: Query Analysis
-        intent = self._analyzer.analyze(query_text)
+        with timer.stage("analyze"):
+            intent = self._analyzer.analyze(query_text)
         if verbose:
             logger.info(f"[Stage 1] Intent: {intent.to_dict()}")
 
@@ -383,7 +425,8 @@ class QueryPipeline:
         # pinned chunks from the store, go straight to Stage 5/6.
         # Used by the disambiguation UX after the user picks a group.
         if pinned_chunk_ids:
-            chunks = self._fetch_chunks_by_ids(list(pinned_chunk_ids))
+            with timer.stage("fetch_pinned"):
+                chunks = self._fetch_chunks_by_ids(list(pinned_chunk_ids))
             if not chunks:
                 logger.info(
                     "Pinned chunk IDs did not resolve to any chunks "
@@ -396,16 +439,19 @@ class QueryPipeline:
                     query_intent=intent,
                     candidate_count=0,
                     retrieved_count=0,
+                    timings_ms=timer.as_dict(),
                 )
             logger.info(
                 f"Pinned-chunks path: synthesizing from "
                 f"{len(chunks)}/{len(pinned_chunk_ids)} requested chunks"
             )
-            context = self._context_builder.build(
-                query_text, chunks, intent.query_type,
-                max_context_chars=self._max_context_chars,
-            )
-            response = (synthesizer or self._synthesizer).synthesize(context, intent)
+            with timer.stage("assemble"):
+                context = self._context_builder.build(
+                    query_text, chunks, intent.query_type,
+                    max_context_chars=self._max_context_chars,
+                )
+            with timer.stage("synthesize"):
+                response = (synthesizer or self._synthesizer).synthesize(context, intent)
             response.candidate_count = 0
             response.retrieved_chunks = chunks
             response.assembled_context = context
@@ -415,23 +461,30 @@ class QueryPipeline:
                 for c in chunks
                 if c.metadata.get("req_id")
             ]
-            response.citation_audit = audit_answer_citations(
-                response.answer, available_req_ids,
-            )
+            with timer.stage("audit"):
+                response.citation_audit = audit_answer_citations(
+                    response.answer, available_req_ids,
+                )
+            response.timings_ms = timer.as_dict()
             return response
 
         # Stage 2: MNO/Release Resolution
-        scoped = self._resolver.resolve(intent)
+        with timer.stage("resolve_scope"):
+            scoped = self._resolver.resolve(intent)
         if verbose:
             logger.info(f"[Stage 2] Scope: {scoped.to_dict()}")
 
         # Stage 3: Graph Scoping
+        # Bypassed in pure-RAG mode — deliberately NOT timed in that
+        # case, so the timeline shows the stage as absent rather than
+        # as a 0 ms segment that reads like "instant".
         if self._bypass_graph:
             candidates = CandidateSet()
             if verbose:
                 logger.info("[Stage 3] BYPASSED (pure RAG mode)")
         else:
-            candidates = self._scoper.scope(scoped)
+            with timer.stage("graph_scope"):
+                candidates = self._scoper.scope(scoped)
             if verbose:
                 logger.info(f"[Stage 3] Candidates: {candidates.to_dict()}")
 
@@ -444,7 +497,8 @@ class QueryPipeline:
         # by default, so existing pipelines see unchanged behavior.
         retrieval_query = query_text
         if _TYPE_REWRITE_ENABLED.get(intent.query_type, False):
-            rewrites = self._rewriter.rewrite(query_text)
+            with timer.stage("rewrite"):
+                rewrites = self._rewriter.rewrite(query_text)
             if rewrites:
                 retrieval_query = expand_query(query_text, rewrites)
                 if verbose:
@@ -507,22 +561,27 @@ class QueryPipeline:
         from core.src.query.reranker import MockReranker
         target_cells = self._select_cells(scoped)
         if len(target_cells) == 1:
-            chunks = self._retrievers[target_cells[0]].retrieve(
-                retrieval_query, candidates, scoped.scoped_mnos,
-                top_k=type_top_k, bm25_weight=bm25_weight, rerank=rerank,
-            )
-        else:
-            pool: list = []
-            for ck in target_cells:
-                pool.extend(self._retrievers[ck].retrieve(
+            with timer.stage("retrieve"):
+                chunks = self._retrievers[target_cells[0]].retrieve(
                     retrieval_query, candidates, scoped.scoped_mnos,
-                    top_k=type_top_k, bm25_weight=bm25_weight, rerank=False,
-                ))
-            if rerank and not isinstance(self._reranker, MockReranker):
-                pool = self._reranker.rerank(retrieval_query, pool)
-            else:
-                pool.sort(key=lambda c: c.similarity_score)  # cosine distance: lower = better
-            chunks = pool[:type_top_k]
+                    top_k=type_top_k, bm25_weight=bm25_weight, rerank=rerank,
+                )
+        else:
+            # Multi-cell: the per-cell retrievals and the single merged
+            # rerank all accumulate into one `retrieve` segment — the
+            # timeline reports Stage 4 as a whole, not per cell.
+            with timer.stage("retrieve"):
+                pool: list = []
+                for ck in target_cells:
+                    pool.extend(self._retrievers[ck].retrieve(
+                        retrieval_query, candidates, scoped.scoped_mnos,
+                        top_k=type_top_k, bm25_weight=bm25_weight, rerank=False,
+                    ))
+                if rerank and not isinstance(self._reranker, MockReranker):
+                    pool = self._reranker.rerank(retrieval_query, pool)
+                else:
+                    pool.sort(key=lambda c: c.similarity_score)  # cosine distance: lower = better
+                chunks = pool[:type_top_k]
             if verbose:
                 logger.info(
                     f"[Stage 4] Multi-cell merge across {len(target_cells)} cells "
@@ -543,9 +602,10 @@ class QueryPipeline:
             intent.query_type, self._max_distance_threshold
         )
         if threshold is not None:
-            before = len(chunks)
-            chunks = [c for c in chunks if c.similarity_score <= threshold]
-            dropped = before - len(chunks)
+            with timer.stage("threshold"):
+                before = len(chunks)
+                chunks = [c for c in chunks if c.similarity_score <= threshold]
+                dropped = before - len(chunks)
             if dropped:
                 logger.info(
                     f"Threshold filter (max_distance={threshold}): "
@@ -561,6 +621,7 @@ class QueryPipeline:
                     query_intent=intent,
                     candidate_count=candidates.total,
                     retrieved_count=0,
+                    timings_ms=timer.as_dict(),
                 )
 
         # Stage 4.7: Hierarchy-based grouping (optional, opt-in via
@@ -584,50 +645,62 @@ class QueryPipeline:
                 gap_between_top_groups, group_chunks_by_hierarchy,
             )
 
-            groups = group_chunks_by_hierarchy(chunks)
-            if len(groups) > 1:
-                gap_threshold = resolve_gap_threshold(
-                    query_type=intent.query_type.value,
-                )
-                gap = gap_between_top_groups(groups)
-                if gap >= gap_threshold:
-                    # Clear winner — auto-commit to top group's chunks.
-                    top_group = groups[0]
+            # The disambiguation return sits OUTSIDE the timed block on
+            # purpose: `timer.as_dict()` in a return expression would be
+            # evaluated before the context manager's `finally` records
+            # the stage, so `group` would be missing from the very
+            # response that spent the time. Decide inside, return after.
+            disambiguate = False
+            with timer.stage("group"):
+                groups = group_chunks_by_hierarchy(chunks)
+                if len(groups) > 1:
+                    gap_threshold = resolve_gap_threshold(
+                        query_type=intent.query_type.value,
+                    )
+                    gap = gap_between_top_groups(groups)
+                    if gap >= gap_threshold:
+                        # Clear winner — auto-commit to top group's chunks.
+                        top_group = groups[0]
+                        logger.info(
+                            f"[Stage 4.7] Auto-commit to top group "
+                            f"(prefix={top_group.common_prefix}, "
+                            f"chunks={len(top_group.chunks)}/{len(chunks)}, "
+                            f"gap={gap:.4f} >= threshold={gap_threshold})"
+                        )
+                        chunks = top_group.chunks
+                    else:
+                        # Gap too narrow — disambiguate, skip Stages 5/6.
+                        logger.info(
+                            f"[Stage 4.7] Disambiguation: {len(groups)} groups, "
+                            f"gap={gap:.4f} < threshold={gap_threshold}"
+                        )
+                        disambiguate = True
+                elif verbose:
                     logger.info(
-                        f"[Stage 4.7] Auto-commit to top group "
-                        f"(prefix={top_group.common_prefix}, "
-                        f"chunks={len(top_group.chunks)}/{len(chunks)}, "
-                        f"gap={gap:.4f} >= threshold={gap_threshold})"
+                        f"[Stage 4.7] Single group "
+                        f"(prefix={groups[0].common_prefix if groups else []}); "
+                        "no disambiguation needed"
                     )
-                    chunks = top_group.chunks
-                else:
-                    # Gap too narrow — return disambiguation, skip Stages 5/6.
-                    logger.info(
-                        f"[Stage 4.7] Disambiguation: {len(groups)} groups, "
-                        f"gap={gap:.4f} < threshold={gap_threshold}"
-                    )
-                    return QueryResponse(
-                        answer=_DISAMBIGUATION_ANSWER,
-                        citations=[],
-                        query_intent=intent,
-                        candidate_count=candidates.total,
-                        retrieved_count=sum(len(g.chunks) for g in groups),
-                        retrieved_chunks=chunks,
-                        disambiguation_required=True,
-                        groups=groups,
-                    )
-            elif verbose:
-                logger.info(
-                    f"[Stage 4.7] Single group "
-                    f"(prefix={groups[0].common_prefix if groups else []}); "
-                    "no disambiguation needed"
+
+            if disambiguate:
+                return QueryResponse(
+                    answer=_DISAMBIGUATION_ANSWER,
+                    citations=[],
+                    query_intent=intent,
+                    candidate_count=candidates.total,
+                    retrieved_count=sum(len(g.chunks) for g in groups),
+                    retrieved_chunks=chunks,
+                    disambiguation_required=True,
+                    groups=groups,
+                    timings_ms=timer.as_dict(),
                 )
 
         # Stage 5: Context Assembly
-        context = self._context_builder.build(
-            query_text, chunks, intent.query_type,
-            max_context_chars=self._max_context_chars,
-        )
+        with timer.stage("assemble"):
+            context = self._context_builder.build(
+                query_text, chunks, intent.query_type,
+                max_context_chars=self._max_context_chars,
+            )
         if verbose:
             logger.info(
                 f"[Stage 5] Context: {len(context.context_text)} chars, "
@@ -635,7 +708,8 @@ class QueryPipeline:
             )
 
         # Stage 6: LLM Synthesis
-        response = (synthesizer or self._synthesizer).synthesize(context, intent)
+        with timer.stage("synthesize"):
+            response = (synthesizer or self._synthesizer).synthesize(context, intent)
         response.candidate_count = candidates.total
         # Surface the retrieval set for the UI / Test page. This is
         # the post-rerank top-K returned by Stage 4 (RAG) — it's what
@@ -660,9 +734,10 @@ class QueryPipeline:
             for c in chunks
             if c.metadata.get("req_id")
         ]
-        response.citation_audit = audit_answer_citations(
-            response.answer, available_req_ids,
-        )
+        with timer.stage("audit"):
+            response.citation_audit = audit_answer_citations(
+                response.answer, available_req_ids,
+            )
 
         if verbose:
             logger.info(
@@ -670,6 +745,7 @@ class QueryPipeline:
                 f"{len(response.citations)} citations"
             )
 
+        response.timings_ms = timer.as_dict()
         return response
 
 

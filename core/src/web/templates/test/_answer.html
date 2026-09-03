@@ -104,6 +104,14 @@
 
     <div class="answer-body" style="line-height: 1.5;">{{ answer | md_bubbles(bubble_req_ids, root_path) }}</div>
 
+    {# Where the time went. Above the engineering-details fold on
+       purpose — latency is the everyday user's question, not an
+       engineering-review detail. None when the lane reported no
+       stage timings (older cached rows, error paths). #}
+    {% if timeline %}
+      {% include "test/_timeline.html" %}
+    {% endif %}
+
     {# ── Engineering details ───────────────────────────────────────────
        Everything below (retrieval internals, citations, chunks, prompts,
        timings) is for engineering review, not the everyday ask-a-question
@@ -163,22 +171,18 @@
           {% endif %}
         {% endif %}
       </div>
-      {% if sira_timings_ms %}
+      {# The per-stage expand/search/rerank/synth numbers that used to
+         print here now render in the query timeline above the fold
+         (test/_timeline.html), so only the rerank call-distribution
+         stats — which the timeline does not carry — remain here. #}
+      {% if sira_rerank_call_stats and sira_rerank_call_stats.count %}
         <div class="small text-muted mb-2">
-          <strong>SIRA timing:</strong>
-          expand={{ sira_timings_ms.get('expand_ms', 0) }} ms ·
-          search={{ sira_timings_ms.get('search_ms', 0) }} ms ·
-          rerank={{ sira_timings_ms.get('rerank_ms', 0) }} ms
-          {% if sira_timings_ms.get('synth_ms') is not none %}
-            · synth={{ sira_timings_ms.get('synth_ms', 0) }} ms
-          {% endif %}
-          {% if sira_rerank_call_stats and sira_rerank_call_stats.count %}
-            ({{ sira_rerank_call_stats.count }} calls,
-            mean={{ sira_rerank_call_stats.mean_ms }} ms,
-            p50={{ sira_rerank_call_stats.p50_ms }} ms,
-            p95={{ sira_rerank_call_stats.p95_ms }} ms,
-            max={{ sira_rerank_call_stats.max_ms }} ms)
-          {% endif %}
+          <strong>SIRA rerank calls:</strong>
+          {{ sira_rerank_call_stats.count }} calls,
+          mean={{ sira_rerank_call_stats.mean_ms }} ms,
+          p50={{ sira_rerank_call_stats.p50_ms }} ms,
+          p95={{ sira_rerank_call_stats.p95_ms }} ms,
+          max={{ sira_rerank_call_stats.max_ms }} ms
         </div>
       {% endif %}
     {% endif %}

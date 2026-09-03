@@ -1084,6 +1084,95 @@ class TestPipeline:
         assert response.answer != ""
 
 
+class TestStageTimings:
+    """Per-stage timing capture on the NORA lane.
+
+    The contract the UI depends on: every return path carries a
+    `total_ms`, a stage that ran has a key, and a stage that was
+    bypassed has NO key (rather than a zero, which would render as
+    "instantaneous" instead of "skipped").
+    """
+
+    def setup_method(self):
+        self.graph = _build_test_graph()
+        self.embedder = MockEmbedder(dim=8)
+        self.store = _build_test_store(self.embedder)
+        self.pipeline = QueryPipeline(
+            graph=self.graph,
+            embedder=self.embedder,
+            store=self.store,
+            top_k=5,
+        )
+
+    def test_timings_populated_on_normal_path(self):
+        response = self.pipeline.query("data retry timer")
+        t = response.timings_ms
+        assert "total_ms" in t
+        # The always-run stages on the synthesis path.
+        for stage in ("analyze", "resolve_scope", "retrieve", "assemble",
+                      "synthesize", "audit"):
+            assert stage in t, f"expected {stage} in {sorted(t)}"
+
+    def test_all_timings_are_non_negative_ints(self):
+        response = self.pipeline.query("data retry timer")
+        for key, value in response.timings_ms.items():
+            assert isinstance(value, int), f"{key} is {type(value)}"
+            assert value >= 0, f"{key} is negative"
+
+    def test_stage_keys_are_known_slugs(self):
+        from core.src.query.schema import STAGE_ORDER
+
+        known = {slug for slug, _label, _band in STAGE_ORDER} | {"total_ms"}
+        response = self.pipeline.query("data retry timer")
+        assert set(response.timings_ms) <= known
+
+    def test_bypassed_graph_stage_is_absent_not_zero(self):
+        bypassed = QueryPipeline(
+            graph=self.graph,
+            embedder=self.embedder,
+            store=self.store,
+            top_k=5,
+        )
+        # Pure-RAG mode is a post-construction attribute, not a ctor arg.
+        bypassed._bypass_graph = True
+        response = bypassed.query("data retry timer")
+        assert "graph_scope" not in response.timings_ms
+        # Contrast: the same stage IS timed when graph scoping runs.
+        assert "graph_scope" in self.pipeline.query("data retry timer").timings_ms
+
+    def test_unaccounted_never_negative(self):
+        response = self.pipeline.query("data retry timer")
+        assert response.unaccounted_ms >= 0
+
+    def test_unaccounted_is_total_minus_parts(self):
+        response = self.pipeline.query("data retry timer")
+        t = dict(response.timings_ms)
+        t["total_ms"] = 1000
+        t["analyze"] = 200
+        t["synthesize"] = 300
+        for k in list(t):
+            if k not in ("total_ms", "analyze", "synthesize"):
+                del t[k]
+        response.timings_ms = t
+        assert response.unaccounted_ms == 500
+
+    def test_timings_survive_to_dict(self):
+        response = self.pipeline.query("data retry timer")
+        assert response.to_dict()["timings_ms"] == response.timings_ms
+
+    def test_pinned_chunks_path_carries_timings(self):
+        seed = self.pipeline.query("data retry timer")
+        ids = [c.chunk_id for c in seed.retrieved_chunks[:2]]
+        assert ids, "seed query returned no chunks to pin"
+        response = self.pipeline.query("data retry timer", pinned_chunk_ids=ids)
+        t = response.timings_ms
+        assert "total_ms" in t
+        assert "fetch_pinned" in t
+        # Stages 2-4.7 are skipped on this path, so they must be absent.
+        for stage in ("resolve_scope", "graph_scope", "retrieve", "threshold"):
+            assert stage not in t, f"{stage} should be absent on pinned path"
+
+
 # ═══════════════════════════════════════════════════════════════
 # Integration tests (requires real data)
 # ═══════════════════════════════════════════════════════════════
