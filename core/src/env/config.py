@@ -128,6 +128,35 @@ def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
     return out
 
 
+def _resolve_llm_config_path() -> tuple[Path, str]:
+    """Which `llm.json` to read when no explicit path is given.
+
+    Returns `(path, source)` where source is `"env"` or `"default"`.
+
+    `NORA_LLM_CONFIG` lets a deployment supply a roster without baking it into
+    the committed image — `config/llm.json` ships without one (1a3575f), so
+    before this there was no way to deploy a roster at all.
+
+    A value naming a missing or unreadable file WARNS and falls through to the
+    default. The failure mode being avoided: a typo degrading silently to
+    `providers == []`, which is indistinguishable from "no roster configured".
+    A missing DEFAULT path stays silent by contrast — that IS the normal
+    no-roster case, not an error.
+    """
+    raw = os.getenv(LLM_CONFIG_PATH_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_LLM_CONFIG_PATH, "default"
+    candidate = Path(raw)
+    if not (candidate.is_file() and os.access(candidate, os.R_OK)):
+        logger.warning(
+            "%s=%s is missing or unreadable — falling back to %s. "
+            "No roster will load from the env var.",
+            LLM_CONFIG_PATH_ENV_VAR, raw, DEFAULT_LLM_CONFIG_PATH,
+        )
+        return DEFAULT_LLM_CONFIG_PATH, "default"
+    return candidate, "env"
+
+
 @dataclass
 class LLMConfigFile:
     """Schema for `config/llm.json`. Empty/zero values mean "fall through".
@@ -163,18 +192,31 @@ class LLMConfigFile:
     # every deployment that never edits this key keeps getting.
     providers: list[LLMProviderEntry] = field(default_factory=list)
 
+    # Provenance of THIS instance, for /api/health diagnostics. Not part of the
+    # JSON schema — populated by load(). Recorded rather than recomputed
+    # because /api/health is polled by the navbar status dot, and re-running
+    # the resolver per poll would re-log its warning every few seconds.
+    # compare=False: provenance is not part of the config's identity. Two
+    # instances with the same content ARE the same config whatever file they
+    # came from, and equality is what existing tests assert on.
+    config_path: Path | None = field(default=None, compare=False)
+    config_source: str = field(default="default", compare=False)  # env|default|explicit
+
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
-        config_path = path or DEFAULT_LLM_CONFIG_PATH
+        if path is not None:
+            config_path, source = path, "explicit"
+        else:
+            config_path, source = _resolve_llm_config_path()
         if not config_path.exists():
-            return cls()
+            return cls(config_path=config_path, config_source=source)
         try:
             with open(config_path) as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.warning("Could not parse %s: %s — using empty defaults",
                            config_path, e)
-            return cls()
+            return cls(config_path=config_path, config_source=source)
         return cls(
             llm_provider=str(data.get("llm_provider", "") or "").strip(),
             llm_model=str(data.get("llm_model", "") or "").strip(),
@@ -197,6 +239,8 @@ class LLMConfigFile:
             reranker_api_key=str(data.get("reranker_api_key", "") or "").strip(),
             reranker_batch_size=int(data.get("reranker_batch_size", 1) or 1),
             providers=_parse_providers(data.get("providers"), config_path),
+            config_path=config_path,
+            config_source=source,
         )
 
 
@@ -583,6 +627,10 @@ LLM_MODEL_ENV_VAR: str = "NORA_LLM_MODEL"
 LLM_TIMEOUT_ENV_VAR: str = "NORA_LLM_TIMEOUT"
 LLM_BASE_URL_ENV_VAR: str = "NORA_LLM_BASE_URL"
 LLM_API_KEY_ENV_VAR: str = "NORA_LLM_API_KEY"
+# Location of config/llm.json itself. Unlike the names above this does not
+# select a VALUE — it selects the FILE the values come from, so a deployment
+# can supply a roster that is not baked into the committed image.
+LLM_CONFIG_PATH_ENV_VAR: str = "NORA_LLM_CONFIG"
 
 
 def resolve_llm_provider(
@@ -753,6 +801,20 @@ def resolve_providers() -> list[LLMProviderEntry]:
     named endpoints, which is a file-shaped thing, not a flag.
     """
     return list(_llm_config().providers)
+
+
+def llm_config_provenance() -> tuple[str, str]:
+    """`(source, filename)` of the `llm.json` actually loaded.
+
+    Source is `"env"` when `NORA_LLM_CONFIG` supplied the path. Returns the
+    BASENAME only — the caller is `/api/health`, which is team-allowlisted, and
+    an absolute container path is not something a gated user should be handed.
+
+    Reads the cached config rather than re-resolving, so polling the endpoint
+    does not re-log the resolver's warning.
+    """
+    cfg = _llm_config()
+    return cfg.config_source, (cfg.config_path.name if cfg.config_path else "")
 
 
 def resolve_provider(provider_id: str | None) -> LLMProviderEntry | None:

@@ -1030,3 +1030,114 @@ def test_old_env_json_without_requirements_dir_loads(tmp_path):
     loaded = EnvironmentConfig.load_json(p)
     assert loaded.requirements_dir == ""
     assert loaded.input_root == tmp_path.resolve() / "input"
+
+
+# ---------------------------------------------------------------------------
+# NORA_LLM_CONFIG — deployable llm.json location (strand llm-roster-deploy, #18)
+# ---------------------------------------------------------------------------
+
+def _roster_json(provider_id: str) -> str:
+    import json
+    return json.dumps({
+        "providers": [{
+            "id": provider_id,
+            "name": f"{provider_id} endpoint",
+            "base_url": "http://example.invalid/v1",
+            "model": "test-model",
+        }],
+    })
+
+
+def test_llm_config_env_var_beats_default_path(monkeypatch, tmp_path):
+    """A deployment supplies its roster via NORA_LLM_CONFIG. Before this the
+    only readable location was the committed config/llm.json, which ships
+    without a roster (1a3575f) — so no deployment could configure one."""
+    from core.src.env import config as env_cfg
+    from core.src.env.config import LLM_CONFIG_PATH_ENV_VAR, LLMConfigFile
+
+    committed = tmp_path / "committed.json"
+    committed.write_text(_roster_json("from-default"))
+    deployed = tmp_path / "deployed.json"
+    deployed.write_text(_roster_json("from-env"))
+
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", committed)
+    monkeypatch.setenv(LLM_CONFIG_PATH_ENV_VAR, str(deployed))
+    env_cfg._reset_llm_config_cache()
+    try:
+        cfg = LLMConfigFile.load()
+        assert [p.id for p in cfg.providers] == ["from-env"]
+        assert cfg.config_source == "env"
+        assert cfg.config_path == deployed
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_llm_config_env_var_unset_leaves_behaviour_unchanged(monkeypatch, tmp_path):
+    """Unset must be byte-identical to today: the default path is read and
+    nothing is warned about. This is the case every existing deployment is in."""
+    from core.src.env import config as env_cfg
+    from core.src.env.config import LLM_CONFIG_PATH_ENV_VAR, LLMConfigFile
+
+    committed = tmp_path / "committed.json"
+    committed.write_text(_roster_json("from-default"))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", committed)
+    monkeypatch.delenv(LLM_CONFIG_PATH_ENV_VAR, raising=False)
+    env_cfg._reset_llm_config_cache()
+    try:
+        cfg = LLMConfigFile.load()
+        assert [p.id for p in cfg.providers] == ["from-default"]
+        assert cfg.config_source == "default"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_llm_config_env_var_missing_file_warns_and_falls_through(
+    monkeypatch, tmp_path, caplog,
+):
+    """A typo in NORA_LLM_CONFIG must not degrade silently to providers == [],
+    which is indistinguishable from "no roster configured". It warns loudly and
+    falls back to the default path — it does NOT raise, because a bad env var
+    must not take the whole app down."""
+    import logging
+
+    from core.src.env import config as env_cfg
+    from core.src.env.config import LLM_CONFIG_PATH_ENV_VAR, LLMConfigFile
+
+    committed = tmp_path / "committed.json"
+    committed.write_text(_roster_json("from-default"))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", committed)
+    monkeypatch.setenv(LLM_CONFIG_PATH_ENV_VAR, str(tmp_path / "typo.json"))
+    env_cfg._reset_llm_config_cache()
+    try:
+        with caplog.at_level(logging.WARNING, logger=env_cfg.logger.name):
+            cfg = LLMConfigFile.load()
+        # Fell through to the default rather than yielding an empty roster.
+        assert [p.id for p in cfg.providers] == ["from-default"]
+        assert cfg.config_source == "default"
+        warnings = [r.getMessage() for r in caplog.records]
+        assert any(LLM_CONFIG_PATH_ENV_VAR in m for m in warnings), (
+            f"no warning naming {LLM_CONFIG_PATH_ENV_VAR}: {warnings}"
+        )
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_llm_config_missing_default_path_stays_silent(monkeypatch, tmp_path, caplog):
+    """Contrast with the test above: a missing DEFAULT config/llm.json is the
+    normal no-roster case, not an error. Warning here would fire on every
+    deployment that never configures a roster."""
+    import logging
+
+    from core.src.env import config as env_cfg
+    from core.src.env.config import LLM_CONFIG_PATH_ENV_VAR, LLMConfigFile
+
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", tmp_path / "absent.json")
+    monkeypatch.delenv(LLM_CONFIG_PATH_ENV_VAR, raising=False)
+    env_cfg._reset_llm_config_cache()
+    try:
+        with caplog.at_level(logging.WARNING, logger=env_cfg.logger.name):
+            cfg = LLMConfigFile.load()
+        assert cfg.providers == []
+        assert caplog.records == []
+    finally:
+        env_cfg._reset_llm_config_cache()
