@@ -613,6 +613,26 @@ function askRecordHistory(question, pendingId) {
     form.requestSubmit();
   });
   askRenderRecents();
+
+  /*
+   * Hand-off from the History page's Re-run button, which cannot submit here
+   * itself. It stashes the question under this key and navigates; we pick it
+   * up, clear it, and ask. Cleared BEFORE submitting so a reload does not
+   * silently re-ask — the key is a one-shot baton, not state.
+   *
+   * localStorage rather than a ?q= param on purpose: a question can quote
+   * proprietary requirement text, and a URL lands in access logs.
+   */
+  const ASK_PREFILL_KEY = "nora-ask-prefill";
+  let handoff = null;
+  try {
+    handoff = localStorage.getItem(ASK_PREFILL_KEY);
+    if (handoff) localStorage.removeItem(ASK_PREFILL_KEY);
+  } catch (e) { /* blocked storage — nothing to hand off */ }
+  if (handoff && handoff.trim()) {
+    box.value = handoff;
+    form.requestSubmit();
+  }
 })();
 
 /*
