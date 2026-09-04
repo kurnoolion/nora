@@ -269,13 +269,22 @@ def _build_llm_from_env_or_default(
     configured, which `config_schema.py` says on the fields themselves.
 
     `mode` is the asker's Fast/Think choice:
-      * "fast"  -> `reasoning_effort: "none"` (skip thinking)
-      * "think" -> send NO reasoning field, so the model does whatever the
-                   deployment already does. We never invent an effort level
-                   on its behalf.
-    A mode on a provider that declares `supports_reasoning_control: false` is
-    ignored with a warning — the field would be silently dropped anyway, and
-    pretending otherwise would let the UI lie about what was sent.
+      * "fast"  -> suppress thinking, in whichever wire form the selected
+                   endpoint accepts: `reasoning_effort: "none"` or
+                   `chat_template_kwargs: {"enable_thinking": false}`. The
+                   entry declares which (`reasoning_control`); there is no
+                   default that works everywhere, because the two endpoints on
+                   the internal roster reject each other's form.
+      * "think" -> send NO reasoning field at all, whatever the mechanism, so
+                   the model does whatever the deployment already does. We
+                   never invent an effort level on its behalf.
+    The asker still sees two states — Fast and Think. Only the wire form
+    varies, and it varies per endpoint, not per user choice (D-216 rejected
+    exposing effort levels on the Ask page).
+
+    A mode on a provider that declares no reasoning mechanism is ignored with
+    a warning — the field would be silently dropped anyway, and pretending
+    otherwise would let the UI lie about what was sent.
 
     A roster-built provider IS refusal-wrapped when the roster names a
     `fallback_provider`. This reverses the original design, which left it
@@ -317,9 +326,10 @@ def _build_llm_from_env_or_default(
         timeout = entry.timeout or DEFAULT_LLM_TIMEOUT
         logger.info(
             "Web LLM resolved: provider=%s (%s) model=%s mode=%s reasoning=%s "
-            "timeout=%ds",
+            "via=%s timeout=%ds",
             entry.id, entry.name, entry.model, mode or entry.default_mode,
-            reasoning or "<none sent>", timeout,
+            reasoning or "<none sent>",
+            entry.reasoning_mechanism or "<no control>", timeout,
         )
         provider = OpenAICompatibleProvider(
             model=entry.model,
@@ -327,17 +337,26 @@ def _build_llm_from_env_or_default(
             api_key=entry.api_key or None,
             timeout=timeout,
             reasoning=reasoning,
+            reasoning_control=entry.reasoning_mechanism,
         )
         # Without this the roster path loses refusal coverage that the
         # no-roster chain gets for free via create_llm_provider — so merely
         # configuring a roster would silently remove it from Ask.
         fb_entry = resolve_fallback_provider()
         if fb_entry is not None and fb_entry.id != entry.id:
+            # The fallback resolves the mode through its OWN entry: two
+            # endpoints mean two wire contracts, so `entry`'s mechanism would
+            # be wrong here as often as it is right. Before this it was passed
+            # no reasoning at all, so a Fast question that got rerouted was
+            # answered by a thinking model — the reroute is disclosed on the
+            # answer card, but the mode silently was not honoured.
             fallback = OpenAICompatibleProvider(
                 model=fb_entry.model,
                 base_url=fb_entry.base_url,
                 api_key=fb_entry.api_key or None,
                 timeout=fb_entry.timeout or DEFAULT_LLM_TIMEOUT,
+                reasoning=_reasoning_for(fb_entry, mode),
+                reasoning_control=fb_entry.reasoning_mechanism,
             )
             wrapped = maybe_wrap_with_refusal_fallback(
                 provider, timeout=timeout, fallback=fallback,
@@ -406,15 +425,20 @@ def _build_llm_from_env_or_default(
     return ctx.create_llm_provider(require_real=False)
 
 def _reasoning_for(entry, mode: str | None) -> str | None:
-    """Map the asker's Fast/Think choice onto a reasoning_effort value.
+    """Map the asker's Fast/Think choice onto a reasoning effort VALUE.
+
+    The value is only half the answer — `entry.reasoning_mechanism` says which
+    wire field carries it. Both are needed to build a provider; this function
+    deliberately owns only the mode mapping, so the Fast/Think semantics stay
+    in one place while the per-endpoint wire form stays in the entry.
 
     Falls back to the entry's own `default_mode` when the asker expressed
     no preference, so a provider that should think by default does.
     """
-    if not entry.supports_reasoning_control:
+    if not entry.reasoning_mechanism:
         if mode:
             logger.warning(
-                "Provider %r declares no reasoning support — ignoring "
+                "Provider %r declares no reasoning mechanism — ignoring "
                 "mode=%r.", entry.id, mode,
             )
         return None

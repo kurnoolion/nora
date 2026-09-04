@@ -66,6 +66,10 @@ class LLMProviderEntry:
     accept `reasoning_effort` and silently ignore it, which is
     indistinguishable from honouring it.
 
+    `reasoning_control` names the WIRE MECHANISM the endpoint accepts, which
+    is a separate question from whether it honours a knob at all. Two endpoints
+    on the same roster answer it differently — see `reasoning_mechanism`.
+
     `api_key_env` names an environment variable; keys are never written in
     this committed file.
     """
@@ -76,6 +80,16 @@ class LLMProviderEntry:
     model: str
     api_key_env: str = ""
     supports_reasoning_control: bool = False
+    # How to say "don't think" ON THE WIRE for this endpoint: "reasoning_effort"
+    # (the OpenAI-standard field) or "chat_template_kwargs" (the
+    # `{"enable_thinking": false}` template kwarg). Empty defers to
+    # `supports_reasoning_control` — see `reasoning_mechanism`. Declared per
+    # entry because it genuinely varies per endpoint: a real vLLM server
+    # rejects `reasoning_effort` outright ("Extra inputs are not permitted"),
+    # and a non-vLLM OpenAI-compatible server can accept the field but reject
+    # the value "none" (its enum is low|medium|high, none of which skip
+    # thinking). One roster, two contracts.
+    reasoning_control: str = ""
     default_mode: str = "think"
     # 0 = unset -> DEFAULT_LLM_TIMEOUT. Per-entry because a 130B endpoint and a
     # small one do not want the same ceiling. NOT resolved through
@@ -85,8 +99,39 @@ class LLMProviderEntry:
     timeout: int = 0
 
     @property
+    def reasoning_mechanism(self) -> str:
+        """The wire mechanism to use, or "" when this endpoint honours none.
+
+        An explicit `reasoning_control` wins and implies support — declaring a
+        mechanism is a stronger statement than the boolean, so it does not also
+        need `supports_reasoning_control: true`.
+
+        With `reasoning_control` unset we fall back to "reasoning_effort" for a
+        roster that declares only the boolean. That is deliberate rather than an
+        oversight: `reasoning_effort` is the single mechanism those rosters could
+        have meant, since it was the only one this code ever sent. It is also the
+        wrong form for both endpoints on the current internal roster, which is
+        why the field exists — old configs keep their original meaning, and a
+        deployment fixes itself by naming the mechanism.
+        """
+        declared = (self.reasoning_control or "").strip().lower()
+        if declared and declared != "none":
+            return declared
+        if declared == "none":
+            return ""
+        return "reasoning_effort" if self.supports_reasoning_control else ""
+
+    @property
     def api_key(self) -> str:
         return os.getenv(self.api_key_env, "") if self.api_key_env else ""
+
+
+# Wire mechanisms a roster entry may declare for "don't think". Validated at
+# load time so a typo degrades to "no control" with a warning instead of
+# silently sending nothing — the failure a declared-not-detected design is
+# most exposed to. "none" is accepted as an explicit "this endpoint honours
+# nothing", which is why it is not simply the empty string.
+REASONING_CONTROLS = ("", "none", "reasoning_effort", "chat_template_kwargs")
 
 
 def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
@@ -121,6 +166,13 @@ def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
                 "%s: providers[%d] default_mode %r is not fast/think — "
                 "using think", config_path, i, mode)
             mode = "think"
+        control = str(item.get("reasoning_control", "") or "").strip().lower()
+        if control not in REASONING_CONTROLS:
+            logger.warning(
+                "%s: providers[%d] reasoning_control %r is not one of %s — "
+                "treating as unset", config_path, i, control,
+                "/".join(c or "<empty>" for c in REASONING_CONTROLS))
+            control = ""
         seen.add(pid)
         out.append(LLMProviderEntry(
             id=pid,
@@ -129,6 +181,7 @@ def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
             model=model,
             api_key_env=str(item.get("api_key_env", "") or "").strip(),
             supports_reasoning_control=bool(item.get("supports_reasoning_control", False)),
+            reasoning_control=control,
             default_mode=mode,
             timeout=int(item.get("timeout", 0) or 0),
         ))
