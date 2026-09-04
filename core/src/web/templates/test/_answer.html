@@ -127,8 +127,10 @@
         <i class="bi bi-tools me-1"></i>Engineering details
       </button>
       {% if row_id %}
-      {# Share this stored answer. askCopyShare lives in test/index.html — this
-         partial is injected with innerHTML, which never runs inline scripts. #}
+      {# Share this stored answer. askCopyShare lives in static/js/app.js,
+         loaded by base.html on every page — this partial is injected with
+         innerHTML, which never runs inline scripts, so the handler cannot
+         live here. #}
       <button type="button"
               class="btn btn-sm btn-outline-primary py-0"
               onclick="askCopyShare(this, '{{ root_path }}/ask/s/{{ row_id }}')"

@@ -83,6 +83,28 @@
            engineering knobs (retrieval lanes, correction label) that collapse.
            Collapsed inputs are still submitted — collapse hides, not disables. #}
         <div class="d-flex align-items-center justify-content-end gap-2 flex-wrap">
+          {# Recents + Re-run (strand ask-rerun). Left-aligned via me-auto so
+             Ask stays the rightmost primary action. Both start hidden and are
+             revealed by askRenderRecents() only when history is non-empty —
+             a first-time user sees no dead controls. Choosing a recent
+             question LOADS it into the box rather than asking, so it can be
+             edited first; Re-run last submits immediately, which is the
+             tight alpha loop: change a knob, re-ask the same question. #}
+          <div class="dropdown me-auto d-none" id="ask-recents-wrap">
+            <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                    type="button" id="ask-recents-btn"
+                    data-bs-toggle="dropdown" aria-expanded="false"
+                    title="Load a recent question back into the box">
+              <i class="bi bi-clock-history me-1"></i>Recent
+            </button>
+            <ul class="dropdown-menu" id="ask-recents-menu"
+                style="max-width: 34rem"></ul>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary d-none" type="button"
+                  id="ask-rerun-last"
+                  title="Ask the most recent question again, with the current settings">
+            <i class="bi bi-arrow-repeat me-1"></i>Re-run last
+          </button>
           <button class="btn btn-sm btn-outline-secondary" type="button"
                   data-bs-toggle="collapse" data-bs-target="#ask-options"
                   aria-expanded="false" aria-controls="ask-options">
@@ -321,6 +343,12 @@
       return;
     }
 
+    // Recorded here, not at done-time: both guards above have passed, so this
+    // ask is really going out. An ask that then fails still shows up in
+    // recents, which is the whole point of re-running after a fix.
+    const historyId = askBeginHistory(askedQuestion);
+    askRenderRecents();          // the question is available to re-run at once
+
     setBusy(true);
     answerEl.innerHTML = "";
     showProgressFor(lanes);
@@ -336,6 +364,7 @@
         + 'Stream connection failed: ' + (err.message || err) + '</div>';
       hideProgress();
       setBusy(false);
+      askFinishHistory(historyId);   // early return skips the finally below
       return;
     }
 
@@ -381,7 +410,7 @@
             // the bubble would sit on "Loading…" with no request ever sent.
             if (window.htmx) window.htmx.process(answerEl);
             hideProgress();
-            askRecordHistory(askedQuestion);
+            askRecordHistory(askedQuestion, historyId);
           }
         }
       }
@@ -391,6 +420,10 @@
       hideProgress();
     } finally {
       setBusy(false);
+      // No-op on the success path (phase 2 already consumed the entry); on a
+      // stream failure it drops the marker from the entry that stays pathless.
+      askFinishHistory(historyId);
+      askRenderRecents();
     }
   });
 })();
@@ -401,19 +434,9 @@
  * executes inline <script> tags. `path` is root-relative; the origin is added
  * so the copied text is a complete, pasteable URL.
  */
-function askCopyShare(btn, path) {
-  const url = window.location.origin + path;
-  const done = () => {
-    const orig = btn.innerHTML;
-    btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Link copied';
-    setTimeout(() => { btn.innerHTML = orig; }, 1500);
-  };
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(url).then(done, () => window.prompt("Copy this link:", url));
-  } else {
-    window.prompt("Copy this link:", url);
-  }
-}
+// askCopyShare now lives in static/js/app.js, which every page loads — the
+// same logic was duplicated here and in history.html, window.prompt fallback
+// included, so a fix could land in one and not the other.
 
 /*
  * Ask history — a per-browser index over the share links each ask already
@@ -424,8 +447,19 @@ function askCopyShare(btn, path) {
  *
  * One entry per lane answer: a two-lane ask records two badged entries, which
  * is identical to per-question for SIRA-only users and gives engineers the
- * lane-compare workflow. Answers with no stored row carry no data-share-path,
- * so nothing is recorded — correct, as there would be no link to open.
+ * lane-compare workflow.
+ *
+ * Recording is TWO-PHASE (strand ask-rerun). The question is written at SUBMIT
+ * time, before any answer exists, so an ask that errors or produces no stored
+ * row still enters history — that is the question a user most wants to re-run
+ * after a fix, and the previous answer-time-only recording dropped it. When an
+ * answer does arrive, the pending entry is REPLACED by its per-lane entries
+ * rather than a second set being unshifted; without that the two phases would
+ * double-record every ask.
+ *
+ * Consequence: an entry may have no `path`. The history page renders those
+ * unlinked — see history.html, which would otherwise throw on
+ * `entry.path.replace`.
  */
 const ASK_HISTORY_KEY = "nora-ask-history";
 
@@ -444,21 +478,162 @@ function askWriteHistory(entries) {
   } catch (e) { /* quota/blocked — history is best-effort, never break the ask */ }
 }
 
-function askRecordHistory(question, root) {
-  const found = document.querySelectorAll("#test-answer [data-share-path]");
-  if (!found.length) return;
+/*
+ * Phase 1 — called at submit. Records the question with no path yet and
+ * returns a pending id, so phase 2 can find this exact entry even if another
+ * ask has unshifted ahead of it.
+ */
+function askBeginHistory(question) {
+  const pendingId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const entries = askReadHistory();
-  const ts = new Date().toISOString();
-  found.forEach((el) => {
-    entries.unshift({
-      q: question,
-      path: el.getAttribute("data-share-path"),
-      lane: el.getAttribute("data-lane") || "",
-      ts: ts,
-    });
+  entries.unshift({
+    q: question,
+    path: "",
+    lane: "",
+    ts: new Date().toISOString(),
+    pending: pendingId,
   });
   askWriteHistory(entries);
+  return pendingId;
 }
+
+/*
+ * Recents control (strand ask-rerun). Deduped by question text, newest wins,
+ * so a two-lane ask shows once and repeated verification of one question does
+ * not crowd the list. The history page keeps every per-lane row — those give
+ * engineers the lane-compare view; the dedupe is display-only here.
+ *
+ * The store stays unlimited; this cap is a UI choice, not a retention policy.
+ */
+const ASK_RECENTS_SHOWN = 20;
+
+function askRecentQuestions() {
+  const seen = new Set();
+  const out = [];
+  for (const e of askReadHistory()) {
+    const q = e && typeof e.q === "string" ? e.q.trim() : "";
+    if (!q || seen.has(q)) continue;
+    seen.add(q);
+    out.push(q);
+    if (out.length >= ASK_RECENTS_SHOWN) break;
+  }
+  return out;
+}
+
+function askRenderRecents() {
+  const wrap = document.getElementById("ask-recents-wrap");
+  const rerun = document.getElementById("ask-rerun-last");
+  const menu = document.getElementById("ask-recents-menu");
+  if (!wrap || !rerun || !menu) return;
+
+  const questions = askRecentQuestions();
+  wrap.classList.toggle("d-none", questions.length === 0);
+  rerun.classList.toggle("d-none", questions.length === 0);
+
+  menu.textContent = "";
+  questions.forEach((q) => {
+    const li = document.createElement("li");
+    const a = document.createElement("button");
+    a.type = "button";
+    a.className = "dropdown-item text-truncate";
+    // textContent, never innerHTML: these strings are user-authored and come
+    // back out of localStorage — the same rule history.html's esc() enforces.
+    a.textContent = q;
+    a.title = q;
+    a.addEventListener("click", () => {
+      const box = document.getElementById("test-question");
+      if (!box) return;
+      box.value = q;
+      box.focus();
+    });
+    li.appendChild(a);
+    menu.appendChild(li);
+  });
+}
+
+/*
+ * Drops the internal pending marker if phase 2 never ran — a stream that fails
+ * before "done" would otherwise leave it on the entry forever. Idempotent: on
+ * the success path phase 2 has already removed the entry it was on.
+ */
+function askFinishHistory(pendingId) {
+  const entries = askReadHistory();
+  const at = entries.findIndex((e) => e && e.pending === pendingId);
+  if (at === -1) return;
+  delete entries[at].pending;
+  askWriteHistory(entries);
+}
+
+/*
+ * Phase 2 — called when an answer arrives. Replaces the pending entry with one
+ * entry per lane answer. An ask that never reaches "done" (stream failure) or
+ * that mints no stored row keeps its pending entry, pathless: the question was
+ * still asked, and re-running it is the point.
+ */
+function askRecordHistory(question, pendingId) {
+  const entries = askReadHistory();
+  const at = entries.findIndex((e) => e && e.pending === pendingId);
+  if (at === -1) return;                       // cleared mid-ask; nothing to enrich
+  const found = document.querySelectorAll("#test-answer [data-share-path]");
+  if (!found.length) {
+    delete entries[at].pending;                // keep it, unlinked
+    askWriteHistory(entries);
+    return;
+  }
+  const ts = entries[at].ts;
+  const rows = Array.from(found).map((el) => ({
+    q: question,
+    path: el.getAttribute("data-share-path"),
+    lane: el.getAttribute("data-lane") || "",
+    ts: ts,
+  }));
+  entries.splice(at, 1, ...rows);
+  askWriteHistory(entries);
+}
+
+/*
+ * Re-run last. Sets the question and submits through the form's own path, so
+ * every existing behaviour applies unchanged: the empty/lane guards, the
+ * sticky-fields write, the streaming handler, history recording, and the
+ * sidebar collapse-on-ask from strand collapsible-sidebar. A parallel ask
+ * path would have to be kept in step with all of that.
+ *
+ * Uses the CURRENT form settings, not the ones the question was first asked
+ * with — the changed knob is the whole point of re-running.
+ */
+(function () {
+  const btn = document.getElementById("ask-rerun-last");
+  const form = document.getElementById("ask-form");
+  const box = document.getElementById("test-question");
+  if (!btn || !form || !box) return;
+  btn.addEventListener("click", () => {
+    const last = askRecentQuestions()[0];
+    if (!last) return;
+    box.value = last;
+    form.requestSubmit();
+  });
+  askRenderRecents();
+
+  /*
+   * Hand-off from the History page's Re-run button, which cannot submit here
+   * itself. It stashes the question under this key and navigates; we pick it
+   * up, clear it, and ask. Cleared BEFORE submitting so a reload does not
+   * silently re-ask — the key is a one-shot baton, not state.
+   *
+   * localStorage rather than a ?q= param on purpose: a question can quote
+   * proprietary requirement text, and a URL lands in access logs.
+   */
+  const ASK_PREFILL_KEY = "nora-ask-prefill";
+  let handoff = null;
+  try {
+    handoff = localStorage.getItem(ASK_PREFILL_KEY);
+    if (handoff) localStorage.removeItem(ASK_PREFILL_KEY);
+  } catch (e) { /* blocked storage — nothing to hand off */ }
+  if (handoff && handoff.trim()) {
+    box.value = handoff;
+    form.requestSubmit();
+  }
+})();
 
 /*
  * Sticky fields — the name (and the now-collapsed lane selection + correction
