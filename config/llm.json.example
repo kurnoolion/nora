@@ -24,9 +24,10 @@
   "default_provider": "dgx-130b",
   "fallback_provider": "internal-14b",
 
-  "_comment_providers_fields": "id: stable slug, recorded on every answer as llm_provider_id. name: what the user sees — say what the infrastructure IS ('130B — DGX'), not its role ('primary'), because the role means nothing to the person asking. base_url: include /v1. model: the model tag on that endpoint. api_key_env: the NAME of an env var holding the key — never put a key in this committed file. supports_reasoning_control: see below. default_mode: fast | think, applied when the asker expresses no preference. timeout: per-request seconds for THIS endpoint; omit or 0 to use the built-in default (600) — a 130B endpoint and a small one rarely want the same ceiling.",
+  "_comment_providers_fields": "id: stable slug, recorded on every answer as llm_provider_id. name: what the user sees — say what the infrastructure IS ('130B — DGX'), not its role ('primary'), because the role means nothing to the person asking. base_url: include /v1. model: the model tag on that endpoint. api_key_env: the NAME of an env var holding the key — never put a key in this committed file. supports_reasoning_control: see below. reasoning_control: HOW to say \"don't think\" on the wire for this endpoint — \"chat_template_kwargs\" sends {\"enable_thinking\": false}, \"reasoning_effort\" sends the OpenAI-standard reasoning_effort field, \"none\" says the endpoint honours neither. Omit it and a legacy roster keeps its old meaning (reasoning_effort when supports_reasoning_control is true). There is no default that works everywhere — see below. default_mode: fast | think, applied when the asker expresses no preference. timeout: per-request seconds for THIS endpoint; omit or 0 to use the built-in default (600) — a 130B endpoint and a small one rarely want the same ceiling.",
   "_comment_supports_reasoning_control": "Whether the ENDPOINT HONOURS THE KNOB — not whether the model reasons. These are independent: a thinking model with no exposed control is false, because nothing we send changes how much it thinks. Set it false and the toggle renders as 'Not supported' instead of offering a choice that would do nothing. It cannot be auto-detected: no OpenAI-compatible endpoint advertises the capability, and a probe only catches outright rejection — a server can accept reasoning_effort and silently ignore it. Verify with: python -m core.src.llm.llm_debug --complete --text 'ping'",
-  "_comment_modes": "fast sends reasoning_effort='none' (skip thinking). think sends NO reasoning field, so the model does whatever the deployment already configured — we never assert an effort level on its behalf.",
+  "_comment_reasoning_control": "WHICH WIRE FORM the endpoint accepts, which is a separate question from whether it honours anything. The obvious assumption — that vLLM takes reasoning_effort and maps it to enable_thinking itself, so one form serves every OpenAI-compatible server — is FALSE, and was measured false on both endpoints of the internal roster: a real vLLM server rejected reasoning_effort outright (400 extra_forbidden, 'Extra inputs are not permitted'), and a non-vLLM OpenAI-compatible server accepted the field but rejected the value 'none' (400 literal_error; its enum is low|medium|high, and low still thinks). chat_template_kwargs {\"enable_thinking\": false} returned 200 and a thinking-free answer on BOTH. So the mechanism is declared per entry. Like supports_reasoning_control it is declared, never probed — for the same reason: a server can accept a field and silently ignore it.",
+  "_comment_modes": "fast suppresses thinking using this entry's reasoning_control form. think sends NOTHING — no reasoning_effort, no chat_template_kwargs — so the model does whatever the deployment already configured; we never assert an effort level on its behalf. The Ask page shows exactly these two states; effort levels (low/medium/high) are deliberately NOT exposed there (D-216) and stay in golden_cli --reasoning.",
   "providers": [
     {
       "id": "dgx-130b",
@@ -35,6 +36,7 @@
       "model": "qwen3-130b",
       "api_key_env": "NORA_LLM_DGX_KEY",
       "supports_reasoning_control": true,
+      "reasoning_control": "chat_template_kwargs",
       "default_mode": "fast",
       "timeout": 900
     },
@@ -45,6 +47,7 @@
       "model": "internal-14b",
       "api_key_env": "NORA_LLM_API_KEY",
       "supports_reasoning_control": false,
+      "reasoning_control": "none",
       "default_mode": "think"
     }
   ]
