@@ -116,10 +116,30 @@ class OpenAICompatibleProvider:
         extra_headers: Optional headers merged into every request (e.g. OpenRouter's
             HTTP-Referer / X-Title for analytics).
         reasoning: Reasoning effort for models that support it — one of
-            "none" / "low" / "medium" / "high". Sent as the OpenAI-standard
-            `reasoning_effort` field; vLLM maps it to the model's
-            `enable_thinking` chat-template kwarg ("none" disables thinking).
-            None omits the field entirely, which is the pre-existing behaviour.
+            "none" / "low" / "medium" / "high". None omits the field entirely,
+            which is the pre-existing behaviour.
+        reasoning_control: How to put `reasoning` ON THE WIRE for this
+            endpoint — "reasoning_effort" (the OpenAI-standard field) or
+            "chat_template_kwargs" (`{"enable_thinking": false}`). Empty
+            defaults to "reasoning_effort". There is no correct default across
+            endpoints, which is why the caller declares it per roster entry.
+
+    A NOTE ON THE MECHANISM, because the obvious assumption is wrong: this
+    code used to state that vLLM accepts `reasoning_effort` and injects the
+    model's `enable_thinking` chat-template kwarg itself, so one wire form
+    served every OpenAI-compatible server. Probing the two endpoints on the
+    internal roster disproved that on BOTH:
+
+      * a real vLLM server rejected `reasoning_effort` outright — HTTP 400,
+        `extra_forbidden`, "Extra inputs are not permitted";
+      * a non-vLLM OpenAI-compatible server accepted the field but rejected
+        the value — HTTP 400, `literal_error`, its enum being low|medium|high,
+        and `low` still thinks, so no accepted value skips thinking.
+
+    `chat_template_kwargs: {"enable_thinking": false}` returned 200 and a
+    thinking-free answer on both. Hence: mechanism is declared per endpoint,
+    never assumed, and never probed (a server can accept a field and silently
+    ignore it, which is indistinguishable from honouring it).
     """
 
     def __init__(
@@ -130,6 +150,7 @@ class OpenAICompatibleProvider:
         timeout: int = _DEFAULT_TIMEOUT,
         extra_headers: dict[str, str] | None = None,
         reasoning: str | None = None,
+        reasoning_control: str = "",
     ) -> None:
         # Constructor args win over env vars; env vars are fallback only.
         resolved_model = model or os.environ.get(ENV_MODEL)
@@ -156,12 +177,16 @@ class OpenAICompatibleProvider:
         self._timeout = timeout
         self._extra_headers = dict(extra_headers or {})
         self._reasoning = (reasoning or "").strip() or None
+        self._reasoning_control = (
+            (reasoning_control or "").strip().lower() or "reasoning_effort"
+        )
         self._call_count = 0
         self._last_call_stats: dict = {}
 
         logger.info(
             f"OpenAICompatibleProvider ready: model={self._model}, "
             f"base_url={self._base_url}, reasoning={self._reasoning or '<default>'}"
+            f" via {self._reasoning_control}"
         )
 
     def complete(
@@ -185,14 +210,19 @@ class OpenAICompatibleProvider:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # Reasoning effort, when the caller asked for one. vLLM accepts the
-        # OpenAI-standard field and injects the model's `enable_thinking`
-        # chat-template kwarg itself ("none" -> false, low/medium/high -> true),
-        # so no per-model mapping table is needed here. Older servers that
-        # reject `reasoning_effort` take the equivalent:
-        #     payload["chat_template_kwargs"] = {"enable_thinking": False}
+        # Reasoning control, when the caller asked for one, in whichever wire
+        # form THIS endpoint accepts (see the class docstring — the two forms
+        # are not interchangeable and neither works everywhere).
         if self._reasoning:
-            payload["reasoning_effort"] = self._reasoning
+            if self._reasoning_control == "chat_template_kwargs":
+                # Only ever emitted to SUPPRESS thinking. There is deliberately
+                # no `enable_thinking: True` branch: "think" means send nothing
+                # and let the deployment do what it is configured to do, so we
+                # never assert an effort level on the model's behalf (D-216).
+                if self._reasoning == "none":
+                    payload["chat_template_kwargs"] = {"enable_thinking": False}
+            else:
+                payload["reasoning_effort"] = self._reasoning
 
         body = json.dumps(payload).encode("utf-8")
         headers = {
