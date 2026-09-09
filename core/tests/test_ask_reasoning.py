@@ -4,7 +4,9 @@ Covers the two seams the feature adds:
   - `QueryPipeline.query(synthesizer=...)` — a per-call synthesizer override,
     so a request can vary the LLM without rebuilding the cached pipeline.
   - `_form_mode` / `_form_provider` — what the Ask form is allowed to send.
-  - `_reasoning_for` — how a Fast/Think choice becomes a wire value.
+  - `_reasoning_for` — how a Fast/Think choice becomes a wire VALUE.
+  - `LLMProviderEntry.reasoning_mechanism` + the built request payload — how
+    that value reaches the wire, which differs per endpoint.
 
 No network: the store, embedder and synthesizers are all doubles.
 """
@@ -262,6 +264,13 @@ class TestExampleConfigStaysValid:
         assert [p.id for p in cfg.providers] == ["dgx-130b", "internal-14b"]
         assert cfg.providers[0].supports_reasoning_control is True
         assert cfg.providers[1].supports_reasoning_control is False
+        # The example only teaches the per-entry point if its two entries
+        # really do declare different mechanisms. `test_it_documents_every_
+        # entry_field` above is generative over the dataclass, so it sees that
+        # the key is present but cannot tell a real mechanism from a typo —
+        # this is where example VALUES are pinned.
+        assert cfg.providers[0].reasoning_mechanism == "chat_template_kwargs"
+        assert cfg.providers[1].reasoning_mechanism == ""
 
     def test_it_documents_every_entry_field(self):
         """A field added to LLMProviderEntry must reach the example, or the
@@ -665,3 +674,160 @@ class TestCurationBypassesRoster:
             assert _build_llm_from_env_or_default(provider_id="").model == "roster-model"
         finally:
             cfg._reset_llm_config_cache()
+
+
+class TestReasoningMechanism:
+    """Which wire form an entry declares. The boolean says whether the endpoint
+    honours anything; the mechanism says how to say it. They are separate
+    because the two endpoints on the internal roster honour a knob and still
+    reject each other's field."""
+
+    def _entry(self, **kw):
+        from core.src.env.config import LLMProviderEntry
+        return LLMProviderEntry(id="p", name="P", base_url="u", model="m", **kw)
+
+    def test_explicit_control_wins_and_implies_support(self):
+        """Declaring a mechanism is the stronger statement, so it does not also
+        need the boolean — requiring both would be a trap that silently
+        disables the control."""
+        e = self._entry(reasoning_control="chat_template_kwargs")
+        assert e.supports_reasoning_control is False
+        assert e.reasoning_mechanism == "chat_template_kwargs"
+
+    def test_legacy_boolean_alone_means_reasoning_effort(self):
+        """A roster written before the field existed could only have meant
+        `reasoning_effort` — it was the only form this code ever sent."""
+        assert self._entry(supports_reasoning_control=True).reasoning_mechanism == (
+            "reasoning_effort"
+        )
+
+    def test_no_declaration_at_all_means_no_control(self):
+        assert self._entry().reasoning_mechanism == ""
+
+    def test_explicit_none_overrides_the_legacy_boolean(self):
+        """"none" has to be distinguishable from "unset", or an endpoint that
+        honours nothing could not say so without also clearing the boolean."""
+        e = self._entry(supports_reasoning_control=True, reasoning_control="none")
+        assert e.reasoning_mechanism == ""
+
+    def test_unknown_mechanism_is_rejected_at_load(self, tmp_path):
+        """A typo degrades to "no control" with a warning rather than sending
+        an unknown key — declared-not-detected is only safe if the declaration
+        is validated."""
+        import json
+        from core.src.env.config import LLMConfigFile
+
+        path = tmp_path / "llm.json"
+        path.write_text(json.dumps({"providers": [{
+            "id": "p", "name": "P", "base_url": "u", "model": "m",
+            "supports_reasoning_control": True,
+            "reasoning_control": "enable_thinking",   # not a real mechanism
+        }]}))
+        entry = LLMConfigFile.load(path).providers[0]
+        assert entry.reasoning_control == ""
+        assert entry.reasoning_mechanism == "reasoning_effort"  # falls back to the bool
+
+
+class TestModeReachesTheWire:
+    """The end-to-end shape: a Fast/Think choice plus an entry's declared
+    mechanism produce a specific request body. `_reasoning_for` alone no longer
+    determines this — it returns the value, the entry chooses the field."""
+
+    def _payload_for(self, mode, **entry_kw):
+        import json as _json
+        from unittest.mock import patch
+
+        from core.src.env.config import LLMProviderEntry
+        from core.src.llm.openai_provider import OpenAICompatibleProvider
+        from core.src.web.routes.query import _reasoning_for
+
+        entry = LLMProviderEntry(
+            id="p", name="P", base_url="https://x.test/v1", model="m", **entry_kw
+        )
+        provider = OpenAICompatibleProvider(
+            model=entry.model,
+            base_url=entry.base_url,
+            reasoning=_reasoning_for(entry, mode),
+            reasoning_control=entry.reasoning_mechanism,
+        )
+        seen = {}
+
+        class _Resp:
+            status = 200
+
+            def read(self, size=-1):
+                return _json.dumps({
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                }).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def _fake_urlopen(req, timeout=None):
+            seen.update(_json.loads(req.data))
+            return _Resp()
+
+        with patch("urllib.request.urlopen", _fake_urlopen):
+            provider.complete("q")
+        return seen
+
+    def test_fast_on_a_chat_template_endpoint(self):
+        """The form that was measured working on BOTH internal endpoints."""
+        p = self._payload_for("fast", reasoning_control="chat_template_kwargs")
+        assert p["chat_template_kwargs"] == {"enable_thinking": False}
+        assert "reasoning_effort" not in p
+
+    def test_fast_on_a_reasoning_effort_endpoint(self):
+        p = self._payload_for("fast", reasoning_control="reasoning_effort")
+        assert p["reasoning_effort"] == "none"
+        assert "chat_template_kwargs" not in p
+
+    def test_think_sends_neither_field_whatever_the_mechanism(self):
+        """Think means "let the deployment decide" — asserting an effort level
+        on the model's behalf is exactly what D-216 rejected."""
+        for mech in ("chat_template_kwargs", "reasoning_effort"):
+            p = self._payload_for("think", reasoning_control=mech)
+            assert "chat_template_kwargs" not in p
+            assert "reasoning_effort" not in p
+
+    def test_endpoint_honouring_nothing_sends_neither_field(self):
+        p = self._payload_for("fast")
+        assert "chat_template_kwargs" not in p
+        assert "reasoning_effort" not in p
+
+    def test_default_mode_reaches_the_wire_when_the_asker_is_silent(self):
+        p = self._payload_for(
+            "", reasoning_control="chat_template_kwargs", default_mode="fast",
+        )
+        assert p["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+class TestFallbackKeepsItsOwnMechanism:
+    """A refusal reroute goes to a DIFFERENT box. Sending the primary's wire
+    form there is a 400 on the one path that exists to rescue a failed
+    answer — and sending nothing silently drops the asker's Fast choice."""
+
+    def _entries(self):
+        from core.src.env.config import LLMProviderEntry
+        primary = LLMProviderEntry(
+            id="a", name="A", base_url="u", model="m",
+            reasoning_control="reasoning_effort",
+        )
+        fallback = LLMProviderEntry(
+            id="b", name="B", base_url="u", model="m",
+            reasoning_control="chat_template_kwargs",
+        )
+        return primary, fallback
+
+    def test_the_two_entries_resolve_independently(self):
+        primary, fallback = self._entries()
+        assert primary.reasoning_mechanism == "reasoning_effort"
+        assert fallback.reasoning_mechanism == "chat_template_kwargs"
+
+    def test_fast_is_carried_to_the_fallback_not_dropped(self):
+        from core.src.web.routes.query import _reasoning_for
+        _, fallback = self._entries()
+        assert _reasoning_for(fallback, "fast") == "none"
