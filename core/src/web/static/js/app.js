@@ -250,3 +250,87 @@ function refreshStatus() {
 
     syncButton();
 })();
+
+
+/*
+ * Share-link copy (strand ask-rerun, task: Edge dialog).
+ *
+ * Reported: Chrome copies silently, Edge opens a dialog needing OK. The dialog
+ * was our own window.prompt fallback firing — navigator.clipboard is only
+ * exposed in a SECURE CONTEXT, so reaching the app over plain http via a
+ * hostname or LAN IP (rather than localhost/127.0.0.1) leaves it undefined and
+ * dropped straight to the prompt. Nothing Edge-specific; the same URL in
+ * Chrome behaves the same way.
+ *
+ * So: try the clipboard API, then fall back to a detached textarea plus
+ * execCommand("copy") — deprecated but works in non-secure contexts and, more
+ * to the point, needs no dialog. Only if BOTH fail does the button say so;
+ * there is no modal on any path.
+ *
+ * Lives here rather than in test/index.html because the same logic was
+ * duplicated there and in test/history.html, prompt fallback included. One
+ * copy means the next fix cannot land in only one of them. `askCopyShare`
+ * keeps its name because _answer.html calls it from an inline onclick.
+ */
+function askCopyShare(btn, path) {
+  const url = window.location.origin + path;
+
+  const flash = (label, icon) => {
+    if (!btn) return;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi ' + icon + ' me-1"></i>' + label;
+    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+  };
+  const ok = () => flash("Link copied", "bi-check2");
+
+  // Last resort, and deliberately NOT a modal: drop a pre-selected read-only
+  // input beside the button so Ctrl/Cmd+C still works. The old code used
+  // window.prompt here, which is the dialog this task set out to remove — but
+  // a prompt at least left the URL copyable, so failing to a dead end would
+  // trade one annoyance for a worse one.
+  const fail = () => {
+    console.warn("Could not copy share link automatically:", url);
+    if (!btn || !btn.parentNode) return;
+    const existing = btn.parentNode.querySelector(".nora-copy-fallback");
+    if (existing) existing.remove();
+    const box = document.createElement("input");
+    box.className = "form-control form-control-sm nora-copy-fallback";
+    box.readOnly = true;
+    box.value = url;
+    box.style.maxWidth = "22rem";
+    box.title = "Press Ctrl/Cmd+C to copy";
+    btn.parentNode.insertBefore(box, btn.nextSibling);
+    box.focus();
+    box.select();
+    flash("Copy manually", "bi-clipboard");
+  };
+
+  // Detached textarea + execCommand: the non-secure-context path.
+  const legacyCopy = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      // Off-screen but focusable — execCommand needs a real selection.
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, url.length);
+      const copied = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return copied;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(url).then(ok, () => {
+      legacyCopy() ? ok() : fail();
+    });
+    return;
+  }
+  legacyCopy() ? ok() : fail();
+}

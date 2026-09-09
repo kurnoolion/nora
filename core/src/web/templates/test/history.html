@@ -127,6 +127,21 @@
   function show(entry, idx) {
     selected = idx;
     render();
+    // Pathless entry (strand ask-rerun): the question was asked but produced no
+    // stored answer — it errored, or minted no row. Recording those is
+    // deliberate, since they are what a user re-runs after a fix. Bail before
+    // the fetch below, which would throw on `entry.path.replace`.
+    if (!entry.path) {
+      detailEl.innerHTML =
+        '<div class="alert alert-secondary">No stored answer for this question — '
+        + 'it was asked but did not produce a saved result.'
+        + '<div class="mt-2"><button type="button" class="btn btn-sm btn-outline-primary" '
+        + 'id="hist-rerun">Ask it again</button></div></div>';
+      // Carries the question through, rather than landing on an empty Ask page.
+      const again = document.getElementById("hist-rerun");
+      if (again) again.addEventListener("click", () => rerun(idx));
+      return;
+    }
     detailEl.innerHTML = '<div class="text-muted p-4">Loading…</div>';
     // Entries store the *share* URL (/ask/s/<id>) because that is what a user
     // copies. The pane needs the body-only fragment, so swap in the API path —
@@ -221,10 +236,16 @@
         +   '<div class="flex-grow-1" role="button" data-open="' + idx + '">'
         +     '<div class="small">' + esc(e.q) + "</div>"
         +     '<div class="text-muted small mt-1">' + laneBadge(e.lane)
+        +       (e.path ? "" : '<span class="badge bg-light text-secondary border">no saved answer</span>')
         +       ' <span class="ms-1">' + esc(when(e.ts)) + "</span></div>"
         +   "</div>"
-        +   '<button class="btn btn-sm btn-outline-danger py-0" data-del="' + idx + '" '
-        +     'title="Remove from history">&times;</button>'
+        +   '<div class="d-flex gap-1 flex-shrink-0">'
+        +     '<button class="btn btn-sm btn-outline-primary py-0" data-rerun="' + idx + '" '
+        +       'title="Ask this question again on the Ask page">'
+        +       '<i class="bi bi-arrow-repeat"></i></button>'
+        +     '<button class="btn btn-sm btn-outline-danger py-0" data-del="' + idx + '" '
+        +       'title="Remove from history">&times;</button>'
+        +   "</div>"
         + "</div></div>"
       );
     }).join("");
@@ -234,7 +255,29 @@
     nextBtn.disabled = page >= pages - 1;
   }
 
+  /*
+   * Re-run hands the question to the Ask page through localStorage, NOT a
+   * query param. A question can quote proprietary requirement text, and a URL
+   * lands in reverse-proxy and server access logs — the project's standing
+   * rule is that such content stays out of logs. This also keeps /test's route
+   * signature unchanged.
+   */
+  const ASK_PREFILL_KEY = "nora-ask-prefill";
+
+  function rerun(idx) {
+    const entry = read()[idx];
+    if (!entry || !entry.q) return;
+    try {
+      localStorage.setItem(ASK_PREFILL_KEY, entry.q);
+    } catch (e) {
+      return;                        // storage blocked: better to do nothing
+    }
+    window.location.href = "{{ root_path }}/test";
+  }
+
   listEl.addEventListener("click", (ev) => {
+    const again = ev.target.closest("[data-rerun]");
+    if (again) { rerun(parseInt(again.getAttribute("data-rerun"), 10)); return; }
     const del = ev.target.closest("[data-del]");
     if (del) { remove(parseInt(del.getAttribute("data-del"), 10)); return; }
     const open = ev.target.closest("[data-open]");
@@ -249,17 +292,9 @@
   detailEl.addEventListener("click", (ev) => {
     const btn = ev.target.closest("[data-share]");
     if (!btn) return;
-    const url = window.location.origin + btn.getAttribute("data-share");
-    const done = () => {
-      const orig = btn.innerHTML;
-      btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Link copied';
-      setTimeout(() => { btn.innerHTML = orig; }, 1500);
-    };
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(url).then(done, () => window.prompt("Copy this link:", url));
-    } else {
-      window.prompt("Copy this link:", url);
-    }
+    // Shared with the Ask page's Share button via static/js/app.js — the
+    // clipboard/fallback logic used to be copy-pasted here.
+    askCopyShare(btn, btn.getAttribute("data-share"));
   });
 
   prevBtn.addEventListener("click", () => { if (page > 0) { page--; render(); } });
