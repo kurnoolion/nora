@@ -16,6 +16,7 @@ from __future__ import annotations
 import pathlib
 
 import networkx as nx
+import pytest
 
 from core.src.query.pipeline import QueryPipeline
 from core.src.query.schema import QueryResponse
@@ -251,26 +252,34 @@ class TestRosterResolution:
             cfg._reset_llm_config_cache()
 
 
-class TestExampleConfigStaysValid:
-    """`config/llm.json.example` is the file people copy from, so it has to
-    parse and to name every field — an example that drifts is worse than none."""
+_EXAMPLE_PATH = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "customizations" / "config" / "llm.json.example"
+)
 
-    _PATH = pathlib.Path(__file__).resolve().parents[2] / "config" / "llm.json.example"
+
+@pytest.mark.skipif(
+    not _EXAMPLE_PATH.exists(),
+    reason="roster example lives in the internal repo; not present in this clone",
+)
+class TestExampleConfigStaysValid:
+    """The roster example people copy from has to parse and to name every
+    field — an example that drifts is worse than none.
+
+    The file itself is NOT committed here: a useful copy-from reference names
+    real endpoints, and committed examples in this repo stay fictional. It
+    lives in the internal repo at `customizations/config/llm.json.example`,
+    so these checks run in clones that carry it and skip elsewhere. Only
+    value-free properties are asserted — pinning the example's values in this
+    committed test would put them right back in this repo."""
+
+    _PATH = _EXAMPLE_PATH
 
     def test_it_parses_and_yields_its_providers(self):
         from core.src.env.config import LLMConfigFile
 
         cfg = LLMConfigFile.load(self._PATH)
-        assert [p.id for p in cfg.providers] == ["dgx-130b", "internal-14b"]
-        assert cfg.providers[0].supports_reasoning_control is True
-        assert cfg.providers[1].supports_reasoning_control is False
-        # The example only teaches the per-entry point if its two entries
-        # really do declare different mechanisms. `test_it_documents_every_
-        # entry_field` above is generative over the dataclass, so it sees that
-        # the key is present but cannot tell a real mechanism from a typo —
-        # this is where example VALUES are pinned.
-        assert cfg.providers[0].reasoning_mechanism == "chat_template_kwargs"
-        assert cfg.providers[1].reasoning_mechanism == ""
+        assert cfg.providers, "example declares no providers"
 
     def test_it_documents_every_entry_field(self):
         """A field added to LLMProviderEntry must reach the example, or the
@@ -281,7 +290,9 @@ class TestExampleConfigStaysValid:
         from core.src.env.config import LLMProviderEntry
 
         raw = json.loads(self._PATH.read_text())
-        documented = set(raw["providers"][0]) | set(raw["providers"][1])
+        documented = set()
+        for entry in raw["providers"]:
+            documented |= set(entry)
         expected = {f.name for f in dataclasses.fields(LLMProviderEntry)}
         assert expected <= documented, f"undocumented: {expected - documented}"
 
@@ -293,7 +304,10 @@ class TestExampleConfigStaysValid:
         raw = json.loads(self._PATH.read_text())
         for entry in raw["providers"]:
             assert "api_key" not in entry
-            assert entry["api_key_env"].startswith("NORA_")
+            # api_key_env is optional (a keyless endpoint omits it), but when
+            # present it must be an env-var NAME, not a value.
+            if entry.get("api_key_env"):
+                assert entry["api_key_env"].startswith("NORA_")
 
 
 class TestNoRosterBuildPath:
