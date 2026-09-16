@@ -96,6 +96,14 @@ Note: `${VAR}` inside env files is NOT expanded (compose passes them to the
 container verbatim), so referencing shell vars from within them can't work —
 the overlay file is the supported mechanism.
 
+Optional: the Ask page can offer a **named roster** of endpoints instead of the
+single `NORA_LLM_*` pair. Point `NORA_LLM_CONFIG` (in `.env.nora-web`) at a JSON
+roster file. The path resolves inside the container, so keep the file under
+`WEB_STATE_DIR` and reference it as `/data/web-state/llm.json` — that mount is
+per-stack and, unlike `/data/env`, is untouched by `promote.sh`, so the roster
+survives a promote. A missing or unreadable path warns and falls back to no
+roster at all.
+
 In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
