@@ -51,10 +51,11 @@ environments/*.json
 # hook installed by ~/work/utils/git-sync/sync-work.sh — it blocks any
 # push whose remote URL points at github.com unless
 # NORA_ALLOW_PUBLIC_PUSH=1.
-# customizations/config/llm.json.example follows the same convention:
-# the copy-from roster example names real endpoints, so it is committed
-# internally only; this repo carries no roster example (the tests that
-# validate it skip when the file is absent).
+# customizations/llm/llm.json (the deployed roster, baked into the
+# image — D-248) and customizations/config/llm.json.example (its
+# copy-from example) follow the same convention: rosters name real
+# endpoints, so both are committed internally only; this repo carries
+# neither (the tests that validate them skip when absent).
 
 
 # Vim swap files

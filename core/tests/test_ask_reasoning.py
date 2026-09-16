@@ -252,26 +252,35 @@ class TestRosterResolution:
             cfg._reset_llm_config_cache()
 
 
-_EXAMPLE_PATH = (
+_ROSTER_CANDIDATES = [
+    # The deployed roster, committed in the internal repo and baked into the
+    # image (D-248) — the file that actually serves, so it is preferred.
     pathlib.Path(__file__).resolve().parents[2]
-    / "customizations" / "config" / "llm.json.example"
+    / "customizations" / "llm" / "llm.json",
+    # Its copy-from example, also internal-only.
+    pathlib.Path(__file__).resolve().parents[2]
+    / "customizations" / "config" / "llm.json.example",
+]
+_EXAMPLE_PATH = next(
+    (p for p in _ROSTER_CANDIDATES if p.exists()), _ROSTER_CANDIDATES[0]
 )
 
 
 @pytest.mark.skipif(
     not _EXAMPLE_PATH.exists(),
-    reason="roster example lives in the internal repo; not present in this clone",
+    reason="roster lives in the internal repo; not present in this clone",
 )
 class TestExampleConfigStaysValid:
-    """The roster example people copy from has to parse and to name every
-    field — an example that drifts is worse than none.
+    """The roster people deploy (or copy from) has to parse and to name every
+    field — a roster that drifts behind the schema is worse than none.
 
-    The file itself is NOT committed here: a useful copy-from reference names
-    real endpoints, and committed examples in this repo stay fictional. It
-    lives in the internal repo at `customizations/config/llm.json.example`,
-    so these checks run in clones that carry it and skip elsewhere. Only
-    value-free properties are asserted — pinning the example's values in this
-    committed test would put them right back in this repo."""
+    The file itself is NOT committed here: a useful roster names real
+    endpoints, and committed configs in this repo stay fictional. It lives in
+    the internal repo (deployed roster preferred over the copy-from example —
+    see _ROSTER_CANDIDATES), so these checks run in clones that carry one and
+    skip elsewhere. Only value-free properties are asserted — pinning the
+    roster's values in this committed test would put them right back in this
+    repo."""
 
     _PATH = _EXAMPLE_PATH
 

@@ -8696,3 +8696,39 @@ two stacks sharing one roster would need either a symlink or the rejected
 dedicated mount.
 
 _Promoted from strand: llm-roster-docs on 2026-09-16._
+
+## D-248: The deployed roster is committed in the internal repo and baked into the image
+**Status**: Active · **Date**: 2026-09-16.
+
+**Context.** D-247 documented the file-shaped recipe: roster at
+`/data/web-state/llm.json`, edited in place on the host. The team's roster then
+grew entries for proprietary providers, whose adapter code lives in the
+internal repo at `customizations/llm/` — putting the roster's contents under
+the same redaction constraints as `customizations/mappings/` and
+`customizations/prompts/` (D-062), and raising the question of where the
+team's single source of truth for it should live.
+
+**Decision.** The deployed roster is committed in the internal repo at
+`customizations/llm/llm.json` — internal-only, per the D-062 convention — and
+is baked into the `nora-web` image at build time.
+`NORA_LLM_CONFIG=/app/customizations/llm/llm.json` in the stack's
+`.env.nora-web.<stack>` selects it. Changing the roster means commit
+internally → rebuild `nora-web` → `up -d --force-recreate`; the roster is
+never edited as a host file.
+
+**Why.** One versioned source of truth for the whole team instead of per-host
+files that drift; roster changes are auditable through internal git history
+rather than invisible host edits; and proprietary provider configuration sits
+next to the proprietary provider code it names, inside the repo whose pre-push
+guard already keeps that content off github.com. In-image also survives
+promotes trivially — the roster lives in the image, not in any mounted
+snapshot.
+
+**Consequences.** Partially supersedes D-247: the `/data/web-state` recipe is
+no longer how the team's own stacks are configured, but it remains the
+documented file-shaped alternative for deployments without the internal repo,
+and D-247's core finding (never under `/data/env` — a promoted snapshot) holds
+for any file-shaped roster. A roster edit now costs an image rebuild, which is
+accepted — it ties roster changes to the same web-only rebuild flow as code.
+`TestExampleConfigStaysValid` validates the committed roster where present,
+preferring it over the copy-from example.

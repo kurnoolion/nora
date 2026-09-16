@@ -104,6 +104,14 @@ per-stack and, unlike `/data/env`, is untouched by `promote.sh`, so the roster
 survives a promote. A missing or unreadable path warns and falls back to no
 roster at all.
 
+Deployments built from the internal repo use the committed roster instead
+(D-248): the roster lives at `customizations/llm/llm.json` (committed
+internally only, like `customizations/mappings/` — D-062) and is baked into
+the image, so `NORA_LLM_CONFIG=/app/customizations/llm/llm.json`. Changing
+that roster means commit → rebuild `nora-web` → `up -d --force-recreate`,
+never editing a file on the host; the file-shaped `/data/web-state` recipe
+above remains the path for deployments without the internal repo.
+
 In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
