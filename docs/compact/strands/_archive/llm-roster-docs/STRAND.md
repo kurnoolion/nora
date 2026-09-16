@@ -1,8 +1,8 @@
 # llm-roster-docs
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-15
-**Landed:**
+**Landed:** 2026-09-16
 **Assignees:** Hanif
 **Target modules:** docs, docker (no core modules)
 **Active phase:** development
@@ -22,4 +22,4 @@ change, no new mount.
 
 ## Notes
 
-<!-- appended to over the strand's lifetime -->
+Landed on 2026-09-16 with 1 promoted decision: D-247.
