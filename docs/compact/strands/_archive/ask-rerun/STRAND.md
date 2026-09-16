@@ -1,8 +1,8 @@
 # ask-rerun
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-03
-**Landed:**
+**Landed:** 2026-09-16
 **Assignees:** Hanif
 **Target modules:** web
 
@@ -34,3 +34,4 @@ merge every anonymous user and be spoofable by typing someone else's name.
 
 ## Notes
 
+Landed on 2026-09-16 with 7 promoted decisions: D-240..D-246.

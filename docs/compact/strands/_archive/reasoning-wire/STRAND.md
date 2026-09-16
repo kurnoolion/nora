@@ -1,7 +1,8 @@
 # reasoning-wire
 
-**Status:** active
+**Status:** landed
 **Opened:** 2026-09-04
+**Landed:** 2026-09-16
 **Assignees:** Hanif
 **Target modules:** llm, web, env
 **Active phase:** development
@@ -55,3 +56,4 @@ Related: issue #21, D-216.
   those commits are pushed, the example-config edits in this branch will
   conflict with theirs in `config/llm.json.example` — resolve by keeping the
   real roster's entries and adding `reasoning_control` to each.
+- 2026-09-16: Landed with 5 promoted decisions: D-235..D-239.
