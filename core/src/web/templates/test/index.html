@@ -135,6 +135,17 @@
             {% endfor %}
           </select>
           <select
+              id="ask-model"
+              name="model"
+              class="form-select form-select-sm"
+              style="max-width: 230px"
+              aria-label="Which model on that provider answers"
+              data-url-template="{{ root_path }}/api/test/providers/__ID__/models">
+            {% for p in providers %}{% if loop.first %}
+            <option value="{{ p.model }}" selected>{{ p.model }}</option>
+            {% endif %}{% endfor %}
+          </select>
+          <select
               id="ask-mode"
               name="mode"
               class="form-select form-select-sm"
@@ -649,6 +660,8 @@ function askRecordHistory(question, pendingId) {
   const labelEl = document.getElementById("ask-label");
   const providerEl = document.getElementById("ask-provider");
   const modeEl = document.getElementById("ask-mode");
+  const modelEl = document.getElementById("ask-model");
+  let savedModel = "";
   const nora    = document.getElementById("lane-nora");
   const sira    = document.getElementById("lane-sira");
 
@@ -666,6 +679,7 @@ function askRecordHistory(question, pendingId) {
         [...providerEl.options].some(o => o.value === last.provider)) {
       providerEl.value = last.provider;
     }
+    savedModel = last.model || "";
     if (last.mode && modeEl &&
         [...modeEl.options].some(o => o.value === last.mode)) {
       modeEl.value = last.mode;
@@ -714,6 +728,43 @@ function askRecordHistory(question, pendingId) {
   });
   syncMode();
 
+  // Model list per provider, discovered server-side (/v1/models, cached).
+  // The select is disabled while loading but keeps showing a valid default,
+  // so a quick submit still sends something the server accepts. A disabled
+  // select is not submitted, so re-enable before any await can be outrun.
+  let modelReq = 0;
+  async function syncModels() {
+    if (!providerEl || !modelEl) return;
+    const reqId = ++modelReq;
+    const url = modelEl.dataset.urlTemplate.replace(
+      "__ID__", encodeURIComponent(providerEl.value));
+    modelEl.title = "";
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const data = await resp.json();
+      if (reqId !== modelReq) return;           // a newer provider pick won
+      modelEl.replaceChildren(...data.models.map(function (m) {
+        const o = document.createElement("option");
+        o.value = m;
+        o.textContent = m;
+        return o;
+      }));
+      const wanted = data.models.includes(savedModel) ? savedModel : data.default;
+      modelEl.value = wanted;
+      savedModel = "";                          // restore once, on first load
+      if (!data.discovered) {
+        modelEl.title = "Could not list this provider's models — showing "
+          + "its configured default only.";
+      }
+    } catch (e) {
+      if (reqId !== modelReq) return;
+      modelEl.title = "Could not load models — the provider's default is used.";
+    }
+  }
+  if (providerEl) providerEl.addEventListener("change", syncModels);
+  syncModels();
+
   form.addEventListener("submit", function () {
     try {
       localStorage.setItem(KEY, JSON.stringify({
@@ -721,6 +772,7 @@ function askRecordHistory(question, pendingId) {
         label:     labelEl ? labelEl.value : "",
         provider: providerEl ? providerEl.value : "",
         mode:      modeEl ? modeEl.value : "",
+        model:     modelEl ? modelEl.value : "",
         nora:      nora ? nora.checked : undefined,
         sira:      sira ? sira.checked : undefined,
       }));
