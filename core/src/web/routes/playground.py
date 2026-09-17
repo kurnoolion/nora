@@ -1131,6 +1131,22 @@ def _ingested_rows() -> "list[dict[str, Any]]":
     return rows
 
 
+@router.get("/api/test/providers/{provider_id}/models")
+async def provider_models(provider_id: str):
+    """Models the Ask page may offer for one roster provider (discovered from
+    its `/v1/models`, cached — see web/model_discovery.py). Unknown id is a
+    404 rather than the default entry: the page only asks for ids it rendered."""
+    from core.src.env.config import resolve_providers
+    from core.src.web.model_discovery import models_for
+
+    entry = next((p for p in resolve_providers() if p.id == provider_id), None)
+    if entry is None:
+        return JSONResponse({"error": "unknown provider"}, status_code=404)
+    models, discovered = await asyncio.to_thread(models_for, entry)
+    return JSONResponse({"models": models, "default": entry.model,
+                         "discovered": discovered})
+
+
 @router.get("/api/test/ingested", response_class=HTMLResponse)
 async def ingested_inventory(request: Request):
     """The ingested-corpus table partial (HTMX, loaded on page load)."""

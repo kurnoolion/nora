@@ -120,3 +120,31 @@ def test_concurrent_askers_trigger_one_fetch(monkeypatch):
     for t in threads:
         t.join()
     assert len(calls) == 1
+
+
+class TestModelsRoute:
+    @pytest.fixture()
+    def client(self, tmp_path, monkeypatch):
+        import json
+        from fastapi.testclient import TestClient
+        from core.src.env import config as cfg
+        from core.src.web.app import app
+
+        path = tmp_path / "llm.json"
+        path.write_text(json.dumps({"providers": [
+            {"id": "internal", "name": "Internal", "base_url": "http://llm.invalid/v1",
+             "model": "default-model"},
+        ]}))
+        cfg._LLM_CONFIG_CACHE = cfg.LLMConfigFile.load(path)
+        yield TestClient(app)
+        cfg._reset_llm_config_cache()
+
+    def test_lists_discovered_models(self, client, monkeypatch):
+        _script(monkeypatch, ["model-x"])
+        r = client.get("/api/test/providers/internal/models")
+        assert r.status_code == 200
+        assert r.json() == {"models": ["default-model", "model-x"],
+                            "default": "default-model", "discovered": True}
+
+    def test_unknown_provider_is_404(self, client):
+        assert client.get("/api/test/providers/ghost/models").status_code == 404
