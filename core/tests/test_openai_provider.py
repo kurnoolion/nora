@@ -369,3 +369,51 @@ class TestReasoningEffort:
             with patch("urllib.request.urlopen", side_effect=_capture_request(captured)):
                 p.complete("ping")
             assert "reasoning_effort" not in captured["body"]
+
+
+# ---------------------------------------------------------------------------
+# list_models() — model discovery on OpenAI-compatible endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestListModels:
+    def _capture(self, captured, body):
+        def _fake(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["auth"] = req.get_header("Authorization")
+            captured["timeout"] = timeout
+            return _FakeResponse(json.dumps(body).encode("utf-8"))
+        return _fake
+
+    def test_parses_openai_shape_in_server_order(self):
+        from core.src.llm.openai_provider import list_models
+        captured = {}
+        body = {"data": [{"id": "model-b"}, {"id": "model-a"}]}
+        with patch("urllib.request.urlopen", side_effect=self._capture(captured, body)):
+            assert list_models("http://llm.invalid/v1/", "k") == ["model-b", "model-a"]
+        assert captured["url"] == "http://llm.invalid/v1/models"
+        assert captured["auth"] == "Bearer k"
+
+    def test_no_key_sends_no_authorization(self):
+        from core.src.llm.openai_provider import list_models
+        captured = {}
+        with patch("urllib.request.urlopen",
+                   side_effect=self._capture(captured, {"data": [{"id": "m"}]})):
+            list_models("http://llm.invalid/v1")
+        assert captured["auth"] is None
+
+    def test_http_error_raises(self):
+        import urllib.error
+        from core.src.llm.openai_provider import list_models
+        err = urllib.error.HTTPError("http://llm.invalid/v1/models", 401,
+                                     "Unauthorized", None, io.BytesIO(b"no"))
+        with patch("urllib.request.urlopen", side_effect=err):
+            with pytest.raises(RuntimeError, match="401"):
+                list_models("http://llm.invalid/v1")
+
+    def test_unexpected_shape_raises(self):
+        from core.src.llm.openai_provider import list_models
+        with patch("urllib.request.urlopen",
+                   side_effect=self._capture({}, {"models": []})):
+            with pytest.raises(RuntimeError, match="shape"):
+                list_models("http://llm.invalid/v1")
