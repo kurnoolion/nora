@@ -147,4 +147,20 @@ class TestModelsRoute:
                             "default": "default-model", "discovered": True}
 
     def test_unknown_provider_is_404(self, client):
-        assert client.get("/api/test/providers/ghost/models").status_code == 404
+        r = client.get("/api/test/providers/ghost/models")
+        assert r.status_code == 404
+        assert r.json() == {"error": "unknown provider"}
+
+    def test_reachable_with_team_mode_on_and_no_admin_cookie(self, client, monkeypatch):
+        """The route lives under the /api/test prefix, which the team gate
+        allowlists (see team_mode._TEAM_ALLOWED) — a gated team member with
+        no admin cookie must reach it directly, not get redirected to /test."""
+        from core.src.web import team_mode as tm
+
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+        _script(monkeypatch, ["model-x"])
+        r = client.get("/api/test/providers/internal/models", follow_redirects=False)
+        assert r.status_code == 200
+        assert r.json() == {"models": ["default-model", "model-x"],
+                            "default": "default-model", "discovered": True}
