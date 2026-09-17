@@ -211,6 +211,7 @@ class TestAskPageModelSelect:
         assert 'name="model"' in body
         assert '<option value="vega-alpha-9" selected>vega-alpha-9</option>' in body
         assert 'data-url-template="/api/test/providers/__ID__/models"' in body
+        assert 'data-default-model="vega-alpha-9"' in body
 
     def test_no_roster_renders_no_model_select(self, client_no_roster):
         r = client_no_roster.get("/test")

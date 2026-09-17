@@ -126,11 +126,12 @@
               name="provider"
               class="form-select form-select-sm"
               style="max-width: 210px"
-              aria-label="Which model answers">
+              aria-label="Which endpoint answers">
             {% for p in providers %}
             <option value="{{ p.id }}"
                     data-supports-reasoning-control="{{ 1 if p.supports_reasoning_control else 0 }}"
                     data-default-mode="{{ p.default_mode }}"
+                    data-default-model="{{ p.model }}"
                     {% if loop.first %}selected{% endif %}>{{ p.name }}</option>
             {% endfor %}
           </select>
@@ -736,6 +737,16 @@ function askRecordHistory(question, pendingId) {
   async function syncModels() {
     if (!providerEl || !modelEl) return;
     const reqId = ++modelReq;
+    // Reset to the newly-selected provider's own default before the fetch
+    // resolves, so a quick submit mid-load can't send provider A's model
+    // with provider B (e.g. a localStorage-restored provider differing from
+    // the server-rendered first option).
+    const selectedOpt = providerEl.options[providerEl.selectedIndex];
+    const defaultModel = selectedOpt ? selectedOpt.dataset.defaultModel : "";
+    const placeholderOpt = document.createElement("option");
+    placeholderOpt.value = defaultModel || "";
+    placeholderOpt.textContent = defaultModel || "";
+    modelEl.replaceChildren(placeholderOpt);
     const url = modelEl.dataset.urlTemplate.replace(
       "__ID__", encodeURIComponent(providerEl.value));
     modelEl.title = "";
