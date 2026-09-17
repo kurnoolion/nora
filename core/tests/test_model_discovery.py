@@ -164,3 +164,55 @@ class TestModelsRoute:
         assert r.status_code == 200
         assert r.json() == {"models": ["default-model", "model-x"],
                             "default": "default-model", "discovered": True}
+
+
+class TestAskPageModelSelect:
+    """The `/test` page's `ask-model` select (strand llm-model-discovery,
+    Task 6) — rendered only when a roster is configured, server-rendering
+    the first provider's default so a pre-fetch submit still posts a model
+    the server accepts."""
+
+    @pytest.fixture()
+    def client_with_roster(self, tmp_path, monkeypatch):
+        import json
+        from fastapi.testclient import TestClient
+        from core.src.env import config as cfg
+        from core.src.web.app import app
+
+        path = tmp_path / "llm.json"
+        path.write_text(json.dumps({"providers": [
+            {"id": "vega", "name": "Vega", "base_url": "http://vega.invalid/v1",
+             "model": "vega-alpha-9"},
+            {"id": "nyx", "name": "Nyx", "base_url": "http://nyx.invalid/v1",
+             "model": "nyx-beta-2"},
+        ]}))
+        cfg._LLM_CONFIG_CACHE = cfg.LLMConfigFile.load(path)
+        yield TestClient(app)
+        cfg._reset_llm_config_cache()
+
+    @pytest.fixture()
+    def client_no_roster(self, tmp_path, monkeypatch):
+        import json
+        from fastapi.testclient import TestClient
+        from core.src.env import config as cfg
+        from core.src.web.app import app
+
+        path = tmp_path / "llm.json"
+        path.write_text(json.dumps({}))
+        cfg._LLM_CONFIG_CACHE = cfg.LLMConfigFile.load(path)
+        yield TestClient(app)
+        cfg._reset_llm_config_cache()
+
+    def test_roster_configured_renders_model_select(self, client_with_roster):
+        r = client_with_roster.get("/test")
+        assert r.status_code == 200
+        body = r.text
+        assert 'id="ask-model"' in body
+        assert 'name="model"' in body
+        assert '<option value="vega-alpha-9" selected>vega-alpha-9</option>' in body
+        assert 'data-url-template="/api/test/providers/__ID__/models"' in body
+
+    def test_no_roster_renders_no_model_select(self, client_no_roster):
+        r = client_no_roster.get("/test")
+        assert r.status_code == 200
+        assert 'id="ask-model"' not in r.text

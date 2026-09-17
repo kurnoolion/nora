@@ -729,9 +729,9 @@ function askRecordHistory(question, pendingId) {
   syncMode();
 
   // Model list per provider, discovered server-side (/v1/models, cached).
-  // The select is disabled while loading but keeps showing a valid default,
-  // so a quick submit still sends something the server accepts. A disabled
-  // select is not submitted, so re-enable before any await can be outrun.
+  // The select stays enabled and keeps showing a valid default throughout,
+  // so a quick submit still sends something the server accepts. modelReq
+  // discards a response that lands after a newer provider pick.
   let modelReq = 0;
   async function syncModels() {
     if (!providerEl || !modelEl) return;
