@@ -26,6 +26,7 @@ locked-down hosts that nonetheless have outbound HTTPS.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -336,7 +337,7 @@ def list_models(base_url: str, api_key: str = "", timeout: float = 10) -> list[s
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"models HTTP {e.code} {e.reason}") from e
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
         raise RuntimeError(f"models request failed: {e}") from e
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):

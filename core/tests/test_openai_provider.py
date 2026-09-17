@@ -417,3 +417,11 @@ class TestListModels:
                    side_effect=self._capture({}, {"models": []})):
             with pytest.raises(RuntimeError, match="shape"):
                 list_models("http://llm.invalid/v1")
+
+    def test_http_client_exception_raises(self):
+        import http.client
+        from core.src.llm.openai_provider import list_models
+        with patch("urllib.request.urlopen",
+                   side_effect=http.client.IncompleteRead(b"")):
+            with pytest.raises(RuntimeError):
+                list_models("http://llm.invalid/v1")
