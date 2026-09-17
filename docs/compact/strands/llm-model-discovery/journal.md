@@ -25,7 +25,14 @@
 - Browser-verified locally against Ollama's `/v1` (17 models listed; asked with
   `gemma4:e2b`, log confirms `provider=local model=gemma4:e2b`; unreachable
   provider degrades to its default with a warning). Hanif: "looks great".
-- Full suite: 8 failed / 1961 passed / 112 skipped — the 8 failures are
+- Final whole-branch review ("with fixes") → one fix wave, re-reviewed clean:
+  `list_models` now also maps `http.client.HTTPException` (e.g. `IncompleteRead`)
+  to `RuntimeError` (previously escaped → route 500, no last-good list, refetch
+  every load); web MODULE.md Deferred bullet no longer lists `llm`; the Model
+  select resets to the selected provider's default while its list loads
+  (`data-default-model` on provider options); provider select aria-label is now
+  "Which endpoint answers".
+- Full suite: 8 failed / 1962 passed / 112 skipped — the 8 failures are
   pre-existing on `main` (test_embedding_ollama ×1, test_enrich_overlay_store ×1,
   test_web_config ×6).
 
@@ -34,6 +41,3 @@
   (pre-existing), so it also carries no model.
 - No test asserts `model` is threaded through each lane function; the guard is
   the builder-level tests plus a grep check.
-- On a network/500 failure of the models fetch (not the `discovered=false`
-  path), the select keeps the previous provider's options until the next sync;
-  the server degrades the stale value to the new provider's default.
