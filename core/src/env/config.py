@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 # core/src/env/config.py -> core/src/env -> core/src -> core -> <repo_root>
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DEFAULT_LLM_CONFIG_PATH = _PROJECT_ROOT / "config" / "llm.json"
+# How long a provider's discovered `/v1/models` list is trusted before the
+# Ask page refetches it. Endpoints rarely change what they serve, so hours.
+DEFAULT_MODEL_DISCOVERY_TTL_S: int = 21600
 
 
 @dataclass
@@ -188,6 +191,23 @@ def _parse_providers(raw, config_path) -> list[LLMProviderEntry]:
     return out
 
 
+def _parse_ttl(raw, config_path) -> int:
+    """`model_discovery_ttl_s`, or the default. Missing/0 is silent (unset);
+    a negative or non-integer value warns — degrade, don't fail the load."""
+    if raw in (None, "", 0):
+        return DEFAULT_MODEL_DISCOVERY_TTL_S
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = -1
+    if value <= 0:
+        logger.warning("%s: model_discovery_ttl_s=%r is not a positive "
+                       "integer — using %d", config_path, raw,
+                       DEFAULT_MODEL_DISCOVERY_TTL_S)
+        return DEFAULT_MODEL_DISCOVERY_TTL_S
+    return value
+
+
 def _validated_provider_id(raw, providers, key: str, config_path) -> str:
     """Check that `default_provider` / `fallback_provider` names a real entry.
 
@@ -278,6 +298,8 @@ class LLMConfigFile:
     # these keys existed rely on.
     default_provider: str = ""
     fallback_provider: str = ""
+    # Seconds a discovered model list is cached (web/model_discovery.py).
+    model_discovery_ttl_s: int = DEFAULT_MODEL_DISCOVERY_TTL_S
 
     # Provenance of THIS instance, for /api/health diagnostics. Not part of the
     # JSON schema — populated by load(). Recorded rather than recomputed
@@ -333,6 +355,8 @@ class LLMConfigFile:
             fallback_provider=_validated_provider_id(
                 data.get("fallback_provider"), providers,
                 "fallback_provider", config_path),
+            model_discovery_ttl_s=_parse_ttl(
+                data.get("model_discovery_ttl_s"), config_path),
             config_path=config_path,
             config_source=source,
         )
@@ -912,6 +936,12 @@ def resolve_fallback_provider() -> LLMProviderEntry | None:
         if p.id == fallback_id:
             return p
     return None
+
+
+def resolve_model_discovery_ttl_s() -> int:
+    """Seconds a provider's discovered model list stays fresh. File-only,
+    like the roster it belongs to."""
+    return _llm_config().model_discovery_ttl_s
 
 
 def llm_config_provenance() -> tuple[str, str]:

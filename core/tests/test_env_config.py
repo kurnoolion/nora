@@ -1232,3 +1232,51 @@ def test_fallback_provider_parsed_and_validated(monkeypatch, tmp_path, caplog):
         assert any("fallback_provider" in r.getMessage() for r in caplog.records)
     finally:
         env_cfg._reset_llm_config_cache()
+
+
+def _load_llm_json(tmp_path, data):
+    import json
+    from core.src.env import config as env_cfg
+    path = tmp_path / "llm.json"
+    path.write_text(json.dumps(data))
+    env_cfg._LLM_CONFIG_CACHE = env_cfg.LLMConfigFile.load(path)
+    return env_cfg
+
+
+def test_model_discovery_ttl_defaults_to_six_hours(tmp_path):
+    env_cfg = _load_llm_json(tmp_path, {})
+    try:
+        assert env_cfg.resolve_model_discovery_ttl_s() == 21600
+        assert env_cfg.DEFAULT_MODEL_DISCOVERY_TTL_S == 21600
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_model_discovery_ttl_explicit_value(tmp_path):
+    env_cfg = _load_llm_json(tmp_path, {"model_discovery_ttl_s": 600})
+    try:
+        assert env_cfg.resolve_model_discovery_ttl_s() == 600
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_model_discovery_ttl_invalid_degrades_to_default(tmp_path, caplog):
+    for bad in (-5, "soon", 0):
+        env_cfg = _load_llm_json(tmp_path, {"model_discovery_ttl_s": bad})
+        try:
+            assert env_cfg.resolve_model_discovery_ttl_s() == 21600
+        finally:
+            env_cfg._reset_llm_config_cache()
+    assert "model_discovery_ttl_s" in caplog.text   # -5 and "soon" warn
+
+
+def test_model_discovery_ttl_leaves_roster_entries_unchanged(tmp_path):
+    env_cfg = _load_llm_json(tmp_path, {
+        "model_discovery_ttl_s": 60,
+        "providers": [{"id": "a", "base_url": "http://a.invalid/v1", "model": "m1"}],
+    })
+    try:
+        (entry,) = env_cfg.resolve_providers()
+        assert entry.model == "m1"
+    finally:
+        env_cfg._reset_llm_config_cache()

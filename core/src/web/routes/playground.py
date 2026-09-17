@@ -290,6 +290,12 @@ def _form_provider(form) -> str:
     return (form.get("provider") or "").strip()
 
 
+def _form_model(form) -> str:
+    """Read the model from an Ask form post. Validation lives in
+    `_build_llm_from_env_or_default`, against the provider's discovered list."""
+    return (form.get("model") or "").strip()
+
+
 def _snapshot_nora_lane_config(
     result: dict[str, Any], provider_id: str = "", mode: str = "",
 ) -> dict[str, Any]:
@@ -344,6 +350,7 @@ async def _run_nora_lane_for_merged(
     emit_progress: "Callable[[str], Awaitable[None]] | None" = None,
     provider_id: str = "",
     mode: str = "",
+    model: str = "",
 ) -> dict[str, Any]:
     """Run NORA's hybrid pipeline for the merged tab. Returns a
     standardized dict the merged branch consumes:
@@ -371,7 +378,7 @@ async def _run_nora_lane_for_merged(
     try:
         result = await asyncio.to_thread(
             _run_query_for_test, question, request.app,
-            provider_id=provider_id or None, mode=mode or None,
+            provider_id=provider_id or None, mode=mode or None, model=model or None,
         )
     except Exception as exc:
         logger.exception("NORA lane failed in merged tab")
@@ -408,6 +415,7 @@ async def _run_sira_lane_for_merged(
     emit_progress: "Callable[[str], Awaitable[None]] | None" = None,
     provider_id: str = "",
     mode: str = "",
+    model: str = "",
 ) -> dict[str, Any]:
     """Run SIRA's BM25→rerank pipeline + NORA's synthesizer pinned to
     the SIRA top results, for the merged tab. Returns a standardized
@@ -427,7 +435,7 @@ async def _run_sira_lane_for_merged(
     if _SELECT_SYNTH_ENABLED:
         return await _run_select_synth_lane(
             question, _say, start, label=label, provider_id=provider_id,
-            mode=mode,
+            mode=mode, model=model,
         )
     await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
@@ -459,7 +467,7 @@ async def _run_sira_lane_for_merged(
         try:
             synth_result = await asyncio.to_thread(
                 _run_query_for_test, question, request.app, pinned_chunk_ids,
-                provider_id=provider_id or None, mode=mode or None,
+                provider_id=provider_id or None, mode=mode or None, model=model or None,
             )
             # Surface NORA-synthesizer latency alongside SIRA's retrieval
             # timings (expand/search/rerank) so the test page shows the full
@@ -763,12 +771,12 @@ def _select_synth_extract_citations(answer: str, packed: list[dict[str, Any]]) -
 
 def _select_synth_synthesize(
     question: str, packed: list[dict[str, Any]], provider_id: str | None = None,
-    mode: str | None = None,
+    mode: str | None = None, model: str | None = None,
 ) -> dict[str, Any]:
     """One LLM call over all packed chunks: the model selects relevant ones and
     synthesizes. Returns the dict shape the merged template consumes."""
     from core.src.web.routes.query import _build_llm_from_env_or_default
-    llm = _build_llm_from_env_or_default(provider_id=provider_id, mode=mode)
+    llm = _build_llm_from_env_or_default(provider_id=provider_id, mode=mode, model=model)
     if llm is None or getattr(llm, "_is_mock", False):
         return {"error": "select-synth needs a real LLM (NORA_LLM_* not configured)"}
     context_text = _build_select_synth_context(question, packed)
@@ -814,6 +822,7 @@ async def _run_select_synth_lane(
     label: str = "",
     provider_id: str = "",
     mode: str = "",
+    model: str = "",
 ) -> dict[str, Any]:
     """select-synth lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
     that selects relevant chunks + synthesizes. Same dict shape as the default
@@ -846,7 +855,7 @@ async def _run_select_synth_lane(
     synth_start = time.time()
     synth_result = await asyncio.to_thread(
         _select_synth_synthesize, question, packed,
-        provider_id=provider_id or None, mode=mode or None,
+        provider_id=provider_id or None, mode=mode or None, model=model or None,
     )
     synth_ms = int((time.time() - synth_start) * 1000)
     timings = sira_result.setdefault("timings_ms", {})
@@ -1131,6 +1140,22 @@ def _ingested_rows() -> "list[dict[str, Any]]":
     return rows
 
 
+@router.get("/api/test/providers/{provider_id}/models")
+async def provider_models(provider_id: str):
+    """Models the Ask page may offer for one roster provider (discovered from
+    its `/v1/models`, cached — see web/model_discovery.py). Unknown id is a
+    404 rather than the default entry: the page only asks for ids it rendered."""
+    from core.src.env.config import resolve_providers
+    from core.src.web.model_discovery import models_for
+
+    entry = next((p for p in resolve_providers() if p.id == provider_id), None)
+    if entry is None:
+        return JSONResponse({"error": "unknown provider"}, status_code=404)
+    models, discovered = await asyncio.to_thread(models_for, entry)
+    return JSONResponse({"models": models, "default": entry.model,
+                         "discovered": discovered})
+
+
 @router.get("/api/test/ingested", response_class=HTMLResponse)
 async def ingested_inventory(request: Request):
     """The ingested-corpus table partial (HTMX, loaded on page load)."""
@@ -1305,6 +1330,7 @@ async def playground_ask(request: Request):
     label = (form.get("label") or "").strip()
     provider_id = _form_provider(form)
     mode = _form_mode(form)
+    model = _form_model(form)
 
     if not question:
         return _template_response(request, "test/_answer.html", {
@@ -1331,13 +1357,13 @@ async def playground_ask(request: Request):
         runners: dict[str, Any] = {}
         if "nora" in lanes_checked:
             runners["nora"] = _run_nora_lane_for_merged(
-                question, request, provider_id=provider_id, mode=mode,
+                question, request, provider_id=provider_id, mode=mode, model=model,
             )
         if "sira" in lanes_checked:
             runners["sira"] = _run_sira_lane_for_merged(question, request,
                                                         label=label,
                                                         provider_id=provider_id,
-                                                        mode=mode)
+                                                        mode=mode, model=model)
         outputs = dict(zip(runners.keys(),
                            await asyncio.gather(*runners.values(),
                                                 return_exceptions=False)))
@@ -1387,7 +1413,7 @@ async def playground_ask(request: Request):
             try:
                 synth_result = await asyncio.to_thread(
                     _run_query_for_test, question, request.app, pinned_chunk_ids,
-                    provider_id=provider_id or None, mode=mode or None,
+                    provider_id=provider_id or None, mode=mode or None, model=model or None,
                 )
                 if "error" in synth_result:
                     synth_error = synth_result["error"]
@@ -1479,7 +1505,7 @@ async def playground_ask(request: Request):
     try:
         result = await asyncio.to_thread(
             _run_query_for_test, question, request.app,
-            provider_id=provider_id or None, mode=mode or None,
+            provider_id=provider_id or None, mode=mode or None, model=model or None,
         )
     except Exception as e:
         logger.exception("Test query failed")
@@ -1562,6 +1588,7 @@ async def playground_ask_stream(request: Request):
     label = (form.get("label") or "").strip()
     provider_id = _form_provider(form)
     mode = _form_mode(form)
+    model = _form_model(form)
 
     if section != "merged":
         return JSONResponse(
@@ -1593,13 +1620,13 @@ async def playground_ask_stream(request: Request):
     if "nora" in lanes_checked:
         runners["nora"] = _run_nora_lane_for_merged(
             question, request, emit_progress=_make_emitter("nora"),
-            provider_id=provider_id, mode=mode,
+            provider_id=provider_id, mode=mode, model=model,
         )
     if "sira" in lanes_checked:
         runners["sira"] = _run_sira_lane_for_merged(
             question, request, label=label,
             emit_progress=_make_emitter("sira"),
-            provider_id=provider_id, mode=mode,
+            provider_id=provider_id, mode=mode, model=model,
         )
 
     async def event_stream():
@@ -1697,6 +1724,7 @@ async def playground_synthesize_group(request: Request):
             _run_query_for_test, question, request.app, chunk_ids,
             provider_id=_form_provider(form) or None,
             mode=_form_mode(form) or None,
+            model=_form_model(form) or None,
         )
     except Exception as e:
         logger.exception("Synthesize-group query failed")
@@ -1845,6 +1873,7 @@ def _run_query_for_test(
     pinned_chunk_ids: list[str] | None = None,
     provider_id: str | None = None,
     mode: str | None = None,
+    model: str | None = None,
 ) -> dict:
     """Adapt the existing /query pipeline runner into a dict shape
     the test page templates can consume directly. Re-imports the
@@ -1869,7 +1898,7 @@ def _run_query_for_test(
 
     raw = _run_query_sync(
         question, app=app, pinned_chunk_ids=pinned_chunk_ids,
-        provider_id=provider_id, mode=mode,
+        provider_id=provider_id, mode=mode, model=model,
     )
     if "error" in raw:
         return {"error": raw["error"]}

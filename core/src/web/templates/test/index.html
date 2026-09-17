@@ -126,13 +126,25 @@
               name="provider"
               class="form-select form-select-sm"
               style="max-width: 210px"
-              aria-label="Which model answers">
+              aria-label="Which endpoint answers">
             {% for p in providers %}
             <option value="{{ p.id }}"
                     data-supports-reasoning-control="{{ 1 if p.supports_reasoning_control else 0 }}"
                     data-default-mode="{{ p.default_mode }}"
+                    data-default-model="{{ p.model }}"
                     {% if loop.first %}selected{% endif %}>{{ p.name }}</option>
             {% endfor %}
+          </select>
+          <select
+              id="ask-model"
+              name="model"
+              class="form-select form-select-sm"
+              style="max-width: 230px"
+              aria-label="Which model on that provider answers"
+              data-url-template="{{ root_path }}/api/test/providers/__ID__/models">
+            {% for p in providers %}{% if loop.first %}
+            <option value="{{ p.model }}" selected>{{ p.model }}</option>
+            {% endif %}{% endfor %}
           </select>
           <select
               id="ask-mode"
@@ -649,6 +661,8 @@ function askRecordHistory(question, pendingId) {
   const labelEl = document.getElementById("ask-label");
   const providerEl = document.getElementById("ask-provider");
   const modeEl = document.getElementById("ask-mode");
+  const modelEl = document.getElementById("ask-model");
+  let savedModel = "";
   const nora    = document.getElementById("lane-nora");
   const sira    = document.getElementById("lane-sira");
 
@@ -666,6 +680,7 @@ function askRecordHistory(question, pendingId) {
         [...providerEl.options].some(o => o.value === last.provider)) {
       providerEl.value = last.provider;
     }
+    savedModel = last.model || "";
     if (last.mode && modeEl &&
         [...modeEl.options].some(o => o.value === last.mode)) {
       modeEl.value = last.mode;
@@ -714,6 +729,53 @@ function askRecordHistory(question, pendingId) {
   });
   syncMode();
 
+  // Model list per provider, discovered server-side (/v1/models, cached).
+  // The select stays enabled and keeps showing a valid default throughout,
+  // so a quick submit still sends something the server accepts. modelReq
+  // discards a response that lands after a newer provider pick.
+  let modelReq = 0;
+  async function syncModels() {
+    if (!providerEl || !modelEl) return;
+    const reqId = ++modelReq;
+    // Reset to the newly-selected provider's own default before the fetch
+    // resolves, so a quick submit mid-load can't send provider A's model
+    // with provider B (e.g. a localStorage-restored provider differing from
+    // the server-rendered first option).
+    const selectedOpt = providerEl.options[providerEl.selectedIndex];
+    const defaultModel = selectedOpt ? selectedOpt.dataset.defaultModel : "";
+    const placeholderOpt = document.createElement("option");
+    placeholderOpt.value = defaultModel || "";
+    placeholderOpt.textContent = defaultModel || "";
+    modelEl.replaceChildren(placeholderOpt);
+    const url = modelEl.dataset.urlTemplate.replace(
+      "__ID__", encodeURIComponent(providerEl.value));
+    modelEl.title = "";
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const data = await resp.json();
+      if (reqId !== modelReq) return;           // a newer provider pick won
+      modelEl.replaceChildren(...data.models.map(function (m) {
+        const o = document.createElement("option");
+        o.value = m;
+        o.textContent = m;
+        return o;
+      }));
+      const wanted = data.models.includes(savedModel) ? savedModel : data.default;
+      modelEl.value = wanted;
+      savedModel = "";                          // restore once, on first load
+      if (!data.discovered) {
+        modelEl.title = "Could not list this provider's models — showing "
+          + "its configured default only.";
+      }
+    } catch (e) {
+      if (reqId !== modelReq) return;
+      modelEl.title = "Could not load models — the provider's default is used.";
+    }
+  }
+  if (providerEl) providerEl.addEventListener("change", syncModels);
+  syncModels();
+
   form.addEventListener("submit", function () {
     try {
       localStorage.setItem(KEY, JSON.stringify({
@@ -721,6 +783,7 @@ function askRecordHistory(question, pendingId) {
         label:     labelEl ? labelEl.value : "",
         provider: providerEl ? providerEl.value : "",
         mode:      modeEl ? modeEl.value : "",
+        model:     modelEl ? modelEl.value : "",
         nora:      nora ? nora.checked : undefined,
         sira:      sira ? sira.checked : undefined,
       }));

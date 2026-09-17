@@ -26,6 +26,7 @@ locked-down hosts that nonetheless have outbound HTTPS.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -319,3 +320,26 @@ class OpenAICompatibleProvider:
     @property
     def last_call_stats(self) -> dict:
         return dict(self._last_call_stats)
+
+
+def list_models(base_url: str, api_key: str = "", timeout: float = 10) -> list[str]:
+    """Model ids an OpenAI-compatible endpoint serves (`GET {base_url}/models`).
+
+    Returned in server order. Raises RuntimeError on any failure — whether a
+    failure keeps a previous list is the caller's policy, not this function's.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/models", headers=headers, method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"models HTTP {e.code} {e.reason}") from e
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
+        raise RuntimeError(f"models request failed: {e}") from e
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise RuntimeError("models response has unexpected shape (no `data` list)")
+    return [str(it["id"]) for it in items if isinstance(it, dict) and it.get("id")]

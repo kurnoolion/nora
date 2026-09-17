@@ -48,8 +48,8 @@ class TestGateLogic:
         assert tm.is_admin(_req({tm.ADMIN_COOKIE: ""})) is False
 
     def test_path_whitelist(self):
-        for ok in ("/test", "/api/test/ask-stream", "/static/x.css",
-                   "/admin-unlock", "/api/health", "/favicon.ico"):
+        for ok in ("/test", "/api/test/ask-stream", "/api/test/providers/internal/models",
+                   "/static/x.css", "/admin-unlock", "/api/health", "/favicon.ico"):
             assert tm.path_allowed_for_team(ok), ok
         for blocked in ("/", "/dashboard", "/api/config", "/parse"):
             assert not tm.path_allowed_for_team(blocked), blocked

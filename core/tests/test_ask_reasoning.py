@@ -854,3 +854,93 @@ class TestFallbackKeepsItsOwnMechanism:
         from core.src.web.routes.query import _reasoning_for
         _, fallback = self._entries()
         assert _reasoning_for(fallback, "fast") == "none"
+
+
+class TestFormModel:
+    def test_reads_and_strips(self):
+        from core.src.web.routes.playground import _form_model
+        assert _form_model({"model": " model-x "}) == "model-x"
+
+    def test_missing_is_empty(self):
+        from core.src.web.routes.playground import _form_model
+        assert _form_model({}) == ""
+
+
+class TestChosenModel:
+    """Strand llm-model-discovery: the asker's model is honoured only when the
+    discovery cache lists it for that provider; anything else degrades to the
+    entry's configured default, as an unknown provider id does."""
+
+    def _roster(self, tmp_path, monkeypatch, cached=None):
+        import json
+        from core.src.env import config as cfg
+        from core.src.web import model_discovery as md
+        from core.src.web.routes import query as q
+
+        path = tmp_path / "llm.json"
+        path.write_text(json.dumps({
+            "providers": [
+                {"id": "internal", "name": "Internal",
+                 "base_url": "http://llm.invalid/v1", "model": "default-model"},
+                {"id": "backup", "name": "Backup",
+                 "base_url": "http://backup.invalid/v1", "model": "backup-model"},
+            ],
+            "fallback_provider": "backup",
+        }))
+        cfg._LLM_CONFIG_CACHE = cfg.LLMConfigFile.load(path)
+        md._reset_cache()
+        if cached is not None:
+            monkeypatch.setattr(md, "list_models", lambda *a, **k: list(cached))
+            md.models_for(cfg.resolve_provider("internal"))
+        monkeypatch.setattr(q, "_config_store_get", lambda module, key: None)
+        return cfg, md
+
+    def _primary(self, llm):
+        return getattr(llm, "_primary", llm)
+
+    def test_listed_model_is_used(self, tmp_path, monkeypatch):
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        cfg, md = self._roster(tmp_path, monkeypatch, cached=["model-x"])
+        try:
+            llm = _build_llm_from_env_or_default(provider_id="internal", model="model-x")
+            assert self._primary(llm).model == "model-x"
+        finally:
+            cfg._reset_llm_config_cache(); md._reset_cache()
+
+    def test_unlisted_model_degrades_to_default(self, tmp_path, monkeypatch, caplog):
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        cfg, md = self._roster(tmp_path, monkeypatch, cached=["model-x"])
+        try:
+            llm = _build_llm_from_env_or_default(provider_id="internal", model="rogue")
+            assert self._primary(llm).model == "default-model"
+            assert "rogue" in caplog.text
+        finally:
+            cfg._reset_llm_config_cache(); md._reset_cache()
+
+    def test_no_model_uses_default(self, tmp_path, monkeypatch):
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        cfg, md = self._roster(tmp_path, monkeypatch, cached=["model-x"])
+        try:
+            llm = _build_llm_from_env_or_default(provider_id="internal")
+            assert self._primary(llm).model == "default-model"
+        finally:
+            cfg._reset_llm_config_cache(); md._reset_cache()
+
+    def test_empty_cache_allows_only_default(self, tmp_path, monkeypatch):
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        cfg, md = self._roster(tmp_path, monkeypatch)
+        try:
+            llm = _build_llm_from_env_or_default(provider_id="internal", model="model-x")
+            assert self._primary(llm).model == "default-model"
+        finally:
+            cfg._reset_llm_config_cache(); md._reset_cache()
+
+    def test_fallback_keeps_its_own_default_model(self, tmp_path, monkeypatch):
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        monkeypatch.setenv("NORA_LLM_REFUSAL_MARKERS", "I cannot")
+        cfg, md = self._roster(tmp_path, monkeypatch, cached=["model-x"])
+        try:
+            llm = _build_llm_from_env_or_default(provider_id="internal", model="model-x")
+            assert llm._fallback.model == "backup-model"
+        finally:
+            cfg._reset_llm_config_cache(); md._reset_cache()

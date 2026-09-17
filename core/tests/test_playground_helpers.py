@@ -202,7 +202,7 @@ def test_nora_lane_runner_emits_progress_on_start_and_done():
         msgs.append(m)
 
     # Stub _run_query_for_test to return a successful, well-shaped result.
-    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
+    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None, model=None):
         return {
             "answer": "OK",
             "rag_chunks": [{"req_id": "R-1"}, {"req_id": "R-2"}],
@@ -232,7 +232,7 @@ def test_nora_lane_runner_emits_progress_on_error():
     async def emit(m: str) -> None:
         msgs.append(m)
 
-    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
+    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None, model=None):
         raise RuntimeError("boom")
 
     with patch.object(pg, "_run_query_for_test", _fake_run):
@@ -251,7 +251,7 @@ def test_nora_lane_runner_works_without_callback():
     """emit_progress is optional — runners must work when it's None."""
     from core.src.web.routes import playground as pg
 
-    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
+    def _fake_run(q, app, pinned_chunk_ids=None, provider_id=None, mode=None, model=None):
         return {"answer": "OK", "rag_chunks": [], "llm_citations": []}
 
     with patch.object(pg, "_run_query_for_test", _fake_run):
@@ -279,7 +279,7 @@ def test_sira_lane_runner_emits_progress_at_stage_boundaries():
             "notes": [],
         }
 
-    def _fake_run_query(q, app, pinned_chunk_ids=None, provider_id=None, mode=None):
+    def _fake_run_query(q, app, pinned_chunk_ids=None, provider_id=None, mode=None, model=None):
         return {"answer": "ok", "rag_chunks": [], "llm_citations": []}
 
     async def _fake_snapshot():
@@ -644,7 +644,7 @@ def test_select_synth_answer_carries_epilogue(monkeypatch):
 
     monkeypatch.setattr(
         query_routes, "_build_llm_from_env_or_default",
-        lambda provider_id=None, mode=None: _NamedLLM())
+        lambda provider_id=None, mode=None, model=None: _NamedLLM())
     out = pg._select_synth_synthesize(
         "widget retry?",
         [{"req_id": "REQ_FOO_0001", "text": "Widgets shall retry.",
