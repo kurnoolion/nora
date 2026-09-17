@@ -244,6 +244,7 @@ def _find_env_config_for_web():
 def _build_llm_from_env_or_default(
     provider_id: str | None = None,
     mode: str | None = None,
+    model: str | None = None,
     *,
     use_roster: bool = True,
 ):
@@ -286,6 +287,12 @@ def _build_llm_from_env_or_default(
     a warning — the field would be silently dropped anyway, and pretending
     otherwise would let the UI lie about what was sent.
 
+    `model` is the asker's model on the selected entry. It is honoured only
+    when the discovery cache lists it for that entry (web/model_discovery.py
+    `allowed_models`, which never fetches); empty or unlisted degrades to the
+    entry's configured `model` — its default — with a warning for unlisted.
+    The fallback entry always answers with its own default.
+
     A roster-built provider IS refusal-wrapped when the roster names a
     `fallback_provider`. This reverses the original design, which left it
     unwrapped on the argument that rerouting defeats the asker's explicit
@@ -324,15 +331,25 @@ def _build_llm_from_env_or_default(
         # Entry-owned, NOT resolve_llm_timeout(): a selected roster entry is
         # independent of the Config-page DB, so nothing here consults it.
         timeout = entry.timeout or DEFAULT_LLM_TIMEOUT
+        chosen_model = entry.model
+        if model and model != entry.model:
+            from core.src.web.model_discovery import allowed_models
+            if model in allowed_models(entry):
+                chosen_model = model
+            else:
+                logger.warning(
+                    "Model %r is not offered by provider %r — using its "
+                    "default %r", model, entry.id, entry.model,
+                )
         logger.info(
             "Web LLM resolved: provider=%s (%s) model=%s mode=%s reasoning=%s "
             "via=%s timeout=%ds",
-            entry.id, entry.name, entry.model, mode or entry.default_mode,
+            entry.id, entry.name, chosen_model, mode or entry.default_mode,
             reasoning or "<none sent>",
             entry.reasoning_mechanism or "<no control>", timeout,
         )
         provider = OpenAICompatibleProvider(
-            model=entry.model,
+            model=chosen_model,
             base_url=entry.base_url,
             api_key=entry.api_key or None,
             timeout=timeout,
@@ -695,6 +712,7 @@ def _run_query_sync(
     pinned_chunk_ids: list[str] | None = None,
     provider_id: str | None = None,
     mode: str | None = None,
+    model: str | None = None,
 ) -> dict:
     """Run the query pipeline synchronously (called via asyncio.to_thread).
 
@@ -739,9 +757,9 @@ def _run_query_sync(
     # Chroma, BM25) stay cached; provider construction costs no network call.
     # Mutating the cached provider instead would race across concurrent queries.
     query_synthesizer = None
-    if provider_id or mode:
+    if provider_id or mode or model:
         per_query_llm = _build_llm_from_env_or_default(
-            provider_id=provider_id, mode=mode,
+            provider_id=provider_id, mode=mode, model=model,
         )
         if per_query_llm is not None and not getattr(per_query_llm, "_is_mock", False):
             from core.src.query.synthesizer import LLMSynthesizer
@@ -751,9 +769,9 @@ def _run_query_sync(
             llm = per_query_llm
         else:
             logger.warning(
-                "Per-question override (provider=%r mode=%r) requested but "
-                "no real LLM resolved — answering with the cached provider.",
-                provider_id, mode,
+                "Per-question override (provider=%r mode=%r model=%r) requested "
+                "but no real LLM resolved — answering with the cached provider.",
+                provider_id, mode, model,
             )
 
     llm_calls_before = llm.call_count if llm else 0
