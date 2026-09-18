@@ -253,3 +253,40 @@ body {
     text-align: left;
     white-space: normal;
 }
+
+/* Requirement body (strand req-bubble-tables). Prose keeps the source's own
+   line breaks; tables are real tables. `pre-wrap` sits on the prose spans
+   rather than the panel so it cannot leak into table cells and stop them
+   wrapping. */
+.req-body-text {
+    display: block;
+    white-space: pre-wrap;
+}
+
+/* The panel caps at 40rem, and a corpus table is often wider — scroll it
+   inside the panel instead of letting it widen the floating layer past the
+   viewport. */
+.req-body {
+    display: block;
+    overflow-x: auto;
+}
+
+.req-body table {
+    width: 100%;
+    margin: 0.5rem 0;
+    border-collapse: collapse;
+    font-size: 0.95em;
+}
+
+.req-body th,
+.req-body td {
+    border: 1px solid var(--bs-border-color);
+    padding: 0.25rem 0.4rem;
+    vertical-align: top;
+    text-align: left;
+}
+
+.req-body th {
+    background-color: var(--bs-tertiary-bg);
+    font-weight: 600;
+}
