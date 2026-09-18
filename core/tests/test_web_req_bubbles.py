@@ -73,7 +73,25 @@ def corpus(tmp_path: Path) -> Path:
             "plan_id": "PLANA",
             "plan_name": "Plan A",
             "requirements": [
-                {"req_id": "VZ_REQ_A_1", "title": "Band support", "text": text},
+                {"req_id": "VZ_REQ_A_1", "title": "Band support", "text": text,
+                 "section_number": "1.4.3"},
+                # Table-anchored shape: no section_number of its own, linked
+                # to its owning section by parent_section.
+                {"req_id": "VZ_REQ_A_2", "title": "Anchored", "text": text,
+                 "section_number": "", "parent_section": "1.4"},
+                # Neither — the section line has nothing to say.
+                {"req_id": "VZ_REQ_A_3", "title": "Bare", "text": text,
+                 "section_number": "", "parent_section": ""},
+            ],
+        }))
+        # Multi-plan doc: empty tree-level plan, per-req plan ids. Its reqs are
+        # SECONDARY plans, which carry no document-level name.
+        (d / "MULTI_tree.json").write_text(json.dumps({
+            "plan_id": "",
+            "plan_name": "Whole Document Name",
+            "requirements": [
+                {"req_id": "VZ_REQ_B_1", "title": "Secondary", "text": text,
+                 "plan_id": "PLANB", "section_number": "9"},
             ],
         }))
     return tmp_path
@@ -115,6 +133,38 @@ class TestReqEndpoint:
         r = client.get("/api/req/VZ_REQ_A_1")
         assert "new text" in r.text
         assert "2 releases" in r.text
+
+
+# ── Panel metadata (strand req-bubble-metadata) ────────────────
+
+
+class TestBubbleMetadata:
+    def test_section_number_is_shown(self, client):
+        r = client.get("/api/req/VZ_REQ_A_1")
+        assert "1.4.3" in r.text
+
+    def test_missing_section_number_falls_back_to_parent_section(self, client):
+        """Table-anchored and leading-id-body reqs have `section_number=""` by
+        design (parser MODULE.md) but do carry `parent_section` — rendering
+        nothing would discard information the tree already holds."""
+        r = client.get("/api/req/VZ_REQ_A_2")
+        assert "1.4" in r.text
+
+    def test_section_line_is_omitted_when_there_is_nothing_to_show(self, client):
+        r = client.get("/api/req/VZ_REQ_A_3")
+        assert "Section" not in r.text
+
+    def test_primary_plan_shows_the_name_not_the_id(self, client):
+        r = client.get("/api/req/VZ_REQ_A_1")
+        assert "Plan A" in r.text
+        assert "PLANA" not in r.text
+
+    def test_secondary_plan_shows_its_id_not_the_document_name(self, client):
+        """The document's name belongs to the tree's primary plan only. Showing
+        it beside a secondary plan's requirement would label it wrongly."""
+        r = client.get("/api/req/VZ_REQ_B_1")
+        assert "PLANB" in r.text
+        assert "Whole Document Name" not in r.text
 
 
 # ── Regression: the templates that pass no ids ─────────────────

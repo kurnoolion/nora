@@ -3,12 +3,23 @@
 <span class="d-flex justify-content-between gap-2 mb-1">
   <code class="fw-semibold">{{ req.req_id }}</code>
   <span class="text-muted">
-    {% if req.plan %}{{ req.plan }}{% endif %}
+    {# The readable plan name when the corpus carries one for THIS req's plan,
+       else its code. `plan_name` is primary-plan-only by contract — see
+       req_tree.find_req — so a secondary plan shows its id rather than being
+       mislabelled with the document's name. #}
+    {% if req.plan_name %}{{ req.plan_name }}{% elif req.plan %}{{ req.plan }}{% endif %}
     {% if req.mno %} · {{ req.mno }}{% endif %}
     {% if req.release %} · {{ req.release }}{% endif %}
   </span>
 </span>
 {% if req.title %}<span class="d-block fw-semibold mb-1">{{ req.title }}</span>{% endif %}
+{# Table-anchored and leading-id-body reqs have no section number of their own
+   and are located through their parent section instead; some have neither, and
+   then the line has nothing to say. #}
+{% set section = req.section_number or req.parent_section %}
+{% if section %}
+  <span class="d-block text-muted mb-1">Section {{ section }}</span>
+{% endif %}
 <span class="d-block" style="white-space: pre-wrap;">{{ req.text }}</span>
 {% if other_releases %}
   <span class="d-block text-muted mt-1">
