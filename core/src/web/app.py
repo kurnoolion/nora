@@ -249,8 +249,13 @@ templates.env.globals["is_team_restricted"] = _team_restricted
 # interpolate as `{{ answer | md }}` without an explicit |safe.
 from core.src.web.markdown_render import render_markdown as _render_md
 from core.src.web.markdown_render import render_markdown_bubbles as _render_md_bubbles
+from core.src.web.markdown_render import render_req_body as _render_req_body
 templates.env.filters["md"] = _render_md
 templates.env.filters["md_bubbles"] = _render_md_bubbles
+# Corpus requirement body — tables become tables, the rest stays literal
+# text (strand req-bubble-tables). NOT `md`: corpus text must not go
+# through markdown emphasis rules.
+templates.env.filters["req_body"] = _render_req_body
 
 
 def _template_response(
