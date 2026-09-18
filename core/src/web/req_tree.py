@@ -178,9 +178,27 @@ def find_req(
     """Locate a req_id across the corpus — direct-entry validation and
     auto-qualification in the Eval Studio picker (an id found in exactly
     one cell auto-fills its qualifiers). Returns
-    ``[{mno, release, plan, doc_id, title, text}]``, one row per cell the
-    id appears in. Falls back to the legacy flat layout (empty mno/release)
-    when no per-cell trees exist.
+    ``[{mno, release, plan, plan_name, doc_id, title, section_number,
+    parent_section, text}]``, one row per cell the id appears in. Falls back
+    to the legacy flat layout (empty mno/release) when no per-cell trees
+    exist.
+
+    ``section_number`` / ``parent_section`` / ``plan_name`` are for display
+    beside a requirement snippet (strand req-bubble-metadata). Two contracts
+    consumers need to know:
+
+    - ``section_number`` is routinely ``""``. Table-anchored and
+      leading-id-body Requirements have no section number by design and are
+      located through ``parent_section`` instead (see parser MODULE.md); TOC
+      pair misses also leave it empty. The key is always present, so branch
+      on emptiness, never on absence.
+    - ``plan_name`` is populated **only for the tree's primary plan** — the
+      requirement whose effective plan equals the tree's own ``plan_id``. A
+      document can carry several plans, but the document-level ``plan_name``
+      describes just one of them; ``graph/builder.py`` stamps secondary plans
+      with an empty name for the same reason. No per-plan-id-to-name mapping
+      exists anywhere, so a secondary plan's requirement gets ``""`` rather
+      than borrowing a name that belongs to a different plan.
 
     Passing both qualifiers scopes the scan to that single cell —
     corpus-wide scans are for genuinely unqualified lookups only.
@@ -196,12 +214,18 @@ def find_req(
             tree = load_tree(env_dir_path, doc_id, mno, rel)
             for req in tree.get("requirements", []):
                 if req.get("req_id") == req_id:
+                    plan = _req_plan(req, tree)
+                    is_primary = plan == tree.get("plan_id", "")
                     matches.append({
                         "mno": mno,
                         "release": rel,
-                        "plan": _req_plan(req, tree),
+                        "plan": plan,
+                        "plan_name": (
+                            tree.get("plan_name", "") if is_primary else ""),
                         "doc_id": doc_id,
                         "title": req.get("title", ""),
+                        "section_number": req.get("section_number", ""),
+                        "parent_section": req.get("parent_section", ""),
                         "text": req.get("text", ""),
                     })
     return matches
