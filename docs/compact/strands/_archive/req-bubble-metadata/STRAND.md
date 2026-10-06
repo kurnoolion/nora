@@ -1,8 +1,8 @@
 # req-bubble-metadata
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-18
-**Landed:**
+**Landed:** 2026-10-06
 **Assignees:** Hanif
 **Target modules:** web
 
@@ -38,3 +38,5 @@ check on the work-PC corpus: is top-level `plan_name` non-empty, and does
 top-level `plan_id` match the requirements' `plan_id`? If `plan_name` is empty
 there too, the corpus carries no plan name and the fix is profile work (the
 `plan_name` regex), not web work.
+
+Landed on 2026-10-06 with 2 promoted decisions: D-252..D-253.

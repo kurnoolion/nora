@@ -1,8 +1,8 @@
 # req-bubble-tables
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-09-18
-**Landed:**
+**Landed:** 2026-10-06
 **Assignees:** Hanif
 **Target modules:** web
 **Active phase:**
@@ -22,4 +22,4 @@ Driver: manager feedback on the Ask answer page.
 
 ## Notes
 
-<!-- appended to over the strand's lifetime -->
+Landed on 2026-10-06 with 3 promoted decisions: D-249..D-251.

@@ -8732,3 +8732,186 @@ for any file-shaped roster. A roster edit now costs an image rebuild, which is
 accepted — it ties roster changes to the same web-only rebuild flow as code.
 `TestExampleConfigStaysValid` validates the committed roster where present,
 preferring it over the copy-from example.
+
+## D-249: Requirement bodies render through a table-only promoter, never a markdown pass
+**Status**: Active · **Date**: 2026-10-06.
+
+**Context.** Manager feedback on the Ask answer page: the req-ID bubble should
+show tables. The tables are already present — the parser inlines each one into
+`Requirement.text` at its document position (`structural_parser.py`,
+`block.html or render_table_markdown(...)`) — but `_req_bubble.html` escaped the
+whole body under `white-space: pre-wrap`, so a reader saw `<table>` markup or
+raw `|` pipes. The web module already owns a renderer that turns markdown into
+HTML (`render_markdown`, the `md` filter), so reusing it was the obvious move.
+
+**Decision (Hanif, 2026-09-18).** A separate `render_req_body` renders the
+requirement body for the bubble: it promotes tables to markup and leaves
+everything else as escaped literal text. Registered as the `req_body` Jinja
+filter. `render_markdown` is not reused and no markdown pass runs over corpus
+text.
+
+**Why.** `render_markdown` renders LLM prose, where markdown emphasis is the
+point. Requirement bodies are corpus content, where it is a liability: req IDs
+are underscore-dense (`VZ_REQ_LTEDATARETRY_7748`), and `**MUST**`-style emphasis
+is part of the spec's own text, not formatting to interpret. A full markdown
+pass would silently rewrite the corpus the bubble exists to quote faithfully.
+
+**Rejected alternatives.**
+- *Pipe the body through `render_markdown`.* One line, and it renders pipe
+  tables for free — but it puts emphasis rules in contact with every requirement
+  body, and the failure is silent corruption rather than a visible error.
+- *Render only the structured `Requirement.tables` beneath the prose.* See
+  D-251.
+
+**Consequences.** `markdown_render.py` now hosts two renderers with deliberately
+different contracts — LLM prose vs corpus text — and the distinction has to hold
+at future call sites. Any surface that wants a requirement body rendered must
+reach for `req_body`, not `md`. The compact `[Table: …]` form stays text, which
+is consistent with D-198 making it deliberately lossy: it carries no grid to
+recover, and building one would invent structure the corpus never had.
+
+_Promoted from strand: req-bubble-tables on 2026-10-06._
+
+## D-250: Provider table HTML is rebuilt from an allowlist, on stdlib
+**Status**: Active · **Date**: 2026-10-06.
+
+**Context.** D-199 has the DOCX extractor emit lossless HTML for merged-cell
+tables, and Docling supplies HTML for layout-provider tables; both land verbatim
+in `Requirement.text`. Rendering them means third-party markup reaching the
+answer page's DOM unescaped for the first time. `render_markdown` already
+handles the adjacent problem with `_DANGEROUS_TAG_RE`, a denylist of
+`script`/`style`/`iframe`/`object`/`embed`/`svg`/`math`.
+
+**Decision (Hanif, 2026-09-18).** Table HTML is parsed with stdlib
+`html.parser.HTMLParser` and rebuilt from an allowlist: tags
+`table/thead/tbody/tfoot/tr/th/td/caption`, attributes `colspan`/`rowspan` only.
+`script` and `style` drop with their content; any other tag is unwrapped so its
+text survives; all text is escaped.
+
+**Why.** A denylist has to predict every dangerous construct and stays wrong as
+the web grows. The set of tags a table legitimately needs is small and closed,
+which makes an allowlist both safer and shorter here. `colspan`/`rowspan`
+survive because merged structure is the entire reason D-199 renders HTML at all
+— dropping them would render the table while discarding what made it worth
+keeping losslessly.
+
+**Rejected alternatives.**
+- *Reuse `_DANGEROUS_TAG_RE`.* Wrong instrument for markup we are about to trust
+  into the DOM, and it would carry presentation attributes through.
+- *Add `bleach` or `nh3`.* A well-tested sanitizer, but the repo has no
+  sanitizer dependency and is stdlib-first throughout (`requirements.txt` has no
+  HTML-sanitizing package); a ~40-line closed-allowlist parser does not justify
+  a new dependency on every deployment.
+
+**Consequences.** Provider tables lose styling attributes by design — they
+inherit the panel's own table CSS instead. A future need for another table
+feature (e.g. `<colgroup>`, alignment) is an explicit allowlist edit, which is
+the intended friction.
+
+_Promoted from strand: req-bubble-tables on 2026-10-06._
+
+## D-251: The bubble reads the inlined `text`, not the structured `tables`
+**Status**: Active · **Date**: 2026-10-06.
+
+**Context.** A requirement carries its tables twice: inlined into `text` at
+document position, and structured on `Requirement.tables` as
+`TableData(headers, rows, html, source)`. The bubble needed one of them, and
+`req_tree.find_req` currently selects neither `tables` nor anything beyond
+`{mno, release, plan, doc_id, title, text}`.
+
+**Decision (Hanif, 2026-09-18).** The bubble renders from `text`.
+`req_tree.find_req` is unchanged — no new field selected, no new query path.
+
+**Why.** `text` is the only representation that preserves where each table sits
+relative to the prose, which is what makes the quoted requirement readable.
+`TableData` is also not reliably populated: the parser's `drop_grid` empties
+`headers`/`rows` when a layout provider supplied HTML and table-anchored
+extraction is off, so for those corpora the structured path yields nothing at
+all — the failure would be invisible in the demo env and appear only on a real
+provider-backed corpus.
+
+**Rejected alternatives.**
+- *Select `tables` in `find_req` and render them under the prose.* Structured
+  input, no HTML parsing needed — but tables detach from their position, and
+  `drop_grid` makes it empty on exactly the corpora that motivated the request.
+
+**Consequences.** `find_req` stays the single shared lookup for the Requirement
+Browser, the Eval Studio picker and the bubble, with no bubble-specific shape.
+The renderer carries the cost instead: it has to recognise all three inlined
+forms from text alone, which is what D-249 and D-250 specify.
+
+_Promoted from strand: req-bubble-tables on 2026-10-06._
+
+## D-252: `find_req`'s `plan_name` is populated for the primary plan only
+**Status**: Active · **Date**: 2026-10-06.
+
+**Context.** Manager feedback after the req-bubble-tables strand: show a
+readable plan name beside the requirement snippet instead of the plan code.
+The bubble's plan comes from `_req_plan`, which is the requirement's OWN
+`plan_id` — a within-tree dimension, because a single source document can
+carry several plans (one PDF whose sections each correspond to a plan). The
+only readable name available is the tree-level `plan_name`, a document-level
+scalar.
+
+**Decision (Hanif, 2026-09-18).** `find_req` returns `plan_name` as the tree's
+`plan_name` only when the requirement's effective plan equals the tree's own
+`plan_id` — i.e. the requirement belongs to the document's primary plan — and
+`""` otherwise. Consumers show the plan id when `plan_name` is empty.
+
+**Why.** The document-level name describes one plan, not every plan the
+document carries. `graph/builder.py` already encodes exactly this: it stamps
+`plan_name` on the primary Plan node and an empty name on secondary ones,
+because a sections-as-plans document has no per-plan name. There is no
+per-plan-id-to-name mapping anywhere in the codebase, so pairing a secondary
+plan's id with the document's name would not be a degraded label — it would be
+a wrong one, attributing a requirement to a plan it does not belong to.
+
+**Rejected alternatives.**
+- *Return `tree["plan_name"]` unconditionally.* Simplest, and indistinguishable
+  from correct on single-plan corpora — which is what makes it dangerous. On a
+  multi-plan document every secondary-plan requirement would be labelled with
+  another plan's name, and nothing in the UI would reveal it.
+- *Build a plan_id-to-name mapping.* There is no source for one. The parser
+  extracts a single `plan_name` per document via the profile regex; secondary
+  plans are discovered from per-req `plan_id` and have no name anywhere.
+
+**Consequences.** On corpora where the tree-level `plan_id` is empty and every
+requirement carries its own — which is the whole of `~/work/env_demo` — the
+name is never shown and the bubble keeps displaying the plan code. That is
+correct behaviour, but it means the feature is invisible until a corpus
+populates `plan_name` for its primary plan. If the work-PC corpus is also
+empty, the remaining work is profile-side (the `plan_name` regex), not web-side.
+
+_Promoted from strand: req-bubble-metadata on 2026-10-06._
+
+## D-253: An empty `section_number` falls back to `parent_section`
+**Status**: Active · **Date**: 2026-10-06.
+
+**Context.** The same feedback asked for the section number beside the snippet.
+`Requirement.section_number` is empty for a meaningful share of the corpus:
+table-anchored and leading-id-body requirements have none by design — they are
+addressed by `req_id` and linked to their owning section through
+`parent_section` / `parent_req_id` — and a TOC pair miss also leaves it empty.
+The parser's MODULE.md states outright that consumers must not assume it is
+non-empty.
+
+**Decision (Hanif, 2026-09-18).** The bubble renders `section_number` when
+present, falls back to `parent_section` when it is empty, and omits the line
+entirely when both are. `find_req` returns both keys, always present, so the
+template branches on emptiness rather than absence.
+
+**Why.** A table-anchored requirement is not section-less — it sits inside a
+section that the tree already records. Rendering nothing would discard
+information the model holds, and rendering an empty label would be worse than
+either. Returning both keys unconditionally keeps the empty-vs-missing
+distinction out of the template, where a Jinja `Undefined` would silently
+render as blank and hide the difference.
+
+**Consequences.** The line reads "Section 1.4" for a table-anchored req whose
+parent is 1.4, which is the parent's number rather than the requirement's own.
+That is the honest answer — the requirement has no number of its own — but a
+reader cannot tell from the line alone whether it is exact or inherited. If
+that distinction turns out to matter, the fix is to label the fallback case
+differently, not to drop it.
+
+_Promoted from strand: req-bubble-metadata on 2026-10-06._
