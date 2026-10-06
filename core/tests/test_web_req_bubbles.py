@@ -74,6 +74,17 @@ def corpus(tmp_path: Path) -> Path:
             "plan_name": "Plan A",
             "requirements": [
                 {"req_id": "VZ_REQ_A_1", "title": "Band support", "text": text},
+                {
+                    "req_id": "VZ_REQ_A_2",
+                    "title": "Band table",
+                    # The parser inlines tables into the body at their
+                    # document position — this is what a table-bearing
+                    # requirement actually looks like on disk.
+                    "text": (
+                        "The device shall support:\n\n"
+                        "| Band | Required |\n| --- | --- |\n| B13 | Yes |"
+                    ),
+                },
             ],
         }))
     return tmp_path
@@ -115,6 +126,16 @@ class TestReqEndpoint:
         r = client.get("/api/req/VZ_REQ_A_1")
         assert "new text" in r.text
         assert "2 releases" in r.text
+
+    def test_table_in_the_body_reaches_the_panel_as_a_table(self, client):
+        """strand req-bubble-tables — the end-to-end assertion: a requirement
+        whose body carries an inlined table renders as one in the panel, not
+        as escaped pipes."""
+        r = client.get("/api/req/VZ_REQ_A_2")
+        assert r.status_code == 200
+        assert "<table" in r.text
+        assert "<td>B13</td>" in r.text
+        assert "| B13 |" not in r.text
 
 
 # ── Regression: the templates that pass no ids ─────────────────

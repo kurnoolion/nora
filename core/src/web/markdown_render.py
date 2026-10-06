@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import itertools
 import re
+from html.parser import HTMLParser
 
 import markdown as _markdown
 from markupsafe import Markup, escape
@@ -156,3 +157,173 @@ def render_markdown_bubbles(text: str, req_ids=None, root_path: str = "") -> Mar
     if not req_ids:
         return rendered
     return Markup(_linkify_req_ids(str(rendered), req_ids, root_path))
+
+
+# Requirement-body rendering (strand req-bubble-tables). Separate from
+# `render_markdown` on purpose: that one renders LLM prose, this one renders
+# CORPUS text, where markdown emphasis rules are a liability rather than a
+# feature (req IDs and spec references are underscore- and asterisk-dense).
+# Only tables are promoted to markup; everything else stays literal.
+#
+# The parser inlines a table into `Requirement.text` at its document position
+# (structural_parser.py:2291) in one of three forms:
+#   1. lossless <table> HTML — Docling, and merged-cell DOCX per D-199
+#   2. a GFM pipe table from `render_table_markdown`
+#   3. the compact `[Table: …]` line (D-198), which may span several lines
+# Forms 1 and 2 become real tables here. Form 3 stays text: D-198 made it
+# deliberately lossy, so there is no grid to recover and building one would be
+# inventing structure the corpus never had.
+
+_HTML_TABLE_RE = re.compile(r"<table\b.*?</table\s*>", re.IGNORECASE | re.DOTALL)
+# A pipe-table line: leading pipe, at least two cells. The leading pipe is what
+# keeps the compact `[Table: a | b]` form out of this branch.
+_PIPE_LINE_RE = re.compile(r"^\s*\|.*\|\s*$")
+_DELIMITER_CELL_RE = re.compile(r"^:?-{2,}:?$")
+
+# Tags a corpus table may keep, and the only attributes worth carrying. Merged
+# structure (colspan/rowspan) is the entire reason D-199 renders HTML at all,
+# so it survives; presentation attributes do not.
+_TABLE_TAGS = frozenset(
+    {"table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption"})
+_TABLE_ATTRS = frozenset({"colspan", "rowspan"})
+# Tags whose CONTENT is dropped along with the tag. Anything else outside the
+# allowlist is unwrapped — its text is corpus content and belongs to the reader.
+_DROP_CONTENT_TAGS = frozenset({"script", "style"})
+
+
+class _TableSanitizer(HTMLParser):
+    """Rebuild provider table HTML from an allowlist.
+
+    This is third-party markup (a layout provider's output) landing in the
+    answer page's DOM. A denylist would be the wrong instrument: it has to
+    predict every dangerous construct, and the set of tags a table legitimately
+    needs is tiny and closed.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._out: list[str] = []
+        self._suppress_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_CONTENT_TAGS:
+            self._suppress_depth += 1
+            return
+        if self._suppress_depth or tag not in _TABLE_TAGS:
+            return
+        kept = "".join(
+            f' {k}="{escape(v)}"'
+            for k, v in attrs
+            if k in _TABLE_ATTRS and v is not None
+        )
+        self._out.append(f"<{tag}{kept}>")
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_CONTENT_TAGS:
+            self._suppress_depth = max(0, self._suppress_depth - 1)
+            return
+        if self._suppress_depth or tag not in _TABLE_TAGS:
+            return
+        self._out.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self._suppress_depth:
+            return
+        self._out.append(str(escape(data)))
+
+    def result(self) -> str:
+        return "".join(self._out)
+
+
+def _sanitize_table_html(html: str) -> str:
+    parser = _TableSanitizer()
+    parser.feed(html)
+    parser.close()
+    return parser.result()
+
+
+def _render_pipe_table(lines: list[str]) -> str:
+    """Build a table from `render_table_markdown`'s pipe output.
+
+    Hand-built rather than handed to the markdown library for two reasons: the
+    library needs a header/delimiter pair and so drops the headerless row-only
+    form the renderer also emits, and running cells through markdown would put
+    emphasis rules back in contact with corpus text.
+    """
+    rows = [
+        [c.strip() for c in ln.strip().strip("|").split("|")]
+        for ln in lines
+    ]
+    headers: list[str] = []
+    if len(rows) >= 2 and all(_DELIMITER_CELL_RE.match(c) for c in rows[1] if c):
+        headers, rows = rows[0], rows[2:]
+    out = ["<table>"]
+    if headers:
+        out.append("<thead><tr>")
+        out += [f"<th>{escape(h)}</th>" for h in headers]
+        out.append("</tr></thead>")
+    out.append("<tbody>")
+    for row in rows:
+        out.append("<tr>")
+        out += [f"<td>{escape(c)}</td>" for c in row]
+        out.append("</tr>")
+    out.append("</tbody></table>")
+    return "".join(out)
+
+
+def _render_prose(text: str) -> str:
+    """Corpus prose: escaped, newlines preserved by the class's `pre-wrap`."""
+    if not text.strip():
+        return ""
+    return f'<span class="req-body-text">{escape(text)}</span>'
+
+
+def render_req_body(text: str) -> Markup:
+    """Render `Requirement.text` for the Ask-page bubble panel.
+
+    Tables become tables; everything else stays literal corpus text.
+    """
+    if not text:
+        return Markup("")
+
+    out: list[str] = []
+    pos = 0
+    # Pass 1: lift the lossless HTML tables out, so their own pipes and
+    # newlines never reach the line-based pipe-table scan.
+    for m in _HTML_TABLE_RE.finditer(text):
+        out.append(_render_segment(text[pos:m.start()]))
+        out.append(_sanitize_table_html(m.group(0)))
+        pos = m.end()
+    out.append(_render_segment(text[pos:]))
+    return Markup("".join(out))
+
+
+def _render_segment(text: str) -> str:
+    """Pass 2 over a table-HTML-free segment: group contiguous pipe-table
+    lines into tables, everything else into prose, preserving order."""
+    if not text:
+        return ""
+    out: list[str] = []
+    prose: list[str] = []
+    pipes: list[str] = []
+
+    def flush_prose():
+        if prose:
+            out.append(_render_prose("\n".join(prose)))
+            prose.clear()
+
+    def flush_pipes():
+        if pipes:
+            out.append(_render_pipe_table(list(pipes)))
+            pipes.clear()
+
+    for line in text.split("\n"):
+        if _PIPE_LINE_RE.match(line):
+            flush_prose()
+            pipes.append(line)
+        else:
+            flush_pipes()
+            prose.append(line)
+    flush_prose()
+    flush_pipes()
+    return "".join(out)

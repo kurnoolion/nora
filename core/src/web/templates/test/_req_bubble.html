@@ -9,7 +9,7 @@
   </span>
 </span>
 {% if req.title %}<span class="d-block fw-semibold mb-1">{{ req.title }}</span>{% endif %}
-<span class="d-block" style="white-space: pre-wrap;">{{ req.text }}</span>
+<span class="d-block req-body">{{ req.text | req_body }}</span>
 {% if other_releases %}
   <span class="d-block text-muted mt-1">
     Showing the latest of {{ other_releases + 1 }} releases carrying this id.
