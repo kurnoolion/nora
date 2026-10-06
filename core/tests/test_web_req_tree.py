@@ -151,3 +151,68 @@ def test_reqs_for_plan_per_req_fallback_rule(tmp_path: Path):
     rows = reqs_for_plan(tmp_path, "mno-a", "Apr2026", "PLAN_Y")
     assert [r["req_id"] for r in rows] == ["REQ_BAR_0001"]
     assert reqs_for_plan(tmp_path, "mno-a", "Apr2026", "PLAN_NOPE") == []
+
+
+# ── Bubble metadata: section_number + plan_name (strand req-bubble-metadata) ──
+
+
+def _meta_corpus(env_dir: Path):
+    """One single-plan tree (its reqs ARE the primary plan) and one multi-plan
+    tree (empty tree-level plan, per-req plan ids — the secondary-plan case).
+    """
+    _write_tree(env_dir, "mno-a", "Jan2026", "docP", {
+        "plan_id": "PLAN_X",
+        "plan_name": "Plan Ex",
+        "requirements": [
+            {"req_id": "REQ_P_0001", "section_number": "1.4.3"},
+            # Table-anchored shape: no section_number, linked by parent_section.
+            {"req_id": "REQ_P_0002", "section_number": "",
+             "parent_section": "1.4"},
+            # Neither — nothing to show.
+            {"req_id": "REQ_P_0003", "section_number": "", "parent_section": ""},
+        ],
+    })
+    _write_tree(env_dir, "mno-a", "Jan2026", "docS", {
+        "plan_id": "",
+        "plan_name": "Whole Document Name",
+        "requirements": [
+            {"req_id": "REQ_S_0001", "plan_id": "PLAN_Y", "section_number": "2"},
+        ],
+    })
+
+
+def test_find_req_returns_section_number(tmp_path: Path):
+    _meta_corpus(tmp_path)
+    m = find_req(tmp_path, "REQ_P_0001")[0]
+    assert m["section_number"] == "1.4.3"
+
+
+def test_find_req_carries_empty_section_number_rather_than_omitting_it(
+    tmp_path: Path,
+):
+    """Table-anchored and leading-id-body reqs have `section_number=""` by
+    design (parser MODULE.md) — the key is always present so the template can
+    branch on emptiness instead of on absence."""
+    _meta_corpus(tmp_path)
+    m = find_req(tmp_path, "REQ_P_0002")[0]
+    assert m["section_number"] == ""
+    assert m["parent_section"] == "1.4"
+
+
+def test_primary_plan_req_gets_the_document_plan_name(tmp_path: Path):
+    _meta_corpus(tmp_path)
+    m = find_req(tmp_path, "REQ_P_0001")[0]
+    assert m["plan"] == "PLAN_X"
+    assert m["plan_name"] == "Plan Ex"
+
+
+def test_secondary_plan_req_does_not_borrow_the_document_name(tmp_path: Path):
+    """`graph/builder.py` establishes that only the PRIMARY plan carries the
+    document-level name; secondary plans get "". There is no per-plan-id ->
+    name mapping, so showing the document's name beside a secondary plan's
+    requirement would label it with the wrong plan.
+    """
+    _meta_corpus(tmp_path)
+    m = find_req(tmp_path, "REQ_S_0001")[0]
+    assert m["plan"] == "PLAN_Y"
+    assert m["plan_name"] == ""
