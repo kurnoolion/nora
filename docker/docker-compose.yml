@@ -34,6 +34,13 @@ services:
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/sira-query:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
+    # Serve containers default to root (0:0 — today's behavior). Set
+    # SERVE_UID/SERVE_GID to the host user so bind-mount writes land
+    # user-owned instead of root-owned (same pattern as JOB_UID/JOB_GID
+    # on the job containers). One-time migration when switching an
+    # existing deployment: chown the already-root-owned state dirs
+    # (web-state, feedback, golden dir) to that user first.
+    user: "${SERVE_UID:-0}:${SERVE_GID:-0}"
     ports:
       - "${SIRA_QUERY_PORT:-8040}:8040"
     volumes:
@@ -68,6 +75,10 @@ services:
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/nora-web:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
+    # See sira-query: default 0:0 is today's behavior; set SERVE_UID and
+    # SERVE_GID so web-state/feedback/corrections/golden writes land
+    # user-owned.
+    user: "${SERVE_UID:-0}:${SERVE_GID:-0}"
     ports:
       - "${NORA_WEB_PORT:-8000}:8000"
     volumes:
