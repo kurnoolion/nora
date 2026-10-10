@@ -1,12 +1,14 @@
 # Storage design — dev/test and corp-prod deployment
 
-Strand: `corp-db-layer` · Draft v0.4, 2026-10-09 · Status: approved in review
+Strand: `corp-db-layer` · Draft v0.5, 2026-10-09 · Status: approved in review
 (v0.2: engine-agnostic cell schema, registry tiers + scale analysis,
 phased validation plan replacing the big-bang publish sequence.
 v0.3, post-review: single engine per stack made explicit; `memory`
 disqualified as production engine at global scale; lazy-open/LRU loader
 contract; single-engine publish in phase 4; inverted-index glossary
-note. v0.4: §1a overall-design diagram + query/response path.)
+note. v0.4: §1a overall-design diagram + query/response path.
+v0.5: backward-compatibility invariant in §7 — all phase-1–3 changes
+additive and flag-gated, today's behavior the default.)
 
 Inputs: `artifact-inventory.md` (same strand) + the architect's scope
 ruling of 2026-10-09: corp deployment serves the Ask surface only
@@ -336,6 +338,15 @@ serving may adopt the same cell-DB path (optional, later).
 
 ## 7. Invariants carried over (and where they now live)
 
+- **Backward compatibility** → every phase-1–3 change is additive and
+  flag-gated with today's behavior as the default (`NORA_SIRA_INDEX`
+  defaults to `flat`; the ingestion `--index` flag defaults to legacy
+  flat files; `FsCorpusStore` is the default store and must be a pure
+  extraction of today's reads, not a rewrite — the phase-2
+  memory-engine parity gate is its test). An instance that sets nothing
+  runs unchanged. Phase 4 is the only phase that changes a default, and
+  it does so by the evaluated new stack becoming official, not by
+  flipping flags under existing instances.
 - **Label immutability** → cell-DB files are write-once; registry is the
   only mutable corpus state. Enforceable with file permissions.
 - **Rollback is repointing** → `active` row flip.
