@@ -60,8 +60,12 @@ from sandbox.sira_query.enrich_overlay import (
     make_verdict_fn,
 )
 
-SCHEMA_VERSION = 1
-CONVERTER_VERSION = "0.1"
+SCHEMA_VERSION = 1   # pre-release; frozen when the first loader ships
+CONVERTER_VERSION = "0.2"  # 0.2: corpus.req_id UNIQUE dropped — real cells
+#   carry duplicate doc/section `_id` rows (field finding, 2026-10-10);
+#   the row set must stay byte- and position-faithful to corpus.jsonl
+#   because the index blobs score every row. Id lookups are last-wins
+#   (max doc per req_id), mirroring the serving loader's dict semantics.
 
 _DDL = """
 CREATE TABLE meta(
@@ -70,10 +74,16 @@ CREATE TABLE meta(
 );
 CREATE TABLE corpus(
   doc     INTEGER PRIMARY KEY,          -- stable load-order index
-  req_id  TEXT UNIQUE NOT NULL,         -- corpus.jsonl `_id`
+  req_id  TEXT NOT NULL,                -- corpus.jsonl `_id`; NOT unique:
+                                        -- real cells carry duplicate doc/
+                                        -- section ids, and the index blobs
+                                        -- score every row positionally.
+                                        -- Service semantics for id lookup
+                                        -- is last-wins (max doc per id).
   title   TEXT NOT NULL DEFAULT '',
   text    TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX corpus_req_id_idx ON corpus(req_id);
 CREATE TABLE enrichment(
   req_id  TEXT PRIMARY KEY,             -- post-overlay-fold EFFECTIVE set
   phrases TEXT NOT NULL,                -- JSON array of phrases

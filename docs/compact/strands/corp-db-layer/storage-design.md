@@ -394,3 +394,14 @@ serving may adopt the same cell-DB path (optional, later).
    current overlay state into the cell DB at convert time; the FTS5
    stack's Apply/pending machinery is inert during the trial (surface
    is dormant anyway).
+6. Per-cell DB dedup across stack configs (field question, 2026-10-10):
+   N dev/test stacks sharing a corpus but differing in enrichment runs
+   duplicate the requirement tier once per stack. Ruled for phases 1–3:
+   keep self-contained per-(stack-config) files — compressed cells are
+   small, corp-prod runs one stack, and self-containment is what makes
+   transfer/rollback/identity trivial. Revisit at phase-4 registry
+   design with measured sizes; fingerprint-keyed file sharing in
+   `cell_versions` is the natural home if dedup ever earns its
+   complexity. Converter output lives outside the serve root
+   (`<data-root>/cell-dbs/<label>/<stack>/`); labels and promote.sh
+   untouched in phases 1–3.

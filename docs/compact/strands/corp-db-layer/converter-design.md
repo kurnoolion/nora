@@ -50,10 +50,17 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE corpus(
   doc     INTEGER PRIMARY KEY,          -- stable load-order index
-  req_id  TEXT UNIQUE NOT NULL,         -- corpus.jsonl `_id`
+  req_id  TEXT NOT NULL,                -- corpus.jsonl `_id`; NOT unique —
+                                        -- real cells carry duplicate doc/
+                                        -- section id rows (field finding
+                                        -- 2026-10-10); every row ships,
+                                        -- positionally aligned with the
+                                        -- index; id lookup is last-wins
+                                        -- (max doc), mirroring the service
   title   TEXT NOT NULL DEFAULT '',
   text    TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX corpus_req_id_idx ON corpus(req_id);
 
 CREATE TABLE enrichment(
   req_id  TEXT PRIMARY KEY,

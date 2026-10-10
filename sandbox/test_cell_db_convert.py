@@ -238,6 +238,43 @@ def test_no_cells_is_cnv009(tmp_path):
     assert ei.value.code == "CNV-009"
 
 
+def test_duplicate_doc_section_ids_convert(tmp_path):
+    """Field finding (2026-10-10): real cells carry duplicate doc/section
+    `_id` rows (`section:<plan>:<num>` emitted more than once). The flat
+    stack serves them; the DB must keep every row positionally (the index
+    blobs score all of them) with last-wins id-lookup semantics."""
+    dup_docs = [
+        ("doc:planx", "plan doc", "plan document preamble text"),
+        ("section:planx:1", "s1", "first section body"),
+        ("REQ-0", "emergency callback", "the device shall support emergency callback mode"),
+        ("section:planx:1", "s1 again", "first section body repeated"),
+        ("REQ-1", "lock screen", "emergency calls shall bypass the device lock screen"),
+        ("doc:planx", "plan doc again", "plan document preamble repeated"),
+    ]
+    db_root = tmp_path / "cells"
+    make_cell(db_root, "mnoa", "Apr2098", docs=dup_docs,
+              enrich={"REQ-0": ["cbm"], "section:planx:1": ["marker phrase"]})
+    out = tmp_path / "out"
+    report = convert(db_root, out, verify_n=4)
+
+    (cell_rep,) = report["cells"]
+    assert cell_rep["n_docs"] == len(dup_docs)
+    assert cell_rep["verify"]["mismatches"] == 0
+
+    con = sqlite3.connect(f"file:{out / 'cell-mnoa-Apr2098.db'}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT doc, req_id, title, text FROM corpus ORDER BY doc").fetchall()
+        assert rows == [(i, rid, t, x) for i, (rid, t, x) in enumerate(dup_docs)]
+        # last-wins lookup semantics: max(doc) per req_id = the later row
+        last = con.execute(
+            "SELECT title FROM corpus WHERE req_id='section:planx:1' "
+            "ORDER BY doc DESC LIMIT 1").fetchone()
+        assert last == ("s1 again",)
+    finally:
+        con.close()
+
+
 def test_verify_catches_blob_corruption(tmp_path):
     """Tampered blobs must fail verification, not serve quietly."""
     from sandbox.cell_db_convert import _load_cell, _fold_and_enrich
