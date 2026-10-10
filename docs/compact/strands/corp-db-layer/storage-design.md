@@ -1,6 +1,6 @@
 # Storage design — dev/test and corp-prod deployment
 
-Strand: `corp-db-layer` · Draft v0.5, 2026-10-09 · Status: approved in review
+Strand: `corp-db-layer` · Draft v0.6, 2026-10-09 · Status: approved in review
 (v0.2: engine-agnostic cell schema, registry tiers + scale analysis,
 phased validation plan replacing the big-bang publish sequence.
 v0.3, post-review: single engine per stack made explicit; `memory`
@@ -8,7 +8,9 @@ disqualified as production engine at global scale; lazy-open/LRU loader
 contract; single-engine publish in phase 4; inverted-index glossary
 note. v0.4: §1a overall-design diagram + query/response path.
 v0.5: backward-compatibility invariant in §7 — all phase-1–3 changes
-additive and flag-gated, today's behavior the default.)
+additive and flag-gated, today's behavior the default. v0.6: phase-3
+flag renamed `--index=fts5` → `--index=cell-db` — names the artifact,
+not an engine.)
 
 Inputs: `artifact-inventory.md` (same strand) + the architect's scope
 ruling of 2026-10-09: corp deployment serves the Ask surface only
@@ -283,9 +285,14 @@ no-regression, and per-sample adjudication of misses (a shifted ranking
 is not automatically a regression).
 
 **Phase 3 — ingestion flag.** The SIRA-lane build step gains
-`--index=fts5` (name per the flag's user-facing intent; it emits the
-cell DB). During transition it emits BOTH forms from one build — flat
-files and cell DB — so the two stacks always serve byte-identical
+`--index=cell-db`. The value names the artifact's granularity and kind,
+not an engine or vendor — the engine is a serve-time choice
+(`NORA_SIRA_ENGINE`), schema evolution rides `schema_version`, and the
+flag is an enum, so any future storage shape is a new additive value.
+(Renamed from the earlier working name `--index=fts5`, which named one
+optional table in the file and would turn wrong the day `postings`
+wins the eval.) During transition it emits BOTH forms from one build —
+flat files and cell DB — so the two stacks always serve byte-identical
 corpus+enrichment and the A/B stays honest. Default remains legacy
 flat files.
 

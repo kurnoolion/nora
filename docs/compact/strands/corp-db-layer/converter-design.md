@@ -165,7 +165,7 @@ sira-query gains two knobs, both read at startup:
 - nora-web reads (stays on label flat files in both stacks).
 - The enrichment-review Apply/pending machinery (inert for cell-db
   cells during the trial; overlay state is baked at convert time).
-- Ingestion (`--index=fts5` emission is phase 3).
+- Ingestion (`--index=cell-db` emission is phase 3).
 - Registry / transfer / corp profile (phase 4; `storage-design.md` §5a).
 
 ## 8. Acceptance (exit criteria for phases 1–2)
