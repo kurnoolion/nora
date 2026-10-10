@@ -1,6 +1,6 @@
 # Storage design — dev/test and corp-prod deployment
 
-Strand: `corp-db-layer` · Draft v0.7, 2026-10-09 · Status: approved in review
+Strand: `corp-db-layer` · Draft v0.8, 2026-10-10 · Status: approved in review
 (v0.2: engine-agnostic cell schema, registry tiers + scale analysis,
 phased validation plan replacing the big-bang publish sequence.
 v0.3, post-review: single engine per stack made explicit; `memory`
@@ -14,7 +14,10 @@ not an engine. v0.7, at phase-1 implementation: §4 engine set amended
 to memory | bm25x (enriched index as compressed blobs — expected
 winner) | fts5; SQL `postings` engine deferred — bm25x is a Rust
 multi-gram hashed engine a textbook dump cannot reproduce; see
-converter-design.md §9 findings.)
+converter-design.md §9 findings. v0.8, at phase-2 implementation:
+`memory` engine removed — build params not recorded/introspectable, and
+the blob engine is the byte-exact parity control; engines are
+bm25x | fts5; field-validation numbers folded in.)
 
 Inputs: `artifact-inventory.md` (same strand) + the architect's scope
 ruling of 2026-10-09: corp deployment serves the Ask surface only
@@ -100,9 +103,7 @@ the engine choice changes only steps 4–5):
    accumulates the exact bm25x formula from the fetched rows and the
    `meta` params, combining `s_orig + w·s_exp` per
    `search_with_expansion` semantics; top-k wins. (`fts5` engine: two
-   MATCH queries combined in the service instead; `memory` engine: no
-   DB reads at query time — the in-memory index built at open answers
-   directly.)
+   MATCH queries combined in the service instead.)
 6. **Materialize.** `SELECT req_id, title, text FROM corpus WHERE doc
    IN (top-k)` — the retrieved chunks.
 7. **Rerank + answer (LLM).** Optional rerank call, then the answer
@@ -230,9 +231,14 @@ same data across phase-2 A/B stacks, or inside the converter's offline
 
 | Engine | What it does | Why it exists |
 |---|---|---|
-| `memory` | load rows, rebuild + enrich the in-memory `bm25x` index at cell load (~seconds, measured) | parity control — identical ranking to today; the baseline every comparison runs against |
-| `bm25x` | the cell DB carries the ENRICHED serialized bm25x engine state as zlib blobs; the loader extracts and `BM25.load`s it | the expected production engine: byte-exact parity with the flat stack by construction, zero scoring re-implementation (bm25x is a Rust multi-gram hashed engine — a textbook SQL dump cannot reproduce its ranking; converter-design.md §9) |
-| `fts5` | FTS5 virtual table over the unigram token stream; ranking inside SQLite | the zero-custom-code in-engine option; unigram-only, k1/b hardcoded — comparable only where the source index is unigram, informational otherwise |
+| `bm25x` | the cell DB carries the ENRICHED serialized bm25x engine state as zlib blobs; the loader extracts and `BM25.load`s it | the expected production engine AND the parity control: byte-exact identity with the flat stack by construction, zero scoring re-implementation (bm25x is a Rust multi-gram hashed engine — a textbook SQL dump cannot reproduce its ranking; converter-design.md §9) |
+| `fts5` | FTS5 virtual table over the unigram token stream; ranking inside SQLite (tokenization + DF filter still via the blob-loaded index, so the scorer is the only A/B variable) | the zero-custom-code in-engine option; the production index measured unigram, so it is a real candidate |
+
+(A third `memory` engine — rebuild from rows — was designed and then
+removed at implementation: the index's build parameters are neither
+introspectable from bm25x nor recorded anywhere, so a rebuild cannot be
+faithful; the blob engine already provides the byte-exact parity
+control. `NORA_SIRA_ENGINE=memory` fails loudly at startup.)
 
 A custom SQL `postings` engine (per-(term/ngram, doc) contribution dump
 + service-side summation) remains mathematically possible —
@@ -249,19 +255,20 @@ engines on identical data; the winner ships. An engine change is an
 eval-gated config flip forever after — never a schema change.
 
 **Scale verdict (2026-10-09 analysis, amended at implementation):**
-`memory` pays a full rebuild + enrich per open cell at startup —
-disqualified as the production engine at global scale; it remains the
-eval parity control and debug tool, rebuildable from `corpus` +
-`enrichment` rows, which ship regardless of engine. Expected winner:
+A rebuild-from-rows engine would pay a full rebuild + enrich per open
+cell at startup and cannot be faithful anyway (build params not
+recorded) — removed at implementation. Expected winner:
 `bm25x` (blob) — exact parity by construction; its per-open-cell RAM is
 the loaded Rust index (compact — the serialized form is dominated by a
 mostly-empty hash table that compresses ~500:1 on disk), bounded by the
 lazy-open/LRU budget, and its open cost is decompress + load
 (milliseconds-to-subsecond), not a rebuild. fts5 still runs in the
 phase-2 eval (emitting it is nearly free) but is unigram-only —
-comparable solely where the source index is unigram. Real per-cell RAM
-and open-cost numbers land with the phase-1 conversion of the actual
-label (converter report + `meta.bm25x_max_n`).
+comparable solely where the source index is unigram. Field validation
+(2026-10-10, first production label): the production index IS unigram
+(`max_n = 1` on all 5 cells), so fts5 stands as a real candidate;
+cell DBs measured ~10–33 MB (4.3k–12.4k docs/cell), 5/5 self-verify,
+5/5 fingerprint parity with the live stack's healthz.
 
 **Single-engine publish (phase 4):** the three-engine file is a
 phases-1–3 evaluation affordance, not the shipping format. Once the
@@ -287,7 +294,7 @@ stack keeps serving as-is. nora-web stays on flat files in BOTH stacks,
 so the only variable is the retrieval index. Evaluation: golden
 Stage-1/Stage-2 against both stack URLs (black-box, zero new eval code;
 StackStamps key the runs apart) plus a team-usage round. Acceptance:
-`memory`-engine result-set parity with the flat stack (sanity gate),
+`bm25x`-engine result-set IDENTITY with the flat stack (sanity gate),
 then per-engine recall@5/@10 not below the flat baseline, Stage-2 judge
 no-regression, and per-sample adjudication of misses (a shifted ranking
 is not automatically a regression).
@@ -358,7 +365,7 @@ serving may adopt the same cell-DB path (optional, later).
   defaults to `flat`; the ingestion `--index` flag defaults to legacy
   flat files; `FsCorpusStore` is the default store and must be a pure
   extraction of today's reads, not a rewrite — the phase-2
-  memory-engine parity gate is its test). An instance that sets nothing
+  bm25x-engine identity gate is its test). An instance that sets nothing
   runs unchanged. Phase 4 is the only phase that changes a default, and
   it does so by the evaluated new stack becoming official, not by
   flipping flags under existing instances.

@@ -1,6 +1,6 @@
 # Cell-DB converter design (phase 1)
 
-Strand: `corp-db-layer` · Draft v0.3, 2026-10-09 · Status: implemented (sandbox/cell_db_convert.py)
+Strand: `corp-db-layer` · Draft v0.4, 2026-10-10 · Status: implemented (converter + loader)
 Companion: `storage-design.md` (§4 engines, §5 phases)
 (v0.2, post-review: single engine per process in §6; loader lazy-open
 note. v0.3, at implementation: schema amended to blob-primary after
@@ -79,11 +79,12 @@ CREATE TABLE index_blob(
 CREATE VIRTUAL TABLE fts USING fts5(toks);  -- rowid == corpus.doc
 ```
 
-Design intents: `corpus` + `enrichment` alone suffice for the `memory`
-engine (parity control rebuilds from rows); `index_blob` serves the
-`bm25x` engine — extract, `BM25.load`, serve, byte-exact parity with
-the flat stack by construction; `fts` is the unigram in-engine
-candidate (informational where the source index is multi-gram, §9).
+Design intents: `index_blob` serves the `bm25x` engine — extract,
+`BM25.load`, serve, byte-exact parity with the flat stack by
+construction (it is both the expected production engine and the parity
+control); `fts` is the unigram in-engine candidate; `corpus` +
+`enrichment` rows remain the readable source of record (debugging,
+future consumers, and the phase-4 web-side `requirements` tier).
 The zlib codec is load-bearing: bm25x's hashed n-gram side serializes
 its full slot table (~134 MB of mostly zeros at default `n_features`)
 regardless of corpus size; compression stores it at ~500:1 and
@@ -157,22 +158,36 @@ sira-query gains two knobs, both read at startup:
 - `NORA_SIRA_INDEX = flat | cell-db` — where cells come from. `flat`
   is today's path, untouched. `cell-db` enumerates `cell-*.db` under
   `NORA_SIRA_DB_ROOT` instead of cell directories.
-- `NORA_SIRA_ENGINE = memory | bm25x | fts5` (cell-db mode only) —
-  **exactly one engine per process, read once at startup**; every query
-  scores through it. No per-query switching or fallback. Engines only
-  meet across phase-2 A/B stacks (via the golden harness) and inside
-  this converter's offline `--verify`:
-  - `memory`: load `corpus` + `enrichment` rows, rebuild + enrich in
-    RAM as `_load_one_cell` does today from files. Parity control.
+- `NORA_SIRA_ENGINE = bm25x | fts5` (cell-db mode only) — **exactly one
+  engine per process, read once at startup**; every query scores
+  through it. No per-query switching or fallback. Engines only meet
+  across phase-2 A/B stacks (via the golden harness) and inside this
+  converter's offline `--verify`:
   - `bm25x` (expected production engine): extract `index_blob` to a
     cell cache dir, `BM25.load`, `disable_auto_save` — byte-exact
     parity with the flat stack, no re-enrichment (the blobs are already
     enriched). Open cost = decompress + load, milliseconds-to-subsecond.
   - `fts5`: two MATCH queries (original-token query, expansion-token
     query, each as quoted-token OR), combined `score = s_orig + w·s_exp`
-    in the service; `bm25()` rank is negative-is-better — normalize
-    before fusion. Unigram-only: informational where the source index
-    is multi-gram (§9).
+    in the service; `bm25()` rank is negative-is-better — normalized
+    before fusion. Tokenization and query-side DF filtering still run
+    through the blob-loaded index, so the SCORER is the only variable
+    the A/B measures. (A blob-free fts5 would need tokenizer params in
+    `meta` — phase-4 work, only if fts5 wins.)
+  - The earlier `memory` engine (rebuild from rows) is REMOVED at
+    implementation: the index's build parameters (k1, b, method,
+    tokenizer) are neither introspectable from bm25x nor recorded, so a
+    rebuild cannot be faithful — and its parity-control role is filled
+    byte-exactly by `bm25x`, which loads the same engine state the flat
+    stack builds. `NORA_SIRA_ENGINE=memory` fails loudly at startup.
+- `NORA_SIRA_PROMPTS_FROM` (cell-db mode): a flat cell dir to load the
+  query-enrich/rerank prompts from (the DB carries no prompt files), so
+  both A/B stacks serve byte-identical prompts; unset falls back to the
+  clone's canonical prompts.
+- Cell-db cells are immutable at serve time: `/cells/{cell}/reload`
+  returns 409 (new content = new DB + restart in the trial; registry
+  flip later), and label branch variants fall back to the default view
+  (the Apply machinery is inert; overlay is baked).
 - Everything above the retrieval call (LLM question enrichment, rerank
   toggle, response shapes, healthz) is unchanged. Healthz reports
   `data_fingerprint = meta.source_fingerprint` plus the engine and
@@ -190,7 +205,7 @@ sira-query gains two knobs, both read at startup:
 
 1. Converter self-verify passes on every cell of the current label
    (DB-blob-loaded index ≡ in-memory enriched index, per cell).
-2. Phase-2 `memory`-engine stack returns result sets identical to the
+2. Phase-2 `bm25x`-engine stack returns result sets identical to the
    flat-file stack on the golden Stage-1 queries (sanity gate — proves
    the DB content, load path, and plumbing before any engine question).
 3. Per-engine golden recall@5/@10 ≥ flat baseline; Stage-2 judge
@@ -228,4 +243,13 @@ pin them.
    the converter records `bm25x_max_n`/`bm25x_ngrams` in `meta` at
    convert time, which also settles how seriously to take the fts5
    engine for that cell (unigram source index → comparable; multi-gram
-   → informational only).
+   → informational only). RESOLVED by field validation 2026-10-10:
+   `max_n = 1` (`ngrams = [1]`) on every production cell — FTS5 is a
+   real phase-2 candidate.
+5. **Field validation (2026-10-10, first production label, 5 cells):**
+   5/5 converted and self-verified (25 probes, k=10, zero mismatches);
+   5/5 `source_fingerprint` byte-equal to the live stack's own per-cell
+   healthz fingerprint; cell DB sizes ~10–33 MB (4.3k–12.4k docs/cell),
+   inside the storage-design estimates. One real-data schema correction
+   was needed first: duplicate doc/section `_id` rows (§3, UNIQUE
+   dropped).

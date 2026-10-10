@@ -48,6 +48,17 @@ logger = logging.getLogger(__name__)
 # ── Config from env ─────────────────────────────────────────────────
 
 _DB_ROOT = os.getenv("NORA_SIRA_DB_ROOT", "")
+# corp-db-layer phase 2: where cells come from, and which engine scores.
+# flat (default) = today's path, byte-untouched. cell-db = <db_root> holds
+# `cell-<mno>-<release>.db` files from sandbox/cell_db_convert.py.
+# Engine (cell-db mode only; exactly one per process, read here once):
+#   bm25x = load the enriched engine state from the DB's index blobs
+#           (byte-exact parity with the flat stack by construction);
+#   fts5  = FTS5 MATCH scoring inside SQLite (tokenization and DF filter
+#           still via the blob-loaded index, so the scorer is the only
+#           variable the A/B measures).
+_INDEX_MODE = os.getenv("NORA_SIRA_INDEX", "flat").strip().lower()
+_ENGINE = os.getenv("NORA_SIRA_ENGINE", "bm25x").strip().lower()
 # Enrichment-corrections overlay root (strand sira-enrichment-review):
 # mounted ro in containers; unset = overlay machinery inert (vanilla behavior).
 _CORR_ROOT = os.getenv("NORA_SIRA_CORRECTIONS_ROOT", "")
@@ -376,6 +387,12 @@ def _compute_identity() -> None:
             db_root = Path(_DB_ROOT)
             for cell in sorted(_cells):
                 cstate = _cells[cell]
+                if cstate.db_meta.get("source_fingerprint"):
+                    # cell-db mode: the converter recorded the fingerprint
+                    # with the SAME formula over the SAME source files, so
+                    # both A/B stacks report comparable identities.
+                    per_cell[cell_dirname(cell)] = cstate.db_meta["source_fingerprint"]
+                    continue
                 base = db_root / cell_dirname(cell)
                 phrases = (
                     Path(cstate.doc_enrich_source)
@@ -464,6 +481,14 @@ class CellState:
     overlay_snapshot: dict = field(default_factory=dict)
     accepted_snapshot: set = field(default_factory=set)
     _token_cache: dict[str, frozenset] = field(default_factory=dict)
+    # --- cell-db mode (corp-db-layer phase 2) ---
+    # engine: "flat" (file-loaded, today's path) | "bm25x" | "fts5".
+    # db_meta carries the cell DB's meta table (fingerprint, schema,
+    # enrich run); db_con is the read-only connection the fts5 engine
+    # queries (None for other engines).
+    engine: str = "flat"
+    db_meta: dict = field(default_factory=dict)
+    db_con: "Any" = field(default=None, repr=False)
 
     def vanilla_tokens(self, req_id: str) -> "frozenset | None":
         """VANILLA index token set for a req (the fingerprint basis —
@@ -859,8 +884,57 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
     cstate.loaded_at = time.time()
 
 
+def _load_one_cell_db(db_path: Path) -> CellState:
+    """Load one cell from its SQLite cell DB (corp-db-layer phase 2).
+
+    The DB carries the ENRICHED index as blobs, so there is no enrichment
+    or overlay pass here — overlay state was baked at convert time and
+    the Apply machinery is inert for cell-db cells. Mirrors the flat
+    loader's id semantics exactly (every row keeps its slot; id lookups
+    are last-wins)."""
+    from sandbox.sira_query.cell_db_store import load_cell_db
+
+    data = load_cell_db(db_path, keep_connection=(_ENGINE == "fts5"))
+    if _ENGINE == "fts5" and not data.has_fts:
+        raise RuntimeError(
+            f"{db_path.name}: no fts table — reconvert without --no-fts5 "
+            "or set NORA_SIRA_ENGINE=bm25x")
+
+    doc_ids: list[str] = []
+    doc_id_to_idx: dict[str, int] = {}
+    corpus_by_id: dict[str, dict[str, str]] = {}
+    for _doc, rid, title, text in data.rows:
+        doc_id_to_idx[rid] = len(doc_ids)
+        doc_ids.append(rid)
+        corpus_by_id[rid] = {"title": title, "text": text}
+    max_df = max(1, int(len(doc_ids) * _MAX_DF_RATIO))
+
+    from bm25x import BM25
+    bm25 = BM25.load(data.index_dir)
+    bm25.disable_auto_save()
+
+    cstate = CellState(
+        cell=data.cell, bm25=bm25, doc_ids=doc_ids,
+        doc_id_to_idx=doc_id_to_idx, corpus_by_id=corpus_by_id, max_df=max_df,
+        engine=_ENGINE, db_meta=data.meta, db_con=data.con,
+    )
+    # Provenance for healthz / review surfaces. llm_words holds the
+    # EFFECTIVE (post-fold) sets here — the pre-overlay LLM output is not
+    # stored in the DB; the review surface is read-only for cell-db cells.
+    cstate.llm_words = dict(data.enrichment)
+    cstate.effective_words = dict(data.enrichment)
+    cstate.doc_enrich_applied_docs = int(data.meta.get("enriched_docs", "0") or 0)
+    cstate.doc_enrich_source = (
+        f"{db_path.name}: baked (run {data.meta.get('enrich_run', '') or 'none'})")
+    cstate.enrich_model = data.meta.get("enrich_model", "")
+    cstate.overlay_digest = data.meta.get("overlay_digest_baked", "")
+    cstate.loaded_at = time.time()
+    return cstate
+
+
 def _load_cells() -> None:
-    """Populate `_cells` from `<db_root>/<mno>__<MMMYYYY>/` datasets.
+    """Populate `_cells` from `<db_root>` — flat cell dirs by default, or
+    SQLite cell DBs when NORA_SIRA_INDEX=cell-db.
 
     Idempotent. On any per-cell load failure, that cell is skipped and
     the error recorded in `_cells_load_error`; other cells still load so
@@ -872,8 +946,35 @@ def _load_cells() -> None:
     if not _DB_ROOT:
         return
     db_root = Path(_DB_ROOT)
-    cells = enumerate_cells(db_root)
     errors: list[str] = []
+
+    if _INDEX_MODE == "cell-db":
+        if _ENGINE not in ("bm25x", "fts5"):
+            _cells_load_error = (
+                f"NORA_SIRA_ENGINE={_ENGINE!r} unsupported — use bm25x or "
+                "fts5 (the DB's blobs ARE the engine state; a rebuild-from-"
+                "rows engine would need build params the index does not expose)")
+            return
+        for db_path in sorted(db_root.glob("cell-*.db")):
+            try:
+                cstate = _load_one_cell_db(db_path)
+                _cells[cstate.cell] = cstate
+            except Exception as exc:
+                errors.append(f"{db_path.name}: {exc}")
+        # No overlay/enrichment pass: baked at convert time (see loader).
+        _cells_load_error = "; ".join(errors) if errors else None
+        if _cells:
+            logger.info(
+                "Cell-DB mode (engine=%s): loaded %d cell(s): %s",
+                _ENGINE, len(_cells),
+                ", ".join(cell_dirname(c) for c in sorted(_cells)),
+            )
+        elif not _cells_load_error:
+            _cells_load_error = f"no cell-*.db files under {db_root}"
+        _compute_identity()
+        return
+
+    cells = enumerate_cells(db_root)
     for cell in cells:
         base = db_root / cell_dirname(cell)
         try:
@@ -903,15 +1004,26 @@ def _build_retrieve_fn(query: str, raw_phrases: list[str], label: str = ""):
     branch variant's index (built by the caller) instead of the default."""
     def _retrieve(cell: CellKey, k: int) -> list[tuple[str, float]]:
         cstate = _get_variant(cell, label) or _cells[cell]
-        expansion = ""
+        stems: list[str] = []
         if raw_phrases:
             kept, _ = cstate.bm25.filter_query_expansion(
                 query, raw_phrases, cstate.max_df,
             )
-            stems: list[str] = []
             for p in kept:
                 stems.extend(cstate.bm25.tokenize(p))
-            expansion = " ".join(stems)
+        if cstate.engine == "fts5":
+            # fts5 engine: tokenization and DF-filtering above come from
+            # the blob-loaded index (one tokenizer for both engines, so
+            # the scorer is the only A/B variable); scoring runs inside
+            # SQLite via two MATCH passes combined per
+            # search_with_expansion semantics.
+            from sandbox.sira_query.cell_db_store import fts5_search
+            hits = fts5_search(
+                cstate.db_con, cstate.bm25.tokenize(query), stems,
+                k, _EXPANSION_WEIGHT,
+            )
+            return [(cstate.doc_ids[doc], float(s)) for doc, s in hits]
+        expansion = " ".join(stems)
         results = cstate.bm25.search_with_expansion(
             [query], [expansion], k=k, weight=_EXPANSION_WEIGHT,
         )
@@ -1206,8 +1318,17 @@ def _startup() -> None:
             # Service-level prompts aren't loaded by _load_cells (which is
             # skipped → no _load_state in multi-cell mode). Load them from the
             # first cell's runs/ (prompt content is identical across cells).
-            first = sorted(_cells)[0]
-            _load_prompts(Path(_DB_ROOT) / cell_dirname(first))
+            # Cell-db mode: the DB carries no prompt files — point
+            # NORA_SIRA_PROMPTS_FROM at a flat cell dir (the label the DBs
+            # were converted from) so both A/B stacks serve byte-identical
+            # prompts; unset falls back to the clone's canonical prompts.
+            prompts_from = os.getenv("NORA_SIRA_PROMPTS_FROM", "").strip()
+            if _INDEX_MODE == "cell-db":
+                _load_prompts(Path(prompts_from) if prompts_from
+                              else Path(_DB_ROOT))
+            else:
+                first = sorted(_cells)[0]
+                _load_prompts(Path(_DB_ROOT) / cell_dirname(first))
         else:
             _load_state()
     except Exception as exc:  # pragma: no cover — defensive
@@ -1346,6 +1467,11 @@ def _get_variant(ck: CellKey, label: str,
     touches the default cell, so other users' serving is unaffected."""
     if not label:
         return _cells.get(ck)
+    if _INDEX_MODE == "cell-db":
+        # Label branch variants rebuild from flat files + live overlay —
+        # inert for cell-db cells (overlay is baked at convert time).
+        # Serve the default view rather than a stale or impossible build.
+        return _cells.get(ck)
     st = _label_cells.get((ck, label))
     if st is not None or not build:
         return st
@@ -1416,6 +1542,15 @@ def cell_reload(cell_name: str, label: str = "") -> dict[str, Any]:
     rebuild on next labeled use."""
     label = label.strip()
     ck = _parse_cell_or_404(cell_name)
+    if _INDEX_MODE == "cell-db":
+        # Cell-db cells are write-once snapshots with overlay baked at
+        # convert time — there is nothing fresher on disk to apply. New
+        # content arrives as a new DB file + service restart (trial) or a
+        # registry flip (later phases).
+        raise HTTPException(
+            status_code=409,
+            detail="reload is a flat-mode operation; cell-db cells are "
+                   "immutable snapshots — reconvert and restart instead")
     with _reload_locks_guard:
         lock = _reload_locks.setdefault(ck, threading.Lock())
     with lock:
@@ -1449,9 +1584,17 @@ def healthz() -> dict[str, Any]:
     eff_doc_ids = (
         [rid for c in _cells.values() for rid in c.doc_ids] if multi else _doc_ids
     )
+    first_meta = next(
+        (c.db_meta for c in _cells.values() if c.db_meta), {}) if multi else {}
     return {
         "ok": multi or (_bm25 is not None),
         "mode": "multi-cell" if multi else "single-dataset",
+        # corp-db-layer phase 2: where cells come from + which engine
+        # scores. flat/bm25x-flat is today's path; golden StackStamps key
+        # runs apart on these.
+        "index_mode": _INDEX_MODE,
+        "engine": (_ENGINE if _INDEX_MODE == "cell-db" else "flat"),
+        "cell_db_schema_version": first_meta.get("schema_version", ""),
         "cells": [cell_dirname(c) for c in sorted(_cells)] if multi else [],
         "cells_load_error": _cells_load_error,
         "load_error": _load_error,
