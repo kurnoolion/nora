@@ -129,7 +129,11 @@ def _load_bm25():
     idx = _paths()["index"]
     if not idx.exists():
         raise FileNotFoundError(f"BM25 index not found at {idx}")
-    return BM25.load(str(idx))
+    bm25 = BM25.load(str(idx))
+    # Mutations (enrich) auto-save back to the load path — never
+    # rewrite the on-disk index from a debug tool.
+    bm25.disable_auto_save()
+    return bm25
 
 
 def _load_prompt(name: str) -> str:

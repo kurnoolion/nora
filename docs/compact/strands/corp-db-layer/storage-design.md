@@ -1,6 +1,6 @@
 # Storage design — dev/test and corp-prod deployment
 
-Strand: `corp-db-layer` · Draft v0.6, 2026-10-09 · Status: approved in review
+Strand: `corp-db-layer` · Draft v0.7, 2026-10-09 · Status: approved in review
 (v0.2: engine-agnostic cell schema, registry tiers + scale analysis,
 phased validation plan replacing the big-bang publish sequence.
 v0.3, post-review: single engine per stack made explicit; `memory`
@@ -10,7 +10,11 @@ note. v0.4: §1a overall-design diagram + query/response path.
 v0.5: backward-compatibility invariant in §7 — all phase-1–3 changes
 additive and flag-gated, today's behavior the default. v0.6: phase-3
 flag renamed `--index=fts5` → `--index=cell-db` — names the artifact,
-not an engine.)
+not an engine. v0.7, at phase-1 implementation: §4 engine set amended
+to memory | bm25x (enriched index as compressed blobs — expected
+winner) | fts5; SQL `postings` engine deferred — bm25x is a Rust
+multi-gram hashed engine a textbook dump cannot reproduce; see
+converter-design.md §9 findings.)
 
 Inputs: `artifact-inventory.md` (same strand) + the architect's scope
 ruling of 2026-10-09: corp deployment serves the Ask surface only
@@ -226,14 +230,16 @@ same data across phase-2 A/B stacks, or inside the converter's offline
 
 | Engine | What it does | Why it exists |
 |---|---|---|
-| `memory` | load rows, build the in-memory `bm25x` index at cell load (~seconds, measured) | parity control — identical ranking to today; the baseline every comparison runs against |
-| `postings` | read the dumped postings/df/doclen tables from SQLite; scoring loop in the service with `bm25x`'s exact formula, parameters, and max-df rule | the corp-optimized custom option: DB-backed reads, score parity, full control (expansion weighting, future field boosts) |
-| `fts5` | FTS5 virtual table over the same token stream; ranking inside SQLite | the zero-custom-code in-engine option; k1/b hardcoded (1.2/0.75), no max-df (emulated via the `df` table at query time), weighted expansion needs a two-query combine |
+| `memory` | load rows, rebuild + enrich the in-memory `bm25x` index at cell load (~seconds, measured) | parity control — identical ranking to today; the baseline every comparison runs against |
+| `bm25x` | the cell DB carries the ENRICHED serialized bm25x engine state as zlib blobs; the loader extracts and `BM25.load`s it | the expected production engine: byte-exact parity with the flat stack by construction, zero scoring re-implementation (bm25x is a Rust multi-gram hashed engine — a textbook SQL dump cannot reproduce its ranking; converter-design.md §9) |
+| `fts5` | FTS5 virtual table over the unigram token stream; ranking inside SQLite | the zero-custom-code in-engine option; unigram-only, k1/b hardcoded — comparable only where the source index is unigram, informational otherwise |
 
-FTS5's limitations for this corpus are real (fixed parameters,
-table-global statistics — neutralized by per-cell files — and no
-expansion weighting in a single MATCH), which is why the custom
-`postings` engine is a first-class candidate, not a fallback. Rejected
+A custom SQL `postings` engine (per-(term/ngram, doc) contribution dump
++ service-side summation) remains mathematically possible —
+`search_with_expansion` is a pure sum of query-independent
+contributions — but is DEFERRED: near-exact at best (hashed-slot
+collisions), and the blob engine already gives exact parity. Revisit
+only if the blob engine's footprint or open cost disappoints. Rejected
 engines: Tantivy (excellent BM25 but a new runtime + non-SQLite index —
 weak fit for corp standardization), DuckDB FTS / Postgres pg_search
 (extensions, same objection).
@@ -242,18 +248,20 @@ Decision mechanism: phase-2 A/B (§5) runs golden + team usage across
 engines on identical data; the winner ships. An engine change is an
 eval-gated config flip forever after — never a schema change.
 
-**Scale verdict on `memory` (2026-10-09 analysis):** at global scale
-(~100 MNOs, ~200 open cells of ~10k requirements) the `memory` engine
-costs ~100–150 MB RAM per open cell (~20–30 GB total) plus minutes of
-rebuild at startup — disqualified as the production engine. It remains
-the eval parity control and debug tool, rebuildable from `corpus` +
-`enrichment` rows, which ship regardless of engine. The DB-backed
-engines stay flat: <1 MB fixed per open cell plus a configurable page
-cache (~2–5 GB total for the whole hot set). Expected winner:
-`postings` — exact parity (tuned k1/b, max-df, native weighted
-expansion) where fts5 compromises all three; fts5 still runs in the
-phase-2 eval (emitting it is nearly free) and ships only if it beats
-postings.
+**Scale verdict (2026-10-09 analysis, amended at implementation):**
+`memory` pays a full rebuild + enrich per open cell at startup —
+disqualified as the production engine at global scale; it remains the
+eval parity control and debug tool, rebuildable from `corpus` +
+`enrichment` rows, which ship regardless of engine. Expected winner:
+`bm25x` (blob) — exact parity by construction; its per-open-cell RAM is
+the loaded Rust index (compact — the serialized form is dominated by a
+mostly-empty hash table that compresses ~500:1 on disk), bounded by the
+lazy-open/LRU budget, and its open cost is decompress + load
+(milliseconds-to-subsecond), not a rebuild. fts5 still runs in the
+phase-2 eval (emitting it is nearly free) but is unigram-only —
+comparable solely where the source index is unigram. Real per-cell RAM
+and open-cost numbers land with the phase-1 conversion of the actual
+label (converter report + `meta.bm25x_max_n`).
 
 **Single-engine publish (phase 4):** the three-engine file is a
 phases-1–3 evaluation affordance, not the shipping format. Once the

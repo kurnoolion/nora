@@ -601,6 +601,12 @@ def _load_state() -> None:
     # is the vanilla one regardless of which doc-enrich run we use.
     from bm25x import BM25
     _bm25 = BM25.load(str(index_dir))
+    # bm25x remembers its load path and AUTO-SAVES after every mutation —
+    # enrich_batch included. Without this, each startup writes the
+    # enriched index back over index/best (tf compounds across restarts),
+    # or raises on a read-only mount (silent vanilla fallback). SIRA's
+    # own batch scripts disable it the same way.
+    _bm25.disable_auto_save()
 
     # Resolve per-stage run directories (or None if falling back to
     # best-pointer behavior).
@@ -731,6 +737,9 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
 
     from bm25x import BM25
     bm25 = BM25.load(str(index_dir))
+    # Never mutate the on-disk index: enrich_batch would otherwise
+    # auto-save the enriched index back over index/best (see _load_state).
+    bm25.disable_auto_save()
 
     cstate = CellState(
         cell=cell, bm25=bm25, doc_ids=doc_ids,
