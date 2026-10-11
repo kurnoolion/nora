@@ -1684,6 +1684,11 @@ def healthz() -> dict[str, Any]:
         # different stacks compared as equal). Values duplicate
         # top-level keys by design; this dict is the contract.
         "retrieval_knobs": {
+            # Index backend + engine are retrieval-shaping state: two
+            # stacks differing only in engine must NOT share a knob
+            # digest (field-found — engine arms pooled as one stack).
+            "index_mode": _INDEX_MODE,
+            "engine": _ENGINE if _INDEX_MODE == "cell-db" else "flat",
             "max_df_ratio": _MAX_DF_RATIO,
             "max_df_absolute": _max_df_absolute,
             "expansion_weight": _EXPANSION_WEIGHT,

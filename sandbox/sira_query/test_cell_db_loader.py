@@ -123,6 +123,24 @@ def test_cell_db_healthz_identity(monkeypatch, converted):
     assert svc._data_fingerprint == svc_flat._data_fingerprint
 
 
+def test_engine_is_in_the_knob_tuple(monkeypatch, converted):
+    """Two stacks differing only in NORA_SIRA_ENGINE must not share a
+    knob set — the eval StackStamp builds its comparability key from the
+    healthz retrieval_knobs sub-dict (field-found: engine arms pooled as
+    one stack before index_mode/engine joined the knobs)."""
+    _flat, out = converted
+    knobs_bm25x = load_service(
+        monkeypatch, out, index="cell-db", engine="bm25x").healthz()["retrieval_knobs"]
+    knobs_fts5 = load_service(
+        monkeypatch, out, index="cell-db", engine="fts5").healthz()["retrieval_knobs"]
+    assert knobs_bm25x["index_mode"] == knobs_fts5["index_mode"] == "cell-db"
+    assert knobs_bm25x["engine"] == "bm25x" and knobs_fts5["engine"] == "fts5"
+    assert knobs_bm25x != knobs_fts5
+    # flat default reports itself distinctly too
+    flat_knobs = load_service(monkeypatch, _flat, index="flat").healthz()["retrieval_knobs"]
+    assert flat_knobs["index_mode"] == "flat" and flat_knobs["engine"] == "flat"
+
+
 def test_fts5_engine_serves_and_ranks(monkeypatch, converted):
     _flat, out = converted
     svc = load_service(monkeypatch, out, index="cell-db", engine="fts5")
