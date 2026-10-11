@@ -1,6 +1,6 @@
 # Storage design — dev/test and corp-prod deployment
 
-Strand: `corp-db-layer` · Draft v0.8, 2026-10-10 · Status: approved in review
+Strand: `corp-db-layer` · Draft v0.9, 2026-10-11 · Status: approved in review
 (v0.2: engine-agnostic cell schema, registry tiers + scale analysis,
 phased validation plan replacing the big-bang publish sequence.
 v0.3, post-review: single engine per stack made explicit; `memory`
@@ -17,7 +17,8 @@ multi-gram hashed engine a textbook dump cannot reproduce; see
 converter-design.md §9 findings. v0.8, at phase-2 implementation:
 `memory` engine removed — build params not recorded/introspectable, and
 the blob engine is the byte-exact parity control; engines are
-bm25x | fts5; field-validation numbers folded in.)
+bm25x | fts5; field-validation numbers folded in. v0.9: phase 3
+implemented — §5 phase-3 entry is as-built.)
 
 Inputs: `artifact-inventory.md` (same strand) + the architect's scope
 ruling of 2026-10-09: corp deployment serves the Ask surface only
@@ -299,8 +300,15 @@ then per-engine recall@5/@10 not below the flat baseline, Stage-2 judge
 no-regression, and per-sample adjudication of misses (a shifted ranking
 is not automatically a regression).
 
-**Phase 3 — ingestion flag.** The SIRA-lane build step gains
-`--index=cell-db`. The value names the artifact's granularity and kind,
+**Phase 3 — ingestion flag (IMPLEMENTED 2026-10-11).** The SIRA-lane
+build step gains `--index=cell-db` (`sandbox/sira_lane.py`; reachable
+operationally via `cycle.sh enrich --index cell-db`). After the flat
+build (and lane verify) succeeds, each built cell is also converted
+into a cell DB under `<db_root>/cell-dbs/` — in-process reuse of the
+phase-1 converter, the lane's enrichment run pinned (best-pointer for
+bm25-only builds), `--force` implied since the lane just rebuilt the
+cells. The DBs ride label promotion with the build tree; a cell-db
+stack mounts `<label>/sira/cell-dbs`. The value names the artifact's granularity and kind,
 not an engine or vendor — the engine is a serve-time choice
 (`NORA_SIRA_ENGINE`), schema evolution rides `schema_version`, and the
 flag is an enum, so any future storage shape is a new additive value.

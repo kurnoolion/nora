@@ -564,8 +564,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FAILED {exc}", file=sys.stderr)
         return 1
 
-    report_path = Path(args.out) / "conversion-report.json"
+    report_path = write_report(report, Path(args.out))
+    print_report(report)
+    print(f"report: {report_path}")
+    return 0
+
+
+def write_report(report: dict, out_dir: Path) -> Path:
+    """Persist the content-free conversion report; returns its path."""
+    report_path = out_dir / "conversion-report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return report_path
+
+
+def print_report(report: dict) -> None:
+    """One line per cell, chat-pasteable (counts/digests only — D-012)."""
     for c in report["cells"]:
         v = c.get("verify")
         vtxt = f"verify {v['probes']}q/k{v['k']} OK" if v else "verify skipped"
@@ -573,8 +586,6 @@ def main(argv: list[str] | None = None) -> int:
               f"blobs={c['blob_files']}({c['blob_stored_bytes'] >> 10}K stored, "
               f"{c['blob_bytes'] >> 20}M raw) "
               f"fts5={'y' if c['fts5'] else 'n'}  {vtxt}  -> {c['file']}")
-    print(f"report: {report_path}")
-    return 0
 
 
 if __name__ == "__main__":

@@ -18,7 +18,16 @@ Usage:
                        [--include-refused]] \\
         [--enrich-doc-chunks] [--enrich-section-chunks] \\
         [--max-reqs N] [--verify] \\
+        [--index flat|cell-db] [--overlay-root <corrections-root>] \\
         [--stages prepare,bm25,enrich_corpus] [--dry-run]
+
+`--index=cell-db` (corp-db-layer phase 3) DUAL-EMITS: after the flat
+build (and --verify, when given) succeeds, each built cell is also
+converted into a SQLite cell DB under `<db_root>/cell-dbs/` via
+sandbox.cell_db_convert — flat files remain the primary output and the
+default (`--index=flat`) stays byte-identical to today. The DBs ride
+label promotion with the rest of the build tree; a cell-db stack mounts
+`<label>/sira/cell-dbs` as its NORA_SIRA_DB_ROOT.
 
 `--only` restricts BOTH steps to the named cells (same <MNO>__<REL> format
 either side). After the lane completes, restart the sira-query service(s) so
@@ -125,6 +134,45 @@ def run_repairs(args: argparse.Namespace) -> None:
                   f"evicted {evicted} doc(s) for retry")
 
 
+def run_cell_db_emit(args: argparse.Namespace) -> int:
+    """`--index=cell-db` dual-emit (corp-db-layer phase 3): convert the
+    just-built cells into SQLite cell DBs under <db_root>/cell-dbs/.
+
+    Runs only after the flat build succeeded — flat files stay the
+    primary output; a conversion failure fails the lane loudly rather
+    than leaving a silently stale DB next to a fresh flat cell. The
+    enrichment selection mirrors what this lane just built: the lane's
+    --run-name is pinned when the enrich_corpus stage ran, else the
+    converter's best-pointer fallback (a bm25-only build has no run to
+    pin). --force is implied: the lane just rebuilt these cells, so any
+    existing DB for them is stale by definition.
+    """
+    from sandbox.cell_db_convert import ConvertError, convert, print_report, write_report
+
+    out_dir = args.db_root / "cell-dbs"
+    enrich_run = args.run_name if "enrich_corpus" in args.stages else ""
+    cells_filter = ([c.strip() for c in args.only.split(",") if c.strip()]
+                    if args.only else None)
+    if args.dry_run:
+        scope = args.only or "all cells"
+        pin = f"pinned run {enrich_run}" if enrich_run else "best-pointer enrichment"
+        print(f"sira-lane: would emit cell DBs ({scope}, {pin}) -> {out_dir}")
+        return 0
+    try:
+        report = convert(
+            args.db_root, out_dir, cells_filter=cells_filter,
+            enrich_run=enrich_run, overlay_root=str(args.overlay_root or ""),
+            force=True,
+        )
+    except ConvertError as exc:
+        print(f"sira-lane: cell-db emit FAILED {exc}", file=sys.stderr)
+        return 1
+    write_report(report, out_dir)
+    print("sira-lane: cell DBs emitted (dual-emit — flat files unchanged):")
+    print_report(report)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="sira_lane",
@@ -188,6 +236,15 @@ def main(argv: list[str] | None = None) -> int:
                         "pairing with --retry-failed. Never loosens the "
                         "response-budget-derived cap")
     p.add_argument("--stages", default="prepare,bm25,enrich_corpus")
+    p.add_argument("--index", choices=("flat", "cell-db"), default="flat",
+                   help="flat (default): today's output, unchanged. "
+                        "cell-db: ALSO emit SQLite cell DBs under "
+                        "<db_root>/cell-dbs/ after the build (dual-emit; "
+                        "corp-db-layer phase 3)")
+    p.add_argument("--overlay-root", default=None, type=Path,
+                   help="with --index=cell-db: corrections root whose "
+                        "overlay (main view) is baked into the cell DBs; "
+                        "default none")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the two commands, run nothing")
     args = p.parse_args(argv)
@@ -225,6 +282,10 @@ def main(argv: list[str] | None = None) -> int:
                 print("sira-lane: verification FAILED — see reports above.",
                       file=sys.stderr)
                 return rc
+    if args.index == "cell-db":
+        rc = run_cell_db_emit(args)
+        if rc != 0:
+            return rc
     if not args.dry_run:
         print("sira-lane: done. Restart sira-query service(s) to load new cells "
               "(/healthz lists them).")

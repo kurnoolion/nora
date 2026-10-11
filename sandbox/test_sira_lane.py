@@ -12,7 +12,8 @@ def _args(**kw):
                 sira_clone=Path("sandbox/sira"), run_name="enrich-stable",
                 only=None, wipe_stale_index=False, wipe_all_derived=False,
                 enrich_doc_chunks=False, enrich_section_chunks=False,
-                stages="prepare,bm25,enrich_corpus", dry_run=True)
+                stages="prepare,bm25,enrich_corpus", dry_run=True,
+                index="flat", overlay_root=None)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -213,3 +214,95 @@ def test_main_verify_dry_run_prints_only(tmp_path, monkeypatch, capsys):
     rc = main(_main_argv(tmp_path, "--verify"))
     assert rc == 0
     assert "would verify cells" in capsys.readouterr().out
+
+
+# ── --index=cell-db dual-emit (corp-db-layer phase 3) ───────────────
+
+
+def test_index_flag_default_is_flat_and_commands_unchanged():
+    """Backward compatibility: the default --index=flat produces exactly
+    the two legacy commands — the emit step must not appear anywhere in
+    the command plan."""
+    default = build_commands(_args())
+    explicit_flat = build_commands(_args(index="flat"))
+    with_db = build_commands(_args(index="cell-db"))
+    assert default == explicit_flat == with_db  # emit is post-build, not a command
+    assert all("cell_db_convert" not in " ".join(cmd) for cmd in default)
+
+
+def test_emit_dry_run_prints_plan_only(tmp_path, capsys):
+    from sandbox.sira_lane import run_cell_db_emit
+
+    rc = run_cell_db_emit(_args(db_root=tmp_path, dry_run=True,
+                                index="cell-db", only="mnoa__Apr2098"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "would emit cell DBs" in out
+    assert "pinned run enrich-stable" in out
+    assert not (tmp_path / "cell-dbs").exists()
+
+
+def test_emit_bm25_only_build_uses_best_pointer(tmp_path, capsys):
+    from sandbox.sira_lane import run_cell_db_emit
+
+    rc = run_cell_db_emit(_args(db_root=tmp_path, dry_run=True,
+                                index="cell-db", stages="prepare,bm25"))
+    assert rc == 0
+    assert "best-pointer enrichment" in capsys.readouterr().out
+
+
+def test_emit_converts_built_cells(tmp_path, capsys):
+    """Real dual-emit over a synthetic built cell: flat files untouched,
+    cell DB lands under <db_root>/cell-dbs/ with the lane's run pinned."""
+    pytest = __import__("pytest")
+    bm25x = pytest.importorskip("bm25x")
+    import hashlib
+    import json
+    import sqlite3
+
+    from sandbox.sira_lane import run_cell_db_emit
+
+    db_root = tmp_path
+    base = db_root / "mnoa__Apr2098"
+    (base / "raw").mkdir(parents=True)
+    (base / "raw" / "metadata.json").write_text("{}", encoding="utf-8")
+    docs = [("REQ-0", "emergency callback", "the device shall support emergency callback mode"),
+            ("REQ-1", "registration", "the handset must register on the preferred network")]
+    with open(base / "raw" / "corpus.jsonl", "w", encoding="utf-8") as f:
+        for rid, t, x in docs:
+            f.write(json.dumps({"_id": rid, "title": t, "text": x}) + "\n")
+    (base / "index" / "best").mkdir(parents=True)
+    b = bm25x.BM25()
+    b.disable_auto_save()
+    b.add([x for _, _, x in docs])
+    b.save(str(base / "index" / "best"))
+    run_dir = base / "runs" / "doc-enrich" / "enrich-stable"
+    run_dir.mkdir(parents=True)
+    with open(run_dir / "enrichments.kept.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"doc_id": "REQ-0", "phrases": ["cbm"]}) + "\n")
+
+    flat_digest = {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(base.rglob("*")) if p.is_file()
+    }
+    rc = run_cell_db_emit(_args(db_root=db_root, dry_run=False, index="cell-db"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "dual-emit" in out and "verify" in out
+
+    # flat build byte-untouched
+    assert flat_digest == {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(base.rglob("*")) if p.is_file()
+    }
+    db_path = db_root / "cell-dbs" / "cell-mnoa-Apr2098.db"
+    assert db_path.exists()
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    meta = dict(con.execute("SELECT key, value FROM meta"))
+    con.close()
+    assert meta["enrich_run"] == "enrich-stable"   # the lane's run, pinned
+    assert meta["n_docs"] == "2"
+
+    # re-run (the lane rebuilt): --force implied, no CNV-004
+    assert run_cell_db_emit(_args(db_root=db_root, dry_run=False,
+                                  index="cell-db")) == 0

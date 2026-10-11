@@ -24,6 +24,8 @@
 #   ./cycle.sh prompts                          # gate: per-MNO prompts present + shaped, publish to <build>/prompts/
 #   ./cycle.sh taxonomy     [--force]           # re-run = retry of failed docs
 #   ./cycle.sh enrich       [--cell <MNO>__<MMMYYYY>] [--retry-failed] [--run-name <r>]
+#                           [--index flat|cell-db]  (cell-db: ALSO emit SQLite cell DBs
+#                            under <db_root>/cell-dbs/ — dual-emit; default flat unchanged)
 #   ./cycle.sh verify-enrich                    # gate: sira_multi --verify must PASS
 #   ./cycle.sh promote --label <label> [--host <serving-host>] [--scheme <s>] [--sira-only]
 #   ./cycle.sh abandon      [--note "<why>"]
@@ -59,7 +61,7 @@ die() { echo "CYC-E$1: $2" >&2; echo "  fix: $3" >&2; exit 1; }
 usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 VERB="${1:-}"; [ -n "$VERB" ] || usage; shift
-BUILD="" PROFILES="" FORCE="" SKIPSTD="" CELL="" RETRY=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE=""
+BUILD="" PROFILES="" FORCE="" SKIPSTD="" CELL="" RETRY=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE="" INDEX_MODE="flat"
 while (( $# > 0 )); do
   case "$1" in
     --profiles)      PROFILES="$2"; shift 2;;
@@ -72,6 +74,7 @@ while (( $# > 0 )); do
     --host)          HOST="$2"; shift 2;;
     --scheme)        SCHEME="$2"; shift 2;;
     --sira-only)     SIRA_ONLY=1; shift;;
+    --index)         INDEX_MODE="$2"; shift 2;;   # flat (default) | cell-db dual-emit
     --note)          NOTE="$2"; shift 2;;
     -h|--help)       usage;;
     -*) echo "unknown option: $1" >&2; exit 2;;
@@ -293,6 +296,11 @@ enrich)
   [ "$(phase_state enrich)" != running ] || die 063 "enrich already running" "./cycle.sh status"
   cyc set "$CJ" run_name "$RUN"
   extra=""; (( RETRY )) && extra="--retry-failed --max-reqs 1"
+  case "$INDEX_MODE" in
+    flat) ;;
+    cell-db) extra="$extra --index cell-db";;   # dual-emit (corp-db-layer phase 3)
+    *) die 065 "unknown --index $INDEX_MODE" "flat (default) or cell-db";;
+  esac
   if [ -n "$CELL" ]; then
     [ -d "$REQS/${CELL%%__*}/${CELL##*__}" ] || die 064 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
     inner="python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
