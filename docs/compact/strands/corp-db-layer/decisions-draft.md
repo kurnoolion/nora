@@ -44,6 +44,20 @@ engine means owning a small scoring loop in the service; FTS5 limitations
 (fixed k1/b, max-df and expansion weighting emulated query-side) are
 accepted as eval candidates, not designed around.
 
+
+**Amended 2026-10-11 (at implementation + field validation):**
+(a) The index payload is the ENRICHED serialized bm25x engine state as
+zlib-compressed blobs (`index_blob` table), not dumped postings tables —
+bm25x is a Rust multi-gram hashed engine whose ranking a textbook dump
+cannot reproduce; compression is load-bearing (~500:1 on the hashed
+side's slot table). (b) Engine set is `bm25x | fts5`; the designed
+rebuild-from-rows `memory` engine was removed — build parameters are
+neither introspectable from bm25x nor recorded, and the blob engine IS
+the byte-exact parity control. `NORA_SIRA_ENGINE=memory` fails loudly.
+(c) Adjudicated by the phase-2 eval on a frozen shared denominator:
+production engine = bm25x; fts5 validated as quality-indistinguishable
+at n=39 and kept on record as the alternate, not shipped.
+
 ### D-DRAFT-3 — Converter parity by construction, with mandatory self-verify
 
 **Date:** 2026-10-09
@@ -103,3 +117,95 @@ loses a capability today.
 future first-time MNO onboarding runs review/corrections in dev and its
 output flows into the next publish; if live correction is ever needed in
 corp, it requires a deliberate new mechanism, not a quiet regression.
+
+### D-DRAFT-6 — Corpus rows are position- and byte-faithful; no unique id key
+
+**Date:** 2026-10-11
+**Context:** Field validation found real cells carry duplicate
+doc/section `_id` rows (~80 per cell on one corpus); the converter's
+UNIQUE constraint on corpus.req_id aborted, while the flat stack serves
+those rows today.
+**Decision:** The cell DB's corpus table keeps EVERY corpus.jsonl row in
+file order (`doc` = position), req_id NOT unique (plain index only);
+id lookup semantics are last-wins (max doc per id).
+**Why:** The index blobs score every row positionally — dedup at
+convert time would desynchronize doc numbering and corrupt retrieval;
+a (id, kind) key still forbids what the corpus actually contains.
+Last-wins mirrors the serving loader's dict semantics exactly.
+**Consequences:** Consumers must not assume id uniqueness; service-
+equivalent lookup is ORDER BY doc DESC LIMIT 1. Upstream question
+flagged separately: duplicates inflate those rows' BM25 statistics in
+every stack today (adapter may emit section rows once per occurrence) —
+parity correctly preserves it; cleanup is a pipeline investigation, not
+a storage one.
+
+### D-DRAFT-7 — disable_auto_save() after every BM25.load
+
+**Date:** 2026-10-11
+**Context:** bm25x's constructor form (`BM25(index=path)`) auto-saves
+the whole index back to its path after every mutation, enrich included —
+and enrich accumulates tf with no dedup, so a path-bound index that gets
+enriched at startup would compound into the label across restarts. The
+static `BM25.load` the service uses does NOT arm auto-save (verified
+empirically and against the vendored source).
+**Decision:** Every BM25.load in serving, debug tooling, and the
+converter is immediately followed by disable_auto_save(); tests pin both
+the constructor-form hazard and the non-mutation of loaded indexes.
+**Why:** Label immutability is a §7 invariant; "accidentally safe"
+(safe only because we use the right API form) becomes "safe by
+contract" for one call per site. SIRA's own batch scripts use the same
+belt-and-suspenders.
+**Consequences:** A future bm25x version or an API-form change cannot
+silently mutate a label; the pinning test tells us if the guard ever
+becomes load-bearing or obsolete.
+
+### D-DRAFT-8 — Identity is asserted only over deterministic paths; engine/index knobs are comparability keys
+
+**Date:** 2026-10-11
+**Context:** The phase-2 identity gate (cell-db stack must equal the
+flat stack id-for-id) cannot run over live query expansion: the
+expansion LLM endpoint does not honor temperature 0, so expansion-ON
+repeats churn on every run (36/36 samples) even on one stack. Separately,
+the engine A/B exposed that two stacks differing only in engine shared a
+stamp knob digest and would have pooled as one stack.
+**Decision:** (a) Identity gates run with the nondeterministic stage
+OFF on both sides, preceded by a within-stack repeat-identity check so
+any cross-stack diff is real; the switched-off path's parity is carried
+by layered deterministic proofs (converter self-verify, loader tests
+with fixed phrases). Quality comparisons run in normal serving config
+and are judged against measured run-to-run noise floors, never by
+identity. (b) index_mode and engine are retrieval-shaping knobs: they
+ride the healthz retrieval_knobs sub-dict (the stamp's service-owns-
+knobs contract), so configurations differing in either never share a
+comparability key.
+**Why:** An identity assertion over a nondeterministic stage tests the
+LLM's dice, not the index; floors make quality differences meaningful.
+The knob contract keeps the fix two service-side lines with no
+eval-side change.
+**Consequences:** Gate runs require a config flip + verified restore on
+live stacks; every new retrieval-shaping setting must join
+retrieval_knobs when added or stamps will falsely pool; the first
+Stage-2 noise floor for the golden set (judge mean ±0.5, median ±1.7)
+is on record and bounds what Stage-2 can claim.
+
+### D-DRAFT-9 — Campaign snapshots are frozen read-only copies with recorded digests
+
+**Date:** 2026-10-11
+**Context:** Field validation found the eval campaign's "snapshot"
+directory was a live writer mount (the web app's golden dir), gaining
+curated samples and run artifacts after the fact — the historical
+denominator was no longer reproducible from that path.
+**Decision:** A campaign snapshot is a COPY outside any container
+mount, with its sample-set digest recorded beside it and write
+permission removed; runs execute against a separate working dir seeded
+from the frozen copy, and run stamps carry the set digest so mid-
+campaign drift is detected mechanically (runs stop pooling), not
+prevented by hope. The live golden dir remains the web app's working
+dir, un-frozen by design.
+**Why:** One directory was serving two roles (curation target and
+frozen denominator) that are mutually exclusive. Named lesson: a
+"snapshot" that is a writer's mount point is not a snapshot.
+**Consequences:** Campaign setup gains a one-time freeze step;
+historical results remain valid under their own digests; digest
+equality between working dir and frozen reference is checked before
+runs.

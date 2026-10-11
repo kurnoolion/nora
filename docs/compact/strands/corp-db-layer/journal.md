@@ -74,3 +74,88 @@
   but promote to a logged decision at land time.
 - Corp DB technology / network constraints still unknown — blocks only
   phase-4 items (§8: transfer mechanism, metrics/config DBs, NORA_SURFACE).
+
+## 2026-10-11 — Phases 1–2 built and field-validated; bm25x adjudicated as the engine
+
+### Done this session
+- Phase 1 implemented: `sandbox/cell_db_convert.py` converts a promoted
+  label's SIRA cells into per-cell SQLite DBs. Schema pivoted to
+  blob-primary at implementation — bm25x is a Rust multi-gram hashed
+  engine whose ranking a textbook terms/postings dump cannot reproduce;
+  the ENRICHED serialized index ships as zlib blobs (~500:1 — the hashed
+  n-gram side serializes ~134 MB of mostly zeros regardless of corpus
+  size). Per-cell self-verify (in-memory vs DB-loaded rankings must be
+  identical), CNV-001..009 codes, content-free report.
+- `disable_auto_save()` guards added after every BM25.load (service,
+  debug tool, converter): only the constructor form auto-saves today
+  (verified empirically; enrich accumulates tf with no dedup), so the
+  guards are belt-and-suspenders, pinned by tests.
+- Field finding → schema fix: real cells carry duplicate doc/section
+  `_id` rows (~80/cell on one corpus); UNIQUE dropped on corpus.req_id —
+  the index blobs score every row positionally, so the row set must stay
+  byte- and position-faithful; id lookup documented last-wins, mirroring
+  the serving loader.
+- Phase-1 field validation: 9/9 cells across both stack configurations
+  converted + self-verified; 9/9 source fingerprints byte-equal to the
+  live stacks' own healthz; deployed index confirmed unigram (max_n=1),
+  promoting FTS5 to a real candidate; cell DBs ~10–34 MB.
+- Phase 2 implemented: `NORA_SIRA_INDEX=cell-db` loader +
+  `NORA_SIRA_ENGINE=bm25x|fts5` (new sandbox/sira_query/cell_db_store.py;
+  the designed rebuild-from-rows `memory` engine removed — build params
+  neither introspectable nor recorded; the blob engine IS the byte-exact
+  parity control). Cell-db cells immutable at serve time (reload 409,
+  label variants fall back); healthz identity from DB meta; env knobs
+  documented. 89 tests green including the untouched flat-path suite.
+- Phase-2 field validation: trial stack healthz gate passed (fingerprints
+  + prompt sources equal to its flat counterpart); IDENTITY GATE GREEN —
+  0/40 cross-stack result-set diffs (expansion OFF on both stacks for the
+  gate: the expansion LLM is nondeterministic at this endpoint, so
+  identity is only testable over the deterministic path; expansion-path
+  parity carried by converter self-verify + loader tests).
+- Engine A/B on a frozen 39-sample denominator (set digest 29088f2a4167,
+  shared with the historical sweep): no arm distinguishable — Stage-1
+  gaps under campaign floors, Stage-2 inside the judge's own spread
+  (first Stage-2 noise floor recorded: mean ±0.5, median ±1.7).
+  ADJUDICATED per design rule: production engine = bm25x (byte-exact
+  parity); fts5 on record as validated alternate, not shipped.
+- Golden data management ruling from field findings: campaign snapshots
+  are frozen read-only copies with recorded set digests, outside any
+  container mount; the live golden dir stays the web app's working dir.
+  Lesson named: a "snapshot" that is a writer's mount point is not a
+  snapshot.
+- Eval stamp gap fixed (field-found): engine arms shared a knob digest —
+  index_mode + engine now ride the healthz retrieval_knobs sub-dict (the
+  stamp's service-owns-knobs contract), regression test added.
+- docker: serve containers gained SERVE_UID/SERVE_GID (default 0:0 —
+  unchanged behavior) so bind-mount writes stop landing root-owned once
+  enabled; one-time chown migration documented in env.example.
+- Security: corp GitHub alert adjudicated false positive (env-var
+  interpolation at service.py Bearer header); whole-history scan of all
+  993 commits clean; key-shaped-literal patterns added to the standing
+  commit gate.
+- Docs synced through the builds: storage-design v0.8, converter-design
+  v0.4 (as-built §9 findings + field validation numbers).
+
+### In progress
+- Trial stack running (cell-db/bm25x, normal config) — awaiting the
+  team-usage round, the last phase-2 criterion.
+
+### Next
+- Team-usage round on the trial stack (architect's timing), then declare
+  phase 2 closed.
+- Ops rollout: SERVE_UID/SERVE_GID on the host stacks (+ one-time chown,
+  restart — picks up the stamp fix in the same rebake); dispose of the
+  stale 20260819 snapshot dir in the same round.
+- Phase 3: `--index=cell-db` ingestion flag with dual-emit, legacy
+  default.
+- Amend D-DRAFT-2 (engine set is now bm25x|fts5; memory removed) and
+  capture this session's new decisions.
+
+### Flags
+- Upstream pipeline question (not a converter issue): duplicate
+  doc/section rows inflate those rows' BM25 statistics in every stack
+  today — the adapter may be emitting section rows once per occurrence;
+  investigate in its own session.
+- The judge temperature/nondeterminism remains an endpoint property;
+  Stage-2 comparisons need the recorded noise floor until a deterministic
+  judge endpoint exists.
