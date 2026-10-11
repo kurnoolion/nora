@@ -961,7 +961,8 @@ def _load_cells() -> None:
                 _cells[cstate.cell] = cstate
             except Exception as exc:
                 errors.append(f"{db_path.name}: {exc}")
-        # No overlay/enrichment pass: baked at convert time (see loader).
+        # Overlay + enrichment were baked at convert time (see loader),
+        # so no second application step runs here.
         _cells_load_error = "; ".join(errors) if errors else None
         if _cells:
             logger.info(
@@ -981,8 +982,8 @@ def _load_cells() -> None:
             _cells[cell] = _load_one_cell(base, cell)
         except Exception as exc:
             errors.append(f"{cell_dirname(cell)}: {exc}")
-    # second pass: overlay + enrichment application (cross-release verdicts
-    # need every peer's corpus present first)
+    # second sweep — overlay + enrichment application (cross-release
+    # verdicts need every peer's corpus present first)
     for cstate in _cells.values():
         _apply_overlay_and_enrich(cstate)
     _cells_load_error = "; ".join(errors) if errors else None
