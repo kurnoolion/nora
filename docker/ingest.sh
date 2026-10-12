@@ -15,6 +15,12 @@
 #               must point at a build WORKSPACE (a per-build dir, or the
 #               legacy live env dir), never a promoted serve label
 #   -l <lane>   pipeline lane: ingestion | nora (default: ingestion)
+#   -t          chain the taxonomy stage after the lane, in the SAME
+#               container run (one log): a second run_cli invocation
+#               with --start taxonomy --end taxonomy --no-skip-taxonomy.
+#               Taxonomy is corpus-wide by design (newest-release-wins
+#               dedup over every cell; the ledger bounds LLM cost to
+#               changed docs), so it takes no --mno/--release scope.
 #   -f          pass --force (redo work the skip logic would reuse)
 #   --fg        run attached in the foreground, output to the terminal
 #               (no log redirect) — for quick diagnosis
@@ -23,15 +29,17 @@
 # Examples:
 #   ./ingest.sh GP Feb2026
 #   ./ingest.sh -f GP Feb2026 -- --skip-standards
+#   ./ingest.sh -t GP Apr2098 -- --skip-resolve --skip-standards
 #   ./ingest.sh -l nora GP Feb2026
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-ENVFILE="$HERE/.env.builds" LANE="ingestion" FORCE="" FG=0
+ENVFILE="$HERE/.env.builds" LANE="ingestion" FORCE="" FG=0 WITH_TAX=0
 while (( $# > 0 )); do
   case "$1" in
     -e) ENVFILE="$2"; shift 2;;
     -l) LANE="$2"; shift 2;;
+    -t) WITH_TAX=1; shift;;
     -f) FORCE="--force"; shift;;
     --fg) FG=1; shift;;
     --) shift; break;;
@@ -50,13 +58,21 @@ echo "$REL" | grep -qE '^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[0-9]{
 EXTRA="$*"
 
 CLI="python -m core.src.pipeline.run_cli --env-dir /data/env --lane $LANE --mno $MNO --release $REL $FORCE $EXTRA"
-LOG="/data/env/reports/lane-${LANE}-${MNO}__${REL}-$(date +%Y%m%d_%H%M%S).log"
+TAG="lane-${LANE}"
+if (( WITH_TAX )); then
+    # Chained in one container so one command covers lane + taxonomy;
+    # the taxonomy invocation carries no scope (corpus-wide stage) and
+    # forces itself on over any NORA_SKIP_TAXONOMY / config default.
+    CLI="$CLI && python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $FORCE"
+    TAG="lane-${LANE}+tax"
+fi
+LOG="/data/env/reports/${TAG}-${MNO}__${REL}-$(date +%Y%m%d_%H%M%S).log"
 
 if (( FG )); then
-    INNER="mkdir -p /data/env/reports && exec $CLI"
+    INNER="mkdir -p /data/env/reports && { $CLI; }"
     RUNFLAGS=(--rm -T)
 else
-    INNER="mkdir -p /data/env/reports && exec $CLI > $LOG 2>&1"
+    INNER="mkdir -p /data/env/reports && { $CLI; } > $LOG 2>&1"
     RUNFLAGS=(-d --rm -T)
 fi
 
