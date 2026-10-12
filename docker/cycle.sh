@@ -50,10 +50,24 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 NORA_ROOT="${NORA_ROOT:-/srv/nora}"
 BUILDS="${NORA_BUILDS_ROOT:-$NORA_ROOT/builds}"
+# Per-lane build roots. Defaults preserve the single-root layout
+# ($BUILDS/nora, $BUILDS/sira) byte-for-byte; hosts whose wiring env
+# follows the README sibling-tree convention set these two vars to those
+# trees' parents, making the wiring-named dirs the build dirs (field
+# finding: the script's tree and the README convention couldn't both
+# hold). ACTIVE moves with the nora root only when it is overridden.
+NROOT="${NORA_BUILDS_NORA_ROOT:-$BUILDS/nora}"
+SROOT="${NORA_BUILDS_SIRA_ROOT:-$BUILDS/sira}"
 REQS="${NORA_REQUIREMENTS_DIR:-$NORA_ROOT/requirements}"
 SERVE_ROOT="${NORA_SERVE_ROOT:-$NORA_ROOT/serve}"
 ENV_ROOT="${NORA_ENV_ROOT:-$NORA_ROOT/env}"
-WIRING="$ENV_ROOT/.env.builds"; [ -f "$WIRING" ] || WIRING="$HERE/.env.builds"
+# Wiring env: explicit override first (hosts with stack-suffixed wiring
+# files, e.g. a name carrying the stack), then the two legacy locations.
+if [ -n "${NORA_BUILDS_WIRING:-}" ]; then
+  WIRING="$NORA_BUILDS_WIRING"
+else
+  WIRING="$ENV_ROOT/.env.builds"; [ -f "$WIRING" ] || WIRING="$HERE/.env.builds"
+fi
 ME="$(whoami)"
 TS="$(date +%Y%m%d_%H%M%S)"
 
@@ -117,11 +131,14 @@ PY
 }
 
 # ---- baton --------------------------------------------------------------------
-ACTIVE="$BUILDS/ACTIVE"
+# Baton location: unchanged ($BUILDS/ACTIVE) on the default layout; next
+# to the nora build root when that root is overridden (keeps the baton
+# inside the tree the builds actually live in).
+if [ -n "${NORA_BUILDS_NORA_ROOT:-}" ]; then ACTIVE="$NROOT/ACTIVE"; else ACTIVE="$BUILDS/ACTIVE"; fi
 resolve_build() {
   [ -f "$ACTIVE" ] || die 001 "no cycle in flight ($ACTIVE missing)" "./cycle.sh start <build-id>"
   BUILD="$(cat "$ACTIVE")"
-  NB="$BUILDS/nora/$BUILD"; SB="$BUILDS/sira/$BUILD"; CJ="$NB/CYCLE.json"
+  NB="$NROOT/$BUILD"; SB="$SROOT/$BUILD"; CJ="$NB/CYCLE.json"
   [ -f "$CJ" ] || die 002 "ACTIVE names $BUILD but $CJ is missing" "restore CYCLE.json or rm $ACTIVE and start over"
   OWNER="$(cyc get "$CJ" owner)"
   [ "$OWNER" = "$ME" ] || echo "NOTE: cycle $BUILD is owned by $OWNER; you ($ME) are acting on it — recorded as such" >&2
@@ -185,12 +202,12 @@ start)
   [ -n "$BUILD" ] || usage
   echo "$BUILD" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$' || die 020 "bad build-id '$BUILD'" "letters/digits/._- only"
   if [ -f "$ACTIVE" ]; then
-    prev="$(cat "$ACTIVE")"; pst="$(cyc get "$BUILDS/nora/$prev/CYCLE.json" status 2>/dev/null || echo unknown)"
+    prev="$(cat "$ACTIVE")"; pst="$(cyc get "$NROOT/$prev/CYCLE.json" status 2>/dev/null || echo unknown)"
     [ "$pst" = promoted ] || [ "$pst" = abandoned ] \
-      || die 021 "cycle '$prev' is still in flight (status=$pst, owner=$(cyc get "$BUILDS/nora/$prev/CYCLE.json" owner))" \
+      || die 021 "cycle '$prev' is still in flight (status=$pst, owner=$(cyc get "$NROOT/$prev/CYCLE.json" owner))" \
          "finish it (./cycle.sh promote) or ./cycle.sh abandon — one cycle at a time"
   fi
-  NB="$BUILDS/nora/$BUILD"; SB="$BUILDS/sira/$BUILD"; CJ="$NB/CYCLE.json"
+  NB="$NROOT/$BUILD"; SB="$SROOT/$BUILD"; CJ="$NB/CYCLE.json"
   [ ! -e "$NB" ] && [ ! -e "$SB" ] || die 022 "build dirs for $BUILD already exist" "pick a new build-id (builds are never reused)"
   [ -d "$REQS" ] && [ -n "$(cells)" ] || die 023 "no <MNO>/<MMMYYYY> cells under $REQS" "stage the source docs first (README Phase 0.3)"
   [ -f "$WIRING" ] || die 003 "no builds wiring env at $ENV_ROOT/.env.builds (nor docker/)" "README Phase 0: cp <stack env> .env.builds"
@@ -200,7 +217,7 @@ start)
   # bindings encode document-structure judgment and are chosen, not inherited.
   src=""
   if [ -n "$PROFILES" ]; then
-    if [ -f "$PROFILES" ]; then src="$PROFILES"; elif [ -f "$BUILDS/nora/$PROFILES/profiles.json" ]; then src="$BUILDS/nora/$PROFILES/profiles.json"; fi
+    if [ -f "$PROFILES" ]; then src="$PROFILES"; elif [ -f "$NROOT/$PROFILES/profiles.json" ]; then src="$NROOT/$PROFILES/profiles.json"; fi
     [ -n "$src" ] || die 024 "--profiles '$PROFILES' is neither a file nor a build-id with profiles.json" "point at a profiles.json"
   fi
   images="{}"
