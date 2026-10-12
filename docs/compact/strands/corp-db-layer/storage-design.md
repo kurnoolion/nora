@@ -357,6 +357,7 @@ serving may adopt the same cell-DB path (optional, later).
 | `out/parse` trees | `requirements` table in cell DBs | unchanged files |
 | SIRA `corpus.jsonl` + enrichments | same cell DBs (`requirements` + `enrichment`) | unchanged |
 | SIRA `index/best/` | not shipped (rebuild at load; FTS5 optional later) | unchanged |
+| `out/taxonomy/taxonomy.json` | not deployed — ingestion/build artifact; its only serve-time consumer is the taxonomy-corrections surface, which is dev-only per the scope ruling. Rides labels today solely for dev-serve surfaces | unchanged flat build file |
 | Chroma vectorstore | dropped | optional, experiments only |
 | Knowledge graph | dropped (tables reserved, later) | unchanged (stage off) |
 | `serve/<label>` + MANIFEST + flip | registry.db (`cell_versions` + `active`) | unchanged locally |
