@@ -12,7 +12,8 @@
 #
 # Options:
 #   -e <file>   wiring env file (default: .env.builds) — its NORA_ENV_DIR
-#               must point at a BUILD dir, never a promoted serve label
+#               must point at a build WORKSPACE (a per-build dir, or the
+#               legacy live env dir), never a promoted serve label
 #   -l <lane>   pipeline lane: ingestion | nora (default: ingestion)
 #   -f          pass --force (redo work the skip logic would reuse)
 #   --fg        run attached in the foreground, output to the terminal
