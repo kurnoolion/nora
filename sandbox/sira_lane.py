@@ -228,6 +228,13 @@ def main(argv: list[str] | None = None) -> int:
                         "same --only scope and --run-name). Non-zero exit "
                         "when any cell FAILs — the lane's post-build gate. "
                         "Paste-safe (counts/statuses only)")
+    p.add_argument("--req-ids", default=None, type=Path, metavar="FILE",
+                   help="diagnostic selector: enrich ONLY the req ids listed "
+                        "in FILE (one per line, # comments ok) — exported as "
+                        "NORA_SIRA_BATCH_ONLY_REQ_IDS to the batching layer. "
+                        "Combine with --only <cell> and --max-reqs 1 for a "
+                        "targeted probe; ids stay in the file, logs carry "
+                        "counts only")
     p.add_argument("--max-reqs", type=int, default=None, metavar="N",
                    help="Cap reqs per enrichment batch (exported as "
                         "NORA_SIRA_BATCH_MAX_REQS to the build). 1 = "
@@ -256,6 +263,13 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["NORA_SIRA_BATCH_MAX_REQS"] = str(args.max_reqs)
         print(f"sira-lane: NORA_SIRA_BATCH_MAX_REQS={args.max_reqs} "
               f"(reqs/batch cap{' — single-req mode' if args.max_reqs == 1 else ''})")
+
+    if args.req_ids is not None:
+        if not args.req_ids.is_file():
+            p.error(f"--req-ids file not found: {args.req_ids}")
+        os.environ["NORA_SIRA_BATCH_ONLY_REQ_IDS"] = str(args.req_ids)
+        print(f"sira-lane: NORA_SIRA_BATCH_ONLY_REQ_IDS={args.req_ids} "
+              f"(diagnostic req-id selector — only listed ids enrich)")
 
     run_repairs(args)
 

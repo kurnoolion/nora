@@ -150,6 +150,13 @@ class BatchConfig:
     reasoning_sentinel: bool = False    # opt-in: append the FINAL_ANSWER_MARKER
                                         # instruction + parse only after the marker
                                         # (untagged-thinking endpoints)
+    only_req_ids_file: str = ""         # diagnostic selector: path to a file of
+                                        # req ids (one per line, # comments ok);
+                                        # run_batched processes ONLY those ids.
+                                        # Ids stay on-host in the file — logs
+                                        # carry counts only. Missing/empty file
+                                        # fails loud (a typo must not silently
+                                        # run the full corpus).
 
     @property
     def response_reserve(self) -> int:
@@ -180,6 +187,7 @@ class BatchConfig:
                 env.get("NORA_LLM_REFUSAL_MARKERS", "")),
             debug_raw=_get("DEBUG_RAW", _bool, False),
             reasoning_sentinel=_get("REASONING_SENTINEL", _bool, False),
+            only_req_ids_file=_get("ONLY_REQ_IDS", str, ""),
         )
 
 
@@ -336,6 +344,28 @@ async def run_batched(
     — the same call goes to `fallback_llm_call` instead (same prompt,
     same budget, batch row tagged "llm": "fallback"). With no fallback
     configured the batch fails fast as llm_refused (no requeue burn)."""
+    if cfg.only_req_ids_file:
+        try:
+            wanted = {
+                ln.strip() for ln in
+                open(cfg.only_req_ids_file, encoding="utf-8")
+                if ln.strip() and not ln.lstrip().startswith("#")
+            }
+        except OSError as e:
+            raise ValueError(
+                f"only_req_ids_file unreadable: {cfg.only_req_ids_file} ({e})"
+            ) from e
+        if not wanted:
+            raise ValueError(
+                f"only_req_ids_file has no ids: {cfg.only_req_ids_file}")
+        n_before = len(items)
+        items = [it for it in items if it[0] in wanted]
+        logger.info("req-id selector: %d of %d items selected (%d ids wanted)",
+                    len(items), n_before, len(wanted))
+        if not items:
+            logger.warning("req-id selector matched NOTHING — check the ids "
+                           "against this cell's corpus")
+
     summary = {"batches": 0, "oversized": 0, "enriched": 0, "failed": 0,
                "proposed": 0, "kept": 0, "filtered": 0, "errors": 0,
                "requeued": 0, "skipped": 0, "fallbacks": 0, "refused": 0}

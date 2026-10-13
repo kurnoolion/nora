@@ -557,3 +557,61 @@ def test_batch_trace_carries_measured_response_chars():
     for r in rows:
         assert r["resp_chars"] == len(raw_response)
         assert "resp_tokens_est" in r   # estimates stay, now documented
+
+
+class TestReqIdSelector:
+    """only_req_ids_file: the diagnostic selector processes ONLY listed
+    ids, fails loud on a bad file (a typo must not silently run the full
+    corpus), and warns on zero matches."""
+
+    ITEMS = [("R1", "**plan**: PA\nreq one"), ("R2", "**plan**: PA\nreq two")]
+
+    @staticmethod
+    def _ids_file(tmp_path, lines):
+        f = tmp_path / "ids.txt"
+        f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return str(f)
+
+    def test_selects_only_listed_ids(self, tmp_path):
+        async def llm(prompt, max_tokens):
+            assert "R2" not in prompt
+            return json.dumps({"R1": ["alpha"]})
+
+        cfg = eb.BatchConfig(max_retries=1,
+                             only_req_ids_file=self._ids_file(tmp_path, ["R1"]))
+        sink, summary = _run(self.ITEMS, llm, cfg=cfg)
+        assert dict(sink.enrich) == {"R1": ["alpha"]}
+        assert summary["enriched"] == 1
+
+    def test_comments_and_blanks_ignored(self, tmp_path):
+        async def llm(prompt, max_tokens):
+            return json.dumps({"R2": ["beta"]})
+
+        cfg = eb.BatchConfig(max_retries=1, only_req_ids_file=self._ids_file(
+            tmp_path, ["# probe list", "", "R2"]))
+        sink, _ = _run(self.ITEMS, llm, cfg=cfg)
+        assert dict(sink.enrich) == {"R2": ["beta"]}
+
+    def test_missing_file_fails_loud(self, tmp_path):
+        import pytest
+
+        async def llm(prompt, max_tokens):
+            raise AssertionError("must not be called")
+
+        cfg = eb.BatchConfig(only_req_ids_file=str(tmp_path / "absent.txt"))
+        with pytest.raises(ValueError, match="unreadable"):
+            _run(self.ITEMS, llm, cfg=cfg)
+
+    def test_empty_file_fails_loud(self, tmp_path):
+        import pytest
+
+        async def llm(prompt, max_tokens):
+            raise AssertionError("must not be called")
+
+        cfg = eb.BatchConfig(only_req_ids_file=self._ids_file(tmp_path, ["# only comments"]))
+        with pytest.raises(ValueError, match="no ids"):
+            _run(self.ITEMS, llm, cfg=cfg)
+
+    def test_from_env_picks_up_knob(self):
+        cfg = eb.BatchConfig.from_env({"NORA_SIRA_BATCH_ONLY_REQ_IDS": "/x/ids.txt"})
+        assert cfg.only_req_ids_file == "/x/ids.txt"
