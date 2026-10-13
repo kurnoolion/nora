@@ -1,6 +1,6 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.7, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v0.8, 2026-10-13 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -159,10 +159,32 @@ the two classes the prompt forgot. The tuned 0.4 / 0.7 thresholds have never
 taken effect there.
 
 A typed option set is a schema, not prose inside a prompt, so this failure
-mode cannot recur on the decision path. **The defect must be fixed before any
-legacy-vs-decision comparison runs**, or the legacy arm is measured against
-broken code and the class-distribution differences will be misread as a model
-effect.
+mode cannot recur on the decision path.
+
+**CORRECTED v0.8 — the defect is latent, not live (D-DRAFT-15).**
+`LLMQueryAnalyzer` is never constructed in any live path:
+`core/src/query/pipeline.py:290` is `self._analyzer = analyzer or
+MockQueryAnalyzer()`, and `sandbox/sira_query/service.py:1191` is
+`make_query_analyzer(None)` with a comment recording that wiring an
+`LLMProvider` for it is a deliberate follow-up. Classification in the serving
+path is **100% rule-based today**, `MockQueryAnalyzer` emits both classes, and
+the tables above therefore fire normally — **nothing is currently inert, and
+the tuned 0.4 / 0.7 thresholds do take effect.** The defect is a **landmine**
+for whoever enables the LLM analyzer, not a present fault. It stays in phase 1
+as cheap hygiene but is **not a gate**, and NORA's A4 / A8 / A11 baselines are
+sound (an earlier claim that they ran with the defect live is withdrawn).
+
+**Consequence for §6:** the planned "current LLM" arm does not exist in
+production. Real arms are rules (live), decision model, and fine-tuned
+decision model.
+
+**Consequence for the premise:** this seam has **no LLM call to displace** — a
+decision model here replaces *rules*. D-DRAFT-2's reasons for choosing it
+first still hold (query-only exposure, existing baseline, one factory
+function, lowest risk), but it will not reduce LLM usage or cost. The decision
+points that do spend LLM calls — reranking, SIRA chunk selection, the Stage-2
+judge — all read chunk bodies. If token cost rather than capability is the
+driver, target ordering deserves revisiting with the architect.
 
 ## 3. The decision seam in code
 

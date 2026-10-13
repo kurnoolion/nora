@@ -711,3 +711,53 @@ idea, and it belongs to a successor strand rather than this one.
   better-aimed intervention; no need to overdo it. CPT stays available as the
   remedy for the chunk-body-reading decision points in a successor strand,
   subject to the weights-governance flag above.
+
+## 2026-10-13 (cont. 12) — CORRECTION: classification is rule-based; the defect is latent
+
+### Done this session
+
+- **Checked the analyzer's call sites, which earlier sessions had not.**
+  `LLMQueryAnalyzer` is **never constructed in any live path**:
+  `core/src/query/pipeline.py:290` is `self._analyzer = analyzer or
+  MockQueryAnalyzer()`; `sandbox/sira_query/service.py:1191` is
+  `make_query_analyzer(None)`, with a docstring note recording that wiring an
+  `LLMProvider` for `LLMQueryAnalyzer` is a deliberate follow-up. Outside
+  tests nothing instantiates it. **Query classification in the serving path is
+  100% rule-based today.**
+- **Corrections issued → D-DRAFT-15:**
+  - The `SUMMARIZE`/`FACT` defect is **latent, not live**. `MockQueryAnalyzer`
+    emits both classes, so `_TYPE_MAX_DISTANCE` and `_TYPE_DISABLE_GROUPING`
+    fire normally and the tuned 0.4 / 0.7 thresholds do take effect.
+  - **The A4 / A8 / A11 flag is withdrawn.** Those runs used the rule-based
+    analyzer; the baselines are sound.
+  - The defect is demoted from phase-1 gate to landmine — fix before anyone
+    enables the LLM analyzer, but it blocks nothing now.
+  - The measurement loses an arm: the "current LLM" arm does not exist in
+    production. Real arms are rules (live), decision model, fine-tuned
+    decision model.
+  - **Premise reframed:** this seam has **no LLM call to displace**. A
+    decision model here replaces *rules*. D-DRAFT-2's selection reasons still
+    hold, but no LLM cost is saved here. The LLM-spending decision points are
+    reranking, SIRA chunk selection and the Stage-2 judge — all chunk-body
+    readers. If token cost rather than capability is the driver, target
+    ordering should be revisited with the architect.
+- **Process lesson recorded:** verifying what a thing *contains* is not
+  verifying whether anything *uses* it. The per-type maps were checked for
+  their key sets; the analyzer's call sites were not, and the blast-radius
+  claim was asserted on that gap.
+
+### Reference — the live classifier, for the architect's review
+
+Ordered phrase matching over 10 `QueryType` values plus 3 `DocTypeScope`
+values. Precedence is deliberate and documented in comments: `FACT` is checked
+before definitional patterns so "what is the maximum X" is not mis-routed;
+`STANDARDS_COMPARISON` precedes `RELEASE_DIFF` because "differ" overlaps
+"diff"; `SUMMARIZE` precedes entity/breadth heuristics so "explain the X
+authentication requirements" routes to a wide survey rather than a narrow
+lookup. Signals include MNO count (>=2 → `CROSS_MNO_COMPARISON`), release
+count, standards references, and phrase sets such as
+("value of", "how many", "how long", "default value", "maximum value",
+"what is the threshold") → `FACT` and ("explain ", "summarize", "overview of",
+"describe ", "tell me about ") → `SUMMARIZE`. It works because the user
+population asks in formulaic shapes; it is brittle to unanticipated phrasing,
+which is the gap a trained classifier would target.

@@ -432,3 +432,46 @@ points that *do* read chunk bodies — reranking, SIRA chunk selection, the
 golden-eval Stage-2 judge — where domain language is genuinely the missing
 ingredient. That belongs to a successor strand, and the weights-governance
 question must be ruled on before it is scheduled.
+
+### D-DRAFT-15 — CORRECTION to D-DRAFT-11: the defect is latent, not live; and this seam has no LLM call to displace
+
+**Date:** 2026-10-13
+**Context:** D-DRAFT-11 claimed the `SUMMARIZE`/`FACT` prompt omission makes
+two per-type features inert "whenever the LLM analyzer is active", and flagged
+that NORA's A4 / A8 / A11 baselines were likely produced that way. The call
+sites were not checked. They have now been.
+**Correction:** `LLMQueryAnalyzer` **is never constructed in any live path.**
+`core/src/query/pipeline.py:290` is `self._analyzer = analyzer or
+MockQueryAnalyzer()`; `sandbox/sira_query/service.py:1191` is
+`make_query_analyzer(None)` with a comment recording that wiring an
+`LLMProvider` for `LLMQueryAnalyzer` is a deliberate follow-up. Outside tests,
+nothing instantiates it. **Query classification in the serving path is 100%
+rule-based today.**
+**Consequences:**
+1. **The defect is latent, not live.** `MockQueryAnalyzer` emits both `FACT`
+   (`analyzer.py:269`) and `SUMMARIZE` (`:283`), so `_TYPE_MAX_DISTANCE` and
+   `_TYPE_DISABLE_GROUPING` fire normally and the tuned 0.4 / 0.7 thresholds
+   do take effect. Nothing is currently inert.
+2. **The A4 / A8 / A11 flag is withdrawn.** Those baselines ran on the
+   rule-based analyzer and are sound. The earlier claim was wrong.
+3. **The defect is demoted from phase-1 gate to landmine.** It must be fixed
+   before anyone enables `LLMQueryAnalyzer`, but it does not block or
+   invalidate baseline measurement. D-DRAFT-11's "blocks the phase-1 gate"
+   rationale no longer holds; the fix stays in this strand as cheap hygiene.
+4. **The measurement loses an arm.** The planned "current LLM" arm does not
+   exist in production — measuring it would mean wiring a path that has never
+   been wired. Real arms are: **rules (live today)**, decision model, and
+   fine-tuned decision model. An LLM arm is optional and synthetic.
+5. **Motivational reframing, and it needs saying to the architect.** The
+   strand's premise was displacing LLM calls at small decision points. **This
+   seam has no LLM call to displace** — a decision model here replaces
+   *rules*. That remains a legitimate and well-chosen first target (query-only
+   exposure, existing baseline, one factory function, lowest risk — D-DRAFT-2
+   still holds), but it will not reduce LLM usage or cost. The decision points
+   that *do* spend LLM calls are reranking, SIRA chunk selection and the
+   golden-eval Stage-2 judge — all of which read chunk bodies, which is why
+   they were parked. If token cost rather than capability is the driver, the
+   ordering of targets deserves revisiting.
+**Why this was missed:** the per-type maps were verified for their key sets but
+the analyzer's *call sites* were not. Verifying what a thing contains is not
+the same as verifying whether anything uses it.
