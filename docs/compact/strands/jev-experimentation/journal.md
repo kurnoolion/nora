@@ -480,3 +480,75 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   cross-encoder run), A3 81.7% / 54.6% (gemma4:e4b), and A4-vs-A6 the 20pp
   graph-topology gap. The doc now says so inline so a reader does not have to
   reconstruct it.
+
+## 2026-10-13 (cont. 7) — AutoTrust family enumerated; openjev blocked on licence
+
+### Done this session
+
+- **Terminology settled with the architect-side operator.** Decision model =
+  head-bearing model = System One model — same thing. Jev is TypeSafe's hosted
+  closed product; the open models are alternatives. One sharpening recorded:
+  "classification model" is narrower than the rest, since the category emits
+  `choice` (classification) **plus** `score` and `bool`.
+- **AutoTrust AI family enumerated** (Singapore applied-AI lab,
+  `huggingface.co/autotrust`), all Apache 2.0 — and **none of it fits the
+  A4000's 16 GB**, so the whole family is DGX-Spark-or-nothing and Kev remains
+  the iteration-1 pick:
+  - **JEV-9B** — Qwen3.5-9B backbone, ~18 GB download, 24 GB VRAM minimum
+    (32-48 comfortable), vision added 2026-10-03. AutoTrust's first integrated
+    System 1 + System 2 model.
+  - **JEV-27B** — Qwen3.8-27B, ~54 GB, 80 GB+ VRAM, text only. Keeps **96% of
+    hosted Jev's accuracy at 16 options**, KL divergence ~0.017.
+  - **JEV-27B-VL** — Qwen3.8-27B + vision, 256k inputs, 80 GB+ full; Q8_0
+    ~48 GB at 99.0% agreement with full precision, Q4_K_M ~24 GB at 92.9%.
+    Hit #1 on Hugging Face's global trending list 2026-10-08; leads the Jev
+    Decision Index vision board at 69.82 against 67.66 for the next entrant.
+  - **GEV-26B-Decide** — Gemma 4 26B-A4B MoE (~4B active), ~49.5 GB full,
+    NVFP4 18 GB / 17.1 GiB weights needing 24 GB short-context.
+- **"Blocks of Experts" recipe recorded → design §4.0.** The backbone stays
+  **frozen**; a small **detachable** decision block is added. JEV-9B's System 1
+  block is **40.2M trained parameters, ~0.5% of its backbone**. This single
+  fact explains three things at once: the GGUF trap's mechanism (a detachable
+  block ships as separate files), why the block costs nothing in generative
+  quality (JEV-9B scores 70.7% HumanEval *identical* to base Qwen3.5-9B,
+  backbone untouched), and why the §4.2 fine-tune is affordable rather than a
+  research programme. Kev's rank-16 LoRA + pointer head is the same idea at
+  smaller scale.
+- **System 1 vs System 2 scoped.** System 1 = typed question, one forward
+  pass, calibrated distribution. System 2 = ordinary generation with
+  step-by-step reasoning. GEV's adaptive thinking switches between them
+  (reportedly Minesweeper 21.0 → 86.0, Connect Four 54.0 → 99.5). NORA's
+  phase-1 use is **System 1 only**; adaptive thinking is a latency risk on the
+  interactive path and is explicitly out of scope until measured.
+- **GGUF detection made concrete → design §7.** AutoTrust's own guidance: the
+  file list must contain `head.safetensors`, an adapter folder, and
+  `calibration.json`. **A hollow distribution contains only `.gguf` files.**
+  What a stripped build omits is the decision adapter, the 24-slot decision
+  head, and the calibration temperatures. Phase 3 now asserts this in code
+  rather than by inspection. One known working exception exists: Atlas3D's
+  JEV-27B-VL ships a `llama.cpp-jev.patch`, because the `jev` decision type is
+  absent from upstream llama.cpp.
+- **Small-model field widened** (the bucket that actually fits): Kev-4B, Tev1
+  (0.8B, 812 MB), Nimble, Lev, Laya, Julia-1. Licences and `/v1/systemone`
+  support unverified for all but Kev; added to the design as roster candidates
+  pending verification.
+
+### Flags
+
+- **openjev is blocked on a licence conflict.** Its GitHub repository states
+  Apache-2.0; a secondary survey records openjev (27B) as **CC BY-NC 4.0,
+  commercial use prohibited**. The sources also disagree on the model itself
+  (DiffusionGemma 26B-A4B on vLLM/MLX versus a 27B served through llama.cpp).
+  An NC licence is a hard blocker for corporate deployment. Deliberately not
+  resolved here — legal confirms from the repository itself. Recorded as
+  design §8 open point 2.
+- **Correction to an earlier flag:** published benchmarks for this category
+  *do* exist — the **Jev Decision Index**, with a vision board. The earlier
+  "no published benchmarks" note was accurate only for Kev and openjev
+  specifically, not for the category.
+- **The convenience path is the trap path.** The small models that fit the
+  A4000 are the ones distributed for Ollama / llama.cpp — i.e. via GGUF, the
+  exact format that silently drops decision blocks. Every small candidate
+  needs the §7 file-list check before it is believed, and the "runs on a
+  laptop" framing in secondary sources should be treated as unverified for
+  decision capability.

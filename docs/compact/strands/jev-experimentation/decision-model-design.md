@@ -1,6 +1,6 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.3, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v0.4, 2026-10-13 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -8,7 +8,11 @@ cited; §2.1 defect fix claimed by this strand rather than left for adjudication
 v0.3: §4 split — 4.1 states that head-bearing IS the speed mechanism and that
 every candidate including Kev is head-bearing; 4.2 scopes the prior-art
 warning to accuracy of generic weights on domain text, with the A-series
-identified as NORA's own eval runs. Seam partition by output shape, `/v1/systemone` as the
+identified as NORA's own eval runs.
+v0.4: AutoTrust family enumerated with VRAM (none fits 16 GB); §4.0 Blocks of
+Experts — frozen backbone, 40.2M detachable block, 0.5% of backbone; System 1
+vs System 2 and adaptive thinking scoped out of phase 1; §7 GGUF detection made
+concrete; openjev blocked on a licence conflict (§8.2). Seam partition by output shape, `/v1/systemone` as the
 internal wire format, Kev as iteration-1 candidate, four-arm measurement with
 per-class confusion matrix, five gated phases mapping the architect's
 directive.)
@@ -194,11 +198,49 @@ phase-2 identity gate achievable.
 
 Verified first-hand; earlier secondary listings are not load-bearing.
 
+**AutoTrust AI** (Singapore applied-AI lab, `huggingface.co/autotrust`)
+publishes the reference open family, all Apache 2.0. **None of it fits 16 GB:**
+
+| Model | Base | VRAM | Fits A4000 | Note |
+|---|---|---|---|---|
+| JEV-9B | Qwen3.5-9B | 24 GB min, 32-48 comfortable (~18 GB download) | no | vision since 2026-10-03 |
+| JEV-27B | Qwen3.8-27B | 80 GB+ (~54 GB) | no | keeps 96% of hosted Jev's accuracy at 16 options, KL 0.017 |
+| JEV-27B-VL | Qwen3.8-27B + vision | 80 GB+; Q8_0 ~48 GB (99.0% agreement); Q4_K_M ~24 GB (92.9%) | no | 256k inputs; #1 on HF trending 2026-10-08 |
+| GEV-26B-Decide | Gemma 4 26B-A4B MoE (~4B active) | 80 GB+; NVFP4 24 GB short ctx (17.1 GiB) | no | adaptive thinking |
+
+The small end — what actually fits — is a separate and less documented field:
+
 | Candidate | Licence | `/v1/systemone` | Fits A4000 16 GB | Disposition |
 |---|---|---|---|---|
-| **Kev** 0.8B / 4B | Qwen3.5 bases Apache-2.0 | native | yes | **iteration 1** |
-| openjev (DiffusionGemma 26B-A4B) | Apache-2.0 | native + `/v1/decisions` | no — 24 GB+ | parked |
-| GEV-26B-Decide | Apache-2.0 | — | no — 24 GB+ even at NVFP4 (17.1 GiB) | parked |
+| **Kev** 0.8B / 4B | Qwen3.5 bases Apache-2.0 | native | **yes** | **iteration 1** |
+| Tev1 0.8B (812 MB) | unverified | unverified | yes | roster candidate |
+| Nimble, Lev, Laya, Julia-1 | unverified | varies | yes | roster candidates |
+| openjev | **conflicting — see §8** | native + `/v1/decisions` | no | **blocked on licence** |
+| AutoTrust family (above) | Apache 2.0 | native | no | parked — DGX Spark only |
+
+### 4.0 Why the decision block is small, detachable, and cheap to train
+
+AutoTrust's published recipe — **"Blocks of Experts"** — keeps the pretrained
+backbone **frozen** and adds a small **detachable** decision block. JEV-9B's
+System 1 block is **40.2 million trained parameters, about 0.5% of its
+backbone**. Three consequences matter to this design:
+
+- It explains the GGUF trap mechanically (§7): a detachable block ships as
+  separate files, so a format that packages only the backbone drops it.
+- It explains why the decision block costs nothing in generative quality —
+  JEV-9B scores 70.7% on HumanEval with the block attached, *identical* to
+  base Qwen3.5-9B, because the backbone is untouched.
+- It is the strongest argument that the §4.2 fine-tune is affordable: training
+  0.5% of a small model on NORA's labels is a modest job, not a research
+  programme. Kev's rank-16 LoRA plus pointer head is the same idea.
+
+These models also integrate **System 1 and System 2**: System 1 answers typed
+questions in one forward pass with a calibrated distribution; System 2 is
+ordinary generation with step-by-step reasoning. GEV's "adaptive thinking"
+switches between them — it answers instantly when confident and reasons first
+when not, reportedly taking Minesweeper from 21.0 to 86.0 and Connect Four from
+54.0 to 99.5. NORA's phase-1 use is purely System 1; adaptive thinking is a
+latency risk on the interactive path and is **out of scope** until measured.
 
 Kev checkpoints are a rank-16 LoRA adapter plus a small bilinear pointer head
 on a Qwen3.5 base; the readout scores each option's hidden state against the
@@ -329,23 +371,37 @@ accurate**. Legitimate answers are yes / yes / no.
   property and each needs its own assessment before being touched.
 - **GGUF is banned** for head-bearing decision models (D-DRAFT-3). vLLM only.
 - **Decision heads must be asserted loaded** before any accuracy number is
-  recorded.
+  recorded. Concrete check, per AutoTrust's own guidance: the model's file
+  list must contain `head.safetensors`, an adapter folder, and
+  `calibration.json`. **A hollow distribution contains only `.gguf` files.**
+  The missing components in a stripped build are the decision adapter, the
+  24-slot decision head, and the calibration temperatures. Phase 3 asserts
+  this in code before recording a single number, not by inspection.
 - `QueryIntent` is the contract and does not change.
 
 ## 8. Open points for adjudication
 
 1. **Module placement** — `core/src/decision/` as a 17th package (proposed)
    versus extending `core/src/llm/`.
-2. **Canonical Kev upstream.** Many near-identical forks exist
+2. **openjev's licence is in conflict and the project is blocked until it is
+   resolved.** Its GitHub repository states Apache-2.0, while a secondary
+   survey records openjev (27B) as **CC BY-NC 4.0 — commercial use
+   prohibited**. The two sources also disagree on the model itself
+   (DiffusionGemma 26B-A4B on vLLM/MLX, versus a 27B served through
+   llama.cpp). For a corporate deployment an NC licence is a hard blocker, so
+   openjev stays out of the roster until legal confirms the licence from the
+   repository itself. Not resolved here on purpose — this design does not get
+   to pick which source is right.
+3. **Canonical Kev upstream.** Many near-identical forks exist
    (`jaredpalmer`, `chi2liu`, `song007`, `Radexito`, others) with no clear
    provenance ordering. Iteration 1 brings external model code and weights
    into the corporate network; this needs whoever owns software intake to
    rule, before anything is pulled.
-3. **Fine-tuning budget.** §4's prior-art warning argues the generic-Kev arm
+4. **Fine-tuning budget.** §4's prior-art warning argues the generic-Kev arm
    is likely to underperform for the same OOD reason the cross-encoder did.
    Is the LoRA fine-tune in scope for this strand, or a successor?
-4. **Architect questions still open:** production image/stack name for the
+5. **Architect questions still open:** production image/stack name for the
    phase-5 rebuild; exact DGX Spark specification.
-5. **Phase-5 criteria.** What measurement result justifies flipping the
+6. **Phase-5 criteria.** What measurement result justifies flipping the
    default? Stating it now prevents the decision being relitigated later
    against a moving bar.
