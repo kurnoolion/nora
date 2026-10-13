@@ -525,6 +525,35 @@ def _select_newest_trees(
     return selected, len(tree_files) - len(selected)
 
 
+def _load_taxonomy_ledger(state_path, prompt_fp: str) -> dict:
+    """Load extraction_state.json's per-doc ledger, honored only when its
+    stored overview fingerprint matches the current one.
+
+    The discard on mismatch is deliberate (an overview edit must
+    invalidate every cached extraction) but it must never be SILENT: a
+    dropped ledger means a full-corpus LLM re-extract, and a mis-wired
+    NORA_TAXONOMY_OVERVIEW_DIR looks identical to a real overview edit
+    from here (field-found: a wiring-env migration lost the var and the
+    only tell was TAX-W003 two hours in).
+    """
+    try:
+        st = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if st.get("prompt_fp") == prompt_fp:
+        return st.get("docs", {})
+    n_prev = len(st.get("docs", {}))
+    logger.warning(
+        f"TAX-W004: overview fingerprint changed "
+        f"(ledger {st.get('prompt_fp', '?')} != current {prompt_fp}) — "
+        f"discarding {n_prev} cached extraction(s); full-corpus re-extract "
+        f"follows. If the overview files were not deliberately edited, "
+        f"check NORA_TAXONOMY_OVERVIEW_DIR in the wiring env before "
+        f"letting this run proceed."
+    )
+    return {}
+
+
 def run_taxonomy(ctx: PipelineContext) -> StageResult:
     """Extract feature taxonomy from parsed trees.
 
@@ -614,12 +643,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     state_path = out_dir / "extraction_state.json"
     prev_docs: dict[str, dict] = {}
     if not ctx.force and state_path.exists():
-        try:
-            st = json.loads(state_path.read_text(encoding="utf-8"))
-            if st.get("prompt_fp") == prompt_fp:
-                prev_docs = st.get("docs", {})
-        except Exception:
-            prev_docs = {}
+        prev_docs = _load_taxonomy_ledger(state_path, prompt_fp)
 
     # Split multi-plan trees (one doc, chapter-per-plan) into per-plan
     # extraction units, then dedupe units by (MNO, plan_id) with newest

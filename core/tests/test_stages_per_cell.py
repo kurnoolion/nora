@@ -407,3 +407,45 @@ class TestProfileCoverageFailLoud:
         res = run_profile(ctx)
         assert res.status == "OK", res
         assert (env / "out" / "profile" / "MNO-A" / "Feb2026" / "profile.json").is_file()
+
+
+# ── taxonomy ledger gate (TAX-W004) ─────────────────────────────────
+
+
+class TestTaxonomyLedgerGate:
+    """The per-doc ledger is honored only on a matching overview
+    fingerprint — and a mismatch must be LOUD (TAX-W004), never a silent
+    full-corpus re-extract (field-found: a wiring-env migration lost
+    NORA_TAXONOMY_OVERVIEW_DIR and the only tell was a context warning)."""
+
+    def _write_state(self, tmp_path, prompt_fp, n_docs=3):
+        p = tmp_path / "extraction_state.json"
+        p.write_text(json.dumps({
+            "prompt_fp": prompt_fp,
+            "docs": {f"doc{i}": {"status": "ok"} for i in range(n_docs)},
+        }), encoding="utf-8")
+        return p
+
+    def test_matching_fingerprint_returns_ledger(self, tmp_path):
+        from core.src.pipeline.stages import _load_taxonomy_ledger
+        p = self._write_state(tmp_path, "abc123")
+        assert len(_load_taxonomy_ledger(p, "abc123")) == 3
+
+    def test_mismatch_discards_and_warns_tax_w004(self, tmp_path, caplog):
+        import logging
+        from core.src.pipeline.stages import _load_taxonomy_ledger
+        p = self._write_state(tmp_path, "abc123")
+        with caplog.at_level(logging.WARNING):
+            docs = _load_taxonomy_ledger(p, "zzz999")
+        assert docs == {}
+        assert any("TAX-W004" in r.message and "3 cached" in r.message
+                   for r in caplog.records)
+
+    def test_unreadable_state_is_quietly_empty(self, tmp_path, caplog):
+        import logging
+        from core.src.pipeline.stages import _load_taxonomy_ledger
+        p = tmp_path / "extraction_state.json"
+        p.write_text("not json", encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            assert _load_taxonomy_ledger(p, "abc123") == {}
+        assert not any("TAX-W004" in r.message for r in caplog.records)
