@@ -552,3 +552,28 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   needs the §7 file-list check before it is believed, and the "runs on a
   laptop" framing in secondary sources should be treated as unverified for
   decision capability.
+
+## 2026-10-13 (cont. 8) — NC licence scope clarified
+
+### Done this session
+
+- **Clarified that "non-commercial" does not exempt internal corporate use**
+  (design §8.2, v0.5). CC BY-NC 4.0 turns on whether use is "primarily
+  intended for or directed towards commercial advantage" — a **purpose** test,
+  not a distribution test. A for-profit company running a model internally in
+  support of its commercial business is generally commercial use; keeping it
+  inside the network changes nothing. Compounding factors: Creative Commons
+  does not recommend CC licences for software and concedes NC is ambiguous,
+  and the copyright status of model weights and fine-tuned derivatives is
+  unsettled. Determination is fact- and jurisdiction-specific, so it belongs
+  with legal.
+- **Recommendation recorded: drop openjev rather than adjudicate it.** It is
+  already parked on VRAM (does not fit the A4000), so the licence question
+  costs nothing to avoid. Revisit only if DGX Spark frees up and openjev is
+  actually wanted.
+- **New intake item: Kev's adapter/head licence is unverified.** The Qwen3.5
+  *bases* are Apache-2.0, but the licence covering Kev's own rank-16 LoRA
+  adapter and bilinear pointer head is a separate artifact. Base licence does
+  not imply adapter licence. Folded into the canonical-upstream review
+  (§8.3), which must now confirm provenance **and** licence for the adapter
+  itself before anything is pulled.

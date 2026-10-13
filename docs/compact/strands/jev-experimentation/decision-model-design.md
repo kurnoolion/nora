@@ -1,6 +1,6 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.4, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v0.5, 2026-10-13 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -12,7 +12,10 @@ identified as NORA's own eval runs.
 v0.4: AutoTrust family enumerated with VRAM (none fits 16 GB); §4.0 Blocks of
 Experts — frozen backbone, 40.2M detachable block, 0.5% of backbone; System 1
 vs System 2 and adaptive thinking scoped out of phase 1; §7 GGUF detection made
-concrete; openjev blocked on a licence conflict (§8.2). Seam partition by output shape, `/v1/systemone` as the
+concrete; openjev blocked on a licence conflict (§8.2).
+v0.5: §8.2 expanded — NC is a purpose test, so internal corporate use is not
+exempt; recommendation is to drop openjev rather than adjudicate it; Kev's
+adapter/head licence flagged as distinct from its Apache-2.0 base. Seam partition by output shape, `/v1/systemone` as the
 internal wire format, Kev as iteration-1 candidate, four-arm measurement with
 per-class confusion matrix, five gated phases mapping the architect's
 directive.)
@@ -392,6 +395,23 @@ accurate**. Legitimate answers are yes / yes / no.
    openjev stays out of the roster until legal confirms the licence from the
    repository itself. Not resolved here on purpose — this design does not get
    to pick which source is right.
+
+   **Do not assume "internal use only" satisfies NC.** CC BY-NC 4.0 turns on
+   whether the use is "primarily intended for or directed towards commercial
+   advantage" — a purpose test, not a distribution test. A for-profit company
+   running a model internally to support its commercial business is generally
+   commercial use; internal deployment does not exempt it. Creative Commons
+   additionally does not recommend CC licences for software and acknowledges
+   NC is ambiguous, and the status of model weights and fine-tuned derivatives
+   under copyright is unsettled. **Practical routing: this costs nothing to
+   avoid.** openjev is already parked on VRAM (it does not fit the A4000), so
+   the recommendation is to drop it rather than spend legal time — revisit
+   only if DGX Spark frees up and it is actually wanted.
+
+   **Related, and in scope for the same intake review:** Kev's *bases*
+   (Qwen3.5) are Apache-2.0, but the licence covering Kev's own LoRA adapter
+   and pointer head is a separate artifact and is **not yet verified**. Base
+   licence does not imply adapter licence.
 3. **Canonical Kev upstream.** Many near-identical forks exist
    (`jaredpalmer`, `chi2liu`, `song007`, `Radexito`, others) with no clear
    provenance ordering. Iteration 1 brings external model code and weights
