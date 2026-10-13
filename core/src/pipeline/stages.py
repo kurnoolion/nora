@@ -558,7 +558,7 @@ def _load_taxonomy_ledger(state_path, prompt_fp: str) -> dict:
         return st.get("docs", {})
     n_prev = len(st.get("docs", {}))
     logger.warning(
-        f"TAX-W004: overview fingerprint changed "
+        f"TAX-W006: overview fingerprint changed "
         f"(ledger {st.get('prompt_fp', '?')} != current {prompt_fp}) — "
         f"discarding {n_prev} cached extraction(s); full-corpus re-extract "
         f"follows. If the overview files were not deliberately edited, "
@@ -757,6 +757,15 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
             "status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name,
         }
         n_extracted += 1
+        _save_state()
+
+    # Persist the COMPLETE ledger once the loop ends. The in-loop saves
+    # fire only on extraction/failure events, so a run whose tail units
+    # are cached would otherwise leave a ledger truncated at its last
+    # extraction (field-found: a one-plan retry shrank a 267-entry
+    # ledger to 178 — the cached entries after the retried unit never
+    # reached disk, scheduling them for silent re-extraction).
+    if units:
         _save_state()
 
     if not all_doc_features:

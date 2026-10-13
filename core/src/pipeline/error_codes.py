@@ -85,6 +85,9 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("TAX-W002", "Using correction file for taxonomy", "corrections/taxonomy.json overrides auto-generated"),
     ErrorDef("TAX-W003", "No usable corpus overview for MNO {mno}", "Extraction proceeds without corpus context; check NORA_TAXONOMY_OVERVIEW_DIR contents"),
     ErrorDef("TAX-W004", "{failed} of {total} docs failed extraction", "Re-run the taxonomy stage to retry failed docs; details in out/taxonomy/extraction_state.json"),
+    ErrorDef("TAX-W005", "Ledger present but no unit is cacheable", "Every stored tree hash is stale — parse trees regenerated since the last taxonomy run; full-corpus re-extract follows"),
+    ErrorDef("TAX-W006", "Overview fingerprint changed — {count} cached extractions discarded", "Full-corpus re-extract follows; if the overview files were not deliberately edited, check NORA_TAXONOMY_OVERVIEW_DIR in the wiring env"),
+    ErrorDef("TAX-I001", "{cached} cached / {extract} to extract (of {total} units)", "Launch-time extraction plan; an unexpectedly large extract count can be stopped before LLM cost accrues"),
 
     # --- Standards (STD) ---
     ErrorDef("STD-E001", "Failed to download spec {spec}: {reason}", "Check network connectivity and 3GPP FTP availability"),

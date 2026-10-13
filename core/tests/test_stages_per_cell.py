@@ -409,7 +409,7 @@ class TestProfileCoverageFailLoud:
         assert (env / "out" / "profile" / "MNO-A" / "Feb2026" / "profile.json").is_file()
 
 
-# ── taxonomy ledger gate (TAX-W004) ─────────────────────────────────
+# ── taxonomy ledger gate (TAX-W006) ─────────────────────────────────
 
 
 class TestTaxonomyLedgerGate:
@@ -431,14 +431,14 @@ class TestTaxonomyLedgerGate:
         p = self._write_state(tmp_path, "abc123")
         assert len(_load_taxonomy_ledger(p, "abc123")) == 3
 
-    def test_mismatch_discards_and_warns_tax_w004(self, tmp_path, caplog):
+    def test_mismatch_discards_and_warns_tax_w006(self, tmp_path, caplog):
         import logging
         from core.src.pipeline.stages import _load_taxonomy_ledger
         p = self._write_state(tmp_path, "abc123")
         with caplog.at_level(logging.WARNING):
             docs = _load_taxonomy_ledger(p, "zzz999")
         assert docs == {}
-        assert any("TAX-W004" in r.message and "3 cached" in r.message
+        assert any("TAX-W006" in r.message and "3 cached" in r.message
                    for r in caplog.records)
 
     def test_unreadable_state_is_quietly_empty(self, tmp_path, caplog):
@@ -448,7 +448,7 @@ class TestTaxonomyLedgerGate:
         p.write_text("not json", encoding="utf-8")
         with caplog.at_level(logging.WARNING):
             assert _load_taxonomy_ledger(p, "abc123") == {}
-        assert not any("TAX-W004" in r.message for r in caplog.records)
+        assert not any("TAX-W006" in r.message for r in caplog.records)
 
 
 class TestTaxonomyCachedUnitKeys:
@@ -484,3 +484,38 @@ class TestTaxonomyCachedUnitKeys:
         units = [self._unit("a", "sha1", "P1")]
         prev = {"a": {"status": "ok", "tree_sha": "sha1"}}
         assert _cached_unit_keys(units, prev, tmp_path) == set()
+
+
+class TestTaxonomyLedgerCompleteness:
+    """The ledger on disk must hold EVERY current unit after a run — not
+    just entries up to the last extraction event (field-found: a one-plan
+    retry whose extraction sorted before the cached tail truncated a
+    267-entry ledger to 178, silently scheduling the tail for
+    re-extraction)."""
+
+    def _ctx(self, env, monkeypatch, provider):
+        ctx = PipelineContext.standalone(env_dir=env, model_provider="mock")
+        monkeypatch.setattr(ctx, "create_llm_provider", lambda *a, **k: provider)
+        return ctx
+
+    def test_retry_with_cached_tail_persists_full_ledger(self, tmp_path, monkeypatch):
+        # PLANA sorts before PLANB; fail PLANA first so the retry's only
+        # extraction happens BEFORE the cached unit.
+        _seed_plan_tree(tmp_path, "MNO-A", "R2026Q1", "PLANA")
+        _seed_plan_tree(tmp_path, "MNO-B", "R2026Q1", "PLANB")
+        prov = _ScriptedProvider(fail_plans={"PLANA"})
+        ctx = self._ctx(tmp_path, monkeypatch, prov)
+        state = tmp_path / "out" / "taxonomy" / "extraction_state.json"
+
+        r1 = run_taxonomy(ctx)
+        assert r1.status == "WARN" and r1.stats["failed"] == 1
+
+        prov.fail_plans.clear()
+        r2 = run_taxonomy(ctx)
+        assert r2.status == "OK"
+        assert r2.stats["docs"] == 1 and r2.stats["cached_docs"] == 1
+
+        docs = json.loads(state.read_text(encoding="utf-8"))["docs"]
+        assert len(docs) == 2, (
+            f"ledger truncated at the last extraction: {sorted(docs)}")
+        assert all(e["status"] == "ok" for e in docs.values())
