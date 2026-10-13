@@ -577,3 +577,26 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   not imply adapter licence. Folded into the canonical-upstream review
   (§8.3), which must now confirm provenance **and** licence for the adapter
   itself before anything is pulled.
+
+## 2026-10-13 (cont. 9) — Iteration-1 candidate locked: Kev-4B, as-is
+
+### Done this session
+
+- **Kev-4B on the A4000, unmodified, selected for iteration 1 → D-DRAFT-12.**
+  No quantization, no AWQ conversion, no DGX Spark dependency. Rationale: it
+  runs out of the box on hardware already in place with a runtime already in
+  production, so iteration 1 spends its effort on the seam, the labelled set
+  and the measurement instead of model engineering. JEV-9B-AWQ remains in the
+  roster as a later entry.
+- **Hardware rule recorded in plain terms** for whoever picks this up: small
+  models fit the A4000 as-is; large models (JEV-9B, JEV-27B, JEV-27B-VL,
+  GEV-26B-Decide) fit DGX Spark as-is; anything in between needs shrinking,
+  and shrinking must use AWQ (keeps the decision block) rather than GGUF
+  (drops it). Caveat attached: DGX Spark's unified memory will fit the large
+  models but is slower than dedicated GPU memory, so "fits" is not "fast"
+  there until measured.
+- **Accuracy expectation set explicitly.** A generic 4B decision model on
+  telecom spec text will likely score modestly, per the §4.2
+  out-of-distribution warning and NORA's own A11 precedent. This is accepted
+  up front rather than discovered later — the iteration-1 deliverable is a
+  working configurable path plus honest measurement, not a win (D-DRAFT-6).

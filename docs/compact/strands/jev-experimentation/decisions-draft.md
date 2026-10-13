@@ -326,3 +326,31 @@ grouping-disable were inert throughout, which would mean those tuned 0.4 / 0.7
 values have never taken effect in any recorded baseline. If so, the fix is a
 behaviour change to the legacy path in its own right and needs its own
 before/after measurement, independent of anything to do with decision models.
+
+### D-DRAFT-12 — Iteration 1 runs Kev-4B on the A4000 as-is; no quantization work in scope
+
+**Date:** 2026-10-13
+**Context:** Two viable candidates reach the A4000: Kev-4B directly, and
+JEV-9B after a self-produced 4-bit AWQ conversion NORA would be first to
+attempt (§4.3 of the design). The strand's objective is exploration and
+expertise, not deployment optimization (D-DRAFT-6).
+**Decision:** Iteration 1 uses **Kev-4B on the A4000, unmodified**. No
+quantization work, no AWQ conversion, no DGX Spark dependency.
+**Why:** It works out of the box on hardware already available with a runtime
+already in production, so the first iteration spends its effort on the seam,
+the labelled set and the measurement rather than on model engineering. The
+JEV-9B-AWQ route is better-pedigreed (clean Apache 2.0, published figures —
+mean KL ~0.019 to hosted Jev, 90% of its accuracy at 16 options) but unproven:
+no JEV-9B-AWQ is published, so NORA would be first, and the attempt could cost
+a day or a week. Carrying unproven conversion work inside a first exploration
+risks the strand failing for reasons unrelated to decision models.
+**Consequences:** The accuracy ceiling of iteration 1 is whatever a 4B generic
+decision model achieves on telecom text — likely modest, per the §4.2
+out-of-distribution warning. That is acceptable and expected: the deliverable
+is a working configurable path plus measurement, not a win. JEV-9B-AWQ stays
+in the roster as a later entry, and becomes attractive without any conversion
+work at all if DGX Spark frees up. The general rule recorded for whoever picks
+this up next: **small models fit the A4000 as-is; large models fit DGX Spark
+as-is; everything else needs shrinking.** Note that DGX Spark's unified memory
+will fit the large models but is slower than dedicated GPU memory, so "fits"
+should not be read as "fast" there until measured.
