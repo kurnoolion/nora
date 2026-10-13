@@ -165,3 +165,74 @@ requirement has existing precedent in the landed `llm-model-discovery` /
 - Counter-evidence survey — https://redreamality.com/blog/open-decision-models-2026-survey-benchmarks/
 - openjev reference server — https://github.com/razorback16/openjev
 - GEV-26B adaptive thinking (architect-supplied; 403 to automated fetch, not read first-hand) — https://medium.com/data-science-in-your-pocket/gev-26b-a-jev-like-decision-model-with-adaptive-thinking-4ed75c09bbd8
+
+## 2026-10-13 (cont.) — Objective set, hardware scoped, a live analyzer defect found
+
+### Done this session
+
+- **Objective reaffirmed and recorded → D-DRAFT-6.** The strand ships a
+  configurable Jev-class decision path and explores its effectiveness; the
+  deliverable is working integration plus in-house expertise, not a proven
+  accuracy win. Decision models are fast and gaining adoption, the expertise
+  transfers to NORA's six other decision points and to classification work
+  beyond NORA, and the integration cost is bounded because the seam is one
+  factory function. Proceeds irrespective of how baselines compare.
+- **D-DRAFT-5 reframed accordingly.** The rule-based and small-classifier arms
+  are reference baselines measured for accountability — mandatory, because
+  without them the experiment yields an unanchored number — but they do not
+  gate the exploration. "The baseline won" is a successful outcome of this
+  strand. Reporting must keep three questions separate: does the decision path
+  work, is it faster, is it more accurate. Legitimate answers: yes / yes / no.
+- **Hardware scoped → D-DRAFT-4 amended.** DGX Spark is currently committed as
+  the backup host for LLM synthesis — contended, likely unavailable near-term,
+  explicitly not ruled out but not plannable. The A4000 (16 GB) is the
+  practical target and can also act as backup. Consequence: **GEV-26B-Decide
+  is out of scope for iteration 1** (17.1 GiB NVFP4 weights exceed 16 GB
+  before context) and re-enters only if DGX Spark frees up. First-iteration
+  shortlist is the small end: ModernBERT-class (322-421M), sub-9B Qwen3.5
+  builds, and SemIf-style constrained decoding over an already-resident model.
+  Favourable side effect: these fit the A4000 comfortably and some run on CPU.
+- **`QueryType` fully enumerated — ten members, not eight.** `SINGLE_DOC`,
+  `CROSS_DOC`, `CROSS_MNO_COMPARISON`, `RELEASE_DIFF`,
+  `STANDARDS_COMPARISON`, `TRACEABILITY`, `FEATURE_LEVEL`, `SUMMARIZE`,
+  `FACT`, `GENERAL`. `SUMMARIZE` and `FACT` are the intent-shaped types added
+  in "Step 4", each gating its own per-type knobs.
+- **Live defect found at the target seam.** `MockQueryAnalyzer` emits `FACT`
+  (`analyzer.py:269`) and `SUMMARIZE` (`:283`), but `LLMQueryAnalyzer`'s prompt
+  enumerates only 8 `query_type` options and omits both. So whenever the LLM
+  analyzer is active, those two classes are unreachable and their routing
+  knobs are silently dead — wide `top_k` + grouping-disabled for `SUMMARIZE`,
+  tight `top_k` + strict `max_distance_threshold` + rerank-ON for `FACT`.
+  Needs its own fix regardless of this strand's outcome; it also predicts that
+  any legacy-vs-decision-path A/B will show class-distribution differences
+  that are a prompt defect, not a model effect.
+- **Analyzer seam partitioned → D-DRAFT-7.** `QueryIntent` carries nine
+  populated fields, so the decision model cannot be a drop-in replacement for
+  `analyze()`. Partition by output shape: decision model owns `query_type`
+  (10-way choice) and `doc_type_scope` (3-way choice), optionally `mnos` /
+  `likely_features` / `plan_ids` as parallel per-candidate booleans — which is
+  precisely the one-state-many-questions pattern the category is built for.
+  Open-extraction fields (`entities`, `concepts`, `releases`,
+  `standards_refs`) stay on `MockQueryAnalyzer`'s existing regex extractors,
+  which are already written and tested. The result is a hybrid analyzer, and
+  it is architecturally cleaner than today's single LLM call doing
+  classification and extraction together with a wholesale fallback on any JSON
+  parse failure.
+
+### Next
+
+- Open design question for the architect: decision model **before or after
+  query expansion** (directive phase 3). Not yet analysed.
+- Candidate repo + licence verification first-hand, small end of the field.
+- Labelled query set (~40-60) for the four-arm comparison.
+- Then the architectural design: hybrid analyzer, roster + flag shape
+  (mirroring the landed LLM roster), trial stack on new ports per
+  `corp-db-layer`'s template.
+
+### Flags
+
+- **`SUMMARIZE` / `FACT` unreachable under `LLMQueryAnalyzer`** — standalone
+  defect, independent of this strand. Fix before any legacy-vs-decision A/B,
+  or the baseline arm is measured against a broken legacy path.
+- Three architect questions still open: serving runtime name, production
+  image/stack name, exact DGX Spark specification.

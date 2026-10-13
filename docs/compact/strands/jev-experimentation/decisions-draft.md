@@ -93,30 +93,106 @@ for an interactive query-time dependency. Smaller open candidates (0.6B-9B
 Qwen3.5-based; 322-421M ModernBERT-class) are what actually fit the A4000,
 with an open accuracy question. Requires confirming vLLM support on DGX Spark.
 
-### D-DRAFT-5 — A small purpose-trained classifier is a first-class arm, not a fallback
+**Amended 2026-10-13:** hardware availability clarified by the architect. DGX
+Spark is currently committed as the backup host for LLM synthesis, so it is
+contended and likely unavailable near-term — explicitly *not* ruled out, but
+not plannable. The A4000 (16 GB) is the practical target, and can also serve as
+a backup. Consequence: GEV-26B-Decide is **out of scope for the first
+iteration** on hardware grounds (17.1 GiB NVFP4 weights exceed 16 GB before
+context), and the first-iteration shortlist is the small end of the field —
+ModernBERT-class (322-421M), sub-9B Qwen3.5-based builds, and SemIf-style
+constrained decoding over a model already resident. GEV-26B re-enters if and
+when DGX Spark frees up.
+
+### D-DRAFT-5 — Baselines are measured for accountability; they do not gate the exploration
 
 **Date:** 2026-10-13
-**Context:** The directive frames the work as migrating decision-making to a
-Jev-class model. Published counter-evidence on the category argues the
-category is often the wrong tool for exactly this task shape.
-**Decision:** The comparison carries a fourth arm — a small purpose-trained
-classifier (200M-class, offline) — evaluated on equal footing with the
-decision-model candidates, not as a consolation path.
-**Why:** On tasks they are trained for, small classifiers match or beat
-decision models while being cheaper, faster, and offline: a 200M DeBERTa
-scored 89.01% at 54 ms against Jev's 86.35% at 348 ms on prompt-injection
-detection; a 125M model hit 80.27% at 33 ms on content safety. The category's
-headline selling point — calibration — is also softer than advertised: Jev
-runs overconfident at 0.81 mean confidence against 0.74 actual accuracy
-(ECE 0.074), and JEV-9B's published ECE of 0.0007 is computed against the
-teacher's distributions, measuring closeness to Jev rather than accuracy
-against truth (0.0759 independently). The survey's own selection rule is
-"start with a small classifier if you have labels." NORA has 8 stable
-`QueryType` classes and recorded real user queries (submit-time question
-recording from the `ask-history` work), so labels are cheap to produce.
-**Consequences:** Phase 1 must include a labelling step, which is new work the
-directive does not currently budget. A classifier arm that wins would retire
-the vLLM / DGX-Spark commitment in D-DRAFT-3 and D-DRAFT-4 entirely — the
-cheapest available outcome, and the reason it must be measured rather than
-assumed away. The cheapest outcome of all remains possible: `MockQueryAnalyzer`
-already exists and may match the LLM without any new model.
+**Context:** Published counter-evidence on the decision-model category argues
+small purpose-trained classifiers often match or beat decision models on
+trained tasks, and that the calibration advantage is overstated (see Why
+below). An earlier draft of this decision treated that as grounds for the
+exploration to terminate at "use the classifier instead."
+**Decision:** The rule-based (`MockQueryAnalyzer`) and small-classifier arms
+are measured as **reference baselines**, reported honestly, and do **not**
+gate the Jev-class exploration. The strand proceeds with the decision-model
+integration regardless of whether a baseline wins on accuracy.
+**Why:** The strand's objective is capability, not a leaderboard win (see
+D-DRAFT-6) — a baseline that beats the decision model is a useful result to
+*record*, not a reason to stop. Baselines are still mandatory: without them
+the experiment produces an unanchored number and cannot tell anyone whether
+the decision path helped, which is the difference between exploration and
+decoration. The counter-evidence that motivates them: a 200M DeBERTa scored
+89.01% at 54 ms against hosted Jev's 86.35% at 348 ms on prompt-injection
+detection; a 125M model hit 80.27% at 33 ms on content safety; hosted Jev runs
+overconfident at 0.81 mean confidence against 0.74 actual accuracy (ECE
+0.074); and JEV-9B's published ECE of 0.0007 is computed against the teacher's
+distributions — closeness to Jev, not accuracy against truth (0.0759
+independently).
+**Consequences:** Phase 1 carries a labelling step the directive does not yet
+budget. Success criteria must be stated as capability + accountable
+measurement, not "beat the LLM," or a null accuracy result will read as
+failure when it is not. Reporting must separate three questions that will be
+conflated otherwise: does the decision path *work*, is it *faster*, and is it
+*more accurate* — the answers can legitimately be yes / yes / no.
+
+### D-DRAFT-6 — The strand's objective is capability-building under configurability, not a first-shot win
+
+**Date:** 2026-10-13
+**Context:** Decision models ("System One" models) are an emerging category
+with a real speed advantage and growing adoption. The architect-side decision
+is to build in-house expertise with them now rather than wait for the category
+to settle, using NORA's query classification as the vehicle.
+**Decision:** This strand ships a configurable Jev-class decision path in
+NORA and explores its effectiveness. The deliverable is working, configurable
+integration plus recorded expertise — not a proven accuracy improvement. The
+work proceeds irrespective of baseline comparison outcomes.
+**Why:** Deliberate capability investment. The category is fast and gaining
+adoption; the expertise transfers to NORA's six other LLM-backed decision
+points and to classification work beyond NORA. Waiting for external consensus
+forfeits the learning window, and the integration cost is bounded because the
+seam is one factory function (`make_query_analyzer`). An accuracy win is a
+possible bonus, not the success condition.
+**Consequences:** Legacy remains the configurable default throughout, so the
+exploration never risks production behaviour. Success criteria are: the
+decision path runs in a configurable manner, candidate swapping works, and
+measured per-class accuracy / determinism / latency are recorded against
+baselines. "The baseline won" is a successful outcome of this strand, not a
+failed one. The strand should also bank negative findings (the GGUF trap in
+D-DRAFT-3 is already one) as first-class deliverables.
+
+### D-DRAFT-7 — The decision model owns only the choice- and bool-shaped fields of QueryIntent; extraction stays with the existing paths
+
+**Date:** 2026-10-13
+**Context:** `LLMQueryAnalyzer.analyze()` returns a whole `QueryIntent`
+(`core/src/query/schema.py:62`) with nine populated fields, not a single
+label. A decision model emits only `bool` / `score` / `choice`, so it cannot
+be a drop-in replacement for the method.
+**Decision:** Partition `QueryIntent` by output shape. The decision model owns
+`query_type` (a 10-way `choice`) and `doc_type_scope` (a 3-way `choice`), and
+optionally `mnos`, `likely_features` and `plan_ids` as **parallel booleans,
+one question per closed-vocabulary candidate**. The open-extraction fields —
+`entities`, `concepts`, `releases`, `standards_refs` — stay on the existing
+regex paths in `MockQueryAnalyzer`.
+**Why:** The partition follows the data, not preference. `query_type` and
+`doc_type_scope` are closed option sets — native `choice` shape. `mnos`
+(VZW/TMO/ATT), `likely_features` (keys of `_FEATURE_KEYWORDS`) and `plan_ids`
+(five values) are closed-vocabulary multi-selects, which decompose exactly
+into the per-candidate parallel questions the category is built for — one
+`state` (the query) evaluated against many questions in one request, well
+inside a 64k/32k budget for a single query. `entities`, `concepts`,
+`releases` and `standards_refs` are free-text span extraction with no option
+set, so no decision model can produce them at all. `MockQueryAnalyzer` already
+implements every one of these extractors in regex
+(`_extract_entities`, `_extract_concepts`, `_extract_releases`,
+`_extract_standards`), so the non-decision half of the work is already
+written and tested.
+**Consequences:** The integration is a **hybrid** analyzer, not a swap: a
+decision-model classifier composed with the existing rule-based extractors.
+This is architecturally cleaner than today's `LLMQueryAnalyzer`, which asks one
+LLM call to do classification and extraction together and falls back wholesale
+to `MockQueryAnalyzer` on any JSON parse failure. It also fixes a live defect
+by construction: today's LLM prompt enumerates only 8 of the 10 `QueryType`
+values, omitting `SUMMARIZE` and `FACT`, so the LLM analyzer can never emit
+them and their per-type knobs (wide top_k + grouping off; tight top_k + strict
+threshold + rerank on) are silently dead. A typed option set is a schema, not
+prose in a prompt, so that failure mode becomes impossible.
