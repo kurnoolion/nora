@@ -337,3 +337,61 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   the decision to be defensible at all".
 - Two architect questions still open: production image/stack name, exact DGX
   Spark specification.
+
+## 2026-10-13 (cont. 4) — Design doc written to the house convention
+
+### Done this session
+
+- **Artifact location settled empirically.** Superpowers' default spec path
+  (`docs/superpowers/specs/`) does not exist in this repo and never has.
+  Seven strands instead keep design docs **inside the strand folder** as
+  `<topic>-design.md` (`corp-db-layer/storage-design.md`,
+  `corp-db-layer/converter-design.md`, `_archive/mno-c-ingestion/
+  asset-ingestion-design.md`, `_archive/sira-enrichment-pe/
+  enrichment-pe-design.md`, `_archive/multi-mno-nora/
+  multi-mno-ingestion-design.md`, `_archive/docker-distro/
+  docker-distro-design.md`, `_archive/sira-enrichment-review/
+  enrichment-review-design.md`). The split adopted: **Superpowers owns the
+  process** (brainstorm → design → plan → execute), **COMPACT owns the
+  artifacts** (in-strand design doc, journal, decisions-draft, promotion via
+  `/land-strand`). One set of files, in the places the architect authored. The
+  brainstorming skill explicitly permits this — its own text defers spec
+  location to user preference.
+- **`decision-model-design.md` written** (draft v0.1), matching
+  `storage-design.md`'s format: title + strand/version/status byline,
+  cumulative parenthetical version log, `Inputs:` block naming sources and
+  architect rulings with dates, numbered sections, `## 8. Open points for
+  adjudication` last. Sections: shape of the answer · the picture (seam
+  diagram + downstream knob fan-out) · `QueryIntent` partition by output
+  shape · the code seam and `/v1/systemone` · candidates and hardware · five
+  gated phases · measurement · invariants · open points.
+- **Prior-art warning folded into the design.** NORA already ships a
+  head-bearing model: `CrossEncoderReranker` (`reranker.py:90`,
+  `ms-marco-MiniLM-L6-v2`) is the same architecture class with a scoring head
+  instead of a decision head. The A11 result had it net-zero and slightly
+  regressive (86.4% / 62.3%), diagnosed as out-of-distribution on telecom spec
+  text. A generic Kev should be expected to hit the same wall for the same
+  reason, which makes the LoRA fine-tune the load-bearing step rather than an
+  optional extra. Recorded as §4's warning and §8's open point 3.
+- **Spec self-review run.** Two fixes applied: the fourth measurement arm
+  (fine-tuned Kev) was stated as definite while §8 still asked whether
+  fine-tuning is in scope — now explicitly conditional; and "phase" versus
+  "iteration" were used interchangeably — now defined once in §5.
+
+### Next
+
+- Architect review of `decision-model-design.md`, particularly §8's six open
+  points.
+- On approval: `superpowers:writing-plans` for the phase-1 implementation plan
+  (defect fix + labelled set + baseline measurement). No code before that.
+
+### Flags
+
+- **Six open points carried in the design doc** awaiting adjudication: module
+  placement; canonical Kev upstream (supply-chain review before anything is
+  pulled); fine-tuning budget; ownership of the `SUMMARIZE`/`FACT` defect fix;
+  the two outstanding architect questions; and phase-5 default-flip criteria.
+- **Phase-5 criteria unstated is the one worth closing early.** Agreeing now
+  what measurement justifies flipping the default prevents the decision being
+  relitigated later against a moving bar — the same failure the strand's
+  objective framing (D-DRAFT-6) is meant to prevent.
