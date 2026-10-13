@@ -1,6 +1,6 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.5, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v0.6, 2026-10-13 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -15,7 +15,10 @@ vs System 2 and adaptive thinking scoped out of phase 1; §7 GGUF detection made
 concrete; openjev blocked on a licence conflict (§8.2).
 v0.5: §8.2 expanded — NC is a purpose test, so internal corporate use is not
 exempt; recommendation is to drop openjev rather than adjudicate it; Kev's
-adapter/head licence flagged as distinct from its Apache-2.0 base. Seam partition by output shape, `/v1/systemone` as the
+adapter/head licence flagged as distinct from its Apache-2.0 base.
+v0.6: §4.3 added — AWQ via llm-compressor keeps the decision head in bf16
+(precedent: JEV-27B-VL-AWQ), so JEV-9B plausibly reaches the A4000; AutoTrust
+is parked on VRAM only, never on licence; roster is now two-horse. Seam partition by output shape, `/v1/systemone` as the
 internal wire format, Kev as iteration-1 candidate, four-arm measurement with
 per-class confusion matrix, five gated phases mapping the architect's
 directive.)
@@ -202,7 +205,9 @@ phase-2 identity gate achievable.
 Verified first-hand; earlier secondary listings are not load-bearing.
 
 **AutoTrust AI** (Singapore applied-AI lab, `huggingface.co/autotrust`)
-publishes the reference open family, all Apache 2.0. **None of it fits 16 GB:**
+publishes the reference open family, all Apache 2.0. **No licence problem
+anywhere in it** — it is parked on VRAM alone, and §4.3 shows that constraint
+may dissolve. At full precision none of it fits 16 GB:
 
 | Model | Base | VRAM | Fits A4000 | Note |
 |---|---|---|---|---|
@@ -260,6 +265,43 @@ decision arm merge in iteration 2 rather than competing.
 Serving: decision path on vLLM, legacy LLM path stays on Ollama. The arms do
 not contend, and the GGUF ban (D-DRAFT-3) is satisfied by construction rather
 than by discipline.
+
+### 4.3 AWQ preserves the decision head — JEV-9B may reach the A4000
+
+The VRAM parking above assumed full precision and NVFP4 only. A third path
+exists and inverts the GGUF trap.
+
+Precedent: **`aioutfitters/JEV-27B-VL-AWQ`**, a 4-bit AWQ build produced with
+`llm-compressor` and served on vLLM, in which **the decision head (`lm_head`)
+and the vision tower are deliberately kept in bf16 while every other text
+layer is quantized** — W4A16_ASYM, group size 128, asymmetric int8 zero
+points, pack-quantized / compressed-tensors. Where GGUF *drops* the decision
+block, this approach *protects* it and compresses only the backbone.
+
+Applied to **JEV-9B** (18 GB bf16): 4-bit backbone weights land near 5 GB, the
+bf16 head is small, and KV cache for single short queries is modest — so it
+should fit the A4000 with headroom. Its published figures are the strongest
+of any candidate here: mean KL ≈ 0.019 against hosted Jev, **90% of Jev's
+accuracy at 16 options**, 2.6× faster than JEV-27B. Sixteen options is exactly
+`_FEATURE_KEYWORDS`' cardinality (§2), so that datapoint is directly on-shape
+for NORA.
+
+Two honest caveats, both measurable rather than arguable:
+
+- **No JEV-9B-AWQ was found published.** NORA would produce it with
+  `llm-compressor`. A documented path, but real work, and it must be verified
+  against the §7 file-list check afterwards.
+- **Quantization costs accuracy on top of the 90%.** JEV-27B-VL's Q4_K_M held
+  92.9% agreement with full precision and Q8_0 held 99.0%; AWQ W4A16
+  typically beats Q4_K_M, but the figure for this model is unknown until
+  measured on NORA's labelled set.
+
+**Consequence for the roster:** the candidate field is two-horse, not
+one-horse. **Kev** — tiny, native `/v1/systemone`, LoRA-trainable, unverified
+provenance and adapter licence. **JEV-9B-AWQ** — reference family, clean
+Apache 2.0, published benchmarks, needs a quantization step NORA performs
+itself. Both fit the A4000 and both belong in the phase-3 roster; Kev remains
+first to stand up because it needs no quantization work.
 
 ### 4.1 "Head-bearing" is the speed mechanism, not a drawback
 
