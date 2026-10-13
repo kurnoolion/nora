@@ -639,3 +639,68 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   case. Encouragingly, 13.5k records over two epochs is a small training job,
   which argues for resolving §8's fine-tuning-budget question in favour of
   keeping it inside this strand.
+
+## 2026-10-13 (cont. 11) — Terminology fixed; domain-adaptation idea noted
+
+### Terminology, for the record
+
+Loose use of "trained" was corrected in discussion. Precisely:
+
+- **Pre-training** — from scratch, next-token prediction, huge corpora. No labels.
+- **CPT (continued pre-training)** — next-token prediction continued on *domain*
+  text. Teaches the model the domain's **language**. No labels needed.
+- **SFT (supervised fine-tuning)** — training on input→output pairs. Teaches
+  the model a **task**. Labels required.
+- **Fine-tuning** — umbrella term; CPT and SFT are both kinds of it.
+
+**What Kev did:** trained a LoRA adapter (r=16) plus a newly-initialised
+pointer head on 13,576 **labelled** classification records with the backbone
+**frozen** — i.e. parameter-efficient **SFT**, not CPT. Both verbs circulate
+legitimately because the *head* is new and genuinely trained from scratch,
+while the *adapter* sits on a pretrained base and is therefore fine-tuned. For
+what NORA would do to Kev, **"fine-tune" is the correct term**.
+
+### Noted idea (architect-side): domain-adapt the base on NORA's own corpora
+
+Proposal: CPT ("season") the base model on telecom requirement specs — and
+procurement specs, if those are in scope; the term needs confirming — before
+task fine-tuning. Assessment, recorded rather than actioned:
+
+**Where it does not help: phase 1.** The query classifier reads **user
+questions**, not corpus text — "What are all the data-retry requirements?",
+"Compare VZW and TMO on IMS registration", "What changed in eSIM from Oct 2025
+to Feb 2026?". What separates `RELEASE_DIFF` from `TRACEABILITY` is **question
+shape**, not telecom vocabulary. CPT on dense spec prose teaches the backbone
+the language of *documents*, a different distribution from the language of
+*questions about* documents, and could plausibly hurt by pulling the
+representation toward text never seen at inference. For this task, **SFT on
+labelled queries is the direct and likely sufficient fix**.
+
+**Where it is genuinely strong: the other decision points.** Reranking, SIRA
+chunk selection and the golden-eval Stage-2 judge all read **chunk bodies** —
+real spec text. There the missing ingredient *is* domain language, and CPT
+would be operating on the right distribution. This is the natural home for the
+idea, and it belongs to a successor strand rather than this one.
+
+**Two blockers to weigh before CPT becomes a plan:**
+
+1. **Kev freezes its backbone by design.** CPT-ing the backbone invalidates the
+   adapter and head trained against the original — it means rebuilding Kev's
+   decision block on a NORA-specific base, which is substantially more work
+   than a LoRA run, not an add-on to one.
+2. **CPT bakes proprietary spec content into model weights.** The standing
+   project rule keeps proprietary content out of logs, error messages, compact
+   reports and test fixtures. **Model weights are a category nobody has ruled
+   on**, and weights can leak training data. This needs a governance decision
+   before any CPT work is scheduled — flagged, not assumed.
+
+### Flags
+
+- **Governance: proprietary content in model weights is unruled.** If
+  domain-adaptive pre-training on NORA's corpora is ever pursued, someone must
+  rule on whether spec content may enter trained weights, and what that implies
+  for where those weights may be stored, served, or shared. Distinct from the
+  egress question already settled in D-DRAFT-1.
+- "Procurement spec" from the dictated proposal needs confirming — NORA's
+  corpus is device requirement specifications; whether procurement documents
+  are a separate in-scope corpus is unclear.
