@@ -196,3 +196,61 @@ values, omitting `SUMMARIZE` and `FACT`, so the LLM analyzer can never emit
 them and their per-type knobs (wide top_k + grouping off; tight top_k + strict
 threshold + rerank on) are silently dead. A typed option set is a schema, not
 prose in a prompt, so that failure mode becomes impossible.
+
+### D-DRAFT-8 — The decision model runs before query expansion; the existing per-type gate forces it
+
+**Date:** 2026-10-13
+**Context:** Directive phase 3 asks explicitly whether the Jev-class decision
+step should run before or after query expansion.
+**Decision:** Before. Classification stays the first stage of the query
+pipeline; expansion remains downstream of it.
+**Why:** Not a preference — the code already forecloses the alternative.
+`core/src/query/pipeline.py:500` gates expansion on the classification result:
+`if _TYPE_REWRITE_ENABLED.get(intent.query_type, False):`. `analyze()` runs at
+`:420` and `rewrite()` at `:501`, so expansion is a *consequence* of
+classification, not a peer stage. Placing the decision model after expansion
+would leave nothing to decide whether to expand. The same dependency holds for
+every other per-type knob — `top_k`, BM25 weight, rerank enable, distance
+threshold, grouping disable, and the synthesis system prompt all read
+`intent.query_type`.
+**Consequences:** The decision model sits at the earliest point of the
+interactive path, so its latency is in series with the entire downstream
+pipeline — this is what makes the category's single-forward-pass claim
+(~45 ms) materially valuable, and it argues for the small candidates over
+GEV-26B even once DGX Spark frees up. More importantly, a misclassification
+propagates into *every* downstream knob, so **per-class accuracy, not overall
+accuracy, is the measurement that matters**: a full confusion matrix across
+all 10 `QueryType` values is required output of the comparison, not a
+nice-to-have. A candidate that is 90% accurate overall but systematically
+confuses `FACT` with `SUMMARIZE` would invert two opposed retrieval
+configurations (tight top_k + strict threshold + rerank on, versus wide top_k
++ grouping off) and could be worse in practice than the rule-based baseline.
+
+### D-DRAFT-9 — `/v1/systemone` is NORA's internal decision-provider interface
+
+**Date:** 2026-10-13
+**Context:** Directive phase 3 requires a selectable roster of decision
+models, mirroring the existing LLM roster. Several open Jev-class
+implementations expose TypeSafe's own `/v1/systemone` HTTP API (Kev, Rizzo
+Flow, `razorback16/openjev`).
+**Decision:** Define a `DecisionProvider` protocol speaking `/v1/systemone`
+(typed `bool` / `score` / `choice` questions against one shared `state`),
+with concrete providers behind it and a roster selecting among them. Legacy
+remains the configurable default.
+**Why:** Mirrors a pattern this codebase has already validated. NORA's
+`OpenAICompatibleProvider` speaks `/v1/chat/completions` over stdlib urllib
+with no SDK dependency, which is what made the LLM roster vendor-neutral and
+let `llm-model-discovery` add model selection without touching providers.
+Adopting the de-facto decision-model wire format buys the same property:
+swapping candidates becomes a config change, and if hosted Jev ever becomes
+reachable (it is not today — D-DRAFT-1) it is the same interface with no
+rework. Protocol-based abstraction is also the stated project convention
+(`LLMProvider`, `EmbeddingProvider`, `VectorStoreProvider`).
+**Consequences:** Candidates that do not expose `/v1/systemone` —
+ModernBERT-class (Laya, Von) and SemIf-style constrained decoding over a
+resident model — need a thin in-process adapter implementing the protocol
+rather than an HTTP hop. That is acceptable and keeps the roster honest about
+what each arm actually is. Module placement still to decide (a new
+`core/src/decision/` package versus extending `core/src/llm/`); either way it
+needs its own `MODULE.md` per project convention, shipped in this branch per
+the CLAUDE.md branch-flow rule.

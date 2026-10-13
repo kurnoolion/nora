@@ -236,3 +236,54 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   or the baseline arm is measured against a broken legacy path.
 - Three architect questions still open: serving runtime name, production
   image/stack name, exact DGX Spark specification.
+
+## 2026-10-13 (cont. 2) — Runtime confirmed, placement settled, interface chosen
+
+### Done this session
+
+- **Serving runtime confirmed: both Ollama and vLLM are in production.** This
+  is the best case and closes the first of the three open architect questions.
+  Consequence: the D-DRAFT-3 GGUF trap is avoidable by construction rather
+  than by discipline — the legacy LLM path stays on Ollama untouched, the
+  decision path runs on vLLM, and the two arms of the A/B are cleanly isolated
+  with no contention on the legacy default. The main infra objection to
+  head-bearing decision models is therefore already paid for.
+- **Placement settled → D-DRAFT-8.** Directive phase 3's before-or-after
+  question is foreclosed by existing code: `pipeline.py:500` gates expansion
+  on `_TYPE_REWRITE_ENABLED.get(intent.query_type, False)`, with `analyze()`
+  at `:420` and `rewrite()` at `:501`. Expansion is a consequence of
+  classification, so "after" would leave nothing to decide whether to expand.
+  Every other per-type knob (top_k, BM25 weight, rerank, threshold, grouping,
+  system prompt) has the same dependency.
+- **Derived measurement requirement.** Because classification sits at the head
+  of the interactive path, a misclassification propagates into every
+  downstream knob. Per-class accuracy — a full confusion matrix over all 10
+  `QueryType` values — is therefore required output, not optional. Worked
+  example of why overall accuracy is insufficient: a candidate at 90% overall
+  that systematically confuses `FACT` with `SUMMARIZE` inverts two opposed
+  retrieval configurations and could be worse in practice than the rule-based
+  baseline.
+- **Interface chosen → D-DRAFT-9.** `/v1/systemone` becomes NORA's internal
+  decision-provider wire format, behind a `DecisionProvider` protocol, with a
+  roster selecting among providers and legacy as the configurable default.
+  Direct precedent: `OpenAICompatibleProvider` speaks `/v1/chat/completions`
+  over stdlib urllib with no SDK dependency, which is what made the LLM roster
+  vendor-neutral and let `llm-model-discovery` add model selection without
+  touching providers. Candidates without a `/v1/systemone` endpoint
+  (ModernBERT-class, SemIf-style) get a thin in-process adapter implementing
+  the same protocol.
+
+### Next
+
+- Decide module placement: new `core/src/decision/` package vs extending
+  `core/src/llm/`. Needs a `MODULE.md` either way, shipped in this branch.
+- Pick the iteration-1 lead candidate now that vLLM is available — the small
+  end with real decision heads (NanoJev 0.6B, Kev) is reachable.
+- Labelled query set (~40-60) across all 10 classes for the four-arm
+  confusion-matrix comparison.
+- Then the full architectural design + committed spec before any code.
+
+### Flags
+
+- Two architect questions still open: production image/stack name (for the
+  phase-5 default-on rebuild) and the exact DGX Spark specification.
