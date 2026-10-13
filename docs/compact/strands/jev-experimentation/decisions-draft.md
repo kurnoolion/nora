@@ -295,3 +295,34 @@ it belongs to whoever owns software intake. Secondary consequence: no
 published accuracy or calibration benchmarks were found for either Kev or
 openjev, so NORA's own labelled set is the only evidence that will exist for
 this choice — which raises the priority of building it.
+
+### D-DRAFT-11 — This strand owns the `SUMMARIZE`/`FACT` prompt-omission fix, as phase-1 work
+
+**Date:** 2026-10-13
+**Context:** `QueryType` carries ten members. `LLMQueryAnalyzer`'s prompt
+(`analyzer.py:378`) enumerates eight and omits `summarize` and `fact`, so
+neither class can ever be emitted on the LLM-analyzer path.
+`MockQueryAnalyzer` emits both (`:269`, `:283`). Verified blast radius against
+the per-type maps in `pipeline.py`: `_TYPE_MAX_DISTANCE` (`:104`) has exactly
+two keys, `FACT: 0.4` and `SUMMARIZE: 0.7`; `_TYPE_DISABLE_GROUPING` (`:199`)
+has exactly one, `SUMMARIZE`. Both features are therefore **entirely inert**
+whenever the LLM analyzer is active. `_TYPE_REWRITE_ENABLED` (`:151`) loses
+only its `SUMMARIZE` entry; its other six types are unaffected.
+**Decision:** This strand fixes the defect as part of phase 1, rather than
+routing it to a separate bugfix branch or asking the architect to adjudicate
+ownership.
+**Why:** It sits inside this strand's target seam, it was found by this
+strand's characterization work, and it blocks this strand's phase-1 gate —
+baselines are meaningless if the legacy arm is measured against code where two
+per-type features silently never fire. Routing it elsewhere would stall phase
+1 behind another queue for a fix that is a prompt-string edit plus a
+regression test.
+**Consequences:** The legacy arm must be reported as "legacy, defect fixed"
+and is **not** comparable to NORA's historical eval baselines (A4 88.0% /
+67.6%, A8 88.3% / 64.3%, A11 86.4% / 62.3%). Needs checking which analyzer
+those runs actually used — if they ran with a configured LLM provider they
+went through `LLMQueryAnalyzer` and the per-type distance thresholds and
+grouping-disable were inert throughout, which would mean those tuned 0.4 / 0.7
+values have never taken effect in any recorded baseline. If so, the fix is a
+behaviour change to the legacy path in its own right and needs its own
+before/after measurement, independent of anything to do with decision models.

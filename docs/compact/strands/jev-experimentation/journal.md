@@ -395,3 +395,54 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   what measurement justifies flipping the default prevents the decision being
   relitigated later against a moving bar — the same failure the strand's
   objective framing (D-DRAFT-6) is meant to prevent.
+
+## 2026-10-13 (cont. 5) — Design claims verified; defect blast radius is larger than first written
+
+### Done this session
+
+- **Three load-bearing design claims verified rather than assumed**, after a
+  review pass flagged that all three were written as fact without being read:
+  - `make_query_analyzer()` (`analyzer.py:415`) confirmed as a two-branch
+    factory on a single `llm_provider=None` argument. So the decision path
+    needs a **signature extension**, not just a third branch — folded into
+    design §3. Its docstring also records the governing posture from
+    `multi-mno-sira` D-DRAFT-9 ("the same configured-LLM-or-mock posture as
+    the rest of NORA"), which the decision path should mirror: configured
+    decision provider → hybrid, otherwise fall through to today's two branches
+    unchanged. That fall-through is what makes the phase-2 identity gate
+    achievable.
+  - `_FEATURE_KEYWORDS` counted at **16** keys. Full phase-3 shape is
+    16 + 3 + 5 = 24 booleans plus 2 choices = 26 questions against one state —
+    comfortably inside documented concurrency (openjev advertises 64
+    concurrent reads). Design §2 now states the count instead of leaving the
+    cardinality open.
+  - **Per-type map key sets read — the defect is worse than first written.**
+    `_TYPE_MAX_DISTANCE` (`:104`) contains exactly two entries, `FACT: 0.4`
+    and `SUMMARIZE: 0.7`. `_TYPE_DISABLE_GROUPING` (`:199`) contains exactly
+    one, `SUMMARIZE`. Since neither class is reachable under
+    `LLMQueryAnalyzer`, **both features are entirely inert on that path**, not
+    merely degraded. `_TYPE_REWRITE_ENABLED` loses only its `SUMMARIZE` entry.
+    An earlier grep missed this by searching lowercase string literals when
+    the maps reference the enum.
+- **Defect ownership claimed → D-DRAFT-11.** Removed from the design's open
+  points; it is this strand's phase-1 work, not an adjudication question. It
+  is a prompt-string edit plus a regression test, it was found here, and it
+  gates the phase-1 baseline.
+- **Design doc bumped to v0.2** with all of the above folded in: §2.1 now
+  carries a verified blast-radius table, §2 states the counted cardinality, §3
+  carries the factory signature finding and the D-DRAFT-9 posture, §8 is down
+  to five genuinely architect-level open points.
+
+### Flags
+
+- **NORA's historical eval baselines may all have been run with the defect
+  live.** A4 (88.0% / 67.6%), A8 (88.3% / 64.3%) and A11 (86.4% / 62.3%) were
+  produced with a configured LLM provider, which routes through
+  `LLMQueryAnalyzer`. If so, the per-type distance thresholds and
+  grouping-disable were inert for every one of those runs, and the tuned
+  0.4 / 0.7 values have never taken effect in any recorded baseline. Needs
+  confirming. If confirmed, the phase-1 fix is a behaviour change to the
+  legacy path in its own right and deserves its own before/after measurement,
+  independent of the decision-model work — and it may partly explain the
+  `SUMMARIZE`-shaped retrieval complaints carried in
+  `nora-retrieval-quality`.

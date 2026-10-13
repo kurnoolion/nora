@@ -1,7 +1,10 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.1, 2026-10-13 · Status: draft, for review
-(v0.1: first design. Seam partition by output shape, `/v1/systemone` as the
+Strand: `jev-experimentation` · Draft v0.2, 2026-10-13 · Status: draft, for review
+(v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
+maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
+counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
+cited; §2.1 defect fix claimed by this strand rather than left for adjudication. Seam partition by output shape, `/v1/systemone` as the
 internal wire format, Kev as iteration-1 candidate, four-arm measurement with
 per-class confusion matrix, five gated phases mapping the architect's
 directive.)
@@ -105,7 +108,11 @@ drop-in replacement for the method. The partition follows the data
 The three closed-vocabulary multi-selects decompose into one boolean question
 per candidate, evaluated against a single shared `state` (the query) in one
 request — which is the pattern the category is built around, and sits far
-inside a 64k state / 32k question budget for a single query.
+inside a 64k state / 32k question budget for a single query. Counted rather
+than assumed: `_FEATURE_KEYWORDS` has **16** keys, so the full phase-3 shape is
+16 + 3 + 5 = 24 booleans plus 2 choices = 26 questions against one state.
+Comfortably inside the concurrency these servers document (openjev advertises
+up to 64 concurrent reads).
 
 The open-extraction fields have no option set, so no decision model can
 produce them. They stay on `MockQueryAnalyzer`'s existing regex extractors.
@@ -118,10 +125,24 @@ has one variable.
 
 `QueryType` has ten members. `LLMQueryAnalyzer`'s prompt enumerates eight and
 omits `SUMMARIZE` and `FACT`, so under the LLM analyzer those two classes are
-unreachable and their per-type knobs are dead — wide `top_k` + grouping
-disabled for `SUMMARIZE`, tight `top_k` + strict `max_distance_threshold` +
-rerank on for `FACT`. `MockQueryAnalyzer` emits both (`analyzer.py:269`,
-`:283`), so the two analyzers disagree on the available class set.
+unreachable. `MockQueryAnalyzer` emits both (`analyzer.py:269`, `:283`), so the
+two analyzers disagree on the available class set.
+
+Blast radius, verified against the per-type maps in `pipeline.py` rather than
+assumed:
+
+| Map | Its key set | Effect under `LLMQueryAnalyzer` |
+|---|---|---|
+| `_TYPE_MAX_DISTANCE` (`:104`) | `FACT: 0.4`, `SUMMARIZE: 0.7` — **only these two** | **entirely inert** |
+| `_TYPE_DISABLE_GROUPING` (`:199`) | `SUMMARIZE` — **only this one** | **entirely inert** |
+| `_TYPE_REWRITE_ENABLED` (`:151`) | 7 types incl. `SUMMARIZE` | loses the `SUMMARIZE` entry; other 6 unaffected |
+| `_TYPE_RERANK_ENABLED` (`:182`) | empty by design (global default) | unaffected |
+| `_TYPE_BM25_WEIGHT` (`:129`) | shipped per-type map | unaffected |
+
+So two per-type features — per-type distance thresholds and grouping-disable —
+never fire at all on the LLM-analyzer path, because their only keys are exactly
+the two classes the prompt forgot. The tuned 0.4 / 0.7 thresholds have never
+taken effect there.
 
 A typed option set is a schema, not prose inside a prompt, so this failure
 mode cannot recur on the decision path. **The defect must be fixed before any
@@ -152,6 +173,18 @@ instead of an HTTP hop.
 Configuration follows the roster precedent exactly: a flag selects the path,
 a roster selects the provider, legacy is the default, nothing changes for an
 operator who sets neither.
+
+One implementation detail, read rather than assumed: `make_query_analyzer()`
+(`analyzer.py:415`) today takes a single `llm_provider=None` argument and
+branches two ways — provider supplied → `LLMQueryAnalyzer`, `None` →
+`MockQueryAnalyzer`. Adding the decision path therefore needs a signature
+extension (a decision-provider argument, or a config read inside the factory),
+not just a new branch. Its docstring records the governing posture from
+`multi-mno-sira` D-DRAFT-9 — query analysis follows "the same
+configured-LLM-or-mock posture as the rest of NORA" — so the decision path
+should mirror it: configured decision provider → hybrid, otherwise fall
+through to today's two branches unchanged. That fall-through is what makes the
+phase-2 identity gate achievable.
 
 ## 4. Candidates and hardware
 
@@ -277,11 +310,8 @@ accurate**. Legitimate answers are yes / yes / no.
 3. **Fine-tuning budget.** §4's prior-art warning argues the generic-Kev arm
    is likely to underperform for the same OOD reason the cross-encoder did.
    Is the LoRA fine-tune in scope for this strand, or a successor?
-4. **Who owns the `SUMMARIZE`/`FACT` defect fix** (§2.1) — this strand, or a
-   separate bugfix branch? It is independent of the decision-model work and
-   blocks the phase-1 gate.
-5. **Architect questions still open:** production image/stack name for the
+4. **Architect questions still open:** production image/stack name for the
    phase-5 rebuild; exact DGX Spark specification.
-6. **Phase-5 criteria.** What measurement result justifies flipping the
+5. **Phase-5 criteria.** What measurement result justifies flipping the
    default? Stating it now prevents the decision being relitigated later
    against a moving bar.
