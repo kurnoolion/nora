@@ -254,3 +254,44 @@ what each arm actually is. Module placement still to decide (a new
 `core/src/decision/` package versus extending `core/src/llm/`); either way it
 needs its own `MODULE.md` per project convention, shipped in this branch per
 the CLAUDE.md branch-flow rule.
+
+### D-DRAFT-10 — Kev leads iteration 1; openjev and GEV-26B are parked on VRAM
+
+**Date:** 2026-10-13
+**Context:** With vLLM confirmed in production and the A4000 (16 GB) as the
+practical host, the iteration-1 lead candidate had to be a native
+`/v1/systemone` implementation that fits 16 GB. Shortlist verified first-hand
+rather than from the earlier secondary listing.
+**Decision:** Kev (0.5B-9B family) leads iteration 1, at 0.8B or 4B. openjev
+and GEV-26B-Decide are parked on hardware grounds and re-enter if DGX Spark
+frees up.
+**Why:** Verified properties. Kev checkpoints are a rank-16 LoRA adapter plus
+a small bilinear pointer head on a Qwen3.5 base — Kev-0.8B on
+Qwen3.5-0.8B-Base and Kev-4B on Qwen3.5-4B-Base, both Apache-2.0. The readout
+is a trained bilinear pointer head scoring each option's hidden state against
+the question's `<decide>` hidden state, softmaxed to probabilities — not a
+letter-row argmax. The API matches TypeSafe's System One, so it validates the
+D-DRAFT-9 protocol choice natively instead of through an adapter, and the
+TypeSafe Python SDK can be pointed at a local server. Ecosystem support is
+landing (a vllm.cpp PR adding Kev; a system1-omni issue tracking the family).
+Decisively, **Kev is trainable** — which collapses the D-DRAFT-5 tension: if
+the counter-evidence is right that a small purpose-trained classifier beats a
+generic decision model, then Kev fine-tuned on NORA's labelled queries *is*
+that classifier, with a decision-model interface and calibrated outputs. The
+two arms merge in iteration 2 rather than competing.
+Parked: **openjev** (Apache-2.0, DiffusionGemma 26B-A4B, native
+`/v1/systemone` plus `/v1/decisions`, 698 stars, 30 ms p50 on an RTX PRO 6000,
+confidence defined as `1 - H(p)/ln K`) requires 24 GB+ VRAM on its vLLM
+backend — it does not fit the A4000. Its MLX backend needs ~16 GB on Apple
+silicon, which NORA does not deploy on. Worth revisiting on DGX Spark; its
+heads are integrated into the weights rather than shipped separately, which is
+a point in its favour against the D-DRAFT-3 trap.
+**Consequences:** Iteration 1 pulls external model code and weights into the
+corporate network, so **the canonical Kev upstream must be established before
+anything is pulled** — searches surface many near-identical forks
+(`jaredpalmer`, `chi2liu`, `song007`, `Radexito` and others) with no obvious
+provenance ordering. This is a supply-chain review item, not a formality, and
+it belongs to whoever owns software intake. Secondary consequence: no
+published accuracy or calibration benchmarks were found for either Kev or
+openjev, so NORA's own labelled set is the only evidence that will exist for
+this choice — which raises the priority of building it.
