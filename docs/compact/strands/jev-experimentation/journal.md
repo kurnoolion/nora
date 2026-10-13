@@ -761,3 +761,48 @@ count, standards references, and phrase sets such as
 "describe ", "tell me about ") → `SUMMARIZE`. It works because the user
 population asks in formulaic shapes; it is brittle to unanticipated phrasing,
 which is the gap a trained classifier would target.
+
+## 2026-10-13 (cont. 13) — Placement confirmed live; latency accepted; a missing record found
+
+### Done this session
+
+- **Placement re-verified on the LIVE path → D-DRAFT-17.** D-DRAFT-8 had
+  argued from `core/src/query/pipeline.py` (the `nora` lane). Applying the
+  D-DRAFT-15 lesson, the `sira` lane was checked: `analyze()` is step 1 of
+  `_multi_cell_query` (`service.py:1191`) and expansion happens later inside
+  retrieval (`filter_query_expansion` / `search_with_expansion`,
+  `:1010`-`:1029`). **Classification precedes expansion in both lanes**;
+  current behaviour is preserved, as the architect-side operator preferred.
+  Terminology recorded: the service calls that stage "query **enrichment**"
+  (`:559`) while the core lane calls it expansion/rewrite — one stage, two
+  names.
+- **Latency regression accepted → D-DRAFT-16.** Rules are effectively free;
+  Kev-4B is ~45 ms on an H100 and will be slower on an A4000, so 100-200 ms is
+  the working expectation. Accepted because the objective is capability and
+  because the cost is proportionally small — the live path already contains an
+  **LLM expansion call** and an **LLM synthesis call** plus BM25 and
+  reranking, so total query latency is in seconds. Latency becomes a
+  first-class per-arm metric; Kev-0.8B is the fallback if the measured figure
+  materially exceeds expectation.
+- **Noted for a successor strand, not scheduled:** the expansion stage is
+  itself an LLM call whose sampling makes phrases vary run-to-run
+  (`service.py:213`). A decision model taking over an "expand or not" boolean
+  would be a net latency *gain*. This is the first identified case where the
+  original token-cost motivation and the latency concern point the same way.
+- **Finding: no decision record exists for the rules-over-LLM choice.**
+  `DECISIONS.md` has nothing on query classification — every hit concerns
+  *heading* classification in the parser. The only recorded reason anywhere is
+  `service.py:1185`, which calls wiring an `LLMProvider` for
+  `LLMQueryAnalyzer` a **follow-up** — i.e. a plumbing gap, not a latency or
+  accuracy verdict.
+
+### Flags
+
+- **Ask the architect why classification is rule-based.** The operator's
+  hypothesis — an LLM was tried, latency hurt, rules won, and Jev-class speed
+  now justifies revisiting — fits the artifacts but is **unsupported by the
+  repository**. The distinction matters: if latency was the reason, this
+  strand is directly well-motivated; if it was only plumbing, then no model
+  has ever been measured at this seam and the rules have never been compared
+  against anything, making phase 1's baseline the first such comparison ever
+  run. Either answer is useful; the absence of a record is the thing to fix.

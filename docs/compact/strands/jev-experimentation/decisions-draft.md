@@ -475,3 +475,58 @@ rule-based today.**
 **Why this was missed:** the per-type maps were verified for their key sets but
 the analyzer's *call sites* were not. Verifying what a thing contains is not
 the same as verifying whether anything uses it.
+
+### D-DRAFT-16 — Latency regression at the classification seam is accepted, and must be measured
+
+**Date:** 2026-10-13
+**Context:** Replacing rule-based classification with a decision model trades
+effectively-free string matching for a model forward pass. Kev-4B is ~45 ms on
+an H100; an A4000 will be slower, so 100-200 ms is the working expectation
+until measured.
+**Decision:** The regression is **accepted**. The strand proceeds, and
+per-arm latency is recorded as required output alongside accuracy.
+**Why:** The objective is capability and better classification, not
+preserving a zero-cost stage (D-DRAFT-6). Rule-based keyword matching is not
+scalable as the class set and phrasing diversity grow, and it is brittle to
+any phrasing nobody anticipated. The cost is also proportionally small: the
+live query path already contains an **LLM expansion call** and an **LLM
+synthesis call**, plus BM25 and reranking, so total query latency is measured
+in seconds and 100-200 ms at the head is a few percent. A latency budget must
+still be stated, because "a few percent" is an estimate, not a measurement.
+**Consequences:** Latency is a first-class reported metric per arm, not a
+footnote. If the measured figure materially exceeds the 100-200 ms
+expectation, Kev-0.8B is the fallback before abandoning the approach. A
+related and more attractive prospect is noted for later, not scheduled: the
+**expansion stage is itself an LLM call** whose sampling makes phrases vary
+run-to-run (`sandbox/sira_query/service.py:213`), so a decision model taking
+over an "expand or not" boolean would be a net latency *gain* rather than a
+cost. That is a successor-strand idea and is explicitly not part of iteration 1.
+
+### D-DRAFT-17 — Placement confirmed on the live path; no record exists for the rules-over-LLM choice
+
+**Date:** 2026-10-13
+**Context:** D-DRAFT-8 settled that classification runs before query expansion,
+but argued it from `core/src/query/pipeline.py` — the `nora` lane. Following
+the D-DRAFT-15 lesson, the **live** `sira` lane was checked rather than
+assumed.
+**Decision:** Placement confirmed and unchanged: classification stays **before
+expansion/enrichment** in both lanes. Current behaviour is preserved.
+**Why:** In the live path, `analyze()` is step 1 of `_multi_cell_query`
+(`sandbox/sira_query/service.py:1191`) and expansion occurs later inside
+retrieval (`filter_query_expansion` / `search_with_expansion`, `:1010`-`:1029`).
+Terminology note: that stage is called "query enrichment" in the service
+(`:559`, "Query enrichment prompt not found — expansion stage skipped") and
+"expansion"/"rewrite" in the core lane — the same stage under two names.
+**Consequences and an open question for the architect:** **no decision record
+exists for why classification is rule-based.** `DECISIONS.md` contains nothing
+on query classification (every hit concerns *heading* classification in the
+parser). The only recorded reason is at `service.py:1185`, which states that
+wiring an `LLMProvider` around the service's httpx LLM for `LLMQueryAnalyzer`
+is a **follow-up** — a plumbing gap, not a latency or accuracy verdict. So the
+plausible story that an LLM was tried and rejected on latency is
+**unsupported by the repository**. This matters to the strand's framing: if
+latency was the real reason, the decision-model revival is directly
+well-motivated; if it was only plumbing, then **no model has ever been
+measured at this seam and the rules have never been compared against
+anything** — which makes the baseline measurement in phase 1 the first such
+comparison ever run. Worth asking the architect which it was.
