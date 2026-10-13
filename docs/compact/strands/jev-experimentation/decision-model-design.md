@@ -1,10 +1,14 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.2, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v0.3, 2026-10-13 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
-cited; §2.1 defect fix claimed by this strand rather than left for adjudication. Seam partition by output shape, `/v1/systemone` as the
+cited; §2.1 defect fix claimed by this strand rather than left for adjudication.
+v0.3: §4 split — 4.1 states that head-bearing IS the speed mechanism and that
+every candidate including Kev is head-bearing; 4.2 scopes the prior-art
+warning to accuracy of generic weights on domain text, with the A-series
+identified as NORA's own eval runs. Seam partition by output shape, `/v1/systemone` as the
 internal wire format, Kev as iteration-1 candidate, four-arm measurement with
 per-class confusion matrix, five gated phases mapping the architect's
 directive.)
@@ -212,13 +216,43 @@ Serving: decision path on vLLM, legacy LLM path stays on Ollama. The arms do
 not contend, and the GGUF ban (D-DRAFT-3) is satisfied by construction rather
 than by discipline.
 
-**Prior art warning carried into this design:** NORA already ships a
-head-bearing model — `CrossEncoderReranker` (`reranker.py:90`,
-`ms-marco-MiniLM-L6-v2`), same architecture class with a scoring head. The
-A11 result had it net-zero and slightly regressive (86.4% / 62.3%), diagnosed
-as out-of-distribution on telecom spec text. A generic Kev should be expected
-to hit the same wall for the same reason. This is the strongest argument for
-budgeting the fine-tuning step rather than treating it as optional.
+### 4.1 "Head-bearing" is the speed mechanism, not a drawback
+
+Stated explicitly because it is easy to invert: **every candidate in this
+design is a head-bearing model, including Kev, and that is precisely why they
+are fast.** Hosted Jev is one too.
+
+A generative LLM is slow because it is autoregressive — producing N tokens
+costs N serial forward passes, each depending on the last, so latency scales
+with output length. A decision head removes the loop entirely: one forward
+pass, then a thin trained layer reads the final hidden state and emits a
+probability distribution over the K options directly. **Zero tokens
+generated, and latency is independent of K.** Kev's bilinear pointer head
+scores each option's hidden state against the question's `<decide>` hidden
+state and softmaxes; openjev describes the same property as "one read
+generates label token probabilities directly from model outputs".
+
+Base size still sets the cost of that single pass, which is why the small end
+of the field is attractive rather than merely affordable: Kev-0.8B on a local
+A4000 should beat hosted Jev's quoted 70-500 ms end-to-end, because it is both
+a far smaller base and has no network hop. The category's speed claim is not
+something NORA gives up by self-hosting small — it is something self-hosting
+small improves.
+
+### 4.2 Prior-art warning — about accuracy, not speed
+
+NORA already ships a head-bearing model: `CrossEncoderReranker`
+(`reranker.py:90`, `ms-marco-MiniLM-L6-v2`), the same architecture class with
+a scoring head instead of a decision head. The **A11** run — one of NORA's
+own labelled eval runs in `STATUS.md`, not an external benchmark — had it
+net-zero and slightly regressive at 86.4% overall / 62.3% accuracy, diagnosed
+as out-of-distribution on telecom spec text.
+
+The lesson is strictly about **accuracy of generic weights on domain text**,
+and carries no implication about the architecture or its latency. A generic
+Kev should be expected to hit the same OOD wall for the same reason, which is
+the strongest argument for budgeting the LoRA fine-tune rather than treating
+it as optional. NORA has already paid for this lesson once.
 
 ## 5. Migration path — five gated phases
 

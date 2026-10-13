@@ -446,3 +446,37 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   independent of the decision-model work — and it may partly explain the
   `SUMMARIZE`-shaped retrieval complaints carried in
   `nora-retrieval-quality`.
+
+## 2026-10-13 (cont. 6) — Design v0.3: head-bearing framing corrected
+
+### Done this session
+
+- **Corrected a misreading the design invited.** v0.2's §4 "prior art warning"
+  about `CrossEncoderReranker` read as an argument *against* head-bearing
+  models. It is not, and the design does not reject them — **Kev is a
+  head-bearing model**, as is hosted Jev, and the head is the mechanism that
+  makes the whole category fast. Split into two sections:
+  - **§4.1 — head-bearing is the speed mechanism.** A generative LLM is slow
+    because it is autoregressive: N output tokens cost N serial forward
+    passes. A decision head removes the loop — one forward pass, then a thin
+    trained layer reads the final hidden state and emits a distribution over
+    the K options directly. Zero tokens generated; latency independent of K.
+    Kev's bilinear pointer head scores each option's hidden state against the
+    question's `<decide>` hidden state; openjev states the same property as
+    "one read generates label token probabilities directly from model
+    outputs". Base size still sets the cost of that single pass, so Kev-0.8B
+    locally should **beat** hosted Jev's quoted 70-500 ms — smaller base, no
+    network hop. Self-hosting small improves the category's speed claim rather
+    than surrendering it.
+  - **§4.2 — prior-art warning scoped to accuracy.** The A11 lesson is about
+    generic weights being out-of-distribution on telecom spec text and implies
+    nothing about architecture or latency. A generic Kev should be expected to
+    hit the same wall, which is the argument for budgeting the LoRA fine-tune.
+- **A-series labels identified in the doc.** A3 / A4 / A6 / A7 / A8 / A11 are
+  NORA's **own** labelled eval runs recorded in `STATUS.md` against the 18-Q
+  OA eval set — not external benchmarks. A4 88.0% / 67.6% (qwen3-235b-a22b via
+  OpenRouter), A7 87%, A8 88.3% / 64.3% (the deterministic baseline, whose
+  3-run variance experiment showed a 6.7pp spread), A11 86.4% / 62.3% (the
+  cross-encoder run), A3 81.7% / 54.6% (gemma4:e4b), and A4-vs-A6 the 20pp
+  graph-topology gap. The doc now says so inline so a reader does not have to
+  reconstruct it.
