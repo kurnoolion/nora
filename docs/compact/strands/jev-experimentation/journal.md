@@ -600,3 +600,42 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   out-of-distribution warning and NORA's own A11 precedent. This is accepted
   up front rather than discovered later — the iteration-1 deliverable is a
   working configurable path plus honest measurement, not a win (D-DRAFT-6).
+
+## 2026-10-13 (cont. 10) — Kev cleared; model card corrects three design assumptions
+
+### Done this session
+
+- **Both intake questions resolved first-hand → D-DRAFT-13.** Canonical
+  upstream is **`jaredpalmer/kev`** (original, no fork marker, 9.1k stars, 343
+  commits); the several other `kev` repositories are forks of it.
+  **Apache-2.0 covers the repository, the LoRA adapter and the pointer head**,
+  and the Qwen3 / Qwen3.5 / Qwen3.8 bases are Apache-2.0 as well. Nothing
+  ambiguous, commercial use permitted. Design §8 open points 2 and 3 close.
+  Kev 1.0 shipped Kev-0.8B / 4B / 9B on Qwen3.5 and Kev-27B on Qwen3.8;
+  weights at `huggingface.co/collections/jaredpalmer/kev`. Minor item for pull
+  time: the `kev-4b-qwen3` card cites `Qwen/Qwen3-4B-Base` while the repo
+  overview says Qwen3.5-4B-Base, so both variants may exist.
+- **Correction 1 — Kev does not use vLLM.** It ships its own server exposing
+  `/v1/systemone`: `python -m kev.serve --run jaredpalmer/kev-4b --port 8008`.
+  vLLM support is in flight (a `vllm.cpp` PR) but has not landed. Simpler than
+  planned rather than harder — one self-contained Python server, no vLLM
+  plumbing for iteration 1. The GGUF ban still binds.
+- **Correction 2 — bf16 is mandatory on the A4000.** "4B fp32 needs ~16 GB"
+  exactly saturates the card with nothing left for context; `KEV_DTYPE=bf16`
+  roughly halves it to ~8 GB. A flag that must be set, not a default.
+- **Correction 3 — generic Kev-4B will be weak and uncalibrated on this
+  corpus, per its own card.** In-distribution 0.854, **out-of-domain 0.790**,
+  OOD Brier 0.328, **ECE 0.096 described as uncalibrated out of domain**;
+  locked test 0.856 / 0.806. Latency ~45 ms on an H100, so slower on an
+  A4000. Training suite is ~13,576 generic text-classification records over
+  two epochs (banking77, BoolQ, AG News, MultiNLI, SST5, Yelp, TREC, DBpedia,
+  Amazon Reviews, IMDB) — nothing like telecom requirement specs. The card
+  states outright that "product-shaped questions with no training analogue are
+  not guaranteed", which is precisely NORA's `QueryType` task.
+- **Consequence recorded: the fine-tune is the experiment, not an extra.**
+  The model's own documentation now confirms the §4.2 OOD warning that was
+  previously inferred from NORA's A11 cross-encoder result, and it retires
+  out-of-the-box calibration — the category's headline benefit — for this use
+  case. Encouragingly, 13.5k records over two epochs is a small training job,
+  which argues for resolving §8's fine-tuning-budget question in favour of
+  keeping it inside this strand.

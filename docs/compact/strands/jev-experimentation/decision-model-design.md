@@ -1,6 +1,6 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.6, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v0.7, 2026-10-13 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -262,9 +262,20 @@ on NORA's labelled queries *is* that purpose-trained classifier — with
 calibrated typed outputs and the decision interface. The baseline arm and the
 decision arm merge in iteration 2 rather than competing.
 
-Serving: decision path on vLLM, legacy LLM path stays on Ollama. The arms do
-not contend, and the GGUF ban (D-DRAFT-3) is satisfied by construction rather
-than by discipline.
+Serving, corrected at verification: **Kev does not use vLLM.** It ships its
+own server exposing `/v1/systemone` directly — `python -m kev.serve --run
+jaredpalmer/kev-4b --port 8008`. vLLM support is in flight (a `vllm.cpp` PR)
+but has not landed. This is simpler than planned, not harder: one
+self-contained Python server for iteration 1, no vLLM plumbing. The legacy LLM
+path stays on Ollama, so the arms still do not contend, and the GGUF ban
+(D-DRAFT-3) still binds — it rules out the Ollama/llama.cpp distribution path
+regardless of which server the decision model uses. vLLM remains the serving
+route for the larger candidates (§4.3, AutoTrust family) if they are ever
+stood up.
+
+**bf16 is mandatory on the A4000, not optional.** Kev's card states "4B fp32
+needs ~16 GB", which exactly saturates the card leaving nothing for context.
+`KEV_DTYPE=bf16` roughly halves it to ~8 GB. A flag that must be set.
 
 ### 4.3 AWQ preserves the decision head — JEV-9B may reach the A4000
 
@@ -334,6 +345,24 @@ a scoring head instead of a decision head. The **A11** run — one of NORA's
 own labelled eval runs in `STATUS.md`, not an external benchmark — had it
 net-zero and slightly regressive at 86.4% overall / 62.3% accuracy, diagnosed
 as out-of-distribution on telecom spec text.
+
+**Kev-4B's own model card now confirms this independently**, which moves it
+from inference to documented fact. Published figures: in-distribution accuracy
+0.854, **out-of-domain accuracy 0.790**, out-of-domain Brier 0.328, and **ECE
+0.096, explicitly described as uncalibrated out of domain**; locked test 0.856
+ID / 0.806 OOD. Its training suite is ~13,576 generic text-classification
+records over two epochs — banking77, BoolQ, AG News, MultiNLI, SST5, Yelp,
+TREC, DBpedia, Amazon Reviews, IMDB — containing nothing resembling telecom
+requirement specifications. The card's limitations state that
+"product-shaped questions with no training analogue are not guaranteed",
+which is exactly what NORA's `QueryType` classification is.
+
+Two consequences. Out-of-the-box **calibration — the category's headline
+selling point — is not available** for this corpus at ECE 0.096. And the LoRA
+fine-tune stops being an enhancement and becomes **the experiment itself**.
+Its scale is encouraging: 13.5k records over two epochs is a small job, which
+argues for resolving §8's fine-tuning-budget question in favour of keeping it
+in this strand.
 
 The lesson is strictly about **accuracy of generic weights on domain text**,
 and carries no implication about the architecture or its latency. A generic
@@ -454,11 +483,15 @@ accurate**. Legitimate answers are yes / yes / no.
    (Qwen3.5) are Apache-2.0, but the licence covering Kev's own LoRA adapter
    and pointer head is a separate artifact and is **not yet verified**. Base
    licence does not imply adapter licence.
-3. **Canonical Kev upstream.** Many near-identical forks exist
-   (`jaredpalmer`, `chi2liu`, `song007`, `Radexito`, others) with no clear
-   provenance ordering. Iteration 1 brings external model code and weights
-   into the corporate network; this needs whoever owns software intake to
-   rule, before anything is pulled.
+3. ~~**Canonical Kev upstream.**~~ **CLOSED 2026-10-13.** Canonical upstream
+   is `jaredpalmer/kev` — the original, no fork marker, 9.1k stars, 343
+   commits; the other `kev` repositories are forks of it. **Apache-2.0 covers
+   the repository, the LoRA adapter and the pointer head**, and the Qwen3 /
+   Qwen3.5 / Qwen3.8 bases are Apache-2.0 too. Weights at
+   `huggingface.co/collections/jaredpalmer/kev`. Remaining trivial item for
+   pull time: the `kev-4b-qwen3` card cites `Qwen/Qwen3-4B-Base` while the
+   repo overview says Qwen3.5-4B-Base, so confirm which variant is being
+   pulled.
 4. **Fine-tuning budget.** §4's prior-art warning argues the generic-Kev arm
    is likely to underperform for the same OOD reason the cross-encoder did.
    Is the LoRA fine-tune in scope for this strand, or a successor?

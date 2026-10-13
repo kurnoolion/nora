@@ -354,3 +354,50 @@ this up next: **small models fit the A4000 as-is; large models fit DGX Spark
 as-is; everything else needs shrinking.** Note that DGX Spark's unified memory
 will fit the large models but is slower than dedicated GPU memory, so "fits"
 should not be read as "fast" there until measured.
+
+### D-DRAFT-13 — Kev provenance and licence cleared; three as-built corrections
+
+**Date:** 2026-10-13
+**Context:** D-DRAFT-10 selected Kev while flagging two unresolved intake
+items: which of the many `kev` repositories is canonical, and whether the
+adapter/head licence differs from the Apache-2.0 Qwen base. Both are now
+resolved first-hand, and the model card corrects three assumptions carried in
+the design.
+**Decision:** Kev is cleared for use. Canonical upstream is
+**`jaredpalmer/kev`** — the original (no fork marker), 9.1k stars, 343
+commits. **Apache-2.0 applies to the repository, the LoRA adapter and the
+pointer head**, with Qwen3 / Qwen3.5 / Qwen3.8 bases also Apache-2.0. Design
+§8 open point 3 (canonical upstream + adapter licence) closes. Open point 2
+remains openjev's licence conflict, which is unaffected.
+**Why:** Verified against the repository and the `kev-4b-qwen3` model card
+rather than secondary sources. Kev 1.0 shipped four sizes — Kev-0.8B, Kev-4B,
+Kev-9B (Qwen3.5 bases) and Kev-27B (Qwen3.8, post-trained). Weights are on the
+Hugging Face Hub under `huggingface.co/collections/jaredpalmer/kev`.
+**Consequences — three corrections to the design as written:**
+1. **Kev does not use vLLM.** It ships its own server exposing
+   `/v1/systemone` directly: `python -m kev.serve --run jaredpalmer/kev-4b
+   --port 8008`. vLLM support is in flight (a `vllm.cpp` PR) but not landed.
+   This is simpler than planned, not harder — one self-contained Python
+   server. The GGUF ban (D-DRAFT-3) is unaffected and still binds.
+2. **bf16 is mandatory on the A4000, not optional.** The card states "4B fp32
+   needs ~16 GB", which exactly saturates the card with nothing left for
+   context. `KEV_DTYPE=bf16` roughly halves it to ~8 GB. A config flag that
+   must be set, not a default to assume.
+3. **Generic Kev-4B will be weak and badly calibrated on NORA's corpus, by
+   its own documentation.** Published figures: in-distribution accuracy
+   0.854, **out-of-domain accuracy 0.790**, out-of-domain Brier 0.328, and
+   **ECE 0.096 — explicitly described as uncalibrated out of domain**. Locked
+   test 0.856 ID / 0.806 OOD. Latency ~45 ms on an H100, so materially slower
+   on an A4000. Its training suite is ~13,576 generic text-classification
+   records over two epochs (banking77, BoolQ, AG News, MultiNLI, SST5, Yelp,
+   TREC, DBpedia, Amazon Reviews, IMDB) — nothing resembling telecom
+   requirement specifications. The card's own limitations state that
+   "product-shaped questions with no training analogue are not guaranteed",
+   which is exactly what NORA's `QueryType` classification is.
+   This independently confirms the §4.2 out-of-distribution warning derived
+   from NORA's A11 cross-encoder result, and it retires calibration — the
+   category's headline selling point — as a benefit available out of the box.
+   **The LoRA fine-tune is therefore not an enhancement; it is the
+   experiment.** Scale is encouraging: 13.5k records over two epochs is a
+   small job, which strengthens the case for resolving §8's fine-tuning-budget
+   question in favour of including it in this strand.
