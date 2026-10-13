@@ -806,3 +806,109 @@ which is the gap a trained classifier would target.
   has ever been measured at this seam and the rules have never been compared
   against anything, making phase 1's baseline the first such comparison ever
   run. Either answer is useful; the absence of a record is the thing to fix.
+
+## 2026-10-13 — Session close: three-valued analyzer knob; drafts consolidated 17 → 14
+
+### Done this session
+
+- **Configuration redesigned to a single three-valued knob → D-DRAFT-14.**
+  `NORA_QUERY_ANALYZER` = `rules` | `llm` | `decision`, resolved
+  CLI > env > config > default, defaulting to `rules`; the provider roster
+  moves beneath the `decision` value. Replaces the earlier boolean
+  flag-plus-roster design. The operator's proposal and a better fit: it maps
+  onto three implementations that already exist, and the name matches the
+  `NORA_*` convention.
+- **The `llm` value brought into scope**, having initially been set aside. It
+  resurrects written-but-unwired code, restores a measurement arm previously
+  dismissed as synthetic, and enables a comparison that has never been run at
+  this seam. Consequence: the knob is the mechanism that makes
+  `LLMQueryAnalyzer` reachable, so the `SUMMARIZE`/`FACT` fix is re-escalated
+  from hygiene to a hard prerequisite shipped in the same change.
+- **Design doc to v0.9** — §3 rewritten for the knob, §2.1 defect re-escalated,
+  §6 rebuilt with four named arms, the divergence-weighted confusion matrix,
+  the intrinsic/extrinsic split, and the inspectability-trade rationale.
+- **Coupling quantified.** `intent.query_type` is read at **12 sites** in
+  `core/src/query/pipeline.py`, driving retrieved-chunk count, BM25 weighting,
+  rerank enable, expansion enable, distance cutoff, grouping and the synthesis
+  path; in the sira lane `resolve_cells(intent, ...)` additionally decides
+  which corpus cells are searched at all. Confirms the operator's instinct that
+  classification is strongly coupled, and supplies the justification for
+  weighting the confusion matrix by downstream divergence rather than counting
+  label mismatches.
+- **Eval-material audit.** No classification eval exists. A4 / A8 / A11 are
+  end-to-end pipeline runs, not classification runs. Repo-wide labelled
+  query→type examples live only in unit tests and are skewed by history —
+  FACT 15, SUMMARIZE 13, SINGLE_DOC 7, STANDARDS_COMPARISON 3, GENERAL 3,
+  FEATURE_LEVEL 1, CROSS_DOC 1, and **zero** for CROSS_MNO_COMPARISON,
+  RELEASE_DIFF and TRACEABILITY. The real eval sets live under `<env_dir>/eval/`
+  and are labelled with expected req_ids and golden responses, not query types.
+- **Two-stage labelled-set plan agreed.** A synthetic/public dev set built
+  outside the office carries no proprietary content and can therefore be
+  **committed** — giving CI regression coverage the real set never could.
+  `PROJECT.md` already contains safe seed queries covering two of the three
+  zero-coverage classes. A corp set drawn from golden-eval samples and
+  `ask-history` recordings follows later and stays under `<env_dir>/eval/`.
+  **The dev set is for plumbing; the corp set is for verdicts** — synthetic
+  queries are cleaner and differently distributed than real traffic, so dev-set
+  scores must not be quoted as evidence the approach works. Hygiene for the
+  committed set: no real plan codes or req IDs (two prior `git filter-repo`
+  scrubs, 2026-05-09 and 2026-05-15).
+- **SIRA fixtures: do not commit a cell DB.** `.gitignore:12` already ignores
+  `*.db`, so it would need `git add -f`. Cell DBs carry full corpus text plus
+  enrichment — the proprietary content the project rule bars — and a public
+  mirror exists at `github.com/kurnoolion/nora`. The better path already exists:
+  `sandbox/sira_query/test_cell_db_loader.py:40` defines `make_flat_cells()`,
+  which should be promoted into a fixture generator — reproducible, committable,
+  CI-usable. Real data moves out-of-band into `<env_dir>`, never through git.
+  Also noted: phase 1 needs no SIRA at all, since `MockQueryAnalyzer.analyze()`
+  is pure Python with no corpus dependency.
+- **Drafts consolidated 17 → 14** at close. Mid-session correction chains were
+  folded into the decisions they corrected rather than appended after them:
+  the latent-defect correction into the defect-ownership draft, the live-lane
+  placement re-verification into the placement draft, and Kev's clearance plus
+  as-is selection into the Kev candidate draft. Substance preserved; the
+  "I was wrong earlier" scaffolding removed, with the process lessons kept here
+  in the journal where they belong.
+
+### Process lessons from this session
+
+- **Verifying what a thing contains is not verifying whether anything uses it.**
+  Blast radius was asserted twice from map contents without checking call
+  sites; both claims needed retraction. Check the callers.
+- **Argue from the live lane.** Placement was first argued from
+  `core/src/query/pipeline.py`, which is the `nora` lane; the live `sira` lane
+  had to be checked separately. It agreed, but the method was wrong.
+- **Capture cadence.** Drafting after every turn produced correction chains a
+  future reader would have to follow. The project's own ritual — converse,
+  then triage at close-session — exists for this reason; front-loading capture
+  to avoid empty draft files over-corrected in the other direction.
+
+### Next
+
+- `superpowers:writing-plans` for the phase-1 implementation plan: defect fix
+  shipped with the knob, synthetic labelled dev set, rules and llm baselines.
+- Architect review of `decision-model-design.md` v0.9, especially §8.
+
+### Flags
+
+- **Five open points carried in design §8** awaiting the architect: module
+  placement (`core/src/decision/` vs extending `core/src/llm/`); openjev's
+  licence conflict (recommendation: drop it, since it is already parked on
+  VRAM); fine-tuning budget — **the one to answer first**, since
+  without SFT iteration 1 measures a model that has never seen a telecom
+  question; production image/stack name; and phase-5 default-flip criteria.
+- **Ask the architect why classification is rule-based.** No decision record
+  exists. If latency drove it, this strand is directly well-motivated; if it
+  was only plumbing, then no model has ever been measured at this seam and
+  phase 1's baseline is the first such comparison ever run.
+- **Governance: proprietary content in model weights is unruled.** Blocks any
+  future CPT work (D-DRAFT-12). Distinct from the egress question in
+  D-DRAFT-1.
+- **Premise caveat for the architect.** This seam has no LLM call to displace,
+  so iteration 1 saves no tokens. If cost reduction rather than capability is
+  the driver, target ordering should be revisited — the token-spending
+  decision points are reranking, SIRA chunk selection and the Stage-2 judge.
+- Docs nit for a scaffold pass: `PROJECT.md`'s Contributors table still says
+  `<doc_root>/corrections/`, stale since the D-022 rename to `<env_dir>`.
+- "Procurement spec" from a dictated proposal remains unconfirmed — NORA's
+  corpus is device requirement specifications.

@@ -1,6 +1,6 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.8, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v0.9, 2026-10-13 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -174,9 +174,17 @@ for whoever enables the LLM analyzer, not a present fault. It stays in phase 1
 as cheap hygiene but is **not a gate**, and NORA's A4 / A8 / A11 baselines are
 sound (an earlier claim that they ran with the defect live is withdrawn).
 
-**Consequence for §6:** the planned "current LLM" arm does not exist in
-production. Real arms are rules (live), decision model, and fine-tuned
-decision model.
+**Re-escalated at v0.9.** The three-valued knob (§3) is precisely the
+mechanism that makes `LLMQueryAnalyzer` reachable, so **the fix becomes a
+genuine prerequisite again** — not because the baseline needs it, but because
+the `llm` value would otherwise be wrong by construction: silently unable to
+emit two of ten classes, with `_TYPE_MAX_DISTANCE` and
+`_TYPE_DISABLE_GROUPING` inert whenever that mode is selected. Ship the fix in
+the same change that introduces the knob.
+
+**Consequence for §6, revised at v0.9:** with the knob, the `llm` arm is real
+rather than synthetic. Arms are rules (live default), llm, decision model, and
+fine-tuned decision model.
 
 **Consequence for the premise:** this seam has **no LLM call to displace** — a
 decision model here replaces *rules*. D-DRAFT-2's reasons for choosing it
@@ -206,9 +214,34 @@ without a `/v1/systemone` endpoint (ModernBERT-class; constrained decoding
 over a resident model) implement the protocol as a thin in-process adapter
 instead of an HTTP hop.
 
-Configuration follows the roster precedent exactly: a flag selects the path,
-a roster selects the provider, legacy is the default, nothing changes for an
-operator who sets neither.
+Configuration is a **single three-valued knob**, not a boolean flag plus a
+roster — revised at v0.9 on the architect-side operator's design, which is
+cleaner and maps exactly onto implementations that already exist:
+
+| Value | Implementation | Status today |
+|---|---|---|
+| `rules` | `MockQueryAnalyzer` | exists; **live default** |
+| `llm` | `LLMQueryAnalyzer` | exists, fully written, **never wired** |
+| `decision` | `HybridQueryAnalyzer` + `DecisionProvider` | new (§2, §3) |
+
+Named `NORA_QUERY_ANALYZER` to match the established convention
+(`NORA_LLM_PROVIDER`, `NORA_EMBEDDING_PROVIDER`, `NORA_SIRA_INDEX`,
+`NORA_SIRA_ENGINE`) and resolved CLI > env var > config > default like the
+other `resolve_*` knobs. Default stays `rules`, so an operator who sets
+nothing sees today's behaviour. A **provider roster** still sits *beneath* the
+`decision` value, selecting which decision model serves it — the roster did
+not disappear, it moved one level down.
+
+**The `llm` value is in scope, and cheaply so.** It was initially treated as
+out of scope; that was wrong on three counts. It resurrects code that is
+already written and currently does nothing. It restores the measurement arm
+§6 had written off as synthetic — with the knob, `llm` is a selectable mode
+rather than a hypothetical. And it finally permits the comparison that
+D-DRAFT-17 shows **has never been run at this seam**: rules vs LLM vs decision
+model, same input, same harness. Cost is a few lines in the factory for the
+`nora` lane, plus a thin adapter in the `sira` lane, where
+`sandbox/sira_query/service.py:1185` records that wrapping the service's httpx
+LLM in an `LLMProvider` is an outstanding follow-up. Small, not free.
 
 One implementation detail, read rather than assumed: `make_query_analyzer()`
 (`analyzer.py:415`) today takes a single `llm_provider=None` argument and
@@ -425,10 +458,39 @@ behaviour is the default throughout.
 
 ## 6. Measurement
 
-Four arms: `MockQueryAnalyzer` (rules) · `LLMQueryAnalyzer` (legacy, defect
-fixed) · Kev generic · Kev fine-tuned on NORA labels — the fourth arm
-conditional on §8 open point 3, since the fine-tune may belong to a successor
-strand. The first three are unconditional.
+Four arms, each one value of `NORA_QUERY_ANALYZER` (§3) or a roster entry
+under it:
+
+1. **`rules`** — `MockQueryAnalyzer`. The live baseline, and the thing a
+   decision model must actually beat.
+2. **`llm`** — `LLMQueryAnalyzer`, defect fixed. Never measured at this seam
+   before (D-DRAFT-17), so this arm answers a standing open question
+   independent of decision models.
+3. **`decision`, generic Kev-4B** — expected weak per §4.2 (0.790 OOD, ECE
+   0.096 on its own card).
+4. **`decision`, fine-tuned Kev-4B** — conditional on §8's fine-tuning-budget
+   question; §4.2 argues it is the arm that actually matters.
+
+**Weight the confusion matrix by downstream divergence.** Because §1a's knob
+fan-out means every class selects a different retrieval configuration, not all
+confusions cost the same. `FACT` ↔ `SUMMARIZE` is catastrophic — tight top_k
++ strict 0.4 threshold + rerank on, versus wide top_k + 0.7 threshold +
+grouping off: opposite configurations. `CROSS_DOC` ↔ `FEATURE_LEVEL` is mild
+— both rewrite-enabled, both top_k 25. A classifier at 95% that errs on the
+first pair can be worse end-to-end than one at 85% that errs on the second, so
+the reported metric must reflect damage rather than label mismatch.
+
+**Two levels of evaluation, which can disagree.** *Intrinsic* — the weighted
+confusion matrix on the labelled set. *Extrinsic* — end-to-end pipeline
+quality on the 18-Q / golden sets. Both are required; a gain in one does not
+imply a gain in the other.
+
+**Why an eval harness is load-bearing rather than overhead.** Rules are
+deterministic and inspectable: a misfire is read and fixed at the rule. A
+model offers no such visibility — it can only be measured. Introducing a model
+is therefore what *creates* the need for this harness; it is the replacement
+for the debuggability being traded away, and that trade should be stated to the
+architect explicitly.
 
 **Required output is a per-class confusion matrix over all 10 `QueryType`
 values**, not an overall accuracy figure (D-DRAFT-8). Because classification
