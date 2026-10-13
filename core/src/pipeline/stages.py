@@ -525,6 +525,20 @@ def _select_newest_trees(
     return selected, len(tree_files) - len(selected)
 
 
+def _cached_unit_keys(units, prev_docs: dict, out_dir) -> set:
+    """Ledger keys of units the extraction loop will serve from cache:
+    entry ok + stored tree hash matches + the plan's features file exists.
+    The single source of the cache predicate — the launch log and the
+    loop both use it, so the announced plan is the executed plan."""
+    cached: set = set()
+    for _rkey, lkey, tree_sha, sub in units:
+        ent = prev_docs.get(lkey)
+        if (ent and ent.get("status") == "ok" and ent.get("tree_sha") == tree_sha
+                and (out_dir / f"{sub.plan_id}_features.json").exists()):
+            cached.add(lkey)
+    return cached
+
+
 def _load_taxonomy_ledger(state_path, prompt_fp: str) -> dict:
     """Load extraction_state.json's per-doc ledger, honored only when its
     stored overview fingerprint matches the current one.
@@ -701,13 +715,29 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
             encoding="utf-8",
         )
 
+    # Launch-time visibility (field-found: a fully stale ledger meant a
+    # full-corpus LLM re-extract whose only tell arrived hours in): say
+    # up front how much of the plan is cache vs LLM work, so an operator
+    # can stop an unexpectedly large run in minute one.
+    cached_lkeys = _cached_unit_keys(units, prev_docs, out_dir)
+    n_to_extract = len(units) - len(cached_lkeys)
+    logger.info(
+        f"TAX-I001: {len(cached_lkeys)} cached / {n_to_extract} to extract "
+        f"(of {len(units)} units)"
+    )
+    if units and not cached_lkeys and prev_docs:
+        logger.warning(
+            f"TAX-W005: ledger present but NO unit is cacheable — every "
+            f"stored tree hash is stale (parse trees regenerated since the "
+            f"last taxonomy run?). Full-corpus re-extract of {len(units)} "
+            f"units follows."
+        )
+
     for _rkey, lkey, tree_sha, sub in units:
         feat_path = out_dir / f"{sub.plan_id}_features.json"
-        ent = prev_docs.get(lkey)
-        if (ent and ent.get("status") == "ok" and ent.get("tree_sha") == tree_sha
-                and feat_path.exists()):
+        if lkey in cached_lkeys:
             all_doc_features.append(DocumentFeatures.load_json(feat_path))
-            new_docs[lkey] = ent
+            new_docs[lkey] = prev_docs[lkey]
             n_cached += 1
             continue
         try:

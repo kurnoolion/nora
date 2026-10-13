@@ -449,3 +449,38 @@ class TestTaxonomyLedgerGate:
         with caplog.at_level(logging.WARNING):
             assert _load_taxonomy_ledger(p, "abc123") == {}
         assert not any("TAX-W004" in r.message for r in caplog.records)
+
+
+class TestTaxonomyCachedUnitKeys:
+    """_cached_unit_keys is the single source of the cache predicate —
+    the TAX-I001 launch log and the extraction loop both use it."""
+
+    class _Sub:
+        def __init__(self, plan_id):
+            self.plan_id = plan_id
+
+    def _unit(self, lkey, tree_sha, plan_id):
+        return ("rkey", lkey, tree_sha, self._Sub(plan_id))
+
+    def test_cached_requires_ok_hash_and_features_file(self, tmp_path):
+        from core.src.pipeline.stages import _cached_unit_keys
+        (tmp_path / "P1_features.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "P4_features.json").write_text("{}", encoding="utf-8")
+        units = [
+            self._unit("a", "sha1", "P1"),   # ok + match + file -> cached
+            self._unit("b", "sha2", "P2"),   # hash mismatch
+            self._unit("c", "sha3", "P3"),   # status failed
+            self._unit("d", "sha4", "P4"),   # not in ledger
+        ]
+        prev = {
+            "a": {"status": "ok", "tree_sha": "sha1"},
+            "b": {"status": "ok", "tree_sha": "STALE"},
+            "c": {"status": "failed", "tree_sha": "sha3"},
+        }
+        assert _cached_unit_keys(units, prev, tmp_path) == {"a"}
+
+    def test_missing_features_file_is_not_cached(self, tmp_path):
+        from core.src.pipeline.stages import _cached_unit_keys
+        units = [self._unit("a", "sha1", "P1")]
+        prev = {"a": {"status": "ok", "tree_sha": "sha1"}}
+        assert _cached_unit_keys(units, prev, tmp_path) == set()
