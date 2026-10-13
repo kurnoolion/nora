@@ -401,3 +401,34 @@ Hugging Face Hub under `huggingface.co/collections/jaredpalmer/kev`.
    experiment.** Scale is encouraging: 13.5k records over two epochs is a
    small job, which strengthens the case for resolving §8's fine-tuning-budget
    question in favour of including it in this strand.
+
+### D-DRAFT-14 — No domain-adaptive pre-training for query classification; SFT on labelled queries only
+
+**Date:** 2026-10-13
+**Context:** Kev-4B's own card documents weak, uncalibrated out-of-domain
+behaviour (0.790 accuracy, ECE 0.096) on a training suite of generic
+text-classification benchmarks. One proposed remedy was CPT — "seasoning" the
+base on NORA's telecom requirement specs before task fine-tuning.
+**Decision:** CPT is **out of scope** for the query-classification target.
+Adaptation is **SFT on labelled queries only**.
+**Why:** The classifier's input is **user questions**, not corpus text — "What
+are all the data-retry requirements?", "Compare VZW and TMO on IMS
+registration". What separates `RELEASE_DIFF` from `TRACEABILITY` is **question
+shape**, not telecom vocabulary. CPT teaches the language of *documents*, a
+different distribution from the language of *questions about* documents, and
+could plausibly degrade the task by pulling the representation toward prose
+never seen at inference. Short English questions over ten stable classes is a
+favourable shape for SFT, so the simpler intervention is also the better-aimed
+one. Two further costs made the rejection easy rather than close: Kev **freezes
+its backbone by design**, so CPT-ing it invalidates the adapter and head and
+means rebuilding the decision block against a NORA-specific base rather than
+adding to the existing one; and CPT would **bake proprietary spec content into
+model weights**, a governance category nobody has ruled on.
+**Consequences:** Phase-1 and phase-3 adaptation work is bounded to a LoRA SFT
+run on the labelled query set — a day's work, not a research programme, which
+is what makes including it in this strand reasonable (§8 open point 4). CPT is
+**not rejected in general**: it is the natural remedy for NORA's decision
+points that *do* read chunk bodies — reranking, SIRA chunk selection, the
+golden-eval Stage-2 judge — where domain language is genuinely the missing
+ingredient. That belongs to a successor strand, and the weights-governance
+question must be ruled on before it is scheduled.

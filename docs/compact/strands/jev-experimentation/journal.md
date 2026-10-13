@@ -704,3 +704,10 @@ idea, and it belongs to a successor strand rather than this one.
 - "Procurement spec" from the dictated proposal needs confirming — NORA's
   corpus is device requirement specifications; whether procurement documents
   are a separate in-scope corpus is unclear.
+
+- **CPT rejected for query classification, confirmed with the architect-side
+  operator → D-DRAFT-14.** Agreed assessment: the target is "mostly pure
+  English", so SFT on labelled queries is both the simpler and the
+  better-aimed intervention; no need to overdo it. CPT stays available as the
+  remedy for the chunk-body-reading decision points in a successor strand,
+  subject to the weights-governance flag above.
