@@ -615,3 +615,41 @@ class TestReqIdSelector:
     def test_from_env_picks_up_knob(self):
         cfg = eb.BatchConfig.from_env({"NORA_SIRA_BATCH_ONLY_REQ_IDS": "/x/ids.txt"})
         assert cfg.only_req_ids_file == "/x/ids.txt"
+
+
+class TestBatchIdsAndMapping:
+    """Batch ids must be unique ACROSS runs (field-found: per-run b00000
+    restarts made the same id name different batches in different runs),
+    and every batch row must carry its request ids so retries and parse
+    errors are traceable without guessing."""
+
+    ITEMS = [("R1", "**plan**: PA\nreq one"), ("R2", "**plan**: PA\nreq two")]
+
+    def test_batch_ids_unique_across_runs(self):
+        async def llm(prompt, max_tokens):
+            return json.dumps({"R1": ["alpha"], "R2": ["beta"]})
+
+        sink1, _ = _run(self.ITEMS, llm)
+        sink2, _ = _run(self.ITEMS, llm)
+        ids1 = {r["batch_id"] for r in sink1.batches}
+        ids2 = {r["batch_id"] for r in sink2.batches}
+        assert ids1 and ids2 and not (ids1 & ids2)
+        # sequence tail stays human-readable
+        assert all(".b" in b for b in ids1 | ids2)
+
+    def test_every_batch_row_carries_req_ids(self):
+        calls = []
+
+        async def llm(prompt, max_tokens):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return json.dumps({"R1": ["alpha"]})   # R2 missing -> requeue
+            return json.dumps({"R2": ["beta"]})
+
+        sink, _ = _run(self.ITEMS, llm)
+        assert len(sink.batches) >= 2                   # first try + requeue
+        for row in sink.batches:
+            assert row["req_ids"], row
+        # the requeue try's row maps R2 to its own batch
+        retry_rows = [r for r in sink.batches if r["req_ids"] == ["R2"]]
+        assert retry_rows and retry_rows[0]["batch_id"] != sink.batches[0]["batch_id"]

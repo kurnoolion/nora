@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -372,6 +373,11 @@ async def run_batched(
     tax_cache: dict[str, str] = {}
     header_cache: dict[str, int] = {}
     sem = asyncio.Semaphore(max(1, cfg.batch_concurrency))
+    # Run-scoped batch ids (field-found: ids restarted at b00000 every
+    # invocation, so the same id named different batches across runs and
+    # batch-level correlation was impossible). The tag is time + random,
+    # so ids stay unique even for invocations within the same second.
+    run_tag = time.strftime("%y%m%d%H%M%S") + "-" + os.urandom(2).hex()
     batch_seq = 0
 
     def _header(plan_id: str) -> tuple[str, int]:
@@ -423,6 +429,7 @@ async def run_batched(
                 for rid in batch.ids:
                     await _fail(rid, "batch_error", batch_id, error=str(e))
             await write_batch({"batch_id": batch_id, "plan": batch.plan_id,
+                               "req_ids": list(batch.ids),
                                "n_reqs": len(batch.ids), "status": "error",
                                "error": str(e), "attempt": attempt,
                                "ms": int((time.time() - t0) * 1000)})
@@ -440,6 +447,7 @@ async def run_batched(
                 await _fail(rid, "llm_refused", batch_id, ms=ms)
             await write_batch({
                 "batch_id": batch_id, "plan": batch.plan_id,
+                "req_ids": list(batch.ids),
                 "n_reqs": len(batch.ids), "status": "refused",
                 "answered": 0, "missing": len(batch.ids),
                 "prompt_tokens_est": batch.prompt_tokens,
@@ -506,6 +514,7 @@ async def run_batched(
         # measurement and chased as an endpoint cap).
         row = {
             "batch_id": batch_id, "plan": batch.plan_id,
+            "req_ids": list(batch.ids),
             "n_reqs": len(batch.ids), "status": "ok" if not res.error else "parse_error",
             "answered": len(res.phrases_by_id), "missing": len(res.missing),
             "prompt_tokens_est": batch.prompt_tokens,
@@ -560,7 +569,7 @@ async def run_batched(
         requeue: list[tuple[str, str]] = []
         tasks = []
         for b in round_batches:
-            bid = f"b{batch_seq:05d}"
+            bid = f"{run_tag}.b{batch_seq:05d}"
             batch_seq += 1
             tasks.append(_run_one(b, bid, requeue, attempt))
         await asyncio.gather(*tasks)
