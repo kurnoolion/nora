@@ -189,7 +189,12 @@ class Batch:
     ids: list[str]
     texts: list[str]
     prompt_tokens: int          # estimate incl. header
-    closed_by: str              # "prompt" | "response" | "end"
+    closed_by: str              # PACKING label — why the batch was CLOSED
+                                # while being packed: "prompt" (prompt
+                                # budget), "response" (ESTIMATED response
+                                # budget), "end" (end of plan). Says
+                                # nothing about how the endpoint finished
+                                # the response (field-found misread).
     oversized: bool = False
 
 
@@ -409,6 +414,7 @@ async def run_batched(
                 "answered": 0, "missing": len(batch.ids),
                 "prompt_tokens_est": batch.prompt_tokens,
                 "resp_tokens_est": len(batch.ids) * cfg.resp_tokens_per_req,
+                "resp_chars": len(raw or ""),
                 "closed_by": batch.closed_by, "oversized": batch.oversized,
                 "attempt": attempt, "ms": ms})
             return
@@ -464,12 +470,17 @@ async def run_batched(
                 for rid in res.missing:
                     await _fail(rid, "missing_in_batch_response", batch_id,
                                 error=res.error, ms=ms)
+        # *_est fields are PRE-CALL estimates (reqs x per-req budget / the
+        # packer's prompt count) — never measured sizes; resp_chars is the
+        # MEASURED response length (field-found: the estimate was read as a
+        # measurement and chased as an endpoint cap).
         row = {
             "batch_id": batch_id, "plan": batch.plan_id,
             "n_reqs": len(batch.ids), "status": "ok" if not res.error else "parse_error",
             "answered": len(res.phrases_by_id), "missing": len(res.missing),
             "prompt_tokens_est": batch.prompt_tokens,
             "resp_tokens_est": len(batch.ids) * cfg.resp_tokens_per_req,
+            "resp_chars": len(raw or ""),
             "closed_by": batch.closed_by, "oversized": batch.oversized,
             "attempt": attempt, "ms": ms}
         if used_fallback:

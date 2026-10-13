@@ -539,3 +539,21 @@ class TestReasoningSentinel:
         assert "unknown ids  (first 20): ['RX']" in joined
         assert "requested ids (first 20): ['R1', 'R2']" in joined
         assert "plan PA" in joined          # plan named next to the batch id
+
+
+def test_batch_trace_carries_measured_response_chars():
+    """Trace rows must carry the MEASURED response length (resp_chars)
+    beside the pre-call estimates — the estimate fields were misread as
+    measurements in the field and chased as an endpoint cap."""
+    raw_response = json.dumps({"R1": ["alpha"], "R2": ["beta"]})
+
+    async def llm(prompt, max_tokens):
+        return raw_response
+
+    sink, _summary = _run(
+        [("R1", "**plan**: PA\nreq one"), ("R2", "**plan**: PA\nreq two")], llm)
+    rows = [r for r in sink.batches if r.get("status") in ("ok", "parse_error")]
+    assert rows, sink.batches
+    for r in rows:
+        assert r["resp_chars"] == len(raw_response)
+        assert "resp_tokens_est" in r   # estimates stay, now documented
