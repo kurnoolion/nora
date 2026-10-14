@@ -580,6 +580,14 @@ def _batch_stats(rows: list[dict]) -> dict:
                              if r.get("attempt", 0) == final_round),
         "single_req_mode": all(r.get("n_reqs") == 1 for r in rows),
         "fallback_used": sum(1 for r in rows if r.get("llm") == "fallback"),
+        # req_ids ride batch rows since the run-scoped-id change; older
+        # rows lack them (resolution then falls back to coverage).
+        "parse_error_req_ids": sorted({
+            i for r in rows if r.get("status") == "parse_error"
+            for i in (r.get("req_ids") or [])}),
+        "parse_error_rows_without_ids": sum(
+            1 for r in rows
+            if r.get("status") == "parse_error" and r.get("req_ids") is None),
     }
 
 
@@ -696,6 +704,7 @@ def verify_run(dataset_dir: Path, run_name: str) -> dict:
 
     fails: list[str] = []
     warns: list[str] = []
+    notes: list[str] = []
     if invariant["torn"]:
         fails.append(f"torn lines: {sum(invariant['torn'].values())}")
     if invariant["kept_without_enrichment"]:
@@ -708,8 +717,29 @@ def verify_run(dataset_dir: Path, run_name: str) -> dict:
     if trace["kept_and_failed_overlap"]:
         fails.append(f"kept∩failed overlap: {trace['kept_and_failed_overlap']}")
     if batches:
-        if batches["status"].get("parse_error"):
-            warns.append(f"parse_error batches: {batches['status']['parse_error']}")
+        n_pe = batches["status"].get("parse_error")
+        if n_pe:
+            # A parse-error batch whose requests ALL reached a terminal
+            # record (kept or failed — failed ones warn via their own
+            # checks) is a TRANSIENT event: in-run requeues recovered it.
+            # Field-found: two transient batches kept a WARN alive and
+            # sent us chasing a request that was kept all along.
+            resolved = (
+                _jsonl_doc_ids(sorted(run_dir.glob("trace.kept*.jsonl")))
+                | _jsonl_doc_ids(sorted(run_dir.glob("trace.failed*.jsonl"))))
+            unresolved = [i for i in batches.get("parse_error_req_ids", [])
+                          if i not in resolved]
+            legacy = batches.get("parse_error_rows_without_ids", 0)
+            coverage_complete = trace.get("uncovered") == 0
+            if unresolved:
+                warns.append(f"parse_error batches: {n_pe} — "
+                             f"{len(unresolved)} unresolved req(s)")
+            elif legacy and not coverage_complete:
+                warns.append(f"parse_error batches: {n_pe} (legacy rows, "
+                             f"resolution unknown; coverage incomplete)")
+            else:
+                notes.append(f"parse_error batches: {n_pe} — transient "
+                             f"(all requests resolved)")
         if batches["missing_final"]:
             warns.append(f"missing at final round: {batches['missing_final']}")
     if trace["failed_non_benign"]:
@@ -724,7 +754,8 @@ def verify_run(dataset_dir: Path, run_name: str) -> dict:
 
     verdict = "FAIL" if fails else ("WARN" if warns else "PASS")
     return {"batches": batches, "trace": trace, "invariant": invariant,
-            "fails": fails, "warns": warns, "verdict": verdict}
+            "fails": fails, "warns": warns, "notes": notes,
+            "verdict": verdict}
 
 
 def _merged_enrichments(run_dir: Path) -> dict[str, list]:
@@ -1102,6 +1133,8 @@ def verify_cell(dataset_dir: Path, run_name: str,
         print(f"FAIL: {f_}")
     for w in rep["warns"]:
         print(f"WARN: {w}")
+    for n in rep.get("notes", []):
+        print(f"note: {n}")
     print(f"verdict: {rep['verdict']}")
     return rep["verdict"]
 
