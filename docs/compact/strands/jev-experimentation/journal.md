@@ -958,3 +958,11 @@ which is the gap a trained classifier would target.
   means *task* SFT on labelled questions, never domain training on specs. The
   two were conflated once and the distinction matters both technically and in
   how the work is perceived.
+- **Brief committed to the strand** as `decision-model-brief.html` (the page
+  published at Version 2). Pre-commit scan clean: no MNO names, no req IDs, no
+  plan-code shapes, no internal endpoint addresses; the only NORA-specific
+  figures are the A11 results, already open in committed `STATUS.md`. Safe
+  against the public mirror. Kept beside `decision-model-design.md` per the
+  in-strand convention — the design doc is the working artefact, the brief is
+  the shareable summary of it, and both must be updated together when the
+  design changes.

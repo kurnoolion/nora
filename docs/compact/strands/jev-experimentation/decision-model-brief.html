@@ -1,0 +1,470 @@
+<title>NORA Decision Models</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+<style>
+  :root{
+    --ground:#F5F8F8;
+    --surface:#FFFFFF;
+    --surface-2:#EDF3F3;
+    --ink:#101A1D;
+    --ink-2:#36484D;
+    --muted:#5E7177;
+    --line:#D5DFE1;
+    --line-strong:#B6C6C9;
+    --accent:#0E7C86;
+    --accent-ink:#0A5A62;
+    --accent-soft:#E0F0F1;
+    --warn:#9A5B06;
+    --warn-soft:#F8EEDC;
+    --good:#2C6A50;
+    --good-soft:#E2F0E9;
+    --stop:#9B3B32;
+    --stop-soft:#F8E8E6;
+
+    --f-display:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+    --f-body:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0B1215;
+      --surface:#111C1F;
+      --surface-2:#16252A;
+      --ink:#E7EEF0;
+      --ink-2:#C0CFD3;
+      --muted:#8EA2A8;
+      --line:#223237;
+      --line-strong:#32474D;
+      --accent:#4FC3CE;
+      --accent-ink:#8BDAE2;
+      --accent-soft:#0F3338;
+      --warn:#D9A14E;
+      --warn-soft:#2C2314;
+      --good:#6FBF95;
+      --good-soft:#12291F;
+      --stop:#E08B80;
+      --stop-soft:#2E1917;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0B1215;
+    --surface:#111C1F;
+    --surface-2:#16252A;
+    --ink:#E7EEF0;
+    --ink-2:#C0CFD3;
+    --muted:#8EA2A8;
+    --line:#223237;
+    --line-strong:#32474D;
+    --accent:#4FC3CE;
+    --accent-ink:#8BDAE2;
+    --accent-soft:#0F3338;
+    --warn:#D9A14E;
+    --warn-soft:#2C2314;
+    --good:#6FBF95;
+    --good-soft:#12291F;
+    --stop:#E08B80;
+    --stop-soft:#2E1917;
+  }
+
+  body{
+    background:var(--ground);
+    color:var(--ink);
+    font-family:var(--f-body);
+    font-size:16px;
+    line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:820px;
+    margin:0 auto;
+    padding-inline:20px;
+    padding-block:48px 72px;
+  }
+
+  /* ---- masthead ---- */
+  .mast{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:10px}
+  .kicker{
+    font-family:var(--f-mono);font-size:11.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--accent-ink);margin-bottom:14px;
+  }
+  h1{
+    font-family:var(--f-display);font-weight:600;
+    font-size:clamp(30px,6vw,44px);line-height:1.12;margin:0 0 12px;
+    letter-spacing:-.015em;text-wrap:balance;
+  }
+  .standfirst{
+    font-size:clamp(16px,2.4vw,18.5px);color:var(--ink-2);margin:0;max-width:62ch;
+  }
+  .mast-meta{
+    display:flex;flex-wrap:wrap;gap:6px 22px;
+    font-family:var(--f-mono);font-size:11.5px;color:var(--muted);
+    padding:12px 0 0;margin-bottom:40px;
+  }
+  .mast-meta b{color:var(--ink-2);font-weight:500}
+
+  /* ---- sections ---- */
+  section{margin-bottom:46px;scroll-margin-top:20px}
+  .eyebrow{
+    font-family:var(--f-mono);font-size:11px;letter-spacing:.15em;
+    text-transform:uppercase;color:var(--muted);
+    display:flex;align-items:center;gap:10px;margin-bottom:10px;
+  }
+  .eyebrow::after{content:"";flex:1;height:1px;background:var(--line)}
+  h2{
+    font-family:var(--f-display);font-weight:600;
+    font-size:clamp(21px,3.4vw,27px);line-height:1.22;margin:0 0 14px;
+    letter-spacing:-.01em;text-wrap:balance;
+  }
+  h3{
+    font-family:var(--f-body);font-weight:600;font-size:16.5px;
+    margin:26px 0 8px;color:var(--ink);
+  }
+  p{margin:0 0 14px;max-width:68ch}
+  ul{margin:0 0 14px;padding-left:20px;max-width:68ch}
+  li{margin-bottom:7px}
+  li::marker{color:var(--accent)}
+  strong{font-weight:600}
+  code{
+    font-family:var(--f-mono);font-size:.88em;
+    background:var(--surface-2);border:1px solid var(--line);
+    padding:1px 5px;border-radius:3px;color:var(--ink-2);
+    overflow-wrap:anywhere;
+  }
+  a{color:var(--accent-ink)}
+
+  /* ---- verdict panel ---- */
+  .verdict{
+    background:var(--surface);border:1px solid var(--line-strong);
+    border-top:3px solid var(--accent);
+    padding:22px 24px;margin-bottom:44px;
+  }
+  .verdict h2{font-size:19px;margin-bottom:12px}
+  .verdict p:last-child{margin-bottom:0}
+  .vgrid{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:1px;background:var(--line);border:1px solid var(--line);margin-top:18px;
+  }
+  .vcell{background:var(--surface);padding:12px 14px}
+  .vcell dt{
+    font-family:var(--f-mono);font-size:10.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--muted);margin-bottom:5px;
+  }
+  .vcell dd{margin:0;font-size:15px;font-weight:600;color:var(--ink)}
+  .vcell dd small{display:block;font-weight:400;font-size:12.5px;color:var(--muted);margin-top:2px}
+
+  /* ---- tables ---- */
+  .tw{overflow-x:auto;margin:0 0 16px;border:1px solid var(--line)}
+  table{border-collapse:collapse;width:100%;font-size:14px;background:var(--surface)}
+  caption{
+    caption-side:top;text-align:left;font-family:var(--f-mono);
+    font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);padding:10px 14px;background:var(--surface-2);
+    border-bottom:1px solid var(--line);
+  }
+  th,td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{
+    font-family:var(--f-mono);font-size:11px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted);font-weight:500;
+    background:var(--surface-2);white-space:nowrap;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .yes{color:var(--good);font-weight:600}
+  .no{color:var(--stop);font-weight:600}
+
+  /* ---- pills ---- */
+  .pill{
+    display:inline-block;font-family:var(--f-mono);font-size:10.5px;
+    letter-spacing:.07em;text-transform:uppercase;padding:2px 7px;
+    border-radius:2px;white-space:nowrap;font-weight:500;
+  }
+  .p-go{background:var(--good-soft);color:var(--good)}
+  .p-hold{background:var(--warn-soft);color:var(--warn)}
+  .p-stop{background:var(--stop-soft);color:var(--stop)}
+
+  /* ---- callout ---- */
+  .note{
+    border-left:3px solid var(--warn);background:var(--warn-soft);
+    padding:14px 18px;margin:0 0 18px;font-size:14.5px;
+  }
+  .note p{margin-bottom:8px;max-width:none}
+  .note p:last-child{margin-bottom:0}
+  .note .nh{
+    font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--warn);margin-bottom:6px;font-weight:500;
+  }
+  .note.good{border-left-color:var(--good);background:var(--good-soft)}
+  .note.good .nh{color:var(--good)}
+
+  /* ---- latency diagram ---- */
+  .diag{
+    background:var(--surface);border:1px solid var(--line);
+    padding:20px 18px;margin:0 0 18px;
+  }
+  .diag svg{display:block;width:100%;height:auto;max-width:100%}
+  .d-label{fill:var(--ink-2);font-family:"IBM Plex Mono",monospace;font-size:11px}
+  .d-sub{fill:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:9.5px}
+  .d-box-gen{fill:var(--surface-2);stroke:var(--line-strong)}
+  .d-box-dec{fill:var(--accent-soft);stroke:var(--accent)}
+  .d-arrow{stroke:var(--line-strong);fill:none}
+  .d-tick{fill:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:9px}
+
+  /* ---- fan-out ---- */
+  .fan{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));
+    gap:1px;background:var(--line);border:1px solid var(--line);margin:0 0 16px;
+  }
+  .fan div{background:var(--surface);padding:10px 12px;font-size:13.5px}
+  .fan div b{
+    display:block;font-family:var(--f-mono);font-size:11px;
+    color:var(--accent-ink);margin-bottom:2px;font-weight:500;
+  }
+  .fan div span{color:var(--muted);font-size:12.5px}
+
+  /* ---- ask list ---- */
+  ol.ask{counter-reset:a;list-style:none;padding:0;margin:0;max-width:68ch}
+  ol.ask li{
+    counter-increment:a;position:relative;padding-left:34px;margin-bottom:14px;
+  }
+  ol.ask li::before{
+    content:counter(a);position:absolute;left:0;top:1px;
+    font-family:var(--f-mono);font-size:11px;color:var(--accent);
+    border:1px solid var(--line-strong);width:21px;height:21px;
+    display:grid;place-items:center;border-radius:50%;
+  }
+
+  footer{
+    border-top:1px solid var(--line);margin-top:54px;padding-top:18px;
+    font-family:var(--f-mono);font-size:11.5px;color:var(--muted);
+  }
+  footer p{max-width:none;margin-bottom:6px}
+
+  @media (max-width:560px){
+    .mast-meta{gap:4px 14px}
+    th,td{padding:8px 10px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="kicker">Strand brief · jev-experimentation</div>
+    <h1>Decision models for NORA query classification</h1>
+    <p class="standfirst">What a “System One” decision model is, why the hosted product is unusable for us, which open model we can actually run, and what it would realistically buy NORA.</p>
+  </header>
+  <div class="mast-meta">
+    <span><b>Status</b> design draft v0.9</span>
+    <span><b>Date</b> 13 Oct 2026</span>
+    <span><b>Target</b> query classification</span>
+    <span><b>Code written</b> none</span>
+  </div>
+
+  <div class="verdict">
+    <h2>The short version</h2>
+    <p>A decision model answers a typed question — a choice, a yes/no, or a score — in <strong>one forward pass, generating no text</strong>. That is the whole trick, and it is why the category is fast.</p>
+    <p>TypeSafe’s <strong>Jev</strong> is the product that named the category. We cannot use it: closed weights, hosted only, no on-premise option, and our build and serve environment permits no external calls. So the question becomes whether an <em>open</em> decision model, running in-corp, should take over NORA’s query classification.</p>
+    <p>It can. <strong>Kev-4B runs today on the A4000 we already have</strong>, Apache-2.0 throughout, no new serving infrastructure, and it works <strong>zero-shot</strong> — the ten categories are passed in at query time, not trained in. No telecom-specific training is required, and none is proposed.</p>
+    <dl class="vgrid">
+      <div class="vcell"><dt>Hosted Jev</dt><dd><span class="pill p-stop">Blocked</span><small>No egress permitted</small></dd></div>
+      <div class="vcell"><dt>Candidate</dt><dd>Kev-4B<small>Apache-2.0, fits 16 GB</small></dd></div>
+      <div class="vcell"><dt>New hardware</dt><dd>None<small>A4000, bf16</small></dd></div>
+      <div class="vcell"><dt>Token saving</dt><dd>Zero<small>This seam uses no LLM</small></dd></div>
+    </dl>
+  </div>
+
+  <section>
+    <div class="eyebrow">Concept</div>
+    <h2>What a decision model actually is</h2>
+    <p>Every transformer has two parts: a stack that turns text into hidden states, and a thin final layer — the <strong>head</strong> — that turns the last hidden state into output.</p>
+    <p>A normal LLM has a <em>language-model head</em>: hidden state to a probability over the whole vocabulary. Pick a token, append it, run again. Producing N tokens costs N serial passes, so latency scales with how much it writes.</p>
+    <p>A <strong>decision head</strong> maps that same hidden state straight onto <em>your option set</em> — K choices, or one yes/no probability, or a score level. One pass, no tokens, and <strong>latency independent of K</strong>: ten options cost what two do.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 640 196" role="img" aria-label="An LLM runs one forward pass per generated token in sequence; a decision model runs a single forward pass and reads a probability distribution from its head.">
+        <text class="d-label" x="0" y="14">Generative LLM — one pass per token, in sequence</text>
+        <g>
+          <rect class="d-box-gen" x="0" y="26" width="76" height="30" rx="2" stroke-width="1"/>
+          <text class="d-sub" x="38" y="45" text-anchor="middle">pass 1</text>
+          <path class="d-arrow" d="M80 41 h18" stroke-width="1" marker-end=""/>
+          <rect class="d-box-gen" x="102" y="26" width="76" height="30" rx="2" stroke-width="1"/>
+          <text class="d-sub" x="140" y="45" text-anchor="middle">pass 2</text>
+          <path class="d-arrow" d="M182 41 h18" stroke-width="1"/>
+          <rect class="d-box-gen" x="204" y="26" width="76" height="30" rx="2" stroke-width="1"/>
+          <text class="d-sub" x="242" y="45" text-anchor="middle">pass 3</text>
+          <path class="d-arrow" d="M284 41 h18" stroke-width="1"/>
+          <text class="d-sub" x="310" y="45">… one per token …</text>
+          <path class="d-arrow" d="M406 41 h18" stroke-width="1"/>
+          <rect class="d-box-gen" x="428" y="26" width="86" height="30" rx="2" stroke-width="1"/>
+          <text class="d-sub" x="471" y="45" text-anchor="middle">pass N</text>
+          <text class="d-tick" x="524" y="45">then parse the text</text>
+        </g>
+
+        <text class="d-label" x="0" y="102">Decision model — one pass, read the distribution</text>
+        <g>
+          <rect class="d-box-dec" x="0" y="114" width="150" height="34" rx="2" stroke-width="1.5"/>
+          <text class="d-sub" x="75" y="135" text-anchor="middle">single forward pass</text>
+          <path class="d-arrow" d="M154 131 h20" stroke-width="1"/>
+          <rect class="d-box-dec" x="178" y="114" width="96" height="34" rx="2" stroke-width="1.5"/>
+          <text class="d-sub" x="226" y="135" text-anchor="middle">decision head</text>
+          <path class="d-arrow" d="M278 131 h20" stroke-width="1"/>
+          <text class="d-sub" x="302" y="129">SINGLE_DOC 0.81</text>
+          <text class="d-sub" x="302" y="143">RELEASE_DIFF 0.11</text>
+          <text class="d-tick" x="302" y="163">typed output, calibrated probability, no parsing</text>
+        </g>
+      </svg>
+    </div>
+
+    <p>The vocabulary is interchangeable: <strong>decision model</strong>, <strong>head-bearing model</strong>, <strong>System One model</strong> all name the same thing. “Classification model” is narrower — classification is one of three output shapes, alongside score and boolean.</p>
+    <p>None of this is new. Bolting a head onto a transformer has been standard since BERT in 2018, and NORA already ships one: <code>CrossEncoderReranker</code> runs <code>ms-marco-MiniLM-L6-v2</code>, a transformer with a scoring head. What <em>is</em> new is training specifically for calibrated probabilities, and a typed API that evaluates many questions against one shared input in parallel.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Constraint</div>
+    <h2>Why it cannot be Jev</h2>
+    <p>TypeSafe released Jev on 15 September 2026. It returns only bools, scores and choices with calibrated probabilities; 70–500 ms end-to-end; $0.042 per million input tokens with output free; questions in one request evaluated in parallel against a shared state.</p>
+    <p>It is also <strong>closed weights, hosted only</strong> — no VPC, no on-premise, no self-hosting. US West Coast with no region choice. Retention is “as long as reasonably necessary”, with zero-retention negotiable through enterprise sales. SOC 2 Type II is third-party reported but not confirmed in TypeSafe’s own documents; no ISO 27001.</p>
+    <p>Our corpus is proprietary MNO requirement content, and our build and serve environment permits no external API calls at all. <strong>There is no configuration in which hosted Jev runs against this corpus.</strong> No vendor contract is needed or wanted — “Jev” from here means Jev-<em>class</em>, not the product.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Use case</div>
+    <h2>What NORA does today, and where this would sit</h2>
+    <p>Every NORA query starts at the query analyzer, which assigns one of <strong>ten</strong> <code>QueryType</code> values and one of three <code>DocTypeScope</code> values. Today that is done entirely by <strong>ordered keyword rules</strong> — <code>MockQueryAnalyzer</code>. An LLM-based analyzer exists in the codebase but is never wired into any live path.</p>
+    <p>The rules are not naive. Precedence is deliberate: <code>FACT</code> is tested before definitional patterns so “what is the maximum X” isn’t mis-routed; <code>STANDARDS_COMPARISON</code> precedes <code>RELEASE_DIFF</code> because “differ” overlaps “diff”. They work because engineers ask in formulaic shapes. They are brittle to any phrasing nobody anticipated, and they do not scale as classes and phrasings multiply.</p>
+
+    <h3>This one label configures the entire pipeline</h3>
+    <p><code>intent.query_type</code> is read at <strong>twelve</strong> sites in the query pipeline. It selects:</p>
+    <div class="fan">
+      <div><b>top_k</b><span>how many chunks retrieved</span></div>
+      <div><b>bm25_weight</b><span>BM25 vs vector balance</span></div>
+      <div><b>rerank</b><span>reranking on or off</span></div>
+      <div><b>rewrite</b><span>whether expansion runs</span></div>
+      <div><b>max_distance</b><span>relevance cutoff</span></div>
+      <div><b>grouping</b><span>group results or not</span></div>
+      <div><b>system prompt</b><span>which synthesis prompt</span></div>
+      <div><b>cell scope</b><span>which corpora are searched</span></div>
+    </div>
+    <p>So classification is the highest-leverage single decision in the pipeline — everything downstream is parameterised by it. It must also stay <em>before</em> query enrichment, because enrichment only runs if the classified type enables it.</p>
+
+    <div class="note">
+      <p class="nh">Consequence for measurement</p>
+      <p>Overall accuracy is the wrong metric. <code>FACT</code> and <code>SUMMARIZE</code> select opposite configurations — tight top_k with a strict 0.4 cutoff and reranking on, versus wide top_k with a 0.7 cutoff and grouping off. A classifier at 95% that confuses those two can be worse in practice than one at 85% that confuses near-identical types. We will report a <strong>confusion matrix weighted by how far apart the downstream settings are</strong>.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Options</div>
+    <h2>What we can actually run</h2>
+    <p><strong>AutoTrust AI</strong> (Singapore) publishes the reference open family, all Apache 2.0. None of it fits our 16 GB A4000 — it is parked on memory alone, never on licence.</p>
+    <div class="tw">
+      <table>
+        <caption>Open decision models, against a 16 GB A4000</caption>
+        <thead><tr><th>Model</th><th>Base</th><th>VRAM</th><th>Fits</th><th>Licence</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Kev-4B</strong></td><td>Qwen3.5-4B</td><td class="num">~8 GB at bf16</td><td class="yes">Yes</td><td>Apache-2.0</td></tr>
+          <tr><td>Kev-0.8B</td><td>Qwen3.5-0.8B</td><td class="num">~2 GB</td><td class="yes">Yes</td><td>Apache-2.0</td></tr>
+          <tr><td>JEV-9B</td><td>Qwen3.5-9B</td><td class="num">24 GB min</td><td class="no">No</td><td>Apache-2.0</td></tr>
+          <tr><td>GEV-26B-Decide</td><td>Gemma 4 26B-A4B MoE</td><td class="num">24 GB (NVFP4)</td><td class="no">No</td><td>Apache-2.0</td></tr>
+          <tr><td>JEV-27B / 27B-VL</td><td>Qwen3.8-27B</td><td class="num">80 GB+</td><td class="no">No</td><td>Apache-2.0</td></tr>
+          <tr><td>openjev</td><td>DiffusionGemma 26B-A4B</td><td class="num">24 GB+</td><td class="no">No</td><td><span class="pill p-stop">Conflicted</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>Kev is the pick.</strong> Canonical upstream is <code>jaredpalmer/kev</code> (9.1k stars; the several identically-named repos are forks). Each checkpoint is a rank-16 LoRA adapter plus a small bilinear pointer head on an Apache-2.0 Qwen base — and Apache-2.0 covers the adapter and head too, not just the base. It ships its own server exposing <code>/v1/systemone</code>, so <strong>no vLLM work is needed</strong> for the first iteration.</p>
+    <p>One flag matters: the card notes 4B at fp32 needs ~16 GB, which would consume the whole card. <code>KEV_DTYPE=bf16</code> halves that.</p>
+    <p>A route back to the bigger models exists and is worth recording. AWQ quantisation via <code>llm-compressor</code> keeps the decision head at full precision while compressing only the backbone — the published <code>JEV-27B-VL-AWQ</code> does exactly that. Applied to JEV-9B (18 GB at bf16, ~5 GB at 4-bit) it should fit our card, and JEV-9B’s numbers are the strongest available: KL ≈ 0.019 against hosted Jev and <strong>90% of its accuracy at 16 options</strong>. Nobody has published a JEV-9B-AWQ, so we would be first — which is why it is a later entry, not the opener.</p>
+
+    <div class="note">
+      <p class="nh">Requirement — the trap to avoid</p>
+      <p>These models keep the backbone frozen and add a small <strong>detachable</strong> decision block; for JEV-9B it is 40.2M parameters, about 0.5% of the backbone. Because it is detachable, it ships as separate files — and <strong>standard GGUF conversion drops it</strong>. The popular GGUF builds are plain Qwen or Gemma wearing a decision-model name. They load, they answer, and nothing errors.</p>
+      <p>Since NORA serves local models through Ollama, which is GGUF-based, the most natural integration path is the broken one. Verification before any number is recorded: the file list must contain <code>head.safetensors</code>, an adapter folder and <code>calibration.json</code>. <strong>A hollow build contains only <code>.gguf</code> files.</strong></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Alternatives</div>
+    <h2>The four things that could own this decision</h2>
+    <p>Configuration would be a single knob, <code>NORA_QUERY_ANALYZER</code>, with three values — <code>rules</code>, <code>llm</code>, <code>decision</code> — defaulting to <code>rules</code> so nothing changes for anyone who sets nothing. A model roster sits beneath the <code>decision</code> value.</p>
+    <div class="tw">
+      <table>
+        <caption>Candidate owners of query classification</caption>
+        <thead><tr><th>Approach</th><th>Latency</th><th>Inspectable</th><th>Scales with classes</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Keyword rules</strong><br><span style="color:var(--muted);font-size:13px">today’s default</span></td><td class="num">~0 ms</td><td class="yes">Yes</td><td class="no">Poorly</td><td><span class="pill p-go">Live</span></td></tr>
+          <tr><td><strong>LLM analyzer</strong></td><td class="num">seconds</td><td>Partly</td><td class="yes">Well</td><td><span class="pill p-hold">Written, unwired</span></td></tr>
+          <tr><td><strong>Decision model</strong><br><span style="color:var(--muted);font-size:13px">Kev-4B, zero-shot</span></td><td class="num">~100–200 ms</td><td class="no">No</td><td class="yes">Well</td><td><span class="pill p-hold">Proposed</span></td></tr>
+          <tr><td><strong>Decision model</strong><br><span style="color:var(--muted);font-size:13px">Kev-4B + task fine-tune</span></td><td class="num">~100–200 ms</td><td class="no">No</td><td class="yes">Well</td><td><span class="pill p-hold">Only if needed</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>A fifth option deserves naming because published evidence favours it: a <strong>small purpose-trained classifier</strong>. A 200M DeBERTa scored 89.01% at 54 ms against hosted Jev’s 86.35% at 348 ms on prompt-injection detection. The usual guidance is “if you have labels, start with a small classifier.”</p>
+    <p>That tension resolves rather than competes here. Kev is LoRA-trainable, so <strong>a Kev fine-tuned on our labelled queries <em>is</em> that small purpose-trained classifier</strong> — with calibrated typed outputs and a standard interface on top. The two arms merge.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Risk</div>
+    <h2>What will go wrong, stated in advance</h2>
+    <p>Kev-4B’s own model card reports in-distribution accuracy 0.854 but <strong>out-of-domain accuracy 0.790, with ECE 0.096 described explicitly as uncalibrated out of domain.</strong> Its limitations section says that “product-shaped questions with no training analogue are not guaranteed.”</p>
+    <p>It is worth being precise about <em>why</em>, because the obvious reading is wrong. The gap is <strong>not</strong> that it lacks telecom knowledge — our classifier reads plain English questions, never spec text, so telecom vocabulary is irrelevant to it. The gap is that it has never seen <strong>our label set</strong>. It was trained to sort banking intents, news topics and film sentiment. It has never been asked to sort a question into NORA’s ten categories, and <code>RELEASE_DIFF</code> or <code>TRACEABILITY</code> are our taxonomy, not English concepts.</p>
+    <p>Some of those boundaries are not determinable from English at all — they are NORA conventions. Our own code documents the clearest case: <em>“explain the X authentication requirements”</em> routes to <code>SUMMARIZE</code> rather than <code>SINGLE_DOC</code> <strong>even though it names a plan</strong>, because the user wants the topic surveyed rather than one requirement looked up. No amount of language understanding produces that answer; it is a decision we made.</p>
+
+    <div class="note good">
+      <p class="nh">So: no telecom fine-tuning. Possibly a small task fine-tune.</p>
+      <p><strong>Domain training is explicitly rejected.</strong> Continued pre-training on spec prose would teach the model the language of <em>documents</em>, a different distribution from the language of <em>questions about</em> documents — the wrong target, and it would also bake proprietary content into weights.</p>
+      <p>What may help instead is ordinary <strong>task</strong> fine-tuning: a few hundred labelled example questions teaching it where our category boundaries sit. And the convenient part is that <strong>we need that labelled set for evaluation anyway</strong> — one artefact, two uses. Nothing extra to collect.</p>
+      <p>It is also not a prerequisite. Kev classifies zero-shot, so the sequence is: run it against the labelled set, read the confusion matrix, and fine-tune only if the errors cluster on category boundaries. If zero-shot is good enough, we stop there.</p>
+    </div>
+    <p>One cautionary precedent, with its limits stated. The <strong>A11</strong> run put a generic cross-encoder reranker into the pipeline and it came back net-zero at 86.4% / 62.3%, diagnosed as out-of-distribution on telecom text. That is a real warning about generic models on NORA tasks — but it is not a direct prediction here, because that reranker scored query-against-chunk pairs over spec prose, and our classifier never touches spec prose. Treat Kev’s own 0.790 as the number to expect, not A11’s.</p>
+    <p>Two further honest costs. <strong>Latency rises</strong> from effectively zero to perhaps 100–200 ms — small against a pipeline that already makes an LLM expansion call and an LLM synthesis call, but real, and it will be measured rather than assumed. And <strong>we trade away inspectability</strong>: when a rule misfires you read the rule and fix it; when a model misfires you can only measure it. The evaluation set is not overhead bolted onto the experiment — it is the replacement for debugging by inspection.</p>
+    <p>There is also no classification evaluation today. The A-series runs measure the pipeline end to end, not the classifier. Labelled examples exist only in unit tests, skewed by history, with <strong>zero coverage for three of the ten classes</strong>. Building that set is the first real task.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Scope</div>
+    <h2>What this does and does not buy</h2>
+    <p>One correction worth stating plainly, because it changes the business case: <strong>this seam does not currently use an LLM.</strong> A decision model here replaces keyword rules, so iteration one saves <strong>zero</strong> LLM tokens. It buys better classification, scalability, and the expertise — not cost reduction.</p>
+    <p>The decision points that <em>do</em> spend LLM calls are reranking, SIRA chunk selection, query expansion and the golden-eval judge. All of those read chunk bodies, which is why they are not first. If cost reduction rather than capability is the goal, the ordering should be reconsidered.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Roadmap</div>
+    <h2>Where this goes in NORA</h2>
+    <p>Query classification is deliberately the safest, cheapest place to learn the category: it reads only the user’s question, never corpus content; it has an existing baseline to beat; and the integration point is a single factory function. Once the pattern is proven, six other decisions in NORA have the same shape.</p>
+    <div class="tw">
+      <table>
+        <caption>Candidate decision points beyond iteration one</caption>
+        <thead><tr><th>Decision point</th><th>Shape</th><th>What it would gain</th></tr></thead>
+        <tbody>
+          <tr><td>Query expansion on/off</td><td>bool</td><td><strong>Latency, tokens and determinism at once</strong> — today an LLM call whose sampling varies run to run</td></tr>
+          <tr><td>Reranking</td><td>score</td><td>Replaces an LLM asked for an integer per document</td></tr>
+          <tr><td>SIRA chunk selection</td><td>choice</td><td>Removes an LLM call from the hot path</td></tr>
+          <tr><td>Taxonomy feature mapping</td><td>choice</td><td>Determinism — its variance caused a recorded 20pp eval swing</td></tr>
+          <tr><td>Golden-eval judge</td><td>score</td><td>Removes a ±1.7 median judge noise floor</td></tr>
+          <tr><td>Citation audit</td><td>bool</td><td>Cheap per-sentence verification</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The expansion toggle is the standout: it is the one place where the token-cost motivation, the latency concern and a known recorded pain all point the same direction. It is also the natural home for domain-adaptive training later, since those decisions read spec text — where teaching the model telecom language would genuinely help, unlike query classification, which reads plain English questions.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Decisions needed</div>
+    <h2>What we need from you</h2>
+    <ol class="ask">
+      <li><strong>If zero-shot falls short, is a task fine-tune in scope for this strand?</strong> Not telecom training — just a few hundred labelled questions teaching it where our ten category boundaries sit, using the set we need for evaluation regardless. Roughly a day of work. We would only reach for it if the confusion matrix shows the errors clustering on boundaries.</li>
+      <li><strong>Why is classification rule-based today?</strong> There is no decision record. If an LLM was tried and rejected on latency, this revival is directly well-motivated. If it was never wired for plumbing reasons, then no model has ever been measured at this seam and our baseline would be the first such comparison ever run. Either answer is useful.</li>
+      <li><strong>Module placement</strong> — a new <code>core/src/decision/</code> package, or extend <code>core/src/llm/</code>?</li>
+      <li><strong>What result would justify making this the default?</strong> Worth agreeing now, so it isn’t relitigated later against a moving bar.</li>
+      <li><strong>Infrastructure detail</strong> — the production image name for a later default-on rebuild, and the exact DGX Spark specification, which would reopen the larger models.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <p>Sources: TypeSafe Jev documentation; AutoTrust AI model cards on Hugging Face; <code>jaredpalmer/kev</code> repository and Kev-4B model card; published open-decision-model survey benchmarks.</p>
+    <p>NORA references: <code>core/src/query/analyzer.py</code>, <code>core/src/query/pipeline.py</code>, <code>core/src/query/schema.py</code>, <code>sandbox/sira_query/service.py</code>. Full reasoning and 14 draft decisions in <code>docs/compact/strands/jev-experimentation/</code>.</p>
+    <p>No proprietary corpus content appears in this document.</p>
+  </footer>
+
+</div>
