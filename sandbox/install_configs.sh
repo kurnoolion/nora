@@ -109,6 +109,11 @@ apply_patch \
     "enrich_batching" \
     "scripts/add_doc_index_adapter.py"
 
+apply_patch \
+    "$REPO_ROOT/sandbox/sira_patches/no-best-update.patch" \
+    "NORA_SIRA_SKIP_UPDATE_BEST" \
+    "scripts/add_doc_index_adapter.py"
+
 echo
 echo "OK — installed 3 hydra configs + 3 prompts into $SIRA_CLONE/scripts/configs/"
 echo "     plus patches under sandbox/sira_patches/ (idempotent — re-run any time)."

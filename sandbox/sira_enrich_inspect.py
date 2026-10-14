@@ -236,6 +236,87 @@ def list_failed_cell(cell_dir: Path, *, run: str | None, limit: int) -> int:
     return len(failed)
 
 
+
+def _load_run_kept(cell_dir: Path, run_name: str) -> dict[str, set[str]]:
+    """{doc_id: phrase set} from one run's enrichments.kept.jsonl
+    (phrases aggregated per doc, mirroring the service's load)."""
+    path = cell_dir / "runs" / "doc-enrich" / run_name / "enrichments.kept.jsonl"
+    out: dict[str, set[str]] = {}
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            did = row.get("doc_id") or row.get("_id")
+            phrases = row.get("phrases") or []
+            if did and phrases:
+                out.setdefault(did, set()).update(phrases)
+    return out
+
+
+def cmd_compare(cell_dir: Path, run_names: list[str],
+                ids_file: str | None) -> int:
+    """Pairwise content-free comparison of doc-enrich runs: kept-set
+    overlap + per-req phrase-set Jaccard distribution. PASTE-SAFE — the
+    output carries counts and percentages only, never ids or phrases."""
+    runs: dict[str, dict[str, set[str]]] = {}
+    for name in run_names:
+        try:
+            runs[name] = _load_run_kept(cell_dir, name)
+        except FileNotFoundError as e:
+            print(f"error: no kept file for run '{name}': {e}", file=sys.stderr)
+            return 2
+    wanted: set[str] | None = None
+    if ids_file:
+        with open(ids_file, encoding="utf-8") as f:
+            wanted = {ln.strip() for ln in f
+                      if ln.strip() and not ln.lstrip().startswith("#")}
+        runs = {n: {d: ph for d, ph in kept.items() if d in wanted}
+                for n, kept in runs.items()}
+
+    print(f"compare: cell {cell_dir.name} | runs {len(runs)}"
+          + (f" | restricted to {len(wanted)} ids" if wanted is not None else "")
+          + "  (paste-safe: counts only)")
+    for name, kept in runs.items():
+        sizes = sorted(len(ph) for ph in kept.values())
+        med = sizes[len(sizes) // 2] if sizes else 0
+        print(f"  run {name}: kept {len(kept)} req(s), "
+              f"phrases/req median {med}, max {sizes[-1] if sizes else 0}")
+
+    names = list(runs)
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            a, b = names[i], names[j]
+            ka, kb = runs[a], runs[b]
+            both = set(ka) & set(kb)
+            only_a = len(ka) - len(both)
+            only_b = len(kb) - len(both)
+            jac = []
+            n_ident = 0
+            for d in both:
+                u = ka[d] | kb[d]
+                jx = len(ka[d] & kb[d]) / len(u) if u else 1.0
+                jac.append(jx)
+                if ka[d] == kb[d]:
+                    n_ident += 1
+            jac.sort()
+
+            def _q(p: float) -> float:
+                return jac[min(len(jac) - 1, int(p * len(jac)))] if jac else 0.0
+
+            print(f"  [{a} vs {b}] kept-overlap {len(both)} "
+                  f"(only-{a} {only_a}, only-{b} {only_b})")
+            if both:
+                print(f"    phrase-set Jaccard: q25 {_q(0.25):.2f} | "
+                      f"median {_q(0.5):.2f} | q75 {_q(0.75):.2f} | "
+                      f"min {jac[0]:.2f} | identical "
+                      f"{n_ident}/{len(both)} ({100 * n_ident / len(both):.0f}%)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="sira_enrich_inspect",
@@ -274,11 +355,27 @@ def main(argv: list[str] | None = None) -> int:
         "--trace", action="store_true",
         help="also print the raw enrichment trace row",
     )
+    ap.add_argument(
+        "--compare", default=None, metavar="RUN1,RUN2[,RUN3]",
+        help="PASTE-SAFE pairwise run comparison for --cell: kept-set "
+             "overlap + per-req phrase-set Jaccard distribution (counts "
+             "only, no ids/phrases). Optional --ids restricts to a "
+             "req-id file (one per line)",
+    )
+    ap.add_argument(
+        "--ids", default=None, metavar="FILE",
+        help="with --compare: restrict the comparison to these req ids",
+    )
     args = ap.parse_args(argv)
 
-    if args.failed and args.req_id:
+    if args.compare:
+        if not args.cell:
+            ap.error("--compare requires --cell")
+        if args.req_id or args.failed:
+            ap.error("--compare is its own mode (no req_id / --failed)")
+    elif args.failed and args.req_id:
         ap.error("give a req_id OR --failed, not both")
-    if not args.failed and not args.req_id:
+    elif not args.failed and not args.req_id:
         ap.error("req_id required (or use --failed for the triage listing)")
 
     if not args.db_root:
@@ -294,6 +391,11 @@ def main(argv: list[str] | None = None) -> int:
         if not cell_dirs[0].is_dir():
             print(f"error: cell not found: {cell_dirs[0]}", file=sys.stderr)
             return 2
+        if args.compare:
+            return cmd_compare(
+                cell_dirs[0],
+                [r.strip() for r in args.compare.split(",") if r.strip()],
+                args.ids)
     else:
         cells = enumerate_cells(db_root)
         if not cells:
