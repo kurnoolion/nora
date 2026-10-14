@@ -304,6 +304,15 @@ outputs and the decision interface.
   DBpedia, Amazon Reviews, IMDB) with nothing resembling telecom requirement
   specifications, and the card states that "product-shaped questions with no
   training analogue are not guaranteed" — exactly NORA's task.
+  **Amended 2026-10-14:** the gap is the **unfamiliar label set**, not the
+  telecom domain. This classifier reads English questions and never touches
+  spec prose, so telecom vocabulary is irrelevant; what Kev has not seen is
+  NORA's ten `QueryType` values and the conventions separating them. Kev also
+  classifies **zero-shot** — `/v1/systemone` takes the option set at inference
+  time — so no training is a prerequisite to running it. The remedy, if
+  needed, is an ordinary task SFT on a few hundred labelled questions reusing
+  phase 1's eval set, reached for only if the confusion matrix shows boundary
+  clustering. See design §4.2 v1.0.
   This independently confirms the out-of-distribution warning already derived
   from NORA's own A11 cross-encoder result (`ms-marco-MiniLM-L6-v2`, net-zero
   and slightly regressive at 86.4% / 62.3%, diagnosed as OOD on telecom text).

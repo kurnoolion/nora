@@ -1,6 +1,6 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v0.9, 2026-10-13 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v1.0, 2026-10-14 · Status: draft, for review
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -401,8 +401,40 @@ own labelled eval runs in `STATUS.md`, not an external benchmark — had it
 net-zero and slightly regressive at 86.4% overall / 62.3% accuracy, diagnosed
 as out-of-distribution on telecom spec text.
 
-**Kev-4B's own model card now confirms this independently**, which moves it
-from inference to documented fact. Published figures: in-distribution accuracy
+**CORRECTED v1.0 — the gap is the label set, not the domain.** The framing
+below (and in D-DRAFT-10) read as "generic weights are weak on telecom text",
+which is wrong for this target and would mislead a reader. Our classifier reads
+plain English questions and **never touches spec prose**, so telecom
+vocabulary is irrelevant to it. What Kev has never seen is **NORA's label
+set** — it was trained to sort banking intents, news topics and film
+sentiment, not to place a question among ten NORA `QueryType` values, and
+`RELEASE_DIFF` / `TRACEABILITY` are our taxonomy rather than English concepts.
+Some boundaries are not derivable from English at all but are NORA
+conventions: `analyzer.py` documents that "explain the X authentication
+requirements" routes to `SUMMARIZE` rather than `SINGLE_DOC` *even though it
+names a plan*, because the user wants the topic surveyed. No language
+understanding yields that.
+
+Three consequences follow, all of which soften the earlier position:
+
+- **Kev classifies zero-shot.** `/v1/systemone` takes the option set at
+  inference time and the pointer head scores each option against the question,
+  so no training is a prerequisite to running it. Iteration 1 measures
+  zero-shot first.
+- **The remedy, if needed, is an ordinary task SFT** on a few hundred labelled
+  questions teaching category boundaries — drawn from the set phase 1 builds
+  for evaluation anyway. One artefact, two uses. It is reached for only if the
+  confusion matrix shows errors clustering on boundaries, not by default.
+- **The A11 parallel is weaker than stated.** That cross-encoder scored
+  query-against-chunk pairs over spec prose and went OOD on the domain; this
+  classifier sees no prose. A11 remains a caution about generic models on NORA
+  tasks, but Kev's own 0.790 is the number to expect, not A11's.
+
+Domain-adaptive pre-training stays rejected (D-DRAFT-12) and is unaffected by
+any of this.
+
+**Kev-4B's own model card confirms the OOD figures independently**, which moves
+them from inference to documented fact. Published figures: in-distribution accuracy
 0.854, **out-of-domain accuracy 0.790**, out-of-domain Brier 0.328, and **ECE
 0.096, explicitly described as uncalibrated out of domain**; locked test 0.856
 ID / 0.806 OOD. Its training suite is ~13,576 generic text-classification

@@ -912,3 +912,49 @@ which is the gap a trained classifier would target.
   `<doc_root>/corrections/`, stale since the D-022 rename to `<env_dir>`.
 - "Procurement spec" from a dictated proposal remains unconfirmed — NORA's
   corpus is device requirement specifications.
+
+## 2026-10-14 — Correction: the OOD gap is the label set, not the domain
+
+### Done this session
+
+- **Published a briefing artifact for the architect** covering what a decision
+  model is, why hosted Jev is unusable, the NORA use case, requirements,
+  options, alternatives, risks and roadmap. Private link; no proprietary corpus
+  content.
+- **Correction raised by the operator and applied** (design §4.2 → v1.0,
+  D-DRAFT-10 amended). The earlier framing — "generic Kev will be weak on
+  telecom text, so a fine-tune is the experiment" — conflated two different
+  things and would have alarmed a reader into expecting telecom training:
+  - **The classifier never reads spec prose.** It reads plain English
+    questions, so telecom vocabulary is irrelevant to it. Domain training
+    remains rejected (D-DRAFT-12) and nothing here revisits that.
+  - **What Kev has not seen is NORA's label set.** It was trained to sort
+    banking intents, news topics and film sentiment — never to place a
+    question among ten `QueryType` values. `RELEASE_DIFF` and `TRACEABILITY`
+    are NORA taxonomy, not English concepts, and some boundaries are pure
+    convention: `analyzer.py` documents that "explain the X authentication
+    requirements" routes to `SUMMARIZE` rather than `SINGLE_DOC` *even though
+    it names a plan*. No language understanding produces that.
+  - **Kev classifies zero-shot**, which was not previously recorded and is
+    material. `/v1/systemone` takes the option set at inference time and the
+    pointer head scores each option against the question, so **no training is
+    a prerequisite to running it**. Iteration 1 measures zero-shot first.
+  - **The remedy, if needed, is an ordinary task SFT** — a few hundred
+    labelled questions teaching boundaries, drawn from the set phase 1 builds
+    for evaluation regardless. One artefact, two uses; nothing extra to
+    collect. Reached for only if the confusion matrix shows errors clustering
+    on boundaries.
+  - **The A11 parallel was overstated.** That cross-encoder scored
+    query-against-chunk pairs over spec prose and went out-of-distribution on
+    the *domain*; this classifier sees no prose. A11 stays a caution about
+    generic models on NORA tasks, but Kev's own 0.790 is the figure to expect.
+- **Consequence for §8 open point on fine-tuning budget:** it softens from
+  "is the fine-tune in scope" to "if zero-shot falls short, is a task
+  fine-tune in scope" — a smaller and more accurate ask.
+
+### Flags
+
+- **Watch this framing in any future summary.** "Fine-tune" in this strand
+  means *task* SFT on labelled questions, never domain training on specs. The
+  two were conflated once and the distinction matters both technically and in
+  how the work is perceived.
