@@ -159,3 +159,92 @@
 - The judge temperature/nondeterminism remains an endpoint property;
   Stage-2 comparisons need the recorded noise floor until a deterministic
   judge endpoint exists.
+
+## 2026-10-16 — Phase 3 shipped and field-debuted; ingestion hardening; enrichment A/B closed
+
+### Done this session
+- Phase 3 implemented: `sira_lane --index=cell-db` dual-emits per-cell DBs
+  into `<db_root>/cell-dbs/` after the lane + verify complete (converter
+  reused in-process, lane run-name pinned, self-verify mandatory); flat
+  stays the default. `cycle.sh` forwards `--index` (CYC-E065); per-lane
+  build roots became overridable (defaults unchanged). Field debut: a new
+  release ingested end-to-end produced its cell DB, self-verified.
+- `ingest.sh` gained `-t` (chain taxonomy into the same container/log)
+  after a field correction: taxonomy sits outside the ingestion lane, and
+  the first launch attempt wrongly assumed a lane flag covered it.
+- Taxonomy stage hardened through a field-found defect chain on that
+  ingestion: (a) launch visibility — TAX-I001 "N cached / M to extract"
+  line plus TAX-W005 (all units stale) and TAX-W006 (prompt-fingerprint
+  mismatch discards the ledger — loudly, no longer silently); (b) ledger
+  truncation bug fixed — state only saved on extraction events, so a
+  zero-extraction retry truncated 267→178 entries; final save now
+  unconditional, regression test proven red-without/green-with; (c) the
+  whole-stage fingerprint short-circuit had stamped the truncated ledger
+  complete — repaired by clearing the stamp (backed up) and re-running;
+  the fix restores stamped⇒complete. Root cause of the full re-extract
+  itself: an August parser update re-wrote unit bytes but taxonomy never
+  re-ran — the re-extract was overdue repair, not waste. Lesson named:
+  output-changing parser updates schedule a taxonomy re-extract.
+- Enrichment traceability hardened (also field-driven): run-scoped batch
+  ids (`<timestamp-rand>.b#####`), `req_ids` on every batch trace row,
+  `resp_chars` measured on responses (an earlier response-cap inference
+  from config estimates was withdrawn — now it's a recorded field);
+  `--req-ids FILE` diagnostic selector (fail-loud). verify-run verdict
+  fixed: parse-error batch events WARN only when requests remain
+  unresolved — a parse error whose requests all resolved on retry is a
+  transient, noted not warned (proven by coverage arithmetic on the new
+  cell: all 4,217 docs accounted for).
+- Enrichment batched-vs-single A/B designed, run, and closed: at temp 0.4
+  exact phrase overlap is ~0 for ALL pairs including same-mode reruns, so
+  the standard is word-level Jaccard against the same-mode rerun noise
+  floor. Batched sat at the floor (median 0.38 vs 0.38); single-request
+  produced ~2× phrases/req (8.6 vs 4.4), exceeding the prompt's 10-cap
+  (instruction-only, nothing enforces it), at ~9× the LLM cost, with the
+  least shared vocabulary of any arm. Verdict: batched stays production.
+  Tooling shipped: `sira_enrich_inspect --compare` (kept counts,
+  phrases/req, exact + word-level Jaccard) and a no-best-update patch
+  (`NORA_SIRA_SKIP_UPDATE_BEST=1`) after field review caught that
+  `update_best` repoints best links on a 0.0 tie AND deletes the old
+  targets — experiment runs must never touch best links.
+- Finding on the cell dataset's built-in eval: it scores 0.0 everywhere
+  on our data (inert) — best-link blessing is OURS via the golden eval,
+  never the dataset's own update mechanism.
+- Run-selection precedence documented: per-stage pinned run name
+  (exact-or-nothing) > use-latest > best-links/canonical; stacks that set
+  both pins and use-latest are running on pins — latest is dead config
+  there. Pin-miss degrades silently; migration to per-cell best-link
+  pinning queued for the maintenance window.
+- Ops/security: `serve-up.sh` launcher exports the launching user's
+  user/group ids to the serve containers (root default unchanged); one defunct
+  compose stack discovered (lost its port race months ago, no network,
+  zero exposure) — teardown queued for the maintenance window; one
+  credential-scanner false positive resolved by rewording two comments.
+- Docs synced: storage-design v0.9 (§5 phase-3 as-built; §7
+  backward-compat invariant — all changes land behind flags with legacy
+  defaults; §8 taxonomy/parse artifact disposition row: cell DBs stay a
+  SIRA-lane product, parse/taxonomy re-homing deferred to phase 4).
+
+### In progress
+- Trial stack still serving cell-db/bm25x; the new release's cell is
+  built + verified but not yet serving (restart pending).
+
+### Next
+- Serving restart to pick up the new cell; team-usage round (last
+  phase-2 criterion), then declare phase 2 closed.
+- Compare-tool field validation: reproduce the A/B comparison table on
+  the work host after the next merge.
+- Maintenance window (one batch): per-cell best-link pinning + golden-
+  eval blessing (includes repairing dangling best links), SERVE_UID
+  rollout to the flat stacks + one-time chown, defunct stack teardown,
+  experiment-dir deletion, stale snapshot disposition.
+- Phase 4 remains parked on corp network facts.
+
+### Flags
+- Dangling best links exist on one corpus (cause identified:
+  wipe-stale-index + full-resume combination) — repair deliberately held
+  for the blessing step, not patched ad hoc.
+- The enrichment phrase cap is prompt-instruction only; nothing enforces
+  it mechanically. Surfaced by the A/B; left as-is while batched (which
+  respects it in practice) is production.
+- Optional parked study: single-request-style richer enrichment vs
+  batched, judged by golden eval rather than overlap metrics.
