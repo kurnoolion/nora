@@ -244,3 +244,19 @@ class TestCompareMode:
         from sandbox.sira_enrich_inspect import cmd_compare
         cell = self._mk_cell(tmp_path, {"r1": {"R1": ["a"]}})
         assert cmd_compare(cell, ["r1", "nope"], None) == 2
+
+    def test_word_level_jaccard_sees_through_exact_mismatch(self, tmp_path, capsys):
+        """Exact phrase strings differ but share words: exact Jaccard is 0,
+        word-level is high — the measure that can see anything at
+        temperature-driven string divergence."""
+        from sandbox.sira_enrich_inspect import cmd_compare
+        cell = self._mk_cell(tmp_path, {
+            "r1": {"R1": ["ims registration state"]},
+            "r2": {"R1": ["registration state ims callback"]},
+        })
+        assert cmd_compare(cell, ["r1", "r2"], None) == 0
+        out = capsys.readouterr().out
+        assert "identical 0/1 (0%)" in out              # exact: disjoint
+        assert "word-level Jaccard" in out
+        assert "median 0.75" in out                      # 3 of 4 words shared
+        assert "phrases/req mean 1.00" in out

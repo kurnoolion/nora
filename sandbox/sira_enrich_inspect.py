@@ -283,8 +283,9 @@ def cmd_compare(cell_dir: Path, run_names: list[str],
     for name, kept in runs.items():
         sizes = sorted(len(ph) for ph in kept.values())
         med = sizes[len(sizes) // 2] if sizes else 0
-        print(f"  run {name}: kept {len(kept)} req(s), "
-              f"phrases/req median {med}, max {sizes[-1] if sizes else 0}")
+        mean = sum(sizes) / len(sizes) if sizes else 0.0
+        print(f"  run {name}: kept {len(kept)} req(s), phrases/req "
+              f"mean {mean:.2f}, median {med}, max {sizes[-1] if sizes else 0}")
 
     names = list(runs)
     for i in range(len(names)):
@@ -295,6 +296,7 @@ def cmd_compare(cell_dir: Path, run_names: list[str],
             only_a = len(ka) - len(both)
             only_b = len(kb) - len(both)
             jac = []
+            wjac = []
             n_ident = 0
             for d in both:
                 u = ka[d] | kb[d]
@@ -302,18 +304,32 @@ def cmd_compare(cell_dir: Path, run_names: list[str],
                 jac.append(jx)
                 if ka[d] == kb[d]:
                     n_ident += 1
+                # Word-level: the union of lowercased words across the
+                # req's phrases. Exact phrase-set Jaccard is ~0 between ANY
+                # two enrichment runs (temperature 0.4; batching changes
+                # prompt context, so a fixed seed cannot reproduce exact
+                # strings) — word overlap is the measure that can see
+                # anything, judged against a same-mode rerun noise floor.
+                wa = {w for ph in ka[d] for w in ph.lower().split()}
+                wb = {w for ph in kb[d] for w in ph.lower().split()}
+                wu = wa | wb
+                wjac.append(len(wa & wb) / len(wu) if wu else 1.0)
             jac.sort()
+            wjac.sort()
 
-            def _q(p: float) -> float:
-                return jac[min(len(jac) - 1, int(p * len(jac)))] if jac else 0.0
+            def _q(vals: list[float], p: float) -> float:
+                return vals[min(len(vals) - 1, int(p * len(vals)))] if vals else 0.0
 
             print(f"  [{a} vs {b}] kept-overlap {len(both)} "
                   f"(only-{a} {only_a}, only-{b} {only_b})")
             if both:
-                print(f"    phrase-set Jaccard: q25 {_q(0.25):.2f} | "
-                      f"median {_q(0.5):.2f} | q75 {_q(0.75):.2f} | "
+                print(f"    phrase-set Jaccard: q25 {_q(jac, 0.25):.2f} | "
+                      f"median {_q(jac, 0.5):.2f} | q75 {_q(jac, 0.75):.2f} | "
                       f"min {jac[0]:.2f} | identical "
                       f"{n_ident}/{len(both)} ({100 * n_ident / len(both):.0f}%)")
+                print(f"    word-level Jaccard: q25 {_q(wjac, 0.25):.2f} | "
+                      f"median {_q(wjac, 0.5):.2f} | q75 {_q(wjac, 0.75):.2f} | "
+                      f"min {wjac[0]:.2f}")
     return 0
 
 
