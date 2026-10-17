@@ -414,3 +414,25 @@ def test_fallback_delta_from_end_of_run_healthz(monkeypatch):
     assert report.stamp.fallback_used_delta == 5
     line = report.stamp.compact_line()
     assert "fb_pre=2" in line and "fb_delta=5" in line
+
+
+def test_flagged_sample_skips_stage2_but_scores_stage1(monkeypatch):
+    # A release move flagged the sample: its golden response may be
+    # written from older text, so it is not judged (GEV-W002).
+    from core.src.eval import golden_runner
+
+    monkeypatch.setattr(golden_runner, "fetch_healthz", lambda url: None)
+    monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {
+        "results": [{"rank": 1, "req_id": "REQ_FOO_0001"}]})
+    flagged = _sample()
+    flagged.golden_meta["review"] = {"mno-b": {"changed": ["REQ_FOO_0001"]}}
+    judge = _FakeJudge(raw='{"score": 7, "missing": [], "contradicting": []}')
+    rep = golden_runner.run_all(
+        [flagged], "http://127.0.0.1:9999", "s", _NOW,
+        query_pipeline=_FakePipeline(), judge=judge,
+        judge_prompt=("v1", "<<CANDIDATE>>"),
+    )
+    assert len(rep.stage1) == 1 and rep.stage2 == []
+    assert [e["code"] for e in rep.errors] == ["GEV-W002"]
+    # Not judged, so outside the Stage-2 identity.
+    assert rep.stamp.eval_set_stage2_digest == ""

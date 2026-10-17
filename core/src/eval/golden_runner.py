@@ -35,6 +35,7 @@ from .golden import (
     GoldenSample,
     GroundTruthEntry,
     is_relative_release,
+    needs_review,
     runs_dir,
 )
 from .release_map import ReleaseMap
@@ -320,7 +321,10 @@ class StackStamp:
             [s.sample_id, s.query, s.kind, digest_view(s, release_map)]
             for s in scorable
         ]) if scorable else ""
-        golden_ready = [s for s in scorable if s.status == STATUS_GOLDEN_READY]
+        # Samples pending review are not judged (GEV-W002), so they are
+        # outside the Stage-2 identity: clearing a flag changes the key.
+        golden_ready = [s for s in scorable if s.status == STATUS_GOLDEN_READY
+                        and not needs_review(s)]
         self.eval_set_stage2_digest = _digest([
             [s.sample_id, s.query, s.kind, digest_view(s, release_map),
              s.golden_response or ""]
@@ -1315,6 +1319,14 @@ def run_all(
             })
             continue
         if stage2_enabled and sample.status == STATUS_GOLDEN_READY:
+            if needs_review(sample):
+                report.errors.append({
+                    "sample_id": sample.sample_id,
+                    "code": "GEV-W002",
+                    "message": "pending review after a release move — "
+                               "Stage 2 skipped",
+                })
+                continue
             if sira_rows_mode:
                 query_pipeline.bind_rows(s1.retrieved_rows)
             try:

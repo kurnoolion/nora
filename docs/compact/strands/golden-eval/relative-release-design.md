@@ -117,7 +117,7 @@ One versioned file in the golden dir:
 flips:
 
 ```
-golden_release_cli advance --golden-dir <dir> --mno MNO-B --release Apr2099
+golden_release_cli advance --env-dir <env> --mno MNO-B --release Apr2099 [--yes]
 ```
 
 It checks that parse trees exist for the release, runs the
@@ -157,32 +157,37 @@ the mismatch on the `id:` line.
 
 ### 4.5 Provenance and the text-change check
 
-Each sample records `golden_meta.authored_release`:
-`{mno: release}` for each MNO in its entries, meaning the release whose
-text the answer key and golden response were built from. Eval Studio
-sets it at save time from the map's `N`. A `version` sample records the
-resolved pair.
+**Provenance is the entry's stored release.** On a `standard` sample the
+release is not matched (m2), so the value the picker stored is free to
+mean "the release this entry was written from". *(As built in step 3;
+this replaces an earlier `golden_meta.authored_release` field, which
+would only have duplicated it.)* Entries with no release have no
+provenance; the check counts them as "unattributed" and leaves them
+alone.
 
-When `advance` moves an MNO's `N`, it checks every sample whose
-recorded release for that MNO is now older than `N`:
+When `advance` moves an MNO's `N`, it checks every entry of that MNO
+whose stored release is older than the new `N`:
 
-- `standard`: for each entry, compare text in the recorded release and
-  in the new `N` (`req_tree.find_req`, whitespace-normalised):
-  unchanged / changed / absent;
+- `standard`: compare the entry's text in its stored release and in
+  the new `N` (a per-cell parse-tree reader in the command —
+  whitespace-normalised; web's `req_tree` cannot be imported from
+  eval): unchanged / changed / absent (not in the new release) /
+  unverified (not found in its own stored release);
 - relative `version`: **always flagged**. Its answer is true for one
   `(N-1, N)` pair only, so moving `N` changes both the answer and the
   expected ids;
 - absolute `version`: not flagged while its releases are still served.
 
-A sample with any changed or absent entry, and every relative
-`version` sample, gets `golden_meta.review = {from, to, changed,
-absent}`. Samples with all entries unchanged get their
-`authored_release` advanced automatically.
+A sample with any changed, absent or unverified entry, and every
+relative `version` sample, gets `golden_meta.review[mno] = {from, to,
+changed, absent, unverified, relative, flagged_at}`. Unchanged entries
+have their stored release moved to the new `N`, in flagged samples too;
+the others keep their old release, so the review can show both texts.
 
 **Runner policy for flagged samples:**
 - Stage 1 still scores them. The ids are still the expectation, and an
   absent id is a real miss the expert must rule on.
-- Stage 2 skips them, with `GEV-W003` "pending review", counted. A
+- Stage 2 skips them, with `GEV-W002` "pending review", counted. A
   golden response written from older text is not a valid reference.
 
 The expert clears the flag in Eval Studio. A review panel shows the old
@@ -231,9 +236,8 @@ older pair.
 
 - A **kind** selector on the sample; `standard` is the default.
 - `standard`: the picker still browses by MNO → Plan → Release, to
-  find requirements. The stored entry keeps `mno` and `req_id`. The
-  release is recorded only in `authored_release`, taken from the map,
-  not from the picker list (F9). If the expert picks from a release
+  find requirements. The stored entry keeps `mno`, `req_id` and the
+  picked release as provenance (4.5). If the expert picks from a release
   other than `N`, Eval Studio warns: the text they see is not what the
   stack serves.
 - `version`: each entry needs a release. A "relative" toggle stores
@@ -264,16 +268,15 @@ FR-multi-6) and belongs to the serving work, not to this strand.
 
 ## 5. Migration of the current set
 
-`golden_release_cli migrate --golden-dir <dir>`:
+`golden_release_cli migrate --env-dir <env> [--yes]` (dry run without `--yes`):
 
 1. writes map `v1` from the releases the env holds, with the operator
    confirming `N` per MNO;
 2. sets every sample to `kind: standard`, unless its question names a
    release; those are listed for the expert to mark as `version`;
-3. records `authored_release` from each sample's current entry
-   releases;
-4. runs the text-change check for samples whose recorded release is
-   older than `N`. The six samples behind the field finding are in
+3. runs the text-change check for entries whose stored release is
+   older than `N` (relative `version` samples are not flagged, since
+   `N` is not moving). The six samples behind the field finding are in
    this group. Their review uses the same side-by-side panel (4.5).
 
 Runs after migration key apart from earlier runs (`match_rule`), as
@@ -285,7 +288,7 @@ intended.
 |---|---|---|
 | 1 | Scope classification and counts (4.4, without the map: expected scope from entry releases) | small |
 | 2 | `kind`, release grammar, `ReleaseMap` + history, resolution, release-free matching for `standard`, `match_rule`, digests over resolved entries, map/stack preflight, `rmap=` | medium |
-| 3 | `golden_release_cli` show / advance (text-change check) / migrate; `authored_release`; review flag; Stage-2 skip of flagged samples | medium |
+| 3 | `golden_release_cli` show / migrate / advance (text-change check) / review (list, clear); review flag; Stage-2 skip of flagged samples | medium |
 | 4 | F10 de-duplication fix | small |
 | 5 | Eval Studio: kind selector, release toggle, review panel, QC warnings | medium |
 | 6 | Docs: golden-eval guide, eval and web MODULE.md, decision drafts, serve-flip hand-off line | small |
@@ -301,7 +304,7 @@ the intent model ships.
    "scope extra" ever a failure for `standard` samples, or always
    informational?
 2. Should F11 (unqualified entries take the first match) be fixed in
-   the migration, by recording `authored_release` from the latest
+   the migration, by giving bare entries a release from the latest
    match?
 3. Who curates relative `version` samples after each advance? It
    recurs every release.

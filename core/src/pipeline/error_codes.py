@@ -119,6 +119,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("GEV-E005", "Relative release unresolvable for {sample_id}: {reason}", "Write or advance the golden set's release map, or fix the entry"),
     ErrorDef("GEV-E006", "Release map and stack disagree: {reason}", "Advance the release map after a flip, or pin --release-map-version"),
     ErrorDef("GEV-W001", "Sample {sample_id} skipped: {reason}", "Advance the sample's status in the Eval Studio"),
+    ErrorDef("GEV-W002", "Sample {sample_id} pending review after a release move: Stage 2 skipped", "Review the flagged entries and golden response, then clear the flag (golden_release_cli review --clear)"),
 
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),

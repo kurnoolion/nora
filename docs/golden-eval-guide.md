@@ -189,11 +189,55 @@ to the samples, with its history:
  "mnos": {"MNO-A": ["Apr2098", "Oct2098"], "MNO-B": ["Apr2098"]}}
 ```
 
-Per MNO, releases are listed oldest first; `N` is the last one. A
-command to create and advance the map is coming (`golden_release_cli`).
-Until then the map is optional: without one, relative entries cannot
-resolve (`GEV-E005` per sample) and standard samples match without the
-release, with the scope check accepting any cell of the entry's MNO.
+Per MNO, releases are listed oldest first; `N` is the last one. The
+map is optional: without one, relative entries cannot resolve
+(`GEV-E005` per sample) and standard samples match without the release,
+with the scope check accepting any cell of the entry's MNO.
+
+**Maintaining the map** — `golden_release_cli`, run with the same
+`--env-dir` as `golden_cli` (on docker, in the pipeline container, where
+`GOLDEN_DIR` is mounted at `<env>/eval/golden`). The env's parse trees
+supply the requirement texts. `migrate` and `advance` print their plan
+and change nothing until re-run with `--yes`.
+
+```bash
+# once, for an existing set: write map v1 (N = each MNO's latest parsed
+# release; override with --n MNO=REL)
+python -m core.src.eval.golden_release_cli migrate --env-dir <env_dir> [--yes]
+
+# after every ingestion + flip of a new release
+python -m core.src.eval.golden_release_cli advance --env-dir <env_dir> \
+    --mno <MNO> --release <MMMYYYY> [--yes]
+
+python -m core.src.eval.golden_release_cli show   --env-dir <env_dir>
+python -m core.src.eval.golden_release_cli review --env-dir <env_dir> \
+    [--clear <sample_id> [--mno <MNO>]]
+```
+
+Advance the map as the step after the flip, by whoever flipped. Until
+then every run against the flipped stack stops with `GEV-E006`.
+
+**The text check.** When an MNO's `N` moves (and once, at `migrate`),
+every standard entry of that MNO whose stored release is older than the
+new `N` is compared by text between the two releases:
+
+- `unchanged` — the entry's stored release moves to the new `N`;
+- `changed` — the text differs;
+- `absent` — the id is not in the new release;
+- `unverified` — the id is not in its own stored release, so there is
+  nothing to compare.
+
+A sample with any `changed`, `absent` or `unverified` entry is flagged
+for review, and so is every relative version sample at an `advance` (its
+answer is true for one release pair only). Flagged samples still score
+in Stage 1 — an absent id is a real miss for the expert to rule on — but
+Stage 2 skips them (`GEV-W002`): the golden response may describe the
+old text. List flags with `review`; after checking the entries and the
+golden response, clear with `review --clear`. Entries with no release
+are counted as `unattributed` and left alone.
+
+The command prints sample and requirement ids — local material. Only
+its final counts line is chat-pasteable.
 
 **At run start** the runner compares the map's `N` with the stack's
 latest served release for every MNO the samples use (from the stack's
@@ -288,6 +332,7 @@ Line by line:
 | `GEV-E005` | error | A relative release (`N`, `N-1`, ...) could not be resolved: the set has no release map, or `N-k` is beyond the MNO's listed releases. Per sample; the run continues. |
 | `GEV-E006` | error | The release map's `N` and the stack's latest release disagree for an MNO. Refused before scoring (exit 2) — advance the map or pin `--release-map-version`. |
 | `GEV-W001` | warning | Sample skipped, with reason: `draft` status, empty ground truth (Stage-1 unscorable), or no golden response (Stage-2 unscorable). |
+| `GEV-W002` | warning | Sample flagged for review after a release move: Stage 2 skipped (Stage 1 still scores). Clear with `golden_release_cli review --clear`. |
 
 `E`-codes fail the invocation (exit 1) — a run with hard errors is not
 a clean data point. `W`-codes are bookkeeping for skipped samples.

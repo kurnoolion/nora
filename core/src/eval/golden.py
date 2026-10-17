@@ -163,6 +163,13 @@ class GoldenSample:
         )
 
 
+def needs_review(sample: GoldenSample) -> bool:
+    """True when a release move flagged the sample for expert review
+    (``golden_meta["review"]``, written by golden_release_cli). Stage 2
+    skips it: its golden response may be written from older text."""
+    return bool(sample.golden_meta.get("review"))
+
+
 def validate_sample(sample: GoldenSample) -> list[str]:
     """Schema-level validation. Returns a list of problems (empty = valid).
 
