@@ -132,6 +132,12 @@ Useful flags:
 - `--answer-prompt-version` / `--sira-prompt-scheme` — caller-known
   identity fields stamped into the run for comparability (see the `id:`
   line below).
+- `--release-map-version K` — score with version `K` of the set's
+  release map instead of the current one (see "Releases and the
+  release map" below). Use it for a stack that has not flipped yet, or
+  to re-score an old run.
+- `--allow-map-mismatch` — score even when the map's `N` disagrees with
+  the stack's latest release for an MNO. The run is stamped `rmap=vK!`.
 
 **Stage-2 mode is auto-selected.** If `<env_dir>/out/vectorstore`
 exists, Stage 2 regenerates through the full `QueryPipeline`
@@ -147,7 +153,62 @@ distinguishable from one that scored nothing.
 must match verbatim — see below).
 
 Exit codes: `0` clean (W-level skips allowed), `1` hard `GEV-E` errors
-occurred, `2` setup failure (no samples / unreadable sample file).
+occurred, `2` setup failure (no samples / unreadable sample file /
+unloadable release map / `GEV-E006` refusal — nothing was scored).
+
+## Releases and the release map
+
+Each MNO's spec releases are served as separate cells. A question that
+names no release is answered from each MNO's latest release only. The
+golden eval handles this with two sample kinds and one map.
+
+**Sample kinds** (`kind` in the sample file; existing samples are
+`standard`):
+
+- `standard` — a question about current behaviour. Its entries are
+  matched on `(req_id, mno)`; the release is **not** used, so an id
+  carried over to a newer release still counts as found. The release
+  stored on an entry is a record of which release the answer was
+  written from.
+- `version` — a question about releases or their differences. Every
+  entry has a release, and it must match:
+  - absolute (`Apr2098`) when the question names the release;
+  - relative (`N`, `N-1`, ...) when the question uses relative wording
+    ("recent", "new", "previous"). `N` is the MNO's current release.
+
+**The release map** says what `N` is for each MNO. It is one file next
+to the samples, with its history:
+
+```
+<golden>/release-map.json            current version
+<golden>/release-map.history.jsonl   every version, one per line
+```
+
+```json
+{"version": 2, "updated_at": "2098-10-20T09:00:00Z", "updated_by": "<user>",
+ "mnos": {"MNO-A": ["Apr2098", "Oct2098"], "MNO-B": ["Apr2098"]}}
+```
+
+Per MNO, releases are listed oldest first; `N` is the last one. A
+command to create and advance the map is coming (`golden_release_cli`).
+Until then the map is optional: without one, relative entries cannot
+resolve (`GEV-E005` per sample) and standard samples match without the
+release, with the scope check accepting any cell of the entry's MNO.
+
+**At run start** the runner compares the map's `N` with the stack's
+latest served release for every MNO the samples use (from the stack's
+healthz `cells`). If they differ, it stops before scoring with
+`GEV-E006` and names each MNO as `mno:<map N>/<stack latest>`. The
+usual causes:
+
+- the stack was flipped to a new release and the map was not advanced:
+  advance the map;
+- the map was advanced and this stack has not flipped yet: pin
+  `--release-map-version` to the version that matches the stack.
+
+With a map, the scope check expects each standard entry's cell to be
+its MNO's `N`, so a stack still serving an older release shows as
+`miss+extra` even though its ids match.
 
 ## Reading the GEV compact block
 
@@ -182,6 +243,11 @@ Line by line:
   - `set=N@digest` — scored-sample count + digest of the frozen eval
     set. **Two runs are comparable only when `set=` matches
     verbatim** (same samples, same ground truth).
+  - `match=` — the Stage-1 matching rule. Runs with a different (or
+    no) `match=` are not comparable, even on the same `set=`.
+  - `rmap=vK` — the release map version the run used; `rmap=vK!` means
+    it was scored despite a map/stack disagreement
+    (`--allow-map-mismatch`).
   - `fb_pre=` / `fb_delta=` — the stack's LLM-fallback counter at run
     start and its growth during the run. A non-zero delta means some
     answers came from a fallback path, not the primary LLM.
@@ -190,8 +256,9 @@ Line by line:
 - **`scope:`** — whether the stack searched the cells the expected
   entries name. It is diagnosis only; recall is computed the same way
   with or without it. Per sample, the expected cells come from the
-  entries' `(mno, release)`, and the searched cells from the stack's
-  `resolved_cells`:
+  entries — for standard samples the MNO's `N` from the release map (any
+  cell of the MNO without a map), for version samples the resolved
+  release — and the searched cells from the stack's `resolved_cells`:
   - `ok` — the stack searched exactly the expected cells;
   - `extra` — it also searched other cells. Informational: a broad
     question can rightly search more;
@@ -218,6 +285,8 @@ Line by line:
 | `GEV-E002` | error | Stack `/sira-query` failed or returned no results list. |
 | `GEV-E003` | error | Stage-2 pipeline setup problem (e.g. empty vector store). |
 | `GEV-E004` | error | Judge failure — missing prompt file, or unparseable verdict after a strict-format retry. |
+| `GEV-E005` | error | A relative release (`N`, `N-1`, ...) could not be resolved: the set has no release map, or `N-k` is beyond the MNO's listed releases. Per sample; the run continues. |
+| `GEV-E006` | error | The release map's `N` and the stack's latest release disagree for an MNO. Refused before scoring (exit 2) — advance the map or pin `--release-map-version`. |
 | `GEV-W001` | warning | Sample skipped, with reason: `draft` status, empty ground truth (Stage-1 unscorable), or no golden response (Stage-2 unscorable). |
 
 `E`-codes fail the invocation (exit 1) — a run with hard errors is not

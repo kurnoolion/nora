@@ -28,6 +28,30 @@ STATUSES = (STATUS_DRAFT, STATUS_STAGE1_READY, STATUS_GOLDEN_READY)
 
 _SAMPLE_ID_RE = re.compile(r"^gs-\d{4,}$")
 
+# Sample kinds (release-handling design). ``standard`` — a question about
+# current behaviour, scored WITHOUT release information. ``version`` — a
+# question about releases or their differences; its entries carry
+# absolute (MMMYYYY) or relative (N, N-1, ...) releases.
+KIND_STANDARD = "standard"
+KIND_VERSION = "version"
+KINDS = (KIND_STANDARD, KIND_VERSION)
+
+_RELATIVE_RE = re.compile(r"^N(?:-([1-9]\d*))?$")
+
+
+def is_relative_release(value: str) -> bool:
+    """True for ``N`` / ``N-<k>`` (k >= 1) — an MNO's current release and
+    the ones before it, resolved through the golden set's release map."""
+    return _RELATIVE_RE.match(value or "") is not None
+
+
+def relative_offset(value: str) -> int:
+    """``N`` -> 0, ``N-2`` -> 2. Raises ValueError for anything else."""
+    m = _RELATIVE_RE.match(value or "")
+    if not m:
+        raise ValueError(f"not a relative release: {value!r}")
+    return int(m.group(1) or 0)
+
 
 class GoldenEvalError(Exception):
     """Structured golden-eval failure carrying a stable GEV- code.
@@ -87,6 +111,10 @@ class GoldenSample:
     sample_id: str
     query: str
     area: str = ""
+    # Scoring-relevant (release-handling design): standard samples match
+    # on (req_id, mno); version samples also match the resolved release.
+    # Existing samples load as standard.
+    kind: str = KIND_STANDARD
     # Carrier tag for grouping / filtered runs (FR-39 round-2). Authoring
     # metadata only — not used by recall matching, which keys on the per-entry
     # (req_id, mno, release). Optional; existing samples default to "".
@@ -104,6 +132,7 @@ class GoldenSample:
             "sample_id": self.sample_id,
             "query": self.query,
             "area": self.area,
+            "kind": self.kind,
             "mno": self.mno,
             "created_by": self.created_by,
             "created_at": self.created_at,
@@ -120,6 +149,7 @@ class GoldenSample:
             sample_id=str(d.get("sample_id", "")),
             query=str(d.get("query", "")),
             area=str(d.get("area", "")),
+            kind=str(d.get("kind", "") or KIND_STANDARD),
             mno=str(d.get("mno", "")),
             created_by=str(d.get("created_by", "")),
             created_at=str(d.get("created_at", "")),
@@ -151,9 +181,29 @@ def validate_sample(sample: GoldenSample) -> list[str]:
         problems.append(
             f"status {sample.status!r} not one of {'/'.join(STATUSES)}"
         )
+    if sample.kind not in KINDS:
+        problems.append(f"kind {sample.kind!r} not one of {'/'.join(KINDS)}")
     for i, entry in enumerate(sample.ground_truth):
         if not entry.req_id.strip():
             problems.append(f"ground_truth[{i}] has empty req_id")
+    relative = [e for e in sample.ground_truth if is_relative_release(e.release)]
+    if relative:
+        if sample.kind != KIND_VERSION:
+            problems.append(
+                "relative releases (N, N-1, ...) are only valid in a "
+                "version sample"
+            )
+        if any(not e.mno for e in relative):
+            problems.append("a relative release needs the entry's mno")
+        if len(relative) != len(sample.ground_truth):
+            problems.append(
+                "a version sample uses relative or absolute releases, "
+                "not both"
+            )
+    if sample.kind == KIND_VERSION and any(
+        not e.release for e in sample.ground_truth
+    ):
+        problems.append("every entry of a version sample needs a release")
     seen: set[tuple] = set()
     for entry in sample.ground_truth:
         key = (entry.req_id, entry.mno, entry.release)

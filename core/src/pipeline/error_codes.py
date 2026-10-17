@@ -116,6 +116,8 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("GEV-E002", "Serving stack unreachable or /sira-query failed: {reason}", "Check the stack URL and its health endpoint"),
     ErrorDef("GEV-E003", "Stage-2 synthesis failed: chunk {chunk_id} not in NORA store", "Re-ingest the cell or fix the entry's qualifiers"),
     ErrorDef("GEV-E004", "Judge call failed or verdict unparseable for {sample_id}: {reason}", "Check judge provider and prompt version"),
+    ErrorDef("GEV-E005", "Relative release unresolvable for {sample_id}: {reason}", "Write or advance the golden set's release map, or fix the entry"),
+    ErrorDef("GEV-E006", "Release map and stack disagree: {reason}", "Advance the release map after a flip, or pin --release-map-version"),
     ErrorDef("GEV-W001", "Sample {sample_id} skipped: {reason}", "Advance the sample's status in the Eval Studio"),
 
     # --- Pipeline (PIP) ---

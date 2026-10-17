@@ -11,11 +11,12 @@ Also owns the **golden eval set** (strand golden-eval; serves FR-38): expert-cur
 - Metrics: `QuestionScore`, `EvalReport`, `score_question(question, response)` (metrics.py) — per-question scoring + aggregate report
 - CLI: `eval_cli.main`
 - Golden eval (strand golden-eval; operator runbook: [docs/golden-eval-guide.md](../../../docs/golden-eval-guide.md)):
-  - Schema (golden.py): `GoldenSample` — sample_id, created_by/created_at/updated_at, area (use-case tag), `mno` (carrier tag, strand eval-studio-ux-2 [D-206] — authoring metadata for grouping/filtered runs; NOT used by recall matching, which keys on per-entry qualifiers, and deliberately outside the eval-set digests so tag edits don't invalidate run comparability), query, `ground_truth: list[GroundTruthEntry]` (req_id + optional `(mno, release, plan)` qualifiers — picker-sourced entries are always fully qualified, direct-entry may be bare), golden_response (None until curated), golden_meta (curated_at, chat_turns, model, `edited` — manual-edit provenance flag, eval-studio-ux-2), status (`draft | stage1-ready | golden-ready`); `load_samples(env_dir)`, `save_sample(env_dir, sample)` — one JSON file per sample under `<env_dir>/eval/golden/samples/<sample_id>.json`
-  - Runner (golden_runner.py): `GoldenRunner(stack_url, pipeline, judge_llm)` — `run_stage1(sample)` (POST `/sira-query` → per-sample recall + per-hit ranks, so recall@5/@10 derive from one run), `classify_scope(ground_truth, misses, resolved_cells)` (field-found: a miss because the stack never searched the entry's cell looked like a retrieval miss — compares the cells the entries name with the stack's `resolved_cells`, tags each miss `miss_kind` `scope` / `retrieval`, and returns the sample's scope `ok | extra | miss | miss+extra | n/a` plus the missing and extra cell lists, carried on `Stage1Result`; diagnosis only — recall is unchanged and nothing enters the comparability keys; the GEV block gains a `scope:` count line, omitted when no sample has scope data so cell-less stacks' blocks stay byte-identical), `run_stage2(sample, stage1_result)` (pin Stage-1 retrieved req_ids into `QueryPipeline` via `pinned_chunk_ids` → judge candidate vs golden_response), `run_all(samples) -> GoldenRunReport`; run artifacts under `<env_dir>/eval/golden/runs/<run_id>/`. `SiraRowsPipeline` (strand golden-eval, field-found) — duck-typed Stage-2 pipeline for the SIRA-only lane, which never builds `out/graph`/`out/vectorstore`: synthesizes with the production `LLMSynthesizer` prompt over the rows Stage-1 actually retrieved (full text via the service's `text_chars` knob; rows retained TRANSIENTLY on `Stage1Result.retrieved_rows`, never serialized), empty-graph context enrichment (the established RAG-only degradation); the CLI auto-selects it when the vectorstore dir is absent. `GoldenRunReport.stage2_mode` (`"" | "pipeline" | "sira-rows"`) + `stage2_skip_reason` make a Stage-2 that never ran distinguishable in report.json from one that ran and scored nothing (field-found silent-skip defect); the GEV block prints `s2: SKIPPED (<reason>)`. `StackStamp` (D-DRAFT-14, strand golden-eval) — runtime-captured identity of the stack a run scored against (serve label, data fingerprint, code version, SIRA prompt scheme, answer-prompt version, LLM identity, reasoning effort, retrieval knobs, fallback counter snapshot), built via `StackStamp.from_healthz(healthz, ...)` with caller-supplied fields winning; comparability is code — `stage1_key()` (data + code + knobs) / `stage2_key()` (+ prompt + LLM, judge version compared alongside); empty field = "not comparable on this axis", never a guess; `compact_line()` renders the redaction-safe GEV `id:` line. Stamped on every `GoldenRunReport`; serving-side healthz adoption of the canonical keys (`data_fingerprint`, `code_version`, `serve_label`, `sira_prompt_scheme`) is incremental follow-up work
+  - Schema (golden.py): `GoldenSample` — sample_id, created_by/created_at/updated_at, area (use-case tag), `mno` (carrier tag, strand eval-studio-ux-2 [D-206] — authoring metadata for grouping/filtered runs; NOT used by recall matching, which keys on per-entry qualifiers, and deliberately outside the eval-set digests so tag edits don't invalidate run comparability), query, `kind` (`standard` default | `version` — release-handling design, strand golden-eval: scoring-relevant, so inside the eval-set digest; a standard sample is a question about current behaviour and matches WITHOUT the release, a version sample's entries carry an absolute `MMMYYYY` or relative `N` / `N-<k>` release — relative needs the entry's `mno`, is version-only, and is not mixed with absolute in one sample; grammar helpers `is_relative_release` / `relative_offset`), `ground_truth: list[GroundTruthEntry]` (req_id + optional `(mno, release, plan)` qualifiers — picker-sourced entries are always fully qualified, direct-entry may be bare; on a standard sample the release is provenance only), golden_response (None until curated), golden_meta (curated_at, chat_turns, model, `edited` — manual-edit provenance flag, eval-studio-ux-2), status (`draft | stage1-ready | golden-ready`); `load_samples(env_dir)`, `save_sample(env_dir, sample)` — one JSON file per sample under `<env_dir>/eval/golden/samples/<sample_id>.json`
+  - Runner (golden_runner.py): `GoldenRunner(stack_url, pipeline, judge_llm)` — `run_stage1(sample)` (POST `/sira-query` → per-sample recall + per-hit ranks, so recall@5/@10 derive from one run), `scoring_entries(sample, release_map)` (binds entries for a run: version entries' relative releases resolved — GEV-E005 without a map or out of range, raised before any stack call; standard entries bound to their MNO's `N` for the scope check, or `""` without a map), match rule **m2** (`MATCH_RULE`): standard samples match on `(req_id, mno)`, version samples on `(req_id, mno, resolved release)` — `match_ground_truth(..., ignore_release)`, `classify_scope(ground_truth, misses, resolved_cells)` (field-found: a miss because the stack never searched the entry's cell looked like a retrieval miss — compares the cells the entries name with the stack's `resolved_cells`, tags each miss `miss_kind` `scope` / `retrieval`, and returns the sample's scope `ok | extra | miss | miss+extra | n/a` plus the missing and extra cell lists, carried on `Stage1Result`; diagnosis only — recall is unchanged and nothing enters the comparability keys; the GEV block gains a `scope:` count line, omitted when no sample has scope data so cell-less stacks' blocks stay byte-identical), `run_stage2(sample, stage1_result)` (pin Stage-1 retrieved req_ids into `QueryPipeline` via `pinned_chunk_ids` → judge candidate vs golden_response), `run_all(samples) -> GoldenRunReport`; run artifacts under `<env_dir>/eval/golden/runs/<run_id>/`. `SiraRowsPipeline` (strand golden-eval, field-found) — duck-typed Stage-2 pipeline for the SIRA-only lane, which never builds `out/graph`/`out/vectorstore`: synthesizes with the production `LLMSynthesizer` prompt over the rows Stage-1 actually retrieved (full text via the service's `text_chars` knob; rows retained TRANSIENTLY on `Stage1Result.retrieved_rows`, never serialized), empty-graph context enrichment (the established RAG-only degradation); the CLI auto-selects it when the vectorstore dir is absent. `GoldenRunReport.stage2_mode` (`"" | "pipeline" | "sira-rows"`) + `stage2_skip_reason` make a Stage-2 that never ran distinguishable in report.json from one that ran and scored nothing (field-found silent-skip defect); the GEV block prints `s2: SKIPPED (<reason>)`. `StackStamp` (D-DRAFT-14, strand golden-eval) — runtime-captured identity of the stack a run scored against (serve label, data fingerprint, code version, SIRA prompt scheme, answer-prompt version, LLM identity, reasoning effort, retrieval knobs, fallback counter snapshot), built via `StackStamp.from_healthz(healthz, ...)` with caller-supplied fields winning; comparability is code — `stage1_key()` (data + code + knobs) / `stage2_key()` (+ prompt + LLM, judge version compared alongside); empty field = "not comparable on this axis", never a guess; `compact_line()` renders the redaction-safe GEV `id:` line. Release handling: `stage1_key()` also carries `match_rule` (bumped on any matching-rule change — stored samples can be byte-identical across one); the eval-set digests cover `(id, query, kind, digest_view(sample, map))` — standard entries with the release blanked (a provenance re-tag or a move of `N` keeps comparability), version entries with the resolved release (a move of `N` that re-binds them breaks it); `release_map_version` / `release_map_mismatch` are stamped for attribution (`match=m2 rmap=v<N>` on the `id:` line, `!` when scored despite a disagreement), not keyed. `run_all(..., release_map, allow_map_mismatch)` checks the map's `N` against the stack's latest served release per MNO the samples use (`check_map_against_stack`, from healthz `cells`) BEFORE scoring and raises GEV-E006 on a disagreement unless allowed. Stamped on every `GoldenRunReport`; serving-side healthz adoption of the canonical keys (`data_fingerprint`, `code_version`, `serve_label`, `sira_prompt_scheme`) is incremental follow-up work
+  - Release map (release_map.py, release-handling design): `ReleaseMap(version, mnos, updated_at, updated_by)` — per MNO the releases oldest first; `current(mno)` = `N`, `resolve(mno, ref)` binds `N-<k>` (GEV-E005 out of range), `validate()`, `digest()`; `load_release_map(golden_dir, version=None)` (current file, or a pinned version from the history; None when the set has no map yet) and `save_release_map(golden_dir, rmap)` (atomic current + append-only history; refuses an invalid or non-advancing version). Files `<golden>/release-map.json` + `release-map.history.jsonl` — golden-set data beside the samples (NFR-8). Explicit, never derived from a stack: all stacks share one set and flip at different times, and a stack stuck on an old label reports that label as its own latest
   - Judge prompt: `prompts/judge_v<N>.txt` — versioned committed artifact (generic wording; sees proprietary content only at runtime); version recorded in every run report
   - CLI: `golden_report_cli.main` — run-dir inspector: per-sample expected (ground-truth) vs retrieved req_ids side by side from a run's `report.json` (`--misses` filters to samples with missed entries; `--samples-dir` adds query text, defaulting to the run dir's sibling `samples/`). Read-only, stdlib-only (copyable to a field machine and runnable directly); output is run-dir material — proprietary, local inspection only, never chat-pasteable (NFR-8)
-  - CLI: `golden_cli.main` — batch entrypoint (stack URL(s), stage selection, env_dir); runnable standalone as a build step or as a final pipeline stage. `--mno` filters the run to samples tagged with that carrier (filter applies BEFORE the stamp freezes the eval set, so filtered runs key apart from full runs). `--reasoning {none,low,medium,high}` sets the reasoning effort for **Stage-2 synthesis only** (openai-compatible endpoints; the judge keeps the endpoint default, so scoring behaviour stays fixed while generation varies)
+  - CLI: `golden_cli.main` — batch entrypoint (stack URL(s), stage selection, env_dir); runnable standalone as a build step or as a final pipeline stage. `--mno` filters the run to samples tagged with that carrier (filter applies BEFORE the stamp freezes the eval set, so filtered runs key apart from full runs). `--release-map-version K` scores with a pinned map version (a stack that has not flipped; re-scoring an old run); `--allow-map-mismatch` scores past a GEV-E006 disagreement and stamps it; a GEV-E006 refusal or an unloadable map exits 2 with nothing scored. `--reasoning {none,low,medium,high}` sets the reasoning effort for **Stage-2 synthesis only** (openai-compatible endpoints; the judge keeps the endpoint default, so scoring behaviour stays fixed while generation varies)
 
 **Invariants**
 - Reasoning effort is recorded on the stamp and printed as `rsn=` on the GEV `id:` line, but is deliberately **NOT** a comparability key — two runs at different levels still pool. Restricting the comparison is the analyst's call, not the tool's; the printed line is what makes the difference visible. Tests assert both halves (`test_eval_golden_runner.py::TestStackStamp`).
@@ -25,6 +26,7 @@ Also owns the **golden eval set** (strand golden-eval; serves FR-38): expert-cur
 - Eval never mutates the graph, vector store, or corrections. It reads; it reports.
 - User-supplied questions from Excel (`<env_dir>/eval/*.xlsx` per D-022) are loaded through the same `EvalQuestion` schema as built-ins — no parallel code path.
 - Golden samples and run reports live under `<env_dir>/eval/golden/` — proprietary content (queries, req_ids, golden responses). Never in the repo; chat-pasteable compact summaries carry counts/percentages only (NFR-8).
+- Standard samples never use the release to match (m2); the release check is the scope check against the map's `N`. Version samples always match the resolved release. Any change to either rule bumps `MATCH_RULE`.
 - Stage-1 scores the serving stack **black-box over HTTP** (`POST /sira-query`) — never an in-process reconstruction of retrieval. The metric measures what the stack actually serves; pointing the runner at different stack URLs is the release A/B.
 - The judge-prompt version is recorded in every Stage-2 report. Judge scores are comparable only within the same judge version; a report never mixes versions.
 - Stage-2's candidate response is generated through `QueryPipeline` with `pinned_chunk_ids` — by construction the same synthesis prompt the production web lane uses. Any drift between eval-side and web-side synthesis invalidates the judge score.
@@ -65,16 +67,22 @@ _Alphabetical, regenerated by regen-map._
 - `GroundTruthEntry` — dataclass — pub — One expected requirement. Qualifiers are optional: picker-sourced
   - `from_dict` — classmethod — pub
   - `to_dict` — method — pub
+- `KINDS` — constant — pub
+- `KIND_STANDARD` — constant — pub
+- `KIND_VERSION` — constant — pub
 - `STATUSES` — constant — pub
 - `STATUS_DRAFT` — constant — pub
 - `STATUS_GOLDEN_READY` — constant — pub
 - `STATUS_STAGE1_READY` — constant — pub
+- `_RELATIVE_RE` — constant — internal
 - `_SAMPLE_ID_RE` — constant — internal
 - `golden_root` — function — pub
+- `is_relative_release` — function — pub — True for ``N`` / ``N-<k>`` (k >= 1) — an MNO's current release and
 - `load_sample` — function — pub — Load one sample file. Raises GoldenEvalError (GEV-E001) on
 - `load_samples` — function — pub — Load every sample under <env_dir>/eval/golden/samples/, sorted by
 - `logger` — constant — pub
 - `next_sample_id` — function — pub — Allocate the next sequential id (gs-0001, gs-0002, ...) from the
+- `relative_offset` — function — pub — ``N`` -> 0, ``N-2`` -> 2. Raises ValueError for anything else.
 - `runs_dir` — function — pub
 - `sample_path` — function — pub
 - `samples_dir` — function — pub
@@ -104,6 +112,7 @@ _Alphabetical, regenerated by regen-map._
   - `to_dict` — method — pub
 - `Stage2Result` — dataclass — pub — Per-sample Stage-2 outcome. `missing` / `contradicting` lists are
   - `to_dict` — method — pub
+- `MATCH_RULE` — constant — pub
 - `_DEFAULT_TIMEOUT` — constant — internal
 - `_JUDGE_FILE_RE` — constant — internal
 - `_PROMPTS_DIR` — constant — internal
@@ -112,7 +121,9 @@ _Alphabetical, regenerated by regen-map._
 - `_get_json` — function — internal
 - `_parse_judge_verdict` — function — internal — Extract the JSON verdict from a judge completion. Raises ValueError
 - `_post_json` — function — internal
+- `check_map_against_stack` — function — pub — Compare the map's ``N`` with the stack's latest served release for
 - `classify_scope` — function — pub — Compare the cells a sample's entries expect with the cells the
+- `digest_view` — function — pub — The ground truth as it bears on scoring — what the eval-set digest
 - `fetch_healthz` — function — pub — Best-effort /healthz snapshot for run-report provenance (D-DRAFT-2).
 - `format_ab_delta` — function — pub — One delta line comparing two runs (same samples, same judge version
 - `load_judge_prompt` — function — pub — Return ``(version, prompt_text)``. Default: the highest
@@ -123,6 +134,7 @@ _Alphabetical, regenerated by regen-map._
 - `run_all` — function — pub — Batch run against one stack. Stage-1 for every non-draft sample;
 - `run_stage1` — function — pub — Score one sample's retrieval recall against one stack.
 - `run_stage2` — function — pub — Regenerate from Stage-1's retrieved chunks and judge vs golden.
+- `scoring_entries` — function — pub — The entries Stage 1 scores, with releases bound for this run.
 - `write_run` — function — pub — Persist a run under <env_dir>/eval/golden/runs/<run_id>/ — full JSON
 
 `metrics.py`
@@ -166,6 +178,19 @@ _Alphabetical, regenerated by regen-map._
 - `Q_TRACE_02` — constant — pub
 - `Q_TRACE_03` — constant — pub
 
+`release_map.py`
+- `HISTORY_FILE` — constant — pub
+- `MAP_FILE` — constant — pub
+- `ReleaseMap` — dataclass — pub
+  - `current` — method — pub — The MNO's ``N``, or None when the map does not list it.
+  - `digest` — method — pub
+  - `from_dict` — classmethod — pub
+  - `resolve` — method — pub — Absolute label for a relative reference. Raises GoldenEvalError
+  - `to_dict` — method — pub
+  - `validate` — method — pub
+- `load_release_map` — function — pub — The current map, or the pinned ``version`` from the history.
+- `save_release_map` — function — pub — Write the map as current (atomically) and append it to the history.
+
 `runner.py`
 - `ABComparison` — dataclass — pub — A/B comparison between graph-scoped and pure-RAG.
   - `_category_comparison` — method — internal
@@ -183,7 +208,7 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[query](../query/MODULE.md) (consumes `QueryPipeline`, `QueryResponse`; golden Stage-2 uses `pinned_chunk_ids`), [llm](../llm/MODULE.md) (A/B across providers via `LLMProvider` injection; golden judge is a separately injectable `LLMProvider` defaulting to the synthesis provider), [vectorstore](../vectorstore/MODULE.md) and [graph](../graph/MODULE.md) as pre-built inputs.
+[query](../query/MODULE.md) (consumes `QueryPipeline`, `QueryResponse`; golden Stage-2 uses `pinned_chunk_ids`), [llm](../llm/MODULE.md) (A/B across providers via `LLMProvider` injection; golden judge is a separately injectable `LLMProvider` defaulting to the synthesis provider), [vectorstore](../vectorstore/MODULE.md) and [graph](../graph/MODULE.md) as pre-built inputs, [extraction](../extraction/MODULE.md) (`release_key` — the single MMMYYYY validity/ordering rule, for the release map and the map/stack check).
 Runtime service edge (not an import): **sira-query service** over HTTP — golden Stage-1 POSTs `/sira-query` on the configured stack URL(s); one run per stack is the release A/B. Same edge kind as the web module's; degrades fail-loud (`GEV-` error), never silently skips a sample.
 
 **Depended on by**

@@ -141,8 +141,9 @@ It compares that set with the `resolved_cells` the stack reports:
 - **scope extra** — cells searched beyond the expected set. Not an
   error (a broad question may search more), but counted.
 
-The `s1:` line gains `scope=ok/miss/extra` sample counts and
-`scope_miss=K` entry counts. This measures the serving intent model
+A separate `scope:` line after `s1:` carries the sample counts per scope
+and the scope/retrieval split of missed entries (built in step 1; kept
+off the `s1:` line so that line stays byte-comparable with older runs). This measures the serving intent model
 (4.9) directly: whether it maps a question to the right MNOs and
 releases.
 
@@ -215,7 +216,10 @@ older pair.
 ### 4.7 Comparability
 
 - `eval_set_digest` / `eval_set_stage2_digest` are computed over the
-  **resolved** entries, plus `kind`.
+  **scoring view** of the entries, plus `kind`: standard entries with the
+  release blanked (it is not matched, so a provenance re-tag or a move of
+  `N` keeps comparability); version entries with the resolved release.
+  (Built in step 2; this refines "resolved entries" above.)
 - `stage1_key` gains `match_rule` (a constant such as `m2`, bumped on
   any change to the matching rule), so runs before and after this
   change do not pool even when the stored samples are byte-identical.

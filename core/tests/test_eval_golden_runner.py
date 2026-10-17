@@ -221,6 +221,8 @@ def test_scope_not_applicable_without_cells_or_qualifiers():
 
 
 def test_run_stage1_records_scope_without_changing_recall(monkeypatch):
+    # A version sample pinned to the older release: still strict on the
+    # release, so the newer-release row is a miss — and a SCOPE miss.
     monkeypatch.setattr(
         golden_runner, "_post_json",
         lambda u, p, t: _service_body(
@@ -231,6 +233,7 @@ def test_run_stage1_records_scope_without_changing_recall(monkeypatch):
     sample = _sample([
         GroundTruthEntry(req_id="R-1", mno="mno-b", release="Jan2026"),
     ])
+    sample.kind = "version"
     r = run_stage1(sample, "http://127.0.0.1:9999")
     assert r.recall == 0.0
     assert r.scope == "miss+extra"
@@ -398,7 +401,7 @@ class TestStackStamp:
 
     def test_missing_healthz_yields_empty_stamp(self):
         s = golden_runner.StackStamp.from_healthz(None)
-        assert s.stage1_key() == ("", "", (), "")
+        assert s.stage1_key() == ("", "", (), "", "")
         assert s.compact_line() == "id: (unstamped)"
 
     def test_stage1_key_prefers_fingerprint_over_label(self):
@@ -552,3 +555,185 @@ class TestEvalSetIdentity:
         # Draft-only set: count 0, digests empty — visible, not a guess.
         assert report.stamp.eval_set_count == 0
         assert report.stamp.eval_set_digest == ""
+
+
+# ─── Release handling: kinds, release map, match rule m2 ──────────────
+
+
+from core.src.eval.release_map import ReleaseMap  # noqa: E402
+
+
+def _rmap(**mnos):
+    return ReleaseMap(version=3, mnos={k.replace("_", "-"): v
+                                       for k, v in mnos.items()})
+
+
+def _cells_post(rows, cells):
+    return lambda u, p, t: _service_body(rows, resolved_cells=cells)
+
+
+def test_standard_sample_matches_across_releases(monkeypatch):
+    # The field case under m2: entry authored on the older release, the
+    # stack serves the newer one — same id, so it is a hit.
+    monkeypatch.setattr(golden_runner, "_post_json", _cells_post(
+        [_row("R-1", 2, mno="mno-b", release="Apr2026")], ["mno-b__Apr2026"]))
+    sample = _sample([
+        GroundTruthEntry(req_id="R-1", mno="mno-b", release="Jan2026"),
+    ])
+    r = run_stage1(sample, "http://127.0.0.1:9999",
+                   release_map=_rmap(mno_b=["Jan2026", "Apr2026"]))
+    assert r.recall == 1.0 and r.hits[0]["rank"] == 2
+    assert r.scope == "ok"
+
+
+def test_standard_sample_still_matches_mno(monkeypatch):
+    monkeypatch.setattr(golden_runner, "_post_json", _cells_post(
+        [_row("R-1", 1, mno="mno-c", release="Apr2026")], ["mno-c__Apr2026"]))
+    sample = _sample([GroundTruthEntry(req_id="R-1", mno="mno-b")])
+    assert run_stage1(sample, "http://127.0.0.1:9999").recall == 0.0
+
+
+def test_standard_scope_expects_map_n(monkeypatch):
+    # A stack stuck on the older release: the id still matches (m2), but
+    # the scope check against the map's N flags it.
+    monkeypatch.setattr(golden_runner, "_post_json", _cells_post(
+        [_row("R-1", 1, mno="mno-b", release="Jan2026")], ["mno-b__Jan2026"]))
+    sample = _sample([GroundTruthEntry(req_id="R-1", mno="mno-b",
+                                       release="Jan2026")])
+    r = run_stage1(sample, "http://127.0.0.1:9999",
+                   release_map=_rmap(mno_b=["Jan2026", "Apr2026"]))
+    assert r.recall == 1.0
+    assert r.scope == "miss+extra"
+    assert r.scope_missing_cells == ["mno-b__Apr2026"]
+
+
+def test_version_sample_resolves_relative_releases(monkeypatch):
+    monkeypatch.setattr(golden_runner, "_post_json", _cells_post(
+        [_row("R-1", 1, mno="mno-b", release="Jan2026"),
+         _row("R-2", 2, mno="mno-b", release="Apr2026")],
+        ["mno-b__Apr2026", "mno-b__Jan2026"]))
+    sample = _sample([
+        GroundTruthEntry(req_id="R-1", mno="mno-b", release="N-1"),
+        GroundTruthEntry(req_id="R-2", mno="mno-b", release="N"),
+        GroundTruthEntry(req_id="R-1", mno="mno-b", release="N"),
+    ])
+    sample.kind = "version"
+    r = run_stage1(sample, "http://127.0.0.1:9999",
+                   release_map=_rmap(mno_b=["Jan2026", "Apr2026"]))
+    assert {(h["req_id"], h["release"]) for h in r.hits} == {
+        ("R-1", "Jan2026"), ("R-2", "Apr2026")}
+    assert [(m["req_id"], m["release"], m["miss_kind"]) for m in r.misses] \
+        == [("R-1", "Apr2026", "retrieval")]
+    assert r.scope == "ok"
+
+
+def test_relative_release_without_map_is_per_sample_error(monkeypatch):
+    called = []
+    monkeypatch.setattr(golden_runner, "_post_json",
+                        lambda u, p, t: called.append(1))
+    sample = _sample([GroundTruthEntry(req_id="R-1", mno="mno-b",
+                                       release="N")])
+    sample.kind = "version"
+    with pytest.raises(GoldenEvalError) as exc:
+        run_stage1(sample, "http://127.0.0.1:9999")
+    assert exc.value.code == "GEV-E005"
+    assert called == []          # bound before any stack call
+    with pytest.raises(GoldenEvalError) as exc:
+        run_stage1(sample, "http://127.0.0.1:9999",
+                   release_map=_rmap(mno_a=["Jan2026"]))
+    assert exc.value.code == "GEV-E005"
+
+
+def test_check_map_against_stack():
+    rmap = _rmap(mno_a=["Jan2026"], mno_b=["Jan2026", "Apr2026"])
+    hz = {"cells": ["mno-a__Jan2026", "mno-b__Jan2026"]}
+    assert golden_runner.check_map_against_stack(
+        rmap, hz, {"mno-a", "mno-b"}) == ["mno-b:Apr2026/Jan2026"]
+    hz_ok = {"cells": ["mno-a__Jan2026", "mno-b__Jan2026", "mno-b__Apr2026"]}
+    assert golden_runner.check_map_against_stack(
+        rmap, hz_ok, {"mno-a", "mno-b"}) == []
+    # Listed on one side only is a disagreement, named with "-"; listed
+    # on neither is not (no expectation to disagree with).
+    assert golden_runner.check_map_against_stack(
+        rmap, {"cells": ["mno-a__Jan2026"]}, {"mno-b"}) == ["mno-b:Apr2026/-"]
+    assert golden_runner.check_map_against_stack(
+        rmap, {"cells": ["mno-a__Jan2026", "mno-c__Jan2026"]}, {"mno-c"}) \
+        == ["mno-c:-/Jan2026"]
+    assert golden_runner.check_map_against_stack(
+        rmap, hz_ok, {"mno-c"}) == []
+    # No cells advertised (legacy stack): nothing to check against.
+    assert golden_runner.check_map_against_stack(rmap, {}, {"mno-b"}) == []
+
+
+def _run_all(monkeypatch, healthz, rmap, **kw):
+    monkeypatch.setattr(golden_runner, "fetch_healthz", lambda url: healthz)
+    monkeypatch.setattr(golden_runner, "_post_json", _cells_post(
+        [_row("R-1", 1, mno="mno-b", release="Apr2026")], ["mno-b__Apr2026"]))
+    sample = _sample([GroundTruthEntry(req_id="R-1", mno="mno-b",
+                                       release="Jan2026")])
+    sample.status = "stage1-ready"
+    return golden_runner.run_all(
+        [sample], "http://127.0.0.1:9999", "s", "t", release_map=rmap, **kw)
+
+
+def test_run_all_refuses_map_stack_disagreement(monkeypatch):
+    rmap = _rmap(mno_b=["Jan2026", "Apr2026"])
+    with pytest.raises(GoldenEvalError) as exc:
+        _run_all(monkeypatch, {"cells": ["mno-b__Jan2026"]}, rmap)
+    assert exc.value.code == "GEV-E006"
+    assert "mno-b:Apr2026/Jan2026" in exc.value.message
+
+
+def test_run_all_allow_mismatch_stamps_it(monkeypatch):
+    rmap = _rmap(mno_b=["Jan2026", "Apr2026"])
+    rep = _run_all(monkeypatch, {"cells": ["mno-b__Jan2026"]}, rmap,
+                   allow_map_mismatch=True)
+    assert rep.stamp.release_map_mismatch == "mno-b:Apr2026/Jan2026"
+    assert "rmap=v3!" in rep.stamp.compact_line()
+
+
+def test_run_all_stamps_match_rule_and_map(monkeypatch):
+    rmap = _rmap(mno_b=["Jan2026", "Apr2026"])
+    rep = _run_all(monkeypatch, {"cells": ["mno-b__Apr2026"]}, rmap)
+    line = rep.stamp.compact_line()
+    assert "match=m2" in line and "rmap=v3" in line and "rmap=v3!" not in line
+    assert rep.stamp.stage1_key()[-1] == "m2"
+    assert rep.stage1[0].recall == 1.0
+    # No map: still m2, no rmap field.
+    rep = _run_all(monkeypatch, {"cells": ["mno-b__Apr2026"]}, None)
+    assert "rmap=" not in rep.stamp.compact_line()
+    assert rep.stamp.match_rule == "m2"
+
+
+class TestDigestView:
+    def _stamp(self, samples, rmap=None):
+        st = golden_runner.StackStamp()
+        st.set_eval_set(samples, rmap)
+        return st.eval_set_digest
+
+    def _std(self, release):
+        s = _sample([GroundTruthEntry(req_id="R-1", mno="mno-b",
+                                      release=release)])
+        s.status = "stage1-ready"
+        return s
+
+    def test_standard_provenance_retag_keeps_digest(self):
+        assert self._stamp([self._std("Jan2026")]) == \
+            self._stamp([self._std("Apr2026")])
+
+    def test_kind_is_in_digest(self):
+        a = self._std("Jan2026")
+        b = self._std("Jan2026")
+        b.kind = "version"
+        assert self._stamp([a]) != self._stamp([b])
+
+    def test_moving_n_rebinds_relative_version_samples(self):
+        s = _sample([GroundTruthEntry(req_id="R-1", mno="mno-b",
+                                      release="N")])
+        s.kind, s.status = "version", "stage1-ready"
+        v3 = _rmap(mno_b=["Jan2026"])
+        v4 = _rmap(mno_b=["Jan2026", "Apr2026"])
+        assert self._stamp([s], v3) != self._stamp([s], v4)
+        # ...but a standard sample is unaffected by the same move.
+        std = self._std("Jan2026")
+        assert self._stamp([std], v3) == self._stamp([std], v4)

@@ -28,17 +28,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .golden import (
+    KIND_STANDARD,
     STATUS_DRAFT,
     STATUS_GOLDEN_READY,
     GoldenEvalError,
     GoldenSample,
     GroundTruthEntry,
+    is_relative_release,
     runs_dir,
 )
+from .release_map import ReleaseMap
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 300.0
+
+# Version of the Stage-1 matching rule, part of the comparability key.
+# Bump on ANY change to how an entry matches a row: stored samples can be
+# byte-identical across a rule change, so the eval-set digest alone would
+# declare differently-scored runs comparable.
+#   (unset) — strict (req_id, mno, release) qualifiers for every sample
+#   m2      — standard samples match on (req_id, mno); version samples on
+#             (req_id, mno, resolved release)
+MATCH_RULE = "m2"
 
 
 # ─── HTTP (module-level so tests can monkeypatch) ───────────────────
@@ -196,8 +208,17 @@ class StackStamp:
     # comparability WITHOUT falsely invalidating Stage-1, which never
     # reads responses.
     eval_set_count: int = 0
-    eval_set_digest: str = ""          # non-draft: (id, query, ground truth)
+    eval_set_digest: str = ""          # non-draft: (id, query, kind, scoring view of ground truth)
     eval_set_stage2_digest: str = ""   # golden-ready: + golden_response
+    # Matching rule (MATCH_RULE) — in the keys. Release map version —
+    # stamped for attribution, NOT in the keys: what a map changes for
+    # scoring is the resolution of version entries, and that is already
+    # inside the eval-set digest.
+    match_rule: str = ""
+    release_map_version: int | None = None
+    # Set when the run went ahead despite the map/stack disagreement
+    # check (--allow-map-mismatch): "<mno>:<map N>/<stack latest>,...".
+    release_map_mismatch: str = ""
 
     _HEALTHZ_KEYS = {
         "serve_label": "serve_label",
@@ -272,14 +293,17 @@ class StackStamp:
             stamp.fallback_used_snapshot = fb["used"]
         return stamp
 
-    def set_eval_set(self, samples: list) -> None:
+    def set_eval_set(
+        self, samples: list, release_map: ReleaseMap | None = None
+    ) -> None:
         """Freeze the scored sample set's identity into the stamp.
 
         Called with the samples the run will score. Stage-1 identity
-        covers every non-draft sample's (id, query, ground truth);
-        Stage-2 identity covers golden-ready samples plus their
-        curated responses. Canonical JSON, sorted by sample_id —
-        stable across load order and dict churn.
+        covers every non-draft sample's (id, query, kind, scoring view of
+        the ground truth — see ``digest_view``); Stage-2 identity covers
+        golden-ready samples plus their curated responses. Canonical
+        JSON, sorted by sample_id — stable across load order and dict
+        churn.
         """
         import hashlib
 
@@ -293,14 +317,12 @@ class StackStamp:
         )
         self.eval_set_count = len(scorable)
         self.eval_set_digest = _digest([
-            [s.sample_id, s.query,
-             [e.to_dict() for e in s.ground_truth]]
+            [s.sample_id, s.query, s.kind, digest_view(s, release_map)]
             for s in scorable
         ]) if scorable else ""
         golden_ready = [s for s in scorable if s.status == STATUS_GOLDEN_READY]
         self.eval_set_stage2_digest = _digest([
-            [s.sample_id, s.query,
-             [e.to_dict() for e in s.ground_truth],
+            [s.sample_id, s.query, s.kind, digest_view(s, release_map),
              s.golden_response or ""]
             for s in golden_ready
         ]) if golden_ready else ""
@@ -324,6 +346,7 @@ class StackStamp:
             self.code_version,
             self._knobs_key(),
             self.eval_set_digest,
+            self.match_rule,
         )
 
     def stage2_key(self) -> tuple:
@@ -353,6 +376,9 @@ class StackStamp:
             "eval_set_count": self.eval_set_count,
             "eval_set_digest": self.eval_set_digest,
             "eval_set_stage2_digest": self.eval_set_stage2_digest,
+            "match_rule": self.match_rule,
+            "release_map_version": self.release_map_version,
+            "release_map_mismatch": self.release_map_mismatch,
         }
 
     def compact_line(self) -> str:
@@ -391,6 +417,13 @@ class StackStamp:
             parts.append(
                 f"set={self.eval_set_count}@{self.eval_set_digest[:8]}"
             )
+        if self.match_rule:
+            parts.append(f"match={self.match_rule}")
+        if self.release_map_version is not None:
+            # "!" = scored despite a map/stack disagreement; the detail
+            # (MNOs and releases) is in report.json, not on the line.
+            bang = "!" if self.release_map_mismatch else ""
+            parts.append(f"rmap=v{self.release_map_version}{bang}")
         if self.fallback_used_snapshot is not None:
             parts.append(f"fb_pre={self.fallback_used_snapshot}")
         if self.fallback_used_delta is not None:
@@ -401,15 +434,20 @@ class StackStamp:
 # ─── Ground-truth matching ──────────────────────────────────────────
 
 
-def _entry_matches(entry: GroundTruthEntry, row: dict) -> bool:
+def _entry_matches(
+    entry: GroundTruthEntry, row: dict, ignore_release: bool = False
+) -> bool:
     """A result row satisfies an entry when req_ids match and every
     non-empty qualifier matches the row's field. A row without mno/release
     fields (legacy single-dataset stacks) is treated as unqualified —
     req_id alone decides. ``plan`` is authoring metadata, never matched.
+    ``ignore_release`` drops the release qualifier (standard samples,
+    MATCH_RULE m2): which release was searched is the scope check's
+    question, not the match's.
     """
     if row.get("req_id") != entry.req_id:
         return False
-    for attr in ("mno", "release"):
+    for attr in ("mno",) if ignore_release else ("mno", "release"):
         want = getattr(entry, attr)
         have = row.get(attr)
         if want and have and want != have:
@@ -418,7 +456,9 @@ def _entry_matches(entry: GroundTruthEntry, row: dict) -> bool:
 
 
 def match_ground_truth(
-    ground_truth: list[GroundTruthEntry], results: list[dict]
+    ground_truth: list[GroundTruthEntry],
+    results: list[dict],
+    ignore_release: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Match each ground-truth entry against ranked result rows.
 
@@ -433,7 +473,7 @@ def match_ground_truth(
     for entry in ground_truth:
         best_rank: int | None = None
         for i, row in enumerate(results):
-            if _entry_matches(entry, row):
+            if _entry_matches(entry, row, ignore_release):
                 rank = int(row.get("rank", i + 1))
                 if best_rank is None or rank < best_rank:
                     best_rank = rank
@@ -447,6 +487,96 @@ def match_ground_truth(
         else:
             hits.append({**record, "rank": best_rank})
     return hits, misses
+
+
+def scoring_entries(
+    sample: GoldenSample, release_map: ReleaseMap | None = None
+) -> list[GroundTruthEntry]:
+    """The entries Stage 1 scores, with releases bound for this run.
+
+    * version sample — relative releases resolved through the map
+      (GEV-E005 when there is no map or ``N-k`` is out of range);
+      absolute ones as stored.
+    * standard sample — the release is NOT a match key (m2). Each entry
+      is bound to its MNO's ``N`` when the map lists it, so the scope
+      check expects the current cell; otherwise to "" (scope then
+      accepts any cell of the MNO). The stored release stays on the
+      sample as provenance.
+    """
+    out: list[GroundTruthEntry] = []
+    for e in sample.ground_truth:
+        if sample.kind == KIND_STANDARD:
+            rel = (release_map.current(e.mno) or "") if (
+                release_map and e.mno
+            ) else ""
+        elif is_relative_release(e.release):
+            if release_map is None:
+                raise GoldenEvalError(
+                    "GEV-E005",
+                    f"sample {sample.sample_id} uses relative release "
+                    f"{e.release} but the set has no release map",
+                )
+            rel = release_map.resolve(e.mno, e.release)
+        else:
+            rel = e.release
+        out.append(GroundTruthEntry(
+            req_id=e.req_id, mno=e.mno, release=rel, plan=e.plan,
+            source=e.source,
+        ))
+    return out
+
+
+def digest_view(
+    sample: GoldenSample, release_map: ReleaseMap | None = None
+) -> list[dict]:
+    """The ground truth as it bears on scoring — what the eval-set digest
+    covers (D-206 rule: scoring-relevant fields in, metadata out).
+    Standard samples drop the release (not matched under m2), so a
+    provenance re-tag or a move of ``N`` does not break comparability.
+    Version samples carry the resolved release, so a move of ``N`` that
+    re-binds them does. An unresolvable relative entry keeps its raw
+    reference here; the run reports it per sample (GEV-E005).
+    """
+    rows = []
+    for e in sample.ground_truth:
+        d = e.to_dict()
+        if sample.kind == KIND_STANDARD:
+            d["release"] = ""
+        elif is_relative_release(e.release) and release_map is not None:
+            try:
+                d["release"] = release_map.resolve(e.mno, e.release)
+            except GoldenEvalError:
+                pass
+        rows.append(d)
+    return rows
+
+
+def check_map_against_stack(
+    release_map: ReleaseMap, healthz: dict | None, mnos: set[str]
+) -> list[str]:
+    """Compare the map's ``N`` with the stack's latest served release for
+    each MNO the samples use. Returns ``"<mno>:<map N>/<stack latest>"``
+    for every disagreement ("-" where a side has no release); empty when
+    they agree or the stack advertises no cells (nothing to check
+    against — legacy single-dataset stacks).
+    """
+    from core.src.extraction.release_key import release_order_key
+
+    cells = (healthz or {}).get("cells") or []
+    if not cells:
+        return []
+    served: dict[str, list[str]] = {}
+    for c in cells:
+        mno, _, rel = str(c).partition("__")
+        if release_order_key(rel) is not None:
+            served.setdefault(mno, []).append(rel)
+    out = []
+    for mno in sorted(mnos):
+        want = release_map.current(mno)
+        have = max(served[mno], key=release_order_key) if served.get(mno) else None
+        if want != have:
+            out.append(f"{mno}:{want or '-'}/{have or '-'}")
+    return out
 
 
 def _cell_name(mno: str, release: str) -> str:
@@ -595,8 +725,12 @@ def run_stage1(
     label: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
     want_row_text: bool = False,
+    release_map: ReleaseMap | None = None,
 ) -> Stage1Result:
     """Score one sample's retrieval recall against one stack.
+
+    Entries are bound for the run by ``scoring_entries`` (relative
+    releases resolved; standard samples matched without the release).
 
     Requires non-empty ground truth (GEV-W001 otherwise — status gating
     across a whole run belongs to the batch runner, but an entry-less
@@ -611,15 +745,20 @@ def run_stage1(
             "GEV-W001",
             f"sample {sample.sample_id} has no ground truth; not scorable",
         )
+    # Bind before querying: an unresolvable entry is a per-sample error
+    # (GEV-E005) and must not spend a stack call.
+    entries = scoring_entries(sample, release_map)
     body = query_stack(
         stack_url, sample.query, top_k=top_k, label=label, timeout=timeout,
         text_chars=_STAGE2_ROW_TEXT_CHARS if want_row_text else None,
     )
     results = body["results"]
-    hits, misses = match_ground_truth(sample.ground_truth, results)
+    hits, misses = match_ground_truth(
+        entries, results, ignore_release=sample.kind == KIND_STANDARD
+    )
     resolved_cells = [str(c) for c in body.get("resolved_cells", [])]
     scope, scope_missing, scope_extra = classify_scope(
-        sample.ground_truth, misses, resolved_cells
+        entries, misses, resolved_cells
     )
     total = len(sample.ground_truth)
     seen: set[str] = set()
@@ -1089,6 +1228,8 @@ def run_all(
     reasoning_effort: str = "",
     sira_prompt_scheme: str = "",
     stage2_skip_reason: str = "",
+    release_map: ReleaseMap | None = None,
+    allow_map_mismatch: bool = False,
 ) -> GoldenRunReport:
     """Batch run against one stack. Stage-1 for every non-draft sample;
     Stage-2 additionally for golden-ready samples when a pipeline + judge
@@ -1101,6 +1242,13 @@ def run_all(
     config). ``stage2_skip_reason`` records WHY Stage-2 was not
     attempted (caller-known setup failure) so the report — not just
     stdout — distinguishes "never ran" from "ran and scored nothing".
+
+    ``release_map`` binds relative releases and each MNO's ``N``. Before
+    any sample is scored, the map's ``N`` is checked against the stack's
+    latest served release per MNO the samples use; a disagreement raises
+    GEV-E006 (field-found: a stale set otherwise scores for an hour and
+    returns plausible numbers) unless ``allow_map_mismatch``, which
+    stamps the disagreement instead.
     """
     healthz = fetch_healthz(stack_url)
     report = GoldenRunReport(
@@ -1118,7 +1266,25 @@ def run_all(
             sira_prompt_scheme=sira_prompt_scheme,
         ),
     )
-    report.stamp.set_eval_set(samples)
+    report.stamp.match_rule = MATCH_RULE
+    if release_map is not None:
+        report.stamp.release_map_version = release_map.version
+        mnos = {
+            e.mno for s in samples if s.status != STATUS_DRAFT
+            for e in s.ground_truth if e.mno
+        }
+        mismatch = check_map_against_stack(release_map, healthz, mnos)
+        if mismatch and not allow_map_mismatch:
+            raise GoldenEvalError(
+                "GEV-E006",
+                f"release map v{release_map.version} and stack "
+                f"{stack_url} disagree (mno:map N/stack latest): "
+                f"{', '.join(mismatch)} — advance the map after a flip, "
+                "or pin --release-map-version for a stack that has not "
+                "flipped",
+            )
+        report.stamp.release_map_mismatch = ",".join(mismatch)
+    report.stamp.set_eval_set(samples, release_map)
     stage2_enabled = bool(query_pipeline and judge and judge_prompt)
     sira_rows_mode = stage2_enabled and hasattr(query_pipeline, "bind_rows")
     if stage2_enabled:
@@ -1138,7 +1304,7 @@ def run_all(
         try:
             s1 = run_stage1(
                 sample, stack_url, top_k=top_k, label=label, timeout=timeout,
-                want_row_text=sira_rows_mode,
+                want_row_text=sira_rows_mode, release_map=release_map,
             )
             report.stage1.append(s1)
         except GoldenEvalError as exc:

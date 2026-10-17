@@ -224,3 +224,107 @@ class TestEvalReasoningEffort:
         # not a literal empty reasoning_effort field on the wire.
         llm = self._provider(monkeypatch, "")
         assert llm._reasoning is None
+
+
+# ─── Sample kind + relative releases (release-handling design) ────────
+
+
+from core.src.eval.golden import (  # noqa: E402
+    KIND_STANDARD,
+    is_relative_release,
+    relative_offset,
+)
+
+
+def _gt(release, mno="mno-b"):
+    return GroundTruthEntry(req_id="R-1", mno=mno, release=release)
+
+
+def test_kind_defaults_to_standard_and_round_trips():
+    s = GoldenSample.from_dict({"sample_id": "gs-0001", "query": "q"})
+    assert s.kind == KIND_STANDARD
+    s.kind = "version"
+    assert GoldenSample.from_dict(s.to_dict()).kind == "version"
+
+
+def test_relative_release_grammar():
+    assert is_relative_release("N") and is_relative_release("N-2")
+    assert not is_relative_release("N-0")
+    assert not is_relative_release("n") and not is_relative_release("Jan2026")
+    assert relative_offset("N") == 0 and relative_offset("N-3") == 3
+
+
+def test_validate_kind_and_relative_rules():
+    s = GoldenSample(sample_id="gs-0001", query="q", kind="weird")
+    assert any("kind" in p for p in validate_sample(s))
+    std = GoldenSample(sample_id="gs-0001", query="q", ground_truth=[_gt("N")])
+    assert any("only valid in a version" in p for p in validate_sample(std))
+    ver = GoldenSample(sample_id="gs-0001", query="q", kind="version",
+                       ground_truth=[_gt("N", mno="")])
+    assert any("needs the entry's mno" in p for p in validate_sample(ver))
+    mixed = GoldenSample(sample_id="gs-0001", query="q", kind="version",
+                         ground_truth=[_gt("N"), _gt("Jan2026")])
+    assert any("not both" in p for p in validate_sample(mixed))
+    bare = GoldenSample(sample_id="gs-0001", query="q", kind="version",
+                        ground_truth=[_gt("")])
+    assert any("needs a release" in p for p in validate_sample(bare))
+    ok = GoldenSample(sample_id="gs-0001", query="q", kind="version",
+                      ground_truth=[_gt("N"), GroundTruthEntry(
+                          req_id="R-2", mno="mno-b", release="N-1")])
+    assert validate_sample(ok) == []
+
+
+# ─── CLI: release map wiring ─────────────────────────────────────────
+
+
+def _cli_env(tmp_path, monkeypatch, healthz_cells):
+    from core.src.eval import golden_runner
+    from core.src.eval.golden import save_sample
+    from core.src.eval.release_map import ReleaseMap, save_release_map
+
+    save_sample(tmp_path, GoldenSample(
+        sample_id="gs-0001", query="q", status="stage1-ready",
+        ground_truth=[GroundTruthEntry(req_id="R-1", mno="mno-b",
+                                       release="Jan2026")]))
+    save_release_map(tmp_path / "eval" / "golden", ReleaseMap(
+        version=1, mnos={"mno-b": ["Jan2026", "Apr2026"]}))
+    monkeypatch.setattr(golden_runner, "fetch_healthz",
+                        lambda url: {"cells": healthz_cells})
+    monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {
+        "results": [{"rank": 1, "req_id": "R-1", "mno": "mno-b",
+                     "release": "Apr2026"}],
+        "resolved_cells": ["mno-b__Apr2026"]})
+
+
+def test_cli_refuses_map_stack_disagreement(tmp_path, monkeypatch, capsys):
+    from core.src.eval.golden_cli import main
+
+    _cli_env(tmp_path, monkeypatch, ["mno-b__Jan2026"])
+    argv = ["--env-dir", str(tmp_path), "--stack-url",
+            "http://127.0.0.1:9999", "--stage", "1"]
+    assert main(argv) == 2
+    assert "GEV-E006" in capsys.readouterr().out
+    assert not (tmp_path / "eval" / "golden" / "runs").exists()
+    assert main(argv + ["--allow-map-mismatch"]) == 0
+    assert "rmap=v1!" in capsys.readouterr().out
+
+
+def test_cli_scores_with_map(tmp_path, monkeypatch, capsys):
+    from core.src.eval.golden_cli import main
+
+    _cli_env(tmp_path, monkeypatch, ["mno-b__Jan2026", "mno-b__Apr2026"])
+    assert main(["--env-dir", str(tmp_path), "--stack-url",
+                 "http://127.0.0.1:9999", "--stage", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "match=m2 rmap=v1" in out
+    assert "recall_avg=1.00" in out
+    assert "scope: ok=1" in out
+
+
+def test_cli_bad_pinned_map_version(tmp_path, monkeypatch, capsys):
+    from core.src.eval.golden_cli import main
+
+    _cli_env(tmp_path, monkeypatch, ["mno-b__Apr2026"])
+    assert main(["--env-dir", str(tmp_path), "--stack-url",
+                 "http://127.0.0.1:9999", "--stage", "1",
+                 "--release-map-version", "9"]) == 2
