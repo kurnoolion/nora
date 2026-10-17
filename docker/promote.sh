@@ -25,7 +25,8 @@
 # --scheme records the SIRA enrichment-prompt scheme (e.g. scheme-v1 /
 #   scheme-v2) in the label MANIFEST so the serving healthz — and through
 #   it every eval run's StackStamp — can attribute served data to the
-#   variant hypothesis it came from.
+#   variant hypothesis it came from. Promoting SIRA cells without it
+#   warns (not fails — a label is valid without it, just less traceable).
 # (--include-parse is accepted as a no-op — parse is in the default set.)
 set -euo pipefail
 
@@ -43,6 +44,10 @@ while (( $# > 0 )); do
 done
 [ -n "$SERVE_ROOT" ] && [ -n "$LABEL" ] || { echo "need --serve-root and --label" >&2; exit 2; }
 [ -n "$NORA_BUILD$SIRA_BUILD" ] || { echo "need --nora-build and/or --sira-build" >&2; exit 2; }
+if [ -n "$SIRA_BUILD" ] && [ -z "$SCHEME" ]; then
+  echo "WARN: --sira-build without --scheme — MANIFEST will record an empty" \
+       "sira_prompt_scheme (labels are immutable; it cannot be filled in later)" >&2
+fi
 
 DEST="$SERVE_ROOT/$LABEL"
 [ -e "$DEST" ] && { echo "refusing: $DEST already exists (labels are immutable; pick a new one)" >&2; exit 1; }
