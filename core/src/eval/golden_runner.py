@@ -449,6 +449,81 @@ def match_ground_truth(
     return hits, misses
 
 
+def _cell_name(mno: str, release: str) -> str:
+    # The serving side's cell_dirname convention (`<mno>__<release>`,
+    # source case kept) — restated, not imported: core never imports
+    # sandbox.
+    return f"{mno}__{release}"
+
+
+def classify_scope(
+    ground_truth: list[GroundTruthEntry],
+    misses: list[dict],
+    resolved_cells: list[str],
+) -> tuple[str, list[str], list[str]]:
+    """Compare the cells a sample's entries expect with the cells the
+    stack searched, and tag each miss with WHY it missed.
+
+    Field-found: a miss because the stack never searched the entry's
+    cell (a new release became the MNO's latest) looked exactly like a
+    retrieval miss. Each miss record gains ``miss_kind``:
+
+      * ``"scope"``     — the entry's cell (or, for an mno-only entry,
+                          any cell of its MNO) was not searched;
+      * ``"retrieval"`` — the cell was searched and the id not returned,
+                          or the entry is bare and cannot be attributed.
+
+    Returns ``(scope, missing_cells, extra_cells)``. ``scope`` is
+    ``"ok"`` / ``"miss"`` / ``"extra"`` / ``"miss+extra"``, or ``"n/a"``
+    when the stack reported no cells (legacy single-dataset stacks) or no
+    entry names an MNO. ``extra`` is informational: a broad question may
+    rightly search more cells than its entries name. Scoring is untouched.
+    """
+    if not resolved_cells:
+        for m in misses:
+            m["miss_kind"] = ""
+        return "n/a", [], []
+    searched = set(resolved_cells)
+    searched_mnos = {c.partition("__")[0] for c in searched}
+    expected_cells = {
+        _cell_name(e.mno, e.release)
+        for e in ground_truth if e.mno and e.release
+    }
+    expected_mnos = {e.mno for e in ground_truth if e.mno}
+    for m in misses:
+        mno, release = m.get("mno", ""), m.get("release", "")
+        if mno and release:
+            unsearched = _cell_name(mno, release) not in searched
+        elif mno:
+            unsearched = mno not in searched_mnos
+        else:
+            unsearched = False
+        m["miss_kind"] = "scope" if unsearched else "retrieval"
+    if not expected_mnos:
+        return "n/a", [], []
+    missing = sorted(expected_cells - searched) + sorted(
+        _cell_name(mno, "*") for mno in expected_mnos
+        if mno not in searched_mnos
+        and not any(c.startswith(mno + "__") for c in expected_cells)
+    )
+    # An mno-only entry accepts any cell of its MNO, so those cells are
+    # not "extra"; a qualified entry accepts only its own cell.
+    mno_only = expected_mnos - {c.partition("__")[0] for c in expected_cells}
+    extra = sorted(
+        c for c in searched
+        if c not in expected_cells and c.partition("__")[0] not in mno_only
+    )
+    if missing and extra:
+        scope = "miss+extra"
+    elif missing:
+        scope = "miss"
+    elif extra:
+        scope = "extra"
+    else:
+        scope = "ok"
+    return scope, missing, extra
+
+
 def recall_at(hits: list[dict], gt_count: int, k: int) -> float:
     """Fraction of ground-truth entries hit at rank <= k."""
     if gt_count <= 0:
@@ -476,6 +551,11 @@ class Stage1Result:
     # Every retrieved req_id in rank order (deduped) — Stage-2 pins these,
     # not just the ground-truth hits (D-DRAFT-3).
     retrieved_req_ids: list[str] = field(default_factory=list)
+    # Expected cells vs searched cells (classify_scope). Diagnostic only —
+    # recall is computed exactly as before.
+    scope: str = "n/a"
+    scope_missing_cells: list[str] = field(default_factory=list)
+    scope_extra_cells: list[str] = field(default_factory=list)
     # TRANSIENT (never serialized — proprietary chunk text stays out of
     # to_dict): the retrieved rows with their text, retained only when
     # ``want_row_text=True`` so the SIRA-lane Stage-2 synthesizes over
@@ -502,6 +582,9 @@ class Stage1Result:
             "mode": self.mode,
             "resolved_cells": self.resolved_cells,
             "retrieved_req_ids": self.retrieved_req_ids,
+            "scope": self.scope,
+            "scope_missing_cells": self.scope_missing_cells,
+            "scope_extra_cells": self.scope_extra_cells,
         }
 
 
@@ -534,6 +617,10 @@ def run_stage1(
     )
     results = body["results"]
     hits, misses = match_ground_truth(sample.ground_truth, results)
+    resolved_cells = [str(c) for c in body.get("resolved_cells", [])]
+    scope, scope_missing, scope_extra = classify_scope(
+        sample.ground_truth, misses, resolved_cells
+    )
     total = len(sample.ground_truth)
     seen: set[str] = set()
     retrieved_req_ids: list[str] = []
@@ -550,8 +637,11 @@ def run_stage1(
         retrieved=len(results),
         effective_top_k=int(body.get("effective_top_k", body.get("top_k", 0))),
         mode=str(body.get("mode", "")),
-        resolved_cells=[str(c) for c in body.get("resolved_cells", [])],
+        resolved_cells=resolved_cells,
         retrieved_req_ids=retrieved_req_ids,
+        scope=scope,
+        scope_missing_cells=scope_missing,
+        scope_extra_cells=scope_extra,
     )
     if want_row_text:
         result.retrieved_rows = [
@@ -917,6 +1007,23 @@ class GoldenRunReport:
                 f"s1: n={n} recall_avg={avg:.2f} r@5={r5:.2f} "
                 f"r@10={r10:.2f} full={full} zero={zero}"
             )
+            # Own line, not appended to s1: older blocks (stacks that
+            # report no cells) stay byte-identical, and the s1 numbers
+            # keep their meaning — scope is diagnosis, not score.
+            if any(r.scope != "n/a" for r in self.stage1):
+                by_scope: dict[str, int] = {}
+                for r in self.stage1:
+                    by_scope[r.scope] = by_scope.get(r.scope, 0) + 1
+                kinds = [m.get("miss_kind", "") for r in self.stage1
+                         for m in r.misses]
+                lines.append(
+                    "scope: " + " ".join(
+                        f"{k}={by_scope.get(k, 0)}"
+                        for k in ("ok", "extra", "miss", "miss+extra", "n/a")
+                    )
+                    + f" misses: scope={kinds.count('scope')}"
+                    f" retrieval={kinds.count('retrieval')}"
+                )
         else:
             lines.append("s1: n=0")
         scores = self._judge_scores()

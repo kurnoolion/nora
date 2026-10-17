@@ -149,6 +149,131 @@ def test_run_stage1_rejects_entryless_sample():
     assert exc.value.code == "GEV-W001"
 
 
+# ─── Scope classification ───────────────────────────────────────────
+
+
+def _miss(req_id, mno="", release=""):
+    return {"req_id": req_id, "mno": mno, "release": release}
+
+
+def test_scope_miss_when_entry_cell_not_searched():
+    # The field case: entries name the older release; the stack searched
+    # only the MNO's newer one.
+    gt = [GroundTruthEntry(req_id="R-1", mno="mno-b", release="Jan2026")]
+    misses = [_miss("R-1", "mno-b", "Jan2026")]
+    scope, missing, extra = golden_runner.classify_scope(
+        gt, misses, ["mno-b__Apr2026"]
+    )
+    assert scope == "miss+extra"
+    assert missing == ["mno-b__Jan2026"]
+    assert extra == ["mno-b__Apr2026"]
+    assert misses[0]["miss_kind"] == "scope"
+
+
+def test_retrieval_miss_when_cell_was_searched():
+    gt = [
+        GroundTruthEntry(req_id="R-1", mno="mno-a", release="Jan2026"),
+        GroundTruthEntry(req_id="R-2", mno="mno-a", release="Jan2026"),
+    ]
+    misses = [_miss("R-2", "mno-a", "Jan2026")]
+    scope, missing, extra = golden_runner.classify_scope(
+        gt, misses, ["mno-a__Jan2026"]
+    )
+    assert (scope, missing, extra) == ("ok", [], [])
+    assert misses[0]["miss_kind"] == "retrieval"
+
+
+def test_extra_cells_are_informational():
+    gt = [GroundTruthEntry(req_id="R-1", mno="mno-a", release="Jan2026")]
+    scope, missing, extra = golden_runner.classify_scope(
+        gt, [], ["mno-a__Jan2026", "mno-c__Jan2026"]
+    )
+    assert (scope, missing, extra) == ("extra", [], ["mno-c__Jan2026"])
+
+
+def test_mno_only_entry_accepts_any_cell_of_its_mno():
+    gt = [GroundTruthEntry(req_id="R-1", mno="mno-a")]
+    misses = [_miss("R-1", "mno-a")]
+    scope, _, extra = golden_runner.classify_scope(
+        gt, misses, ["mno-a__Apr2026"]
+    )
+    assert scope == "ok" and extra == []
+    assert misses[0]["miss_kind"] == "retrieval"
+    misses = [_miss("R-1", "mno-a")]
+    scope, missing, _ = golden_runner.classify_scope(
+        gt, misses, ["mno-b__Apr2026"]
+    )
+    assert scope == "miss+extra" and missing == ["mno-a__*"]
+    assert misses[0]["miss_kind"] == "scope"
+
+
+def test_scope_not_applicable_without_cells_or_qualifiers():
+    bare = [GroundTruthEntry(req_id="R-1")]
+    misses = [_miss("R-1")]
+    assert golden_runner.classify_scope(bare, misses, ["mno-a__Jan2026"]) \
+        == ("n/a", [], [])
+    # A bare entry cannot be attributed to a cell — counted as retrieval.
+    assert misses[0]["miss_kind"] == "retrieval"
+    qualified = [GroundTruthEntry(req_id="R-1", mno="mno-a", release="Jan2026")]
+    misses = [_miss("R-1", "mno-a", "Jan2026")]
+    assert golden_runner.classify_scope(qualified, misses, []) == ("n/a", [], [])
+    assert misses[0]["miss_kind"] == ""
+
+
+def test_run_stage1_records_scope_without_changing_recall(monkeypatch):
+    monkeypatch.setattr(
+        golden_runner, "_post_json",
+        lambda u, p, t: _service_body(
+            [_row("R-1", 1, mno="mno-b", release="Apr2026")],
+            resolved_cells=["mno-b__Apr2026"],
+        ),
+    )
+    sample = _sample([
+        GroundTruthEntry(req_id="R-1", mno="mno-b", release="Jan2026"),
+    ])
+    r = run_stage1(sample, "http://127.0.0.1:9999")
+    assert r.recall == 0.0
+    assert r.scope == "miss+extra"
+    d = r.to_dict()
+    assert d["scope_missing_cells"] == ["mno-b__Jan2026"]
+    assert d["misses"][0]["miss_kind"] == "scope"
+
+
+def test_compact_report_scope_line():
+    from core.src.eval.golden_runner import GoldenRunReport
+
+    rep = GoldenRunReport(stack_label="s", stack_url="u", started_at="t")
+    rep.stage1 = [
+        Stage1Result(sample_id="gs-0001", recall=1.0, scope="ok"),
+        Stage1Result(
+            sample_id="gs-0002", recall=0.0, scope="miss+extra",
+            misses=[{"req_id": "R-1", "miss_kind": "scope"},
+                    {"req_id": "R-2", "miss_kind": "scope"}],
+        ),
+        Stage1Result(
+            sample_id="gs-0003", recall=0.5, scope="extra",
+            misses=[{"req_id": "R-3", "miss_kind": "retrieval"}],
+        ),
+    ]
+    lines = rep.compact_report().splitlines()
+    i = next(n for n, l in enumerate(lines) if l.startswith("s1:"))
+    assert lines[i + 1] == (
+        "scope: ok=1 extra=1 miss=0 miss+extra=1 n/a=0 "
+        "misses: scope=2 retrieval=1"
+    )
+    # NFR-8: counts only — no ids or cell names in the block.
+    assert "R-1" not in "\n".join(lines) and "__" not in "\n".join(lines)
+
+
+def test_compact_report_omits_scope_line_for_cellless_stacks():
+    from core.src.eval.golden_runner import GoldenRunReport
+
+    rep = GoldenRunReport(stack_label="s", stack_url="u", started_at="t")
+    rep.stage1 = [Stage1Result(sample_id="gs-0001", recall=1.0)]
+    assert not any(l.startswith("scope:")
+                   for l in rep.compact_report().splitlines())
+
+
 def test_query_stack_maps_transport_error(monkeypatch):
     def boom(url, payload, timeout):
         raise urllib.error.URLError("connection refused")

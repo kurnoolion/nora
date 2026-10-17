@@ -36,6 +36,29 @@ STAGE1 = [
 ]
 
 
+def test_format_sample_marks_scope_misses():
+    s1 = {
+        "sample_id": "gs-0003",
+        "recall": 0.0,
+        "hits": [],
+        "misses": [
+            {"req_id": "REQ-4", "mno": "mno-b", "release": "Jan2026",
+             "miss_kind": "scope"},
+            {"req_id": "REQ-5", "mno": "mno-b", "release": "Apr2026",
+             "miss_kind": "retrieval"},
+        ],
+        "retrieved_req_ids": ["REQ-4"],
+        "scope": "miss",
+        "scope_missing_cells": ["mno-b__Jan2026"],
+        "scope_extra_cells": [],
+    }
+    text = "\n".join(format_sample(s1))
+    assert "scope: miss  not searched: mno-b__Jan2026" in text
+    assert "REQ-4" in text and "SCOPE" in text
+    line5 = next(l for l in text.splitlines() if "REQ-5" in l)
+    assert "MISS" in line5
+
+
 def test_format_sample_side_by_side():
     lines = format_sample(STAGE1[0], query="what is foo?")
     text = "\n".join(lines)

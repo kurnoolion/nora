@@ -159,6 +159,7 @@ codes only, never sample content. Example (generic):
 GEV my-env v2 2026-01-01T12:00:00 judge=v1
 id: fp=abcdef123456 cells=5 code=1234abc scheme=scheme-v2 aprompt=ans-v1 llm=<model> knobs=19@aabbccdd set=39@11223344 fb_pre=0 fb_delta=0
 s1: n=39 recall_avg=0.66 r@5=0.43 r@10=0.49 full=19 zero=5
+scope: ok=30 extra=3 miss=0 miss+extra=6 n/a=0 misses: scope=40 retrieval=31
 s2: n=38 judge_avg=5.1 judge_med=5.0 mode=sira-rows
 err: GEV-E004(1), GEV-W001(27)
 ```
@@ -186,6 +187,25 @@ Line by line:
     answers came from a fallback path, not the primary LLM.
 - **`s1:`** — scored sample count, mean recall, recall@5/@10, and how
   many samples had full (1.0) vs zero recall.
+- **`scope:`** — whether the stack searched the cells the expected
+  entries name. It is diagnosis only; recall is computed the same way
+  with or without it. Per sample, the expected cells come from the
+  entries' `(mno, release)`, and the searched cells from the stack's
+  `resolved_cells`:
+  - `ok` — the stack searched exactly the expected cells;
+  - `extra` — it also searched other cells. Informational: a broad
+    question can rightly search more;
+  - `miss` — an expected cell was not searched;
+  - `miss+extra` — both. The usual sign that a newer release became an
+    MNO's latest while the entries still name the older one;
+  - `n/a` — the stack reports no cells, or no entry names an MNO.
+
+  `misses:` splits the missed entries: `scope` = the entry's cell was
+  never searched, so the miss says nothing about retrieval quality;
+  `retrieval` = the cell was searched and the id not returned (bare
+  entries count here, since they cannot be tied to a cell). The line is
+  omitted when no sample has scope data, so blocks from stacks that
+  report no cells are unchanged.
 - **`s2:`** — judged count, judge mean/median, Stage-2 mode
   (`pipeline` | `sira-rows`); or `SKIPPED (<reason>)` / `n=0`.
 - **`err:`** — every error/warning code with its count, or `none`.
@@ -218,8 +238,11 @@ host-runnable by design — point it at the host-side run dir,
 there).
 
 Per sample, it prints the ground-truth req_ids (with the rank each was
-found at, or `MISS`) beside everything retrieval returned in rank
-order. Retrieved ids that are ground truth are starred. Example
+found at, `MISS` for a retrieval miss, or `SCOPE` when the stack never
+searched that entry's cell) beside everything retrieval returned in
+rank order. A `scope:` line under the query names the cells not
+searched and any extra cells searched (see `scope:` above); it is
+omitted when scope is `n/a`. Retrieved ids that are ground truth are starred. Example
 (generic ids):
 
 ```
@@ -248,9 +271,11 @@ run it directly (`python3 golden_report_cli.py <run-dir>`) — no repo
 checkout needed.
 
 For programmatic digging, `report.json` carries the same data: each
-`stage1[]` entry has `hits` (with ranks), `misses`, `retrieved_req_ids`
-(rank order), `recall`, `recall_at_5`, `recall_at_10`, and the
-retrieval knobs actually used.
+`stage1[]` entry has `hits` (with ranks), `misses` (each with
+`miss_kind`: `scope` / `retrieval`), `retrieved_req_ids` (rank order),
+`recall`, `recall_at_5`, `recall_at_10`, `resolved_cells`, `scope`,
+`scope_missing_cells`, `scope_extra_cells`, and the retrieval knobs
+actually used.
 
 ## Campaign discipline
 
