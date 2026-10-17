@@ -387,7 +387,10 @@ checkout needed.
 For programmatic digging, `report.json` carries the same data: each
 `stage1[]` entry has `hits` (with ranks), `misses` (each with
 `miss_kind`: `scope` / `retrieval`), `retrieved_req_ids` (rank order),
-`recall`, `recall_at_5`, `recall_at_10`, `resolved_cells`, `scope`,
+`retrieved_row_keys` (rank order, one per requirement *and* cell, as
+`req_id@<mno>__<release>` — a requirement retrieved from two releases
+appears twice; Stage 2 synthesizes over these rows), `recall`,
+`recall_at_5`, `recall_at_10`, `resolved_cells`, `scope`,
 `scope_missing_cells`, `scope_extra_cells`, and the retrieval knobs
 actually used.
 

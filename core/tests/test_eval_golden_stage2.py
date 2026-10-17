@@ -436,3 +436,60 @@ def test_flagged_sample_skips_stage2_but_scores_stage1(monkeypatch):
     assert [e["code"] for e in rep.errors] == ["GEV-W002"]
     # Not judged, so outside the Stage-2 identity.
     assert rep.stamp.eval_set_stage2_digest == ""
+
+
+# ─── F10: one requirement retrieved from two releases ────────────────
+
+
+def _two_release_rows():
+    return [
+        {"rank": 1, "req_id": "REQ_FOO_0001", "title": "Retry",
+         "text": "Retry three times.", "mno": "m", "release": "Apr2026"},
+        {"rank": 2, "req_id": "REQ_FOO_0001", "title": "Retry",
+         "text": "Retry twice.", "mno": "m", "release": "Jan2026"},
+        {"rank": 3, "req_id": "REQ_FOO_0001", "title": "Retry",
+         "text": "Retry three times.", "mno": "m", "release": "Apr2026"},
+    ]
+
+
+def test_row_key():
+    assert golden_runner.row_key(
+        {"req_id": "R-1", "mno": "m", "release": "Jan2026"}) == "R-1@m__Jan2026"
+    assert golden_runner.row_key({"req_id": "R-1"}) == "R-1"
+
+
+def test_stage1_keeps_both_releases_of_one_id(monkeypatch):
+    monkeypatch.setattr(golden_runner, "_post_json",
+                        lambda u, p, t: {"results": _two_release_rows()})
+    r = golden_runner.run_stage1(_sample(), "http://127.0.0.1:1")
+    assert r.retrieved_req_ids == ["REQ_FOO_0001"]
+    assert r.retrieved_row_keys == [
+        "REQ_FOO_0001@m__Apr2026", "REQ_FOO_0001@m__Jan2026"]
+    assert r.to_dict()["retrieved_row_keys"] == r.retrieved_row_keys
+
+
+def test_stage2_synthesizes_over_both_releases(monkeypatch):
+    monkeypatch.setattr(golden_runner, "_get_json", lambda url, timeout: {})
+    monkeypatch.setattr(golden_runner, "_post_json",
+                        lambda u, p, t: {"results": _two_release_rows()})
+    llm = _FakeSynthLLM()
+    report = run_all(
+        [_sample()], "http://127.0.0.1:1", "stackA", _NOW,
+        query_pipeline=golden_runner.SiraRowsPipeline(llm),
+        judge=_FakeJudge(),
+        judge_prompt=("v1", "<<QUERY>> <<GOLDEN>> <<CANDIDATE>>"),
+    )
+    assert report.stage2[0].pinned_count == 2
+    sent = llm.prompts[0]
+    assert "Retry three times." in sent and "Retry twice." in sent
+    # Rank order kept: the newer release (rank 1) comes first.
+    assert sent.index("three times") < sent.index("twice")
+
+
+def test_bare_id_pin_selects_every_row_of_that_id():
+    llm = _FakeSynthLLM()
+    p = golden_runner.SiraRowsPipeline(llm)
+    p.bind_rows(_two_release_rows())
+    p.query("q", pinned_chunk_ids=["req:REQ_FOO_0001"])
+    sent = llm.prompts[0]
+    assert "Retry three times." in sent and "Retry twice." in sent

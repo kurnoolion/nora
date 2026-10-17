@@ -583,6 +583,22 @@ def check_map_against_stack(
     return out
 
 
+def row_key(row: dict) -> str:
+    """Identity of one retrieved row: ``req_id@<mno>__<release>``, or the
+    bare ``req_id`` when the row carries no cell (legacy stacks).
+
+    Field-found (F10): rows were de-duplicated and keyed by ``req_id``
+    alone, so a requirement retrieved from two releases reached Stage-2
+    synthesis in one version only — the case a question about releases
+    tests. Ids are unique per MNO in this corpus, so (id, mno, release)
+    is the row identity.
+    """
+    rid = str(row.get("req_id", "") or "")
+    mno = str(row.get("mno", "") or "")
+    rel = str(row.get("release", "") or "")
+    return f"{rid}@{_cell_name(mno, rel)}" if (mno or rel) else rid
+
+
 def _cell_name(mno: str, release: str) -> str:
     # The serving side's cell_dirname convention (`<mno>__<release>`,
     # source case kept) — restated, not imported: core never imports
@@ -682,9 +698,13 @@ class Stage1Result:
     effective_top_k: int = 0
     mode: str = ""
     resolved_cells: list[str] = field(default_factory=list)
-    # Every retrieved req_id in rank order (deduped) — Stage-2 pins these,
-    # not just the ground-truth hits (D-DRAFT-3).
+    # Every retrieved req_id in rank order (deduped by id) — display and
+    # the legacy pipeline-mode pins.
     retrieved_req_ids: list[str] = field(default_factory=list)
+    # Every retrieved ROW in rank order, deduped by ``row_key`` (id + cell)
+    # — the sira-rows Stage-2 pins these, not just the ground-truth hits
+    # (D-DRAFT-3), and keeps both releases of a carried-over id (F10).
+    retrieved_row_keys: list[str] = field(default_factory=list)
     # Expected cells vs searched cells (classify_scope). Diagnostic only —
     # recall is computed exactly as before.
     scope: str = "n/a"
@@ -716,6 +736,7 @@ class Stage1Result:
             "mode": self.mode,
             "resolved_cells": self.resolved_cells,
             "retrieved_req_ids": self.retrieved_req_ids,
+            "retrieved_row_keys": self.retrieved_row_keys,
             "scope": self.scope,
             "scope_missing_cells": self.scope_missing_cells,
             "scope_extra_cells": self.scope_extra_cells,
@@ -766,12 +787,20 @@ def run_stage1(
     )
     total = len(sample.ground_truth)
     seen: set[str] = set()
+    seen_rows: set[str] = set()
     retrieved_req_ids: list[str] = []
+    retrieved_row_keys: list[str] = []
     for row in results:
         rid = str(row.get("req_id", ""))
-        if rid and rid not in seen:
+        if not rid:
+            continue
+        if rid not in seen:
             seen.add(rid)
             retrieved_req_ids.append(rid)
+        key = row_key(row)
+        if key not in seen_rows:
+            seen_rows.add(key)
+            retrieved_row_keys.append(key)
     result = Stage1Result(
         sample_id=sample.sample_id,
         recall=(len(hits) / total) if total else 0.0,
@@ -782,6 +811,7 @@ def run_stage1(
         mode=str(body.get("mode", "")),
         resolved_cells=resolved_cells,
         retrieved_req_ids=retrieved_req_ids,
+        retrieved_row_keys=retrieved_row_keys,
         scope=scope,
         scope_missing_cells=scope_missing,
         scope_extra_cells=scope_extra,
@@ -845,8 +875,23 @@ class SiraRowsPipeline:
     def query(self, text: str, pinned_chunk_ids: list[str] | None = None):
         from core.src.query.schema import QueryIntent, QueryType, RetrievedChunk
 
-        by_id = {f"req:{r['req_id']}": r for r in self._rows if r.get("req_id")}
-        order = [p for p in (pinned_chunk_ids or []) if p in by_id]
+        # Keyed by row identity (id + cell), not id alone: two releases of
+        # one requirement are two chunks (F10). The context builder labels
+        # each with its MNO and release.
+        # A bare ``req:<id>`` pin (the QueryPipeline form) selects every
+        # bound row of that id, in bound order.
+        by_id: dict[str, dict] = {}
+        by_req: dict[str, list[str]] = {}
+        for r in self._rows:
+            if r.get("req_id"):
+                key = f"req:{row_key(r)}"
+                by_id.setdefault(key, r)
+                by_req.setdefault(f"req:{r['req_id']}", []).append(key)
+        order: list[str] = []
+        for p in pinned_chunk_ids or []:
+            for key in ([p] if p in by_id else by_req.get(p, [])):
+                if key not in order:
+                    order.append(key)
         chunks = [
             RetrievedChunk(
                 chunk_id=pid,
@@ -1028,7 +1073,12 @@ def run_stage2(
             judge_version=version,
             skipped_reason="stage1 retrieved nothing to synthesize from",
         )
-    pinned = [f"req:{rid}" for rid in stage1.retrieved_req_ids]
+    # The sira-rows pipeline pins rows (id + cell, F10); the legacy
+    # QueryPipeline's chunk ids are per requirement id.
+    if hasattr(query_pipeline, "bind_rows") and stage1.retrieved_row_keys:
+        pinned = [f"req:{k}" for k in stage1.retrieved_row_keys]
+    else:
+        pinned = [f"req:{rid}" for rid in stage1.retrieved_req_ids]
     response = query_pipeline.query(sample.query, pinned_chunk_ids=pinned)
     candidate = (getattr(response, "answer", "") or "").strip()
     if not candidate:
