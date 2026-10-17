@@ -30,7 +30,10 @@
 #   --eval-run    golden run id that justified the flip (staged/override)
 #   --yes         skip the confirmation prompt (scripted rollback)
 #   --dry-run     show everything, change nothing
-#   --serve-root  default $NORA_SERVE_ROOT, else /srv/nora/serve
+#   --serve-root  default $NORA_SERVE_ROOT, else /srv/nora/serve. Hosts that
+#                 keep promoted labels under their data root must pass this
+#                 flag (or export NORA_SERVE_ROOT) — the default path has no
+#                 labels there and the flip stops at SFLIP-E002 "no label"
 #   --env-root    default $NORA_ENV_ROOT, else /srv/nora/env; falls back to
 #                 this docker/ dir when the stack env only exists there
 #                 (pre-migration hosts)
@@ -98,7 +101,7 @@ new_nora="" new_sira=""
 [ -d "$NEW/sira" ] && new_sira="$NEW/sira"
 [ -n "$new_nora$new_sira" ] || die 005 "label has neither nora/ nor sira/" "re-promote and re-push"
 
-mfield() { grep -o "\"$2\": *\"[^\"]*\"" "$1" 2>/dev/null | head -1 | cut -d'"' -f4; }
+mfield() { grep -o "\"$2\": *\"[^\"]*\"" "$1" 2>/dev/null | head -1 | cut -d'"' -f4 || true; }
 show_manifest() {  # $1 = label dir, $2 = heading
   local m="$1/MANIFEST.json"
   if [ -f "$m" ]; then
@@ -132,8 +135,12 @@ fi
 
 # ---- 3. rewrite pointers ------------------------------------------------------
 cp -p "$ENVFILE" "$ENVFILE.prev"
-[ -n "$new_nora" ] && sed -i "s|^NORA_ENV_DIR=.*|NORA_ENV_DIR=$new_nora|" "$ENVFILE"
-[ -n "$new_sira" ] && sed -i "s|^SIRA_DB_ROOT=.*|SIRA_DB_ROOT=$new_sira|" "$ENVFILE"
+# keep any trailing inline comment on the pointer lines (values never carry #);
+# a space is re-inserted before the kept comment so compose still parses it
+[ -n "$new_nora" ] && sed -i -E -e "s|^(NORA_ENV_DIR=)[^#]*(#.*)$|\1$new_nora \2|" \
+                                -e "s|^(NORA_ENV_DIR=)[^#]*$|\1$new_nora|" "$ENVFILE"
+[ -n "$new_sira" ] && sed -i -E -e "s|^(SIRA_DB_ROOT=)[^#]*(#.*)$|\1$new_sira \2|" \
+                                -e "s|^(SIRA_DB_ROOT=)[^#]*$|\1$new_sira|" "$ENVFILE"
 echo "env rewritten ($ENVFILE.prev kept)"
 
 # ---- 4. recreate ------------------------------------------------------------
@@ -150,13 +157,15 @@ HZ="http://127.0.0.1:$PORT/healthz"
 body="" got=""
 for _ in $(seq 1 30); do
   body="$(curl -sf --max-time 3 "$HZ" 2>/dev/null || true)"
-  got="$(printf '%s' "$body" | grep -o '"serve_label": *"[^"]*"' | head -1 | cut -d'"' -f4)"
+  # empty body (service not up yet) makes grep exit 1 — without the || true,
+  # pipefail turns the first failed poll into a silent exit of the whole script
+  got="$(printf '%s' "$body" | grep -o '"serve_label": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
   [ "$got" = "$LABEL" ] && break
   sleep 2
 done
-hz() { printf '%s' "$body" | grep -o "\"$1\": *\"[^\"]*\"" | head -1 | cut -d'"' -f4; }
+hz() { printf '%s' "$body" | grep -o "\"$1\": *\"[^\"]*\"" | head -1 | cut -d'"' -f4 || true; }
 FP="$(hz data_fingerprint)"
-CELLS="$(printf '%s' "$body" | grep -o '"data_fingerprint_cells": *{[^}]*}' | grep -o '":' | wc -l | tr -d ' ')"
+CELLS="$(printf '%s' "$body" | grep -o '"data_fingerprint_cells": *{[^}]*}' | grep -o '":' | wc -l | tr -d ' ' || true)"
 echo "healthz    : label=${got:-?} fp=${FP:0:12} code=$(hz code_version) scheme=$(hz sira_prompt_scheme) cells=${CELLS:-0}"
 if [ "$got" != "$LABEL" ]; then
   die 020 "healthz on $HZ does not report serve_label=$LABEL (got '${got:-<none>}')" \
