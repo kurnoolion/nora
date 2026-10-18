@@ -263,3 +263,32 @@ def test_case_mismatch_is_repaired_not_absent(tmp_path, capsys):
         ("R-1", "Apr2026"), ("R-2", "Jan2026")]
     assert s["gs-0001"].golden_meta["review"]["mno-b"]["changed"] == ["r-2"]
     assert s["gs-0002"].ground_truth[0].req_id == "R-4"
+
+
+def test_operator_name_only_change_is_carried_not_flagged(tmp_path, monkeypatch):
+    # Field-found: a release dropped the operator's name from a body;
+    # the entry read as "changed". The alias is invented for the test.
+    import core.src.query.analyzer as an
+
+    monkeypatch.setattr(an, "_MNO_ALIASES", {"acmecell": "mno-b"})
+    _tree(tmp_path, "mno-b", "Jan2026",
+          [("R-1", "The AcmeCell device shall retry."), ("R-2", "Old rule.")])
+    _tree(tmp_path, "mno-b", "Apr2026",
+          [("R-1", "The device shall retry."), ("R-2", "New rule.")])
+    _sample(tmp_path, "gs-0001", [_gt("R-1", "Jan2026"), _gt("R-2", "Jan2026")])
+    rep = text_check(load_samples(tmp_path), tmp_path, "mno-b", "Apr2026")
+    chk = rep.samples[0]
+    assert chk.operator_name == ["R-1"] and chk.changed == ["R-2"]
+    assert rep.counts()["operator_name"] == 1
+    # Token boundaries: an alias inside a longer word is not stripped.
+    from core.src.eval.golden_release_cli import _strip_operator
+    assert _strip_operator("acmecellular rule", "mno-b") == "acmecellular rule"
+    assert _strip_operator("the acmecell rule", "mno-b") == "the rule"
+
+
+def test_mno_surface_forms_longest_first(monkeypatch):
+    import core.src.query.analyzer as an
+
+    monkeypatch.setattr(an, "_MNO_ALIASES",
+                        {"acme": "mno-b", "acme cellular": "mno-b", "zed": "mno-c"})
+    assert an.mno_surface_forms("mno-b") == ["acme cellular", "mno-b", "acme"]

@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import re
 import sys
 import unicodedata
 from dataclasses import dataclass, field
@@ -96,6 +97,19 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
+def _strip_operator(text: str, mno: str) -> str:
+    """``text`` (already ``_norm``-ed) with every written form of ``mno``
+    removed, whitespace collapsed — so an edit that only adds or drops
+    the operator's own name compares equal. Same token-boundary rule as
+    the query analyzer: not adjacent to a letter or digit."""
+    from core.src.query.analyzer import mno_surface_forms
+
+    for form in mno_surface_forms(mno):
+        text = re.sub(r"(?<![a-z0-9])" + re.escape(form) + r"(?![a-z0-9])",
+                      " ", text, flags=re.I)
+    return " ".join(text.split())
+
+
 def cell_texts(
     env_dir: Path, mno: str, release: str
 ) -> dict[str, tuple[str, str]]:
@@ -129,6 +143,11 @@ class SampleCheck:
     # operator-name prefix). Carried over like unchanged, not flagged —
     # the body is what an answer is built from.
     title_only: list[str] = field(default_factory=list)
+    # Differs only by the entry's own operator name, in any written form
+    # (field-found: a release dropped the operator name from a body).
+    # Carried over like unchanged, not flagged. Narrow on purpose — no
+    # similarity threshold: the flag exists to catch real edits.
+    operator_name: list[str] = field(default_factory=list)
     changed: list[str] = field(default_factory=list)
     absent: list[str] = field(default_factory=list)
     # Stored id differs from the parse tree's only by case (field-found:
@@ -154,7 +173,8 @@ class CheckReport:
     unattributed: int = 0       # standard entries of the MNO with no release
 
     def counts(self) -> dict[str, int]:
-        c = {"unchanged": 0, "title_only": 0, "changed": 0, "absent": 0,
+        c = {"unchanged": 0, "title_only": 0, "operator_name": 0,
+             "changed": 0, "absent": 0,
              "unverified": 0, "case": 0}
         for s in self.samples:
             for k in c:
@@ -226,6 +246,9 @@ def text_check(
                 chk.unchanged.append(e.req_id)
             elif old[1] == new[1]:
                 chk.title_only.append(e.req_id)
+            elif all(_strip_operator(a, mno) == _strip_operator(b, mno)
+                     for a, b in zip(old, new)):
+                chk.operator_name.append(e.req_id)
             else:
                 chk.changed.append(e.req_id)
         if chk.from_releases or chk.relative or chk.case:
@@ -245,7 +268,7 @@ def apply_check(
     written: set[str] = set()
     for chk in report.samples:
         s = by_id[chk.sample_id]
-        moved = set(chk.unchanged) | set(chk.title_only)
+        moved = set(chk.unchanged) | set(chk.title_only) | set(chk.operator_name)
         for e in s.ground_truth:
             if e.mno != report.mno:
                 continue
@@ -273,7 +296,8 @@ def apply_check(
 
 def print_check(report: CheckReport) -> None:
     for chk in report.samples:
-        if not (chk.flagged or chk.unchanged or chk.title_only or chk.case):
+        if not (chk.flagged or chk.unchanged or chk.title_only
+                or chk.operator_name or chk.case):
             continue
         parts = [f"  {chk.sample_id}:"]
         if chk.relative:
@@ -286,6 +310,8 @@ def print_check(report: CheckReport) -> None:
             parts.append(f"unchanged={len(chk.unchanged)}")
         if chk.title_only:
             parts.append(f"title_only={','.join(chk.title_only)}")
+        if chk.operator_name:
+            parts.append(f"operator_name={','.join(chk.operator_name)}")
         if chk.case:
             parts.append("case=" + ",".join(
                 f"{a}->{b}" for a, b in sorted(chk.case.items())))

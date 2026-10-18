@@ -227,6 +227,9 @@ new `N` is compared by text between the two releases:
   whitespace collapsed;
 - `title_only` — same body, different title: carried over like
   `unchanged`, not flagged;
+- `operator_name` — the only difference is the entry's own operator
+  name, in any form the query analyzer recognises (a release that
+  dropped or added it): carried over, not flagged;
 - `changed` — the text differs;
 - `absent` — the id is not in the new release;
 - `unverified` — the id is not in its own stored release, so there is

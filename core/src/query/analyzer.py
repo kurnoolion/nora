@@ -46,6 +46,16 @@ _MNO_ALIAS_PATTERNS: list[tuple[re.Pattern, str]] = [
     for alias, mno in _MNO_ALIASES.items()
 ]
 
+def mno_surface_forms(mno: str) -> list[str]:
+    """Every written form of ``mno`` the analyzer recognises (lower case):
+    the aliases that resolve to it, plus the code itself. Longest first,
+    so a caller stripping them removes the full name before a shorter
+    form inside it. Used by the golden eval's text check to ignore an
+    operator-name-only edit between releases."""
+    forms = {a for a, m in _MNO_ALIASES.items() if m == mno} | {mno.lower()}
+    return sorted(forms, key=lambda f: (-len(f), f))
+
+
 # ── Plan name aliases ───────────────────────────────────────────
 
 _PLAN_ALIASES: dict[str, str] = {

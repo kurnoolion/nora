@@ -592,3 +592,21 @@ def test_chat_context_resolves_relative_entries(client, tmp_path):
         GroundTruthEntry(req_id="REQ_FOO_0002", mno="mno-a", release="N-1")])
     assert "Retries use exponential backoff." in ge._gt_context(
         tmp_path, _load(tmp_path))
+
+
+def test_clear_button_survives_ruling_the_last_entry(client, tmp_path):
+    # Field-found: blocks were grouped from the entry rows, so ruling the
+    # last flagged entry removed the clear form and left the sample stuck
+    # out of Stage 2.
+    TestReview()._flagged(tmp_path)
+    url = "/api/eval-studio/sample/gs-0001/review/"
+    client.post(url + "entry", data={"mno": "mno-a",
+                                     "req_id": "REQ_FOO_0001", "action": "keep"})
+    r = client.post(url + "entry", data={"mno": "mno-a",
+                                         "req_id": "REQ_FOO_0002",
+                                         "action": "remove"})
+    assert "All entries ruled on" in r.text
+    assert "/review/clear" in r.text
+    assert "review" in _load(tmp_path).golden_meta
+    client.post(url + "clear", data={"mno": "mno-a"})
+    assert "review" not in _load(tmp_path).golden_meta

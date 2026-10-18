@@ -835,22 +835,25 @@ _REVIEW_CLASSES = ("changed", "absent", "unverified")
 
 
 def _review_rows(sample: GoldenSample) -> list[dict]:
-    """One row per flagged entry: the stored entry, its class, and the
-    requirement text in the old and the new release (case-insensitive, as
-    the text check looks ids up). Per MNO, a relative version sample's
-    flag has no entry rows — the whole answer needs re-curation."""
+    """One block per flagged MNO — built from ``golden_meta.review`` itself,
+    so a block (and its clear button) stays when every entry has been
+    ruled on (field-found: blocks were grouped from the entry rows, so
+    ruling the last entry removed the only way to clear the flag and left
+    the sample stuck out of Stage 2). Each block lists its still-open
+    entries: class plus the requirement text in the old and the new
+    release (case-insensitive, as the text check looks ids up)."""
     review = sample.golden_meta.get("review") or {}
     if not review:
         return []
     env_dir = _env_dir()
-    rows: list[dict] = []
+    blocks: list[dict] = []
     for mno, r in sorted(review.items()):
         old_rel = (r.get("from") or [""])[0]
         new_rel = r.get("to", "")
         ids = [(cls, rid) for cls in _REVIEW_CLASSES for rid in r.get(cls, [])]
-        if r.get("relative") and not ids:
-            rows.append({"mno": mno, "relative": True, "from": old_rel,
-                         "to": new_rel})
+        rows: list[dict] = []
+        blocks.append({"mno": mno, "from": old_rel, "to": new_rel,
+                       "relative": bool(r.get("relative")), "rows": rows})
         for cls, rid in ids:
             def text(rel: str) -> str:
                 if not rel:
@@ -858,12 +861,10 @@ def _review_rows(sample: GoldenSample) -> list[dict]:
                 m = req_tree.find_req(env_dir, rid, mno, rel, ignore_case=True)
                 return f"{m[0]['title']}\n{m[0]['text']}".strip() if m else ""
             rows.append({
-                "mno": mno, "req_id": rid, "cls": cls,
-                "from": old_rel, "to": new_rel,
+                "req_id": rid, "cls": cls,
                 "old_text": text(old_rel), "new_text": text(new_rel),
-                "relative": bool(r.get("relative")),
             })
-    return rows
+    return blocks
 
 
 def _drop_from_review(sample: GoldenSample, mno: str, req_id: str) -> None:
