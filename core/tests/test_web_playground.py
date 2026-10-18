@@ -249,3 +249,60 @@ def test_history_page_renders():
         r = asyncio.run(pg.ask_history_page(req))
     assert r.status_code == 200
     assert captured["name"] == "test/history.html"
+
+
+# -- Team gate: SIRA-only regardless of section --------------------------------
+
+
+def test_gated_ask_refuses_sections_other_than_merged(monkeypatch):
+    # Field-found: the SIRA-only override sat inside the merged branch, so a
+    # gated POST without `section` defaulted to requirement_bot and ran the
+    # NORA lane. Verified with the gate ON (CLAUDE.md).
+    from fastapi.testclient import TestClient
+    import core.src.web.team_mode as tm
+    from core.src.web.app import app
+
+    monkeypatch.setattr(tm, "TEAM_MODE", True)
+    monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+
+    def _no_nora(*a, **k):
+        raise AssertionError("NORA pipeline ran under the gate")
+
+    monkeypatch.setattr(playground, "_run_query_for_test", _no_nora)
+    client = TestClient(app)
+    for data in ({"question": "q?"},
+                 {"question": "q?", "section": "requirement_bot"},
+                 {"question": "q?", "section": "sira_retrieval"}):
+        r = client.post("/api/test/ask", data=data)
+        assert r.status_code == 200
+        assert "SIRA lane only" in r.text
+    r = client.post("/api/test/synthesize-group",
+                    data={"question": "q?", "chunk_ids": "c1"})
+    assert "SIRA lane only" in r.text
+
+
+def test_admin_cookie_keeps_legacy_sections(monkeypatch):
+    from fastapi.testclient import TestClient
+    import core.src.web.team_mode as tm
+    from core.src.web.app import app
+
+    monkeypatch.setattr(tm, "TEAM_MODE", True)
+    monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+    monkeypatch.setattr(playground, "_run_query_for_test",
+                        lambda *a, **k: {"error": "stub ran"})
+    client = TestClient(app, cookies={tm.ADMIN_COOKIE: "sek"})
+    r = client.post("/api/test/ask", data={"question": "q?"})
+    assert "stub ran" in r.text
+
+
+def test_no_embedder_config_refuses_instead_of_default_embedder(tmp_path, monkeypatch):
+    # Field-found: with no NORA index the route built a default config whose
+    # sentence-transformers embedder downloaded from HuggingFace (and hung).
+    import pytest
+    import core.src.vectorstore as vs
+    from core.src.web.routes import query as q
+
+    monkeypatch.setattr(vs, "make_embedder", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("embedder built without a config")))
+    with pytest.raises(q._PipelineBuildError, match="No NORA index"):
+        q._build_pipeline(tmp_path / "graph.json", tmp_path)

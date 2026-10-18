@@ -6,18 +6,20 @@ reports HTTP status, response shape, dimension/score, elapsed ms in a compact
 
 Usage:
     python -m core.src.vectorstore.probe_tei \\
-        --embed-base http://your-gateway/embed \\
-        --rerank-base http://your-gateway/rerank
+        --embed-base http://your-tei-host:PORT \\
+        --rerank-base http://your-tei-host:PORT
 
-The bases passed here are the URL prefixes whose `/embed` or `/rerank` route
-forwards to a TEI server. They match the values you would set in
-``NORA_RERANKER_BASE_URL`` (for the rerank base) and (eventually)
-``NORA_EMBEDDING_BASE_URL``. The script appends the TEI-side route to each
-base, so:
+The bases are the URLs BEFORE the TEI route — the same values you set in
+``NORA_EMBEDDING_BASE_URL`` and ``NORA_RERANKER_BASE_URL``. The script (like
+the providers) appends the route. A TEI server serves its routes at the root,
+so its base is the bare host:port:
 
-    --embed-base http://host/embed   →  POST http://host/embed/v1/embeddings
-                                     →  POST http://host/embed/embed
-    --rerank-base http://host/rerank →  POST http://host/rerank/rerank
+    --embed-base http://host:PORT   →  POST http://host:PORT/v1/embeddings
+                                    →  POST http://host:PORT/embed
+    --rerank-base http://host:PORT  →  POST http://host:PORT/rerank
+
+Behind a gateway that routes by prefix (``/embed`` → TEI), pass the prefix
+instead; it then appears twice in the URL (``http://gw/embed/embed``).
 
 Three probes:
   1. POST {embed-base}/v1/embeddings — OpenAI-compatible embedding (TEI ≥1.5)

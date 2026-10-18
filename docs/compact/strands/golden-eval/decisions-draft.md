@@ -635,3 +635,114 @@ must stay import-free: any future convenience import from core.src
 silently breaks copy-portability, which nothing mechanical checks.
 Output is terminal-only detail that stays on the machine (NFR-8) — the
 tool deliberately has no redacted/pasteable mode.
+
+## D-DRAFT-18 — Standard samples carry no release in scoring; version samples use relative releases
+
+**Context:** Golden entries were tagged with the release they were
+authored against. A question that names no release resolves to the
+latest release, so after a new release was served one MNO's recall
+collapsed: all 40 expected ids carried over, 39 with unchanged text, and
+every one missed on the release tag alone.
+
+**Decision:** Stage 1 and Stage 2 use no release information for
+`standard` samples; they match on (req_id, mno). Only `version` samples
+(questions about release differences) carry releases. A version entry
+uses an absolute label when the question names a release, and a relative
+reference (`N`, `N-1`, …) otherwise, resolved through the release map.
+
+**Why:** The project owner's design. A release tag on a standard question
+measures when the sample was written, not retrieval quality, and makes
+every release advance a scoring change. Absolute labels in all samples
+were rejected for the same reason; relative labels in all samples were
+rejected because a question that names a release means that release.
+
+**Consequences:** Samples need a kind, validated at load (relative refs
+only in version samples, with an mno; no mixing of relative and absolute).
+Serving still needs an intent model that maps relative wording to N /
+N-1 — separate work. Existing standard entries keep their release field
+as provenance only.
+
+## D-DRAFT-19 — The release map is explicit and versioned; a preflight refuses a run that disagrees with the stack
+
+**Context:** Relative references need a definition of `N` per MNO. It
+could be derived from whatever the stack serves, or kept as data.
+
+**Decision:** `<golden>/release-map.json` lists each MNO's releases
+oldest first (N = last), with a version and an append-only history.
+It changes only through `golden_release_cli advance`, after a flip. Before
+scoring, `run_all` compares the map's N with the stack's latest served
+release per MNO (healthz `cells`) and raises GEV-E006 on a disagreement,
+unless `--allow-map-mismatch`. The run stamps `rmap=vK` (`!` when
+overridden).
+
+**Why:** Deriving N from the stack would silently re-bind version
+samples whenever a stack changed, and would let two stacks score the same
+set differently. An explicit map makes a re-binding a visible, attributed
+event.
+
+**Consequences:** One more step after each flip (`advance`). Version
+sample digests include the resolved release, so moving N breaks their
+comparability on purpose; standard samples are unaffected.
+
+## D-DRAFT-20 — Match rule m3: ids compare ignoring case, and the rule is part of the Stage-1 key
+
+**Context:** An id typed in a different case zeroed its sample from the
+day it was authored. Sample files can be byte-identical across a
+matching-rule change, so the digest alone cannot show that a rule
+changed.
+
+**Decision:** `MATCH_RULE = "m3"`: standard samples match on
+(req_id, mno), version samples also on the resolved release, with req_id
+compared case-insensitively. `match_rule` is in `stage1_key()` and on the
+`id:` line.
+
+**Why:** No two ids in the corpus differ only by case, so case-insensitive
+matching loses nothing. Keying the rule stops a run under m3 from being
+compared with one under m2.
+
+**Consequences:** Every future matching change bumps the rule name. Eval
+Studio normalises id case to the tree's form at save, and migrate repairs
+stored ids by its `case` class.
+
+## D-DRAFT-21 — Migrate classifies text by a fixed normalisation, without a similarity threshold; changed samples are flagged out of Stage 2
+
+**Context:** Re-tagging entries to N is safe only when the requirement's
+text is unchanged. A raw comparison flagged whitespace, layout and
+invisible-character differences; a similarity score would need a
+threshold nobody could justify.
+
+**Decision:** The text check normalises (NFKC, zero-width characters and
+BOM removed, whitespace collapsed, and the entry's own MNO name removed
+in every form the query analyzer knows) and assigns a named class:
+unchanged, title_only, operator_name, case, changed, absent, unverified.
+Only `changed` and `absent` flag the sample; Stage 2 skips flagged
+samples (GEV-W002) until a reviewer rules on each entry and clears the
+flag.
+
+**Why:** Named classes are explainable in a report and auditable by a
+reviewer; a threshold is neither. Skipping flagged samples keeps a
+possibly stale golden response from being judged.
+
+**Consequences:** A real change in table layout (for example a table
+split at a page break) still flags the sample; the fix belongs in
+extraction, not in the check. Flags live in `golden_meta.review` and
+survive saves.
+
+## D-DRAFT-22 — A baseline is a series: one full run plus three Stage-1 repeats
+
+**Context:** The LLM rerank makes Stage 1 noisy: recall moves about
+±0.02 and recall@k about ±0.06–0.08 between identical runs. A single run
+can neither set a baseline nor show a regression of that size.
+
+**Decision:** A stack's baseline is the mean of one full run (Stage 1 +
+Stage 2) and three Stage-1 repeats, stored at
+`<nora-data>/eval-baselines/<compose stack name>.txt`
+(`NORA_EVAL_BASELINES` overrides), refreshed after the next accepted
+series with the previous kept as `.prev`.
+
+**Why:** Three repeats bound the noise for a cost of minutes; Stage 2 is
+judged once because the judge is the expensive part and its own variance
+is tracked separately.
+
+**Consequences:** A change smaller than the noise band is not called a
+regression from one run. serve-flip's hand-off names the baseline path.

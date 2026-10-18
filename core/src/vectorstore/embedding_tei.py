@@ -54,9 +54,10 @@ class TEIEmbedder:
         model_name: Informational only — TEI is single-model per instance
             (the model is set at TEI startup). Logged at init, included
             in ``model_name`` property.
-        base_url: TEI gateway base — the URL prefix whose ``/embed``
-            route forwards to the TEI service. The request goes to
-            ``{base_url}/embed``.
+        base_url: The URL before the ``/embed`` route; the request goes
+            to ``{base_url}/embed``. A TEI server serves the route at its
+            root, so its base is the bare host:port. A gateway that
+            routes by prefix takes that prefix. Do not include ``/embed``.
         api_key: Optional bearer token, sent as ``Authorization: Bearer
             <key>`` if non-empty.
         timeout: Per-request timeout in seconds.

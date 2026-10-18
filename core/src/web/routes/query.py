@@ -104,8 +104,9 @@ def _resolve_reranker():
 
     Two backends supported (selected via `reranker_provider`):
 
-      - "huggingface" (default): CrossEncoderReranker wrapping
-        sentence_transformers.CrossEncoder. Loads from HF cache.
+      - "huggingface": CrossEncoderReranker wrapping
+        sentence_transformers.CrossEncoder. Loads from HF cache. Must be
+        named; no provider means passthrough.
 
       - "ollama": OllamaReranker calling a local Ollama server. For
         deployments without HF access but with Ollama running locally.
@@ -142,8 +143,15 @@ def _resolve_reranker():
     model_name = resolve_reranker_model(config_store_value=db_model)
     db_provider = _config_store_get("llm", "reranker_provider")
     provider = resolve_reranker_provider(config_store_value=db_provider)
+    if not provider:
+        logger.warning(
+            "Reranker: enabled but no reranker_provider set — MockReranker "
+            "passthrough. Name a provider to rerank.",
+        )
+        return None
     logger.info(
-        "Reranker: ENABLED provider=%s model=%s", provider, model_name,
+        "Reranker: ENABLED provider=%s model=%s", provider,
+        model_name or "(provider default)",
     )
 
     try:
@@ -188,7 +196,8 @@ def _resolve_reranker():
             )
         else:
             from core.src.query.reranker import CrossEncoderReranker
-            reranker = CrossEncoderReranker(model_name=model_name)
+            reranker = (CrossEncoderReranker(model_name=model_name)
+                        if model_name else CrossEncoderReranker())
         if not getattr(reranker, "available", True):
             logger.warning(
                 "Reranker (%s) for %r not available — falling back to "
@@ -577,13 +586,18 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     from core.src.vectorstore.store_chroma import ChromaDBStore
 
     # D-DRAFT-11: read the embedder config from a per-cell config when the flat
-    # one is absent (else we default to sentence-transformers → HuggingFace).
+    # one is absent. Every built store writes one, so none means no NORA index
+    # for this label. Refuse rather than build a default config, whose
+    # sentence-transformers embedder downloads from HuggingFace.
     from core.src.vectorstore.cell_loader import embedder_config_path
     vs_config_path = embedder_config_path(vectorstore_dir)
-    if vs_config_path is not None:
-        vs_config = VectorStoreConfig.load_json(vs_config_path)
-    else:
-        vs_config = VectorStoreConfig(persist_directory=str(vectorstore_dir))
+    if vs_config_path is None:
+        raise _PipelineBuildError(
+            "No NORA index for this label: no vector store config under "
+            "the vectorstore directory. Run the vectorstore pipeline stage "
+            "first, or use the SIRA lane."
+        )
+    vs_config = VectorStoreConfig.load_json(vs_config_path)
 
     # Use the provider factory so vectorstores built with Ollama
     # embeddings (e.g. qwen3-embedding:4b) load via OllamaEmbedder

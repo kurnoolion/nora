@@ -248,3 +248,26 @@
   respects it in practice) is production.
 - Optional parked study: single-request-style richer enrichment vs
   batched, judged by golden eval rather than overlap metrics.
+
+## 2026-10-18 — serve-path hardening after host-user serving
+
+### Done this session
+- Host: all three stacks serve as the host user (SERVE_UID/SERVE_GID);
+  no root-owned files in any mount before or after.
+- Built, held for commit: the team gate runs only `section=merged` for
+  gated members and refuses `synthesize-group`; no HuggingFace default
+  embedder or reranker (web route, env config, VectorStoreConfig,
+  make_embedder, golden/query/eval CLIs); compose sets HOME and
+  HF_HUB_OFFLINE on the serve services; TEI base-URL docs; promote.sh
+  copies the NORA vectorstore.
+- Decided: no refusal fallback on web (the user changes the model by
+  hand).
+
+### In progress
+- The held batch awaits commit; host steps follow it (rebuild, gate
+  and no-index checks, re-copy existing labels' vectorstores, drop the
+  web fallback env lines).
+
+### Next
+- Decide whether to empty config/llm.json's stale embedding entry.
+- Check whether SIRA cell files change on load (same fix as chroma if so).

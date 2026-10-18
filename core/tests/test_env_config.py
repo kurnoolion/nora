@@ -62,10 +62,12 @@ def test_pipeline_context_standalone_expands_tilde():
 
 
 def test_embedding_fields_have_defaults():
-    """New embedding fields must default; old configs without them still load."""
+    """New embedding fields must default; old configs without them still load.
+    No built-in provider/model: the old sentence-transformers default
+    downloaded from the HuggingFace hub when nothing was configured."""
     env = _make_env("/tmp/x")
-    assert env.embedding_provider == "sentence-transformers"
-    assert env.embedding_model == "all-MiniLM-L6-v2"
+    assert env.embedding_provider == ""
+    assert env.embedding_model == ""
 
 
 def test_validate_rejects_unknown_embedding_provider():
@@ -152,8 +154,8 @@ def test_load_old_json_without_embedding_fields(tmp_path):
         })
     )
     env = EnvironmentConfig.load_json(p)
-    assert env.embedding_provider == "sentence-transformers"
-    assert env.embedding_model == "all-MiniLM-L6-v2"
+    assert env.embedding_provider == ""
+    assert env.embedding_model == ""
 
 
 # ---------------------------------------------------------------------------

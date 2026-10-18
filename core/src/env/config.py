@@ -902,8 +902,11 @@ def resolve_llm_api_key(
 # ---------------------------------------------------------------------------
 
 EMBEDDING_PROVIDERS: tuple[str, ...] = ("sentence-transformers", "huggingface", "ollama", "tei")
-DEFAULT_EMBEDDING_PROVIDER: str = "sentence-transformers"
-DEFAULT_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+# No built-in provider or model: a deployment names them (env var or
+# config/llm.json). The old sentence-transformers default downloaded from the
+# HuggingFace hub whenever nothing was configured; now make_embedder refuses.
+DEFAULT_EMBEDDING_PROVIDER: str = ""
+DEFAULT_EMBEDDING_MODEL: str = ""
 EMBEDDING_PROVIDER_ENV_VAR: str = "NORA_EMBEDDING_PROVIDER"
 EMBEDDING_MODEL_ENV_VAR: str = "NORA_EMBEDDING_MODEL"
 EMBEDDING_BASE_URL_ENV_VAR: str = "NORA_EMBEDDING_BASE_URL"
@@ -996,7 +999,7 @@ def resolve_embedding_provider(
 
     Precedence: CLI flag > NORA_EMBEDDING_PROVIDER env var >
     config/llm.json `embedding_provider` > EnvironmentConfig field
-    (deprecated, back-compat) > default ("sentence-transformers").
+    (deprecated, back-compat) > default ("": none — make_embedder refuses).
     The "huggingface" alias is accepted but the canonical name is
     preserved (make_embedder normalizes aliases internally).
     """
@@ -1023,7 +1026,7 @@ def resolve_embedding_model(
 
     Precedence: CLI flag > NORA_EMBEDDING_MODEL env var >
     config/llm.json `embedding_model` > EnvironmentConfig field
-    (deprecated, back-compat) > default ("all-MiniLM-L6-v2"). No
+    (deprecated, back-compat) > default ("": none). No
     enum validation — model names are provider-specific.
     """
     for value in (
@@ -1104,21 +1107,19 @@ RERANKER_BATCH_SIZE_ENV_VAR: str = "NORA_RERANK_BATCH_SIZE"
 RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED: str = "NORA_SIRA_RERANK_BATCH_SIZE"
 RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
 
-DEFAULT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
-"""Sentence-transformers cross-encoder model id (or local filesystem
-path). When the work-PC corpus is firewalled from HuggingFace, pre-
-download via ``huggingface-cli download <id> --local-dir <path>`` and
-set this to the local-dir path. For provider=ollama, set to an
-Ollama-pulled reranker model name like
-``bbjson/bge-reranker-base:latest`` instead."""
+DEFAULT_RERANKER_MODEL: str = ""
+"""No built-in model: the deployment names it (a HuggingFace cross-encoder
+id or local path for provider=huggingface, an Ollama-pulled name for
+provider=ollama). Empty passes no name; the huggingface backend then uses
+its class default and TEI uses the model its server loaded."""
 
-DEFAULT_RERANKER_PROVIDER: str = "huggingface"
-"""Which reranker backend to instantiate. "huggingface" uses
-sentence_transformers.CrossEncoder (loads from HF cache). "ollama"
-uses OllamaReranker (calls a local Ollama server). For deployments
-on proxy-restricted machines without HF access but with Ollama
-running locally, "ollama" lets you reuse a model already pulled with
-`ollama pull <name>` — no separate HF cache to manage."""
+DEFAULT_RERANKER_PROVIDER: str = ""
+"""No built-in backend. A reranker that is enabled without an explicit
+provider runs as the MockReranker passthrough, so nothing downloads from
+the HuggingFace hub unless "huggingface" is named. "huggingface" uses
+sentence_transformers.CrossEncoder (loads from HF cache). "ollama" uses
+OllamaReranker (calls a local Ollama server); "tei" and the openai-rerank
+variants call a remote server."""
 
 DEFAULT_RERANKER_OLLAMA_URL: str = "http://localhost:11434"
 """Base URL for the local Ollama server when provider=ollama. Same
@@ -1300,7 +1301,7 @@ def resolve_reranker_provider(
 
     Precedence: NORA_RERANKER_PROVIDER env var > Config-page DB
     (``llm.reranker_provider``) > config/llm.json ``reranker_provider``
-    > built-in ``DEFAULT_RERANKER_PROVIDER`` ("huggingface").
+    > built-in ``DEFAULT_RERANKER_PROVIDER`` ("": none, passthrough).
 
     Unknown values fall back to the default. Lets deployments on
     proxy-restricted machines without HF access use a locally-pulled

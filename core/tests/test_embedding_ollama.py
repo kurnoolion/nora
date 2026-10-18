@@ -365,7 +365,8 @@ def test_make_embedder_unknown_provider_raises():
 
 def test_make_embedder_alias_st_for_sentence_transformers():
     """The factory accepts 'st' as a shortcut alias to ensure dispatch is robust."""
-    config = VectorStoreConfig(embedding_provider="st")
+    config = VectorStoreConfig(embedding_provider="st",
+                               embedding_model="all-MiniLM-L6-v2")
     # We don't actually want to load sentence-transformers in this test, just
     # verify the factory routes to it (which will fail on a missing dep on
     # some CI machines). Use importorskip to gate.
@@ -383,6 +384,16 @@ def test_make_embedder_alias_huggingface_for_sentence_transformers():
     from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
 
     for alias in ("huggingface", "hf"):
-        config = VectorStoreConfig(embedding_provider=alias)
+        config = VectorStoreConfig(embedding_provider=alias,
+                                   embedding_model="all-MiniLM-L6-v2")
         emb = make_embedder(config)
         assert isinstance(emb, SentenceTransformerEmbedder), f"alias {alias!r} did not route"
+
+
+def test_make_embedder_refuses_without_a_provider():
+    # No built-in default: an unconfigured provider must fail clearly, not
+    # fall back to sentence-transformers (which downloads from the hub).
+    from core.src.vectorstore import make_embedder
+
+    with pytest.raises(ValueError, match="No embedding provider configured"):
+        make_embedder(VectorStoreConfig())

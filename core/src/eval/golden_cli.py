@@ -103,10 +103,15 @@ def _build_query_pipeline(graph_path: Path, vectorstore_dir: Path, llm):
     from core.src.vectorstore.config import VectorStoreConfig
 
     vs_config_path = embedder_config_path(vectorstore_dir)
-    if vs_config_path is not None:
-        vs_config = VectorStoreConfig.load_json(vs_config_path)
-    else:
-        vs_config = VectorStoreConfig(persist_directory=str(vectorstore_dir))
+    if vs_config_path is None:
+        # Every built store writes one; without it there is no NORA index to
+        # score, and a default config would pick no embedder.
+        raise GoldenEvalError(
+            "GEV-E003",
+            "no vector store config under the vectorstore directory — "
+            "no NORA index to score against",
+        )
+    vs_config = VectorStoreConfig.load_json(vs_config_path)
     embedder = make_embedder(vs_config)
 
     cell_stores = load_cell_stores(vectorstore_dir)

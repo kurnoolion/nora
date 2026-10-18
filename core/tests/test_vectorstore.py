@@ -236,7 +236,7 @@ def _make_taxonomy() -> dict:
 class TestConfig:
     def test_defaults(self):
         c = VectorStoreConfig()
-        assert c.embedding_model == "all-MiniLM-L6-v2"
+        assert c.embedding_provider == "" and c.embedding_model == ""
         assert c.distance_metric == "cosine"
         assert c.embedding_batch_size == 64
         assert c.normalize_embeddings is True

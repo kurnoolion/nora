@@ -381,3 +381,33 @@
 - Strand paused 2026-08-27 — session rebinds to `team-operations`.
   Sweep monitoring continues reactively; `/land-strand` still queued
   (16 drafts; D-DRAFT-10 + D-DRAFT-12 promote together).
+
+## 2026-10-18 — release handling built, migrated and baselined
+
+### Done this session
+- Release-handling design (relative-release-design.md, F1–F11) built in
+  five steps and pushed (95fdaac..781402d): scope-miss classification;
+  standard/version kinds, release map, m3 matching and the E005/E006
+  preflight; golden_release_cli (show/migrate/advance/review, text check
+  with the case and operator_name classes); Eval Studio kind, relative
+  toggle and review panel; row_key Stage-2 pinning.
+- Fallback reasoning level from env (core and both sandbox paths);
+  empty answers are GEV-E007; reroutes recorded on the `fallback:` line.
+- serve-flip names the baseline at `<nora-data>/eval-baselines/<stack>.txt`.
+- Host: stack-B baseline adopted (one full run plus three Stage-1
+  repeats); live set migrated to map v1; gs-0025 cleared.
+
+### In progress
+- gs-0002 and gs-0008 stay flagged as drafts until curated.
+
+### Next
+- Curate gs-0002 and gs-0008 in the review panel.
+- Upstream parse item: join PDF tables split at a page break (same
+  column count, consecutive pages, no repeated header, skip intervening
+  image blocks).
+- Provisioning note: list the commits between the running code_version
+  and the target before a serving rebuild.
+- Serving intent model for relative release wording (separate work).
+
+### Flags
+- 3 sira verify-run tests fail on a clean main (pre-existing, unrelated).

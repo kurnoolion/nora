@@ -236,7 +236,8 @@ by hand.
 ./cycle.sh promote --label 2026-09-05-a --host <serving-host> --scheme <sira-prompt-scheme>
 ```
 
-Snapshots the serve-set into `serve/<label>/` (hardlinks, instant),
+Snapshots the serve-set into `serve/<label>/` (hardlinks, instant; the
+NORA vectorstore is copied, since chroma writes to its files on open),
 pushes it to the serving host (rsync into a staging dir, checksum
 verify, atomic rename — the remote label exists complete or not at
 all), closes the cycle and frees the baton. `--scheme` names the

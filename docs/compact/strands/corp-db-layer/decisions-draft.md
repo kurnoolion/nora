@@ -365,3 +365,71 @@ different enrichment than the lane just produced.
 (seconds per cell); cell DBs accumulate under the sira root and their
 retention is an ops concern; phase 4's publisher consumes these files
 as its input contract.
+
+## D-DRAFT-16 — No built-in HuggingFace embedder or reranker; unconfigured means a clear failure or passthrough
+
+**Context:** With no vector store config, the web route built a default
+config whose sentence-transformers embedder downloaded from the
+HuggingFace hub; on a label with no NORA index an Ask hung on a download
+stuck at 0 bytes. `query_cli` and `eval_cli` built that embedder directly,
+whatever the store named. The reranker defaulted to a HuggingFace
+cross-encoder. Project rule: serving uses no local or offline
+HuggingFace artifacts; embeddings and reranking come from a remote TEI
+server.
+
+**Decision:** The embedding provider and model have no default (env
+config, `VectorStoreConfig`); `make_embedder` raises on an empty
+provider. Readers without a store config fail with "no NORA index" (web
+route, golden/query/eval CLIs), and the CLIs use the provider the store
+was built with. The reranker provider and model have no default; an
+enabled reranker with no provider runs as passthrough with a warning.
+Compose sets `HF_HUB_OFFLINE=1` on the serve services.
+
+**Why:** A silent default hid misconfiguration as a hang or a quiet
+quality change. Keeping the default but setting offline mode was
+rejected: it fails later and less clearly, and still leaves the HF
+backend as the implicit choice.
+
+**Consequences:** Every environment that builds or reads a NORA index
+must name `NORA_EMBEDDING_PROVIDER` (or config/llm.json must). The
+sentence-transformers and huggingface backends still exist, but run only
+when named.
+
+## D-DRAFT-17 — promote.sh copies the NORA vectorstore instead of hardlinking it
+
+**Context:** Labels are hardlink snapshots, on the premise that a
+rebuild never mutates a promoted label. Opening a chroma index updates
+`chroma.sqlite3` in place, so the write reached the build workspace and
+every label sharing the link.
+
+**Decision:** promote copies `out/vectorstore` (`cp -a`); the rest of the
+serve-set stays hardlinked.
+
+**Why:** Hardlinks isolate only rewrites that create new files. No chroma
+open mode is known to be reliably write-free, and the vectorstore is
+small next to the rest of a label, so a copy is the simple, sure fix.
+
+**Consequences:** Promote takes more disk and time for the vectorstore.
+Labels promoted before the change must be re-copied by hand. Any other
+serve-set file opened read-write (SIRA cells are unchecked) would need
+the same treatment.
+
+## D-DRAFT-18 — The team gate refuses legacy sections instead of forcing them to SIRA
+
+**Context:** The SIRA-only override sat inside the `section == "merged"`
+branch of `/api/test/ask`. A gated POST without `section` defaulted to
+`requirement_bot` and ran the NORA lane.
+
+**Decision:** For a gated member, `/api/test/ask` runs only
+`section=merged` (lanes forced to SIRA) and refuses every other section
+before dispatch; `/api/test/synthesize-group`, a NORA-pipeline re-run, is
+refused outright. The admin cookie keeps the legacy paths.
+
+**Why:** Silently rewriting a legacy section to merged + SIRA would
+return 200 for a request that asked for something else — the same
+misreading that hid the gap (a gated "NORA" Ask that ran SIRA). The gated
+page never sends a legacy section, so refusing costs nothing.
+
+**Consequences:** Direct-POST clients under the gate must send
+`section=merged`. Gate-on tests cover a missing section and each legacy
+section.
