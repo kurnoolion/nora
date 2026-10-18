@@ -557,13 +557,33 @@ experiment.
   digest already says why; no clean-up of run dirs is needed.
 
 When a campaign establishes what a stack currently serves — the
-accepted floor for its label — copy that cell's GEV block to
-`${GOLDEN_DIR}/baselines/<stack>.txt`. That file is what a staged
-promote's eval is compared against (`docs/ingestion-guide.md` §6f),
-so it must always describe the label the stack serves *now*: refresh it
-from the first accepted run after every production flip, never from a
-`--mno`-filtered or snapshot-of-another-campaign run, and note the
-campaign id and date in a comment line above the block.
+accepted floor for its label — record it as the stack's **baseline** at
+`<nora-data>/eval-baselines/<stack>.txt` (`$NORA_EVAL_BASELINES`
+overrides the directory; `serve-flip.sh` names the file in its hand-off).
+It lives outside the golden sets and the serve labels on purpose: a
+frozen set must stay frozen and a label is immutable. Keep the old file
+as `<stack>.txt.prev` on every refresh.
+
+A baseline is a **series**, not one run (Stage 1 is not deterministic
+under an LLM rerank — rule above): one `--stage all` run plus at least
+three `--stage 1` repeats on the same stamp. The file holds:
+
+- a comment header: date, the set (`set=`, `rmap=`, `match=`), the run
+  ids, the series shape, and the code/knobs stamp;
+- the full run's GEV block, verbatim;
+- the Stage-1 mean and range across the series (overall, plus any
+  per-MNO split you compare on);
+- Stage 2 from the judged run, marked as a single run until there are
+  repeats.
+
+That file is what a staged promote's eval is compared against
+(`docs/ingestion-guide.md` §6f), so it must always describe the label
+the stack serves *now*: refresh it from the first accepted series after
+every production flip, never from a `--mno`-filtered or
+snapshot-of-another-campaign run. A code change on the stack that keeps
+the label (a rebuilt query service) moves the stamp; append a note with
+a short Stage-1 check on the new code rather than refreshing, unless the
+check shows a shift.
 
 ## The sharing boundary (NFR-8)
 

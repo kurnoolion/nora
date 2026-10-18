@@ -38,6 +38,11 @@
 #                 this docker/ dir when the stack env only exists there
 #                 (pre-migration hosts)
 #
+# The hand-off names the stack's golden baseline: $NORA_EVAL_BASELINES, else
+# eval-baselines/ beside the serve root (<nora-data>/eval-baselines/<stack>.txt).
+# Baselines live outside the golden sets and the serve labels: a frozen set
+# must stay frozen, and a label is immutable.
+#
 # Examples:
 #   ./serve-flip.sh nora2 2026-09-01-a                    # staged: secondary first
 #   ./serve-flip.sh nora1 2026-09-01-a --eval-run 42      # ...then production
@@ -181,6 +186,6 @@ echo "logged     : $LOG"
 echo ""
 echo "flipped $STACK -> $LABEL"
 echo "rollback   : $0 $STACK $CUR_LABEL --mode expedited --yes"
-GOLDEN="$(envget "$ENVFILE" GOLDEN_DIR)"
-echo "baseline   : after the next accepted golden run on $STACK, refresh" \
-     "${GOLDEN:-\$GOLDEN_DIR}/baselines/$STACK.txt with its GEV block"
+BASELINES="${NORA_EVAL_BASELINES:-$(dirname "$SERVE_ROOT")/eval-baselines}"
+echo "baseline   : after the next accepted golden series on $STACK (full run +" \
+     "3 Stage-1 repeats), refresh $BASELINES/$STACK.txt — keep the old file as .prev"

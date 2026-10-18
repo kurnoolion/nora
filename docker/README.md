@@ -730,7 +730,7 @@ existing label:
 ```
 
 `serve-flip.sh` defaults are `staged` mode (flip the secondary stack, run
-the golden eval against `${GOLDEN_DIR}/baselines/<stack>.txt`, then flip
+the golden eval against `<nora-data>/eval-baselines/<stack>.txt`, then flip
 production with `--eval-run <id>`); `--mode expedited` is the direct/hotfix
 flip and `--mode override --note "<why>"` records a knowingly-regressed
 promote. The mode is recorded in `serve/PROMOTE_LOG`, never enforced.
