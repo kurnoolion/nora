@@ -423,3 +423,172 @@ class TestCuration:
         assert "gs-0001" in mine and "gs-0002" not in mine
         # The author dropdown lists both authors regardless of the active filter.
         assert "expert-a" in mine and "expert-b" in mine
+
+
+# ─── Release handling (strand golden-eval, step 5) ───────────────────
+
+
+def _map(tmp_path, **mnos):
+    from core.src.eval.golden import golden_root
+    from core.src.eval.release_map import ReleaseMap, save_release_map
+
+    save_release_map(golden_root(tmp_path), ReleaseMap(
+        version=1, mnos={k.replace("_", "-"): v for k, v in mnos.items()}))
+
+
+def _save(tmp_path, **kw):
+    s = GoldenSample(sample_id="gs-0001", query=kw.pop("query", "widget retry?"),
+                     **kw)
+    save_sample(tmp_path, s)
+    return s
+
+
+def _load(tmp_path):
+    return load_sample(sample_path(tmp_path, "gs-0001"))
+
+
+class TestKindAndRelative:
+    def test_kind_selector_saves_and_refuses_unsupported_switch(self, client, tmp_path):
+        _create(client)
+        r = client.post("/api/eval-studio/sample/gs-0001/meta", data={
+            "query": "widget retry?", "kind": "version"})
+        assert r.status_code == 200 and _load(tmp_path).kind == "version"
+        s = _load(tmp_path)
+        s.ground_truth = [GroundTruthEntry(req_id="REQ_FOO_0001", mno="mno-a",
+                                           release="N")]
+        save_sample(tmp_path, s)
+        r = client.post("/api/eval-studio/sample/gs-0001/meta", data={
+            "query": "widget retry?", "kind": "standard"})
+        assert "Kind not changed" in r.text
+        assert _load(tmp_path).kind == "version"
+
+    def test_relative_toggle_stores_n_refs(self, client, tmp_path):
+        _map(tmp_path, mno_a=["Jan2026", "Apr2026"])
+        _save(tmp_path, kind="version")
+        base = {"mno": "mno-a", "plan": "PLAN_X", "source": "picker",
+                "relative": "1"}
+        client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                    data={**base, "req_id": "REQ_FOO_0001", "release": "Apr2026"})
+        r = client.post("/api/eval-studio/sample/gs-0001/gt/add-bulk",
+                        data={**base, "req_ids": ["REQ_FOO_0002"],
+                              "release": "Jan2026"})
+        rels = {(e.req_id, e.release) for e in _load(tmp_path).ground_truth}
+        assert rels == {("REQ_FOO_0001", "N"), ("REQ_FOO_0002", "N-1")}
+        # The panel shows the binding.
+        assert "N-1 → Jan2026" in r.text
+
+    def test_relative_toggle_ignored_on_standard_samples(self, client, tmp_path):
+        _map(tmp_path, mno_a=["Jan2026", "Apr2026"])
+        _save(tmp_path)
+        client.post("/api/eval-studio/sample/gs-0001/gt/add", data={
+            "req_id": "REQ_FOO_0001", "mno": "mno-a", "release": "Apr2026",
+            "plan": "PLAN_X", "source": "picker", "relative": "1"})
+        assert _load(tmp_path).ground_truth[0].release == "Apr2026"
+
+    def test_direct_entry_stores_tree_spelling(self, client, tmp_path):
+        _save(tmp_path)
+        r = client.post("/api/eval-studio/sample/gs-0001/gt/add",
+                        data={"req_id": "req_foo_0002", "source": "direct"})
+        assert _load(tmp_path).ground_truth[0].req_id == "REQ_FOO_0002"
+        assert "stored as REQ_FOO_0002" in r.text
+
+    def test_qc_warnings(self, client, tmp_path):
+        _save(tmp_path, query="what changed in the jan 2026 release?")
+        r = client.get("/api/eval-studio/sample/gs-0001")
+        assert "probably a version sample" in r.text
+
+
+class TestReview:
+    def _flagged(self, tmp_path):
+        s = _save(tmp_path, status="golden-ready", golden_response="Gold.",
+                  ground_truth=[
+                      GroundTruthEntry(req_id="REQ_FOO_0001", mno="mno-a",
+                                       release="Jan2026"),
+                      GroundTruthEntry(req_id="REQ_FOO_0002", mno="mno-a",
+                                       release="Jan2026")])
+        s.golden_meta["review"] = {"mno-a": {
+            "from": ["Jan2026"], "to": "Apr2026", "changed": ["REQ_FOO_0001"],
+            "absent": ["REQ_FOO_0002"], "unverified": [], "relative": False}}
+        save_sample(tmp_path, s)
+
+    def test_panel_shows_both_texts_and_board_badge(self, client, tmp_path):
+        self._flagged(tmp_path)
+        r = client.get("/api/eval-studio/sample/gs-0001")
+        assert "Review after a release move" in r.text
+        assert "Retries use exponential backoff." in r.text     # old text
+        assert "Jan2026 → Apr2026" in r.text
+        assert "review" in client.get("/api/eval-studio/samples").text
+
+    def test_entry_actions_then_clear(self, client, tmp_path):
+        self._flagged(tmp_path)
+        url = "/api/eval-studio/sample/gs-0001/review/"
+        client.post(url + "entry", data={"mno": "mno-a",
+                                         "req_id": "REQ_FOO_0001", "action": "keep"})
+        s = _load(tmp_path)
+        assert s.ground_truth[0].release == "Apr2026"
+        assert s.golden_meta["review"]["mno-a"]["changed"] == []
+        r = client.post(url + "entry", data={
+            "mno": "mno-a", "req_id": "REQ_FOO_0002", "action": "replace",
+            "new_id": "nope"})
+        assert "not found in mno-a Apr2026" in r.text
+        client.post(url + "entry", data={
+            "mno": "mno-a", "req_id": "REQ_FOO_0002", "action": "replace",
+            "new_id": "req_foo_0001"})
+        # Replacing with an id already present makes a duplicate — refused.
+        assert len(_load(tmp_path).ground_truth) == 2
+        client.post(url + "entry", data={"mno": "mno-a",
+                                         "req_id": "REQ_FOO_0002", "action": "remove"})
+        s = _load(tmp_path)
+        assert [e.req_id for e in s.ground_truth] == ["REQ_FOO_0001"]
+        assert "review" in s.golden_meta                 # flag needs an explicit clear
+        client.post(url + "clear", data={"mno": "mno-a"})
+        assert "review" not in _load(tmp_path).golden_meta
+
+    def test_golden_save_keeps_the_flag(self, client, tmp_path):
+        self._flagged(tmp_path)
+        client.post("/api/eval-studio/sample/gs-0001/golden",
+                    data={"golden_response": "New gold."})
+        s = _load(tmp_path)
+        assert s.golden_response == "New gold." and "review" in s.golden_meta
+
+
+def test_new_routes_reachable_with_gate_on(client, tmp_path, monkeypatch):
+    # CLAUDE.md: integration surfaces are verified with the gate ON.
+    import core.src.web.team_mode as tm
+
+    monkeypatch.setattr(tm, "TEAM_MODE", True)
+    monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+    TestReview()._flagged(tmp_path)
+    r = client.post("/api/eval-studio/sample/gs-0001/review/clear",
+                    data={"mno": "mno-a"}, follow_redirects=False)
+    assert r.status_code == 200
+    assert "review" not in _load(tmp_path).golden_meta
+    r = client.post("/api/eval-studio/sample/gs-0001/meta",
+                    data={"query": "q?", "kind": "version"},
+                    follow_redirects=False)
+    assert r.status_code == 200
+
+
+def test_preview_uses_release_map(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("NORA_SIRA_QUERY_URLS", "http://127.0.0.1:9999")
+    from core.src.eval import golden_runner
+
+    monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {
+        "results": [{"rank": 1, "req_id": "REQ_FOO_0001", "mno": "mno-a",
+                     "release": "Apr2026"}],
+        "resolved_cells": ["mno-a__Apr2026"]})
+    _save(tmp_path, kind="version", ground_truth=[
+        GroundTruthEntry(req_id="REQ_FOO_0001", mno="mno-a", release="N")])
+    r = client.post("/api/eval-studio/sample/gs-0001/preview")
+    assert "GEV-E005" in r.text and "release map" in r.text
+    _map(tmp_path, mno_a=["Jan2026", "Apr2026"])
+    r = client.post("/api/eval-studio/sample/gs-0001/preview")
+    assert "recall 100%" in r.text
+
+
+def test_chat_context_resolves_relative_entries(client, tmp_path):
+    _map(tmp_path, mno_a=["Jan2026", "Apr2026"])
+    _save(tmp_path, kind="version", ground_truth=[
+        GroundTruthEntry(req_id="REQ_FOO_0002", mno="mno-a", release="N-1")])
+    assert "Retries use exponential backoff." in ge._gt_context(
+        tmp_path, _load(tmp_path))

@@ -244,9 +244,22 @@ for review, and so is every relative version sample at an `advance` (its
 answer is true for one release pair only). Flagged samples still score
 in Stage 1 — an absent id is a real miss for the expert to rule on — but
 Stage 2 skips them (`GEV-W002`): the golden response may describe the
-old text. List flags with `review`; after checking the entries and the
-golden response, clear with `review --clear`. Entries with no release
-are counted as `unattributed` and left alone.
+old text. Review flagged samples in **Eval Studio**: the Ground truth
+tab shows each flagged entry's text in the old and the new release, with
+Keep / Replace / Remove, and a button to clear the flag once the entries
+and the golden response are checked. Saving a golden response does not
+clear a flag. From the command line, `review` lists flags and
+`review --clear` clears one. Entries with no release are counted as
+`unattributed` and left alone.
+
+**Authoring in Eval Studio.** The meta card has a **kind** selector
+(`standard` by default). For a version sample with a release map, the
+**relative** checkbox on the Ground truth card stores picked releases
+as `N`, `N-1`, ...; each entry then shows its binding (`N → <release>`).
+Ids are stored in the parse tree's spelling whatever case they were
+typed in. Warnings on the meta card point out a standard sample whose
+question names a release, and relative entries (serving does not yet
+map relative wording, so `N-1` entries score as scope misses).
 
 The command prints sample and requirement ids — local material. Only
 its final counts line is chat-pasteable.

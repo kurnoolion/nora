@@ -39,6 +39,21 @@ KINDS = (KIND_STANDARD, KIND_VERSION)
 _RELATIVE_RE = re.compile(r"^N(?:-([1-9]\d*))?$")
 
 
+# A month name and a 20xx year in either order — the shape the query
+# analyzer reads as a named release. Used to warn that a standard sample's
+# question names a release (it is probably a version sample).
+_NAMED_RELEASE_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+20\d{2}\b"
+    r"|\b20\d{2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+    re.I,
+)
+
+
+def names_release(text: str) -> bool:
+    """True when ``text`` names a release by month and year."""
+    return _NAMED_RELEASE_RE.search(text or "") is not None
+
+
 def is_relative_release(value: str) -> bool:
     """True for ``N`` / ``N-<k>`` (k >= 1) — an MNO's current release and
     the ones before it, resolved through the golden set's release map."""

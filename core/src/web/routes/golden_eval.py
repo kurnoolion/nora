@@ -28,12 +28,19 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from core.src.eval.golden import (
+    KIND_STANDARD,
+    KIND_VERSION,
+    KINDS,
     STATUSES,
     GoldenEvalError,
     GoldenSample,
     GroundTruthEntry,
+    golden_root,
+    is_relative_release,
     load_sample,
     load_samples,
+    names_release,
+    needs_review,
     next_sample_id,
     sample_path,
     save_sample,
@@ -84,6 +91,82 @@ def _stack_url() -> str:
     return os.environ.get("NORA_SIRA_QUERY_URL", "").strip()
 
 
+def _release_map():
+    """The golden set's release map, or None (no map yet, or unreadable —
+    authoring must not break on it; the runner fails loud instead)."""
+    from core.src.eval.release_map import load_release_map
+
+    try:
+        return load_release_map(golden_root(_env_dir()))
+    except GoldenEvalError:
+        return None
+
+
+def _as_relative(rmap, mno: str, release: str) -> str | None:
+    """``N`` / ``N-<k>`` for a release the map lists for ``mno``."""
+    rels = rmap.mnos.get(mno, []) if rmap else []
+    if release not in rels:
+        return None
+    k = len(rels) - 1 - rels.index(release)
+    return "N" if k == 0 else f"N-{k}"
+
+
+def _resolved_release(rmap, entry: GroundTruthEntry) -> str:
+    """The absolute release an entry points at ("" when a relative entry
+    cannot resolve)."""
+    if not is_relative_release(entry.release):
+        return entry.release
+    if rmap is None:
+        return ""
+    try:
+        return rmap.resolve(entry.mno, entry.release)
+    except GoldenEvalError:
+        return ""
+
+
+def _rel_on(sample: GoldenSample) -> bool:
+    """Default for the relative toggle: on when the sample already uses
+    relative releases (a version sample does not mix the two)."""
+    return any(is_relative_release(e.release) for e in sample.ground_truth)
+
+
+def _binding(rmap):
+    """Template helper: how an entry's release reads — ``N → Apr2098`` for
+    a relative entry, the label for an absolute one."""
+    def bind(entry: GroundTruthEntry) -> str:
+        if not is_relative_release(entry.release):
+            return entry.release
+        return f"{entry.release} → {_resolved_release(rmap, entry) or 'unresolved'}"
+    return bind
+
+
+def _qc_warnings(sample: GoldenSample, rmap) -> list[str]:
+    """Authoring warnings for the release-handling rules. Advisory — they
+    never block a save (validation does that)."""
+    out: list[str] = []
+    if sample.kind == KIND_STANDARD and names_release(sample.query):
+        out.append(
+            "The question names a release, so it is probably a version "
+            "sample. As a standard sample it scores without the release, "
+            "and the scope check reports the named release as off-N."
+        )
+    if any(is_relative_release(e.release) for e in sample.ground_truth):
+        out.append(
+            "Relative releases need serving to map relative wording "
+            "(\"recent\", \"previous\") to N and N-1. Until it does, "
+            "N-1 entries score as scope misses."
+        )
+        if rmap is None:
+            out.append("No release map: relative entries cannot resolve "
+                       "(GEV-E005 at run time).")
+    if needs_review(sample):
+        out.append(
+            "A release move flagged this sample for review. Stage 2 skips "
+            "it until the flag is cleared (Ground truth tab)."
+        )
+    return out
+
+
 def _template(request: Request, name: str, ctx: dict):
     from core.src.web.app import _template_response
 
@@ -91,8 +174,15 @@ def _template(request: Request, name: str, ctx: dict):
 
 
 def _editor_ctx(request: Request, sample: GoldenSample) -> dict:
+    rmap = _release_map()
     return {
         "sample": sample,
+        "kinds": KINDS,
+        "qc_warnings": _qc_warnings(sample, rmap),
+        "bind": _binding(rmap),
+        "has_map": rmap is not None,
+        "rel_on": _rel_on(sample),
+        "review_rows": _review_rows(sample),
         "statuses": STATUSES,
         "problems": validate_sample(sample),
         "admin": is_admin(request),
@@ -117,8 +207,12 @@ def _gt_panel_ctx(sample: GoldenSample, *, gt_error: str = "",
     a latest-revision auto-pick) shown muted, distinct from the success/warning
     alerts.
     """
+    rmap = _release_map()
     return {
         "sample": sample,
+        "bind": _binding(rmap),
+        "has_map": rmap is not None,
+        "rel_on": _rel_on(sample),
         "stack_url": _stack_url(),
         "oob_count": True,
         "gt_error": gt_error,
@@ -154,6 +248,7 @@ def sample_board(request: Request, mno: str = "", author: str = ""):
         samples = [s for s in samples if s.created_by == author]
     return _template(request, "eval_studio/_board.html", {
         "samples": samples,
+        "flagged": {s.sample_id for s in samples if needs_review(s)},
         "load_error": load_error,
         "mnos": sorted({c["mno"] for c in req_tree.list_cells(env_dir)}),
         "sel_mno": mno,
@@ -219,7 +314,7 @@ def sample_editor(request: Request, sid: str):
 @router.post("/api/eval-studio/sample/{sid}/meta", response_class=HTMLResponse)
 def sample_meta(
     request: Request, sid: str, query: str = Form(...), area: str = Form(""),
-    mno: str = Form(""),
+    mno: str = Form(""), kind: str = Form(""),
 ):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
@@ -227,6 +322,18 @@ def sample_meta(
     sample.query = query.strip()
     sample.area = area.strip()
     sample.mno = mno.strip()
+    previous_kind = sample.kind
+    if kind:
+        sample.kind = kind
+    problems = validate_sample(sample)
+    if problems and sample.kind != previous_kind:
+        # A kind switch that the entries do not support (e.g. relative
+        # releases on a standard sample): keep the old kind, say why.
+        sample.kind = previous_kind
+        return _template(request, "eval_studio/_meta_card.html", {
+            **_editor_ctx(request, sample),
+            "status_error": "Kind not changed: " + "; ".join(problems),
+        })
     save_sample(_env_dir(), sample)
     # Swap only the meta card so the active tab / scroll survive; refresh the
     # board (area shows there). The chat system prompt is rebuilt from the
@@ -286,11 +393,13 @@ def gt_add(
     release: str = Form(""),
     plan: str = Form(""),
     source: str = Form("direct"),
+    relative: str = Form(""),
 ):
     sample = _load_or_error(sid)
     if isinstance(sample, HTMLResponse):
         return sample
     env_dir = _env_dir()
+    rmap = _release_map()
     qualified = bool(mno and release)
     # One field, possibly many ids: a direct paste may carry a list separated
     # by commas / whitespace / newlines. Picker adds send a single id.
@@ -304,10 +413,17 @@ def gt_add(
     for rid in raw_ids:
         # Picker adds arrive fully qualified — validate within that cell only;
         # unqualified direct pastes need the corpus-wide scan.
-        matches = req_tree.find_req(env_dir, rid, mno, release)
+        # Case-insensitive (the eval matches ids under m3); the entry stores
+        # the parse tree's own spelling.
+        matches = req_tree.find_req(env_dir, rid, mno, release,
+                                    ignore_case=True)
         if not matches:
             not_found.append(rid)
             continue
+        canon = matches[0].get("req_id") or rid
+        if canon != rid:
+            notices.append(f"{rid}: stored as {canon} (the tree's spelling)")
+            rid = canon
         e_mno, e_release, e_plan = mno, release, plan
         if not qualified:
             # Direct entry without qualifiers: auto-qualify. A req_id found in
@@ -321,6 +437,10 @@ def gt_add(
                     f"{rid}: matched {len(matches)} cells ({cells}) — "
                     f"added latest ({e_release})"
                 )
+        e_release, note = _entry_release(sample, rmap, e_mno, e_release,
+                                         relative)
+        if note:
+            notices.append(f"{rid}: {note}")
         key = (rid, e_mno, e_release)
         if key in existing:
             dupes += 1
@@ -349,6 +469,20 @@ def gt_add(
                                    gt_notices=notices))
 
 
+def _entry_release(sample: GoldenSample, rmap, mno: str, release: str,
+                   relative: str) -> tuple[str, str]:
+    """The release to store for a new entry, plus a notice. A version
+    sample with the relative toggle on stores ``N`` / ``N-<k>`` when the
+    map lists the release; everything else stores the label as picked."""
+    if not (relative and sample.kind == KIND_VERSION):
+        return release, ""
+    ref = _as_relative(rmap, mno, release)
+    if ref is None:
+        return release, (f"{release} is not in the release map for {mno} — "
+                         "stored as an absolute release")
+    return ref, ""
+
+
 @router.post("/api/eval-studio/sample/{sid}/gt/add-bulk", response_class=HTMLResponse)
 def gt_add_bulk(
     request: Request,
@@ -357,6 +491,7 @@ def gt_add_bulk(
     mno: str = Form(""),
     release: str = Form(""),
     plan: str = Form(""),
+    relative: str = Form(""),
 ):
     """Add every selected picker row in one shot. The ids come from the
     picker's own plan listing (parse trees), so per-id existence checks
@@ -369,16 +504,18 @@ def gt_add_bulk(
         return _template(request, "eval_studio/_gt_panel.html",
                          _gt_panel_ctx(sample,
                                        gt_error="bulk add needs the picker's MNO/release selection"))
+    stored, note = _entry_release(sample, _release_map(), mno, release,
+                                  relative)
     existing = {(e.req_id, e.mno, e.release) for e in sample.ground_truth}
     added = skipped = 0
     for rid in req_ids:
         rid = rid.strip()
-        key = (rid, mno, release)
+        key = (rid, mno, stored)
         if not rid or key in existing:
             skipped += bool(rid)
             continue
         sample.ground_truth.append(GroundTruthEntry(
-            req_id=rid, mno=mno, release=release, plan=plan, source="picker",
+            req_id=rid, mno=mno, release=stored, plan=plan, source="picker",
         ))
         existing.add(key)
         added += 1
@@ -391,6 +528,7 @@ def gt_add_bulk(
             + (f", {skipped} already present" if skipped else "")
         ) if (added or skipped) else "",
         gt_error="" if (added or skipped) else "No requirements selected",
+        gt_notices=[note] if note else [],
     ))
 
 
@@ -531,11 +669,13 @@ def stage1_preview(request: Request, sid: str):
     from core.src.eval.golden_runner import run_stage1
 
     try:
-        result = run_stage1(sample, stack)
+        result = run_stage1(sample, stack, release_map=_release_map())
     except GoldenEvalError as exc:
+        hint = ("relative release cannot resolve — check the release map"
+                if exc.code == "GEV-E005" else "is the stack up?")
         return HTMLResponse(
             f'<div class="alert alert-danger small">{exc.code}: '
-            f"preview failed — is the stack up?</div>"
+            f"preview failed — {hint}</div>"
         )
     return _template(request, "eval_studio/_preview.html", {
         "sample": sample,
@@ -553,11 +693,14 @@ def _gt_context(env_dir: Path, sample: GoldenSample) -> str:
     """
     parts: list[str] = []
     total = 0
+    rmap = _release_map()
     for entry in sample.ground_truth:
         # Qualified entries scope the scan to their cell; only legacy
-        # unqualified entries pay a corpus-wide lookup.
+        # unqualified entries pay a corpus-wide lookup. A relative entry
+        # reads its resolved release's text.
         matches = req_tree.find_req(
-            env_dir, entry.req_id, entry.mno, entry.release,
+            env_dir, entry.req_id, entry.mno, _resolved_release(rmap, entry),
+            ignore_case=True,
         )
         for m in matches[:1]:
             block = (
@@ -661,12 +804,19 @@ def save_golden(
     else:
         edited = True
     sample.golden_response = new_text
+    # A release-move review flag survives a re-save: clearing it is an
+    # explicit expert act in the review panel (field-found risk — the
+    # meta was rebuilt wholesale, so saving the response silently dropped
+    # the flag and the Stage-2 skip with it).
+    review = sample.golden_meta.get("review")
     sample.golden_meta = {
         "chat_turns": chat_turns,
         "model": model,
         "curated_at": "",  # stamped by save_sample's updated_at
         "edited": edited,
     }
+    if review:
+        sample.golden_meta["review"] = review
     save_sample(_env_dir(), sample)
     sample.golden_meta["curated_at"] = sample.updated_at
     if edited:
@@ -676,3 +826,123 @@ def save_golden(
     # tab check badge.
     return _template(request, "eval_studio/_golden_card.html",
                      {"sample": sample, "oob": True})
+
+
+# ─── Release-move review ────────────────────────────────────────────
+
+
+_REVIEW_CLASSES = ("changed", "absent", "unverified")
+
+
+def _review_rows(sample: GoldenSample) -> list[dict]:
+    """One row per flagged entry: the stored entry, its class, and the
+    requirement text in the old and the new release (case-insensitive, as
+    the text check looks ids up). Per MNO, a relative version sample's
+    flag has no entry rows — the whole answer needs re-curation."""
+    review = sample.golden_meta.get("review") or {}
+    if not review:
+        return []
+    env_dir = _env_dir()
+    rows: list[dict] = []
+    for mno, r in sorted(review.items()):
+        old_rel = (r.get("from") or [""])[0]
+        new_rel = r.get("to", "")
+        ids = [(cls, rid) for cls in _REVIEW_CLASSES for rid in r.get(cls, [])]
+        if r.get("relative") and not ids:
+            rows.append({"mno": mno, "relative": True, "from": old_rel,
+                         "to": new_rel})
+        for cls, rid in ids:
+            def text(rel: str) -> str:
+                if not rel:
+                    return ""
+                m = req_tree.find_req(env_dir, rid, mno, rel, ignore_case=True)
+                return f"{m[0]['title']}\n{m[0]['text']}".strip() if m else ""
+            rows.append({
+                "mno": mno, "req_id": rid, "cls": cls,
+                "from": old_rel, "to": new_rel,
+                "old_text": text(old_rel), "new_text": text(new_rel),
+                "relative": bool(r.get("relative")),
+            })
+    return rows
+
+
+def _drop_from_review(sample: GoldenSample, mno: str, req_id: str) -> None:
+    r = (sample.golden_meta.get("review") or {}).get(mno)
+    if not r:
+        return
+    for cls in _REVIEW_CLASSES:
+        r[cls] = [x for x in r.get(cls, [])
+                  if x.casefold() != req_id.casefold()]
+
+
+@router.post("/api/eval-studio/sample/{sid}/review/entry",
+             response_class=HTMLResponse)
+def review_entry(
+    request: Request,
+    sid: str,
+    mno: str = Form(...),
+    req_id: str = Form(...),
+    action: str = Form(...),
+    new_id: str = Form(""),
+):
+    """Rule on one flagged entry: ``keep`` (move it to the new release),
+    ``replace`` (a successor id in the new release) or ``remove``. The
+    sample's flag stays until the expert clears it — the golden response
+    still needs a look."""
+    sample = _load_or_error(sid)
+    if isinstance(sample, HTMLResponse):
+        return sample
+    r = (sample.golden_meta.get("review") or {}).get(mno)
+    if not r:
+        return _template(request, "eval_studio/_editor.html",
+                         _editor_ctx(request, sample))
+    to = r.get("to", "")
+    entry = next((e for e in sample.ground_truth if e.mno == mno
+                  and e.req_id.casefold() == req_id.casefold()), None)
+    error = ""
+    if entry is None and action != "remove":
+        error = f"{req_id} is no longer in the ground truth"
+    elif action == "keep":
+        entry.release = to
+    elif action == "remove":
+        sample.ground_truth = [e for e in sample.ground_truth if e is not entry]
+    elif action == "replace":
+        m = req_tree.find_req(_env_dir(), new_id.strip(), mno, to,
+                              ignore_case=True)
+        if not new_id.strip() or not m:
+            error = f"{new_id or '(empty)'} not found in {mno} {to}"
+        else:
+            entry.req_id, entry.release = m[0]["req_id"], to
+            entry.plan = m[0].get("plan", entry.plan)
+    else:
+        error = f"unknown action {action!r}"
+    if not error:
+        _drop_from_review(sample, mno, req_id)
+        problems = validate_sample(sample)
+        if problems:
+            error = "; ".join(problems)
+        else:
+            save_sample(_env_dir(), sample)
+    ctx = _editor_ctx(request, sample)
+    ctx["review_error"] = error
+    return _template(request, "eval_studio/_editor.html", ctx)
+
+
+@router.post("/api/eval-studio/sample/{sid}/review/clear",
+             response_class=HTMLResponse)
+def review_clear(request: Request, sid: str, mno: str = Form(...)):
+    """Clear one MNO's flag — the expert confirms the entries and the
+    golden response hold for the new release. Stage 2 judges the sample
+    again once no MNO is flagged."""
+    sample = _load_or_error(sid)
+    if isinstance(sample, HTMLResponse):
+        return sample
+    review = dict(sample.golden_meta.get("review") or {})
+    review.pop(mno, None)
+    if review:
+        sample.golden_meta["review"] = review
+    else:
+        sample.golden_meta.pop("review", None)
+    save_sample(_env_dir(), sample)
+    return _template(request, "eval_studio/_editor.html",
+                     _editor_ctx(request, sample))

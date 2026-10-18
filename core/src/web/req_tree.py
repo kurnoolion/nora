@@ -173,7 +173,8 @@ def plans_for_mno(env_dir_path: Path, mno: str) -> dict[str, list[str]]:
 
 
 def find_req(
-    env_dir_path: Path, req_id: str, mno: str = "", release: str = ""
+    env_dir_path: Path, req_id: str, mno: str = "", release: str = "",
+    ignore_case: bool = False,
 ) -> list[dict]:
     """Locate a req_id across the corpus — direct-entry validation and
     auto-qualification in the Eval Studio picker (an id found in exactly
@@ -202,7 +203,12 @@ def find_req(
 
     Passing both qualifiers scopes the scan to that single cell —
     corpus-wide scans are for genuinely unqualified lookups only.
+
+    ``ignore_case`` matches the id case-insensitively (the golden eval's
+    m3 rule); each row's ``req_id`` is the tree's own spelling, so a
+    caller can store the canonical form.
     """
+    want = req_id.casefold() if ignore_case else req_id
     matches: list[dict] = []
     if mno and release:
         cells: list[dict] = [{"mno": mno, "release": release}]
@@ -213,10 +219,12 @@ def find_req(
         for doc_id in list_docs(env_dir_path, mno, rel):
             tree = load_tree(env_dir_path, doc_id, mno, rel)
             for req in tree.get("requirements", []):
-                if req.get("req_id") == req_id:
+                rid = req.get("req_id") or ""
+                if (rid.casefold() if ignore_case else rid) == want:
                     plan = _req_plan(req, tree)
                     is_primary = plan == tree.get("plan_id", "")
                     matches.append({
+                        "req_id": rid,
                         "mno": mno,
                         "release": rel,
                         "plan": plan,

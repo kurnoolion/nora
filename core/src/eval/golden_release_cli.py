@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
-import re
 import sys
 import unicodedata
 from dataclasses import dataclass, field
@@ -52,18 +51,10 @@ from .golden import (
     golden_root,
     is_relative_release,
     load_samples,
+    names_release,
     save_sample,
 )
 from .release_map import ReleaseMap, load_release_map, save_release_map
-
-# Same shape as the query analyzer's release patterns: a month name and a
-# 20xx year in either order. Used only to LIST standard samples whose
-# question names a release (they are probably version samples).
-_NAMED_RELEASE_RE = re.compile(
-    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+20\d{2}\b"
-    r"|\b20\d{2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
-    re.I,
-)
 
 
 # ─── Parse-tree access ───────────────────────────────────────────────
@@ -375,7 +366,7 @@ def cmd_migrate(args, golden_dir: Path) -> int:
 
     samples = load_samples(args.env_dir)
     named = [s.sample_id for s in samples if s.kind == KIND_STANDARD
-             and _NAMED_RELEASE_RE.search(s.query)]
+             and names_release(s.query)]
     if named:
         print("standard samples whose question names a release "
               "(probably version samples — expert to decide):")

@@ -290,7 +290,7 @@ intended.
 | 2 | `kind`, release grammar, `ReleaseMap` + history, resolution, release-free matching for `standard`, `match_rule`, digests over resolved entries, map/stack preflight, `rmap=` | medium |
 | 3 | `golden_release_cli` show / migrate / advance (text-change check) / review (list, clear); review flag; Stage-2 skip of flagged samples | medium |
 | 4 | F10 de-duplication fix — built: `row_key` = id + cell; Stage 1 `retrieved_row_keys`; sira-rows Stage 2 pins rows | small |
-| 5 | Eval Studio: kind selector, release toggle, review panel, QC warnings | medium |
+| 5 | Eval Studio: kind selector, release toggle, review panel, QC warnings — built, plus case normalisation at save, golden save keeping the flag, map-aware preview and chat context | medium |
 | 6 | Docs: golden-eval guide, eval and web MODULE.md, decision drafts, serve-flip hand-off line | small |
 | — | Serving intent model (4.9) | separate work |
 

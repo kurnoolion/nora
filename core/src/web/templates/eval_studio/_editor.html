@@ -20,6 +20,12 @@
     {% with slot='gt' %}{% include "eval_studio/_promote.html" %}{% endwith %}
   </div>
 
+  {% if review_rows %}
+  <div id="es-review" class="mb-2">
+    {% include "eval_studio/_review_panel.html" %}
+  </div>
+  {% endif %}
+
   <div class="row g-2">
     <div class="col-5">
       {# Ground-truth panel — its own swap target so add/remove never

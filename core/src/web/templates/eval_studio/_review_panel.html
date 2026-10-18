@@ -1,0 +1,69 @@
+{# Release-move review (golden_release_cli advance/migrate flags). One row
+   per flagged entry with its text in the old and the new release; the
+   expert keeps, replaces or removes each entry, then clears the MNO's flag
+   once the golden response is confirmed for the new release. Stage 2
+   skips the sample until no MNO is flagged. Actions re-render the editor. #}
+<div class="card border-warning">
+  <div class="card-header py-1 small fw-semibold">
+    <i class="bi bi-exclamation-triangle text-warning"></i>
+    Review after a release move — Stage 2 skips this sample until cleared
+  </div>
+  <div class="card-body py-2 small">
+    {% if review_error %}<div class="alert alert-warning py-1">{{ review_error }}</div>{% endif %}
+    {% for mno, rows in review_rows|groupby('mno') %}
+    {% set first = rows|first %}
+    <div class="mb-2">
+      <div class="fw-semibold">{{ mno }}: {{ first['from'] or '?' }} → {{ first['to'] }}</div>
+      {% if first.relative %}
+      <div class="text-muted mb-1">Relative version sample: its answer holds for one release pair only. Check every entry and re-curate the golden response for the new pair.</div>
+      {% endif %}
+      {% for r in rows if r.req_id %}
+      <div class="border rounded p-2 mb-1">
+        <div class="d-flex justify-content-between align-items-center">
+          <span><span class="fw-semibold">{{ r.req_id }}</span>
+            <span class="badge text-bg-light">{{ r.cls }}</span></span>
+          <span class="d-inline-flex gap-1">
+            {% for action, label in [('keep', 'Keep'), ('remove', 'Remove')] %}
+            <form hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/review/entry"
+                  hx-target="#es-editor" hx-swap="innerHTML">
+              <input type="hidden" name="mno" value="{{ mno }}">
+              <input type="hidden" name="req_id" value="{{ r.req_id }}">
+              <input type="hidden" name="action" value="{{ action }}">
+              <button class="btn btn-sm btn-outline-{{ 'success' if action == 'keep' else 'danger' }} py-0" type="submit"
+                      {% if action == 'keep' and r.cls == 'absent' %}disabled title="Not in {{ r.to }} — replace or remove"{% endif %}>{{ label }}</button>
+            </form>
+            {% endfor %}
+            <form class="d-inline-flex gap-1"
+                  hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/review/entry"
+                  hx-target="#es-editor" hx-swap="innerHTML">
+              <input type="hidden" name="mno" value="{{ mno }}">
+              <input type="hidden" name="req_id" value="{{ r.req_id }}">
+              <input type="hidden" name="action" value="replace">
+              <input class="form-control form-control-sm py-0" name="new_id" placeholder="successor id in {{ r.to }}" style="width:180px">
+              <button class="btn btn-sm btn-outline-primary py-0" type="submit">Replace</button>
+            </form>
+          </span>
+        </div>
+        <div class="row g-2 mt-1">
+          <div class="col-6"><div class="text-muted">{{ r['from'] or 'old release' }}</div>
+            <pre class="bg-body-tertiary border rounded p-1 mb-0" style="white-space:pre-wrap; max-height:160px; overflow-y:auto">{{ r.old_text or '(not found)' }}</pre></div>
+          <div class="col-6"><div class="text-muted">{{ r.to }}</div>
+            <pre class="bg-body-tertiary border rounded p-1 mb-0" style="white-space:pre-wrap; max-height:160px; overflow-y:auto">{{ r.new_text or '(not found)' }}</pre></div>
+        </div>
+      </div>
+      {% endfor %}
+      <form class="mt-1" hx-post="{{ root_path }}/api/eval-studio/sample/{{ sample.sample_id }}/review/clear"
+            hx-target="#es-editor" hx-swap="innerHTML"
+            hx-confirm="Clear the {{ mno }} review flag? Confirm the entries and the golden response hold for {{ first['to'] }}.">
+        <input type="hidden" name="mno" value="{{ mno }}">
+        <button class="btn btn-sm btn-warning py-0" type="submit">Entries and golden response checked — clear {{ mno }} flag</button>
+      </form>
+    </div>
+    {% endfor %}
+    {% if sample.golden_response %}
+    <details><summary class="text-muted" style="cursor:pointer">Golden response (edit on the Golden response tab)</summary>
+      <pre class="bg-body-tertiary border rounded p-1 mt-1 mb-0" style="white-space:pre-wrap; max-height:200px; overflow-y:auto">{{ sample.golden_response }}</pre>
+    </details>
+    {% endif %}
+  </div>
+</div>
