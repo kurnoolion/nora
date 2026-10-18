@@ -39,7 +39,8 @@
 #                 (pre-migration hosts)
 #
 # The hand-off names the stack's golden baseline: $NORA_EVAL_BASELINES, else
-# eval-baselines/ beside the serve root (<nora-data>/eval-baselines/<stack>.txt).
+# eval-baselines/ beside the serve root (<nora-data>/eval-baselines/<stack>.txt,
+# <stack> = the compose stack name as passed to this script).
 # Baselines live outside the golden sets and the serve labels: a frozen set
 # must stay frozen, and a label is immutable.
 #

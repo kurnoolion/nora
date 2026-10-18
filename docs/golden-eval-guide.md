@@ -558,8 +558,9 @@ experiment.
 
 When a campaign establishes what a stack currently serves — the
 accepted floor for its label — record it as the stack's **baseline** at
-`<nora-data>/eval-baselines/<stack>.txt` (`$NORA_EVAL_BASELINES`
-overrides the directory; `serve-flip.sh` names the file in its hand-off).
+`<nora-data>/eval-baselines/<stack>.txt`, where `<stack>` is the compose
+stack name as passed to `serve-flip.sh` (`$NORA_EVAL_BASELINES` overrides
+the directory; `serve-flip.sh` names the file in its hand-off).
 It lives outside the golden sets and the serve labels on purpose: a
 frozen set must stay frozen and a label is immutable. Keep the old file
 as `<stack>.txt.prev` on every refresh.
