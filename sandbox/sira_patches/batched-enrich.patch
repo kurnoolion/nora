@@ -32,7 +32,7 @@
      prompt_path = os.path.join(SCRIPTS_DIR, cfg.enrich.doc_prompt_file)
      with open(prompt_path) as f:
          return f.read()
-@@ -353,12 +371,114 @@
+@@ -353,12 +371,119 @@
  
      async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
          items = list(zip(target_ids, target_texts))
@@ -79,6 +79,11 @@
 +                    "max_tokens": max_tokens,
 +                    "temperature": enrich_cfg.temperature,
 +                }
++                # The fallback's own reasoning level (a thinking fallback
++                # answered with empty content) — NORA_SIRA_ENRICH_FALLBACK_
++                # LLM_REASONING(_CONTROL), else NORA_LLM_FALLBACK_REASONING.
++                payload.update(enrich_batching.fallback_reasoning_fields(
++                    os.environ, "NORA_SIRA_ENRICH_FALLBACK_LLM_"))
 +                data = await post_chat(
 +                    session, f"{_fb_url}/chat/completions", payload
 +                )

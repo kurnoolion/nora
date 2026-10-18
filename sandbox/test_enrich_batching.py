@@ -653,3 +653,20 @@ class TestBatchIdsAndMapping:
         # the requeue try's row maps R2 to its own batch
         retry_rows = [r for r in sink.batches if r["req_ids"] == ["R2"]]
         assert retry_rows and retry_rows[0]["batch_id"] != sink.batches[0]["batch_id"]
+
+
+def test_patch_reaches_fallback_reasoning_through_this_module():
+    from pathlib import Path
+
+    # batched-enrich.patch calls enrich_batching.fallback_reasoning_fields
+    # (the patched SIRA script reaches sandbox helpers only through here).
+    import sandbox.enrich_batching as eb
+
+    assert eb.fallback_reasoning_fields(
+        {"NORA_SIRA_ENRICH_FALLBACK_LLM_REASONING": "none",
+         "NORA_SIRA_ENRICH_FALLBACK_LLM_REASONING_CONTROL": "chat_template_kwargs"},
+        "NORA_SIRA_ENRICH_FALLBACK_LLM_",
+    ) == {"chat_template_kwargs": {"enable_thinking": False}}
+    patch = (Path(eb.__file__).parent / "sira_patches" / "batched-enrich.patch"
+             ).read_text(encoding="utf-8")
+    assert "enrich_batching.fallback_reasoning_fields(" in patch

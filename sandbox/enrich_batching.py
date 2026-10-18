@@ -28,10 +28,15 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 try:                                    # repo context (sandbox package)
-    from sandbox.llm_refusal import is_permanent_refusal, parse_markers
+    from sandbox.llm_refusal import (  # noqa: F401  (re-exported)
+        fallback_reasoning_fields, is_permanent_refusal, parse_markers,
+    )
 except ImportError:                     # SIRA clone context (copied flat
-    from llm_refusal import is_permanent_refusal, parse_markers  # noqa: F401
-                                        # into scripts/ by install_configs.sh)
+    from llm_refusal import (  # noqa: F401  (into scripts/ by install_configs.sh)
+        fallback_reasoning_fields, is_permanent_refusal, parse_markers,
+    )
+# fallback_reasoning_fields is re-exported for the batched-enrich patch,
+# which reaches sandbox helpers only through this module.
 
 PLAN_RE = re.compile(r"^\*\*plan\*\*: *(.+?) *$", re.M)
 

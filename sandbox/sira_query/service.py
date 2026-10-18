@@ -40,7 +40,11 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from sandbox.llm_refusal import is_permanent_refusal, parse_markers
+from sandbox.llm_refusal import (
+    fallback_reasoning_fields,
+    is_permanent_refusal,
+    parse_markers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +103,10 @@ _RERANK_LLM_API_KEY = os.getenv("NORA_SIRA_RERANK_LLM_API_KEY", "")
 _FALLBACK_LLM_URL = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_URL", "").rstrip("/")
 _FALLBACK_LLM_MODEL = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_MODEL", "")
 _FALLBACK_LLM_API_KEY = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_API_KEY", "")
+# Reasoning level for the fallback call — NORA_SIRA_QUERY_FALLBACK_LLM_
+# REASONING(_CONTROL), else the core NORA_LLM_FALLBACK_REASONING(_CONTROL).
+_FALLBACK_REASONING_FIELDS = fallback_reasoning_fields(
+    os.environ, "NORA_SIRA_QUERY_FALLBACK_LLM_")
 _REFUSAL_MARKERS = parse_markers(os.getenv("NORA_LLM_REFUSAL_MARKERS", ""))
 _FALLBACK_STATS = {"used": 0}        # process-lifetime counter (stats endpoint)
 # Rerank backend (multi-mno-sira): "chat" (default — pointwise LLM-as-judge,
@@ -1770,11 +1778,17 @@ async def _llm_call(
         logger.info("LLM permanently refused — routing call to fallback "
                     "(%d fallback call(s) this process)",
                     _FALLBACK_STATS["used"])
-        payload["model"] = _FALLBACK_LLM_MODEL or used_model
+        # Own payload: the primary's reasoning fields (if any) are for the
+        # primary's box; the fallback gets its own (field-found: a thinking
+        # fallback answered with empty content).
+        fb_payload = {k: v for k, v in payload.items()
+                      if k not in ("chat_template_kwargs", "reasoning_effort")}
+        fb_payload["model"] = _FALLBACK_LLM_MODEL or used_model
+        fb_payload.update(_FALLBACK_REASONING_FIELDS)
         fb_headers = ({"Authorization": f"Bearer {_FALLBACK_LLM_API_KEY}"}
                       if _FALLBACK_LLM_API_KEY else None)
         resp = await client.post(
-            f"{_FALLBACK_LLM_URL}/v1/chat/completions", json=payload,
+            f"{_FALLBACK_LLM_URL}/v1/chat/completions", json=fb_payload,
             headers=fb_headers,
         )
         if resp.status_code != 200:

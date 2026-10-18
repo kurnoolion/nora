@@ -543,9 +543,11 @@ experiment.
   pooled repeats (min and mean of `recall_avg`, median of `judge_med`).
 - **Stage 1 is not deterministic** on a stack whose rerank is an LLM:
   the same requirements are found every run, but their ranks move.
-  Field-measured over five identical runs: `recall_avg` within about
-  ±0.01, `r@5` / `r@10` within about ±0.05 (wider on a small per-MNO
-  split). So judge a Stage-1 change on `recall_avg` first, and treat
+  Field-measured over nine identical runs: `recall_avg` within about
+  ±0.02, `r@5` / `r@10` within about ±0.06–0.08 (a six-sample per-MNO
+  split swings by about 0.25). So judge a Stage-1 change on
+  `recall_avg` first — a single run against a baseline mean within
+  ±0.02 is no change; better, compare means of repeats — and treat
   `r@5` / `r@10` as a band. Build a baseline from **one full run plus
   at least three `--stage 1` repeats**, recorded as mean and range, not
   from a single run.

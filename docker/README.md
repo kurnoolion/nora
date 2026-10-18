@@ -609,6 +609,17 @@ model handles these:
   covers query enrichment and chat rerank; `/healthz` reports
   `refusal_fallback {configured, used}`. Recreate the serve stack after
   editing.
+- **Fallback reasoning level (both)**: a fallback model that thinks by
+  default can spend the whole token budget on reasoning and return empty
+  content. `<prefix>REASONING=none` with
+  `<prefix>REASONING_CONTROL=chat_template_kwargs` (prefix
+  `NORA_SIRA_ENRICH_FALLBACK_LLM_` or `NORA_SIRA_QUERY_FALLBACK_LLM_`)
+  sends `enable_thinking: false` on the fallback call only. Unset, each
+  falls back to `NORA_LLM_FALLBACK_REASONING(_CONTROL)` (the core
+  pipeline/eval names), then to the endpoint's default. The batch side
+  lives in the patch layer: rebake `sira-batch` — and on an OFFLINE host
+  re-run `docker/prep-offline.sh` first, since the vendored clone is
+  patched once there and the patch step skips an already-patched clone.
 - **Retry existing `llm_refused` rows** after configuring the fallback
   (rebake `sira-batch` first — the patch layer changed):
 
