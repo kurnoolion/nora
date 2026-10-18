@@ -215,6 +215,13 @@ def build_fallback_provider(
     go. That is the honest shape — it IS the fallback; there is nothing behind
     it.
 
+    `reasoning` defaults to `NORA_LLM_FALLBACK_REASONING` (e.g. "none"), so
+    every env-configured fallback — eval synthesis and judge, the pipeline,
+    batch enrichment — can be held to a fast answer. Field-found: a fallback
+    model that thinks by default spent the whole token budget on reasoning
+    and returned empty content (an empty synthesis judged 10; a judge call
+    with no verdict). Unset keeps the endpoint's own default.
+
     `reasoning_control` names the wire form for `reasoning` on THIS endpoint,
     defaulting to `NORA_LLM_FALLBACK_REASONING_CONTROL`. It is separate from
     the primary provider's because the fallback is a different box: the two
@@ -235,7 +242,11 @@ def build_fallback_provider(
         base_url=base_url,
         api_key=os.getenv("NORA_LLM_FALLBACK_API_KEY", "") or None,
         timeout=timeout,
-        reasoning=reasoning or None,
+        reasoning=(
+            reasoning
+            or os.getenv("NORA_LLM_FALLBACK_REASONING", "").strip()
+            or None
+        ),
         reasoning_control=(
             reasoning_control
             or os.getenv("NORA_LLM_FALLBACK_REASONING_CONTROL", "").strip()

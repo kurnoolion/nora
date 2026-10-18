@@ -346,6 +346,15 @@ Line by line:
   report no cells are unchanged.
 - **`s2:`** — judged count, judge mean/median, Stage-2 mode
   (`pipeline` | `sira-rows`); or `SKIPPED (<reason>)` / `n=0`.
+- **`fallback:`** — `synth=K judge=J`: how many Stage-2 answers and
+  judge verdicts came from the refusal fallback in the eval process
+  itself (the `fb_*` stamp fields count the *stack's* fallback, not
+  this). Printed only when non-zero. A run with many fallback verdicts
+  is not judged by the same model throughout; read its `s2:` with that
+  in mind. Set `NORA_LLM_FALLBACK_REASONING=none` (with the endpoint's
+  `NORA_LLM_FALLBACK_REASONING_CONTROL`) for any fallback model that
+  thinks by default, or it can spend the whole token budget on
+  reasoning and return nothing.
 - **`err:`** — every error/warning code with its count, or `none`.
 
 ### GEV codes
@@ -358,7 +367,7 @@ Line by line:
 | `GEV-E004` | error | Judge failure — missing prompt file, or unparseable verdict after a strict-format retry. |
 | `GEV-E005` | error | A relative release (`N`, `N-1`, ...) could not be resolved: the set has no release map, or `N-k` is beyond the MNO's listed releases. Per sample; the run continues. |
 | `GEV-E006` | error | The release map's `N` and the stack's latest release disagree for an MNO. Refused before scoring (exit 2) — advance the map or pin `--release-map-version`. |
-| `GEV-E007` | error | Stage-2 synthesis failed (the LLM call or its refusal fallback errored); the sample is not judged. A run with this code is not a clean Stage-2 data point. |
+| `GEV-E007` | error | Stage-2 synthesis failed — the LLM call or its refusal fallback errored, or returned empty content (a thinking model out of token budget); the sample is not judged. A run with this code is not a clean Stage-2 data point. |
 | `GEV-W001` | warning | Sample skipped, with reason: `draft` status, empty ground truth (Stage-1 unscorable), or no golden response (Stage-2 unscorable). |
 | `GEV-W002` | warning | Sample flagged for review after a release move: Stage 2 skipped (Stage 1 still scores). Clear with `golden_release_cli review --clear`. |
 
@@ -529,9 +538,17 @@ experiment.
 
 ### 6. Read results by pooling rules, then refresh the baseline
 
-- Cells pool only when `set=`, `code=`, `fp=`, and `knobs=` all match
-  — i.e. repeats of one grid coordinate. Floors are read over pooled
-  repeats (min and mean of `recall_avg`, median of `judge_med`).
+- Cells pool only when `set=`, `code=`, `fp=`, `knobs=` and `match=`
+  all match — i.e. repeats of one grid coordinate. Floors are read over
+  pooled repeats (min and mean of `recall_avg`, median of `judge_med`).
+- **Stage 1 is not deterministic** on a stack whose rerank is an LLM:
+  the same requirements are found every run, but their ranks move.
+  Field-measured over five identical runs: `recall_avg` within about
+  ±0.01, `r@5` / `r@10` within about ±0.05 (wider on a small per-MNO
+  split). So judge a Stage-1 change on `recall_avg` first, and treat
+  `r@5` / `r@10` as a band. Build a baseline from **one full run plus
+  at least three `--stage 1` repeats**, recorded as mean and range, not
+  from a single run.
 - Compare **arms on the same stack** (same `fp=`) and **stacks on the
   same arm** (same `knobs=`); never a diagonal.
 - A cell excluded by any anchor mismatch is excluded silently — its

@@ -175,3 +175,22 @@ class TestTwinSync:
                 f"{fn.__name__} drifted from sandbox/llm_refusal.py — "
                 "the twin copies must change together"
             )
+
+
+def test_env_fallback_reasoning_defaults_from_env(monkeypatch):
+    # Field-found: a fallback that thinks by default spent the whole token
+    # budget on reasoning. NORA_LLM_FALLBACK_REASONING holds it to a fast
+    # answer on every env-fallback path; unset keeps the endpoint default.
+    from core.src.llm.refusal import build_fallback_provider
+
+    monkeypatch.setenv("NORA_LLM_FALLBACK_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.setenv("NORA_LLM_FALLBACK_MODEL", "fb-model")
+    monkeypatch.setenv("NORA_LLM_FALLBACK_REASONING_CONTROL", "chat_template_kwargs")
+    monkeypatch.delenv("NORA_LLM_FALLBACK_REASONING", raising=False)
+    assert build_fallback_provider()._reasoning is None
+    monkeypatch.setenv("NORA_LLM_FALLBACK_REASONING", "none")
+    fb = build_fallback_provider()
+    assert fb._reasoning == "none"
+    assert fb._reasoning_control == "chat_template_kwargs"
+    # An explicit argument still wins.
+    assert build_fallback_provider(reasoning="high")._reasoning == "high"

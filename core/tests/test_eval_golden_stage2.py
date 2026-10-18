@@ -525,3 +525,41 @@ def test_synthesizer_marks_llm_failure():
     resp = LLMSynthesizer(_Boom()).synthesize(ctx, QueryIntent(raw_query="q"))
     assert resp.synthesis_error == "fallback unreachable"
     assert resp.answer.startswith("[LLM synthesis failed")
+
+
+def test_synthesizer_flags_empty_content():
+    # A thinking model that spends its budget on reasoning returns empty
+    # content; with the epilogue appended it looked like a short answer.
+    from core.src.query.schema import AssembledContext, QueryIntent
+    from core.src.query.synthesizer import LLMSynthesizer
+
+    class _Empty:
+        model = "m"
+
+        def complete(self, **kw):
+            return "   "
+
+    ctx = AssembledContext(context_text="ctx", system_prompt="sys", chunks=[])
+    resp = LLMSynthesizer(_Empty()).synthesize(ctx, QueryIntent(raw_query="q"))
+    assert resp.synthesis_error.startswith("empty answer")
+
+
+def test_reroutes_recorded_and_counted(monkeypatch):
+    from core.src.query.schema import QueryResponse
+
+    class _ReroutedPipeline:
+        def query(self, text, pinned_chunk_ids=None):
+            return QueryResponse(answer="A real answer.", rerouted=True)
+
+    class _ReroutingJudge(_FakeJudge):
+        last_was_fallback = True
+
+    r = run_stage2(_sample(), _stage1(), _ReroutedPipeline(),
+                   _ReroutingJudge(), ("v1", "<<CANDIDATE>>"))
+    assert r.synth_rerouted and r.judge_rerouted
+    assert r.to_dict()["judge_rerouted"] is True
+    rep = _report()
+    rep.stage2 = [r]
+    assert "fallback: synth=1 judge=1" in rep.compact_report()
+    # Clean runs keep their block unchanged.
+    assert "fallback:" not in _report().compact_report()

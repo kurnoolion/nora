@@ -369,6 +369,9 @@ class QueryResponse:
     # the golden judge scored stubs as real answers during a fallback
     # outage); the web path still shows the stub as before.
     synthesis_error: str = ""
+    # True when the answer came from the refusal fallback, not the
+    # primary model (per call — RefusalFallbackProvider.last_was_fallback).
+    rerouted: bool = False
     candidate_count: int = 0
     retrieved_count: int = 0
     context_tokens_approx: int = 0

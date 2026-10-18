@@ -1036,6 +1036,13 @@ class Stage2Result:
     # was unparseable). Kept per-row so parse-difficulty correlation with
     # scores stays checkable.
     judge_retried: bool = False
+    # Whether the candidate answer / the judge verdict came from the
+    # refusal fallback (field-found: the stack's fb counter cannot see the
+    # eval process's own fallback, and a fallback that thinks by default
+    # produced a degenerate answer scored 10 — which call was rerouted
+    # could not be told from the log).
+    synth_rerouted: bool = False
+    judge_rerouted: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -1048,6 +1055,8 @@ class Stage2Result:
             "candidate_chars": self.candidate_chars,
             "skipped_reason": self.skipped_reason,
             "judge_retried": self.judge_retried,
+            "synth_rerouted": self.synth_rerouted,
+            "judge_rerouted": self.judge_rerouted,
         }
 
 
@@ -1091,7 +1100,9 @@ def run_stage2(
         # scored 0 as if it were a real answer.
         raise GoldenEvalError(
             "GEV-E007",
-            f"synthesis failed for {sample.sample_id} — not judged: {failed}",
+            f"synthesis failed for {sample.sample_id} — not judged: {failed}"
+            + (" (answer came from the refusal fallback)"
+               if getattr(response, "rerouted", False) else ""),
         )
     candidate = (getattr(response, "answer", "") or "").strip()
     if not candidate:
@@ -1106,8 +1117,10 @@ def run_stage2(
         .replace("<<CANDIDATE>>", candidate)
     )
     judge_retried = False
+    judge_rerouted = False
     try:
         raw = judge.complete(prompt, temperature=0.0)
+        judge_rerouted = bool(getattr(judge, "last_was_fallback", False))
         try:
             verdict = _parse_judge_verdict(raw)
         except ValueError:
@@ -1121,6 +1134,8 @@ def run_stage2(
                 "no explanation, no surrounding text.",
                 temperature=0.0,
             )
+            judge_rerouted = judge_rerouted or bool(
+                getattr(judge, "last_was_fallback", False))
             verdict = _parse_judge_verdict(raw)
     except GoldenEvalError:
         raise
@@ -1139,6 +1154,8 @@ def run_stage2(
         pinned_count=len(pinned),
         candidate_chars=len(candidate),
         judge_retried=judge_retried,
+        synth_rerouted=bool(getattr(response, "rerouted", False)),
+        judge_rerouted=judge_rerouted,
     )
 
 
@@ -1243,6 +1260,12 @@ class GoldenRunReport:
             lines.append(f"s2: SKIPPED ({self.stage2_skip_reason})")
         else:
             lines.append("s2: n=0")
+        # Eval-side fallback use, which the stack's fb_* counter cannot
+        # see. Own line, only when non-zero, so clean blocks are unchanged.
+        synth_fb = sum(1 for r in self.stage2 if r.synth_rerouted)
+        judge_fb = sum(1 for r in self.stage2 if r.judge_rerouted)
+        if synth_fb or judge_fb:
+            lines.append(f"fallback: synth={synth_fb} judge={judge_fb}")
         if self.errors:
             counts: dict[str, int] = {}
             for e in self.errors:
