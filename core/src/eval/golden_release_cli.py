@@ -37,6 +37,7 @@ import getpass
 import json
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,12 +92,28 @@ def parse_cells(env_dir: Path) -> dict[str, list[str]]:
     return out
 
 
-def cell_texts(env_dir: Path, mno: str, release: str) -> dict[str, str]:
-    """``{req_id: normalized title + text}`` for one cell. Whitespace is
-    collapsed so re-flowed text compares equal; the first occurrence of
-    an id wins (the parser can emit duplicate rows)."""
+# Invisible characters that NFKC keeps but that never change meaning
+# (field-found: a byte-order mark at the end of one line made an
+# otherwise identical requirement compare "changed").
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
+
+
+def _norm(text: str) -> str:
+    """Compatibility-normalise, drop invisible characters, collapse
+    whitespace — so re-flowed or re-encoded text compares equal."""
+    text = unicodedata.normalize("NFKC", text or "").translate(_INVISIBLE)
+    return " ".join(text.split())
+
+
+def cell_texts(
+    env_dir: Path, mno: str, release: str
+) -> dict[str, tuple[str, str]]:
+    """``{req_id: (title, body)}`` for one cell, each normalised by
+    ``_norm``. Title and body are kept apart so a title-only edit is its
+    own class. The first occurrence of an id wins (the parser can emit
+    duplicate rows)."""
     cell = Path(env_dir) / "out" / "parse" / mno / release
-    texts: dict[str, str] = {}
+    texts: dict[str, tuple[str, str]] = {}
     for path in sorted(cell.glob("*_tree.json")):
         try:
             tree = json.loads(path.read_text(encoding="utf-8"))
@@ -105,9 +122,8 @@ def cell_texts(env_dir: Path, mno: str, release: str) -> dict[str, str]:
         for req in tree.get("requirements", []):
             rid = str(req.get("req_id") or "")
             if rid and rid not in texts:
-                texts[rid] = " ".join(
-                    f"{req.get('title', '')}\n{req.get('text', '')}".split()
-                )
+                texts[rid] = (_norm(str(req.get("title", "") or "")),
+                              _norm(str(req.get("text", "") or "")))
     return texts
 
 
@@ -118,8 +134,17 @@ def cell_texts(env_dir: Path, mno: str, release: str) -> dict[str, str]:
 class SampleCheck:
     sample_id: str
     unchanged: list[str] = field(default_factory=list)
+    # Same body, different title (field-found: a title that dropped an
+    # operator-name prefix). Carried over like unchanged, not flagged —
+    # the body is what an answer is built from.
+    title_only: list[str] = field(default_factory=list)
     changed: list[str] = field(default_factory=list)
     absent: list[str] = field(default_factory=list)
+    # Stored id differs from the parse tree's only by case (field-found:
+    # ids typed in another case read as "absent"). ``{stored: tree form}``;
+    # --yes rewrites the stored id. Not flagged by itself — the entry is
+    # then classified like any other.
+    case: dict[str, str] = field(default_factory=dict)
     unverified: list[str] = field(default_factory=list)
     relative: bool = False      # relative version sample — always flagged
     from_releases: list[str] = field(default_factory=list)
@@ -138,7 +163,8 @@ class CheckReport:
     unattributed: int = 0       # standard entries of the MNO with no release
 
     def counts(self) -> dict[str, int]:
-        c = {"unchanged": 0, "changed": 0, "absent": 0, "unverified": 0}
+        c = {"unchanged": 0, "title_only": 0, "changed": 0, "absent": 0,
+             "unverified": 0, "case": 0}
         for s in self.samples:
             for k in c:
                 c[k] += len(getattr(s, k))
@@ -158,7 +184,9 @@ def text_check(
     version samples alone — their binding does not change."""
     report = CheckReport(mno=mno, to_release=to_release)
     new_texts = cell_texts(env_dir, mno, to_release)
-    old_cache: dict[str, dict[str, str]] = {}
+    new_ids = {rid.casefold(): rid for rid in new_texts}
+    old_cache: dict[str, dict[str, tuple[str, str]]] = {}
+    old_ids: dict[str, dict[str, str]] = {}
     to_key = release_order_key(to_release)
     for s in samples:
         entries = [e for e in s.ground_truth if e.mno == mno]
@@ -175,23 +203,41 @@ def text_check(
                 report.unattributed += 1
                 continue
             old_key = release_order_key(e.release)
-            if old_key is None or to_key is None or old_key >= to_key:
-                continue        # already on (or past) the new release
+            if old_key is None or to_key is None:
+                continue
+            if old_key >= to_key:
+                # Already on (or past) the new release: no text to
+                # compare, but a mis-cased id is still repaired.
+                canon = new_ids.get(e.req_id.casefold())
+                if old_key == to_key and canon and canon != e.req_id:
+                    chk.case[e.req_id] = canon
+                continue
             if e.release not in old_cache:
                 old_cache[e.release] = cell_texts(env_dir, mno, e.release)
+                old_ids[e.release] = {
+                    rid.casefold(): rid for rid in old_cache[e.release]}
             if e.release not in chk.from_releases:
                 chk.from_releases.append(e.release)
-            old = old_cache[e.release].get(e.req_id)
-            new = new_texts.get(e.req_id)
+            # Look ids up by the tree's own casing (m3 matches either way;
+            # the stored form is repaired on --yes).
+            canon = (new_ids.get(e.req_id.casefold())
+                     or old_ids[e.release].get(e.req_id.casefold()))
+            if canon and canon != e.req_id:
+                chk.case[e.req_id] = canon
+            rid = canon or e.req_id
+            old = old_cache[e.release].get(rid)
+            new = new_texts.get(rid)
             if new is None:
                 chk.absent.append(e.req_id)
             elif old is None:
                 chk.unverified.append(e.req_id)
             elif old == new:
                 chk.unchanged.append(e.req_id)
+            elif old[1] == new[1]:
+                chk.title_only.append(e.req_id)
             else:
                 chk.changed.append(e.req_id)
-        if chk.from_releases or chk.relative:
+        if chk.from_releases or chk.relative or chk.case:
             report.samples.append(chk)
     return report
 
@@ -199,18 +245,23 @@ def text_check(
 def apply_check(
     samples: list[GoldenSample], report: CheckReport, env_dir: Path,
     now: str,
-) -> int:
-    """Write the check's outcome into the samples: move unchanged entries'
-    stored release to the new ``N``; flag samples that need review.
-    Returns the number of sample files written."""
+) -> set[str]:
+    """Write the check's outcome into the samples: move unchanged (and
+    title-only) entries' stored release to the new ``N``; flag samples
+    that need review. Returns the ids of the samples written — a set, so
+    callers applying several MNOs' reports count each file once."""
     by_id = {s.sample_id: s for s in samples}
-    written = 0
+    written: set[str] = set()
     for chk in report.samples:
         s = by_id[chk.sample_id]
-        moved = set(chk.unchanged)
+        moved = set(chk.unchanged) | set(chk.title_only)
         for e in s.ground_truth:
-            if e.mno == report.mno and e.req_id in moved:
+            if e.mno != report.mno:
+                continue
+            if e.req_id in moved:
                 e.release = report.to_release
+            if e.req_id in chk.case:
+                e.req_id = chk.case[e.req_id]
         if chk.flagged:
             review = dict(s.golden_meta.get("review") or {})
             review[report.mno] = {
@@ -223,15 +274,15 @@ def apply_check(
                 "flagged_at": now,
             }
             s.golden_meta["review"] = review
-        if moved or chk.flagged:
+        if moved or chk.flagged or chk.case:
             save_sample(env_dir, s)
-            written += 1
+            written.add(s.sample_id)
     return written
 
 
 def print_check(report: CheckReport) -> None:
     for chk in report.samples:
-        if not chk.flagged and not chk.unchanged:
+        if not (chk.flagged or chk.unchanged or chk.title_only or chk.case):
             continue
         parts = [f"  {chk.sample_id}:"]
         if chk.relative:
@@ -242,6 +293,11 @@ def print_check(report: CheckReport) -> None:
                 parts.append(f"{name}={','.join(ids)}")
         if chk.unchanged:
             parts.append(f"unchanged={len(chk.unchanged)}")
+        if chk.title_only:
+            parts.append(f"title_only={','.join(chk.title_only)}")
+        if chk.case:
+            parts.append("case=" + ",".join(
+                f"{a}->{b}" for a, b in sorted(chk.case.items())))
         parts.append("-> REVIEW" if chk.flagged else "-> carried over")
         print(" ".join(parts))
     c = report.counts()
@@ -333,8 +389,10 @@ def cmd_migrate(args, golden_dir: Path) -> int:
         return 0
     save_release_map(golden_dir, rmap)
     now = _now()
-    written = sum(apply_check(samples, r, args.env_dir, now) for r in reports)
-    print(f"wrote release map v1 and {written} sample file(s)")
+    written: set[str] = set()
+    for r in reports:
+        written |= apply_check(samples, r, args.env_dir, now)
+    print(f"wrote release map v1 and {len(written)} sample file(s)")
     return 0
 
 
@@ -368,7 +426,8 @@ def cmd_advance(args, golden_dir: Path) -> int:
         return 0
     save_release_map(golden_dir, new_map)
     written = apply_check(samples, report, args.env_dir, _now())
-    print(f"wrote release map v{new_map.version} and {written} sample file(s)")
+    print(f"wrote release map v{new_map.version} and {len(written)} "
+          "sample file(s)")
     return 0
 
 

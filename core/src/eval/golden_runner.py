@@ -51,7 +51,11 @@ _DEFAULT_TIMEOUT = 300.0
 #   (unset) — strict (req_id, mno, release) qualifiers for every sample
 #   m2      — standard samples match on (req_id, mno); version samples on
 #             (req_id, mno, resolved release)
-MATCH_RULE = "m2"
+#   m3      — m2 with req_id compared case-insensitively (field-found: an
+#             id typed in another case during authoring zeroed its sample
+#             since it was written; no two ids in the corpus differ only
+#             by case)
+MATCH_RULE = "m3"
 
 
 # ─── HTTP (module-level so tests can monkeypatch) ───────────────────
@@ -447,9 +451,9 @@ def _entry_matches(
     req_id alone decides. ``plan`` is authoring metadata, never matched.
     ``ignore_release`` drops the release qualifier (standard samples,
     MATCH_RULE m2): which release was searched is the scope check's
-    question, not the match's.
+    question, not the match's. Ids compare case-insensitively (m3).
     """
-    if row.get("req_id") != entry.req_id:
+    if str(row.get("req_id") or "").casefold() != entry.req_id.casefold():
         return False
     for attr in ("mno",) if ignore_release else ("mno", "release"):
         want = getattr(entry, attr)
@@ -1080,6 +1084,15 @@ def run_stage2(
     else:
         pinned = [f"req:{rid}" for rid in stage1.retrieved_req_ids]
     response = query_pipeline.query(sample.query, pinned_chunk_ids=pinned)
+    failed = getattr(response, "synthesis_error", "") or ""
+    if failed:
+        # Field-found: the synthesizer returns an error stub (plus
+        # citation-fallback citations) on an LLM failure; judged, it
+        # scored 0 as if it were a real answer.
+        raise GoldenEvalError(
+            "GEV-E007",
+            f"synthesis failed for {sample.sample_id} — not judged: {failed}",
+        )
     candidate = (getattr(response, "answer", "") or "").strip()
     if not candidate:
         raise GoldenEvalError(

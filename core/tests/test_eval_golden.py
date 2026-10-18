@@ -316,7 +316,7 @@ def test_cli_scores_with_map(tmp_path, monkeypatch, capsys):
     assert main(["--env-dir", str(tmp_path), "--stack-url",
                  "http://127.0.0.1:9999", "--stage", "1"]) == 0
     out = capsys.readouterr().out
-    assert "match=m2 rmap=v1" in out
+    assert "match=m3 rmap=v1" in out
     assert "recall_avg=1.00" in out
     assert "scope: ok=1" in out
 

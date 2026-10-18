@@ -696,13 +696,13 @@ def test_run_all_stamps_match_rule_and_map(monkeypatch):
     rmap = _rmap(mno_b=["Jan2026", "Apr2026"])
     rep = _run_all(monkeypatch, {"cells": ["mno-b__Apr2026"]}, rmap)
     line = rep.stamp.compact_line()
-    assert "match=m2" in line and "rmap=v3" in line and "rmap=v3!" not in line
-    assert rep.stamp.stage1_key()[-1] == "m2"
+    assert "match=m3" in line and "rmap=v3" in line and "rmap=v3!" not in line
+    assert rep.stamp.stage1_key()[-1] == "m3"
     assert rep.stage1[0].recall == 1.0
     # No map: still m2, no rmap field.
     rep = _run_all(monkeypatch, {"cells": ["mno-b__Apr2026"]}, None)
     assert "rmap=" not in rep.stamp.compact_line()
-    assert rep.stamp.match_rule == "m2"
+    assert rep.stamp.match_rule == "m3"
 
 
 class TestDigestView:
@@ -737,3 +737,12 @@ class TestDigestView:
         # ...but a standard sample is unaffected by the same move.
         std = self._std("Jan2026")
         assert self._stamp([std], v3) == self._stamp([std], v4)
+
+
+def test_m3_matches_ids_case_insensitively(monkeypatch):
+    monkeypatch.setattr(golden_runner, "_post_json", _cells_post(
+        [_row("REQ_FOO_0001", 1, mno="mno-b", release="Apr2026")],
+        ["mno-b__Apr2026"]))
+    sample = _sample([GroundTruthEntry(req_id="req_Foo_0001", mno="mno-b")])
+    assert run_stage1(sample, "http://127.0.0.1:9999").recall == 1.0
+    assert golden_runner.MATCH_RULE == "m3"

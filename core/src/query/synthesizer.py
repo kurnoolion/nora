@@ -51,6 +51,7 @@ class LLMSynthesizer:
 
         epilogue_model = ""
         epilogue_reroute = ""
+        synthesis_error = ""
         try:
             answer = self._llm.complete(
                 prompt=prompt,
@@ -64,6 +65,7 @@ class LLMSynthesizer:
             epilogue_reroute = reroute_note(self._llm)
         except Exception as e:
             logger.error(f"LLM synthesis failed: {e}")
+            synthesis_error = str(e) or type(e).__name__
             answer = f"[LLM synthesis failed: {e}]"
 
         if epilogue_model:
@@ -92,6 +94,7 @@ class LLMSynthesizer:
             candidate_count=0,  # set by pipeline
             retrieved_count=len(context.chunks),
             context_tokens_approx=len(context.context_text) // 4,
+            synthesis_error=synthesis_error,
         )
 
         logger.info(

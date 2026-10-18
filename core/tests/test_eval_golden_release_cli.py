@@ -198,3 +198,68 @@ def test_show(tmp_path, capsys):
     capsys.readouterr()
     assert _run(tmp_path, "show") == 0
     assert "mno-b: N=Apr2026  older: Jan2026" in capsys.readouterr().out
+
+
+def test_invisible_characters_and_reflow_compare_unchanged(tmp_path):
+    # Field-found: a byte-order mark at the end of one line made an
+    # otherwise identical requirement compare "changed".
+    _tree(tmp_path, "mno-b", "Jan2026", [("R-1", "Line one﻿\nline two")])
+    _tree(tmp_path, "mno-b", "Apr2026", [("R-1", "Line one line​ two")])
+    _sample(tmp_path, "gs-0001", [_gt("R-1", "Jan2026")])
+    rep = text_check(load_samples(tmp_path), tmp_path, "mno-b", "Apr2026")
+    assert rep.samples[0].unchanged == ["R-1"] and not rep.samples[0].flagged
+
+
+def test_title_only_change_is_carried_not_flagged(tmp_path):
+    for rel, title in (("Jan2026", "PFX Timer"), ("Apr2026", "Timer")):
+        d = tmp_path / "out" / "parse" / "mno-b" / rel
+        d.mkdir(parents=True)
+        (d / "DOC_tree.json").write_text(json.dumps({"requirements": [
+            {"req_id": "R-1", "title": title, "text": "Same body."}]}))
+    _sample(tmp_path, "gs-0001", [_gt("R-1", "Jan2026")])
+    rep = text_check(load_samples(tmp_path), tmp_path, "mno-b", "Apr2026")
+    chk = rep.samples[0]
+    assert chk.title_only == ["R-1"] and not chk.flagged
+    assert rep.counts()["title_only"] == 1
+    save_release_map(golden_root(tmp_path), ReleaseMap(
+        version=1, mnos={"mno-b": ["Jan2026"]}))
+    assert main(["advance", "--env-dir", str(tmp_path), "--mno", "mno-b",
+                 "--release", "Apr2026", "--yes"]) == 0
+    s = load_samples(tmp_path)[0]
+    assert s.ground_truth[0].release == "Apr2026" and not needs_review(s)
+
+
+def test_migrate_counts_each_file_once(tmp_path, capsys):
+    # A sample with entries of two MNOs is written by both MNOs' checks.
+    _corpus(tmp_path)
+    _tree(tmp_path, "mno-a", "Apr2026", [("A-1", "y")])
+    _sample(tmp_path, "gs-0001", [_gt("R-2", "Jan2026"),
+                                  _gt("A-1", "Jan2026", mno="mno-a")])
+    assert _run(tmp_path, "migrate", "--yes") == 0
+    assert "and 1 sample file(s)" in capsys.readouterr().out
+
+
+def test_case_mismatch_is_repaired_not_absent(tmp_path, capsys):
+    # Field-found: ids stored in another case read as "absent" and
+    # could never match.
+    _corpus(tmp_path)
+    _sample(tmp_path, "gs-0001", [_gt("r-1", "Jan2026"), _gt("r-2", "Jan2026")])
+    _sample(tmp_path, "gs-0002", [_gt("r-4", "Apr2026")])     # already on N
+    rep = text_check(load_samples(tmp_path), tmp_path, "mno-b", "Apr2026")
+    by_id = {c.sample_id: c for c in rep.samples}
+    c1 = by_id["gs-0001"]
+    assert c1.case == {"r-1": "R-1", "r-2": "R-2"}
+    assert c1.unchanged == ["r-1"] and c1.changed == ["r-2"] and not c1.absent
+    assert by_id["gs-0002"].case == {"r-4": "R-4"}
+    assert not by_id["gs-0002"].flagged
+    assert rep.counts()["case"] == 3
+    save_release_map(golden_root(tmp_path), ReleaseMap(
+        version=1, mnos={"mno-b": ["Jan2026"]}))
+    assert main(["advance", "--env-dir", str(tmp_path), "--mno", "mno-b",
+                 "--release", "Apr2026", "--yes"]) == 0
+    assert "case=r-1->R-1,r-2->R-2" in capsys.readouterr().out
+    s = {x.sample_id: x for x in load_samples(tmp_path)}
+    assert [(e.req_id, e.release) for e in s["gs-0001"].ground_truth] == [
+        ("R-1", "Apr2026"), ("R-2", "Jan2026")]
+    assert s["gs-0001"].golden_meta["review"]["mno-b"]["changed"] == ["r-2"]
+    assert s["gs-0002"].ground_truth[0].req_id == "R-4"

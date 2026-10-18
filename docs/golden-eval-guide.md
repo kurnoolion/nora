@@ -221,11 +221,23 @@ then every run against the flipped stack stops with `GEV-E006`.
 every standard entry of that MNO whose stored release is older than the
 new `N` is compared by text between the two releases:
 
-- `unchanged` — the entry's stored release moves to the new `N`;
+- `unchanged` — the entry's stored release moves to the new `N`.
+  Text is compared after Unicode normalisation, with invisible
+  characters (zero-width spaces, byte-order marks) removed and
+  whitespace collapsed;
+- `title_only` — same body, different title: carried over like
+  `unchanged`, not flagged;
 - `changed` — the text differs;
 - `absent` — the id is not in the new release;
 - `unverified` — the id is not in its own stored release, so there is
   nothing to compare.
+
+Ids are looked up the way the parse tree spells them. A stored id that
+differs only by case is reported as `case` (`stored->tree form`) and
+rewritten to the tree's form on `--yes` — entries already at `N`
+included. Stage 1 matches ids case-insensitively anyway (`match=m3`),
+so a mis-cased id no longer zeroes a sample; the rewrite keeps the data
+clean.
 
 A sample with any `changed`, `absent` or `unverified` entry is flagged
 for review, and so is every relative version sample at an `advance` (its
@@ -287,8 +299,10 @@ Line by line:
   - `set=N@digest` — scored-sample count + digest of the frozen eval
     set. **Two runs are comparable only when `set=` matches
     verbatim** (same samples, same ground truth).
-  - `match=` — the Stage-1 matching rule. Runs with a different (or
-    no) `match=` are not comparable, even on the same `set=`.
+  - `match=` — the Stage-1 matching rule (`m3`: standard samples on
+    id + MNO, version samples also on the resolved release, ids
+    case-insensitive). Runs with a different (or no) `match=` are not
+    comparable, even on the same `set=`.
   - `rmap=vK` — the release map version the run used; `rmap=vK!` means
     it was scored despite a map/stack disagreement
     (`--allow-map-mismatch`).
@@ -331,6 +345,7 @@ Line by line:
 | `GEV-E004` | error | Judge failure — missing prompt file, or unparseable verdict after a strict-format retry. |
 | `GEV-E005` | error | A relative release (`N`, `N-1`, ...) could not be resolved: the set has no release map, or `N-k` is beyond the MNO's listed releases. Per sample; the run continues. |
 | `GEV-E006` | error | The release map's `N` and the stack's latest release disagree for an MNO. Refused before scoring (exit 2) — advance the map or pin `--release-map-version`. |
+| `GEV-E007` | error | Stage-2 synthesis failed (the LLM call or its refusal fallback errored); the sample is not judged. A run with this code is not a clean Stage-2 data point. |
 | `GEV-W001` | warning | Sample skipped, with reason: `draft` status, empty ground truth (Stage-1 unscorable), or no golden response (Stage-2 unscorable). |
 | `GEV-W002` | warning | Sample flagged for review after a release move: Stage 2 skipped (Stage 1 still scores). Clear with `golden_release_cli review --clear`. |
 

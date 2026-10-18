@@ -493,3 +493,35 @@ def test_bare_id_pin_selects_every_row_of_that_id():
     p.query("q", pinned_chunk_ids=["req:REQ_FOO_0001"])
     sent = llm.prompts[0]
     assert "Retry three times." in sent and "Retry twice." in sent
+
+
+def test_failed_synthesis_is_not_judged(monkeypatch):
+    # Field-found: during a fallback outage the synthesizer returned an
+    # error stub; judged, it scored 0 as a real answer.
+    from core.src.query.schema import QueryResponse
+
+    class _FailingPipeline:
+        def query(self, text, pinned_chunk_ids=None):
+            return QueryResponse(answer="[LLM synthesis failed: boom]",
+                                 synthesis_error="boom")
+
+    judge = _FakeJudge(raw='{"score": 0, "missing": [], "contradicting": []}')
+    with pytest.raises(GoldenEvalError) as exc:
+        run_stage2(_sample(), _stage1(), _FailingPipeline(), judge,
+                   ("v1", "<<CANDIDATE>>"))
+    assert exc.value.code == "GEV-E007"
+    assert judge.prompts == []          # never reached the judge
+
+
+def test_synthesizer_marks_llm_failure():
+    from core.src.query.schema import AssembledContext, QueryIntent
+    from core.src.query.synthesizer import LLMSynthesizer
+
+    class _Boom:
+        def complete(self, **kw):
+            raise TimeoutError("fallback unreachable")
+
+    ctx = AssembledContext(context_text="ctx", system_prompt="sys", chunks=[])
+    resp = LLMSynthesizer(_Boom()).synthesize(ctx, QueryIntent(raw_query="q"))
+    assert resp.synthesis_error == "fallback unreachable"
+    assert resp.answer.startswith("[LLM synthesis failed")
