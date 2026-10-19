@@ -22,7 +22,7 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
     """Construct the embedder named by `config.embedding_provider`.
 
     Supported providers:
-      - "sentence-transformers" (default) — local HF-cached model, fast batch encoding
+      - "sentence-transformers" — local HF-cached model, fast batch encoding
       - "ollama" — Ollama's /api/embeddings; same offline distribution as the
         Ollama LLM (no separate HuggingFace cache needed)
       - "tei" — TEI's native /embed; single-model-per-instance server,
@@ -43,6 +43,12 @@ def make_embedder(config: "VectorStoreConfig") -> "EmbeddingProvider":
         `extra["tei_max_input_chars"]` (default 8000).
     """
     provider = (config.embedding_provider or "").strip().lower()
+    if not provider:
+        raise ValueError(
+            "No embedding provider configured. Set NORA_EMBEDDING_PROVIDER "
+            "(or embedding_provider in config/llm.json) to 'tei', 'ollama' "
+            "or 'sentence-transformers'; there is no built-in default."
+        )
 
     if provider in ("sentence-transformers", "sentence_transformers", "st", "huggingface", "hf"):
         from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder

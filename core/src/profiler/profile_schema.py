@@ -745,7 +745,7 @@ class DocumentProfile:
                 r"^([A-Z][A-Z0-9/-]{1,15})\s*[—–:\-]\s*(.+?)$",
             ),
             toc_detection_pattern=data.get("toc_detection_pattern", r".*\.{3,}\s*\d+\s*$"),
-            toc_page_threshold=data.get("toc_page_threshold", 0.8),
+            toc_page_threshold=data.get("toc_page_threshold", 0.7),
             revision_history_label_pattern=data.get(
                 "revision_history_label_pattern",
                 data.get(

@@ -15,6 +15,10 @@ tries ``<run-dir>/../../samples`` (the layout ``write_run`` produces).
 ``--misses`` limits output to samples with at least one missed
 ground-truth entry.
 
+A miss shows as ``MISS`` (the stack searched the entry's cell and did
+not return the id) or ``SCOPE`` (the stack never searched that cell).
+Reports written before scope classification show every miss as ``MISS``.
+
 Output is run-dir material: it contains proprietary req_ids and query
 text, so it is for local inspection only — never chat-pasteable (NFR-8;
 the GEV compact block remains the shareable summary).
@@ -53,6 +57,9 @@ def format_sample(s1: dict, query: str = "") -> list[str]:
     hits = s1.get("hits", [])
     misses = s1.get("misses", [])
     hit_ranks = {h["req_id"]: h.get("rank") for h in hits}
+    scope_missed = {
+        m["req_id"] for m in misses if m.get("miss_kind") == "scope"
+    }
     expected = [h["req_id"] for h in hits] + [m["req_id"] for m in misses]
     actual = list(s1.get("retrieved_req_ids", []))
     gt = set(expected)
@@ -63,13 +70,24 @@ def format_sample(s1: dict, query: str = "") -> list[str]:
     ]
     if query:
         lines.append(f"    Q: {query}")
+    scope = s1.get("scope", "")
+    if scope and scope != "n/a":
+        line = f"    scope: {scope}"
+        if s1.get("scope_missing_cells"):
+            line += "  not searched: " + ", ".join(s1["scope_missing_cells"])
+        if s1.get("scope_extra_cells"):
+            line += "  extra: " + ", ".join(s1["scope_extra_cells"])
+        lines.append(line)
     width = max([len(e) for e in expected] + [10])
     lines.append(f"    {'EXPECTED':<{width}}  STATUS   ACTUAL (rank order)")
     for i in range(max(len(expected), len(actual))):
         exp = expected[i] if i < len(expected) else ""
         if exp:
             rank = hit_ranks.get(exp)
-            status = f"hit r{rank}" if rank is not None else "MISS"
+            if rank is not None:
+                status = f"hit r{rank}"
+            else:
+                status = "SCOPE" if exp in scope_missed else "MISS"
         else:
             status = ""
         act = actual[i] if i < len(actual) else ""

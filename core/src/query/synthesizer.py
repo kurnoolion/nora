@@ -51,6 +51,8 @@ class LLMSynthesizer:
 
         epilogue_model = ""
         epilogue_reroute = ""
+        synthesis_error = ""
+        rerouted = False
         try:
             answer = self._llm.complete(
                 prompt=prompt,
@@ -62,8 +64,16 @@ class LLMSynthesizer:
 
             epilogue_model = answering_model(self._llm)
             epilogue_reroute = reroute_note(self._llm)
+            rerouted = bool(getattr(self._llm, "last_was_fallback", False))
+            if not (answer or "").strip():
+                # Field-found: a thinking model that spends its whole token
+                # budget on reasoning returns empty content — with the
+                # epilogue appended below it looked like a short answer.
+                synthesis_error = ("empty answer from the LLM (reasoning "
+                                   "may have used the whole token budget)")
         except Exception as e:
             logger.error(f"LLM synthesis failed: {e}")
+            synthesis_error = str(e) or type(e).__name__
             answer = f"[LLM synthesis failed: {e}]"
 
         if epilogue_model:
@@ -92,6 +102,8 @@ class LLMSynthesizer:
             candidate_count=0,  # set by pipeline
             retrieved_count=len(context.chunks),
             context_tokens_approx=len(context.context_text) // 4,
+            synthesis_error=synthesis_error,
+            rerouted=rerouted,
         )
 
         logger.info(

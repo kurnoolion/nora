@@ -1211,3 +1211,21 @@ def test_resolve_reranker_batch_size_db_then_default(monkeypatch):
     monkeypatch.delenv(RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED, raising=False)
     assert resolve_reranker_batch_size(config_store_value="7") == 7
     assert resolve_reranker_batch_size(config_store_value="bogus") == 1
+
+
+def test_enabled_reranker_without_provider_is_passthrough(monkeypatch):
+    # No hub-backed default: enabling the reranker without naming a provider
+    # must not build the HuggingFace cross-encoder.
+    from core.src.env import config as env_cfg
+    from core.src.web.routes import query as q
+    import core.src.query.reranker as rr
+
+    monkeypatch.setenv(env_cfg.RERANKER_ENABLED_ENV_VAR, "1")
+    monkeypatch.delenv(env_cfg.RERANKER_PROVIDER_ENV_VAR, raising=False)
+    monkeypatch.delenv(env_cfg.RERANKER_MODEL_ENV_VAR, raising=False)
+    monkeypatch.setattr(q, "_config_store_get", lambda *a: None)
+    monkeypatch.setattr(env_cfg, "_llm_config", lambda: env_cfg.LLMConfigFile())
+    monkeypatch.setattr(rr, "CrossEncoderReranker", lambda *a, **k: (
+        _ for _ in ()).throw(AssertionError("HF cross-encoder built")))
+    assert env_cfg.DEFAULT_RERANKER_PROVIDER == ""
+    assert q._resolve_reranker() is None

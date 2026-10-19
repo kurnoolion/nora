@@ -8915,3 +8915,28 @@ that distinction turns out to matter, the fix is to label the fallback case
 differently, not to drop it.
 
 _Promoted from strand: req-bubble-metadata on 2026-10-06._
+
+## D-254: Serving scope — SIRA over NORA's taxonomy; pipeline stages beyond taxonomy disabled; knowledge graph is future work
+**Status**: Active · **Date**: 2026-10-18
+
+**Decision.** Current builds run the NORA pipeline through taxonomy
+(extract → profile → parse → resolve → taxonomy) and serve answers through
+SIRA select-synth per (MNO, release) cell, using NORA's feature taxonomy. The
+stages beyond taxonomy (standards, graph, vectorstore) and the graph-scoped
+NORA query path are built but disabled. The full NORA pipeline, with the
+knowledge graph and graph-scoped RAG, is future work. Requirements FR-5, FR-7,
+FR-8, FR-11, FR-12, FR-13, FR-21 and NFR-14 move to Deferred; FR-40 states the
+serving path.
+
+**Why.** SIRA used with NORA's taxonomy gave good recall, so it is the serving
+path while the knowledge-graph work waits. D-045 rejected RAG-only as the v1
+default because graph scoping was the retrieval plan; that plan is deferred,
+not rejected, so D-045 stands for the full pipeline and does not govern
+current builds.
+
+**Consequences.** The requirements describe the system as it serves today,
+and the deferred items return as ordinary edits when the knowledge-graph work
+resumes. The golden eval (FR-38) is the acceptance measure (NFR-15); the
+graph vs pure-RAG A/B (FR-21) waits with the graph. Code for the disabled
+stages stays and keeps its tests, so re-enabling is a configuration change
+plus whatever the graph work adds.

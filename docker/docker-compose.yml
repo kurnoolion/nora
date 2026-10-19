@@ -56,6 +56,11 @@ services:
     environment:
       NORA_SIRA_DB_ROOT: /data/db
       NORA_SIRA_CORRECTIONS_ROOT: /data/corrections
+      # SERVE_UID has no passwd entry in the image, so HOME would be `/`;
+      # libs that write caches need a writable one. Serving never fetches
+      # from the HuggingFace hub (embeddings/rerank come from a TEI server).
+      HOME: /tmp
+      HF_HUB_OFFLINE: "1"
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach host-side LLM endpoints
     restart: unless-stopped
@@ -98,6 +103,9 @@ services:
         required: false
     environment:
       ENV_DIR: /data/env
+      # See sira-query: a writable HOME for non-root, and no hub fetches.
+      HOME: /tmp
+      HF_HUB_OFFLINE: "1"
       NORA_JOBS_DB: /data/web-state/nora_jobs.db
       NORA_METRICS_DB: /data/web-state/nora_metrics.db
       NORA_CONFIG_DB: /data/web-state/nora_config.db

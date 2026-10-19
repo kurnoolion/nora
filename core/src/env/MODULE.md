@@ -4,12 +4,12 @@
 Per-environment scoped workspace configuration. An environment names a workspace (one team member × one `env_dir` × a stage range × MNO/release scope × objectives) so multiple contributors can run partial pipelines in parallel without stepping on each other's outputs. Serves FR-28 (env_dir CLI/config/UI parameterization), FR-29 (single-root partition layout); implements D-022 (per-env directory layout).
 
 **Public surface**
-- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `requirements_dir` (documents-root override, D-DRAFT-6 docker-distro), `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`, `embedding_provider/model`, `standards_source`, `skip_taxonomy`, `skip_graph`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path(key)`, `input_path(mno, release)`, `input_root` (the effective documents root: `requirements_dir` when set, else `<env_dir>/input`), `out_path(stage)`, `state_path()`, `corrections_path()`, `correction_file(artifact)`, `reports_path()`, `eval_path()`, `init_directories()`
-- `ProfileBindings` (profile_bindings.py, D-DRAFT-7) — per-cell profile resolution from `<env_dir>/profiles.json`. `ProfileBinding(mno, release, profile)` rows; `load_profile_bindings(env_dir, override=None) -> ProfileBindings`; `resolve(mno, release) -> Path` with precedence `--profile override > exact (mno,release) > (mno,"*") > default > fail-loud (PIP-E003)`; `covers(mno, release)` / `uncovered(cells)` for coverage validation. MNO match case-insensitive; release exact with `"*"` wildcard. Lives in `env` (not `pipeline`) to avoid the `pipeline → env` import cycle
-- `LLMConfigFile` (config.py) — schema for `config/llm.json`: `llm_provider`, `llm_model`, `llm_timeout`, `llm_base_url`, `llm_api_key`, `embedding_provider`, `embedding_model`, `ollama_url`, `ollama_timeout_s`, `skip_taxonomy`, `skip_graph`. Empty/zero values fall through. `load(path=None)` with malformed/missing tolerance. Also carries `config_path` / `config_source` (`"env"` | `"default"` | `"explicit"`) recording where the instance was loaded from — `compare=False`, so provenance is not part of config identity; two instances with the same content are equal whatever file they came from.
+- `EnvironmentConfig` (config.py) — the dataclass: `name`, `description`, `created_by`, `member`, `env_dir`, `requirements_dir` (documents-root override, D-132), `stage_start/end`, `mnos`, `releases`, `doc_types`, `objectives`, `model_provider/name/timeout`, `embedding_provider/model`, `standards_source`, `skip_taxonomy`, `skip_graph`, `skip_resolve`, `skip_standards`, `reranker_enabled`, `reranker_model`, `created_at`; exposes `save_json()`, `load_json()`, `validate()`, `active_stages`, `env_dir_path`, `path(key)`, `input_path(mno, release)`, `input_root` (the effective documents root: `requirements_dir` when set, else `<env_dir>/input`), `out_path(stage)`, `state_path()`, `corrections_path()`, `correction_file(artifact)`, `reports_path()`, `eval_path()`, `init_directories()`
+- `ProfileBindings` (profile_bindings.py, D-097) — per-cell profile resolution from `<env_dir>/profiles.json`. `ProfileBinding(mno, release, profile)` rows; `load_profile_bindings(env_dir, override=None) -> ProfileBindings`; `resolve(mno, release) -> Path` with precedence `--profile override > exact (mno,release) > (mno,"*") > default > fail-loud (PIP-E003)`; `covers(mno, release)` / `uncovered(cells)` for coverage validation. MNO match case-insensitive; release exact with `"*"` wildcard. Lives in `env` (not `pipeline`) to avoid the `pipeline → env` import cycle
+- `LLMConfigFile` (config.py) — schema for `config/llm.json`: `llm_provider`, `llm_model`, `llm_timeout`, `llm_base_url`, `llm_api_key`, `embedding_provider`, `embedding_model`, `ollama_url`, `ollama_timeout_s`, `skip_taxonomy`, `skip_graph`, `skip_resolve`, `skip_standards`, `reranker_enabled`, `reranker_model`, `reranker_provider`, `reranker_ollama_url`, `reranker_base_url`, `reranker_api_key`, `reranker_batch_size`, `providers`, `default_provider`, `fallback_provider`, `model_discovery_ttl_s`. Empty/zero values fall through. `load(path=None)` with malformed/missing tolerance. Also carries `config_path` / `config_source` (`"env"` | `"default"` | `"explicit"`) recording where the instance was loaded from — `compare=False`, so provenance is not part of config identity; two instances with the same content are equal whatever file they came from.
 - `LLM_CONFIG_PATH_ENV_VAR` = `NORA_LLM_CONFIG` (config.py) — selects the llm.json FILE rather than a value in it, so a deployment can supply a roster without baking it into the committed image (`config/llm.json` ships without one, 1a3575f). `DEFAULT_LLM_CONFIG_PATH` is now the FALLBACK, not the sole location. A value naming a missing or unreadable file warns and falls through — never raises, because a bad env var must not take the app down, and a typo must not degrade silently to `providers == []`, which is indistinguishable from "no roster configured". A missing DEFAULT path stays silent by contrast: that is the normal no-roster case.
 - `llm_config_provenance() -> (source, filename)` (config.py) — which llm.json was actually loaded, for `/api/health`. Returns the BASENAME only; the caller is team-allowlisted and an absolute container path is not something a gated user should be handed. Reads the cached config rather than re-resolving, so polling does not re-log the resolver's warning.
-- Registry constants: `PIPELINE_STAGES`, `PIPELINE_LANES` (D-DRAFT-5 docker-distro — named stage ranges: `ingestion` = extract..standards, `nora` = taxonomy..eval; consumed by `run_cli --lane`), `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`, `DEFAULT_LLM_CONFIG_PATH` (fallback location — see `LLM_CONFIG_PATH_ENV_VAR`)
+- Registry constants: `PIPELINE_STAGES`, `PIPELINE_LANES` (D-131 — named stage ranges: `ingestion` = extract..standards, `nora` = taxonomy..eval; consumed by `run_cli --lane`), `STAGE_NAMES`, `STAGE_NUM`, `NUM_STAGE`, `STAGE_DESC`, `ENV_DIR_DIRS`, `DEFAULT_LLM_CONFIG_PATH` (fallback location — see `LLM_CONFIG_PATH_ENV_VAR`)
 - Resolvers (3-tier — CLI > env var > config/llm.json > env-config back-compat > default):
   - `resolve_llm_provider(cli, env_cfg)` — `--llm-provider` / `NORA_LLM_PROVIDER` / `llm_provider`
   - `resolve_embedding_provider(cli, env_cfg)` — `--embedding-provider` / `NORA_EMBEDDING_PROVIDER` / `embedding_provider`
@@ -17,7 +17,12 @@ Per-environment scoped workspace configuration. An environment names a workspace
   - `resolve_standards_source(cli, env_cfg)` — `--standards-source` / `NORA_STANDARDS_SOURCE` / env config
   - `resolve_skip_taxonomy(cli, env_cfg)` — `--skip-taxonomy` or `--rag-only` / `NORA_SKIP_TAXONOMY` or `NORA_RAG_ONLY` / `skip_taxonomy`
   - `resolve_skip_graph(cli, env_cfg)` — `--skip-graph` or `--rag-only` / `NORA_SKIP_GRAPH` or `NORA_RAG_ONLY` / `skip_graph`
-- `resolve_requirements_dir(cli, env_cfg)` — documents-root override (D-DRAFT-6 docker-distro): `--requirements-dir` / `NORA_REQUIREMENTS_DIR` (`REQUIREMENTS_DIR_ENV_VAR`) / env-config `requirements_dir` / default `<env_dir>/input`
+  - `resolve_skip_resolve`, `resolve_skip_standards` — same shape for the resolve and standards stages
+  - LLM: `resolve_llm_model`, `resolve_llm_timeout`, `resolve_llm_base_url`, `resolve_llm_api_key` — these also take a Config-page DB value
+  - Embedding endpoint: `resolve_embedding_base_url`, `resolve_embedding_api_key`
+  - Reranker: `resolve_reranker_enabled`, `resolve_reranker_provider`, `resolve_reranker_model`, `resolve_reranker_ollama_url`, `resolve_reranker_base_url`, `resolve_reranker_api_key`, `resolve_reranker_batch_size`
+- Retrieval knobs (`config/retrieval.json`, schema `RetrievalConfig`): `resolve_top_k`, `resolve_bm25_weight`, `resolve_grouping_enabled`, `resolve_gap_threshold`, `is_broad_query_type`. `DEFAULT_BM25_WEIGHT_BY_TYPE: dict[str, float]` holds the per-query-type BM25 defaults, keyed by query-type value strings (`standards_comparison`, `traceability`, `single_doc`, `fact` = 0.5; `summarize` = 0.2; any other type = 0.0). `resolve_bm25_weight` falls back to it. Keying by string keeps `env` free of a `query` import.
+- `resolve_requirements_dir(cli, env_cfg)` — documents-root override (D-132): `--requirements-dir` / `NORA_REQUIREMENTS_DIR` (`REQUIREMENTS_DIR_ENV_VAR`) / env-config `requirements_dir` / default `<env_dir>/input`
 - `resolve_stage(value)` — accepts either stage name or 1-based number, returns canonical name
 - `env_cli.main` — CLI: `stages | create | list | show | init | delete`
 
@@ -34,7 +39,8 @@ Per-environment scoped workspace configuration. An environment names a workspace
 - A malformed roster entry is dropped with a warning, never fatal — a half-written `providers` list must not take the app down, and the warning is what makes the omission visible.
 
 - `PIPELINE_STAGES` is the **single source of truth** for stage names and ordering across the project; any other module listing stages must import from here.
-- `env_dir` layout is fixed (D-022): `input/<MNO>/<release>/`, `out/<stage>/`, `state/`, `corrections/`, `reports/`, `eval/` (see `ENV_DIR_DIRS`). Other modules find artifacts by this convention, not by ad-hoc paths. One sanctioned exception (D-DRAFT-6 docker-distro): the **documents root** may be repointed outside the env_dir via `requirements_dir` (`input_root` is the authority; containers mount the shared corpus read-only at a fixed path) — every OUTPUT path (`out/`, `state/`, `reports/`, …) stays under `env_dir` unconditionally.
+- `env_dir` layout is fixed (D-022): `input/<MNO>/<release>/`, `out/<stage>/`, `state/`, `corrections/`, `reports/`, `eval/` (see `ENV_DIR_DIRS`). Other modules find artifacts by this convention, not by ad-hoc paths. One sanctioned exception (D-132): the **documents root** may be repointed outside the env_dir via `requirements_dir` (`input_root` is the authority; containers mount the shared corpus read-only at a fixed path) — every OUTPUT path (`out/`, `state/`, `reports/`, …) stays under `env_dir` unconditionally.
+- Embedding and reranker providers and models have no built-in default: `DEFAULT_EMBEDDING_PROVIDER`, `DEFAULT_EMBEDDING_MODEL`, `DEFAULT_RERANKER_PROVIDER` and `DEFAULT_RERANKER_MODEL` are all `""`. The deployment must name them. `make_embedder` (vectorstore) refuses an empty provider; pipeline (`PipelineContext.from_env` and standalone runs) resolves the embedder through `resolve_embedding_provider` / `resolve_embedding_model`. An enabled reranker with no provider runs as the passthrough, so nothing downloads unless a backend is named.
 - `correction_file(artifact)` returns `None` when missing — callers must handle absence; this is how the "optional override" semantics of corrections is enforced.
 - `validate()` returns errors as a list (never raises) so CLI and Web UI can surface all problems at once.
 - Environment configs live at `environments/<name>.json` (gitignored except `.gitkeep`) — they are per-user, not committed.
@@ -56,6 +62,7 @@ _Alphabetical, regenerated by regen-map._
 
 `config.py`
 - `BROAD_QUERY_TOP_K_ENV_VAR` — constant — pub
+- `DEFAULT_BM25_WEIGHT_BY_TYPE` — constant — pub
 - `DEFAULT_BROAD_QUERY_TOP_K` — constant — pub
 - `DEFAULT_EMBEDDING_MODEL` — constant — pub
 - `DEFAULT_EMBEDDING_PROVIDER` — constant — pub
@@ -65,6 +72,7 @@ _Alphabetical, regenerated by regen-map._
 - `DEFAULT_LLM_MODEL` — constant — pub
 - `DEFAULT_LLM_PROVIDER` — constant — pub
 - `DEFAULT_LLM_TIMEOUT` — constant — pub
+- `DEFAULT_MODEL_DISCOVERY_TTL_S` — constant — pub
 - `DEFAULT_NARROW_QUERY_TOP_K` — constant — pub
 - `DEFAULT_RERANKER_BATCH_SIZE` — constant — pub
 - `DEFAULT_RERANKER_MODEL` — constant — pub
@@ -97,15 +105,15 @@ _Alphabetical, regenerated by regen-map._
 - `GAP_THRESHOLD_ENV_VAR` — constant — pub
 - `GROUPING_ENABLED_ENV_VAR` — constant — pub
 - `LLMConfigFile` — dataclass — pub — Schema for `config/llm.json`. Empty/zero values mean "fall through".
-- `_parse_providers` — function — internal — Parse the optional `providers` list.
+  - `load` — classmethod — pub
 - `LLMProviderEntry` — dataclass — pub — One named endpoint the Ask page can send a question to.
   - `api_key` — property — pub
-  - `load` — classmethod — pub
+  - `reasoning_mechanism` — property — pub — The wire mechanism to use, or "" when this endpoint honours none.
 - `LLM_API_KEY_ENV_VAR` — constant — pub
 - `LLM_BASE_URL_ENV_VAR` — constant — pub
+- `LLM_CONFIG_PATH_ENV_VAR` — constant — pub
 - `LLM_MODEL_ENV_VAR` — constant — pub
 - `LLM_PROVIDERS` — constant — pub
-- `LLM_CONFIG_PATH_ENV_VAR` — constant — pub
 - `LLM_PROVIDER_ENV_VAR` — constant — pub
 - `LLM_TIMEOUT_ENV_VAR` — constant — pub
 - `NARROW_QUERY_TOP_K_ENV_VAR` — constant — pub
@@ -113,6 +121,7 @@ _Alphabetical, regenerated by regen-map._
 - `PIPELINE_LANES` — constant — pub
 - `PIPELINE_STAGES` — constant — pub
 - `RAG_ONLY_ENV_VAR` — constant — pub
+- `REASONING_CONTROLS` — constant — pub
 - `REQUIREMENTS_DIR_ENV_VAR` — constant — pub
 - `RERANKER_API_KEY_ENV_VAR` — constant — pub
 - `RERANKER_BASE_URL_ENV_VAR` — constant — pub
@@ -138,11 +147,15 @@ _Alphabetical, regenerated by regen-map._
 - `_PROJECT_ROOT` — constant — internal
 - `_RETRIEVAL_CONFIG_CACHE` — constant — internal
 - `_llm_config` — function — internal
+- `_parse_providers` — function — internal — Parse the optional `providers` list. Entries missing a required
+- `_parse_ttl` — function — internal — `model_discovery_ttl_s`, or the default. Missing/0 is silent (unset);
 - `_reset_llm_config_cache` — function — internal — Test hook — drop the cached config so the next read picks up
 - `_reset_retrieval_config_cache` — function — internal — Test hook — drop the cached config so the next read picks up
 - `_resolve_int_env_or_default` — function — internal — Read int from env var; fall back to default on absent / invalid.
+- `_resolve_llm_config_path` — function — internal — Which `llm.json` to read when no explicit path is given.
 - `_retrieval_config` — function — internal
 - `_truthy` — function — internal — Treat env-var strings as bool. `1 / true / yes / on` → True.
+- `_validated_provider_id` — function — internal — Check that `default_provider` / `fallback_provider` names a real entry.
 - `is_broad_query_type` — function — pub — True when the query_type belongs to the broad bucket. Unknown
 - `llm_config_provenance` — function — pub — `(source, filename)` of the `llm.json` actually loaded.
 - `logger` — constant — pub
@@ -151,6 +164,7 @@ _Alphabetical, regenerated by regen-map._
 - `resolve_embedding_base_url` — function — pub — Resolve the effective embedding base URL (for HTTP-API embedders).
 - `resolve_embedding_model` — function — pub — Resolve the effective embedding model name.
 - `resolve_embedding_provider` — function — pub — Resolve the effective embedding provider.
+- `resolve_fallback_provider` — function — pub — The roster entry a permanent refusal reroutes to, or None.
 - `resolve_gap_threshold` — function — pub — Resolve the gap threshold for grouping auto-commit vs disambiguation.
 - `resolve_grouping_enabled` — function — pub — Resolve whether Stage 4.7 grouping is enabled.
 - `resolve_llm_api_key` — function — pub — Resolve the effective LLM API key (OpenAI-compatible providers).
@@ -158,10 +172,10 @@ _Alphabetical, regenerated by regen-map._
 - `resolve_llm_model` — function — pub — Resolve the effective LLM model name.
 - `resolve_llm_provider` — function — pub — Resolve the effective LLM provider.
 - `resolve_llm_timeout` — function — pub — Resolve the effective LLM request timeout (seconds).
-- `resolve_requirements_dir` — function — pub — Resolve the source-documents root override.
-- `resolve_fallback_provider` — function — pub — The roster entry a permanent refusal reroutes to, or None.
+- `resolve_model_discovery_ttl_s` — function — pub — Seconds a provider's discovered model list stays fresh. File-only,
 - `resolve_provider` — function — pub — Look up one roster entry by id.
 - `resolve_providers` — function — pub — The named provider roster from `config/llm.json`, or `[]`.
+- `resolve_requirements_dir` — function — pub — Resolve the source-documents root override.
 - `resolve_reranker_api_key` — function — pub — Resolve the reranker endpoint API key (bearer token) for
 - `resolve_reranker_base_url` — function — pub — Resolve the reranker endpoint base URL for OpenAI-compatible
 - `resolve_reranker_batch_size` — function — pub — Resolve the reranker batch size.
@@ -203,7 +217,7 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-None (tier-0 leaf; stdlib only).
+None among core packages (leaf; stdlib only).
 
 **Depended on by**
-[pipeline](../pipeline/MODULE.md), [web](../web/MODULE.md).
+[corrections](../corrections/MODULE.md), [eval](../eval/MODULE.md), [llm](../llm/MODULE.md), [pipeline](../pipeline/MODULE.md), [profile_miner](../profile_miner/MODULE.md), [query](../query/MODULE.md), [standards](../standards/MODULE.md), [taxonomy](../taxonomy/MODULE.md), [vectorstore](../vectorstore/MODULE.md), [web](../web/MODULE.md).

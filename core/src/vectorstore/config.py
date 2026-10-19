@@ -35,17 +35,21 @@ class VectorStoreConfig:
     """
 
     # ── Embedding settings ───────────────────────────────────────
-    embedding_provider: str = "sentence-transformers"
-    """Which embedding backend to use.
+    embedding_provider: str = ""
+    """Which embedding backend to use. No default: empty makes
+    `make_embedder` refuse, so nothing downloads from the HuggingFace hub
+    unless 'sentence-transformers' is named. Every build writes its value
+    into the store's config.json.
     Options:
-      - 'sentence-transformers' (default): local HF-cached model
+      - 'tei': a remote TEI server (base URL from NORA_EMBEDDING_BASE_URL)
+      - 'sentence-transformers': local HF-cached model
       - 'ollama': uses the same Ollama runtime as the LLM provider; no
         separate HuggingFace offline cache needed. Configure ollama_url
         via `extra["ollama_url"]` (defaults to http://localhost:11434).
     """
 
-    embedding_model: str = "all-MiniLM-L6-v2"
-    """Model name passed to the embedding provider.
+    embedding_model: str = ""
+    """Model name passed to the embedding provider. No default.
     sentence-transformers options:
       - 'all-MiniLM-L6-v2'       (384d, fast, good baseline)
       - 'all-mpnet-base-v2'      (768d, slower, better quality)

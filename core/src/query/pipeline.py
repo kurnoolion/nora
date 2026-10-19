@@ -29,6 +29,7 @@ from core.src.query.context_builder import ContextBuilder
 from core.src.query.synthesizer import MockSynthesizer
 from core.src.query.rewriter import MockQueryRewriter, expand_query
 from core.src.query.schema import QueryResponse, CandidateSet, QueryType
+from core.src.env.config import DEFAULT_BM25_WEIGHT_BY_TYPE
 
 
 class _StageTimer:
@@ -113,32 +114,12 @@ _TYPE_MAX_DISTANCE: dict[QueryType, float] = {
 # with DB override via the Config page. The bucket assignment lives in
 # env.config._BROAD_QUERY_TYPES; queries not in that set are narrow.
 
-# Per-query-type BM25 weight in the RRF fusion. 0.0 disables BM25 for
-# that query type (pure dense retrieval). Empirical tuning on the OA
-# eval set:
-#   - STANDARDS_COMPARISON gains +33pp accuracy with BM25 active
-#     (queries name specific TS numbers / cause codes that BM25 weights
-#     heavily but dense embeddings spread thin).
-#   - CROSS_DOC and FEATURE_LEVEL regress when BM25 contributes — the
-#     expected hits are thin parent/overview chunks that BM25 ranks
-#     low; richer leaf chunks pulled up by BM25 displace them.
-#   - TRACEABILITY benefits modestly when the query names a specific
-#     req_id (entity-priority graph scoping handles the well-formed
-#     case in D-039; BM25 helps with concept-shaped trace queries).
-# Numbers may shift as the eval set grows; treat as tuning, not contract.
+# Per-query-type BM25 weight in the RRF fusion. The built-in defaults and
+# their tuning rationale live in env.config.DEFAULT_BM25_WEIGHT_BY_TYPE
+# (string-keyed, so env needs no query import); this is the same table
+# keyed by QueryType.
 _TYPE_BM25_WEIGHT = {
-    QueryType.STANDARDS_COMPARISON: 0.5,
-    QueryType.TRACEABILITY: 0.5,
-    QueryType.SINGLE_DOC: 0.5,
-    # FACT queries name specific timer/threshold/value tokens; BM25
-    # weight matches them exactly while dense embeddings spread
-    # similar phrasing too thin.
-    QueryType.FACT: 0.5,
-    # SUMMARIZE leans dense — the user paraphrases the topic, so
-    # semantic recall matters more than exact-token match.
-    QueryType.SUMMARIZE: 0.2,
-    # CROSS_DOC, FEATURE_LEVEL, CROSS_MNO_COMPARISON, RELEASE_DIFF,
-    # GENERAL: omitted → default 0.0 (pure dense)
+    QueryType(k): v for k, v in DEFAULT_BM25_WEIGHT_BY_TYPE.items()
 }
 
 # Per-query-type rewrite enable. SINGLE_DOC lookups already work via
@@ -516,7 +497,7 @@ class QueryPipeline:
         # chunks that rank below the richer leaf chunks, so a tight
         # top_k systematically misses them.
         # `bm25_weight` is per-query-type (0.0 = pure dense). See
-        # `_TYPE_BM25_WEIGHT` for the rationale; empirical tuning on
+        # `env.config.DEFAULT_BM25_WEIGHT_BY_TYPE` for the rationale; empirical tuning on
         # OA eval found BM25 helps standards / traceability / single-
         # doc queries but hurts cross-doc / feature-level (parent
         # chunks too thin to compete with BM25-favored richer chunks).
@@ -532,7 +513,7 @@ class QueryPipeline:
             type_top_k = min(type_top_k, self._top_k_cap)
         # BM25 weight: resolved through the unified chain so admins can
         # edit per-type values via the Config page without touching code.
-        # Falls back to _TYPE_BM25_WEIGHT built-in defaults when no
+        # Falls back to DEFAULT_BM25_WEIGHT_BY_TYPE built-in defaults when no
         # override is set in DB / JSON. See D-041 (RRF fusion) + D-050
         # (3-tier resolver) + the Config page table editor.
         from core.src.env.config import resolve_bm25_weight

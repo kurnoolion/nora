@@ -51,7 +51,7 @@
           hx-target="#es-editor" hx-swap="innerHTML">
         <td class="fw-semibold">{{ s.sample_id }}{% if s.mno %}<br><span class="badge text-bg-light fw-normal">{{ s.mno }}</span>{% endif %}</td>
         <td class="text-truncate" style="max-width:120px" title="{{ s.area }}">{{ s.area or "—" }}</td>
-        <td><span class="badge es-status-{{ s.status }}">{{ s.status }}</span></td>
+        <td><span class="badge es-status-{{ s.status }}">{{ s.status }}</span>{% if s.sample_id in flagged %} <span class="badge text-bg-warning" title="Flagged by a release move — review pending">review</span>{% endif %}</td>
         <td class="text-muted">{{ s.ground_truth|length }} req</td>
         <td class="text-muted text-truncate" style="max-width:80px">{{ s.created_by }}</td>
       </tr>

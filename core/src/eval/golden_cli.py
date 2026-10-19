@@ -25,7 +25,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .golden import GoldenEvalError, load_samples
+from .golden import GoldenEvalError, golden_root, load_samples
+from .release_map import load_release_map
 from .golden_runner import load_judge_prompt, run_all, write_run
 
 logger = logging.getLogger(__name__)
@@ -102,10 +103,15 @@ def _build_query_pipeline(graph_path: Path, vectorstore_dir: Path, llm):
     from core.src.vectorstore.config import VectorStoreConfig
 
     vs_config_path = embedder_config_path(vectorstore_dir)
-    if vs_config_path is not None:
-        vs_config = VectorStoreConfig.load_json(vs_config_path)
-    else:
-        vs_config = VectorStoreConfig(persist_directory=str(vectorstore_dir))
+    if vs_config_path is None:
+        # Every built store writes one; without it there is no NORA index to
+        # score, and a default config would pick no embedder.
+        raise GoldenEvalError(
+            "GEV-E003",
+            "no vector store config under the vectorstore directory — "
+            "no NORA index to score against",
+        )
+    vs_config = VectorStoreConfig.load_json(vs_config_path)
     embedder = make_embedder(vs_config)
 
     cell_stores = load_cell_stores(vectorstore_dir)
@@ -182,6 +188,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="stack-stamp field: enrichment prompt scheme of "
                              "the SIRA build behind the served data "
                              "(overrides any healthz-advertised value)")
+    parser.add_argument(
+        "--release-map-version", type=int, default=None,
+        help="score with this version of the golden set's release map "
+             "(from its history) instead of the current one — for a stack "
+             "that has not flipped yet, or to re-score an old run",
+    )
+    parser.add_argument(
+        "--allow-map-mismatch", action="store_true",
+        help="score even when the release map's N disagrees with the "
+             "stack's latest release for an MNO (stamped as rmap=vN!)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -201,6 +218,18 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(f"Filtered to mno={args.mno}")
     print(f"Loaded {len(samples)} golden sample(s)")
+    try:
+        release_map = load_release_map(
+            golden_root(args.env_dir), args.release_map_version
+        )
+    except GoldenEvalError as exc:
+        print(exc)
+        return 2
+    if release_map is None:
+        print("No release map — relative releases cannot resolve; "
+              "standard samples match without the release")
+    else:
+        print(f"Release map v{release_map.version}")
 
     query_pipeline = judge = judge_prompt = None
     stage2_skip_reason = ""
@@ -243,7 +272,29 @@ def main(argv: list[str] | None = None) -> int:
             query_pipeline = judge = judge_prompt = None
 
     started_at = datetime.now().isoformat(timespec="seconds")
-    report = run_all(
+    try:
+        report = _run(args, samples, started_at, query_pipeline, judge,
+                      judge_prompt, stage2_skip_reason, release_map)
+    except GoldenEvalError as exc:
+        # Preflight refusal (GEV-E006): nothing was scored.
+        print(exc)
+        return 2
+
+    run_dir = write_run(args.env_dir, report, env_name=args.env_name)
+    print()
+    print(report.compact_report(args.env_name))
+    print()
+    print(f"Run artifacts: {run_dir}")
+
+    # CI signal: hard errors fail the invocation; W-level skips don't.
+    if any(e["code"].startswith("GEV-E") for e in report.errors):
+        return 1
+    return 0
+
+
+def _run(args, samples, started_at, query_pipeline, judge, judge_prompt,
+         stage2_skip_reason, release_map):
+    return run_all(
         samples,
         args.stack_url,
         args.stack_label,
@@ -259,18 +310,9 @@ def main(argv: list[str] | None = None) -> int:
         reasoning_effort=args.reasoning,
         sira_prompt_scheme=args.sira_prompt_scheme,
         stage2_skip_reason=stage2_skip_reason,
+        release_map=release_map,
+        allow_map_mismatch=args.allow_map_mismatch,
     )
-
-    run_dir = write_run(args.env_dir, report, env_name=args.env_name)
-    print()
-    print(report.compact_report(args.env_name))
-    print()
-    print(f"Run artifacts: {run_dir}")
-
-    # CI signal: hard errors fail the invocation; W-level skips don't.
-    if any(e["code"].startswith("GEV-E") for e in report.errors):
-        return 1
-    return 0
 
 
 if __name__ == "__main__":

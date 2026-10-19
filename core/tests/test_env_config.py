@@ -62,10 +62,12 @@ def test_pipeline_context_standalone_expands_tilde():
 
 
 def test_embedding_fields_have_defaults():
-    """New embedding fields must default; old configs without them still load."""
+    """New embedding fields must default; old configs without them still load.
+    No built-in provider/model: the old sentence-transformers default
+    downloaded from the HuggingFace hub when nothing was configured."""
     env = _make_env("/tmp/x")
-    assert env.embedding_provider == "sentence-transformers"
-    assert env.embedding_model == "all-MiniLM-L6-v2"
+    assert env.embedding_provider == ""
+    assert env.embedding_model == ""
 
 
 def test_validate_rejects_unknown_embedding_provider():
@@ -152,8 +154,8 @@ def test_load_old_json_without_embedding_fields(tmp_path):
         })
     )
     env = EnvironmentConfig.load_json(p)
-    assert env.embedding_provider == "sentence-transformers"
-    assert env.embedding_model == "all-MiniLM-L6-v2"
+    assert env.embedding_provider == ""
+    assert env.embedding_model == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1280,3 +1282,11 @@ def test_model_discovery_ttl_leaves_roster_entries_unchanged(tmp_path):
         assert entry.model == "m1"
     finally:
         env_cfg._reset_llm_config_cache()
+
+
+
+def test_env_config_does_not_import_query():
+    """env is a leaf: the BM25 per-type defaults live here, not in query."""
+    import core.src.env.config as env_cfg
+
+    assert "core.src.query" not in Path(env_cfg.__file__).read_text()

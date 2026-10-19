@@ -187,3 +187,76 @@ def test_main_failed_and_req_id_mutually_exclusive(tmp_path):
         main(["A-1", "--failed", "--db-root", str(tmp_path)])
     with pytest.raises(SystemExit):
         main(["--db-root", str(tmp_path)])   # neither req_id nor --failed
+
+
+class TestCompareMode:
+    """--compare: paste-safe pairwise run comparison (counts only)."""
+
+    @staticmethod
+    def _mk_cell(tmp_path, runs: dict):
+        import json as _json
+        cell = tmp_path / "mnoa__Apr2098"
+        for name, kept in runs.items():
+            d = cell / "runs" / "doc-enrich" / name
+            d.mkdir(parents=True)
+            with open(d / "enrichments.kept.jsonl", "w", encoding="utf-8") as f:
+                for did, phrases in kept.items():
+                    f.write(_json.dumps({"doc_id": did, "phrases": phrases}) + "\n")
+        return cell
+
+    def test_identical_runs_report_full_overlap(self, tmp_path, capsys):
+        from sandbox.sira_enrich_inspect import cmd_compare
+        kept = {"R1": ["a", "b"], "R2": ["c"]}
+        cell = self._mk_cell(tmp_path, {"r1": kept, "r2": kept})
+        assert cmd_compare(cell, ["r1", "r2"], None) == 0
+        out = capsys.readouterr().out
+        assert "kept-overlap 2 (only-r1 0, only-r2 0)" in out
+        assert "identical 2/2 (100%)" in out
+
+    def test_divergent_runs_report_jaccard_and_exclusives(self, tmp_path, capsys):
+        from sandbox.sira_enrich_inspect import cmd_compare
+        cell = self._mk_cell(tmp_path, {
+            "r1": {"R1": ["a", "b"], "R2": ["c"], "R3": ["x"]},
+            "r2": {"R1": ["a", "b"], "R2": ["d"]},
+        })
+        assert cmd_compare(cell, ["r1", "r2"], None) == 0
+        out = capsys.readouterr().out
+        assert "kept-overlap 2 (only-r1 1, only-r2 0)" in out
+        assert "identical 1/2 (50%)" in out
+        assert "min 0.00" in out          # R2: disjoint sets
+        # ids and phrases never printed
+        assert "R1" not in out and '"a"' not in out
+
+    def test_ids_restriction(self, tmp_path, capsys):
+        from sandbox.sira_enrich_inspect import cmd_compare
+        cell = self._mk_cell(tmp_path, {
+            "r1": {"R1": ["a"], "R2": ["b"]},
+            "r2": {"R1": ["a"], "R2": ["z"]},
+        })
+        ids = tmp_path / "ids.txt"
+        ids.write_text("R1\n", encoding="utf-8")
+        assert cmd_compare(cell, ["r1", "r2"], str(ids)) == 0
+        out = capsys.readouterr().out
+        assert "restricted to 1 ids" in out
+        assert "identical 1/1 (100%)" in out
+
+    def test_missing_run_errors(self, tmp_path, capsys):
+        from sandbox.sira_enrich_inspect import cmd_compare
+        cell = self._mk_cell(tmp_path, {"r1": {"R1": ["a"]}})
+        assert cmd_compare(cell, ["r1", "nope"], None) == 2
+
+    def test_word_level_jaccard_sees_through_exact_mismatch(self, tmp_path, capsys):
+        """Exact phrase strings differ but share words: exact Jaccard is 0,
+        word-level is high — the measure that can see anything at
+        temperature-driven string divergence."""
+        from sandbox.sira_enrich_inspect import cmd_compare
+        cell = self._mk_cell(tmp_path, {
+            "r1": {"R1": ["ims registration state"]},
+            "r2": {"R1": ["registration state ims callback"]},
+        })
+        assert cmd_compare(cell, ["r1", "r2"], None) == 0
+        out = capsys.readouterr().out
+        assert "identical 0/1 (0%)" in out              # exact: disjoint
+        assert "word-level Jaccard" in out
+        assert "median 0.75" in out                      # 3 of 4 words shared
+        assert "phrases/req mean 1.00" in out

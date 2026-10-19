@@ -4,7 +4,7 @@
 
 **Active phase**: architecture
 **Last updated**: 2026-10-08
-**Last drift-check**: 2026-08-04 — mode: all — 7 drifts resolved (5 requirements: FR-6 reworded per-plan, FR-36 enrichment-review added, NFR-6 scoped to NORA core, FR-15/NFR-13 `<doc_root>`→`<env_dir>`; 2 design: FR-36 citation in web MODULE.md, taxonomy Purpose per-plan), 1 deferred added (FR-37 — SIRA replaces BM25 in NORA pipeline; revisit at nora-retrieval-quality), dev-full clean (3 changed modules aligned; 13 carried from 2026-07-18)
+**Last drift-check**: 2026-10-18 — mode: design — 21 drifts resolved, 1 no change (NFR-1: only acceptable LLMs are configured) (requirements describe current serving: D-254 SIRA over NORA's taxonomy, KG-dependent FR-5/7/8/11/12/13/21 + NFR-14 deferred, FR-37 reworded; new FR-40 serving path, FR-41 team gate, FR-42 LLM roster + refusal fallback, FR-43 promotion; FR-19 Ask-page features; 12 stale FR/NFR rewordings incl. NFR-15/16 → golden eval with per-release targets; TOC default 0.7 in from_dict; carrier-name sweep), 1 deferred (FR-38 release handling — lands with golden-eval strand); same day: dev-full — 16 drifts resolved
 
 ## Done
 

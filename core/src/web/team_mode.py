@@ -1,7 +1,8 @@
 """Team-eval access gating (team-eval-pilot).
 
-`NORA_WEB_TEAM_MODE=1` restricts the web app to the `/test` eval surface for
-team members and locks the test page to the SIRA lane only. The admin unlocks
+`NORA_WEB_TEAM_MODE=1` restricts the web app to the allowlisted surfaces
+(`_TEAM_ALLOWED` below) for team members and locks the test page to the SIRA
+lane only. The admin unlocks
 full access for their own browser by visiting
 `/admin-unlock?token=<NORA_WEB_ADMIN_TOKEN>`, which sets an HttpOnly cookie that
 is checked on every request thereafter.

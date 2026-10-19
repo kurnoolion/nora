@@ -6,6 +6,12 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 **Public surface**
 - App (app.py):
   - `app: FastAPI` — the ASGI application; wires middleware, static mounts, routers, templates
+- Team gate (team_mode.py + middleware.py + app.py):
+  - `NORA_WEB_TEAM_MODE` (`1`/`true`/`yes`/`on`) turns the gate on; read once at import into `TEAM_MODE`. Off (the default) = no-op, full access, both lanes.
+  - `TeamModeMiddleware` (middleware.py) — for a gated request whose root_path-stripped path is not allowlisted, returns a 302 to `<root_path>/test`. Added after `MetricsMiddleware`, so it is outermost and runs first.
+  - Allowlist — the `_TEAM_ALLOWED` prefix tuple in team_mode.py: `/test`, `/api/test`, `/static`, `/api/health`, `/admin-unlock`, `/favicon`, `/enrichment-review`, `/api/enrich-review`, `/eval-studio`, `/api/eval-studio`, `/ask/s/`, `/api/ask/s/`, `/ask/history`, `/api/req/`. Prefix match; `/` is not allowed. `path_allowed_for_team(path)` is the check.
+  - `GET /admin-unlock?token=` (app.py) — a token equal to `NORA_WEB_ADMIN_TOKEN` sets the HttpOnly admin cookie (`nora_admin`, 30 days) and redirects home; a wrong or missing token redirects to `/test`; gate off redirects home.
+  - `is_admin(request)` (gate off, or a valid admin cookie), `team_restricted(request)` (gate on and not admin) — routes use these to refuse or narrow gated requests; `team_restricted` is also the `is_team_restricted` Jinja global that hides admin-only nav.
 - Config (config.py):
   - `WebConfig` — host, port, root_path (reverse-proxy prefix; `$NORA_WEB_ROOT_PATH` > web.json, env-first because web.json is baked into the image while the prefix is per-deployment; normalized to leading-slash/no-trailing-slash), path_mappings, ollama_url, default_model, env_dir, plus DB-path overrides `jobs_db` / `metrics_db` / `feedback_db` and `corrections_root` (enrichment-corrections volume, strand sira-enrichment-review; resolution web.json > $NORA_CORRECTIONS_ROOT > env.json; "" = surface disabled); `from_dict()`, `env_dir_path()`, `state_path()`, `jobs_db_path()`, `metrics_db_path()`, `feedback_db_path()` (per D-022; override-aware)
   - `PathMapping` — `(windows, linux, label)` entry
@@ -23,7 +29,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - Rendered by `templates/test/_timeline.html`, included from `test/_answer.html` ABOVE the "Engineering details" collapse — answer latency is the everyday user's question, not an engineering-review detail. Both `/test` lanes draw the same component.
 - Enrichment-corrections overlay (enrich_overlay_store.py + routes/enrich_review.py, strand sira-enrichment-review):
   - `EnrichOverlayStore(corrections_root)` — sole WRITER of `<root>/sira-enrich/` (sira-query mounts ro): word-record edits (`edit(mno, req_id, op, words|pairs, label, reason, by, origin_release)` with ops remove/unremove/add/unadd/suppress/unsuppress/reaffirm/discard; one active record per (word, direction)), label ops (`disabled_labels`, `set_label_disabled`, `delete_label`, `label_counts`, `label_req_counts` — drawer badge reqs:records), merge log (`accepted_labels`, `set_label_merged` — `accepted-labels.json`, labels-are-branches), reason categories (seeded, extensible), pending signals (`overlay_digest(mno, label)` — canonical view digest, formula locked to sira-query's `_overlay_digest`; `overlay_mtime` as legacy fallback). flock'd read-modify-write, atomic tmp+rename, last-writer-wins per record.
-  - `POST /api/enrich-review/edit`, `GET/POST /api/enrich-review/labels[.../toggle|merge|delete]`, `GET/POST /api/enrich-review/reasons` — JSON edit API; missing corrections_root -> 503 (fail-loud, not silent no-op). Merge/un-merge and delete are admin-gated in team mode (`team_mode.is_admin`); edits are not (they land invisibly on the editor's label branch). Record semantics validated against the service-side fold (`sandbox/sira_query/enrich_overlay.py`) by a cross-side test.
+  - `POST /api/enrich-review/edit`, `GET /api/enrich-review/labels`, `POST /api/enrich-review/labels/merge`, `POST /api/enrich-review/labels/delete`, `GET/POST /api/enrich-review/reasons` — JSON edit API; missing corrections_root -> 503 (fail-loud, not silent no-op). Merge/un-merge and delete are admin-gated in team mode (`team_mode.is_admin`); edits are not (they land invisibly on the editor's label branch). The label-view projection is shared code: the store and the route import `allowed_labels` / `filter_overlay` from `sandbox/sira_query/enrich_overlay.py`, so web and service filter a view identically. The record fold (`apply_overlay_to_req`) is not imported — the row view mirrors it — so record semantics are validated against the service-side fold by a cross-side test.
   - `GET /enrichment-review` (page) + HTMX partials: `/api/enrich-review/cells|plans` (proxied sira-query reads over NORA_SIRA_QUERY_URLS — comma-separated, both stacks; the PRIMARY = first URL is the read/banner authority), `/table` (server-rendered rows: service data ⊕ CURRENT overlay projected onto the `label` view — edits visible instantly regardless of service state; index-words column shows the base BM25 layer; enrichments header carries the enrich model name the service reports), `/row-edit` (one chip interaction → store edit → row partial + OOB pending banner), `/apply` (POST /cells/<cell>/reload on EVERY configured sira-query — with a label only that branch variant rebuilds; the default view is untouched), `/pending`, `/pending-cells` + `/apply-all` (per-MNO staleness sweep behind the labels drawer's Apply-all button — reloads every stale cell of the current view). Exactly ONE `#pending-banner` exists, in the sticky stamp bar; the table response updates it OOB. Chip grammar per the strand design: plain ×→ghost ↺, green adds, suppress-collapse, muted read-only chips for merged (main) records, newer-add-countermands-older-remove rendered as an active add, held banner with Re-affirm/Discard (bulk via __all_held__). Team-mode gate admits `/enrichment-review` + `/api/enrich-review` (domain experts are the gated team).
   - Exports (enrich_report.py + `GET /api/enrich-review/export?mode=report|scorecard&label=&mno=&download=`): pure text builders over flattened word records — `build_report` (label × category pivot, top removed/added words with req/plan counts, suppressions, origin drift, verbatim notes by category; D-012 posture — never requirement body text) and `build_scorecard` (per remove-record: does the CURRENT LLM output — latest loaded release per MNO — still produce the word? gone = fixed; per-label fixed/unfixed + unfixed word list). Report mode degrades to a note when sira-query is down; scorecard mode requires it. Deterministic ordering (successive exports diff cleanly). The export is the input to a prompt-revision pass; after re-enrichment the scorecard measures fix efficacy, then `delete_label` retires the campaign's records.
 - Ingested-corpus inventory (routes/playground.py, D-DRAFT-14 docker-distro):
@@ -31,7 +37,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - Feedback (feedback_db.py):
   - `FeedbackStore(db_path)` — aiosqlite store for the Test page's Q&A + feedback log; `initialize()`, `record_qa()` (returns row id), `record_feedback(row_id, vote, free_form_feedback)` (legacy thumbs vote), `record_user_feedback()` (team-eval: 0–9 score + categories + comment + user name, per lane), `get_row()`, `list_recent()`. Surface for offline review of LLM hallucinations (D-043 driver) and the team-eval round.
 - Config store (config_db.py) [D-053]:
-  - `ConfigStore(db_path)` — synchronous SQLite-backed user-config store; values JSON-encoded; threadsafe via internal lock. Public methods: `get(module, key)`, `get_module(module)`, `get_all()`, `set(module, key, value, updated_by)`, `delete(module, key)`, `apply_to_caches()` (overlay every stored value onto the cached `LLMConfigFile` / `RetrievalConfig` instances at lifespan startup), `reapply_one(module, key)` (cheaper single-field overlay used after each save).
+  - `ConfigStore(db_path)` — synchronous SQLite-backed user-config store; values JSON-encoded; threadsafe via internal lock. Public methods: `get(module, key)`, `get_module(module)`, `get_all()`, `set(module, key, value, updated_by)`, `delete(module, key)`, `apply_to_caches()` (overlay every stored value onto the cached `LLMConfigFile` / `RetrievalConfig` instances at lifespan startup), `reapply_one(module, key)` (cheaper single-field overlay used after each save), `seed_missing(items)` (writes each `(module, key, value)` only when the key is absent; returns the count written; called at lifespan startup).
 - Config schema (config_schema.py) [D-053]:
   - `ConfigField` — per-knob metadata: `module`, `key`, `label`, `kind` (`bool` / `string` / `int` / `float` / `enum` / `password` / `dict_by_query_type`), `category` (`feature` / `value` / `tunable`), `choices` for enums, `value_kind` for per-type maps, `help` text.
   - `ConfigSection` — section grouping (LLM & Embedding, Retrieval & Grouping); `CONFIG_SECTIONS: list[ConfigSection]` is the page's authoritative schema.
@@ -40,31 +46,30 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - `render_markdown(text) -> Markup` — converts LLM answer markdown to Jinja-safe HTML (headers, bullets, **bold**, *italic*, fenced code, tables, `nl2br`). Registered as the `md` Jinja filter on `templates.env`. Strips dangerous tags defensively before parsing (script / style / iframe / object / embed / svg-with-onclick / math).
   - `render_markdown_bubbles(text, req_ids=None, root_path="") -> Markup` — `render_markdown` plus req-ID bubbles (strand req-id-bubbles): each id in `req_ids` that appears verbatim in the rendered prose becomes a badge that previews the requirement on hover and pins it on click, loading the body from `GET /api/req/{req_id}` via a `bubbleopen` event so every open path (hover / click / keyboard focus) fetches by one route. `root_path` prefixes that URL for reverse-proxy mounts. Registered as the `md_bubbles` Jinja filter. Substitution skips tag interiors and the contents of `<a>` / `<pre>`, so markup and fenced blocks cannot be corrupted; inline `<code>` IS bubbled (LLMs routinely backtick req IDs). Empty / missing `req_ids` degrades to plain `render_markdown` output.
   - `render_req_body(text) -> Markup` — renders a requirement's CORPUS body for the bubble panel (strand req-bubble-tables). Registered as the `req_body` Jinja filter and used by `templates/test/_req_bubble.html`. Tables become tables; everything else stays literal text. The parser inlines a table into `Requirement.text` at its document position in three forms and each is handled differently: lossless `<table>` HTML (Docling / merged-cell DOCX per D-199) is allowlist-sanitized to `table/thead/tbody/tfoot/tr/th/td/caption` with only `colspan`/`rowspan` kept, so merged structure survives; a GFM pipe table from `render_table_markdown` is rebuilt as a table (hand-built, not via the markdown library — that needs a header/delimiter pair and would drop the headerless row-only form); the compact `[Table: …]` line (D-198) stays text, because it is deliberately lossy and has no grid to recover. NOT `render_markdown`: corpus text is underscore- and asterisk-dense (req IDs, spec references) and markdown emphasis rules must not rewrite it.
-- DOCX preview rendering (docx_html_render.py):
-  - `render_docx_html(file_path) -> str` — emits an HTML fragment for the Bootstrap annotation harness. Walks docx body in `DOCXExtractor`'s order and applies the same skip rules (empty paragraphs, degenerate tables) so every emitted element's `data-block-idx` matches the IR's `ContentBlock.position.index`. Tables also emit `data-row-idx` per body row for row-range annotations.
-- Annotation schema (bootstrap_schema.py):
-  - `validate_annotation_file(payload) -> dict` — server-side validator for `<env_dir>/annotations/<plan>_annotations.json` per `cline-playbooks/annotation-schema.md`; returns sanitized payload (extra fields stripped) or raises `AnnotationValidationError` with a per-field error list.
-  - `KINDS` — 14 kinds: 8 structural (`section_heading`, `req_id`, `toc`, `strikethrough`, `version_history`, `definitions`, `applicability`, `priority`), 5 reference (`reference_intra_doc`, `reference_cross_doc`, `reference_spec`, `reference_list`, `reference_list_entry`), and 1 user-override (`remove`, [D-061]).
-  - `SPEC_REFERENCE_STYLES` (`direct` / `indirect`) — required field for `reference_spec` kind.
-  - `REFERENCE_LIST_NUMBERING_STYLES`, `REFERENCE_LIST_LAYOUTS`, `STRIKETHROUGH_SUBKINDS`, `STRIKETHROUGH_VISUALS`, `TOC_PATTERN_HINTS`, `DEFINITIONS_LAYOUTS`, `REQ_ID_PLACEMENTS`, `APPLICABILITY_POSITIONS`, `VERSION_HISTORY_SUBTYPES` — authoritative enum constants.
-  - `TARGET_KEYS_BY_KIND` — per-kind allowed keys for the optional ground-truth `target` dict (intra_doc: section_number/req_id; cross_doc: +plan_id; reference_spec: spec/section/ref_number; reference_list_entry: spec/section). Unknown keys silently stripped on save.
-  - `NOTES_MAX_CHARS`, `SCHEMA_VERSION` — caps.
-  - `AnnotationValidationError` — raised on validation failure; carries `errors: list[str]`.
 - Eval Studio (routes/golden_eval.py, strand golden-eval):
   - `GET /eval-studio` (page) + HTMX partials — sample board (list by status `draft → stage1-ready → golden-ready`, per-expert attribution), sample create/edit (query text + area tag), and status transitions (`stage1-ready` requires non-empty, fully-validated ground truth; `golden-ready` requires a saved golden_response).
   - **Ground-truth picker** — cascading dropdowns **MNO → Plan → Release**: MNO/Release inventories from the per-cell parse layout (`out/parse/<mno>/<release>/`, same discovery as req_browser), Plan dropdown shows the union of plans across that MNO's releases and the Release dropdown filters to releases containing the chosen plan (latest preselected). Selected cell+plan renders the requirement tree (shared tree loader, below) with checkboxes + filter-as-you-type; checked rows append to the sample's ground-truth list, which persists across dropdown changes (multi-plan / multi-MNO samples = change dropdowns, keep ticking). Every picker-sourced entry is fully qualified `(mno, release, plan, req_id)` — the cascade supplies qualifiers, the expert never types them. Each added entry shows the requirement title/text inline for confirmation.
+  - `GET /api/eval-studio/picker/jump` — re-renders the whole picker pre-selected to one `(mno, plan, release)` cell, driven by a ground-truth entry's locate button; an unknown or empty release falls back to the plan's latest; a `req_id` pre-fills and applies the filter box.
   - Direct-paste entry — accepts BULK ids (split on comma/space/newline, strand eval-studio-ux-2 [D-207]); each id is validated against the store at save time; an id resolving in exactly one cell is auto-qualified, an id matching SEVERAL releases auto-picks the LATEST release (`req_tree.latest_match`) with a muted per-pick notice — no ambiguity error (the expert wants the current revision; D-207 records the contract change); unresolvable ids block `stage1-ready`.
   - Round-2 UX (strand eval-studio-ux-2, teammate-authored): sortable columns + bounded scrollable lists (attribute-driven client-side sorter, per-table state surviving HTMX re-renders), board author + MNO filters, sample MNO tag (D-206), copy buttons, golden-tab stay-on-save + `golden_meta.edited` provenance badge, in-place question edit, sticky new-sample form values, Enter-to-submit, in-context tab-preserving promote buttons.
   - Retrieval-assisted seeding — run the sample's query against a stack, tick relevant results in. Carries a bias caution (ground truth seeded from retrieval can't capture what retrieval misses); the QC template requires ≥1 independently-sourced entry per sample.
   - Stage-1 preview — single-sample run (`POST /sira-query` on a configured stack) rendering recall + hit/miss per ground-truth entry, so an expert sanity-checks a sample without waiting for a batch run.
   - Stage-2 curation chat — free-form chat with the on-prem LLM over the ground-truth chunk texts (fetched by `req:<id>` from the store); the chat is a scratchpad, only the final text + meta persist as `golden_response` via eval's `golden.py` (single schema, no parallel write path).
-  - Team-mode gate admits `/eval-studio` (domain experts are the gated team); draft-sample delete is expert-allowed (UI-confirmed), deleting promoted (non-draft) samples admin-gated.
-- Shared requirement-tree loader (req_tree.py, strand golden-eval): `load_tree_flat` / `build_tree_hierarchy` / `load_tree` / `find_tree` / cell-and-doc discovery (`list_cells` / `list_docs`), picker cascade data (`plans_for_mno` — plan → releases union, `reqs_for_plan`), and `find_req` (corpus-wide id lookup driving direct-entry validation + auto-qualification) plus `latest_match` (newest-release pick over `find_req` results, ties→first for determinism — the latest-on-conflict contract, D-207) — lifted from `routes/req_browser.py`'s module-private helpers; used by both req_browser and the Eval Studio picker. Per-cell layout first, legacy flat fallback.
+  - Release handling (strand golden-eval, release-handling design — the schema and rules are eval's):
+    - **Kind selector** on the meta card (`standard` | `version`, saved by `POST .../meta` `kind`); a switch the entries do not support (relative releases on a standard sample) is refused with the validation reason, the old kind kept.
+    - **Relative toggle** (version samples, enabled when the set has a release map): picker adds (`gt/add`, `gt/add-bulk` `relative=1`, read from `#es-rel-toggle` via `hx-include`) store `N` / `N-<k>` for a release the map lists, else the label with a notice; the ground-truth list shows each relative entry's binding (`N → <release>`).
+    - **Case normalisation at save**: direct and picker adds look the id up case-insensitively (`req_tree.find_req(..., ignore_case=True)`) and store the parse tree's spelling, with a notice (pairs with eval's m3 matching).
+    - **QC warnings** on the meta card (advisory): a standard sample whose question names a release; relative entries (serving must map relative wording first; no map → GEV-E005); a pending review flag.
+    - **Review panel** (GT tab, shown when `golden_meta.review` is set by `golden_release_cli`): per flagged entry its class and text in the old and the new release, with `POST .../review/entry` `action=keep` (move to the new release) / `replace` (`new_id`, must exist in the new release) / `remove`; `POST .../review/clear` (per MNO, confirm dialog: entries and golden response checked) clears the flag — never implicit. Blocks are built from `golden_meta.review` itself, so an MNO whose entries are all ruled on keeps its block and clear button (field-found: grouping blocks from the entry rows removed the clear form after the last ruling and stranded the sample out of Stage 2). The board badges flagged samples.
+    - **Golden save keeps a review flag** (field-found risk: `golden_meta` was rebuilt wholesale on save, which silently dropped the flag and the Stage-2 skip with it).
+    - Stage-1 preview and the curation chat resolve relative entries through the release map (preview reports GEV-E005 when one cannot resolve); the chat reads requirement texts case-insensitively.
+  - Team-mode gate admits `/eval-studio` (domain experts are the gated team; the review and kind routes sit under the admitted `/api/eval-studio` prefix — verified with the gate on); draft-sample delete is expert-allowed (UI-confirmed), deleting promoted (non-draft) samples admin-gated.
+- Shared requirement-tree loader (req_tree.py, strand golden-eval): `load_tree_flat` / `build_tree_hierarchy` / `load_tree` / `find_tree` / cell-and-doc discovery (`list_cells` / `list_docs`), picker cascade data (`plans_for_mno` — plan → releases union, `reqs_for_plan`), and `find_req` (corpus-wide id lookup driving direct-entry validation + auto-qualification; `ignore_case=True` matches ids case-insensitively, and every row carries the tree's own `req_id` spelling) plus `latest_match` (newest-release pick over `find_req` results, ties→first for determinism — the latest-on-conflict contract, D-207) — lifted from `routes/req_browser.py`'s module-private helpers; used by both req_browser and the Eval Studio picker. Per-cell layout first, legacy flat fallback.
   - `find_req` row shape (strand req-bubble-metadata): `{mno, release, plan, plan_name, doc_id, title, section_number, parent_section, text}`. `section_number` / `parent_section` / `plan_name` feed the metadata line in the answer bubble. Additive — the three call sites (`playground.py`, `golden_eval.py` ×2) all read by key.
 - `MetricsMiddleware` (middleware.py) — captures every request's timing and error count; fire-and-forget
 - `PathMapper(mappings)` (path_mapper.py) — `to_linux()`, `to_windows()`; translates Windows UNC paths to Linux mount points
 - `ResourceSampler` (resource_sampler.py) — background task sampling CPU / memory / disk / GPU via `/proc` and `nvidia-smi` (no `psutil` dependency)
-- Routers (routes/): dashboard, environments, pipeline, jobs, query, corrections, files, metrics_route, parse_review (Parse page — two tabs: **Bootstrap** annotation harness with `GET /parse-review/bootstrap/docs`, `GET /parse-review/bootstrap/<doc_id>/view`, `GET|POST /parse-review/bootstrap/<doc_id>/annotations` writing `<env_dir>/annotations/<plan>_annotations.json` atomically; **Review** post-parse 3-pane), req_browser (Requirement Browser), resolve_review (Resolve Review UI), playground (Test/Ask page — `POST /api/test/ask` (optional `provider` + `mode` form fields, validated by `_form_provider` / `_form_mode`: `provider` names an entry from the `config/llm.json` roster, `mode` is the asker's Fast/Think choice — fast suppresses thinking using the selected entry's declared `reasoning_control` wire form (`reasoning_effort: "none"` or `chat_template_kwargs: {"enable_thinking": false}`; there is no form that works on every endpoint), think sends no reasoning field at all so the deployment's own behaviour applies. The asker still sees exactly two states: only the wire form varies, and it varies per endpoint, not per user choice — D-216 rejected exposing effort levels here. Empty means the provider's declared `default_mode`. Every synthesis path on the page honours both; unknown values degrade rather than failing the question, and a mode on a provider declaring no reasoning mechanism is ignored with a warning. Recorded on `lane_config` as `llm_provider_id` / `llm_mode` beside `llm_model`, so an answer is attributable to a (provider, mode, model) triple. With no roster configured the controls are not rendered at all — the pre-roster page unchanged. An optional `model` form field (`_form_model`) picks a model on the selected provider; `_build_llm_from_env_or_default` honours it only if `model_discovery.allowed_models(entry)` lists it (cache read, never a fetch), else the entry's default with a warning; the fallback entry always uses its own default. `GET /api/test/providers/{provider_id}/models` returns `{models, default, discovered}` for the Model select (404 for an id not in the roster; team-gate allowlisted via `/api/test`)), `POST /api/test/synthesize-group` for D-049 disambiguation user-pick path, `POST /api/test/feedback`, `GET /api/req/{req_id}` (strand req-id-bubbles — read-only requirement fragment behind the answer bubbles; resolves through the shared `req_tree.find_req` + `latest_match`, 404 when the id is not in the parse layer; team-gate allowlisted so shared answers stay readable for gated experts); strands ask-page-ux/ask-history [D-208, D-209]: `GET /ask/s/{row_id}` read-only shared-answer snapshot of a stored ask (normal user view ONLY — engineering internals are not persisted at ask time, D-209; retroactively shareable, no schema change) + body-only `GET /api/ask/s/{row_id}` (the history detail pane reuses the shared markup via `_shared_body.html` so the two surfaces cannot drift) + `GET /ask/history` (browser-localStorage question history — server-side history REJECTED, D-208: optional free-text `user_name` makes it spoofable/merged-anonymous; stale entries 404 and offer removal). All three paths are team-gate allowlisted — shared answers are team-safe by D-209's normal-view-only constraint), config_route (Config page — `GET /config`, `POST /api/config/save`; D-053) — each mounted via `app.include_router`
+- Routers (routes/): dashboard, environments, pipeline, jobs, query, corrections, files, metrics_route, parse_review (Parse page — corpus summary landing plus the per-doc post-parse 3-pane **Review** view), req_browser (Requirement Browser), resolve_review (Resolve Review UI), playground (Test/Ask page — `POST /api/test/ask` (optional `provider` + `mode` form fields, validated by `_form_provider` / `_form_mode`: `provider` names an entry from the `config/llm.json` roster, `mode` is the asker's Fast/Think choice — fast suppresses thinking using the selected entry's declared `reasoning_control` wire form (`reasoning_effort: "none"` or `chat_template_kwargs: {"enable_thinking": false}`; there is no form that works on every endpoint), think sends no reasoning field at all so the deployment's own behaviour applies. The asker still sees exactly two states: only the wire form varies, and it varies per endpoint, not per user choice — D-216 rejected exposing effort levels here. Empty means the provider's declared `default_mode`. Every synthesis path on the page honours both; unknown values degrade rather than failing the question, and a mode on a provider declaring no reasoning mechanism is ignored with a warning. Recorded on `lane_config` as `llm_provider_id` / `llm_mode` beside `llm_model`, so an answer is attributable to a (provider, mode, model) triple. With no roster configured the controls are not rendered at all — the pre-roster page unchanged. An optional `model` form field (`_form_model`) picks a model on the selected provider; `_build_llm_from_env_or_default` honours it only if `model_discovery.allowed_models(entry)` lists it (cache read, never a fetch), else the entry's default with a warning; the fallback entry always uses its own default. `GET /api/test/providers/{provider_id}/models` returns `{models, default, discovered}` for the Model select (404 for an id not in the roster; team-gate allowlisted via `/api/test`)), `POST /api/test/synthesize-group` for D-049 disambiguation user-pick path, (team gate: for a gated member `/api/test/ask` runs only `section=merged`, lanes forced to SIRA, and refuses every other section — the default `requirement_bot` included — before dispatch; `synthesize-group`, a NORA-pipeline re-run, is refused outright. Field-found: the override sat inside the merged branch, so a POST without `section` reached the NORA lane), `POST /api/test/ask-stream` (SSE path of the merged form: same form fields as `/api/test/ask`, emits per-lane `progress` events and heartbeats, then `done` with the rendered merged answer; accepts only `section=merged`, else 400; team-gated like `/api/test/ask` — gated requests run the SIRA lane only), `POST /api/test/feedback`, `GET /api/req/{req_id}` (strand req-id-bubbles — read-only requirement fragment behind the answer bubbles; resolves through the shared `req_tree.find_req` + `latest_match`, 404 when the id is not in the parse layer; team-gate allowlisted so shared answers stay readable for gated experts); strands ask-page-ux/ask-history [D-208, D-209]: `GET /ask/s/{row_id}` read-only shared-answer snapshot of a stored ask (normal user view ONLY — engineering internals are not persisted at ask time, D-209; retroactively shareable, no schema change) + body-only `GET /api/ask/s/{row_id}` (the history detail pane reuses the shared markup via `_shared_body.html` so the two surfaces cannot drift) + `GET /ask/history` (browser-localStorage question history — server-side history REJECTED, D-208: optional free-text `user_name` makes it spoofable/merged-anonymous; stale entries 404 and offer removal). All three paths are team-gate allowlisted — shared answers are team-safe by D-209's normal-view-only constraint), config_route (Config page — `GET /config`, `POST /api/config/save`; D-053) — each mounted via `app.include_router`
 - `model_discovery` (model_discovery.py) — in-process per-provider cache of `llm.list_models()` results for `model_discovery_ttl_s`. `models_for(entry)` fetches when stale and keeps the last good list when a refresh fails (a failed attempt is retried once per TTL, not per request); `allowed_models(entry)` reads the cache only. The entry's configured `model` is always present in both. The Model select shows the list unfiltered — no filtering of embedding/reranker models.
 - App state (set up in `lifespan`): `app.state.job_queue`, `app.state.metrics`, `app.state.feedback_store`, `app.state.path_mapper`, `app.state.config_store` (ConfigStore | None — None when `--config-db` is unset), `app.state.query_pipeline` (cached after first build; saving via `/api/config/save` sets it back to None so the next query rebuilds with the new resolved values).
 - CLI launcher (`if __name__ == "__main__"` in app.py): `--env-dir`, `--host`, `--port`, `--jobs-db`, `--metrics-db`, `--feedback-db`, `--config-db` (each maps to a corresponding `NORA_*_DB` / `ENV_DIR` env var so the uvicorn-reload worker re-import sees the same resolution).
@@ -74,12 +79,13 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - `MetricsMiddleware` is **fire-and-forget** — it never blocks or crashes a response. Metric failures are swallowed at `logger.debug`.
 - Zero npm / JS build step. Server-side jinja2 + HTMX partials only; Bootstrap 5 + Bootstrap Icons + HTMX are **vendored** under `static/`. Runtime never fetches from a CDN.
 - **Reverse-proxy compatible**: `root_path` is injected into every template context via `_template_response()`. Links built with `url_for` or prefixed by `{{ root_path }}` work behind a sub-path proxy mount. The proxy must pass the prefix through unchanged (Starlette root_path semantics: the ASGI path includes the prefix; routing strips it — a stripping proxy 404s the `/static` mount). Middleware path checks (team gate allowlist, metrics endpoint label) compare the root_path-stripped path, never the raw one.
+- **New routes must be checked against the team-gate allowlist** (`_TEAM_ALLOWED` in team_mode.py): a route that gated members need must sit under an allowlisted prefix, and an allowlisted prefix must not expose admin-only actions without an `is_admin` / `team_restricted` check in the route. Verify with the gate ON, not only in an ungated dev run — an unlisted route silently redirects gated members to `/test`.
 - SQLite uses WAL journal mode (both jobs and metrics DBs) — supports concurrent reads while a background job writes.
 - Jobs and metrics DBs are separate files (`<env_dir>/state/nora.db`, `<env_dir>/state/nora_metrics.db` per D-022) — metrics can be truncated for retention without touching job history.
 - `PathMapper` is case-insensitive for Windows paths (UNC paths are not case-sensitive); it returns `None` when no mapping matches — callers surface that as a user error, not a 500.
 - Resource sampler runs on a 30s interval, reads CPU from `/proc/stat`, memory from `/proc/meminfo`, GPU via `nvidia-smi` subprocess — deliberately dependency-free because the host may be locked down.
 - No proprietary document content in metric tags, job log lines sent to SSE, or error-message templates. Verbose logs persist to disk; chat-facing surfaces stay clean (D-012).
-- **Config-page DB layer in resolver chain** [D-053]: when `--config-db` / `$NORA_CONFIG_DB` is set, lifespan startup instantiates `ConfigStore` and calls `apply_to_caches()`, which overlays every stored value onto the cached `LLMConfigFile` / `RetrievalConfig` instances. The existing `resolve_*` functions in `core/src/env/config.py` then automatically pick up the new tier — no plumbing changes elsewhere. Effective resolver chain becomes `CLI > env var > ConfigStore (DB) > config/*.json > defaults`. `POST /api/config/save` writes to the DB, calls `reapply_one` to refresh the cache, and sets `app.state.query_pipeline = None` so the next query rebuilds with the new resolved values.
+- **Config-page DB layer in resolver chain** [D-053]: when `--config-db` / `$NORA_CONFIG_DB` is set, lifespan startup instantiates `ConfigStore`, calls `seed_missing` to write first-creation values for `retrieval.broad_query_top_k` / `narrow_query_top_k` (env var if set and positive, else the default; existing keys are never overwritten, so the DB is authoritative after first creation), then calls `apply_to_caches()`, which overlays every stored value onto the cached `LLMConfigFile` / `RetrievalConfig` instances. The existing `resolve_*` functions in `core/src/env/config.py` then automatically pick up the new tier — no plumbing changes elsewhere. Effective resolver chain becomes `CLI > env var > ConfigStore (DB) > config/*.json > defaults`. `POST /api/config/save` writes to the DB, calls `reapply_one` to refresh the cache, and sets `app.state.query_pipeline = None` so the next query rebuilds with the new resolved values.
 - **The query timeline's denominator is the route's wall clock, not the sum of its stages.** Neither lane instruments everything — the NORA `total_ms` excludes pipeline construction (cold-start expensive), and SIRA's numbers exclude the HTTP round-trip — so `build_timeline` emits the remainder as an explicit `unaccounted` segment. Folding that remainder into a stage, or omitting it so the bars renormalize to 100%, would make the timeline over-claim its coverage. A large unaccounted share is a finding to surface, not a defect to hide.
 - **A skipped stage is absent from the timeline, never a zero-width segment.** `build_timeline` uses `is None` rather than a falsy check, so a stage that genuinely ran in under a millisecond still renders while a bypassed stage produces no segment at all. This is what keeps "instant" and "did not happen" visually distinct.
 - **Markdown renderer strips dangerous HTML before parsing**: `render_markdown` removes `<script>` / `<style>` / `<iframe>` / `<object>` / `<embed>` / `<svg>` / `<math>` tags (paired and self-closing) before invoking the markdown library. LLM answer text on the Test page goes through this filter; raw chunk text in the click-to-expand fragment view deliberately doesn't (the indexed body may contain literal markdown syntax that's part of the requirement, e.g. `**MUST**` in 3GPP-style specs).
@@ -87,11 +93,9 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - **Answer bubbles anchor on the row's own req_id set, never a req-ID pattern** (strand req-id-bubbles): the bubbled ids are `rag_chunks` + `llm_citations` on the live path and the persisted `retrieved_ids` + `cited_ids` columns on the stored path — matched as literal substrings. No regex, and no branch on `lane`: the set is derived once in the shared per-lane context both nora and sira pass through, so a bubble path that works on one lane cannot silently fail on the other (the lanes are exercised on different machines). An id the LLM invented is absent from the set and simply renders unbubbled. Bubble bodies load on first open only — `req_tree.find_req` scans parse trees, so eager preloading would cost N tree loads per answer. The badge does NOT carry `data-bs-toggle`: Bootstrap's own toggle would close a panel hover had already opened, so `app.js` owns show/hide and syncs `aria-expanded` by hand. **Any hand-injected HTML carrying `hx-*` must be passed to `htmx.process()`** — htmx only wires what it swapped itself, and the Ask page's SSE handler and History detail pane both assign with raw `innerHTML`; without it the bubbles render, expand, and never fetch.
 - **`find_req`'s `plan_name` is primary-plan-only** (strand req-bubble-metadata): it carries the tree's `plan_name` only when the requirement's effective plan equals the tree's own `plan_id`, and `""` otherwise. A document can carry several plans while the document-level `plan_name` describes just one; `graph/builder.py` stamps secondary plans with an empty name for the same reason, and no per-plan-id-to-name mapping exists anywhere. Rendering the document name beside a secondary plan's requirement would label it with the wrong plan. Consumers show the plan id when `plan_name` is empty. Related: `section_number` is routinely `""` (table-anchored and leading-id-body reqs, TOC pair misses) and `parent_section` is the fallback — the keys are always present, so branch on emptiness, never on absence.
 - **Logging configured at module-import time**, not just inside the `if __name__ == "__main__":` launcher block. Required because `uvicorn.run(reload=True)` spawns a worker that re-imports the module but never executes the launcher block; without basicConfig at import, the worker's loggers default to WARNING and silently drop every `logger.info(...)` in the request path (verification lines like `Web LLM resolved`, `[Query knobs]`, `ConfigStore active` would never reach stderr).
-- **Bootstrap-tab DOCX renderer is index-aligned with the extractor**: `docx_html_render.render_docx_html` walks the docx body in `DOCXExtractor.extract`'s order and applies the same skip rules (empty paragraphs and degenerate single-empty-column tables consume no index). This guarantees every `data-block-idx` in the rendered HTML corresponds to a real `ContentBlock.position.index` in the saved IR — a regression here would silently misalign every annotation.
 - **Labels are branches; Apply is never a publish** (strand sira-enrichment-review): the default (main) view = unlabeled records + labels in the `accepted-labels.json` merge log; a label view = main + that label's records. Merge/un-merge only edit the merge log — records are never rewritten, so both are instant and reversible. Apply/apply-all are deliberately NOT admin-gated: a reload can only sync serving to what the overlay + merge log already contain, never expose an unmerged label to main.
-- **Pending is a view-scoped content digest, formula-locked to sira-query**: `overlay_digest` hashes only the view's filtered records — the merge log itself stays out, so a merge/un-merge flags only the MNOs the label touches; fully-undone edits digest back to "in sync". The formula must byte-match sira-query's `_overlay_digest` (cross-side parity test); both images must ship formula changes together. Pending/banner state always renders from the PRIMARY configured service (`NORA_SIRA_QUERY_URLS[0]`) — the one every read path queries.
+- **Pending is a view-scoped content digest, formula-locked to sira-query**: `overlay_digest` hashes only the view's filtered records (the filter is the service's own `filter_overlay`, imported) — the merge log itself stays out, so a merge/un-merge flags only the MNOs the label touches; fully-undone edits digest back to "in sync". The hash step is duplicated, so the formula must byte-match sira-query's `_overlay_digest` (cross-side parity test); both images must ship formula changes together. Pending/banner state always renders from the PRIMARY configured service (`NORA_SIRA_QUERY_URLS[0]`) — the one every read path queries.
 - **Eval Studio writes samples only through eval's `golden.py`** (strand golden-eval): the sample schema has one owner; web never serializes `<env_dir>/eval/golden/` JSON itself. Golden samples are proprietary content — no sample query, req_id, or golden-response text in metric tags, logs, or error messages (NFR-8; same posture as D-012).
-- **Bootstrap reference detection is decoupled from resolution**: annotation kinds capture the *source-token shape* of references (5 kinds: `reference_intra_doc`, `reference_cross_doc`, `reference_spec` with `style=direct|indirect`, `reference_list`, `reference_list_entry`). The optional `target` dict is **ignored by Cline's rule derivation** — it carries resolver-eval ground truth only. Indirect spec citations (`[5]`) flow through a two-step path the parser already supports for `definitions`: section-level annotation marks the references list; per-entry pattern populates a `reference_list_map: dict[int, {spec, section?}]` on the parsed tree; the resolver looks up the bracketed number in that map at resolve time. This split keeps detection rules portable across MNOs and lets resolution evolve independently.
 - **`nora-ask-history` entries may have no `path`** (strand ask-rerun): the question is recorded at SUBMIT time, so an ask that errored or minted no stored row is still listed — that is the one worth re-running after a fix. Any consumer must tolerate a pathless entry: `history.html` previously called `entry.path.replace()` unconditionally and would have thrown on the first one. The store is written in two phases, and the pending entry is REPLACED by its per-lane entries rather than a second set being appended; without that every ask double-records.
 - **Share-link copy lives once, in `app.js` (`askCopyShare`)** (strand ask-rerun): it was duplicated in `test/index.html` and `test/history.html`, `window.prompt` fallback and all, so a cross-browser fix landed in one and not the other. Templates call it; they must not re-implement it. `_answer.html` invokes it from an inline `onclick`, which is why the global name is load-bearing. `navigator.clipboard` exists only in a SECURE CONTEXT, so the non-secure fallback (detached textarea + `execCommand`) is not optional — reaching the app over plain http via a hostname or LAN IP has no clipboard API at all.
 
@@ -105,10 +109,10 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - **`/config` page + ConfigStore as the user-editing surface for the resolver chain** [D-053]: the page renders LLM and Retrieval knobs grouped by category (Features / Values / Tunable parameters) per `CONFIG_SECTIONS`. New `kind="dict_by_query_type"` schema field renders a per-`QueryType` table editor (used by `bm25_weight_by_type` today; pattern generalizes to the rest of Phase 4-migrate's per-type maps). Opt-in: when `--config-db` is unset, the page renders read-only with a notice and the resolver chain falls through to JSON files / defaults. See [`../query/RETRIEVAL.md`](../query/RETRIEVAL.md) §14 for the full configuration model.
 
 **Non-goals**
-- No multi-user auth / RBAC in v1. Production deployment runs behind an authenticating reverse proxy (D-016); when in-app authn is added, it's a distinct cross-cutting change, not a router plugin.
+- No multi-user auth / RBAC in v1. The team-mode gate (FR-41) is one shared admin token that unlocks the full app, not per-user identity or roles. Production deployment runs behind an authenticating reverse proxy (D-016); when in-app authn is added, it's a distinct cross-cutting change, not a router plugin.
 - Not a deployment platform. Production deployment (systemd / container / proxy config) is the user's responsibility; app only exposes the right ASGI entrypoint.
 - No WebSocket real-time — SSE is sufficient for unidirectional log streaming; WS adds reconnect complexity we don't need.
-- No state beyond SQLite + filesystem. Caches are HTTP-level (browser) or derived artifacts in `<env_dir>/out/`; there is no Redis, no memcached, no in-process dict that outlives a request.
+- No external cache service — no Redis, no memcached. Durable state is SQLite + filesystem. The in-process caches that exist hold derived state only and rebuild on demand: `model_discovery._cache` (per-provider model lists, TTL), `playground._INGESTED_CACHE` (corpus inventory, mtime fingerprint + TTL), and `app.state.query_pipeline` (cleared on config save). A restart loses nothing but warm-up time.
 
 <!-- BEGIN:STRUCTURE -->
 _Alphabetical, regenerated by regen-map._
@@ -125,7 +129,7 @@ _Alphabetical, regenerated by regen-map._
 - `app` — constant — pub
 - `config` — constant — pub
 - `dashboard` — function — pub
-- `health_check` — function — pub — `/api/health`. Returns `status`, `ollama`, `uptime_seconds`, plus roster diagnostics (strand llm-roster-deploy): `llm_config_source` (`env`|`default`), `llm_config_file` (basename), `roster_size`, `effective_provider`, and `roster_keys` (`[{id, api_key: set|unset}]` — presence only, never values). Basename and counts only: the route is team-allowlisted, so an absolute container path would be readable by gated users.
+- `health_check` — function — pub
 - `lifespan` — function — pub
 - `logger` — constant — pub
 - `templates` — constant — pub
@@ -147,6 +151,8 @@ _Alphabetical, regenerated by regen-map._
 - `_ENV_VAR_FEEDBACK_DB` — constant — internal
 - `_ENV_VAR_JOBS_DB` — constant — internal
 - `_ENV_VAR_METRICS_DB` — constant — internal
+- `_ENV_VAR_ROOT_PATH` — constant — internal
+- `_normalize_root_path` — function — internal — Canonical proxy-prefix form: leading slash, no trailing slash,
 - `_resolve_db_path` — function — internal — Pick the highest-priority override for a DB path. Returns ""
 - `load_config` — function — pub — Load config from JSON file, falling back to defaults.
 - `logger` — constant — pub
@@ -257,8 +263,30 @@ _Alphabetical, regenerated by regen-map._
 `markdown_render.py`
 - `_DANGEROUS_TAG_OPEN_RE` — constant — internal
 - `_DANGEROUS_TAG_RE` — constant — internal
+- `_DELIMITER_CELL_RE` — constant — internal
+- `_DROP_CONTENT_TAGS` — constant — internal
+- `_HTML_TABLE_RE` — constant — internal
 - `_MD_EXTENSIONS` — constant — internal
+- `_PIPE_LINE_RE` — constant — internal
+- `_SKIP_SPANS_RE` — constant — internal
+- `_TABLE_ATTRS` — constant — internal
+- `_TABLE_TAGS` — constant — internal
+- `_TAG_RE` — constant — internal
+- `_TableSanitizer` — class — internal — Rebuild provider table HTML from an allowlist.
+  - `__init__` — constructor — internal
+  - `handle_data` — method — pub
+  - `handle_endtag` — method — pub
+  - `handle_starttag` — method — pub
+  - `result` — method — pub
+- `_bubble_html` — function — internal — One collapsed badge + the panel its click expands. The panel body is
+- `_linkify_req_ids` — function — internal
+- `_render_pipe_table` — function — internal — Build a table from `render_table_markdown`'s pipe output.
+- `_render_prose` — function — internal — Corpus prose: escaped, newlines preserved by the class's `pre-wrap`.
+- `_render_segment` — function — internal — Pass 2 over a table-HTML-free segment: group contiguous pipe-table
+- `_sanitize_table_html` — function — internal
 - `render_markdown` — function — pub — Convert markdown source to HTML, return Jinja-safe Markup.
+- `render_markdown_bubbles` — function — pub — `render_markdown` plus click-to-expand req-ID bubbles.
+- `render_req_body` — function — pub — Render `Requirement.text` for the Ask-page bubble panel.
 
 `metrics.py`
 - `MetricRecord` — dataclass — pub
@@ -288,7 +316,21 @@ _Alphabetical, regenerated by regen-map._
 - `TeamModeMiddleware` — class — pub — When NORA_WEB_TEAM_MODE is on, redirect gated team members (no admin
   - `dispatch` — method — pub
 - `_record_request_metric` — function — internal
+- `_route_path` — function — internal — Request path with the reverse-proxy prefix (scope root_path) removed.
 - `logger` — constant — pub
+
+`model_discovery.py`
+- `DISCOVERY_TIMEOUT_S` — constant — pub
+- `_cache` — constant — internal
+- `_lock_for` — function — internal
+- `_locks` — constant — internal
+- `_locks_guard` — constant — internal
+- `_now` — function — internal
+- `_reset_cache` — function — internal — Test hook.
+- `_with_default` — function — internal
+- `allowed_models` — function — pub — Models the answer path may use for `entry`. Cache only — never fetches.
+- `logger` — constant — pub
+- `models_for` — function — pub — `(models, discovered)` for one roster entry, fetching when stale.
 
 `path_mapper.py`
 - `PathMapper` — class — pub — Translates paths between Windows UNC and Linux mount conventions.
@@ -303,11 +345,13 @@ _Alphabetical, regenerated by regen-map._
 - `_normalize_win` — function — internal — Normalize a Windows path: forward slashes to backslashes, strip trailing.
 
 `req_tree.py`
+- `_TREE_CACHE` — constant — internal
 - `_release_sort_key` — function — internal
 - `_req_plan` — function — internal — A requirement's effective plan: per-req plan_id (multi-plan docs)
 - `build_tree_hierarchy` — function — pub — Convert flat requirement list into nested tree (child_nodes
 - `find_req` — function — pub — Locate a req_id across the corpus — direct-entry validation and
 - `find_tree` — function — pub — Resolve a doc's tree file. Cell-qualified path first, flat legacy
+- `latest_match` — function — pub — Pick the newest cell from ``find_req`` results — the match with the
 - `list_cells` — function — pub — Discover ``(mno, release)`` cells that have at least one parsed
 - `list_docs` — function — pub — Doc ids with a parsed tree — scoped to one cell when qualifiers
 - `load_tree` — function — pub — Full tree dict (incl. plan_id / plan_name / requirements).
@@ -425,21 +469,37 @@ _Alphabetical, regenerated by regen-map._
 
 `routes/golden_eval.py`
 - `_CHAT_CONTEXT_MAX_CHARS` — constant — internal
+- `_CHAT_KICKOFF` — constant — internal
 - `_CHAT_SYSTEM` — constant — internal
+- `_REVIEW_CLASSES` — constant — internal
+- `_as_relative` — function — internal — ``N`` / ``N-<k>`` for a release the map lists for ``mno``.
+- `_binding` — function — internal — Template helper: how an entry's release reads — ``N → Apr2098`` for
+- `_drop_from_review` — function — internal
 - `_editor_ctx` — function — internal
+- `_entry_release` — function — internal — The release to store for a new entry, plus a notice. A version
 - `_env_dir` — function — internal
 - `_gt_context` — function — internal — Assemble the ground-truth requirement texts for the curation chat
+- `_gt_panel_ctx` — function — internal — Context for the standalone ground-truth panel (`_gt_panel.html`).
 - `_load_or_error` — function — internal
+- `_qc_warnings` — function — internal — Authoring warnings for the release-handling rules. Advisory — they
+- `_rel_on` — function — internal — Default for the relative toggle: on when the sample already uses
+- `_release_map` — function — internal — The golden set's release map, or None (no map yet, or unreadable —
+- `_resolved_release` — function — internal — The absolute release an entry points at ("" when a relative entry
+- `_review_rows` — function — internal — One block per flagged MNO — built from ``golden_meta.review`` itself,
 - `_stack_url` — function — internal — Primary sira-query stack URL — first of NORA_SIRA_QUERY_URLS,
 - `_template` — function — internal
 - `curation_chat` — function — pub
 - `eval_studio_page` — function — pub
 - `gt_add` — function — pub
+- `gt_add_bulk` — function — pub — Add every selected picker row in one shot. The ids come from the
 - `gt_remove` — function — pub
 - `logger` — constant — pub
+- `picker_jump` — function — pub — Repopulate the whole picker pre-selected to a cell — driven by a
 - `picker_plans` — function — pub
 - `picker_releases` — function — pub
 - `picker_reqs` — function — pub
+- `review_clear` — function — pub — Clear one MNO's flag — the expert confirms the entries and the
+- `review_entry` — function — pub — Rule on one flagged entry: ``keep`` (move it to the new release),
 - `router` — constant — pub
 - `sample_board` — function — pub
 - `sample_create` — function — pub
@@ -495,13 +555,13 @@ _Alphabetical, regenerated by regen-map._
 
 `routes/playground.py`
 - `_CHARS_PER_TOKEN` — constant — internal
-- `_MODES` — constant — internal
+- `_GATED_SECTION_ERROR` — constant — internal
 - `_INGESTED_CACHE` — constant — internal
+- `_MODES` — constant — internal
 - `_PIN_MAX` — constant — internal
 - `_PIN_MIN_SCORE` — constant — internal
 - `_PIN_MODE` — constant — internal
 - `_PIN_REL_THRESHOLD` — constant — internal
-- `_REASONING_LEVELS` — constant — internal
 - `_SECTION_IDS` — constant — internal
 - `_SELECT_SYNTH_ENABLED` — constant — internal
 - `_SELECT_SYNTH_MAX_OUTPUT_TOKENS` — constant — internal
@@ -514,20 +574,24 @@ _Alphabetical, regenerated by regen-map._
 - `_SYNTH_MODE` — constant — internal
 - `_SYNTH_TOKEN_BUDGET` — constant — internal
 - `_balanced_pin` — function — internal — Round-robin across (mno, release) cells, capped at `limit`.
+- `_bubble_req_ids` — function — internal — Req IDs eligible to become answer bubbles (strand req-id-bubbles).
 - `_build_merged_response_html` — function — internal — Post-process lane outputs and render the merged container to a
 - `_build_sections` — function — internal — Build the per-request section registry with a corpus-aware blurb.
 - `_build_select_synth_context` — function — internal — Group packed chunks by (mno, release) with explicit headers + full text,
 - `_call_sira_query` — function — internal — POST the question to the SIRA per-query probe service and
 - `_corpus_label` — function — internal — Best-effort short label for the corpus the web UI is bound to.
 - `_count_cell` — function — internal — (distinct plans, distinct requirements) from chunk metadata.
+- `_decode_json_column` — function — internal — Decode a JSON text column defensively. A corrupt value degrades to the
 - `_filter_sira_notes` — function — internal — In select-synth mode, rerank-off is the intended design (the lane drops
 - `_flatten_cited_ids` — function — internal — Extract req_ids from a synthesizer citation list (the *explicit*
 - `_form_mode` — function — internal — Read + validate the Fast/Think choice from an Ask form post.
+- `_form_model` — function — internal — Read the model from an Ask form post. Validation lives in
 - `_form_provider` — function — internal — Read the provider id from an Ask form post.
 - `_ingested_cache_key` — function — internal
 - `_ingested_rows` — function — internal
 - `_pack_select_synth` — function — internal — Round-robin across (mno, release) cells, packing WHOLE chunks until the
 - `_pick_sira_snapshot` — function — internal — Subset a /healthz response to the keys that affect retrieval
+- `_render_stored_ask` — function — internal — Load one `test_feedback` row and render it through `template` — shared by
 - `_render_template_to_string` — function — internal — Render a Jinja template to a string (not a Response). Used to
 - `_run_nora_lane_for_merged` — function — internal — Run NORA's hybrid pipeline for the merged tab. Returns a
 - `_run_query_for_test` — function — internal — Adapt the existing /query pipeline runner into a dict shape
@@ -539,6 +603,7 @@ _Alphabetical, regenerated by regen-map._
 - `_select_synth_synthesize` — function — internal — One LLM call over all packed chunks: the model selects relevant ones and
 - `_snapshot_nora_lane_config` — function — internal — Compose NORA's lane_config snapshot from what the query pipeline
 - `_snapshot_sira_lane_config` — function — internal — Fetch the per-query SIRA service's /healthz and apply
+- `ask_history_page` — function — pub — History of questions asked from this browser.
 - `ingested_inventory` — function — pub — The ingested-corpus table partial (HTMX, loaded on page load).
 - `logger` — constant — pub
 - `playground_ask` — function — pub — Submit a question, run the query pipeline, log the Q&A row,
@@ -546,7 +611,11 @@ _Alphabetical, regenerated by regen-map._
 - `playground_feedback` — function — pub — Update an existing Q&A row with the user's feedback. Dispatches on
 - `playground_page` — function — pub
 - `playground_synthesize_group` — function — pub — Step 3c — user picked a group from a disambiguation response.
+- `provider_models` — function — pub — Models the Ask page may offer for one roster provider (discovered from
+- `req_fragment` — function — pub — Requirement body behind an answer bubble (strand req-id-bubbles).
 - `router` — constant — pub
+- `shared_answer` — function — pub — Read-only snapshot of one stored question + answer, for sharing a
+- `shared_answer_fragment` — function — pub — The same stored-ask snapshot as `/ask/s/{row_id}` but body-only, for the
 
 `routes/query.py`
 - `PROJECT_ROOT` — constant — pub
@@ -554,14 +623,14 @@ _Alphabetical, regenerated by regen-map._
 - `_MAX_DISTANCE_THRESHOLD_ENV_VAR` — constant — internal
 - `_PipelineBuildError` — class — internal — Raised by `_build_pipeline` when prerequisites aren't met
 - `_SYNTH_MAX_TOKENS` — constant — internal
-- `_reasoning_for` — function — internal — Map the asker's Fast/Think choice onto a reasoning_effort value.
-- `_build_llm_from_env_or_default` — function — internal — Construct the LLM provider for /query and /test. Signature `(provider_id=None, mode=None, *, use_roster=True)`. `use_roster=False` ignores a configured roster and takes the single-provider chain, for callers that are not the Ask flow (the Eval Studio curation chat) — passing no `provider_id` does NOT achieve this, since `resolve_provider(None)` returns the roster's default entry. A selected roster entry is independent of the Config-page DB; the roster branch is refusal-wrapped when the roster names a `fallback_provider`.
+- `_build_llm_from_env_or_default` — function — internal — Construct the LLM provider for /query and /test.
 - `_build_pipeline` — function — internal — Construct a QueryPipeline + LLM. Heavy: loads graph (~10MB),
 - `_config_store_get` — function — internal — Best-effort read from app.state.config_store. Returns None if
 - `_find_env_config_for_web` — function — internal — Locate the env JSON whose `env_dir` matches the Web UI's
 - `_get_or_build_pipeline` — function — internal — Return (pipeline, llm) cached on `app.state`. First call pays
 - `_graph_path` — function — internal — Resolve `<env_dir>/out/graph/knowledge_graph.json`. The Web UI
 - `_pipeline_build_lock` — constant — internal
+- `_reasoning_for` — function — internal — Map the asker's Fast/Think choice onto a reasoning effort VALUE.
 - `_record_llm_metrics` — function — internal — Record LLM call metrics to MetricsStore (fire-and-forget safe).
 - `_resolve_max_distance_threshold` — function — internal — Return the threshold to pass to QueryPipeline. None disables it.
 - `_resolve_reranker` — function — internal — Resolve and instantiate the reranker from the 3-tier config chain.
@@ -615,11 +684,18 @@ _Alphabetical, regenerated by regen-map._
 - `is_admin` — function — pub — True when the request may see the full app: gate off (everyone), or a
 - `path_allowed_for_team` — function — pub — Whitelist check for the gated surface. `/` is NOT allowed — gated members
 - `team_restricted` — function — pub — True when this request is a gated team member (no admin cookie).
+
+`timeline.py`
+- `_SIRA_STAGES` — constant — internal
+- `_UNACCOUNTED_BAND` — constant — internal
+- `_UNACCOUNTED_LABEL` — constant — internal
+- `_pct` — function — internal — Percentage of `total_ms`, rounded to one decimal. 0.0 when the
+- `build_timeline` — function — pub — Build one renderable timeline.
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[env](../env/MODULE.md), [llm](../llm/MODULE.md) (`model_discovery` imports `llm.list_models`; `playground.py` already imports `llm.openai_provider` without the edge being declared — adding it once covers both), [models](../models/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md), [query](../query/MODULE.md), [resolver](../resolver/MODULE.md), [corrections](../corrections/MODULE.md), [eval](../eval/MODULE.md) (eval-invocation routes; Eval Studio consumes `golden.py` schema/loaders — edge declared at strand golden-eval design time, closing the asymmetry with eval's Depended-on-by).
-Runtime service edge (not an import): **sira-query service** over HTTP (`NORA_SIRA_QUERY_URL`; the enrichment-review surface reads `NORA_SIRA_QUERY_URLS` — comma-separated, first = primary/read authority) — the Test page's SIRA retrieval lane, the corpus inventory's `GET /cells` (D-DRAFT-14 docker-distro), and the enrichment-review proxied reads + `POST /cells/<cell>/reload` (Apply). Degrades gracefully when unreachable (review page: report export degrades, scorecard requires it).
+[env](../env/MODULE.md), [llm](../llm/MODULE.md) (`model_discovery` imports `llm.list_models`; `playground.py` already imports `llm.openai_provider` without the edge being declared — adding it once covers both), [models](../models/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md), [query](../query/MODULE.md), [resolver](../resolver/MODULE.md), [corrections](../corrections/MODULE.md), [eval](../eval/MODULE.md) (eval-invocation routes; Eval Studio consumes `golden.py` schema/loaders — edge declared at strand golden-eval design time, closing the asymmetry with eval's Depended-on-by), [extraction](../extraction/MODULE.md) (`release_key.release_order_key` — release ordering in req_tree.py, playground.py and enrich_review.py).
+**sira-query service** — two edges. Code import: enrich_overlay_store.py and routes/enrich_review.py import `sandbox.sira_query.enrich_overlay` (`allowed_labels`, `filter_overlay`) so the label-view projection is the service's own code (stdlib-only module, so the import carries no service dependencies). Runtime edge over HTTP (`NORA_SIRA_QUERY_URL`; the enrichment-review surface reads `NORA_SIRA_QUERY_URLS` — comma-separated, first = primary/read authority) — the Test page's SIRA retrieval lane, the corpus inventory's `GET /cells` (D-DRAFT-14 docker-distro), and the enrichment-review proxied reads + `POST /cells/<cell>/reload` (Apply). Degrades gracefully when unreachable (review page: report export degrades, scorecard requires it).
 
 **Depended on by**
 None — top of the stack.

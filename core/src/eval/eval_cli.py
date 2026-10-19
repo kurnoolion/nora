@@ -44,23 +44,18 @@ def _create_runner(args: argparse.Namespace) -> EvalRunner:
 
     graph = load_graph(graph_path)
 
-    # Load vector store config
-    vs_config_path = Path(args.vectorstore_dir) / "config.json"
-    if vs_config_path.exists():
-        from core.src.vectorstore.config import VectorStoreConfig
-        vs_config = VectorStoreConfig.load_json(vs_config_path)
-    else:
-        from core.src.vectorstore.config import VectorStoreConfig
-        vs_config = VectorStoreConfig(persist_directory=args.vectorstore_dir)
-
-    # Create embedder
-    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
-    embedder = SentenceTransformerEmbedder(
-        model_name=vs_config.embedding_model,
-        device=vs_config.embedding_device,
-        batch_size=vs_config.embedding_batch_size,
-        normalize=vs_config.normalize_embeddings,
-    )
+    # Load vector store config — the provider the store was built with.
+    from core.src.vectorstore import make_embedder
+    from core.src.vectorstore.cell_loader import embedder_config_path
+    from core.src.vectorstore.config import VectorStoreConfig
+    vs_config_path = embedder_config_path(args.vectorstore_dir)
+    if vs_config_path is None:
+        print("Error: no vector store config (config.json) under "
+              f"{args.vectorstore_dir} — no NORA index.")
+        print("Run: python -m core.src.vectorstore.vectorstore_cli")
+        sys.exit(1)
+    vs_config = VectorStoreConfig.load_json(vs_config_path)
+    embedder = make_embedder(vs_config)
 
     # Create store
     from core.src.vectorstore.store_chroma import ChromaDBStore

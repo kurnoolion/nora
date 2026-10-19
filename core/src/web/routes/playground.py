@@ -1316,6 +1316,11 @@ async def ask_history_page(request: Request):
 # -- API: ask + feedback ----------------------------------------------------
 
 
+# Gated team eval is SIRA-only, server-enforced: only the merged form (whose
+# lanes are forced to SIRA) may run.
+_GATED_SECTION_ERROR = "Team eval runs the SIRA lane only (section=merged)."
+
+
 @router.post("/api/test/ask", response_class=HTMLResponse)
 async def playground_ask(request: Request):
     """Submit a question, run the query pipeline, log the Q&A row,
@@ -1335,6 +1340,12 @@ async def playground_ask(request: Request):
     if not question:
         return _template_response(request, "test/_answer.html", {
             "error": "Question is required.",
+        })
+    if team_restricted(request) and section != "merged":
+        # The gated page only sends `merged`; a legacy section (the default,
+        # requirement_bot, among them) would run the NORA lane.
+        return _template_response(request, "test/_answer.html", {
+            "error": _GATED_SECTION_ERROR,
         })
 
     # ── Merged tab (team-eval-pilot) ─────────────────────────────────
@@ -1703,6 +1714,12 @@ async def playground_synthesize_group(request: Request):
     chunk_ids_raw = (form.get("chunk_ids") or "").strip()
     section = (form.get("section") or "requirement_bot").strip()
 
+    if team_restricted(request):
+        # Pinned re-runs go through NORA's pipeline; the gated page never
+        # offers them (disambiguation is a NORA-lane result).
+        return _template_response(request, "test/_answer.html", {
+            "error": _GATED_SECTION_ERROR,
+        })
     if not question:
         return _template_response(request, "test/_answer.html", {
             "error": "Question is required.",

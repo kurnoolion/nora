@@ -155,7 +155,8 @@ _LLM_FIELDS: list[ConfigField] = [
             "reranker-large, cross-encoder/ms-marco-MiniLM-L6-v2) or "
             "local filesystem path. For provider=ollama: name of an "
             "Ollama-pulled reranker (e.g. bbjson/bge-reranker-base:"
-            "latest). Empty = built-in default."
+            "latest). Empty = no name: huggingface uses its class "
+            "default, tei the model its server loaded."
         ),
     ),
     ConfigField(
@@ -185,7 +186,8 @@ _LLM_FIELDS: list[ConfigField] = [
             "Inference) /rerank endpoint (Cohere-style: body uses "
             "'texts', response is a flat array) — for the standalone "
             "tei-reranker service in the dgx-spark-srv stack. "
-            "Empty = default 'huggingface'."
+            "Empty = none: an enabled reranker runs as the "
+            "passthrough until a provider is named."
         ),
     ),
     ConfigField(

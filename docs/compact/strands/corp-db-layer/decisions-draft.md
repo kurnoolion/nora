@@ -209,3 +209,227 @@ frozen denominator) that are mutually exclusive. Named lesson: a
 historical results remain valid under their own digests; digest
 equality between working dir and frozen reference is checked before
 runs.
+
+### D-DRAFT-10 — Batched enrichment is production; overlap judged by word-level Jaccard vs same-mode rerun noise floor
+
+**Date:** 2026-10-16
+**Context:** Suspicion that batched enrichment (many requirements per LLM
+call) degrades phrase quality vs one-requirement-per-call. A three-arm
+field experiment ran on a small corpus: batched rerun (A), single-request
+(B), vs the serving run (r1). At temperature 0.4 (seeded), exact phrase
+overlap is ~0 for ALL pairs — including batched-vs-batched reruns — so
+exact-string comparison cannot distinguish anything.
+**Decision:** Batched enrichment stays production. The measurement
+standard for enrichment comparisons is word-level Jaccard measured
+against the same-mode rerun noise floor; exact-string overlap is retired
+for any temperature > 0 pipeline. Both metrics ship in
+`sira_enrich_inspect --compare`.
+**Why:** Batched sat exactly at the rerun noise floor vs serving (median
+0.38 vs 0.38 floor — indistinguishable from a rerun of itself).
+Single-request produced ~2× phrases/req (8.6 vs 4.4), violating the
+prompt's 10-phrase cap, at ~9× the LLM call cost, with the least shared
+vocabulary of any arm — richer output, but unvalidated richness at a
+cost multiple, per the experiment's pre-agreed rule 3.
+**Consequences:** No pipeline change; the suspicion is closed with data,
+not reassurance. Any future enrichment change must beat batched via the
+golden eval, not via overlap metrics. Parked study: whether B-style
+richer phrases help retrieval, judged end-to-end. The unenforced phrase
+cap is a known gap (flagged, not fixed).
+
+### D-DRAFT-11 — Best-link blessing is ours via golden eval; experiment runs use no-best mode
+
+**Date:** 2026-10-16
+**Context:** The cell dataset's `update_best` runs its built-in eval and
+repoints per-cell best links when a new run scores >= best — but on our
+data that eval scores 0.0 everywhere (inert), so every run "ties"; and on
+a tie it both repoints the links AND deletes the previous best's targets.
+A field hold caught this before the A/B legs ran.
+**Decision:** (a) The built-in eval is adjudicated inert for our corpora;
+best-link movement is decided by OUR golden eval (a blessing step), never
+by the dataset's own update mechanism. (b) Experiment/diagnostic
+enrichment runs set `NORA_SIRA_SKIP_UPDATE_BEST=1` (patch registered in
+install_configs), which skips update_best entirely and logs that best
+links were untouched.
+**Why:** An inert scorer plus tie-wins-and-deletes semantics means any
+casual rerun would silently become "best" and destroy the previous best's
+files — the opposite of an experiment's contract. Guarding at the env
+seam is one line and leaves the vendored dataset code untouched.
+**Consequences:** Production ingestion still calls update_best (unchanged
+behavior); every experiment must set the knob or risk clobbering serving
+state. The planned migration to per-cell pinned best links (maintenance
+window) removes even that residual risk. Dangling best links found on one
+corpus are repaired at the blessing step, not ad hoc.
+
+### D-DRAFT-12 — Taxonomy ledger is durable and loud: unconditional final save, loud discards, launch accounting
+
+**Date:** 2026-10-16
+**Context:** A routine new-release ingestion surfaced a defect chain:
+the taxonomy stage silently re-extracted the whole corpus (213 units)
+with no indication why; a later zero-extraction retry truncated the
+ledger 267→178 because state was saved only on extraction events; and
+the whole-stage fingerprint short-circuit then stamped the truncated
+ledger as complete.
+**Decision:** The taxonomy ledger contract is: (a) TAX-I001 launch line
+reports "N cached / M to extract" before any LLM call; (b) a
+prompt-fingerprint mismatch discards the ledger LOUDLY (TAX-W006), and
+an all-units-stale run warns (TAX-W005); (c) the ledger is saved
+unconditionally after the unit loop, so a run's surviving knowledge is
+never narrower than what it loaded; (d) stage-stamped implies
+ledger-complete.
+**Why:** Each defect was invisible until it cost a full re-extract or a
+repair session. The root cause of the re-extract itself — an August
+parser update rewrote unit bytes and taxonomy never re-ran — was correct
+cache behavior, but nothing announced it. Visibility turns "mysterious
+expensive run" into "expected repair, pre-announced." Lesson adopted:
+output-changing parser updates schedule a taxonomy re-extract.
+**Consequences:** Error codes TAX-I001/W005/W006 registered; regression
+test pins the truncation fix (proven red without it). Operators read the
+launch line before letting a run proceed. A stamped stage can be trusted
+again; the one corrupted stamp was cleared (backed up) and rebuilt.
+
+### D-DRAFT-13 — New releases ingest under the legacy build model: scoped additive lanes, corpus-wide taxonomy, hardlink guards
+
+**Date:** 2026-10-16
+**Context:** Team-operations/cycle build flow is not deployed on the
+ingestion host; a new release had to land in the live env-dir that
+serving labels were promoted from. Risks examined: partial state visible
+to serving, unwanted rebuilds of prior releases' artifacts, and
+corpus-wide rewriters.
+**Decision:** Ingest with direct lanes scoped `--mno/--release` (writes
+are additive for scoped stages); taxonomy runs corpus-wide BY DESIGN (no
+cell filter — newest-release-wins dedup needs the whole corpus) but is
+ledger-incremental, so prior releases cost nothing when cached; the
+corpus-wide rewriters (taxonomy files, standards reference index) are
+the only cross-release writes. Serving isolation rests on promoted
+labels: hardlink write-through is the only live channel, so pre-flight
+checks link counts (stat %h) and any in-place fix uses copy-then-rename.
+**Why:** The legacy model is safe when the write surface is known
+exactly; enumerating it beat deploying new build machinery mid-strand.
+A cell filter on taxonomy was rejected — it would silently break
+cross-release dedup for a marginal cost saving that the ledger already
+provides.
+**Consequences:** Operators run the enumerated pre-flight before
+ingesting into a live env-dir; serving sees the new release only at the
+next promote/restart. When the cycle/team-operations model deploys,
+these guards become structural rather than procedural.
+
+### D-DRAFT-14 — Enrichment traceability contract: run-scoped ids, req_ids and measured resp_chars on every row; verdict warns only on unresolved requests
+
+**Date:** 2026-10-16
+**Context:** Diagnosing two parse-error batches took a full field round
+trip because trace rows carried neither the affected requirement ids nor
+measured response sizes, batch ids collided across runs, and verify-run
+WARNed on any parse-error event — even after a retry had provably
+resolved every affected requirement (proof had to be done by hand via
+coverage arithmetic).
+**Decision:** Every batch trace row carries a run-scoped batch id
+(`<timestamp-rand>.b#####`), the full `req_ids` list, and measured
+`resp_chars`. Verify-run's verdict treats parse-error events as WARN
+only while any affected requirement remains unresolved (by req_ids, or
+by coverage proof for legacy rows); resolved events are reported as
+transient notes. A fail-loud `--req-ids FILE` selector supports
+targeted re-enrichment diagnostics.
+**Why:** The run's own artifacts should answer "which requirements, how
+big was the response, did the retry cover them" without inference — one
+earlier inference (a response-size cap read off config estimates) was
+field-disproven and withdrawn, which is what measured fields prevent.
+A verdict that warns on self-healed transients trains operators to
+ignore warnings.
+**Consequences:** Trace rows are slightly larger; the segmenter keeps
+working (id format is suffix-compatible). Legacy rows without req_ids
+resolve via coverage proof only. Verdicts are now actionable: a WARN
+means work remains.
+
+### D-DRAFT-15 — Phase-3 dual-emit: cell DB is a post-verify lane product; flat remains the default
+
+**Date:** 2026-10-16
+**Context:** Phase 3 needed ingestion to produce cell DBs without
+destabilizing the flat path every stack serves today (§7
+backward-compat invariant: changes land behind flags with legacy
+defaults).
+**Decision:** `sira_lane --index=cell-db` emits the cell DB as an
+additional product after the lane and its verify pass complete, reusing
+the converter in-process with the lane's run name pinned and the
+per-cell self-verify mandatory; output lands under
+`<db_root>/cell-dbs/`. `--index=flat` (default) is byte-for-byte
+today's behavior; `cycle.sh` forwards the flag. Parse/taxonomy
+artifacts stay outside the cell DB (disposition row: deferred to
+phase 4's publish pipeline).
+**Why:** Emitting after verify means a cell DB can only exist for a
+lane state that passed its own checks; pinning the run name makes the
+DB reflect exactly the run that just built, immune to best-link or
+latest-run drift. A separate post-hoc converter invocation was the
+rejected alternative — it re-resolves run selection and can bind a
+different enrichment than the lane just produced.
+**Consequences:** Dual-emit adds converter cost to each ingestion
+(seconds per cell); cell DBs accumulate under the sira root and their
+retention is an ops concern; phase 4's publisher consumes these files
+as its input contract.
+
+## D-DRAFT-16 — No built-in HuggingFace embedder or reranker; unconfigured means a clear failure or passthrough
+
+**Context:** With no vector store config, the web route built a default
+config whose sentence-transformers embedder downloaded from the
+HuggingFace hub; on a label with no NORA index an Ask hung on a download
+stuck at 0 bytes. `query_cli` and `eval_cli` built that embedder directly,
+whatever the store named. The reranker defaulted to a HuggingFace
+cross-encoder. Project rule: serving uses no local or offline
+HuggingFace artifacts; embeddings and reranking come from a remote TEI
+server.
+
+**Decision:** The embedding provider and model have no default (env
+config, `VectorStoreConfig`); `make_embedder` raises on an empty
+provider. Readers without a store config fail with "no NORA index" (web
+route, golden/query/eval CLIs), and the CLIs use the provider the store
+was built with. The reranker provider and model have no default; an
+enabled reranker with no provider runs as passthrough with a warning.
+Compose sets `HF_HUB_OFFLINE=1` on the serve services.
+
+**Why:** A silent default hid misconfiguration as a hang or a quiet
+quality change. Keeping the default but setting offline mode was
+rejected: it fails later and less clearly, and still leaves the HF
+backend as the implicit choice.
+
+**Consequences:** Every environment that builds or reads a NORA index
+must name `NORA_EMBEDDING_PROVIDER` (or config/llm.json must). The
+sentence-transformers and huggingface backends still exist, but run only
+when named.
+
+## D-DRAFT-17 — promote.sh copies the NORA vectorstore instead of hardlinking it
+
+**Context:** Labels are hardlink snapshots, on the premise that a
+rebuild never mutates a promoted label. Opening a chroma index updates
+`chroma.sqlite3` in place, so the write reached the build workspace and
+every label sharing the link.
+
+**Decision:** promote copies `out/vectorstore` (`cp -a`); the rest of the
+serve-set stays hardlinked.
+
+**Why:** Hardlinks isolate only rewrites that create new files. No chroma
+open mode is known to be reliably write-free, and the vectorstore is
+small next to the rest of a label, so a copy is the simple, sure fix.
+
+**Consequences:** Promote takes more disk and time for the vectorstore.
+Labels promoted before the change must be re-copied by hand. Any other
+serve-set file opened read-write (SIRA cells are unchecked) would need
+the same treatment.
+
+## D-DRAFT-18 — The team gate refuses legacy sections instead of forcing them to SIRA
+
+**Context:** The SIRA-only override sat inside the `section == "merged"`
+branch of `/api/test/ask`. A gated POST without `section` defaulted to
+`requirement_bot` and ran the NORA lane.
+
+**Decision:** For a gated member, `/api/test/ask` runs only
+`section=merged` (lanes forced to SIRA) and refuses every other section
+before dispatch; `/api/test/synthesize-group`, a NORA-pipeline re-run, is
+refused outright. The admin cookie keeps the legacy paths.
+
+**Why:** Silently rewriting a legacy section to merged + SIRA would
+return 200 for a request that asked for something else — the same
+misreading that hid the gap (a gated "NORA" Ask that ran SIRA). The gated
+page never sends a legacy section, so refusing costs nothing.
+
+**Consequences:** Direct-POST clients under the gate must send
+`section=merged`. Gate-on tests cover a missing section and each legacy
+section.

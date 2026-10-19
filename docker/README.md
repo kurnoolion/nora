@@ -112,6 +112,12 @@ that roster means commit → rebuild `nora-web` → `up -d --force-recreate`,
 never editing a file on the host; the file-shaped `/data/web-state` recipe
 above remains the path for deployments without the internal repo.
 
+`NORA_LLM_CONFIG` is a web setting only. The `nora-pipeline` image does not set
+it, so pipeline jobs read the repo's `config/llm.json`. The two files are
+separate: a value set in the web roster does not reach the pipeline, and a
+value set in `config/llm.json` does not reach the web Ask page (unless the
+roster path is missing or unreadable, which warns and falls back to it).
+
 Each roster entry's `model` is that provider's default. The Ask page also offers
 every model the provider's `GET /v1/models` lists, cached for
 `model_discovery_ttl_s` seconds (top-level key, default 21600). A model added
@@ -609,6 +615,17 @@ model handles these:
   covers query enrichment and chat rerank; `/healthz` reports
   `refusal_fallback {configured, used}`. Recreate the serve stack after
   editing.
+- **Fallback reasoning level (both)**: a fallback model that thinks by
+  default can spend the whole token budget on reasoning and return empty
+  content. `<prefix>REASONING=none` with
+  `<prefix>REASONING_CONTROL=chat_template_kwargs` (prefix
+  `NORA_SIRA_ENRICH_FALLBACK_LLM_` or `NORA_SIRA_QUERY_FALLBACK_LLM_`)
+  sends `enable_thinking: false` on the fallback call only. Unset, each
+  falls back to `NORA_LLM_FALLBACK_REASONING(_CONTROL)` (the core
+  pipeline/eval names), then to the endpoint's default. The batch side
+  lives in the patch layer: rebake `sira-batch` — and on an OFFLINE host
+  re-run `docker/prep-offline.sh` first, since the vendored clone is
+  patched once there and the patch step skips an already-patched clone.
 - **Retry existing `llm_refused` rows** after configuring the fallback
   (rebake `sira-batch` first — the patch layer changed):
 
@@ -719,7 +736,7 @@ existing label:
 ```
 
 `serve-flip.sh` defaults are `staged` mode (flip the secondary stack, run
-the golden eval against `${GOLDEN_DIR}/baselines/<stack>.txt`, then flip
+the golden eval against `<nora-data>/eval-baselines/<stack>.txt`, then flip
 production with `--eval-run <id>`); `--mode expedited` is the direct/hotfix
 flip and `--mode override --note "<why>"` records a knowingly-regressed
 promote. The mode is recorded in `serve/PROMOTE_LOG`, never enforced.

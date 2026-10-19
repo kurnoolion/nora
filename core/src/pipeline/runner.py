@@ -18,7 +18,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.src.env.config import STAGE_NAMES
+from core.src.env.config import (
+    STAGE_NAMES,
+    resolve_embedding_model,
+    resolve_embedding_provider,
+)
 from core.src.pipeline.cells import Cell, enumerate_input_cells, is_per_cell_stage
 from core.src.pipeline.stages import STAGE_FUNCS, StageResult
 
@@ -47,9 +51,11 @@ class PipelineContext:
     # "high"). Empty = send nothing, i.e. the endpoint's own default.
     llm_reasoning: str = ""
 
-    # Embedding config (local providers only)
-    embedding_provider: str = "sentence-transformers"
-    embedding_model: str = "all-MiniLM-L6-v2"
+    # Embedding config. No built-in default: the builders below resolve it
+    # through env.config's chain, and an empty provider makes the
+    # vectorstore stage refuse rather than pick a model.
+    embedding_provider: str = ""
+    embedding_model: str = ""
 
     # Scope
     mnos: list[str] = field(default_factory=lambda: ["VZW"])
@@ -236,8 +242,10 @@ class PipelineContext:
             model_provider=env.model_provider,
             model_name=env.model_name,
             model_timeout=env.model_timeout,
-            embedding_provider=env.embedding_provider,
-            embedding_model=env.embedding_model,
+            embedding_provider=resolve_embedding_provider(
+                None, env.embedding_provider,
+            ),
+            embedding_model=resolve_embedding_model(None, env.embedding_model),
             mnos=env.mnos,
             releases=env.releases,
             standards_source=env.standards_source,
@@ -251,8 +259,8 @@ class PipelineContext:
         model_provider: str = "ollama",
         model_name: str = "auto",
         model_timeout: int = 600,
-        embedding_provider: str = "sentence-transformers",
-        embedding_model: str = "all-MiniLM-L6-v2",
+        embedding_provider: str = "",
+        embedding_model: str = "",
         standards_source: str = "huggingface",
     ) -> PipelineContext:
         """Create context for standalone (no EnvironmentConfig) mode.
@@ -273,8 +281,10 @@ class PipelineContext:
             model_provider=model_provider,
             model_name=model_name,
             model_timeout=model_timeout,
-            embedding_provider=embedding_provider,
-            embedding_model=embedding_model,
+            embedding_provider=resolve_embedding_provider(
+                embedding_provider or None,
+            ),
+            embedding_model=resolve_embedding_model(embedding_model or None),
             standards_source=standards_source,
         )
         if profile_path:

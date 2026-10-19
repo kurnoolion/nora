@@ -539,3 +539,134 @@ class TestReasoningSentinel:
         assert "unknown ids  (first 20): ['RX']" in joined
         assert "requested ids (first 20): ['R1', 'R2']" in joined
         assert "plan PA" in joined          # plan named next to the batch id
+
+
+def test_batch_trace_carries_measured_response_chars():
+    """Trace rows must carry the MEASURED response length (resp_chars)
+    beside the pre-call estimates — the estimate fields were misread as
+    measurements in the field and chased as an endpoint cap."""
+    raw_response = json.dumps({"R1": ["alpha"], "R2": ["beta"]})
+
+    async def llm(prompt, max_tokens):
+        return raw_response
+
+    sink, _summary = _run(
+        [("R1", "**plan**: PA\nreq one"), ("R2", "**plan**: PA\nreq two")], llm)
+    rows = [r for r in sink.batches if r.get("status") in ("ok", "parse_error")]
+    assert rows, sink.batches
+    for r in rows:
+        assert r["resp_chars"] == len(raw_response)
+        assert "resp_tokens_est" in r   # estimates stay, now documented
+
+
+class TestReqIdSelector:
+    """only_req_ids_file: the diagnostic selector processes ONLY listed
+    ids, fails loud on a bad file (a typo must not silently run the full
+    corpus), and warns on zero matches."""
+
+    ITEMS = [("R1", "**plan**: PA\nreq one"), ("R2", "**plan**: PA\nreq two")]
+
+    @staticmethod
+    def _ids_file(tmp_path, lines):
+        f = tmp_path / "ids.txt"
+        f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return str(f)
+
+    def test_selects_only_listed_ids(self, tmp_path):
+        async def llm(prompt, max_tokens):
+            assert "R2" not in prompt
+            return json.dumps({"R1": ["alpha"]})
+
+        cfg = eb.BatchConfig(max_retries=1,
+                             only_req_ids_file=self._ids_file(tmp_path, ["R1"]))
+        sink, summary = _run(self.ITEMS, llm, cfg=cfg)
+        assert dict(sink.enrich) == {"R1": ["alpha"]}
+        assert summary["enriched"] == 1
+
+    def test_comments_and_blanks_ignored(self, tmp_path):
+        async def llm(prompt, max_tokens):
+            return json.dumps({"R2": ["beta"]})
+
+        cfg = eb.BatchConfig(max_retries=1, only_req_ids_file=self._ids_file(
+            tmp_path, ["# probe list", "", "R2"]))
+        sink, _ = _run(self.ITEMS, llm, cfg=cfg)
+        assert dict(sink.enrich) == {"R2": ["beta"]}
+
+    def test_missing_file_fails_loud(self, tmp_path):
+        import pytest
+
+        async def llm(prompt, max_tokens):
+            raise AssertionError("must not be called")
+
+        cfg = eb.BatchConfig(only_req_ids_file=str(tmp_path / "absent.txt"))
+        with pytest.raises(ValueError, match="unreadable"):
+            _run(self.ITEMS, llm, cfg=cfg)
+
+    def test_empty_file_fails_loud(self, tmp_path):
+        import pytest
+
+        async def llm(prompt, max_tokens):
+            raise AssertionError("must not be called")
+
+        cfg = eb.BatchConfig(only_req_ids_file=self._ids_file(tmp_path, ["# only comments"]))
+        with pytest.raises(ValueError, match="no ids"):
+            _run(self.ITEMS, llm, cfg=cfg)
+
+    def test_from_env_picks_up_knob(self):
+        cfg = eb.BatchConfig.from_env({"NORA_SIRA_BATCH_ONLY_REQ_IDS": "/x/ids.txt"})
+        assert cfg.only_req_ids_file == "/x/ids.txt"
+
+
+class TestBatchIdsAndMapping:
+    """Batch ids must be unique ACROSS runs (field-found: per-run b00000
+    restarts made the same id name different batches in different runs),
+    and every batch row must carry its request ids so retries and parse
+    errors are traceable without guessing."""
+
+    ITEMS = [("R1", "**plan**: PA\nreq one"), ("R2", "**plan**: PA\nreq two")]
+
+    def test_batch_ids_unique_across_runs(self):
+        async def llm(prompt, max_tokens):
+            return json.dumps({"R1": ["alpha"], "R2": ["beta"]})
+
+        sink1, _ = _run(self.ITEMS, llm)
+        sink2, _ = _run(self.ITEMS, llm)
+        ids1 = {r["batch_id"] for r in sink1.batches}
+        ids2 = {r["batch_id"] for r in sink2.batches}
+        assert ids1 and ids2 and not (ids1 & ids2)
+        # sequence tail stays human-readable
+        assert all(".b" in b for b in ids1 | ids2)
+
+    def test_every_batch_row_carries_req_ids(self):
+        calls = []
+
+        async def llm(prompt, max_tokens):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return json.dumps({"R1": ["alpha"]})   # R2 missing -> requeue
+            return json.dumps({"R2": ["beta"]})
+
+        sink, _ = _run(self.ITEMS, llm)
+        assert len(sink.batches) >= 2                   # first try + requeue
+        for row in sink.batches:
+            assert row["req_ids"], row
+        # the requeue try's row maps R2 to its own batch
+        retry_rows = [r for r in sink.batches if r["req_ids"] == ["R2"]]
+        assert retry_rows and retry_rows[0]["batch_id"] != sink.batches[0]["batch_id"]
+
+
+def test_patch_reaches_fallback_reasoning_through_this_module():
+    from pathlib import Path
+
+    # batched-enrich.patch calls enrich_batching.fallback_reasoning_fields
+    # (the patched SIRA script reaches sandbox helpers only through here).
+    import sandbox.enrich_batching as eb
+
+    assert eb.fallback_reasoning_fields(
+        {"NORA_SIRA_ENRICH_FALLBACK_LLM_REASONING": "none",
+         "NORA_SIRA_ENRICH_FALLBACK_LLM_REASONING_CONTROL": "chat_template_kwargs"},
+        "NORA_SIRA_ENRICH_FALLBACK_LLM_",
+    ) == {"chat_template_kwargs": {"enable_thinking": False}}
+    patch = (Path(eb.__file__).parent / "sira_patches" / "batched-enrich.patch"
+             ).read_text(encoding="utf-8")
+    assert "enrich_batching.fallback_reasoning_fields(" in patch

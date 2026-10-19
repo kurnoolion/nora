@@ -407,3 +407,115 @@ class TestProfileCoverageFailLoud:
         res = run_profile(ctx)
         assert res.status == "OK", res
         assert (env / "out" / "profile" / "MNO-A" / "Feb2026" / "profile.json").is_file()
+
+
+# ── taxonomy ledger gate (TAX-W006) ─────────────────────────────────
+
+
+class TestTaxonomyLedgerGate:
+    """The per-doc ledger is honored only on a matching overview
+    fingerprint — and a mismatch must be LOUD (TAX-W004), never a silent
+    full-corpus re-extract (field-found: a wiring-env migration lost
+    NORA_TAXONOMY_OVERVIEW_DIR and the only tell was a context warning)."""
+
+    def _write_state(self, tmp_path, prompt_fp, n_docs=3):
+        p = tmp_path / "extraction_state.json"
+        p.write_text(json.dumps({
+            "prompt_fp": prompt_fp,
+            "docs": {f"doc{i}": {"status": "ok"} for i in range(n_docs)},
+        }), encoding="utf-8")
+        return p
+
+    def test_matching_fingerprint_returns_ledger(self, tmp_path):
+        from core.src.pipeline.stages import _load_taxonomy_ledger
+        p = self._write_state(tmp_path, "abc123")
+        assert len(_load_taxonomy_ledger(p, "abc123")) == 3
+
+    def test_mismatch_discards_and_warns_tax_w006(self, tmp_path, caplog):
+        import logging
+        from core.src.pipeline.stages import _load_taxonomy_ledger
+        p = self._write_state(tmp_path, "abc123")
+        with caplog.at_level(logging.WARNING):
+            docs = _load_taxonomy_ledger(p, "zzz999")
+        assert docs == {}
+        assert any("TAX-W006" in r.message and "3 cached" in r.message
+                   for r in caplog.records)
+
+    def test_unreadable_state_is_quietly_empty(self, tmp_path, caplog):
+        import logging
+        from core.src.pipeline.stages import _load_taxonomy_ledger
+        p = tmp_path / "extraction_state.json"
+        p.write_text("not json", encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            assert _load_taxonomy_ledger(p, "abc123") == {}
+        assert not any("TAX-W006" in r.message for r in caplog.records)
+
+
+class TestTaxonomyCachedUnitKeys:
+    """_cached_unit_keys is the single source of the cache predicate —
+    the TAX-I001 launch log and the extraction loop both use it."""
+
+    class _Sub:
+        def __init__(self, plan_id):
+            self.plan_id = plan_id
+
+    def _unit(self, lkey, tree_sha, plan_id):
+        return ("rkey", lkey, tree_sha, self._Sub(plan_id))
+
+    def test_cached_requires_ok_hash_and_features_file(self, tmp_path):
+        from core.src.pipeline.stages import _cached_unit_keys
+        (tmp_path / "P1_features.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "P4_features.json").write_text("{}", encoding="utf-8")
+        units = [
+            self._unit("a", "sha1", "P1"),   # ok + match + file -> cached
+            self._unit("b", "sha2", "P2"),   # hash mismatch
+            self._unit("c", "sha3", "P3"),   # status failed
+            self._unit("d", "sha4", "P4"),   # not in ledger
+        ]
+        prev = {
+            "a": {"status": "ok", "tree_sha": "sha1"},
+            "b": {"status": "ok", "tree_sha": "STALE"},
+            "c": {"status": "failed", "tree_sha": "sha3"},
+        }
+        assert _cached_unit_keys(units, prev, tmp_path) == {"a"}
+
+    def test_missing_features_file_is_not_cached(self, tmp_path):
+        from core.src.pipeline.stages import _cached_unit_keys
+        units = [self._unit("a", "sha1", "P1")]
+        prev = {"a": {"status": "ok", "tree_sha": "sha1"}}
+        assert _cached_unit_keys(units, prev, tmp_path) == set()
+
+
+class TestTaxonomyLedgerCompleteness:
+    """The ledger on disk must hold EVERY current unit after a run — not
+    just entries up to the last extraction event (field-found: a one-plan
+    retry whose extraction sorted before the cached tail truncated a
+    267-entry ledger to 178, silently scheduling the tail for
+    re-extraction)."""
+
+    def _ctx(self, env, monkeypatch, provider):
+        ctx = PipelineContext.standalone(env_dir=env, model_provider="mock")
+        monkeypatch.setattr(ctx, "create_llm_provider", lambda *a, **k: provider)
+        return ctx
+
+    def test_retry_with_cached_tail_persists_full_ledger(self, tmp_path, monkeypatch):
+        # PLANA sorts before PLANB; fail PLANA first so the retry's only
+        # extraction happens BEFORE the cached unit.
+        _seed_plan_tree(tmp_path, "MNO-A", "R2026Q1", "PLANA")
+        _seed_plan_tree(tmp_path, "MNO-B", "R2026Q1", "PLANB")
+        prov = _ScriptedProvider(fail_plans={"PLANA"})
+        ctx = self._ctx(tmp_path, monkeypatch, prov)
+        state = tmp_path / "out" / "taxonomy" / "extraction_state.json"
+
+        r1 = run_taxonomy(ctx)
+        assert r1.status == "WARN" and r1.stats["failed"] == 1
+
+        prov.fail_plans.clear()
+        r2 = run_taxonomy(ctx)
+        assert r2.status == "OK"
+        assert r2.stats["docs"] == 1 and r2.stats["cached_docs"] == 1
+
+        docs = json.loads(state.read_text(encoding="utf-8"))["docs"]
+        assert len(docs) == 2, (
+            f"ledger truncated at the last extraction: {sorted(docs)}")
+        assert all(e["status"] == "ok" for e in docs.values())

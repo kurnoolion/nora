@@ -429,7 +429,7 @@ class RetrievalConfig:
     bm25_weight_by_type: dict[str, float] = field(default_factory=dict)
     """Per-QueryType override for the BM25 weight in RRF fusion. Keys
     are `QueryType.value` strings. Empty dict (default) means
-    `pipeline._TYPE_BM25_WEIGHT` built-in defaults apply. Set entries
+    `DEFAULT_BM25_WEIGHT_BY_TYPE` built-in defaults apply. Set entries
     here to override per-type without code changes — useful for
     tuning hybrid retrieval against a new corpus where the default
     empirical values are off."""
@@ -611,6 +611,37 @@ def resolve_top_k(
     )
 
 
+# Built-in per-query-type BM25 weight in the RRF fusion, keyed by
+# `QueryType.value` (query.pipeline derives its QueryType-keyed
+# `_TYPE_BM25_WEIGHT` from this). 0.0 disables BM25 for
+# that query type (pure dense retrieval). Empirical tuning on the OA
+# eval set:
+#   - STANDARDS_COMPARISON gains +33pp accuracy with BM25 active
+#     (queries name specific TS numbers / cause codes that BM25 weights
+#     heavily but dense embeddings spread thin).
+#   - CROSS_DOC and FEATURE_LEVEL regress when BM25 contributes — the
+#     expected hits are thin parent/overview chunks that BM25 ranks
+#     low; richer leaf chunks pulled up by BM25 displace them.
+#   - TRACEABILITY benefits modestly when the query names a specific
+#     req_id (entity-priority graph scoping handles the well-formed
+#     case in D-039; BM25 helps with concept-shaped trace queries).
+# Numbers may shift as the eval set grows; treat as tuning, not contract.
+DEFAULT_BM25_WEIGHT_BY_TYPE: dict[str, float] = {
+    "standards_comparison": 0.5,
+    "traceability": 0.5,
+    "single_doc": 0.5,
+    # FACT queries name specific timer/threshold/value tokens; BM25
+    # weight matches them exactly while dense embeddings spread
+    # similar phrasing too thin.
+    "fact": 0.5,
+    # SUMMARIZE leans dense — the user paraphrases the topic, so
+    # semantic recall matters more than exact-token match.
+    "summarize": 0.2,
+    # CROSS_DOC, FEATURE_LEVEL, CROSS_MNO_COMPARISON, RELEASE_DIFF,
+    # GENERAL: omitted → default 0.0 (pure dense)
+}
+
+
 def resolve_bm25_weight(
     query_type: str | None = None,
     cli_value: float | None = None,
@@ -619,7 +650,7 @@ def resolve_bm25_weight(
 
     Precedence: CLI flag > config/retrieval.json
     `bm25_weight_by_type[query_type]` (DB layer overlays this via
-    apply_to_caches) > pipeline `_TYPE_BM25_WEIGHT` built-in default
+    apply_to_caches) > `DEFAULT_BM25_WEIGHT_BY_TYPE` built-in default
     > 0.0 (pure dense).
 
     No env-var tier — per-type maps are file-only by convention
@@ -632,14 +663,7 @@ def resolve_bm25_weight(
         cfg = _retrieval_config()
         if query_type in cfg.bm25_weight_by_type:
             return cfg.bm25_weight_by_type[query_type]
-        # Fall back to the built-in per-type default in pipeline.py.
-        from core.src.query.pipeline import _TYPE_BM25_WEIGHT
-        from core.src.query.schema import QueryType
-        try:
-            qt_enum = QueryType(query_type)
-        except ValueError:
-            return 0.0
-        return _TYPE_BM25_WEIGHT.get(qt_enum, 0.0)
+        return DEFAULT_BM25_WEIGHT_BY_TYPE.get(query_type, 0.0)
     return 0.0
 
 
@@ -902,8 +926,11 @@ def resolve_llm_api_key(
 # ---------------------------------------------------------------------------
 
 EMBEDDING_PROVIDERS: tuple[str, ...] = ("sentence-transformers", "huggingface", "ollama", "tei")
-DEFAULT_EMBEDDING_PROVIDER: str = "sentence-transformers"
-DEFAULT_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+# No built-in provider or model: a deployment names them (env var or
+# config/llm.json). The old sentence-transformers default downloaded from the
+# HuggingFace hub whenever nothing was configured; now make_embedder refuses.
+DEFAULT_EMBEDDING_PROVIDER: str = ""
+DEFAULT_EMBEDDING_MODEL: str = ""
 EMBEDDING_PROVIDER_ENV_VAR: str = "NORA_EMBEDDING_PROVIDER"
 EMBEDDING_MODEL_ENV_VAR: str = "NORA_EMBEDDING_MODEL"
 EMBEDDING_BASE_URL_ENV_VAR: str = "NORA_EMBEDDING_BASE_URL"
@@ -996,7 +1023,7 @@ def resolve_embedding_provider(
 
     Precedence: CLI flag > NORA_EMBEDDING_PROVIDER env var >
     config/llm.json `embedding_provider` > EnvironmentConfig field
-    (deprecated, back-compat) > default ("sentence-transformers").
+    (deprecated, back-compat) > default ("": none — make_embedder refuses).
     The "huggingface" alias is accepted but the canonical name is
     preserved (make_embedder normalizes aliases internally).
     """
@@ -1023,7 +1050,7 @@ def resolve_embedding_model(
 
     Precedence: CLI flag > NORA_EMBEDDING_MODEL env var >
     config/llm.json `embedding_model` > EnvironmentConfig field
-    (deprecated, back-compat) > default ("all-MiniLM-L6-v2"). No
+    (deprecated, back-compat) > default ("": none). No
     enum validation — model names are provider-specific.
     """
     for value in (
@@ -1104,21 +1131,19 @@ RERANKER_BATCH_SIZE_ENV_VAR: str = "NORA_RERANK_BATCH_SIZE"
 RERANKER_BATCH_SIZE_ENV_VAR_DEPRECATED: str = "NORA_SIRA_RERANK_BATCH_SIZE"
 RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
 
-DEFAULT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
-"""Sentence-transformers cross-encoder model id (or local filesystem
-path). When the work-PC corpus is firewalled from HuggingFace, pre-
-download via ``huggingface-cli download <id> --local-dir <path>`` and
-set this to the local-dir path. For provider=ollama, set to an
-Ollama-pulled reranker model name like
-``bbjson/bge-reranker-base:latest`` instead."""
+DEFAULT_RERANKER_MODEL: str = ""
+"""No built-in model: the deployment names it (a HuggingFace cross-encoder
+id or local path for provider=huggingface, an Ollama-pulled name for
+provider=ollama). Empty passes no name; the huggingface backend then uses
+its class default and TEI uses the model its server loaded."""
 
-DEFAULT_RERANKER_PROVIDER: str = "huggingface"
-"""Which reranker backend to instantiate. "huggingface" uses
-sentence_transformers.CrossEncoder (loads from HF cache). "ollama"
-uses OllamaReranker (calls a local Ollama server). For deployments
-on proxy-restricted machines without HF access but with Ollama
-running locally, "ollama" lets you reuse a model already pulled with
-`ollama pull <name>` — no separate HF cache to manage."""
+DEFAULT_RERANKER_PROVIDER: str = ""
+"""No built-in backend. A reranker that is enabled without an explicit
+provider runs as the MockReranker passthrough, so nothing downloads from
+the HuggingFace hub unless "huggingface" is named. "huggingface" uses
+sentence_transformers.CrossEncoder (loads from HF cache). "ollama" uses
+OllamaReranker (calls a local Ollama server); "tei" and the openai-rerank
+variants call a remote server."""
 
 DEFAULT_RERANKER_OLLAMA_URL: str = "http://localhost:11434"
 """Base URL for the local Ollama server when provider=ollama. Same
@@ -1300,7 +1325,7 @@ def resolve_reranker_provider(
 
     Precedence: NORA_RERANKER_PROVIDER env var > Config-page DB
     (``llm.reranker_provider``) > config/llm.json ``reranker_provider``
-    > built-in ``DEFAULT_RERANKER_PROVIDER`` ("huggingface").
+    > built-in ``DEFAULT_RERANKER_PROVIDER`` ("": none, passthrough).
 
     Unknown values fall back to the default. Lets deployments on
     proxy-restricted machines without HF access use a locally-pulled

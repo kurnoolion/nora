@@ -47,19 +47,16 @@ def _create_pipeline(args: argparse.Namespace) -> QueryPipeline:
     from core.src.vectorstore.config import VectorStoreConfig
     from core.src.vectorstore.cell_loader import embedder_config_path
     vs_config_path = embedder_config_path(args.vectorstore_dir)
-    if vs_config_path is not None:
-        vs_config = VectorStoreConfig.load_json(vs_config_path)
-    else:
-        vs_config = VectorStoreConfig(persist_directory=args.vectorstore_dir)
+    if vs_config_path is None:
+        print("Error: no vector store config (config.json) under "
+              f"{args.vectorstore_dir} — no NORA index.")
+        print("Run: python -m core.src.vectorstore.vectorstore_cli")
+        sys.exit(1)
+    vs_config = VectorStoreConfig.load_json(vs_config_path)
 
-    # Create embedder
-    from core.src.vectorstore.embedding_st import SentenceTransformerEmbedder
-    embedder = SentenceTransformerEmbedder(
-        model_name=vs_config.embedding_model,
-        device=vs_config.embedding_device,
-        batch_size=vs_config.embedding_batch_size,
-        normalize=vs_config.normalize_embeddings,
-    )
+    # Create embedder — the provider the store was built with.
+    from core.src.vectorstore import make_embedder
+    embedder = make_embedder(vs_config)
 
     # Create store(s) — D-DRAFT-11: per-cell stores (flat fallback for legacy).
     from core.src.vectorstore.cell_loader import load_cell_stores

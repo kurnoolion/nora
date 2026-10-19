@@ -525,6 +525,49 @@ def _select_newest_trees(
     return selected, len(tree_files) - len(selected)
 
 
+def _cached_unit_keys(units, prev_docs: dict, out_dir) -> set:
+    """Ledger keys of units the extraction loop will serve from cache:
+    entry ok + stored tree hash matches + the plan's features file exists.
+    The single source of the cache predicate — the launch log and the
+    loop both use it, so the announced plan is the executed plan."""
+    cached: set = set()
+    for _rkey, lkey, tree_sha, sub in units:
+        ent = prev_docs.get(lkey)
+        if (ent and ent.get("status") == "ok" and ent.get("tree_sha") == tree_sha
+                and (out_dir / f"{sub.plan_id}_features.json").exists()):
+            cached.add(lkey)
+    return cached
+
+
+def _load_taxonomy_ledger(state_path, prompt_fp: str) -> dict:
+    """Load extraction_state.json's per-doc ledger, honored only when its
+    stored overview fingerprint matches the current one.
+
+    The discard on mismatch is deliberate (an overview edit must
+    invalidate every cached extraction) but it must never be SILENT: a
+    dropped ledger means a full-corpus LLM re-extract, and a mis-wired
+    NORA_TAXONOMY_OVERVIEW_DIR looks identical to a real overview edit
+    from here (field-found: a wiring-env migration lost the var and the
+    only tell was TAX-W003 two hours in).
+    """
+    try:
+        st = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if st.get("prompt_fp") == prompt_fp:
+        return st.get("docs", {})
+    n_prev = len(st.get("docs", {}))
+    logger.warning(
+        f"TAX-W006: overview fingerprint changed "
+        f"(ledger {st.get('prompt_fp', '?')} != current {prompt_fp}) — "
+        f"discarding {n_prev} cached extraction(s); full-corpus re-extract "
+        f"follows. If the overview files were not deliberately edited, "
+        f"check NORA_TAXONOMY_OVERVIEW_DIR in the wiring env before "
+        f"letting this run proceed."
+    )
+    return {}
+
+
 def run_taxonomy(ctx: PipelineContext) -> StageResult:
     """Extract feature taxonomy from parsed trees.
 
@@ -614,12 +657,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     state_path = out_dir / "extraction_state.json"
     prev_docs: dict[str, dict] = {}
     if not ctx.force and state_path.exists():
-        try:
-            st = json.loads(state_path.read_text(encoding="utf-8"))
-            if st.get("prompt_fp") == prompt_fp:
-                prev_docs = st.get("docs", {})
-        except Exception:
-            prev_docs = {}
+        prev_docs = _load_taxonomy_ledger(state_path, prompt_fp)
 
     # Split multi-plan trees (one doc, chapter-per-plan) into per-plan
     # extraction units, then dedupe units by (MNO, plan_id) with newest
@@ -677,13 +715,29 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
             encoding="utf-8",
         )
 
+    # Launch-time visibility (field-found: a fully stale ledger meant a
+    # full-corpus LLM re-extract whose only tell arrived hours in): say
+    # up front how much of the plan is cache vs LLM work, so an operator
+    # can stop an unexpectedly large run in minute one.
+    cached_lkeys = _cached_unit_keys(units, prev_docs, out_dir)
+    n_to_extract = len(units) - len(cached_lkeys)
+    logger.info(
+        f"TAX-I001: {len(cached_lkeys)} cached / {n_to_extract} to extract "
+        f"(of {len(units)} units)"
+    )
+    if units and not cached_lkeys and prev_docs:
+        logger.warning(
+            f"TAX-W005: ledger present but NO unit is cacheable — every "
+            f"stored tree hash is stale (parse trees regenerated since the "
+            f"last taxonomy run?). Full-corpus re-extract of {len(units)} "
+            f"units follows."
+        )
+
     for _rkey, lkey, tree_sha, sub in units:
         feat_path = out_dir / f"{sub.plan_id}_features.json"
-        ent = prev_docs.get(lkey)
-        if (ent and ent.get("status") == "ok" and ent.get("tree_sha") == tree_sha
-                and feat_path.exists()):
+        if lkey in cached_lkeys:
             all_doc_features.append(DocumentFeatures.load_json(feat_path))
-            new_docs[lkey] = ent
+            new_docs[lkey] = prev_docs[lkey]
             n_cached += 1
             continue
         try:
@@ -703,6 +757,15 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
             "status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name,
         }
         n_extracted += 1
+        _save_state()
+
+    # Persist the COMPLETE ledger once the loop ends. The in-loop saves
+    # fire only on extraction/failure events, so a run whose tail units
+    # are cached would otherwise leave a ledger truncated at its last
+    # extraction (field-found: a one-plan retry shrank a 267-entry
+    # ledger to 178 — the cached entries after the retried unit never
+    # reached disk, scheduling them for silent re-extraction).
+    if units:
         _save_state()
 
     if not all_doc_features:

@@ -67,3 +67,34 @@ def is_permanent_refusal(raw: str | None, markers: tuple[str, ...]) -> bool:
     if not any(text.startswith(m) for m in markers):
         return False
     return not _contains_json_payload(raw)
+
+
+def fallback_reasoning_fields(env, prefix: str = "") -> dict:
+    """Chat-completion payload fields that hold a FALLBACK endpoint to a
+    reasoning level (field-found: a fallback model that thinks by default
+    spent the whole token budget on reasoning and returned empty content).
+
+    Reads ``<prefix>REASONING`` / ``<prefix>REASONING_CONTROL`` (the
+    caller's own fallback env names, e.g. ``NORA_SIRA_QUERY_FALLBACK_LLM_``),
+    falling back to the core ``NORA_LLM_FALLBACK_REASONING`` /
+    ``NORA_LLM_FALLBACK_REASONING_CONTROL``. Same wire rule as core's
+    ``OpenAICompatibleProvider`` (hand-synced across the D-111 boundary):
+    ``chat_template_kwargs`` is only ever sent to SUPPRESS thinking
+    (level ``none``); ``reasoning_effort`` sends the level as given; no
+    level -> no fields, the endpoint's own default.
+    """
+    def get(name: str) -> str:
+        return str(env.get(name, "") or "").strip()
+
+    level = (get(prefix + "REASONING") if prefix else "") or get(
+        "NORA_LLM_FALLBACK_REASONING")
+    control = ((get(prefix + "REASONING_CONTROL") if prefix else "")
+               or get("NORA_LLM_FALLBACK_REASONING_CONTROL")
+               or "reasoning_effort").lower()
+    level = level.lower()
+    if not level:
+        return {}
+    if control == "chat_template_kwargs":
+        return ({"chat_template_kwargs": {"enable_thinking": False}}
+                if level == "none" else {})
+    return {"reasoning_effort": level}

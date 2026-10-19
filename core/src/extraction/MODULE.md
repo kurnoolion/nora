@@ -5,10 +5,10 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 
 **Public surface**
 - `BaseExtractor` (base.py) — ABC: `extract(file_path, mno="", release="", doc_type="", detect_text_tables=False, header_footer_margin_mode="blanket", layout_provider="", provider_table_grid=True, images_root=None) -> DocumentIR` (per-cell PDF hints ignored by other formats; `images_root` redirects extracted-image artifacts into the build output — D-DRAFT-10 docker-distro)
-- `PDFExtractor` (pdf_extractor.py) — text blocks with `FontInfo` (incl. strikethrough via PyMuPDF span flags bit 8), tables via pdfplumber, images; header/footer margin filtering. Opt-in per-cell hints (mno-c-ingestion): `layout_provider: str` routes tables + figures through a `LayoutProvider` (see below) instead of pdfplumber/`get_images` — provider tables become TABLE blocks carrying lossless `html` (+ flat grid unless `provider_table_grid=False`), figures become IMAGE blocks with `caption`, and their bboxes suppress the overlapping pymupdf paragraphs (the text layer is otherwise unchanged); `detect_text_tables: bool` enables geometric borderless-table detection (persistent column-gutter signal; region preserved as a `[TABLE]…[/TABLE]` text block, not a reconstructed grid); `header_footer_margin_mode="pattern_only"` disables blanket margin drops (keeps top-of-page requirement headings)
+- `PDFExtractor` (pdf_extractor.py) — text blocks with `FontInfo` (incl. strikethrough via PyMuPDF span flags bit 8), tables via pdfplumber, images; header/footer margin filtering. Opt-in per-cell hints (mno-c-ingestion): `layout_provider: str` routes tables + figures through a `LayoutProvider` (see below) instead of pdfplumber/`get_images` — provider tables become TABLE blocks carrying lossless `html` (+ flat grid unless `provider_table_grid=False`), figures become IMAGE blocks with `caption`, and their bboxes suppress the overlapping pymupdf paragraphs (the text layer is otherwise unchanged); `detect_text_tables: bool` enables geometric borderless-table detection (persistent column-gutter signal; region preserved as a `[TABLE]…[/TABLE]` text block, not a reconstructed grid); `header_footer_margin_mode="pattern_only"` disables blanket margin drops (keeps top-of-page requirement headings). Env `NORA_EXTRACT_TEXT_TABLES` (`1`/`true`/`yes`/`on`) forces borderless-table detection on for every cell — a global debug override read by the pipeline extract stage
 - `LayoutProvider` (layout_provider.py, mno-c-ingestion) — protocol mirroring `LLMProvider`/`EmbeddingProvider`: `available() -> (bool, reason)`, `extract_layout(pdf_path, image_dir, want_table_grid) -> LayoutStructures`; result types `LayoutStructures` / `LayoutTable` (page, bbox, html, headers, rows) / `LayoutFigure` (page, bbox, image_path, caption), bboxes normalized to top-left PDF points so the extractor can fuse by position; `get_layout_provider(name)` lazy registry
 - `DoclingProvider` (docling_provider.py) — Docling-backed `LayoutProvider` (tables + figures only; OCR off for born-digital PDFs — pymupdf keeps the text layer). Docling is an optional heavy dep: lazy-imported, `available()` gates a missing install fail-loud. Env: `DOCLING_ARTIFACTS` (offline models dir, pair with `HF_HUB_OFFLINE=1`), `DOCLING_OCR=1` (scanned pages)
-- `DOCXExtractor` (docx_extractor.py) — paragraphs (with style/level + strikethrough from `Run.font.strike`), tables (with merged-cell metadata per D-072 — populates `ContentBlock.merged_cells` with anchor `(row, col, rowspan, colspan, text)` for every `gridSpan>1` / `vMerge` region; continuation positions in `headers`/`rows` are blanked to `""` to keep the matrix rectangular), embedded images
+- `DOCXExtractor` (docx_extractor.py) — paragraphs (with style/level + strikethrough from `Run.font.strike`), tables (with merged-cell metadata per D-072 — populates `ContentBlock.merged_cells` with anchor `(row, col, rowspan, colspan, text)` for every `gridSpan>1` / `vMerge` region; continuation positions in `headers`/`rows` are blanked to `""` to keep the matrix rectangular), embedded images. A table with merged cells and no struck runs also gets lossless `block.html` (rowspan/colspan, via `_render_merged_table_html`), so the parser's HTML-preferred table rule keeps the merge layout. A table with any struck run keeps the flat grid only, because the parser drops struck rows from the grid, not from HTML (D-060).
 - `XLSXExtractor` (xlsx_extractor.py) — per-sheet extraction via openpyxl: each non-empty worksheet emits a heading (sheet title) + a table block; cell strikethrough surfaced via `Cell.font.strike` for row-level drop semantics. Page numbers track sheet index (1-based).
 - Registry (registry.py):
   - `supported_extensions() -> set[str]`
@@ -45,7 +45,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - **MMMYYYY release convention enforced at ingest** (D-DRAFT-6): `infer_metadata_from_path` validates a parsed (non-empty) release via `release_key` and raises `EXT-E004` on a non-MMMYYYY directory — the `(MNO, release)` cell key is the layout/ordering unit, so a mis-named release dir fails loud here rather than silently mis-ordering downstream. Validation is at the path→metadata boundary only; `extract_document(release=…)` (explicit-arg API) is unvalidated, so unit tests can pass arbitrary release labels. Empty release (path didn't carry the convention) is left to the caller, not raised here.
 - XLSX strategy is one heading + one table per worksheet — minimal but lets the profiler still cluster headings by font size and the parser still see structured rows.
 - **Layout-provider fusion** (mno-c-ingestion): for an opt-in cell, the provider *replaces* pdfplumber table detection and `get_images()` — its tables/figures are merged into the pymupdf text flow by `(page, y)` sort, and their bboxes reuse the existing `_overlaps_any_table` suppression so the underlying pymupdf cell text isn't duplicated as paragraphs. We deliberately do NOT adopt the provider's text/OCR layer: pymupdf keeps supplying paragraphs with per-span fonts (the profiler's heading detection depends on them) and born-digital text exactness/determinism is preserved (see `docs/compact/strands/mno-c-ingestion/docling-integration-design.md`).
-- Strikeout detected per format. Whole-table and paragraph strikes are marked via `font_info.strikethrough` and dropped by the parser (the corrections workflow can override `profile.ignore_strikeout` without re-extracting) [D-031]. **Exception**: PDF table rows with cell-level strikes (per-word strike segments inside specific cells, common in OA cross-reference tables) are dropped at extract time from the table's `rows` list — the IR has no per-row strike state to preserve and the alternative (mark + parser-side drop) would require a schema extension. If all data rows drop, the table is marked `strikethrough=True` so the parser drops the now-empty remnant via the existing FR-33 path [D-036]. DOCX/XLSX continue to mark, not drop.
+- Strikeout detected per format. Whole-table and paragraph strikes are marked via `font_info.strikethrough` and dropped by the parser (the corrections workflow can override `profile.ignore_strikeout` without re-extracting) [D-031]. PDF table rows with cell-level strikes (common in cross-reference tables) are **kept** in `rows`; `row_runs[i]` marks them struck and the parser drops them at parse time [D-036, D-060]. A table whose data rows are all struck is also marked `strikethrough=True`, so the parser's FR-33 cascade drops it whole. All three formats mark; none drop at extract time.
 
 **Non-goals**
 - No OCR — scanned PDFs without a text layer will yield empty IRs; this is surfaced via block_count=0, not silently filled by an image-to-text model.
@@ -94,6 +94,7 @@ _Alphabetical, regenerated by regen-map._
 - `_BODY_DEFAULT_SIZE` — constant — internal
 - `_HEADING_DEFAULT_SIZE` — constant — internal
 - `_HEADING_STYLE_RE` — constant — internal
+- `_render_merged_table_html` — function — internal — Render the rectangular grid + merge anchors as lossless table HTML.
 - `logger` — constant — pub
 
 `extract.py`
@@ -131,6 +132,7 @@ _Alphabetical, regenerated by regen-map._
   - `_span_struck` — staticmethod — internal — Check whether any strike line meaningfully crosses the span.
   - `_table_is_struck` — staticmethod — internal — Decide whether a table block is struck through (FR-33 [D-031]).
   - `extract` — method — pub
+- `_BG_RECT_PAGE_FRAC` — constant — internal
 - `_LINE_Y_TOL` — constant — internal
 - `_MAX_LINE_GAP_PT` — constant — internal
 - `_MIN_GUTTER_PT` — constant — internal
@@ -142,6 +144,7 @@ _Alphabetical, regenerated by regen-map._
 - `_WORD_MERGE_GAP_PT` — constant — internal
 - `_bbox_overlaps_any` — function — internal — True when `bbox` overlaps any of `others` by >= `min_frac` of its own
 - `_clamp_bbox` — function — internal — Clamp a region bbox to page bounds so pdfplumber's crop() won't raise.
+- `_drop_background_rects` — function — internal — Return `plumber_page` with giant fill-only rects/curves removed.
 - `_find_table_regions` — function — internal — Borderless-table regions on a pdfplumber page, each ``(bbox, lines)``
 - `_gutter_table_regions` — function — internal — Locate borderless-table regions by persistent column gutters.
 - `_looks_tabular` — function — internal — Keep a text-detected table only when it has real tabular shape — >= 2
@@ -183,7 +186,7 @@ _Alphabetical, regenerated by regen-map._
 [models](../models/MODULE.md) (for `DocumentIR`, `ContentBlock`, `FontInfo`, `Position`, `BlockType`).
 
 **Depended on by**
-[profiler](../profiler/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md) (extract stage).
+[profiler](../profiler/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md) (extract stage), [eval](../eval/MODULE.md) (`release_key` only — golden-set release map and the map/stack check), [web](../web/MODULE.md) (`release_key.release_order_key` only — release ordering in the requirement tree, enrich review, and playground routes).
 
 **Deferred**
 - DOC + XLS extractor implementations (deferred per FR-27 / D-018 — revisit: when a corpus contains these legacy formats)

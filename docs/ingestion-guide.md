@@ -16,7 +16,7 @@ experts do with the served result).
 | Role | Machine | Does |
 |---|---|---|
 | Ingestion operator (you) | build machine + serving host | runs the cycle, pushes the label, flips stacks, records the log |
-| Eval operator | serving host | golden evals; keeps `${GOLDEN_DIR}/baselines/<stack>.txt` current |
+| Eval operator | serving host | golden evals; keeps `<nora-data>/eval-baselines/<stack>.txt` current |
 | Architect | both (sudo) | image rebakes, profile-binding commits, migrations |
 | Domain experts | web only | enrichment review, Eval Studio |
 
@@ -236,7 +236,8 @@ by hand.
 ./cycle.sh promote --label 2026-09-05-a --host <serving-host> --scheme <sira-prompt-scheme>
 ```
 
-Snapshots the serve-set into `serve/<label>/` (hardlinks, instant),
+Snapshots the serve-set into `serve/<label>/` (hardlinks, instant; the
+NORA vectorstore is copied, since chroma writes to its files on open),
 pushes it to the serving host (rsync into a staging dir, checksum
 verify, atomic rename — the remote label exists complete or not at
 all), closes the cycle and frees the baton. `--scheme` names the
@@ -257,7 +258,7 @@ against the standing baseline, then production.
 # on the serving host, docker/ of the checkout
 ./serve-flip.sh <secondary-stack> <label>              # shows MANIFEST current vs new; type yes
 # golden eval against the secondary stack (docs/golden-eval-guide.md);
-# compare its GEV block with ${GOLDEN_DIR}/baselines/<production-stack>.txt
+# compare its GEV block with <nora-data>/eval-baselines/<production-stack>.txt
 ./serve-flip.sh <production-stack> <label> --eval-run <run-id>
 ```
 

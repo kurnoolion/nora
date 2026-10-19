@@ -81,3 +81,37 @@ def test_no_markers_disables_detection(monkeypatch):
     raw = asyncio.run(svc._llm_call(client, "prompt text"))
     assert raw.startswith("CANNOT_COMPLY")
     assert len(client.calls) == 1
+
+
+def test_fallback_gets_its_own_reasoning_fields(monkeypatch):
+    # Field-found: a thinking fallback answered with empty content. The
+    # fallback call carries the fallback's reasoning fields, not the
+    # primary payload's.
+    _configure(monkeypatch)
+    monkeypatch.setattr(svc, "_FALLBACK_REASONING_FIELDS",
+                        {"chat_template_kwargs": {"enable_thinking": False}})
+    client = _StubClient(["CANNOT_COMPLY with this input.",
+                          '{"keywords": ["alpha"]}'])
+    asyncio.run(svc._llm_call(client, "prompt text"))
+    primary, fallback = client.calls[0][1], client.calls[1][1]
+    assert "chat_template_kwargs" not in primary
+    assert fallback["chat_template_kwargs"] == {"enable_thinking": False}
+    assert primary["model"] != fallback["model"]
+
+
+def test_fallback_reasoning_fields_rules():
+    from sandbox.llm_refusal import fallback_reasoning_fields as f
+
+    core = {"NORA_LLM_FALLBACK_REASONING": "none",
+            "NORA_LLM_FALLBACK_REASONING_CONTROL": "chat_template_kwargs"}
+    assert f({}, "P_") == {}
+    assert f(core, "P_") == {"chat_template_kwargs": {"enable_thinking": False}}
+    # The caller's own names win over the core ones.
+    assert f({**core, "P_REASONING": "low",
+              "P_REASONING_CONTROL": "reasoning_effort"}, "P_") == {
+        "reasoning_effort": "low"}
+    # chat_template_kwargs is only ever sent to suppress thinking.
+    assert f({**core, "NORA_LLM_FALLBACK_REASONING": "high"}, "P_") == {}
+    # Default wire form is reasoning_effort.
+    assert f({"NORA_LLM_FALLBACK_REASONING": "none"}) == {
+        "reasoning_effort": "none"}

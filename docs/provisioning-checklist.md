@@ -186,7 +186,7 @@ Before touching anything, capture the invariants that must survive:
 
 ```bash
 for p in <query-port-a> <query-port-b>; do curl -s 127.0.0.1:$p/healthz > ~/pre-migration-healthz-$p.json; done
-# + the current GEV baseline block(s) — ${GOLDEN_DIR}/baselines/<stack>.txt, or the last accepted run's block
+# + the current GEV baseline(s) — <nora-data>/eval-baselines/<stack>.txt, or the last accepted run's block
 ```
 
 1. **Stacks down**: `docker compose --env-file <stack env> --profile
@@ -235,9 +235,10 @@ for p in <query-port-a> <query-port-b>; do curl -s 127.0.0.1:$p/healthz > ~/pre-
     splitting state. Remove `docker/.env*` from the checkout after a
     week of quiet.
 12. **PROMOTE_LOG + baselines**: `touch /srv/nora/serve/PROMOTE_LOG`
-    (group-writable) and place the accepted GEV blocks at
-    `/srv/nora/eval/golden/baselines/<stack>.txt` so the first staged
-    promote has something to compare against.
+    (group-writable) and place the accepted baselines at
+    `/srv/nora/eval-baselines/<stack>.txt` (beside the serve root —
+    `serve-flip.sh` names this path; `NORA_EVAL_BASELINES` overrides it)
+    so the first staged promote has something to compare against.
 
 Rollback of the migration itself (before step 11): recreate the stacks
 from the old `docker/.env*` files — the old tree is still in place

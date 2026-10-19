@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -27,10 +28,15 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 try:                                    # repo context (sandbox package)
-    from sandbox.llm_refusal import is_permanent_refusal, parse_markers
+    from sandbox.llm_refusal import (  # noqa: F401  (re-exported)
+        fallback_reasoning_fields, is_permanent_refusal, parse_markers,
+    )
 except ImportError:                     # SIRA clone context (copied flat
-    from llm_refusal import is_permanent_refusal, parse_markers  # noqa: F401
-                                        # into scripts/ by install_configs.sh)
+    from llm_refusal import (  # noqa: F401  (into scripts/ by install_configs.sh)
+        fallback_reasoning_fields, is_permanent_refusal, parse_markers,
+    )
+# fallback_reasoning_fields is re-exported for the batched-enrich patch,
+# which reaches sandbox helpers only through this module.
 
 PLAN_RE = re.compile(r"^\*\*plan\*\*: *(.+?) *$", re.M)
 
@@ -150,6 +156,13 @@ class BatchConfig:
     reasoning_sentinel: bool = False    # opt-in: append the FINAL_ANSWER_MARKER
                                         # instruction + parse only after the marker
                                         # (untagged-thinking endpoints)
+    only_req_ids_file: str = ""         # diagnostic selector: path to a file of
+                                        # req ids (one per line, # comments ok);
+                                        # run_batched processes ONLY those ids.
+                                        # Ids stay on-host in the file — logs
+                                        # carry counts only. Missing/empty file
+                                        # fails loud (a typo must not silently
+                                        # run the full corpus).
 
     @property
     def response_reserve(self) -> int:
@@ -180,6 +193,7 @@ class BatchConfig:
                 env.get("NORA_LLM_REFUSAL_MARKERS", "")),
             debug_raw=_get("DEBUG_RAW", _bool, False),
             reasoning_sentinel=_get("REASONING_SENTINEL", _bool, False),
+            only_req_ids_file=_get("ONLY_REQ_IDS", str, ""),
         )
 
 
@@ -189,7 +203,12 @@ class Batch:
     ids: list[str]
     texts: list[str]
     prompt_tokens: int          # estimate incl. header
-    closed_by: str              # "prompt" | "response" | "end"
+    closed_by: str              # PACKING label — why the batch was CLOSED
+                                # while being packed: "prompt" (prompt
+                                # budget), "response" (ESTIMATED response
+                                # budget), "end" (end of plan). Says
+                                # nothing about how the endpoint finished
+                                # the response (field-found misread).
     oversized: bool = False
 
 
@@ -331,12 +350,39 @@ async def run_batched(
     — the same call goes to `fallback_llm_call` instead (same prompt,
     same budget, batch row tagged "llm": "fallback"). With no fallback
     configured the batch fails fast as llm_refused (no requeue burn)."""
+    if cfg.only_req_ids_file:
+        try:
+            wanted = {
+                ln.strip() for ln in
+                open(cfg.only_req_ids_file, encoding="utf-8")
+                if ln.strip() and not ln.lstrip().startswith("#")
+            }
+        except OSError as e:
+            raise ValueError(
+                f"only_req_ids_file unreadable: {cfg.only_req_ids_file} ({e})"
+            ) from e
+        if not wanted:
+            raise ValueError(
+                f"only_req_ids_file has no ids: {cfg.only_req_ids_file}")
+        n_before = len(items)
+        items = [it for it in items if it[0] in wanted]
+        logger.info("req-id selector: %d of %d items selected (%d ids wanted)",
+                    len(items), n_before, len(wanted))
+        if not items:
+            logger.warning("req-id selector matched NOTHING — check the ids "
+                           "against this cell's corpus")
+
     summary = {"batches": 0, "oversized": 0, "enriched": 0, "failed": 0,
                "proposed": 0, "kept": 0, "filtered": 0, "errors": 0,
                "requeued": 0, "skipped": 0, "fallbacks": 0, "refused": 0}
     tax_cache: dict[str, str] = {}
     header_cache: dict[str, int] = {}
     sem = asyncio.Semaphore(max(1, cfg.batch_concurrency))
+    # Run-scoped batch ids (field-found: ids restarted at b00000 every
+    # invocation, so the same id named different batches across runs and
+    # batch-level correlation was impossible). The tag is time + random,
+    # so ids stay unique even for invocations within the same second.
+    run_tag = time.strftime("%y%m%d%H%M%S") + "-" + os.urandom(2).hex()
     batch_seq = 0
 
     def _header(plan_id: str) -> tuple[str, int]:
@@ -388,6 +434,7 @@ async def run_batched(
                 for rid in batch.ids:
                     await _fail(rid, "batch_error", batch_id, error=str(e))
             await write_batch({"batch_id": batch_id, "plan": batch.plan_id,
+                               "req_ids": list(batch.ids),
                                "n_reqs": len(batch.ids), "status": "error",
                                "error": str(e), "attempt": attempt,
                                "ms": int((time.time() - t0) * 1000)})
@@ -405,10 +452,12 @@ async def run_batched(
                 await _fail(rid, "llm_refused", batch_id, ms=ms)
             await write_batch({
                 "batch_id": batch_id, "plan": batch.plan_id,
+                "req_ids": list(batch.ids),
                 "n_reqs": len(batch.ids), "status": "refused",
                 "answered": 0, "missing": len(batch.ids),
                 "prompt_tokens_est": batch.prompt_tokens,
                 "resp_tokens_est": len(batch.ids) * cfg.resp_tokens_per_req,
+                "resp_chars": len(raw or ""),
                 "closed_by": batch.closed_by, "oversized": batch.oversized,
                 "attempt": attempt, "ms": ms})
             return
@@ -464,12 +513,18 @@ async def run_batched(
                 for rid in res.missing:
                     await _fail(rid, "missing_in_batch_response", batch_id,
                                 error=res.error, ms=ms)
+        # *_est fields are PRE-CALL estimates (reqs x per-req budget / the
+        # packer's prompt count) — never measured sizes; resp_chars is the
+        # MEASURED response length (field-found: the estimate was read as a
+        # measurement and chased as an endpoint cap).
         row = {
             "batch_id": batch_id, "plan": batch.plan_id,
+            "req_ids": list(batch.ids),
             "n_reqs": len(batch.ids), "status": "ok" if not res.error else "parse_error",
             "answered": len(res.phrases_by_id), "missing": len(res.missing),
             "prompt_tokens_est": batch.prompt_tokens,
             "resp_tokens_est": len(batch.ids) * cfg.resp_tokens_per_req,
+            "resp_chars": len(raw or ""),
             "closed_by": batch.closed_by, "oversized": batch.oversized,
             "attempt": attempt, "ms": ms}
         if used_fallback:
@@ -519,7 +574,7 @@ async def run_batched(
         requeue: list[tuple[str, str]] = []
         tasks = []
         for b in round_batches:
-            bid = f"b{batch_seq:05d}"
+            bid = f"{run_tag}.b{batch_seq:05d}"
             batch_seq += 1
             tasks.append(_run_one(b, bid, requeue, attempt))
         await asyncio.gather(*tasks)

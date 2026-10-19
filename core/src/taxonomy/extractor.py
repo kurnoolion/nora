@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 
 from core.src.llm.base import LLMProvider
-from core.src.llm.openai_provider import (
+from core.src.llm import (
     FINAL_ANSWER_MARKER,
     REASONING_SENTINEL_ENABLED,
 )

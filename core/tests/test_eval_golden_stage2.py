@@ -414,3 +414,152 @@ def test_fallback_delta_from_end_of_run_healthz(monkeypatch):
     assert report.stamp.fallback_used_delta == 5
     line = report.stamp.compact_line()
     assert "fb_pre=2" in line and "fb_delta=5" in line
+
+
+def test_flagged_sample_skips_stage2_but_scores_stage1(monkeypatch):
+    # A release move flagged the sample: its golden response may be
+    # written from older text, so it is not judged (GEV-W002).
+    from core.src.eval import golden_runner
+
+    monkeypatch.setattr(golden_runner, "fetch_healthz", lambda url: None)
+    monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {
+        "results": [{"rank": 1, "req_id": "REQ_FOO_0001"}]})
+    flagged = _sample()
+    flagged.golden_meta["review"] = {"mno-b": {"changed": ["REQ_FOO_0001"]}}
+    judge = _FakeJudge(raw='{"score": 7, "missing": [], "contradicting": []}')
+    rep = golden_runner.run_all(
+        [flagged], "http://127.0.0.1:9999", "s", _NOW,
+        query_pipeline=_FakePipeline(), judge=judge,
+        judge_prompt=("v1", "<<CANDIDATE>>"),
+    )
+    assert len(rep.stage1) == 1 and rep.stage2 == []
+    assert [e["code"] for e in rep.errors] == ["GEV-W002"]
+    # Not judged, so outside the Stage-2 identity.
+    assert rep.stamp.eval_set_stage2_digest == ""
+
+
+# ─── F10: one requirement retrieved from two releases ────────────────
+
+
+def _two_release_rows():
+    return [
+        {"rank": 1, "req_id": "REQ_FOO_0001", "title": "Retry",
+         "text": "Retry three times.", "mno": "m", "release": "Apr2026"},
+        {"rank": 2, "req_id": "REQ_FOO_0001", "title": "Retry",
+         "text": "Retry twice.", "mno": "m", "release": "Jan2026"},
+        {"rank": 3, "req_id": "REQ_FOO_0001", "title": "Retry",
+         "text": "Retry three times.", "mno": "m", "release": "Apr2026"},
+    ]
+
+
+def test_row_key():
+    assert golden_runner.row_key(
+        {"req_id": "R-1", "mno": "m", "release": "Jan2026"}) == "R-1@m__Jan2026"
+    assert golden_runner.row_key({"req_id": "R-1"}) == "R-1"
+
+
+def test_stage1_keeps_both_releases_of_one_id(monkeypatch):
+    monkeypatch.setattr(golden_runner, "_post_json",
+                        lambda u, p, t: {"results": _two_release_rows()})
+    r = golden_runner.run_stage1(_sample(), "http://127.0.0.1:1")
+    assert r.retrieved_req_ids == ["REQ_FOO_0001"]
+    assert r.retrieved_row_keys == [
+        "REQ_FOO_0001@m__Apr2026", "REQ_FOO_0001@m__Jan2026"]
+    assert r.to_dict()["retrieved_row_keys"] == r.retrieved_row_keys
+
+
+def test_stage2_synthesizes_over_both_releases(monkeypatch):
+    monkeypatch.setattr(golden_runner, "_get_json", lambda url, timeout: {})
+    monkeypatch.setattr(golden_runner, "_post_json",
+                        lambda u, p, t: {"results": _two_release_rows()})
+    llm = _FakeSynthLLM()
+    report = run_all(
+        [_sample()], "http://127.0.0.1:1", "stackA", _NOW,
+        query_pipeline=golden_runner.SiraRowsPipeline(llm),
+        judge=_FakeJudge(),
+        judge_prompt=("v1", "<<QUERY>> <<GOLDEN>> <<CANDIDATE>>"),
+    )
+    assert report.stage2[0].pinned_count == 2
+    sent = llm.prompts[0]
+    assert "Retry three times." in sent and "Retry twice." in sent
+    # Rank order kept: the newer release (rank 1) comes first.
+    assert sent.index("three times") < sent.index("twice")
+
+
+def test_bare_id_pin_selects_every_row_of_that_id():
+    llm = _FakeSynthLLM()
+    p = golden_runner.SiraRowsPipeline(llm)
+    p.bind_rows(_two_release_rows())
+    p.query("q", pinned_chunk_ids=["req:REQ_FOO_0001"])
+    sent = llm.prompts[0]
+    assert "Retry three times." in sent and "Retry twice." in sent
+
+
+def test_failed_synthesis_is_not_judged(monkeypatch):
+    # Field-found: during a fallback outage the synthesizer returned an
+    # error stub; judged, it scored 0 as a real answer.
+    from core.src.query.schema import QueryResponse
+
+    class _FailingPipeline:
+        def query(self, text, pinned_chunk_ids=None):
+            return QueryResponse(answer="[LLM synthesis failed: boom]",
+                                 synthesis_error="boom")
+
+    judge = _FakeJudge(raw='{"score": 0, "missing": [], "contradicting": []}')
+    with pytest.raises(GoldenEvalError) as exc:
+        run_stage2(_sample(), _stage1(), _FailingPipeline(), judge,
+                   ("v1", "<<CANDIDATE>>"))
+    assert exc.value.code == "GEV-E007"
+    assert judge.prompts == []          # never reached the judge
+
+
+def test_synthesizer_marks_llm_failure():
+    from core.src.query.schema import AssembledContext, QueryIntent
+    from core.src.query.synthesizer import LLMSynthesizer
+
+    class _Boom:
+        def complete(self, **kw):
+            raise TimeoutError("fallback unreachable")
+
+    ctx = AssembledContext(context_text="ctx", system_prompt="sys", chunks=[])
+    resp = LLMSynthesizer(_Boom()).synthesize(ctx, QueryIntent(raw_query="q"))
+    assert resp.synthesis_error == "fallback unreachable"
+    assert resp.answer.startswith("[LLM synthesis failed")
+
+
+def test_synthesizer_flags_empty_content():
+    # A thinking model that spends its budget on reasoning returns empty
+    # content; with the epilogue appended it looked like a short answer.
+    from core.src.query.schema import AssembledContext, QueryIntent
+    from core.src.query.synthesizer import LLMSynthesizer
+
+    class _Empty:
+        model = "m"
+
+        def complete(self, **kw):
+            return "   "
+
+    ctx = AssembledContext(context_text="ctx", system_prompt="sys", chunks=[])
+    resp = LLMSynthesizer(_Empty()).synthesize(ctx, QueryIntent(raw_query="q"))
+    assert resp.synthesis_error.startswith("empty answer")
+
+
+def test_reroutes_recorded_and_counted(monkeypatch):
+    from core.src.query.schema import QueryResponse
+
+    class _ReroutedPipeline:
+        def query(self, text, pinned_chunk_ids=None):
+            return QueryResponse(answer="A real answer.", rerouted=True)
+
+    class _ReroutingJudge(_FakeJudge):
+        last_was_fallback = True
+
+    r = run_stage2(_sample(), _stage1(), _ReroutedPipeline(),
+                   _ReroutingJudge(), ("v1", "<<CANDIDATE>>"))
+    assert r.synth_rerouted and r.judge_rerouted
+    assert r.to_dict()["judge_rerouted"] is True
+    rep = _report()
+    rep.stage2 = [r]
+    assert "fallback: synth=1 judge=1" in rep.compact_report()
+    # Clean runs keep their block unchanged.
+    assert "fallback:" not in _report().compact_report()

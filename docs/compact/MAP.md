@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-08-05 by regen-map. Do not hand-edit.
+Generated 2026-10-18 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -48,6 +48,8 @@ flowchart TD
     m_corrections --> m_env
     m_corrections --> m_profiler
     m_corrections --> m_taxonomy
+    m_eval --> m_env
+    m_eval --> m_extraction
     m_eval --> m_graph
     m_eval --> m_llm
     m_eval --> m_query
@@ -79,27 +81,26 @@ flowchart TD
     m_profile_miner --> m_parser
     m_profile_miner --> m_profiler
     m_profiler --> m_extraction
+    m_profiler --> m_llm
     m_profiler --> m_models
     m_query --> m_env
     m_query --> m_graph
     m_query --> m_llm
-    m_query --> m_resolver
-    m_query --> m_standards
-    m_query --> m_taxonomy
     m_query --> m_vectorstore
     m_resolver --> m_parser
     m_standards --> m_parser
     m_standards --> m_resolver
-    m_taxonomy --> m_corrections
     m_taxonomy --> m_env
     m_taxonomy --> m_llm
     m_taxonomy --> m_parser
     m_taxonomy --> m_pipeline
-    m_vectorstore --> m_models
+    m_vectorstore --> m_env
     m_vectorstore --> m_parser
     m_web --> m_corrections
     m_web --> m_env
     m_web --> m_eval
+    m_web --> m_extraction
+    m_web --> m_llm
     m_web --> m_models
     m_web --> m_parser
     m_web --> m_pipeline
@@ -157,11 +158,14 @@ nora/
 │   │   │   ├── eval_cli.py                              # CLI for the evaluation framework (PoC Step 11).
 │   │   │   ├── golden.py                                # Golden eval set schema + persistence (FR-38, strand golden-eval).
 │   │   │   ├── golden_cli.py                            # Golden eval batch CLI (FR-38, strand golden-eval).
+│   │   │   ├── golden_release_cli.py                    # Golden-set release map maintenance (strand golden-eval, release-handling
+│   │   │   ├── golden_report_cli.py                     # Golden run report inspector — expected vs retrieved req_ids per sample.
 │   │   │   ├── golden_runner.py                         # Golden eval runners (FR-38, strand golden-eval).
 │   │   │   ├── metrics.py                               # Evaluation metrics for the query pipeline (TDD 9.4).
 │   │   │   ├── prompts/
 │   │   │   │   └── judge_v1.txt
 │   │   │   ├── questions.py                             # Evaluation test question set with ground truth (TDD 9.4).
+│   │   │   ├── release_map.py                           # Golden-set release map — what ``N`` means for each MNO (strand
 │   │   │   └── runner.py                                # Evaluation runner (TDD 9.4, Step 11).
 │   │   ├── extraction/                                  # Format-aware content extraction.
 │   │   │   ├── MODULE.md
@@ -183,13 +187,14 @@ nora/
 │   │   │   └── schema.py                                # Knowledge Graph schema definitions (TDD 6.1–6.2).
 │   │   ├── llm/                                         # LLM abstraction layer.
 │   │   │   ├── MODULE.md
-│   │   │   ├── __init__.py
+│   │   │   ├── __init__.py                              # LLM providers.
 │   │   │   ├── base.py                                  # LLM provider abstraction layer.
 │   │   │   ├── llm_debug.py                             # LLM debug — verify the active LLM provider and probe arbitrary endpoints.
 │   │   │   ├── mock_provider.py                         # Mock LLM provider for testing without API keys.
 │   │   │   ├── model_picker.py                          # Hardware detection and LLM model selection.
 │   │   │   ├── ollama_provider.py                       # Ollama LLM provider for local model inference.
-│   │   │   └── openai_provider.py                       # OpenAI-compatible LLM provider for cloud APIs.
+│   │   │   ├── openai_provider.py                       # OpenAI-compatible LLM provider for cloud APIs.
+│   │   │   └── refusal.py                               # Permanent-refusal detection + fallback provider for core LLM lanes.
 │   │   ├── models/                                      # Shared document intermediate representation.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -310,6 +315,7 @@ nora/
 │   │       ├── markdown_render.py                       # Markdown → HTML rendering for LLM-synthesized answers.
 │   │       ├── metrics.py                               # Metrics persistence store for NORA observability.
 │   │       ├── middleware.py                            # Request timing middleware for NORA Web UI.
+│   │       ├── model_discovery.py                       # Discovered model lists for roster providers (strand llm-model-discovery).
 │   │       ├── path_mapper.py                           # Path translation between Windows UNC paths and Linux mount points.
 │   │       ├── req_tree.py                              # Shared requirement-tree loading over parse output (strand golden-eval).
 │   │       ├── resource_sampler.py                      # Background resource sampler for NORA observability.
@@ -339,81 +345,96 @@ nora/
 │   │       │   │   ├── req_browser.js
 │   │       │   │   └── resolve_review.js
 │   │       │   └── vendor/
-│   │       │       ├── bootstrap/
-│   │       │       │   ├── bootstrap.bundle.min.js
-│   │       │       │   └── bootstrap.min.css
 │   │       │       ├── bootstrap-icons/
 │   │       │       │   ├── bootstrap-icons.min.css
 │   │       │       │   └── fonts/
 │   │       │       │       ├── bootstrap-icons.woff
 │   │       │       │       └── bootstrap-icons.woff2
+│   │       │       ├── bootstrap/
+│   │       │       │   ├── bootstrap.bundle.min.js
+│   │       │       │   └── bootstrap.min.css
 │   │       │       └── htmx/
 │   │       │           └── htmx.min.js
 │   │       ├── team_mode.py                             # Team-eval access gating (team-eval-pilot).
-│   │       └── templates/
-│   │           ├── _config_save_ack.html
-│   │           ├── base.html
-│   │           ├── config.html
-│   │           ├── corrections/
-│   │           │   ├── index.html
-│   │           │   ├── profile.html
-│   │           │   ├── report.html
-│   │           │   └── taxonomy.html
-│   │           ├── dashboard.html
-│   │           ├── enrich_review/
-│   │           │   ├── _pending.html
-│   │           │   ├── _row.html
-│   │           │   ├── _rows_page.html
-│   │           │   ├── _table.html
-│   │           │   └── index.html
-│   │           ├── environment_new.html
-│   │           ├── environments.html
-│   │           ├── eval_studio/
-│   │           │   ├── _board.html
-│   │           │   ├── _chat_turn.html
-│   │           │   ├── _editor.html
-│   │           │   ├── _picker_plans.html
-│   │           │   ├── _picker_releases.html
-│   │           │   ├── _picker_reqs.html
-│   │           │   ├── _preview.html
-│   │           │   └── index.html
-│   │           ├── files.html
-│   │           ├── job_detail.html
-│   │           ├── jobs.html
-│   │           ├── metrics.html
-│   │           ├── parse_review/
-│   │           │   ├── _report.html
-│   │           │   ├── _view.html
-│   │           │   └── index.html
-│   │           ├── partials/
-│   │           │   ├── dashboard_jobs.html
-│   │           │   ├── dashboard_status.html
-│   │           │   ├── file_listing.html
-│   │           │   ├── jobs_table.html
-│   │           │   ├── metrics_resource.html
-│   │           │   └── query_result.html
-│   │           ├── pipeline.html
-│   │           ├── query.html
-│   │           ├── req_browser/
-│   │           │   ├── _compare.html
-│   │           │   ├── _req_detail.html
-│   │           │   ├── _tree.html
-│   │           │   └── index.html
-│   │           ├── resolve_review/
-│   │           │   ├── _report.html
-│   │           │   ├── _view.html
-│   │           │   └── index.html
-│   │           └── test/
-│   │               ├── _answer.html
-│   │               ├── _feedback_ack.html
-│   │               ├── _feedback_legacy.html
-│   │               ├── _feedback_merged.html
-│   │               ├── _ingested.html
-│   │               ├── _merged_answer.html
-│   │               └── index.html
+│   │       ├── templates/
+│   │       │   ├── _config_save_ack.html
+│   │       │   ├── base.html
+│   │       │   ├── config.html
+│   │       │   ├── corrections/
+│   │       │   │   ├── index.html
+│   │       │   │   ├── profile.html
+│   │       │   │   ├── report.html
+│   │       │   │   └── taxonomy.html
+│   │       │   ├── dashboard.html
+│   │       │   ├── enrich_review/
+│   │       │   │   ├── _pending.html
+│   │       │   │   ├── _row.html
+│   │       │   │   ├── _rows_page.html
+│   │       │   │   ├── _table.html
+│   │       │   │   └── index.html
+│   │       │   ├── environment_new.html
+│   │       │   ├── environments.html
+│   │       │   ├── eval_studio/
+│   │       │   │   ├── _board.html
+│   │       │   │   ├── _chat_turn.html
+│   │       │   │   ├── _editor.html
+│   │       │   │   ├── _golden_card.html
+│   │       │   │   ├── _gt_panel.html
+│   │       │   │   ├── _meta_card.html
+│   │       │   │   ├── _picker.html
+│   │       │   │   ├── _picker_plans.html
+│   │       │   │   ├── _picker_releases.html
+│   │       │   │   ├── _picker_reqs.html
+│   │       │   │   ├── _preview.html
+│   │       │   │   ├── _promote.html
+│   │       │   │   ├── _review_panel.html
+│   │       │   │   ├── _status_result.html
+│   │       │   │   └── index.html
+│   │       │   ├── files.html
+│   │       │   ├── job_detail.html
+│   │       │   ├── jobs.html
+│   │       │   ├── metrics.html
+│   │       │   ├── parse_review/
+│   │       │   │   ├── _report.html
+│   │       │   │   ├── _view.html
+│   │       │   │   └── index.html
+│   │       │   ├── partials/
+│   │       │   │   ├── dashboard_jobs.html
+│   │       │   │   ├── dashboard_status.html
+│   │       │   │   ├── file_listing.html
+│   │       │   │   ├── jobs_table.html
+│   │       │   │   ├── metrics_resource.html
+│   │       │   │   └── query_result.html
+│   │       │   ├── pipeline.html
+│   │       │   ├── query.html
+│   │       │   ├── req_browser/
+│   │       │   │   ├── _compare.html
+│   │       │   │   ├── _req_detail.html
+│   │       │   │   ├── _tree.html
+│   │       │   │   └── index.html
+│   │       │   ├── resolve_review/
+│   │       │   │   ├── _report.html
+│   │       │   │   ├── _view.html
+│   │       │   │   └── index.html
+│   │       │   └── test/
+│   │       │       ├── _answer.html
+│   │       │       ├── _feedback_ack.html
+│   │       │       ├── _feedback_legacy.html
+│   │       │       ├── _feedback_merged.html
+│   │       │       ├── _ingested.html
+│   │       │       ├── _merged_answer.html
+│   │       │       ├── _req_bubble.html
+│   │       │       ├── _shared_body.html
+│   │       │       ├── _timeline.html
+│   │       │       ├── history.html
+│   │       │       ├── index.html
+│   │       │       └── shared.html
+│   │       └── timeline.py                              # Normalize per-stage query timings into a renderable timeline.
 │   └── tests/
 │       ├── __init__.py
+│       ├── conftest.py                                  # Shared pytest fixtures.
 │       ├── test_apply_profile_patch.py                  # Tests for the profile_patch → corrections-profile merger.
+│       ├── test_ask_reasoning.py                        # Per-question provider + Fast/Think mode on the Ask page (Phase 1).
 │       ├── test_bm25_index.py                           # Unit tests for BM25 sparse retrieval (`bm25_index.py`).
 │       ├── test_chunk_builder_chunk_role.py             # Tests for chunk_role classification and parent-body prepending.
 │       ├── test_chunk_builder_context.py                # Tests for ancestor-section Context in chunk text (D-DRAFT-5, strand
@@ -430,8 +451,11 @@ nora/
 │       ├── test_env_config.py                           # Tests for `EnvironmentConfig` path helpers — focused on `~` expansion.
 │       ├── test_eval.py                                 # Tests for the evaluation framework (Step 11).
 │       ├── test_eval_golden.py                          # Tests for the golden eval sample schema + persistence (FR-38).
+│       ├── test_eval_golden_release_cli.py              # Tests for golden_release_cli — migrate / advance / review and the text
+│       ├── test_eval_golden_report_cli.py               # Tests for the golden run report inspector CLI.
 │       ├── test_eval_golden_runner.py                   # Tests for golden Stage-1 runner: matching, recall, HTTP error mapping.
 │       ├── test_eval_golden_stage2.py                   # Tests for golden Stage-2 (pin + judge), run report, and batch runner.
+│       ├── test_eval_release_map.py                     # Tests for the golden set's release map (synthetic labels only).
 │       ├── test_extractor_images_root.py                # images_root redirect — extracted-image artifacts belong in the BUILD
 │       ├── test_feedback_db.py                          # Tests for `core/src/web/feedback_db.py` — Test page Q&A + vote log.
 │       ├── test_glossary_skip_from_rag.py               # Tests for Phase 5 of the generic-rules pivot — skip glossary from RAG.
@@ -441,6 +465,8 @@ nora/
 │       ├── test_last_run_req_id.py                      # Tests for ``RequirementIdPattern.anchor`` extraction modes.
 │       ├── test_layout_fusion.py                        # Extractor fusion of a LayoutProvider's tables/figures into the pymupdf text
 │       ├── test_layout_provider_foundation.py           # Phase-1 foundation for the Docling/LayoutProvider integration (mno-c-ingestion).
+│       ├── test_llm_refusal.py                          # Refusal detection + fallback provider (core twin of the sandbox
+│       ├── test_model_discovery.py                      # Model discovery cache for the Ask page (strand llm-model-discovery).
 │       ├── test_openai_provider.py                      # Tests for OpenAICompatibleProvider — fully mocked, no network.
 │       ├── test_parse_audit.py                          # Tests for the per-document parse-audit tool (parse_audit.py).
 │       ├── test_parse_log.py                            # Tests for ParseLog generation: dropped block recording, range merging,
@@ -450,11 +476,13 @@ nora/
 │       ├── test_parse_table_header_fallback.py          # Tests for the table-header fallback paths:
 │       ├── test_parser_exclude_sections.py              # Profile-driven section exclusion (D-DRAFT-13).
 │       ├── test_patterns.py                             # Tests for regex patterns used across extraction, profiling, and parsing.
+│       ├── test_pdf_extractor_bg_rects.py               # Background-band rect filter (strand mno-b-tables).
 │       ├── test_pdf_extractor_lines.py                  # Tests for PDF source-line-boundary preservation (ContentBlock.lines).
 │       ├── test_pdf_extractor_strike.py                 # Unit tests for PDF strike-detection geometry helpers (FR-33 [D-031]).
 │       ├── test_pdf_extractor_text_tables.py            # Guards for the opt-in text-strategy (borderless) table detection.
 │       ├── test_pipeline.py                             # Pipeline smoke tests — extract, profile, and parse real PDFs.
 │       ├── test_pipeline_cells.py                       # Tests for the pipeline (MNO, release) cell substrate (D-DRAFT-6).
+│       ├── test_pipeline_error_codes.py                 # Every error code the source raises or prints is registered in CODES.
 │       ├── test_plan_metadata.py                        # Tests for plan-metadata extraction (`_extract_plan_metadata`).
 │       ├── test_playground_helpers.py                   # Tests for the merged-tab helpers in core/src/web/routes/playground.py:
 │       ├── test_profile_bindings.py                     # Tests for per-cell profile binding (D-DRAFT-7).
@@ -478,10 +506,12 @@ nora/
 │       ├── test_stages_per_cell.py                      # Per-cell stage routing tests (D-DRAFT-6/7/10).
 │       ├── test_standards.py                            # Tests for the standards ingestion pipeline (Step 7).
 │       ├── test_strike_runs.py                          # Tests for the unified strike model [D-060].
+│       ├── test_structural_parser_announced_id.py       # Announced-requirement path (strand req-recall).
 │       ├── test_structural_parser_content_start.py      # Tests for the content-start cutoff (D-DRAFT-4).
 │       ├── test_structural_parser_headings.py           # Tests for the numbering-driven heading classification contract.
 │       ├── test_structural_parser_inline_id.py          # Inline-trailing req_id in heading text (mno-c-ingestion).
 │       ├── test_structural_parser_leading_id.py         # Tests for leading-id body-block requirement detection (D-DRAFT-2).
+│       ├── test_structural_parser_req_id_guard.py       # Tests for the req_id over-capture guard (strand id-precision).
 │       ├── test_structural_parser_table_anchors.py      # Tests for table-cell req-ID anchoring in GenericStructuralParser.
 │       ├── test_taxonomy.py                             # Tests for the feature taxonomy pipeline (Step 6).
 │       ├── test_team_mode.py                            # Tests for team-mode access gating (team-eval-pilot).
@@ -493,10 +523,15 @@ nora/
 │       ├── test_web_config_db.py                        # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_eval_studio.py                      # Eval Studio route tests (FR-39): sample CRUD, ground-truth add flows,
 │       ├── test_web_jobs.py                             # Tests for the NORA web job queue.
+│       ├── test_web_markdown_bubbles.py                 # Tests for req-ID bubbles in the web markdown renderer (strand req-id-bubbles).
 │       ├── test_web_markdown_render.py                  # Tests for the web markdown renderer.
 │       ├── test_web_path_mapper.py                      # Tests for the web path mapper module.
 │       ├── test_web_playground.py                       # Tests for the Test-page corpus-label helper.
+│       ├── test_web_req_body.py                         # Tests for the requirement-body renderer behind the Ask-page bubble
+│       ├── test_web_req_bubbles.py                      # Tests for the req-bubble endpoint and its wiring (strand req-id-bubbles).
 │       ├── test_web_req_tree.py                         # Tests for the shared requirement-tree loader (web/req_tree.py).
+│       ├── test_web_sidebar.py                          # Sidebar nav-label markup (strand collapsible-sidebar).
+│       ├── test_web_timeline.py                         # Tests for the normalized query timeline (`core.src.web.timeline`).
 │       └── test_xlsx_extractor.py                       # Tests for XLSXExtractor (FR-1).
 ├── customizations/
 │   ├── __init__.py
@@ -518,6 +553,7 @@ nora/
 │       └── README.md
 ├── docker/
 │   ├── README.md
+│   ├── cycle.sh                                         # cycle.sh — phase-gated driver for one ingest cycle (README "Ingest a new
 │   ├── debug-egress.sh                                  # debug-egress.sh — pinpoint WHY container network egress fails on this host.
 │   ├── docker-compose.yml
 │   ├── env.example
@@ -531,6 +567,9 @@ nora/
 │   ├── promote.sh                                       # promote.sh — snapshot the SERVE-set of a nora-build + sira-build into
 │   ├── pull.sh                                          # Fetch image tarballs from an internal-GitHub release and docker-load them.
 │   ├── push.sh                                          # Publish built images as Release assets on the internal GitHub repo.
+│   ├── serve-flip.sh                                    # serve-flip.sh — point a serve stack at a promoted label and recreate it
+│   ├── serve-push.sh                                    # serve-push.sh — push a promoted serve label from the BUILD machine to the
+│   ├── serve-up.sh                                      # serve-up.sh — start a serve stack with SERVE_UID/SERVE_GID defaulted to
 │   ├── sira.Dockerfile
 │   └── skopeo-pull-bases.sh                             # skopeo-pull-bases.sh — fetch the BASE images the docker/*.Dockerfile builds
 ├── docs/
@@ -553,12 +592,64 @@ nora/
 │   │   ├── retrofit-snapshot.md
 │   │   ├── strands/
 │   │   │   ├── _archive/
+│   │   │   │   ├── ask-history/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── ask-page-ux/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── ask-rerun/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── journal.md
+│   │   │   │   │   └── plan.md
+│   │   │   │   ├── collapsible-sidebar/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
 │   │   │   │   ├── docker-distro/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   ├── docker-distro-design.md
 │   │   │   │   │   └── journal.md
+│   │   │   │   ├── eval-studio-ux-2/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── eval-studio-ux-fix/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
 │   │   │   │   ├── glossary-scoring/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── id-precision/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── llm-model-choice-eval/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── llm-model-choice/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── journal.md
+│   │   │   │   │   ├── plan.html
+│   │   │   │   │   └── plan.md
+│   │   │   │   ├── llm-roster-deploy/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── journal.md
+│   │   │   │   │   └── plan.md
+│   │   │   │   ├── llm-roster-docs/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── mno-b-tables/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
@@ -588,15 +679,35 @@ nora/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
+│   │   │   │   ├── query-timeline-analytics/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── reasoning-wire/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
 │   │   │   │   ├── references-handling/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
-│   │   │   │   ├── section-handling/
+│   │   │   │   ├── req-bubble-metadata/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
-│   │   │   │   ├── sira/
+│   │   │   │   ├── req-bubble-tables/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── req-id-bubbles/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── req-recall/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── section-handling/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
@@ -610,24 +721,54 @@ nora/
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   ├── enrichment-review-design.md
 │   │   │   │   │   └── journal.md
+│   │   │   │   ├── sira/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── table-fidelity/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
 │   │   │   │   └── team-eval-pilot/
 │   │   │   │       ├── STRAND.md
 │   │   │   │       ├── decisions-draft.md
 │   │   │   │       └── journal.md
+│   │   │   ├── corp-db-layer/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── artifact-inventory.md
+│   │   │   │   ├── converter-design.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   ├── journal.md
+│   │   │   │   └── storage-design.md
 │   │   │   ├── golden-eval/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
-│   │   │   │   └── journal.md
+│   │   │   │   ├── journal.md
+│   │   │   │   └── relative-release-design.md
 │   │   │   ├── image-ingestion/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   └── journal.md
-│   │   │   └── nora-retrieval-quality/
+│   │   │   ├── llm-model-discovery/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   ├── implementation-plan.md
+│   │   │   │   ├── journal.md
+│   │   │   │   └── plan.md
+│   │   │   ├── nora-retrieval-quality/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   └── journal.md
+│   │   │   └── team-operations/
 │   │   │       ├── STRAND.md
 │   │   │       ├── decisions-draft.md
 │   │   │       └── journal.md
 │   │   └── structure-conventions.md
-│   └── enrichment-review-guide.md
+│   ├── enrichment-review-guide.md
+│   ├── golden-eval-guide.md
+│   ├── ingestion-guide.md
+│   ├── provisioning-checklist.md
+│   └── redaction-rules.md
 ├── experiments/
 │   ├── image-analysis/
 │   │   ├── README.md
@@ -658,6 +799,7 @@ nora/
 │   │   ├── __init__.py
 │   │   ├── nora_to_beir.py                              # NORA → BEIR adapter for the SIRA standalone-sandbox experiment.
 │   │   └── test_nora_to_beir.py                         # Tests for the NORA → BEIR adapter — multi-cell partitioning (multi-mno-sira).
+│   ├── cell_db_convert.py                               # Cell-DB converter — phase 1 of the corp-db-layer strand.
 │   ├── enrich_batching.py                               # Batched doc-enrichment support (strand sira-enrichment-pe).
 │   ├── install_configs.sh                               # Install the NORA-specific SIRA hydra configs + prompts into the
 │   ├── llm_refusal.py                                   # Permanent-refusal detection for LLM responses (shared by the batch
@@ -687,6 +829,7 @@ nora/
 │   │   ├── __init__.py
 │   │   ├── batched-enrich.patch
 │   │   ├── extra-config-dir.patch
+│   │   ├── no-best-update.patch
 │   │   ├── per-stage-routing.patch
 │   │   └── test/
 │   │       ├── __init__.py
@@ -694,27 +837,36 @@ nora/
 │   ├── sira_preflight.py                                # Input-layout pre-flight for multi-MNO SIRA (multi-mno-sira D-DRAFT-5).
 │   ├── sira_query/
 │   │   ├── __init__.py
+│   │   ├── cell_db_store.py                             # Cell-DB read side for the SIRA query service (corp-db-layer phase 2).
 │   │   ├── enrich_overlay.py                            # Enrichment-corrections overlay — load, filter, apply (sira-enrichment-review).
 │   │   ├── fusion.py                                    # Cross-cell fusion for multi-MNO SIRA (multi-mno-sira D-DRAFT-10).
 │   │   ├── scope.py                                     # Query-scope resolution for multi-MNO SIRA (multi-mno-sira D-DRAFT-9/10).
 │   │   ├── service.py                                   # SIRA per-query inference service — for NORA's Test page SIRA tab.
 │   │   ├── sira_debug.py                                # SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
+│   │   ├── test_cell_db_loader.py                       # Tests for the cell-db serving mode (corp-db-layer phase 2).
 │   │   ├── test_fusion.py                               # Tests for cross-cell fusion (multi-mno-sira D-DRAFT-10).
 │   │   ├── test_llm_fallback.py                         # Permanent-refusal fallback in the service's _llm_call choke point.
+│   │   ├── test_no_autosave.py                          # Regression tests: loading + enriching an index must never mutate it on disk.
 │   │   ├── test_scope.py                                # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
+│   │   ├── test_service_identity.py                     # Serving-identity tests (strand golden-eval).
 │   │   └── test_service_multi_cell.py                   # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
+│   ├── test_cell_db_convert.py                          # Tests for sandbox/cell_db_convert.py — label flat files -> cell DBs.
 │   ├── test_enrich_batching.py                          # Tests for the batched doc-enrichment logic (strand sira-enrichment-pe):
 │   ├── test_enrich_overlay.py                           # Tests for sandbox/sira_query/enrich_overlay.py (sira-enrichment-review
 │   ├── test_llm_refusal.py                              # Permanent-refusal detection (sandbox/llm_refusal.py). Markers here
 │   ├── test_sira_cells.py                               # Tests for the shared (MNO, release) cell primitives (multi-mno-sira).
 │   ├── test_sira_enrich_inspect.py                      # Tests for the SIRA doc-enrichment inspector CLI.
+│   ├── test_sira_incremental_dedup.py                   # Tests for the ``dedup`` repair command (strand id-precision).
 │   ├── test_sira_lane.py                                # sira_lane command construction (docker-distro lane model).
 │   ├── test_sira_multi.py                               # Tests for the multi-MNO batch orchestrator (multi-mno-sira D-DRAFT-7).
 │   ├── test_sira_preflight.py                           # Tests for the multi-MNO input-layout pre-flight (multi-mno-sira D-DRAFT-5).
 │   ├── test_sira_query_review.py                        # Service-side tests for the enrichment-review surface
+│   ├── test_verify_parse_error.py                       # verify_run's parse-error verdict: WARN only when a parse-error batch
+│   ├── test_verify_req_recall.py                        # Tests for sandbox/verify_req_recall.py — extract-vs-parse req-id diff.
 │   ├── test_verify_tables.py                            # Tests for the verify_tables helper.
 │   ├── tests/
 │   │   └── test_sira_incremental.py                     # Tests for sandbox/sira_incremental.py — content-hash-aware
+│   ├── verify_req_recall.py                             # verify_req_recall — diff req-ids visible at extract time against the ids
 │   └── verify_tables.py                                 # verify_tables — confirm parsed tables are inlined into NORA parse text and
 └── visualizations/
     ├── build_viz_data.py                                # Build a self-contained JS data bundle for the NORA visualizations.

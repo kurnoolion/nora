@@ -7,6 +7,8 @@
   <div class="card-header py-2 d-flex justify-content-between align-items-center">
     <span class="small fw-semibold">{{ sample.sample_id }}
       <span class="badge es-status-{{ sample.status }} ms-1">{{ sample.status }}</span>
+      {% if sample.kind == 'version' %}<span class="badge text-bg-info ms-1" title="Scored with the release (absolute or relative)">version</span>{% endif %}
+      {% if sample.golden_meta.get('review') %}<span class="badge text-bg-warning ms-1" title="Flagged by a release move — see the review panel">review</span>{% endif %}
       <span class="text-muted ms-2">{{ sample.created_by }}</span>
     </span>
     <span>
@@ -38,10 +40,17 @@
             {% for m in mnos %}<option value="{{ m }}" {% if m == sample.mno %}selected{% endif %}>{{ m }}</option>{% endfor %}
           </select>
           <input class="form-control form-control-sm" name="area" value="{{ sample.area }}" placeholder="Area">
+          <select class="form-select form-select-sm" name="kind"
+                  title="standard: a question about current behaviour, scored without the release. version: a question about releases, scored with them.">
+            {% for k in kinds %}<option value="{{ k }}" {% if k == sample.kind %}selected{% endif %}>{{ k }}</option>{% endfor %}
+          </select>
           <button class="btn btn-sm btn-outline-primary" type="submit">Save</button>
         </div>
       </div>
     </form>
+    {% for w in qc_warnings %}
+    <div class="text-warning small mt-1"><i class="bi bi-exclamation-triangle"></i> {{ w }}</div>
+    {% endfor %}
     {% if sample.mno %}
       {% set mismatched = sample.ground_truth|selectattr('mno','ne',sample.mno)|selectattr('mno','ne','')|list %}
       {% if mismatched %}
