@@ -4,7 +4,7 @@
 
 **Active phase**: architecture
 **Last updated**: 2026-10-08
-**Last drift-check**: 2026-10-18 — mode: dev-full — 16 drifts resolved (6 code: web pipeline route resolves the embedder, vectorstore CLIs accept tei, every raised error code registered + scan test, single fallback-env reader, env no longer imports query, taxonomy imports llm constants from the package; 10 MODULE.md: 12 files updated to match code), 4 deferred surfaced; 5 unchanged modules carried from 2026-08-04
+**Last drift-check**: 2026-10-18 — mode: design — 21 drifts resolved, 1 no change (NFR-1: only acceptable LLMs are configured) (requirements describe current serving: D-254 SIRA over NORA's taxonomy, KG-dependent FR-5/7/8/11/12/13/21 + NFR-14 deferred, FR-37 reworded; new FR-40 serving path, FR-41 team gate, FR-42 LLM roster + refusal fallback, FR-43 promotion; FR-19 Ask-page features; 12 stale FR/NFR rewordings incl. NFR-15/16 → golden eval with per-release targets; TOC default 0.7 in from_dict; carrier-name sweep), 1 deferred (FR-38 release handling — lands with golden-eval strand); same day: dev-full — 16 drifts resolved
 
 ## Done
 

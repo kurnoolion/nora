@@ -270,3 +270,10 @@ class TestDocumentProfileRoundTrip:
         assert profile.profile_name == "VZW_OA"
         assert len(profile.heading_detection.levels) > 0
         assert profile.requirement_id.pattern != ""
+
+
+def test_from_dict_toc_threshold_default_matches_dataclass():
+    """A profile JSON without the key gets the same default as a fresh profile."""
+    from core.src.profiler.profile_schema import DocumentProfile
+
+    assert DocumentProfile._from_dict({}).toc_page_threshold == DocumentProfile().toc_page_threshold == 0.7
