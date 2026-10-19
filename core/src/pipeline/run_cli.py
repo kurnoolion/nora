@@ -160,15 +160,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--embedding-provider", default=None,
-        choices=["sentence-transformers", "huggingface", "ollama"],
-        help="Embedding provider (default: env config or 'sentence-transformers'; "
-             "overrides NORA_EMBEDDING_PROVIDER env var). "
+        choices=["sentence-transformers", "huggingface", "ollama", "tei"],
+        help="Embedding provider (default: NORA_EMBEDDING_PROVIDER, then "
+             "config/llm.json, then env config; no built-in default). "
              "'huggingface' is an alias for 'sentence-transformers'.",
     )
     parser.add_argument(
         "--embedding-model", default=None,
-        help="Embedding model name (default: env config or 'all-MiniLM-L6-v2'; "
-             "overrides NORA_EMBEDDING_MODEL env var). For ollama, use names like "
+        help="Embedding model name (default: NORA_EMBEDDING_MODEL, then "
+             "config/llm.json, then env config; no built-in default). For ollama, use names like "
              "'nomic-embed-text' or 'mxbai-embed-large' (must be `ollama pull`-ed first).",
     )
     parser.add_argument(

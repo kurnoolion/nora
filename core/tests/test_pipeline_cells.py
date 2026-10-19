@@ -123,3 +123,21 @@ class TestCellScope:
         ctx.scope_mnos = ["MNO-B"]
         assert ctx.cell_in_scope("MNO-B", "Mar2025") is True
         assert ctx.cell_in_scope("VZW-OA", "Feb2026") is False
+
+
+def test_context_builders_resolve_the_embedder(monkeypatch, tmp_path):
+    """Both builders go through env.config's chain, so the web pipeline route
+    (which calls them directly) resolves like the CLI and never falls back to
+    a built-in model."""
+    import core.src.env.config as env_cfg
+
+    monkeypatch.setattr(env_cfg, "_llm_config", lambda: env_cfg.LLMConfigFile())
+    monkeypatch.setenv(env_cfg.EMBEDDING_PROVIDER_ENV_VAR, "tei")
+    monkeypatch.setenv(env_cfg.EMBEDDING_MODEL_ENV_VAR, "m")
+    ctx = PipelineContext.standalone(env_dir=tmp_path)
+    assert (ctx.embedding_provider, ctx.embedding_model) == ("tei", "m")
+
+    monkeypatch.delenv(env_cfg.EMBEDDING_PROVIDER_ENV_VAR)
+    monkeypatch.delenv(env_cfg.EMBEDDING_MODEL_ENV_VAR)
+    ctx = PipelineContext.standalone(env_dir=tmp_path)
+    assert (ctx.embedding_provider, ctx.embedding_model) == ("", "")

@@ -27,7 +27,7 @@ class DroppedRange:
     page_start: int     # page of first dropped block
     page_end: int       # page of last dropped block
     block_count: int    # block_end - block_start + 1
-    reason: str         # "toc" | "revhist" | "text_strikethrough" | "cascade"
+    reason: str         # "toc" | "revhist" | "front_matter" | "text_strikethrough" | "cascade"
 
 
 @dataclass

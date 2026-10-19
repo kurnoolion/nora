@@ -11,7 +11,7 @@ Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language q
   - `GraphScoper` (graph_scope.py) — Stage 3
   - `QueryRewriter` Protocol (rewriter.py) — `rewrite(query) -> list[str]`. Implementations: `LLMQueryRewriter`, `MockQueryRewriter`. Stage 3.5 (optional pre-retrieval expansion; per-type gate via `_TYPE_REWRITE_ENABLED`). `expand_query(original, rewrites) -> str` concatenates the original + paraphrases for the embedder/BM25.
   - `RAGRetriever` (rag_retriever.py) — Stage 4 — accepts optional `bm25_index` and `reranker` constructor params; per-call `bm25_weight: float | None` for hybrid retrieval [D-041]; in-memory glossary index built at init for D-043 acronym pin
-  - `Reranker` Protocol (reranker.py) — `rerank(query, chunks) -> list[RetrievedChunk]`. Implementations: `CrossEncoderReranker` (sentence-transformers `CrossEncoder`, degrades to passthrough when model not cached), `MockReranker` (passthrough; default).
+  - `Reranker` Protocol (reranker.py) — `rerank(query, chunks) -> list[RetrievedChunk]`. Implementations: `CrossEncoderReranker` (sentence-transformers `CrossEncoder`, degrades to passthrough when model not cached), `OllamaReranker`, `OpenAIRerankChat` (per-pair scoring prompt on an OpenAI-compatible chat-completions endpoint), `OpenAIRerankDedicated` (one batched call to an OpenAI-compatible `/v1/rerank` endpoint), `TEIReranker` (a TEI `/rerank` server), `MockReranker` (passthrough; default).
   - Stage 4.5 — relevance threshold filter [D-047]; constants `_NOT_FOUND_ANSWER`, `_TYPE_MAX_DISTANCE` in pipeline.py.
   - Stage 4.7 — hierarchy grouping + disambiguation short-circuit [D-049]; constants `_DISAMBIGUATION_ANSWER`, `_TYPE_DISABLE_GROUPING` in pipeline.py.
   - `ContextBuilder` (context_builder.py) — Stage 5
@@ -33,7 +33,7 @@ Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language q
 - Graph helpers (pipeline.py):
   - `load_graph(path) -> nx.DiGraph` — loads the full knowledge graph from JSON.
   - `build_stub_graph_from_store(store) -> nx.DiGraph` — derives a minimal MNO/Release/Plan-only graph from vectorstore metadata. Used by web/query and eval when the graph stage was skipped (RAG-only mode); pair with `pipeline._bypass_graph = True` so Stage 3 emits an empty CandidateSet.
-- CLI: `query_cli.main`; `retrieval_debug.main` (`--compare-envs --env-dir <path>` — 4-section machine / model / vectorstore / retrieval fingerprint for cross-machine retrieval-quality diff).
+- CLI: `query_cli.main`; `retrieval_debug.main` with two modes. `--compare-envs --env-dir <path>` (`cmd_compare_envs`) prints a 4-section machine / model / vectorstore / retrieval fingerprint for cross-machine retrieval-quality diff. `--inspect-req <REQ_ID>` (`cmd_inspect_req`) dumps the vectorstore and BM25 view of one chunk. `--query` sets the probe query for both modes (an empty string disables scoring in `--inspect-req`); `--repo-root` overrides the inferred repo root; `--verbose` turns on provider logging.
 
 **Invariants**
 - **Graph-first, then RAG.** Vector retrieval is always filtered to the `requirement_ids` produced by `GraphScoper`. Unscoped retrieval is a D-001 violation, not a shortcut. *Exception*: RAG-only mode (`pipeline._bypass_graph = True`) skips Stage 3 entirely; Stage 4 falls back to MNO/release metadata filtering. Used when the graph stage was deliberately skipped (`--rag-only` / `--skip-graph` / `config/llm.json:skip_graph=true`); the stub graph from `build_stub_graph_from_store` keeps the resolver constructible without forcing a full graph build.
@@ -57,16 +57,16 @@ Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language q
 - Pipeline defaults (`top_k=10`, `max_context_chars=30000`) live on the class, not in env config — most callers accept defaults; eval overrides. **Per-query-type override** [D-040]: `QueryPipeline.query` picks `top_k` from a `_TYPE_TOP_K` map keyed by `intent.query_type` — list/breadth queries (CROSS_DOC / FEATURE_LEVEL / STANDARDS_COMPARISON / CROSS_MNO_COMPARISON) widen to 25 because their expected hits include parent/overview reqs whose chunks are short (heading + path only) and rank below richer leaf chunks; TRACEABILITY / RELEASE_DIFF widen to 20; lookups stay at 10. Pipeline takes `max(self._top_k, type_top_k)` so callers can still raise the floor explicitly.
 - **Specific-entity queries are authoritative for graph scope** [D-039]: when `GraphScoper._entity_lookup` matches (the analyzer extracted req IDs that exist as `req:*` nodes), expansion via `_feature_lookup` / `_plan_lookup` / `_title_search` is skipped. Edge traversal from the entity seeds still runs and provides the immediate neighborhood (sibling sections, referenced standards, parent containers) — the named-req anchor isn't diluted into a feature-wide scope where vector ranking can no longer surface the specific chunk.
 - Cross-doc / list-style queries are detected by phrase triggers in `_classify_query_type` [D-040]: `across all`, `across the`, `in all`, `across vzw|mnos|plans|specs`, `all the requirements`, `what are all`, `what requirements` map to `QueryType.CROSS_DOC`. FEATURE_LEVEL still wins on more-specific phrasing (`everything about`, `related to`) — the analyzer checks FEATURE_LEVEL first to preserve the existing classification contract. `mention` / `mentions` / `mentioned` (with trailing space) route to TRACEABILITY before the cross-doc check so concept-lookup queries get BM25 weight rather than the disabled cross-doc weight.
-- **BM25 hybrid retrieval** [D-041]: `RAGRetriever` parallels dense retrieval with a sparse `BM25Index` and fuses via Reciprocal Rank Fusion (Cormack 2009, k=60, weighted). Per-query-type BM25 weight from `pipeline._TYPE_BM25_WEIGHT`: STANDARDS_COMPARISON / TRACEABILITY / SINGLE_DOC = 0.5; CROSS_DOC / FEATURE_LEVEL = 0.0 (parent chunks too thin to compete with BM25-favored leaves). BM25 filter uses `metadata.req_id` (NOT `chunk_id`, which is `req:<req_id>`) so the candidate gate matches the dense path's `where` filter. `_TYPE_BM25_WEIGHT` is empirical hyperparameter tuning, not architectural contract — values shift as the eval set grows.
+- **BM25 hybrid retrieval** [D-041]: `RAGRetriever` parallels dense retrieval with a sparse `BM25Index` and fuses via Reciprocal Rank Fusion (Cormack 2009, k=60, weighted). Per-query-type BM25 weight from `pipeline._TYPE_BM25_WEIGHT`, which pipeline derives (keyed by `QueryType`) from `env.config.DEFAULT_BM25_WEIGHT_BY_TYPE` (keyed by `QueryType` value strings): STANDARDS_COMPARISON / TRACEABILITY / SINGLE_DOC = 0.5; CROSS_DOC / FEATURE_LEVEL = 0.0 (parent chunks too thin to compete with BM25-favored leaves). BM25 filter uses `metadata.req_id` (NOT `chunk_id`, which is `req:<req_id>`) so the candidate gate matches the dense path's `where` filter. The weights are empirical hyperparameter tuning, not architectural contract — values shift as the eval set grows.
 - **Acronym lookup chain** [D-043]: definitional queries ("What is X?", "Define X", "Meaning of X", …) hard-pin the matching glossary chunk to top of retrieval. `RAGRetriever.__init__` builds `_glossary_by_acronym` once by scanning `store.get_all()` for `doc_type=glossary_entry` chunks (back-compat: empty on pre-D-043 corpora). `retrieve()` runs normal retrieval (graph scope → BM25+dense → rerank → diversity) FIRST, then if `_ACRONYM_QUERY_RE` matches AND the acronym is in the index, prepends matched glossary chunks with chunk_id dedup, trimmed back to top_k. Pin runs *after* the cross-encoder so it doesn't demote a chunk we know is the answer. See [`RETRIEVAL.md`](RETRIEVAL.md) for the full end-to-end retrieval architecture.
-- **Cross-encoder reranker**: `CrossEncoderReranker` runs after RRF fusion, before diversity; `MockReranker` (passthrough) is the default. Per-type gate via `_TYPE_RERANK_ENABLED`. Long chunks truncated to `max_chunk_chars` (default 4000) before scoring. Off-the-shelf MS-MARCO MiniLM doesn't help on technical spec text; code stays plumbed for domain-tuned models. The web route has no built-in reranker provider or model (`env.DEFAULT_RERANKER_PROVIDER` / `DEFAULT_RERANKER_MODEL` are empty): an enabled reranker with no provider named runs as passthrough, so nothing downloads from the HuggingFace hub unless `huggingface` is chosen explicitly.
+- **Cross-encoder reranker**: `CrossEncoderReranker` runs after RRF fusion, before diversity; `MockReranker` (passthrough) is the default. Per-type gate via `_TYPE_RERANK_ENABLED`. Long chunks truncated to `max_chunk_chars` (default 4000) before scoring. Off-the-shelf MS-MARCO MiniLM doesn't help on technical spec text; code stays plumbed for domain-tuned models. The web route has no built-in reranker provider or model (`env.DEFAULT_RERANKER_PROVIDER` / `DEFAULT_RERANKER_MODEL` are empty): an enabled reranker with no provider named runs as passthrough, so nothing downloads from the HuggingFace hub unless `huggingface` is chosen explicitly. When `huggingface` is named with no model, `CrossEncoderReranker()` uses its own class default (`_DEFAULT_RERANKER_MODEL` in reranker.py) — naming the provider is the opt-in.
 - **Query rewriting**: `LLMQueryRewriter` (optional Stage 3.5) generates 3 short paraphrases (5-15 words, same scope) concatenated to the original for embedding + BM25. Off for SINGLE_DOC and GENERAL via `_TYPE_REWRITE_ENABLED` (D-039 entity priority handles single-doc lookups; rewriting just adds noise). On for CROSS_DOC, STANDARDS_COMPARISON, FEATURE_LEVEL, etc. — concept-shaped queries gain recall from telecom-specific terminology the user didn't include. SUMMARIZE is also on (D-051); FACT is intentionally off (paraphrasing a fact-shaped query risks routing to the definitional path).
 - **Document-rooted hierarchy paths in chunk metadata** [D-046]: `context_builder._enrich_chunk` prefers `chunk.metadata["hierarchy_path"]` (full Document > Section > Subsection chain, with `plan_name` as root) over the graph node path. Old vectorstores without the metadata fall back to the graph automatically; new ones surface the document-level distinction in the embedding (which is what makes Stage 4.7 grouping meaningful). See [`RETRIEVAL.md`](RETRIEVAL.md) §1, §11.
 - **Stage 4.5 relevance threshold filter** [D-047]: cosine-distance cap applied after retrieval; chunks above threshold dropped. `_TYPE_MAX_DISTANCE` per-type override (FACT=0.4 strict; SUMMARIZE=0.7 lenient). Default 0.5 calibrated empirically on env_vzw + qwen3-embedding:4b-q8_0 — re-sweep when the embedding model changes. See [`RETRIEVAL.md`](RETRIEVAL.md) §10.
 - **Stage 4.7 hierarchy grouping + disambiguation** [D-049]: greedy-LCP clustering on `hierarchy_path` metadata; auto-commit when groups separate cleanly (gap ≥ `gap_threshold`); surface disambiguation otherwise. "System shall not pretend it is an Oracle." `enable_grouping` master toggle, `gap_threshold` tuning knob, `_TYPE_DISABLE_GROUPING` per-intent opt-out (SUMMARIZE bypass). Pinned-chunks path on `query()` for the user-pick UX. Group score = `min(c.similarity_score)` so the best chunk anchors group relevance. See [`RETRIEVAL.md`](RETRIEVAL.md) §11.
 - **FACT and SUMMARIZE intent classification** [D-051]: phrasing-driven query types layered on top of the existing scope-shape types. FACT (strict precision: tight `top_k=10`, `bm25_weight=0.5`, rerank on, `max_distance_threshold=0.4`, terse contradiction-aware prompt). SUMMARIZE (broad survey: `top_k=50`, `bm25_weight=0.2`, rerank off, `max_distance_threshold=0.7`, grouping disabled, TL;DR + per-section breakdown prompt). Triggers checked before existing scope-based heuristics; FACT before SUMMARIZE so "Explain the value of T3402" routes to FACT. Comparison intent deferred (needs multi-MNO/release data). See [`RETRIEVAL.md`](RETRIEVAL.md) §12.
 - **Stage 6.5 citation audit** [D-052]: post-synthesis per-sentence regex scan; cheap (no LLM call). `CitationAudit` carries per-sentence breakdown plus `cited_percent` and `fabricated_count` summaries. Fabricated detection compares answer's `(VZ_REQ_X)` tokens against `available_req_ids` (chunks the LLM actually received) — flags hallucinated req IDs that look authoritative but aren't real. Phase 5c repair (re-prompt LLM to add citations to flagged sentences) deferred. See [`RETRIEVAL.md`](RETRIEVAL.md) §13.
-- **Configuration via unified resolver chain** [D-050, D-053]: `enable_grouping`, `gap_threshold`, `bm25_weight_by_type`, `max_distance_threshold`, `top_k_cap` resolve through `CLI > env var > Config-page DB > config/*.json > defaults`. Per-type maps in `pipeline.py` (`_TYPE_TOP_K`, `_TYPE_BM25_WEIGHT`, `_TYPE_RERANK_ENABLED`, `_TYPE_REWRITE_ENABLED`, `_TYPE_MAX_DISTANCE`, `_TYPE_DISABLE_GROUPING`) are the built-in defaults the resolver consults last; users edit through `/config` page (D-053) or by editing `config/retrieval.json`. The `[Query knobs]` log line at every query prints the resolved knobs for verification. See [`RETRIEVAL.md`](RETRIEVAL.md) §14.
+- **Configuration via unified resolver chain** [D-050, D-053]: `enable_grouping`, `gap_threshold`, `bm25_weight_by_type`, `max_distance_threshold`, `top_k_cap` resolve through `CLI > env var > Config-page DB > config/*.json > defaults`. Per-type maps in `pipeline.py` (`_TYPE_TOP_K`, `_TYPE_BM25_WEIGHT`, `_TYPE_RERANK_ENABLED`, `_TYPE_REWRITE_ENABLED`, `_TYPE_MAX_DISTANCE`, `_TYPE_DISABLE_GROUPING`) are the built-in defaults the resolver consults last. The BM25 defaults live in `env.config.DEFAULT_BM25_WEIGHT_BY_TYPE`, so env never imports query; `_TYPE_BM25_WEIGHT` is derived from that table; users edit through `/config` page (D-053) or by editing `config/retrieval.json`. The `[Query knobs]` log line at every query prints the resolved knobs for verification. See [`RETRIEVAL.md`](RETRIEVAL.md) §14.
 
 **Non-goals**
 - Not a compliance checker. "Is device X compliant with plan Y?" is a separate workflow that uses this pipeline as a primitive; don't collapse the two.
@@ -167,13 +167,17 @@ _Alphabetical, regenerated by regen-map._
 
 `pipeline.py`
 - `QueryPipeline` — class — pub — End-to-end query pipeline.
-  - `__init__` — constructor — internal
+  - `__init__` — constructor — internal — Initialize the pipeline.
   - `_fetch_chunks_by_ids` — method — internal — Fetch chunks from the store by their chunk IDs.
   - `_select_cells` — method — internal — Target cell keys for a query (D-DRAFT-11).
   - `query` — method — pub — Run the full query pipeline.
 - `_DEFAULT_RERANK_ENABLED` — constant — internal
 - `_DISAMBIGUATION_ANSWER` — constant — internal
 - `_NOT_FOUND_ANSWER` — constant — internal
+- `_StageTimer` — class — internal — Accumulates per-stage wall-clock timings for one `query()` call.
+  - `__init__` — constructor — internal
+  - `as_dict` — method — pub — Snapshot the timings, including `total_ms` measured to now.
+  - `stage` — method — pub
 - `_TYPE_BM25_WEIGHT` — constant — internal
 - `_TYPE_DISABLE_GROUPING` — constant — internal
 - `_TYPE_MAX_DISTANCE` — constant — internal
@@ -213,7 +217,7 @@ _Alphabetical, regenerated by regen-map._
 
 `reranker.py`
 - `CrossEncoderReranker` — class — pub — Wraps `sentence_transformers.CrossEncoder` to score (query,
-  - `__init__` — constructor — internal
+  - `__init__` — constructor — internal — Args:
   - `_truncate` — method — internal — Truncate to `max_chunk_chars` so long-tail chunks don't
   - `available` — property — pub
   - `rerank` — method — pub — Score every (query, chunk_text) pair and return chunks
@@ -289,6 +293,7 @@ _Alphabetical, regenerated by regen-map._
 
 `schema.py`
 - `AssembledContext` — dataclass — pub — Assembled LLM prompt context.
+- `BAND_ORDER` — constant — pub
 - `CandidateNode` — dataclass — pub — A candidate node from graph scoping.
 - `CandidateSet` — dataclass — pub — Set of candidate nodes from graph scoping.
   - `requirement_ids` — method — pub — Return req_id values (not graph node IDs) for vector store filtering.
@@ -307,8 +312,10 @@ _Alphabetical, regenerated by regen-map._
 - `QueryResponse` — dataclass — pub — Final pipeline output.
   - `save_json` — method — pub
   - `to_dict` — method — pub
+  - `unaccounted_ms` — property — pub — `total_ms` minus the sum of the per-stage timings.
 - `QueryType` — enum — pub — Types of queries the pipeline can handle.
 - `RetrievedChunk` — dataclass — pub — A chunk retrieved and ranked by vector similarity.
+- `STAGE_ORDER` — constant — pub
 - `ScopedQuery` — dataclass — pub — Query with resolved MNO/release scope.
   - `to_dict` — method — pub
 - `SentenceAudit` — dataclass — pub — One sentence's audit result. Output of post-synthesis Stage 6.5.
@@ -326,7 +333,7 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[graph](../graph/MODULE.md), [vectorstore](../vectorstore/MODULE.md), [llm](../llm/MODULE.md), [resolver](../resolver/MODULE.md) (types only), [standards](../standards/MODULE.md) (types for `StandardsContext`), [taxonomy](../taxonomy/MODULE.md) (feature nodes), [env](../env/MODULE.md) (`resolve_grouping_enabled` / `resolve_gap_threshold` / `resolve_bm25_weight` for the unified config resolver chain — D-050).
+[graph](../graph/MODULE.md) (`NodeType` / `EdgeType`), [vectorstore](../vectorstore/MODULE.md), [llm](../llm/MODULE.md) (`answering_model` / `reroute_note` in the synthesizer; `OllamaProvider` in `query_cli`), [env](../env/MODULE.md) (`resolve_top_k` / `resolve_bm25_weight` / `resolve_gap_threshold` for the unified config resolver chain — D-050).
 
 **Depended on by**
-[eval](../eval/MODULE.md), [web](../web/MODULE.md), [pipeline](../pipeline/MODULE.md) (not a runtime dep — pipeline emits the artifacts query consumes; listed here because stage ordering and artifact contracts are shared).
+[eval](../eval/MODULE.md), [web](../web/MODULE.md), [pipeline](../pipeline/MODULE.md) (`stages.py` builds the eval stage's query pipeline from `query.pipeline` / `synthesizer` / `rewriter` / `reranker`; pipeline also emits the artifacts query consumes).

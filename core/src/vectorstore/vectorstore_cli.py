@@ -1,7 +1,7 @@
 """CLI for vector store construction (PoC Step 9).
 
 Usage:
-    # Build with defaults (all-MiniLM-L6-v2, ChromaDB, cosine)
+    # Build with the configured embedder (NORA_EMBEDDING_PROVIDER or config/llm.json), ChromaDB, cosine
     python -m core.src.vectorstore.vectorstore_cli
 
     # Build with a config file
@@ -65,7 +65,8 @@ def _build_config(args: argparse.Namespace) -> VectorStoreConfig:
       3. Config-file layer (only one of these contributes):
          - `--config <path>` file values, when --config is supplied
          - else config/llm.json `embedding_provider` / `embedding_model`
-      4. Built-in defaults (sentence-transformers / all-MiniLM-L6-v2)
+      There is no built-in default: an empty provider makes make_embedder
+      refuse.
 
     `--config` replaces config/llm.json at the same tier — when a user
     points at a frozen experiment config they don't want the project
@@ -305,8 +306,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--provider",
-        choices=["sentence-transformers", "huggingface", "ollama"],
-        help="Embedding provider. 'huggingface' is an alias for 'sentence-transformers'.",
+        choices=["sentence-transformers", "huggingface", "ollama", "tei"],
+        help="Embedding provider. 'huggingface' is an alias for 'sentence-transformers'. "
+             "'tei' reads its base URL from NORA_EMBEDDING_BASE_URL.",
     )
     parser.add_argument("--device", help="Device for embedding (cpu, cuda, mps)")
     parser.add_argument("--batch-size", type=int, help="Embedding batch size")

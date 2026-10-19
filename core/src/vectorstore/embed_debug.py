@@ -215,8 +215,8 @@ def main() -> None:
 
     parser.add_argument(
         "--embedding-provider", default="ollama",
-        choices=["sentence-transformers", "huggingface", "ollama"],
-        help="(default: ollama)",
+        choices=["sentence-transformers", "huggingface", "ollama", "tei"],
+        help="(default: ollama; 'tei' reads NORA_EMBEDDING_BASE_URL)",
     )
     parser.add_argument(
         "--embedding-model", default="nomic-embed-text",

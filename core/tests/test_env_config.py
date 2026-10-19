@@ -1282,3 +1282,11 @@ def test_model_discovery_ttl_leaves_roster_entries_unchanged(tmp_path):
         assert entry.model == "m1"
     finally:
         env_cfg._reset_llm_config_cache()
+
+
+
+def test_env_config_does_not_import_query():
+    """env is a leaf: the BM25 per-type defaults live here, not in query."""
+    import core.src.env.config as env_cfg
+
+    assert "core.src.query" not in Path(env_cfg.__file__).read_text()

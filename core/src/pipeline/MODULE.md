@@ -5,7 +5,7 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 
 **Public surface**
 - Orchestration (runner.py):
-  - `PipelineContext` — shared state (documents_dir, corrections_dir, eval_dir, stage_dirs, model_provider/name/timeout, llm_reasoning, mnos, releases, state); `stage_output(stage, cell=None)`, `input_cells()`, `correction(filename)`, `create_llm_provider(require_real=False)`
+  - `PipelineContext` — shared state (documents_dir, corrections_dir, eval_dir, stage_dirs, model_provider/name/timeout, llm_reasoning, embedding_provider/model, mnos, releases, state); `stage_output(stage, cell=None)`, `input_cells()`, `correction(filename)`, `create_llm_provider(require_real=False)`
   - `PipelineRunner(ctx)` — `run(stages, continue_on_error=False) -> list[StageResult]`
 - Cell primitives (cells.py, D-DRAFT-6): `Cell(mno, release)` with `.relpath`; `PER_CELL_STAGES` / `GLOBAL_STAGES` partition + `is_per_cell_stage(stage)`; `enumerate_input_cells(documents_dir) -> list[Cell]` (validated + sorted by `release_order_key`)
 - Stage functions (stages.py): `run_extract`, `run_profile`, `run_parse`, `run_resolve`, `run_taxonomy`, `run_standards`, `run_graph`, `run_vectorstore`, `run_eval` — each `PipelineContext -> StageResult`
@@ -13,9 +13,10 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 - `STAGE_FUNCS` — the stage-name → function dispatch table
 - Error catalog (error_codes.py):
   - `ErrorDef` (code, message, hint), `PipelineError` (raised by stages)
-  - `CODES` dict — every EXT-, PRF-, PRS-, RES-, TAX-, STD-, GRF-, VEC-, EVL-, PIP-, ENV-, MDL- code with human-readable hint
+  - `CODES` dict — every EXT-, PRF-, PRS-, PRV-, RES-, RSV-, TAX-, STD-, GRF-, VEC-, EVL-, GEV-, PIP-, ENV-, MDL- code with human-readable hint. Every code raised anywhere is registered, including `PIP-E003` (uncovered profile binding; raised in stages.py and env/profile_bindings.py) and `EXT-E004` (non-MMMYYYY release dir; raised via extraction/release_key.py). `GEV-` is the golden-eval family; `PRV-` and `RSV-` are the parse-review and resolve-review CLIs. A test scans the source for unregistered codes.
 - Reporting (report.py): `format_compact_report()`, `format_verbose_report()`, `print_qc_template()`, `print_fix_template()`
-- CLI: `run_cli.main` — `stages | detect-hw | run ...`; `--lane {ingestion,nora}` (`lane_bounds()` — resolves a `PIPELINE_LANES` named range to start/end; mutually exclusive with `--start`/`--end`, D-DRAFT-5 docker-distro); `--requirements-dir` (documents-root override — repoints `ctx.documents_dir` via `env.resolve_requirements_dir`, D-DRAFT-6 docker-distro; reports stay at `<env_dir>/reports` regardless)
+- CLI: `run_cli.main` — flags only, no subcommands. One-shot modes (mutually exclusive with `--env` / `--env-dir`): `--list-stages`, `--detect-hw`, `--qc-template STAGE`, `--fix-template ARTIFACT`. Run options: `--env/-e NAME` or `--env-dir PATH` (falls back to `$ENV_DIR`); `--start` / `--end`; `--profile`; `--mno` / `--release` / `--force` (D-DRAFT-8); `--model`, `--model-timeout`, `--llm-provider`; `--embedding-provider`, `--embedding-model`; `--standards-source`; `--skip-taxonomy` / `--skip-graph` / `--skip-resolve` / `--skip-standards` (each with a `--no-` form that forces the stage on) and `--rag-only`; `--continue-on-error`; `--verbose`. `--lane {ingestion,nora}` (`lane_bounds()` — resolves a `PIPELINE_LANES` named range to start/end; mutually exclusive with `--start`/`--end`, D-DRAFT-5 docker-distro); `--requirements-dir` (documents-root override — repoints `ctx.documents_dir` via `env.resolve_requirements_dir`, D-DRAFT-6 docker-distro; reports stay at `<env_dir>/reports` regardless)
+- Env vars: `ENV_DIR` (standalone env_dir when no `--env` / `--env-dir`); `NORA_REQUIREMENTS_DIR`; `NORA_LLM_PROVIDER`; `NORA_EMBEDDING_PROVIDER` / `NORA_EMBEDDING_MODEL`; `NORA_STANDARDS_SOURCE`; `NORA_SKIP_TAXONOMY` / `NORA_SKIP_GRAPH` / `NORA_SKIP_RESOLVE` / `NORA_SKIP_STANDARDS`; `NORA_TAXONOMY_OVERVIEW_DIR` (directory of per-MNO corpus-overview prompt files for the taxonomy stage). A CLI flag beats its env var.
 
 **Invariants**
 - **Every failure surfaces a stable prefixed code** registered in `error_codes.CODES`. Ad-hoc strings are a D-012 violation — the user can't diagnose chat-pasted logs without the code.
@@ -28,13 +29,14 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 - **Incremental ingestion: scope + skip** (D-DRAFT-8): `--mno` / `--release` (`PipelineContext.scope_mnos` / `scope_releases`, comma-separable) restrict which cells the **per-cell** stages process — `input_cells()` and `run_extract` filter by `cell_in_scope()`; global stages still read the whole union. Per-cell stages also **skip-if-unchanged**: `run_extract` reuses an IR newer than its source; `run_parse` reuses a tree newer than its IR whose stamped `RequirementTree.profile_fingerprint` (hash of the substituted cell profile) matches the current profile — so a profile/mapping edit (different fingerprint) forces a re-parse that mtime alone couldn't detect. `--force` (`ctx.force`) overrides the skip. So a re-run after dropping a new cell reprocesses only the new/changed cells while the global graph rebuilds over the union.
 - Stage order is fixed and matches `env.config.PIPELINE_STAGES`. Running a downstream stage without its prerequisites emits `PIP-E002` (required input missing) rather than silently failing later.
 - `StageResult.status` uses four discrete values: `OK` (clean), `WARN` (completed but flagged), `FAIL` (aborted), `SKIP` (not run this invocation). Collapsing WARN into OK loses the signal that drives compact QC reports.
+- **Embedder is resolved, never defaulted**: `PipelineContext.embedding_provider` / `embedding_model` default to `""`. `from_env()` and `standalone()` both resolve them through `env.config.resolve_embedding_provider` / `resolve_embedding_model` (CLI arg > `NORA_EMBEDDING_*` env var > `config/llm.json` > `EnvironmentConfig` field), so the web pipeline route and the CLI resolve the same way. An empty result makes the vectorstore stage refuse (`make_embedder` raises); there is no built-in sentence-transformers fallback.
 - `PipelineContext.create_llm_provider()` falls back to `MockLLMProvider` when Ollama is unreachable unless `require_real=True`. This keeps offline stages runnable on work laptops without an LLM server.
 - `PipelineContext.create_llm_provider()` is also the single site where the permanent-refusal fallback is applied (`llm/refusal.py`, `NORA_LLM_REFUSAL_MARKERS` + `NORA_LLM_FALLBACK_*`): every LLM-using stage and CLI that constructs its provider here inherits refusal coverage. Constructing a provider directly (bypassing this method) opts out — don't.
 - Compact reports (`format_compact_report`) contain **no proprietary content** — only stage names, codes, counts, and timings. Verbose reports (separate function) may contain content and go to disk, not chat.
 
 **Key choices**
 - Plain functions per stage + dispatch dict instead of a class hierarchy — each stage is independently runnable from the CLI or tests without instantiating anything upstream.
-- Prefix-per-module error codes (EXT / PRF / PRS / RES / TAX / STD / GRF / VEC / EVL / PIP / ENV / MDL) — the prefix points the user at the right module without needing to read the message.
+- Prefix-per-module error codes (EXT / PRF / PRS / PRV / RES / RSV / TAX / STD / GRF / VEC / EVL / GEV / PIP / ENV / MDL) — the prefix points the user at the right module without needing to read the message.
 - LLM provider creation is centralized in `PipelineContext` so stages don't each invent their own fallback policy; the "Ollama → Mock" fallback lives in one place.
 - Two report formats (compact vs verbose): compact is chat-pasteable and content-free; verbose goes to disk and may include context. The split is explicit because mixing them is exactly how proprietary content leaks.
 - `continue_on_error` is opt-in — default is fail-fast, because downstream stages usually can't recover from a missing input.
@@ -84,10 +86,11 @@ _Alphabetical, regenerated by regen-map._
 
 `runner.py`
 - `PipelineContext` — dataclass — pub — Shared context passed through all pipeline stages.
+  - `_construct_llm_provider` — method — internal — Provider construction proper (no refusal wrap).
   - `_resolve_model` — method — internal — Resolve 'auto' model name using hardware detection.
   - `cell_in_scope` — method — pub — True iff `(mno, release)` passes the `--mno`/`--release` scope (D-DRAFT-8).
   - `correction` — method — pub — Get a correction file path if it exists.
-  - `create_llm_provider` — method — pub — Create an LLM provider based on config.
+  - `create_llm_provider` — method — pub — Create an LLM provider based on config, wrapped with the
   - `from_env` — classmethod — pub — Create context from an EnvironmentConfig.
   - `input_cells` — method — pub — The in-scope `(MNO, release)` cells present under `input/`, validated + sorted.
   - `stage_output` — method — pub — Get the output directory for a stage.
@@ -103,9 +106,11 @@ _Alphabetical, regenerated by regen-map._
   - `ok` — property — pub
 - `_MONTHS` — constant — internal
 - `_RELEASE_RE` — constant — internal
+- `_cached_unit_keys` — function — internal — Ledger keys of units the extraction loop will serve from cache:
 - `_cell_extract_hints` — function — internal — Per-cell PDF extractor hints from each in-scope cell's bound profile
 - `_corpus_fingerprint` — function — internal — Hash of the contributing tree set (D-DRAFT-9).
 - `_fail` — function — internal
+- `_load_taxonomy_ledger` — function — internal — Load extraction_state.json's per-doc ledger, honored only when its
 - `_load_user_eval_questions` — function — internal — Load user-supplied evaluation questions from Excel files.
 - `_release_sort_key` — function — internal — Chronological sort key for MMMYYYY release names.
 - `_select_newest_trees` — function — internal — Newest instance of each (MNO, plan_id) across releases.
@@ -126,7 +131,7 @@ _Alphabetical, regenerated by regen-map._
 [env](../env/MODULE.md), [corrections](../corrections/MODULE.md), [extraction](../extraction/MODULE.md), [profiler](../profiler/MODULE.md), [parser](../parser/MODULE.md), [resolver](../resolver/MODULE.md), [taxonomy](../taxonomy/MODULE.md), [standards](../standards/MODULE.md), [graph](../graph/MODULE.md), [vectorstore](../vectorstore/MODULE.md), [eval](../eval/MODULE.md), [llm](../llm/MODULE.md) (via `PipelineContext.create_llm_provider`).
 
 **Depended on by**
-[web](../web/MODULE.md) (submits jobs via the pipeline runner).
+[web](../web/MODULE.md) (submits jobs via the pipeline runner), [llm](../llm/MODULE.md) (`llm_debug` builds a `PipelineContext`; llm and pipeline import each other — pipeline's imports of llm are lazy, inside functions), [taxonomy](../taxonomy/MODULE.md) (`tax_debug`), [profile_miner](../profile_miner/MODULE.md) (`profile_miner_cli`).
 
 **Deferred**
 - Declare `models` and `query` in Depends on (deferred: imports are thin — `DocumentIR` for type, `query.pipeline`/`query.synthesizer` for the eval stage — and pipeline's Depends on list is already long — revisit: during a Depends-on audit or if the imports deepen)

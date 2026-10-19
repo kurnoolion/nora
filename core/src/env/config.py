@@ -429,7 +429,7 @@ class RetrievalConfig:
     bm25_weight_by_type: dict[str, float] = field(default_factory=dict)
     """Per-QueryType override for the BM25 weight in RRF fusion. Keys
     are `QueryType.value` strings. Empty dict (default) means
-    `pipeline._TYPE_BM25_WEIGHT` built-in defaults apply. Set entries
+    `DEFAULT_BM25_WEIGHT_BY_TYPE` built-in defaults apply. Set entries
     here to override per-type without code changes — useful for
     tuning hybrid retrieval against a new corpus where the default
     empirical values are off."""
@@ -611,6 +611,37 @@ def resolve_top_k(
     )
 
 
+# Built-in per-query-type BM25 weight in the RRF fusion, keyed by
+# `QueryType.value` (query.pipeline derives its QueryType-keyed
+# `_TYPE_BM25_WEIGHT` from this). 0.0 disables BM25 for
+# that query type (pure dense retrieval). Empirical tuning on the OA
+# eval set:
+#   - STANDARDS_COMPARISON gains +33pp accuracy with BM25 active
+#     (queries name specific TS numbers / cause codes that BM25 weights
+#     heavily but dense embeddings spread thin).
+#   - CROSS_DOC and FEATURE_LEVEL regress when BM25 contributes — the
+#     expected hits are thin parent/overview chunks that BM25 ranks
+#     low; richer leaf chunks pulled up by BM25 displace them.
+#   - TRACEABILITY benefits modestly when the query names a specific
+#     req_id (entity-priority graph scoping handles the well-formed
+#     case in D-039; BM25 helps with concept-shaped trace queries).
+# Numbers may shift as the eval set grows; treat as tuning, not contract.
+DEFAULT_BM25_WEIGHT_BY_TYPE: dict[str, float] = {
+    "standards_comparison": 0.5,
+    "traceability": 0.5,
+    "single_doc": 0.5,
+    # FACT queries name specific timer/threshold/value tokens; BM25
+    # weight matches them exactly while dense embeddings spread
+    # similar phrasing too thin.
+    "fact": 0.5,
+    # SUMMARIZE leans dense — the user paraphrases the topic, so
+    # semantic recall matters more than exact-token match.
+    "summarize": 0.2,
+    # CROSS_DOC, FEATURE_LEVEL, CROSS_MNO_COMPARISON, RELEASE_DIFF,
+    # GENERAL: omitted → default 0.0 (pure dense)
+}
+
+
 def resolve_bm25_weight(
     query_type: str | None = None,
     cli_value: float | None = None,
@@ -619,7 +650,7 @@ def resolve_bm25_weight(
 
     Precedence: CLI flag > config/retrieval.json
     `bm25_weight_by_type[query_type]` (DB layer overlays this via
-    apply_to_caches) > pipeline `_TYPE_BM25_WEIGHT` built-in default
+    apply_to_caches) > `DEFAULT_BM25_WEIGHT_BY_TYPE` built-in default
     > 0.0 (pure dense).
 
     No env-var tier — per-type maps are file-only by convention
@@ -632,14 +663,7 @@ def resolve_bm25_weight(
         cfg = _retrieval_config()
         if query_type in cfg.bm25_weight_by_type:
             return cfg.bm25_weight_by_type[query_type]
-        # Fall back to the built-in per-type default in pipeline.py.
-        from core.src.query.pipeline import _TYPE_BM25_WEIGHT
-        from core.src.query.schema import QueryType
-        try:
-            qt_enum = QueryType(query_type)
-        except ValueError:
-            return 0.0
-        return _TYPE_BM25_WEIGHT.get(qt_enum, 0.0)
+        return DEFAULT_BM25_WEIGHT_BY_TYPE.get(query_type, 0.0)
     return 0.0
 
 

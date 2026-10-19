@@ -142,6 +142,16 @@ class RefusalFallbackProvider:
         return answer
 
 
+def fallback_env() -> tuple[str, str]:
+    """`(base_url, model)` of the env-configured fallback endpoint, stripped;
+    empty strings when unset. The only reader of these two names, so the
+    feature-on check and the provider build cannot disagree."""
+    return (
+        os.getenv("NORA_LLM_FALLBACK_BASE_URL", "").strip(),
+        os.getenv("NORA_LLM_FALLBACK_MODEL", "").strip(),
+    )
+
+
 def maybe_wrap_with_refusal_fallback(llm, timeout: int = 600, fallback=None):
     """Wrap `llm` with the refusal fallback when fully configured.
 
@@ -177,8 +187,7 @@ def maybe_wrap_with_refusal_fallback(llm, timeout: int = 600, fallback=None):
             return llm
         logger.info("Refusal fallback active (explicit fallback endpoint)")
         return RefusalFallbackProvider(llm, fallback, markers)
-    base_url = os.getenv("NORA_LLM_FALLBACK_BASE_URL", "").strip()
-    model = os.getenv("NORA_LLM_FALLBACK_MODEL", "").strip()
+    base_url, model = fallback_env()
     if not (markers or base_url):
         return llm
     if not (markers and base_url and model):
@@ -231,8 +240,7 @@ def build_fallback_provider(
     web/routes/query.py resolves this from the fallback's own entry instead;
     this is the env-var-configured equivalent.
     """
-    base_url = os.getenv("NORA_LLM_FALLBACK_BASE_URL", "").strip()
-    model = os.getenv("NORA_LLM_FALLBACK_MODEL", "").strip()
+    base_url, model = fallback_env()
     if not (base_url and model):
         return None
     from core.src.llm.openai_provider import OpenAICompatibleProvider

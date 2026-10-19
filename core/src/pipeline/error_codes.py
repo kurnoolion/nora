@@ -58,6 +58,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("EXT-E001", "PDF extraction failed for {file}: {reason}", "Check if PDF is corrupted or password-protected"),
     ErrorDef("EXT-E002", "No text blocks extracted from {file}", "May be a scanned PDF — OCR not supported yet"),
     ErrorDef("EXT-E003", "Table extraction failed for {file}: {reason}", "Check pdfplumber compatibility"),
+    ErrorDef("EXT-E004", "Release {release} is not MMMYYYY", "Rename the release directory to a 3-letter month + 4-digit year"),
     ErrorDef("EXT-W001", "Low block count ({count}) for {file}", "Document may be mostly images"),
     ErrorDef("EXT-W002", "No tables found in {file}", "Expected for some documents"),
 
@@ -72,6 +73,13 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("PRS-E002", "Section numbering gaps detected in {file}", "May indicate extraction issues"),
     ErrorDef("PRS-W001", "Requirement count ({count}) unusually low for {file}", "Check profile heading rules"),
     ErrorDef("PRS-W002", "Max section depth ({depth}) exceeds 6 in {file}", "Deep nesting may indicate parsing issues"),
+    ErrorDef("PRS-W005", "parse_summary write failed: {reason}", "Parse output is intact; the corpus summary is missing for this run"),
+
+    # --- Parse review CLI (PRV) / resolve review CLI (RSV) ---
+    ErrorDef("PRV-E001", "Parse log, directory, or review file not found: {path}", "Run the parse stage first, or check the path"),
+    ErrorDef("PRV-W001", "Review file already exists, or no parse logs found: {path}", "Use --force to overwrite, or check the directory"),
+    ErrorDef("RSV-E001", "Xrefs file, directory, or review file not found: {path}", "Run the resolve stage first, or check the path"),
+    ErrorDef("RSV-W001", "Review file already exists, or no xrefs files found: {path}", "Use --force to overwrite, or check the directory"),
 
     # --- Resolver (RES) ---
     ErrorDef("RES-E001", "Cross-reference resolution failed for {file}: {reason}", "Check tree file integrity"),
@@ -114,7 +122,7 @@ _DEFS: list[ErrorDef] = [
     #     registered here so the code catalog stays the single human-readable index.
     ErrorDef("GEV-E001", "Golden sample invalid: {reason}", "Fix ground truth / fields in the Eval Studio"),
     ErrorDef("GEV-E002", "Serving stack unreachable or /sira-query failed: {reason}", "Check the stack URL and its health endpoint"),
-    ErrorDef("GEV-E003", "Stage-2 synthesis failed: chunk {chunk_id} not in NORA store", "Re-ingest the cell or fix the entry's qualifiers"),
+    ErrorDef("GEV-E003", "NORA store unusable for Stage 2: {reason}", "Missing or empty store: run the vectorstore stage. Missing chunk: re-ingest the cell or fix the entry's qualifiers"),
     ErrorDef("GEV-E004", "Judge call failed or verdict unparseable for {sample_id}: {reason}", "Check judge provider and prompt version"),
     ErrorDef("GEV-E005", "Relative release unresolvable for {sample_id}: {reason}", "Write or advance the golden set's release map, or fix the entry"),
     ErrorDef("GEV-E006", "Release map and stack disagree: {reason}", "Advance the release map after a flip, or pin --release-map-version"),
@@ -125,6 +133,7 @@ _DEFS: list[ErrorDef] = [
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),
+    ErrorDef("PIP-E003", "No profile bound for {cells}", "Add bindings to <env_dir>/profiles.json, or pass --profile"),
     ErrorDef("PIP-W001", "Stage {stage} skipped: {reason}", "May affect downstream stages"),
 
     # --- Environment (ENV) ---

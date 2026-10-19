@@ -1,7 +1,7 @@
 # vectorstore
 
 **Purpose**
-Unified vector-store construction and configuration. Defines two structural-typing Protocols (`EmbeddingProvider`, `VectorStoreProvider`) per D-007, wraps them with a chunk-builder + builder pipeline, and persists a single vector index spanning all MNOs × releases × doc_types. Metadata filters scope retrieval at query time — there is no per-MNO store. Serves FR-8 (unified vector store with metadata filtering), FR-35 (per-document definitions/acronyms expansion in chunk text before embedding [D-032]); covers NFR-2 (offline HF install via `hf_offline`), NFR-7 (configurable embedding model / backend / metric / chunk strategy via `VectorStoreConfig`).
+Unified vector-store construction and configuration. Defines two structural-typing Protocols (`EmbeddingProvider`, `VectorStoreProvider`) per D-007, wraps them with a chunk-builder + builder pipeline, and persists one vector index per `(mno, release)` cell (D-096). Within a store, metadata filters scope retrieval at query time. Serves FR-8 (unified vector store with metadata filtering), FR-35 (per-document definitions/acronyms expansion in chunk text before embedding [D-032]); covers NFR-2 (offline HF install via `hf_offline`), NFR-7 (configurable embedding model / backend / metric / chunk strategy via `VectorStoreConfig`).
 
 **Public surface**
 - Protocols:
@@ -11,25 +11,31 @@ Unified vector-store construction and configuration. Defines two structural-typi
 - Implementations:
   - `SentenceTransformerEmbedder` (embedding_st.py) — ST backend; respects offline HF cache
   - `OllamaEmbedder` (embedding_ollama.py) — Ollama `/api/embeddings` backend; loopback-aware (bypasses HTTP_PROXY for localhost); same offline-distribution path as the LLM provider (`ollama pull <model>`)
+  - `TEIEmbedder` (embedding_tei.py) — HuggingFace Text Embeddings Inference backend; native `/embed` route, client-side batching at `max_batch_size` (default 32), `truncate=true` on every request
   - `ChromaDBStore` (store_chroma.py) — persistent ChromaDB collection
+  - `ChunkEmbeddingError` (embedding_ollama.py) — raised by `OllamaEmbedder` when one chunk still fails after its shrink retries; `VectorStoreBuilder` drops that chunk, logs its id, and keeps the rest of the batch
 - Provider factory:
-  - `make_embedder(config)` (`__init__.py`) — dispatches by `config.embedding_provider` to `SentenceTransformerEmbedder` or `OllamaEmbedder`; reads provider-specific settings from `extra` (e.g., `ollama_url`, `ollama_timeout_s`). Accepts the aliases `huggingface`/`hf`/`st`/`sentence_transformers` for `sentence-transformers`. An empty provider raises `ValueError` — there is no built-in default, so nothing downloads from the HuggingFace hub unless a sentence-transformers provider is named (field-found: unconfigured paths silently fetched weights from the hub).
+  - `make_embedder(config)` (`__init__.py`) — dispatches by `config.embedding_provider` to `SentenceTransformerEmbedder`, `OllamaEmbedder` or `TEIEmbedder`; reads provider-specific settings from `extra` (e.g., `ollama_url`, `ollama_timeout_s`). The `tei` branch takes its base URL from `NORA_EMBEDDING_BASE_URL` (else `extra['tei_base_url']`) and raises `ValueError` when neither is set; the API key, timeout, batch size and input cap come from the env resolver or `extra`. Accepts the aliases `huggingface`/`hf`/`st`/`sentence_transformers` for `sentence-transformers`. An empty provider raises `ValueError` — there is no built-in default, so nothing downloads from the HuggingFace hub unless a sentence-transformers provider is named (field-found: unconfigured paths silently fetched weights from the hub).
 - Builder / chunking:
   - `VectorStoreBuilder` (builder.py) — orchestrates load → chunk → embed → store
   - `BuildStats` — per-build metrics: chunks_by_plan, embedding model/dim, backend, metric, collection
-  - `load_cell_stores(vectorstore_root) -> {(mno, release): ChromaDBStore}` (cell_loader.py, D-DRAFT-11) — enumerates the per-cell stores under `out/vectorstore/<mno>/<rel>/`; falls back to a single flat store keyed `FLAT_CELL` (`("","")`) when no per-cell dirs exist (legacy/transition). Keys are plain tuples (not `pipeline.cells.Cell`) to avoid a `vectorstore → pipeline` import cycle. Consumed by the query side (cell routing + fusion — D-DRAFT-11 slice 2).
+  - `load_cell_stores(vectorstore_root) -> {(mno, release): ChromaDBStore}` (cell_loader.py, D-096) — enumerates the per-cell stores under `out/vectorstore/<mno>/<rel>/`; falls back to a single flat store keyed `FLAT_CELL` (`("","")`) when no per-cell dirs exist (legacy/transition). Keys are plain tuples (not `pipeline.cells.Cell`) to avoid a `vectorstore → pipeline` import cycle. Consumed by the query side (cell routing + fusion, D-DRAFT-11).
+  - `embedder_config_path(vectorstore_root) -> Path | None` (cell_loader.py) — the `config.json` to read the shared embedder config from: the flat `<root>/config.json` if present, else the first per-cell `<mno>/<rel>/config.json`, else `None`. Without it a per-cell layout has no flat config, and readers would fall back to a default config.
   - `ChunkBuilder`, `Chunk` (chunk_builder.py) — builds contextualized chunks with configurable headers (MNO / Release / Plan / Path / Req ID) and optional inline tables/image context. **Document-rooted hierarchy paths** [D-046]: the `[Path: …]` line prepends `plan_name` (or `plan_id` fallback) as the root, producing `[Path: <doc> > <section> > <subsection>]` so the embedding captures the Document > Section > Subsection chain. Every chunk's metadata also carries `hierarchy_path: list[str]` with the same root-first list (read by retrieval-side grouping in [query](../query/MODULE.md), Stage 4.7 [D-049]); always populated, regardless of `include_hierarchy_path` text-flag. Glossary chunks (D-043) get `hierarchy_path: [doc_root]`. Accepts an optional per-document `definitions_map: dict[str, str]` and expands the first occurrence of each known term inline before chunk text is finalized [D-032]. Optionally appends `[Subsections: ...]` line to thin-bodied parents when `config.include_children_titles=True` (default off — see Key choices) [D-042]. Also emits one short `glossary:<plan_id>:<acronym>` chunk per `definitions_map` entry (`doc_type=glossary_entry`, `metadata.{acronym, expansion}`) so acronym queries can hit a high-precision answer surface [D-043].
 - Config: `VectorStoreConfig` (config.py) — every tuneable parameter (embedding provider/model/batch/device, store backend/metric/persist_dir, chunk contextualization toggles, defaults). Provider options: `'tei'` | `'ollama'` | `'sentence-transformers'`; `embedding_provider` and `embedding_model` default to empty (no built-in default — every build records both in the store's `config.json`, and readers without one fail as "no NORA index").
 - Offline support:
   - `hf_offline.enable_offline_if_cached(model_name)` — switches HF to offline mode when the cache already has the model (sentence-transformers path)
   - Ollama path is offline by construction — once `ollama pull` has run, no further network calls
-- CLI: `vectorstore_cli.main`
+- CLI: `vectorstore_cli.main`. `--provider` accepts `sentence-transformers` / `huggingface` / `ollama` / `tei`.
+- Debug CLIs:
+  - `embed_debug.main` — runs the embedder standalone in one of four modes: `--check` (connection + model + short embed), `--text` (embed one string), `--length-sweep` (find the model's max input length), `--chunks <ENV_DIR>` (rebuild the pipeline's chunks and embed them in order, stopping at the first failure). `--embedding-provider` accepts `sentence-transformers` / `huggingface` / `ollama` / `tei`.
+  - `probe_tei.main` — stdlib-only probe of a TEI deployment's wire shapes (`--embed-base`, `--rerank-base`, `--embed-model`): OpenAI-compatible `/v1/embeddings`, native `/embed`, and `/rerank`. Prints one compact line per probe.
 
 **Invariants**
 - **Oversize-chunk audit**: before embedding, `VectorStoreBuilder.build` scans chunks and logs a WARNING **per chunk_id** (`req:<id>` / `glossary:…`) for any whose text exceeds the embedder's input limit (`embedder.max_input_chars` / `_max_input_chars`, else 8000) — so the architect can see *which requirement* is being truncated (the embedder itself only knows batch indices). Full text is still stored; only the embedding vector is computed from the truncated prefix.
-- **Per-cell stores** (D-DRAFT-11 slice 1, strand `multi-mno-nora`): the pipeline `vectorstore` stage builds one ChromaDB **per `(mno, release)` cell** at `out/vectorstore/<mno>/<rel>/`, each from that cell's trees only — so BM25/retrieval statistics stay isolated per cell. The (global) taxonomy supplies feature_ids across cells. `load_cell_stores` enumerates them for the query side. The builder itself is unchanged (still one store per `VectorStoreBuilder`); the per-cell loop lives in `run_vectorstore`. Query-side cell routing + fusion (loading the per-cell set, retrieve→merge→rerank) is the D-DRAFT-11 slice-2 follow-on — until it lands, the single-store query path + `FLAT_CELL` fallback keep legacy envs working.
-- The two Protocols are the only seams. No direct `chromadb` or `sentence_transformers` imports live outside this module. Switching providers means adding a new file, not touching callers.
-- One unified collection per persist directory — metadata (`mno`, `release`, `plan_id`, `doc_type`) carries the scope; `where` filters enforce it at query time. Implements D-002.
+- **Per-cell stores** (D-096): the pipeline `vectorstore` stage builds one ChromaDB **per `(mno, release)` cell** at `out/vectorstore/<mno>/<rel>/`, each from that cell's trees only — so BM25/retrieval statistics stay isolated per cell. The (global) taxonomy supplies feature_ids across cells. `load_cell_stores` enumerates them for the query side. The builder itself is unchanged (still one store per `VectorStoreBuilder`); the per-cell loop lives in `run_vectorstore`. Query-side cell routing + fusion (retrieve per cell, merge, rerank once) lives in [query](../query/MODULE.md) (D-DRAFT-11); the `FLAT_CELL` fallback keeps legacy single-store envs working.
+- The two Protocols are the only seams. No `chromadb` import, and no embedding use of `sentence_transformers`, lives outside this module. The one allowed exception is reranking: query's `CrossEncoderReranker` imports `sentence_transformers.CrossEncoder`. Switching providers means adding a new file, not touching callers.
+- One collection per persist directory, and one persist directory per cell (D-096). Chunk metadata (`mno`, `release`, `plan_id`, `doc_type`) still carries the scope, and `where` filters enforce it at query time — the metadata half of D-002 holds within each cell store.
 - Requirement-chunk metadata also carries `is_requirement: bool` (mno-c-ingestion — mirrors the parser's requirement-vs-section discriminator; defaults to `bool(req_id)` for trees without the flag, so legacy corpora are unchanged). Lets query-side consumers distinguish actual requirements from structural section nodes that carry a req_id; query-side gating on it is deferred until the NORA-native retrieval lane is exercised.
 - `VectorStoreConfig` is the single source of truth for a build. `BuildStats` captures the actual values used — pair them to reproduce any retrieval result.
 - Embeddings are L2-normalized by default (`normalize_embeddings=True`) because the default `distance_metric="cosine"` requires it; turning off one without the other is a configuration bug.
@@ -54,7 +60,7 @@ Unified vector-store construction and configuration. Defines two structural-typi
 
 **Non-goals**
 - No retrieval logic beyond `query()` — ranking, reranking, hybrid merging, and MNO/release scoping live in [query](../query/MODULE.md).
-- No per-MNO or per-release stores — multi-MNO separation is a metadata filter, never a directory split.
+- No per-MNO-only or per-release-only stores. The store unit is the `(mno, release)` cell (D-096), which partitions the original single unified store of D-002; a cell store holds that cell's trees only. Cross-cell queries merge results on the query side, not in a combined store.
 - No graph semantics — this module stores text+vector+metadata tuples; cross-document structure is [graph](../graph/MODULE.md)'s job.
 - No LLM calls — embedding models don't count; the `LLMProvider` Protocol is separate and lives in [llm](../llm/MODULE.md).
 
@@ -218,7 +224,7 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[models](../models/MODULE.md) (source_format / metadata shapes), [parser](../parser/MODULE.md) (consumes `RequirementTree` + `Requirement`).
+[parser](../parser/MODULE.md) (consumes `RequirementTree` + `Requirement`; `build_context_string` / `render_table_markdown`), [env](../env/MODULE.md) (embedding base-URL / API-key resolvers for the `tei` branch of `make_embedder`; embedding provider/model resolvers in `vectorstore_cli`).
 
 **Depended on by**
-[query](../query/MODULE.md), [pipeline](../pipeline/MODULE.md).
+[query](../query/MODULE.md), [pipeline](../pipeline/MODULE.md), [eval](../eval/MODULE.md), [web](../web/MODULE.md).

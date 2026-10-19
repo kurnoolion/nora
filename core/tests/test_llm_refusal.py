@@ -194,3 +194,15 @@ def test_env_fallback_reasoning_defaults_from_env(monkeypatch):
     assert fb._reasoning_control == "chat_template_kwargs"
     # An explicit argument still wins.
     assert build_fallback_provider(reasoning="high")._reasoning == "high"
+
+
+def test_fallback_env_is_the_single_reader(monkeypatch):
+    from core.src.llm import refusal
+
+    monkeypatch.setenv("NORA_LLM_FALLBACK_BASE_URL", " fallback-base ")
+    monkeypatch.setenv("NORA_LLM_FALLBACK_MODEL", "m")
+    assert refusal.fallback_env() == ("fallback-base", "m")
+    src = open(refusal.__file__).read()
+    reads = src.count('os.getenv("NORA_LLM_FALLBACK_BASE_URL"') + src.count(
+        'os.getenv("NORA_LLM_FALLBACK_MODEL"')
+    assert reads == 2
