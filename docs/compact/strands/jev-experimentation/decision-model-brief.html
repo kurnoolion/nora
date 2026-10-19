@@ -335,7 +335,7 @@
     <p>The rules are not naive. Precedence is deliberate: <code>FACT</code> is tested before definitional patterns so “what is the maximum X” isn’t mis-routed; <code>STANDARDS_COMPARISON</code> precedes <code>RELEASE_DIFF</code> because “differ” overlaps “diff”. They work because engineers ask in formulaic shapes. They are brittle to any phrasing nobody anticipated, and they do not scale as classes and phrasings multiply.</p>
 
     <h3>This one label configures the entire pipeline</h3>
-    <p><code>intent.query_type</code> is read at <strong>twelve</strong> sites in the query pipeline. It selects:</p>
+    <p><code>intent.query_type</code> is read at <strong>thirteen</strong> sites in the query pipeline. It selects:</p>
     <div class="fan">
       <div><b>top_k</b><span>how many chunks retrieved</span></div>
       <div><b>bm25_weight</b><span>BM25 vs vector balance</span></div>

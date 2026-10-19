@@ -218,22 +218,22 @@ service — one stage, two names).
 downstream. Current behaviour is preserved.
 **Why:** Not a preference — the code forecloses the alternative, and this was
 verified in **both** lanes rather than inferred from one. In the `nora` lane,
-`core/src/query/pipeline.py:500` gates expansion on
+`core/src/query/pipeline.py:480` gates expansion on
 `_TYPE_REWRITE_ENABLED.get(intent.query_type, False)`, with `analyze()` at
-`:420` and `rewrite()` at `:501`. In the live `sira` lane, `analyze()` is step
-1 of `_multi_cell_query` (`sandbox/sira_query/service.py:1191`) and expansion
+`:401` and `rewrite()` at `:501`. In the live `sira` lane, `analyze()` is step
+1 of `_multi_cell_query` (`sandbox/sira_query/service.py:1199`) and expansion
 happens later inside retrieval (`filter_query_expansion` /
-`search_with_expansion`, `:1010`-`:1029`). Expansion is a *consequence* of
+`search_with_expansion`, `:1018`-`:1036`). Expansion is a *consequence* of
 classification, so placing the decision model after it would leave nothing to
 decide whether to expand.
 **Consequences:** The decision model sits at the earliest point of the
 interactive path, so its latency is in series with everything downstream
 (D-DRAFT-13). More importantly, **classification is strongly coupled to the
-whole pipeline**: `intent.query_type` is read at 12 sites in `pipeline.py`,
-driving retrieved-chunk count (`resolve_top_k`, `:528`), BM25 weighting
-(`resolve_bm25_weight`, `:539`), rerank enable (`:540`), expansion enable
-(`:499`, `:551`), distance cutoff (`:552`, `:602`), grouping (`:553`, `:640`)
-and the synthesis path (`:450`, `:701`); and in the sira lane
+whole pipeline**: `intent.query_type` is read at 13 sites in `pipeline.py`,
+driving retrieved-chunk count (`resolve_top_k`, `:509`), BM25 weighting
+(`resolve_bm25_weight`, `:520`), rerank enable (`:521`), expansion enable
+(`:499`, `:532`), distance cutoff (`:533`, `:583`), grouping (`:534`, `:621`)
+and the synthesis path (`:431`, `:682`); and in the sira lane
 `resolve_cells(intent, ...)` decides which corpus cells are searched at all.
 A misclassification therefore propagates into every downstream knob, which is
 why the measurement requires a **divergence-weighted confusion matrix** over
@@ -329,12 +329,12 @@ outputs and the decision interface.
 
 **Date:** 2026-10-13
 **Context:** `QueryType` carries ten members. `LLMQueryAnalyzer`'s prompt
-(`analyzer.py:378`) enumerates eight and omits `summarize` and `fact`, so
+(`analyzer.py:391`) enumerates eight and omits `summarize` and `fact`, so
 neither class can be emitted on that path. `MockQueryAnalyzer` emits both
-(`:269`, `:283`). The per-type maps make this consequential:
-`_TYPE_MAX_DISTANCE` (`:104`) has exactly two keys, `FACT: 0.4` and
-`SUMMARIZE: 0.7`; `_TYPE_DISABLE_GROUPING` (`:199`) has exactly one,
-`SUMMARIZE`. `_TYPE_REWRITE_ENABLED` (`:151`) loses only its `SUMMARIZE` entry.
+(`:279`, `:293`). The per-type maps make this consequential:
+`_TYPE_MAX_DISTANCE` (`:105`) has exactly two keys, `FACT: 0.4` and
+`SUMMARIZE: 0.7`; `_TYPE_DISABLE_GROUPING` (`:180`) has exactly one,
+`SUMMARIZE`. `_TYPE_REWRITE_ENABLED` (`:132`) loses only its `SUMMARIZE` entry.
 **Decision:** This strand fixes the defect, shipped in the same change that
 introduces the analyzer knob (D-DRAFT-14). Not routed elsewhere for
 adjudication.
@@ -343,8 +343,8 @@ characterization work, and it is a prompt-string edit plus a regression test —
 routing it elsewhere would stall phase 1 behind another queue.
 **Scope correction, important:** the defect is **latent, not live**.
 `LLMQueryAnalyzer` is **never constructed in any live path** —
-`core/src/query/pipeline.py:290` is `self._analyzer = analyzer or
-MockQueryAnalyzer()`, and `sandbox/sira_query/service.py:1191` is
+`core/src/query/pipeline.py:271` is `self._analyzer = analyzer or
+MockQueryAnalyzer()`, and `sandbox/sira_query/service.py:1199` is
 `make_query_analyzer(None)` with a comment recording that wiring an
 `LLMProvider` for it is a deliberate follow-up. Outside tests nothing
 instantiates it. **Query classification in the serving path is 100% rule-based
@@ -404,7 +404,7 @@ is an estimate.
 measured figure materially exceeds expectation, Kev-0.8B is the fallback before
 abandoning the approach. Noted for a successor strand, not scheduled: the
 **expansion stage is itself an LLM call** whose sampling makes phrases vary
-run-to-run (`sandbox/sira_query/service.py:213`) — the same nondeterminism that
+run-to-run (`sandbox/sira_query/service.py:221`) — the same nondeterminism that
 forced expansion OFF for `corp-db-layer`'s identity gate. A decision model
 taking over an "expand or not" boolean would be a net latency *gain*, a token
 saving, and a determinism win simultaneously — the first identified case where
@@ -430,13 +430,13 @@ three counts: it resurrects written code that currently does nothing; it
 restores a measurement arm otherwise dismissed as synthetic; and it permits a
 comparison that **has never been run at this seam** — no decision record exists
 for why classification is rule-based, and the only recorded reason
-(`sandbox/sira_query/service.py:1185`) calls LLM wiring a *follow-up*, i.e. a
+(`sandbox/sira_query/service.py:1193`) calls LLM wiring a *follow-up*, i.e. a
 plumbing gap rather than a latency or accuracy verdict.
 **Consequences:** The knob is what makes `LLMQueryAnalyzer` reachable, so
 D-DRAFT-11's fix becomes a hard prerequisite shipped in the same change. Cost
 is a few lines in the factory for the `nora` lane plus a thin adapter in the
 `sira` lane, where the service holds an httpx LLM rather than an `LLMProvider`
-object — small, not free. `make_query_analyzer()` (`analyzer.py:415`) currently
+object — small, not free. `make_query_analyzer()` (`analyzer.py:425`) currently
 takes a single `llm_provider=None` argument and branches two ways, so this is a
 signature extension; its docstring records the governing posture from
 `multi-mno-sira` D-DRAFT-9 ("the same configured-LLM-or-mock posture as the

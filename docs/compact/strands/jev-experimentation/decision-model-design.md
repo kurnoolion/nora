@@ -1,6 +1,8 @@
 # Decision-model design — typed classification at the query-analyzer seam
 
-Strand: `jev-experimentation` · Draft v1.0, 2026-10-14 · Status: draft, for review
+Strand: `jev-experimentation` · Draft v1.1, 2026-10-19 · Status: draft, for review
+Line references are as of `fcc9fce` (origin/main, 2026-10-18). Identifiers are
+stable; line numbers are not — re-anchor after any merge.
 (v0.1: first design. v0.2: §2.1 blast radius verified against the per-type
 maps — two features are entirely inert, not merely degraded; `_FEATURE_KEYWORDS`
 counted at 16; factory signature read and the multi-mno-sira D-DRAFT-9 posture
@@ -87,14 +89,14 @@ strand, provided it is measured and recorded.
                                      │
         ┌────────────────────────────┴───────────────────────────┐
         │  every downstream knob reads intent.query_type:         │
-        │  rewrite gate (pipeline.py:500) · top_k · BM25 weight   │
+        │  rewrite gate (pipeline.py:480) · top_k · BM25 weight   │
         │  · rerank enable · distance threshold · grouping        │
         │  · synthesis system prompt                              │
         └─────────────────────────────────────────────────────────┘
 ```
 
 Classification sits at the head of the interactive path and **must** stay
-upstream of query expansion: `pipeline.py:500` gates expansion on
+upstream of query expansion: `pipeline.py:480` gates expansion on
 `_TYPE_REWRITE_ENABLED.get(intent.query_type, False)`, so expansion is a
 consequence of classification, not a peer stage (D-DRAFT-8). This answers
 directive phase 3's before-or-after question from the code rather than from
@@ -139,7 +141,7 @@ has one variable.
 
 `QueryType` has ten members. `LLMQueryAnalyzer`'s prompt enumerates eight and
 omits `SUMMARIZE` and `FACT`, so under the LLM analyzer those two classes are
-unreachable. `MockQueryAnalyzer` emits both (`analyzer.py:269`, `:283`), so the
+unreachable. `MockQueryAnalyzer` emits both (`analyzer.py:279`, `:293`), so the
 two analyzers disagree on the available class set.
 
 Blast radius, verified against the per-type maps in `pipeline.py` rather than
@@ -147,11 +149,11 @@ assumed:
 
 | Map | Its key set | Effect under `LLMQueryAnalyzer` |
 |---|---|---|
-| `_TYPE_MAX_DISTANCE` (`:104`) | `FACT: 0.4`, `SUMMARIZE: 0.7` — **only these two** | **entirely inert** |
-| `_TYPE_DISABLE_GROUPING` (`:199`) | `SUMMARIZE` — **only this one** | **entirely inert** |
-| `_TYPE_REWRITE_ENABLED` (`:151`) | 7 types incl. `SUMMARIZE` | loses the `SUMMARIZE` entry; other 6 unaffected |
-| `_TYPE_RERANK_ENABLED` (`:182`) | empty by design (global default) | unaffected |
-| `_TYPE_BM25_WEIGHT` (`:129`) | shipped per-type map | unaffected |
+| `_TYPE_MAX_DISTANCE` (`:105`) | `FACT: 0.4`, `SUMMARIZE: 0.7` — **only these two** | **entirely inert** |
+| `_TYPE_DISABLE_GROUPING` (`:180`) | `SUMMARIZE` — **only this one** | **entirely inert** |
+| `_TYPE_REWRITE_ENABLED` (`:132`) | 7 types incl. `SUMMARIZE` | loses the `SUMMARIZE` entry; other 6 unaffected |
+| `_TYPE_RERANK_ENABLED` (`:163`) | empty by design (global default) | unaffected |
+| `_TYPE_BM25_WEIGHT` (`:121`) | shipped per-type map | unaffected |
 
 So two per-type features — per-type distance thresholds and grouping-disable —
 never fire at all on the LLM-analyzer path, because their only keys are exactly
@@ -163,8 +165,8 @@ mode cannot recur on the decision path.
 
 **CORRECTED v0.8 — the defect is latent, not live (D-DRAFT-15).**
 `LLMQueryAnalyzer` is never constructed in any live path:
-`core/src/query/pipeline.py:290` is `self._analyzer = analyzer or
-MockQueryAnalyzer()`, and `sandbox/sira_query/service.py:1191` is
+`core/src/query/pipeline.py:271` is `self._analyzer = analyzer or
+MockQueryAnalyzer()`, and `sandbox/sira_query/service.py:1199` is
 `make_query_analyzer(None)` with a comment recording that wiring an
 `LLMProvider` for it is a deliberate follow-up. Classification in the serving
 path is **100% rule-based today**, `MockQueryAnalyzer` emits both classes, and
@@ -240,11 +242,11 @@ rather than a hypothetical. And it finally permits the comparison that
 D-DRAFT-17 shows **has never been run at this seam**: rules vs LLM vs decision
 model, same input, same harness. Cost is a few lines in the factory for the
 `nora` lane, plus a thin adapter in the `sira` lane, where
-`sandbox/sira_query/service.py:1185` records that wrapping the service's httpx
+`sandbox/sira_query/service.py:1193` records that wrapping the service's httpx
 LLM in an `LLMProvider` is an outstanding follow-up. Small, not free.
 
 One implementation detail, read rather than assumed: `make_query_analyzer()`
-(`analyzer.py:415`) today takes a single `llm_provider=None` argument and
+(`analyzer.py:425`) today takes a single `llm_provider=None` argument and
 branches two ways — provider supplied → `LLMQueryAnalyzer`, `None` →
 `MockQueryAnalyzer`. Adding the decision path therefore needs a signature
 extension (a decision-provider argument, or a config read inside the factory),

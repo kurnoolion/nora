@@ -966,3 +966,52 @@ which is the gap a trained classifier would target.
   in-strand convention — the design doc is the working artefact, the brief is
   the shareable summary of it, and both must be updated together when the
   design changes.
+
+## 2026-10-19 — Synced with main; references re-anchored
+
+### Done this session
+
+- **Merged `origin/main` (`fcc9fce`, 2026-10-18)** into the strand branch. No
+  conflicts — the branch is docs-only and touches no file main moved. Local
+  `main` fast-forwarded too. Main brought the `/drift-check dev-full` six code
+  fixes, `/drift-check design` with canonical **D-254**, regenerated
+  `MODULE.md` + `MAP.md`, and the `NORA_LLM_CONFIG` / `llm.json` doc and config
+  corrections.
+- **Every design claim re-verified against `origin/main` — all hold.**
+  `QueryType` still carries the same ten members; `_TYPE_MAX_DISTANCE` is still
+  exactly `{FACT: 0.4, SUMMARIZE: 0.7}`; `_TYPE_DISABLE_GROUPING` and
+  `_TYPE_REWRITE_ENABLED` are intact with expansion still gated on query type;
+  `pipeline.py` still defaults to `MockQueryAnalyzer`; the sira service still
+  calls `make_query_analyzer(None)` with its "wiring an `LLMProvider` is a
+  follow-up" comment; `make_query_analyzer` is still the same two-branch
+  factory. Classification remains 100% rule-based.
+- **All line references re-anchored** across the design doc, the drafts and
+  the brief — every seam file moved on main, by up to ±20 lines. The design
+  header now stamps the as-of commit (`fcc9fce`) and states plainly that
+  identifiers are stable while line numbers are not. Design to v1.1.
+- **Coupling count corrected: 13 read sites, not 12.** `intent.query_type` is
+  read at 13 places in `pipeline.py` (431, 480, 509, 520, 521, 527, 532, 533,
+  534, 583, 621, 639, 682). The original "12" was an undercount on my part,
+  not a change introduced by the merge — it was 13 before as well. Fixed in
+  the design, the drafts and the brief.
+- **New analyzer public surface noted:** `query/MODULE.md` now lists
+  `mno_surface_forms(mno)` — every written form of an MNO the analyzer
+  recognises, longest first, read by the golden eval's text check to ignore
+  operator-name-only edits. Relevant because it is new public surface in the
+  module this strand will modify.
+
+### Flags
+
+- **The `SUMMARIZE`/`FACT` prompt defect survived a `/drift-check dev-full`.**
+  It is still present at `analyzer.py:391` — the prompt still enumerates eight
+  of ten `query_type` options. The audit made six code fixes and did not
+  surface it, because `drift-check` compares MODULE.md *contracts* against
+  code, not prompt *contents* against the enum they must agree with. **This is
+  a blind spot in the audit worth raising with the architect independently of
+  this strand**: any prompt that hard-codes a value set which also exists as an
+  enum can drift silently and no current check will catch it. Candidate
+  remedy, cheap: a test asserting the prompt's option list equals
+  `[t.value for t in QueryType]`. That test is the real fix; the one-line
+  prompt edit is only today's symptom.
+- Line references will rot again on the next merge. The as-of stamp in the
+  design header is the mitigation, not a cure — re-anchor after each sync.
