@@ -112,6 +112,12 @@ that roster means commit → rebuild `nora-web` → `up -d --force-recreate`,
 never editing a file on the host; the file-shaped `/data/web-state` recipe
 above remains the path for deployments without the internal repo.
 
+`NORA_LLM_CONFIG` is a web setting only. The `nora-pipeline` image does not set
+it, so pipeline jobs read the repo's `config/llm.json`. The two files are
+separate: a value set in the web roster does not reach the pipeline, and a
+value set in `config/llm.json` does not reach the web Ask page (unless the
+roster path is missing or unreadable, which warns and falls back to it).
+
 Each roster entry's `model` is that provider's default. The Ask page also offers
 every model the provider's `GET /v1/models` lists, cached for
 `model_discovery_ttl_s` seconds (top-level key, default 21600). A model added
