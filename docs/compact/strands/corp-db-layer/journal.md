@@ -271,3 +271,42 @@
 ### Next
 - Decide whether to empty config/llm.json's stale embedding entry.
 - Check whether SIRA cell files change on load (same fix as chroma if so).
+
+## 2026-10-18 — serve-path batch shipped and verified; embedding defaults gone from both llm.json files
+
+### Done this session
+- Shipped the held batch (`9589a14`) and verified it on all three stacks:
+  the gate refuses every section but `merged` for gated requests; a NORA
+  lane with no index fails at once with "No NORA index"; compose alone
+  supplies HOME and HF_HUB_OFFLINE; every web and pipeline env file names
+  the embedding provider; stack-A's two labels hold their own vectorstore
+  copy (1 link per file).
+- SIRA cell files do not change on load, so promote keeps hardlinking them.
+- `0a3115e`: config/llm.json no longer sets an embedding provider or model.
+  The deployed web roster (the internal-only llm.json the web image reads)
+  had the same stale fields; they are emptied there too. Every container
+  now resolves the embedder from its env file.
+- Found: on the roster path the refusal reroute is switched by
+  NORA_LLM_REFUSAL_MARKERS alone; removing NORA_LLM_FALLBACK_* does not
+  turn it off. Web env template says so (`0a3115e`); the markers were
+  removed from the stacks that still set them.
+- `29364d6`: docker README says NORA_LLM_CONFIG is a web-only setting and
+  the pipeline image reads config/llm.json.
+- After the same-day drift checks (`0b030b5`, `2f166d3`), the stacks were
+  rebuilt at that code: the pipeline context resolves the embedder from
+  env on both pipeline env files; all bound profiles set
+  toc_page_threshold, so the default change reaches none of them.
+- Stack-A's sira-query was two months behind; rebuilt to current code.
+  Health-check keys gained the flat engine/index-mode fields; no retrieval
+  value changed. Stack-A's sira-query stays without a refusal fallback
+  (decided).
+
+### In progress
+- None.
+
+### Next
+- Sync messages name every image to rebuild, including sira-query, or
+  say it is left alone.
+
+### Flags
+- 3 sira verify-run tests fail on a clean main (pre-existing, unrelated).

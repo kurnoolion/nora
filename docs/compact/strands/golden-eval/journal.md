@@ -411,3 +411,14 @@
 
 ### Flags
 - 3 sira verify-run tests fail on a clean main (pre-existing, unrelated).
+
+## 2026-10-18 — acceptance now points at the golden eval
+
+### Done this session
+- The design drift check (`2f166d3`) rebound NFR-15/16 to FR-38: the
+  golden eval is the acceptance measure, with Stage-1 recall and Stage-2
+  judge targets set per release. FR-38's release handling (standard vs
+  version samples, release map) waits for this strand to land.
+
+### Next
+- Unchanged from the previous entry.
