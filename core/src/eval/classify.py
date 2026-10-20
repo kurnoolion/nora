@@ -23,6 +23,7 @@ from core.src.env.config import (
     DEFAULT_BM25_WEIGHT_BY_TYPE,
     is_broad_query_type,
 )
+from core.src.query.analyzer import _MNO_ALIASES
 from core.src.query.pipeline import (
     _TYPE_DISABLE_GROUPING,
     _TYPE_MAX_DISTANCE,
@@ -31,6 +32,32 @@ from core.src.query.pipeline import (
 from core.src.query.schema import DocTypeScope, QueryType
 
 DEFAULT_SET_PATH = Path(__file__).resolve().parent / "classify_set.json"
+
+MNO_PLACEHOLDERS: tuple[str, ...] = ("{MNO_A}", "{MNO_B}", "{MNO_C}")
+"""Operator-code placeholders in a committed set's query text.
+
+The set carries no real operator codes. They are filled in at load time
+from the analyzer's own alias table, so a query still names an operator
+the rule-based analyzer recognises — which is what makes a
+cross-operator sample exercise the cross-operator path.
+"""
+
+
+def _mno_codes() -> list[str]:
+    """Distinct operator codes in alias-table first-appearance order.
+
+    The order pairs ``{MNO_A}`` with the first code, ``{MNO_B}`` with the
+    second, and so on. It is stable because dict order is insertion
+    order; reordering the alias table re-pairs the placeholders, which
+    changes the query text but not any label.
+    """
+    return list(dict.fromkeys(_MNO_ALIASES.values()))
+
+
+def _fill_placeholders(query: str) -> str:
+    for placeholder, code in zip(MNO_PLACEHOLDERS, _mno_codes()):
+        query = query.replace(placeholder, code)
+    return query
 
 
 @dataclass(frozen=True)
@@ -50,7 +77,8 @@ def load_classify_set(path: Path | None = None) -> list[ClassifySample]:
         path: Set file. ``None`` loads the committed dev set.
 
     Returns:
-        Samples in file order.
+        Samples in file order, with operator-code placeholders
+        (``MNO_PLACEHOLDERS``) filled in.
 
     Raises:
         ValueError: A label is not a member of its enum.
@@ -59,7 +87,7 @@ def load_classify_set(path: Path | None = None) -> list[ClassifySample]:
     return [
         ClassifySample(
             sample_id=s["sample_id"],
-            query=s["query"],
+            query=_fill_placeholders(s["query"]),
             query_type=QueryType(s["query_type"]),
             doc_type_scope=DocTypeScope(s["doc_type_scope"]),
         )

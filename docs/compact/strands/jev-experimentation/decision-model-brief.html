@@ -1,5 +1,4 @@
 <title>NORA Decision Models</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
 <style>
   :root{
     --ground:#F5F8F8;
@@ -20,9 +19,9 @@
     --stop:#9B3B32;
     --stop-soft:#F8E8E6;
 
-    --f-display:"IBM Plex Serif",Georgia,"Times New Roman",serif;
-    --f-body:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
-    --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --f-display:Georgia,"Iowan Old Style","Times New Roman",serif;
+    --f-body:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+    --f-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   @media (prefers-color-scheme:dark){
     :root:not([data-theme="light"]){
@@ -201,12 +200,12 @@
     padding:20px 18px;margin:0 0 18px;
   }
   .diag svg{display:block;width:100%;height:auto;max-width:100%}
-  .d-label{fill:var(--ink-2);font-family:"IBM Plex Mono",monospace;font-size:11px}
-  .d-sub{fill:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:9.5px}
+  .d-label{fill:var(--ink-2);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
+  .d-sub{fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:9.5px}
   .d-box-gen{fill:var(--surface-2);stroke:var(--line-strong)}
   .d-box-dec{fill:var(--accent-soft);stroke:var(--accent)}
   .d-arrow{stroke:var(--line-strong);fill:none}
-  .d-tick{fill:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:9px}
+  .d-tick{fill:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:9px}
 
   /* ---- fan-out ---- */
   .fan{
@@ -265,11 +264,11 @@
     <h2>The short version</h2>
     <p>A decision model answers a typed question — a choice, a yes/no, or a score — in <strong>one forward pass, generating no text</strong>. That is the whole trick, and it is why the category is fast.</p>
     <p>TypeSafe’s <strong>Jev</strong> is the product that named the category. We cannot use it: closed weights, hosted only, no on-premise option, and our build and serve environment permits no external calls. So the question becomes whether an <em>open</em> decision model, running in-corp, should take over NORA’s query classification.</p>
-    <p>It can. <strong>Kev-4B runs today on the A4000 we already have</strong>, Apache-2.0 throughout, no new serving infrastructure, and it works <strong>zero-shot</strong> — the ten categories are passed in at query time, not trained in. No telecom-specific training is required, and none is proposed.</p>
+    <p>It can. <strong>Kev-4B runs today on the on-prem GPU host we already have</strong>, Apache-2.0 throughout, no new serving infrastructure, and it works <strong>zero-shot</strong> — the ten categories are passed in at query time, not trained in. No telecom-specific training is required, and none is proposed.</p>
     <dl class="vgrid">
       <div class="vcell"><dt>Hosted Jev</dt><dd><span class="pill p-stop">Blocked</span><small>No egress permitted</small></dd></div>
       <div class="vcell"><dt>Candidate</dt><dd>Kev-4B<small>Apache-2.0, fits 16 GB</small></dd></div>
-      <div class="vcell"><dt>New hardware</dt><dd>None<small>A4000, bf16</small></dd></div>
+      <div class="vcell"><dt>New hardware</dt><dd>None<small>existing on-prem GPU host, bf16</small></dd></div>
       <div class="vcell"><dt>Token saving</dt><dd>Zero<small>This seam uses no LLM</small></dd></div>
     </dl>
   </div>
@@ -357,10 +356,10 @@
   <section>
     <div class="eyebrow">Options</div>
     <h2>What we can actually run</h2>
-    <p><strong>AutoTrust AI</strong> (Singapore) publishes the reference open family, all Apache 2.0. None of it fits our 16 GB A4000 — it is parked on memory alone, never on licence.</p>
+    <p><strong>AutoTrust AI</strong> (Singapore) publishes the reference open family, all Apache 2.0. None of it fits our 16 GB on-prem GPU host — it is parked on memory alone, never on licence.</p>
     <div class="tw">
       <table>
-        <caption>Open decision models, against a 16 GB A4000</caption>
+        <caption>Open decision models, against a 16 GB on-prem GPU host</caption>
         <thead><tr><th>Model</th><th>Base</th><th>VRAM</th><th>Fits</th><th>Licence</th></tr></thead>
         <tbody>
           <tr><td><strong>Kev-4B</strong></td><td>Qwen3.5-4B</td><td class="num">~8 GB at bf16</td><td class="yes">Yes</td><td>Apache-2.0</td></tr>
@@ -457,7 +456,7 @@
       <li><strong>Why is classification rule-based today?</strong> There is no decision record. If an LLM was tried and rejected on latency, this revival is directly well-motivated. If it was never wired for plumbing reasons, then no model has ever been measured at this seam and our baseline would be the first such comparison ever run. Either answer is useful.</li>
       <li><strong>Module placement</strong> — a new <code>core/src/decision/</code> package, or extend <code>core/src/llm/</code>?</li>
       <li><strong>What result would justify making this the default?</strong> Worth agreeing now, so it isn’t relitigated later against a moving bar.</li>
-      <li><strong>Infrastructure detail</strong> — the production image name for a later default-on rebuild, and the exact DGX Spark specification, which would reopen the larger models.</li>
+      <li><strong>Infrastructure detail</strong> — the production image name for a later default-on rebuild, and the exact specification of the synthesis backup host, which would reopen the larger models.</li>
     </ol>
   </section>
 

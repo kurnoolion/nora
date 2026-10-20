@@ -3,7 +3,9 @@
 Strand `jev-experimentation` · Recorded 2026-10-20 · Code at `f877e93`,
 fourth arm added 2026-10-20 (see the amendment at the foot of this file)
 
-Supersedes `phase-1-baselines.md`, whose numbers predate the two defect fixes.
+Supersedes the phase-1 baselines, whose numbers predate the two defect fixes;
+what they recorded is kept in "Superseded phase-1 baselines" at the foot of
+this file.
 
 Set `classify-dev-v1` — 50 synthetic samples, 5 per `QueryType`, labels
 authored from human-read intent. Knob profile digest `29615196d16c`. Counts
@@ -186,7 +188,7 @@ python -m core.src.eval.classify_cli --arm llm \
 
 python -m core.src.eval.classify_cli --arm decision \
     --decision-provider systemone \
-    --decision-base-url http://127.0.0.1:8008 \
+    --decision-base-url http://127.0.0.1:PORT \
     --decision-model kev-latest --repeat 3
 ```
 
@@ -305,9 +307,52 @@ spelled identically as the class, the `--arm` value and the
 ```bash
 python -m core.src.eval.classify_cli --arm confidence-routed \
     --decision-provider systemone \
-    --decision-base-url http://127.0.0.1:8008 \
+    --decision-base-url http://127.0.0.1:PORT \
     --decision-model kev-latest \
     --confidence-floor 0.5 --repeat 3 --out <path>
 ```
 
 Floor 0.0 reproduces `--arm decision`; floor 1.0 reproduces `--arm rules`.
+
+---
+
+# Superseded phase-1 baselines
+
+Recorded 2026-10-20 at `a9ed255`, same set and knob profile, **before** the
+two defect fixes (D-DRAFT-24). Kept as the phase-1 gate record — what was
+measured, when, against which code. Do not quote these as today's baseline:
+the alias double-count fix moved the `rules` arm to 0.760 / 0.112 (D-DRAFT-28).
+
+| Arm | Model | Accuracy | Weighted cost | Scope acc. | Deterministic | p50 | p95 |
+|---|---|---|---|---|---|---|---|
+| `rules` | `MockQueryAnalyzer` | 0.720 | 0.136 | 1.000 | yes (n=3) | <0.1 ms | <0.1 ms |
+| `llm` | `qwen3:8b` via Ollama | 0.700 | 0.120 | 0.960 | vacuous (n=1) | 15 035 ms | 22 817 ms |
+
+Per-class recall, `rules` / `llm`: `single_doc` 0.40 / 0.40, `cross_doc`
+0.60 / 0.20, `cross_mno_comparison` 0.80 / 1.00, `release_diff` 0.60 / 1.00,
+`standards_comparison` 0.80 / 1.00, `traceability` 0.80 / 1.00,
+`feature_level` 0.80 / 0.00, `summarize` 0.80 / 0.60, `fact` 0.60 / 1.00,
+`general` 1.00 / 0.80. `general` precision under the rules was 0.31.
+
+Findings that still hold:
+
+- **The arms were complementary, not ranked.** They disagreed on 21 of 50
+  samples. The LLM fixed every rules failure that was a lexical gap (10
+  samples: a requirement ID with no plan alias, one spec named through two
+  aliases, an implicit cross-carrier comparison, release and fact phrasings
+  outside the trigger tuples, a standards comparison with no spec number). It
+  broke every class that is a house convention (11 samples), with
+  `feature_level` recall falling to 0.00. The rules encode the taxonomy and
+  miss the language; the LLM reads the language and does not know the
+  taxonomy. Phase 3 reproduced this on a decision model.
+- **Accuracy and weighted cost disagreed, as designed.** The `llm` arm was
+  worse on accuracy and better on weighted cost, because its mistakes landed
+  in cheaper retrieval configurations. Neither gap is significant at n=50.
+- **Two defects were found and left unfixed during the run**, so that fixing
+  them could not alter an arm mid-measurement: `LLMQueryAnalyzer` discarded a
+  whole analysis over one bad field, and the cross-doc signal counted alias
+  hits rather than distinct plans (sample c04). Both are fixed (D-DRAFT-24,
+  D-DRAFT-28).
+- **Not measured then or now:** extrinsic end-to-end quality (needs an
+  ingested corpus and a running stack, phase 4) and a corpus-derived label
+  set (`<env_dir>` material).

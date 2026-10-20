@@ -1758,7 +1758,7 @@ they build are named.
 
 `decision` and `confidence-routed` differ only in the confidence floor,
 but they are separate values rather than one value plus a floor: a floor
-of 0.0 is the unrouted policy, and an operator reading a config needs to
+of 0.0 is the unrouted policy, and an administrator reading a config needs to
 see which policy is in force without computing it from a second knob
 (D-DRAFT-25).
 """
@@ -1772,13 +1772,17 @@ def resolve_query_analyzer(
 ) -> str:
     """Resolve which query analyzer serves classification.
 
-    Precedence: CLI flag > Config-page DB > ``NORA_QUERY_ANALYZER`` env
-    var > default (``rules``). DB above env var, matching
-    ``resolve_llm_provider``'s rationale: a stale shell export must not
-    permanently override a value saved through the UI.
+    Precedence: CLI flag > ``config_store_value`` > ``NORA_QUERY_ANALYZER``
+    env var > default (``rules``).
 
-    Default is ``rules``, so an operator who sets nothing gets today's
-    behaviour byte-for-byte.
+    The ``config_store_value`` tier is **reserved and not wired yet**: no
+    caller passes it, and there is no Config-page field that saves it.
+    It sits above the env var so that, once a Config-page value exists,
+    it follows ``resolve_llm_provider``'s rationale — a stale shell export
+    must not permanently override a value saved through the UI.
+
+    Default is ``rules``, so an administrator who sets nothing gets
+    today's behaviour byte-for-byte.
 
     Raises:
         ValueError: A supplied value is not in ``QUERY_ANALYZERS``. A typo
@@ -1806,7 +1810,12 @@ def resolve_query_analyzer(
 # would be machinery ahead of demand. A file tier is additive.
 
 DECISION_PROVIDERS: tuple[str, ...] = ("mock", "systemone")
-DEFAULT_DECISION_PROVIDER: str = "mock"
+DEFAULT_DECISION_PROVIDER: str = ""
+"""Empty: no provider unless one is named. ``mock`` answers from keyword
+rules dressed as a model, so an implicit mock on a served path would
+report the ``decision`` arm while serving nothing a model decided. A
+served path with no provider named degrades to ``rules`` with a warning;
+``mock`` must be named explicitly."""
 DEFAULT_DECISION_TIMEOUT: int = 30
 DECISION_PROVIDER_ENV_VAR: str = "NORA_DECISION_PROVIDER"
 DECISION_MODEL_ENV_VAR: str = "NORA_DECISION_MODEL"
@@ -1818,8 +1827,9 @@ DECISION_API_KEY_ENV_VAR: str = "NORA_DECISION_API_KEY"
 def resolve_decision_provider(cli_value: str | None = None) -> str:
     """Resolve which decision provider serves the ``decision`` analyzer.
 
-    Default ``mock`` so the knob value is exercisable with nothing
-    installed. ``systemone`` is the HTTP client that lands in phase 3.
+    Default empty — no provider is named, and a served path degrades to
+    ``rules``. ``mock`` is exercisable with nothing installed but must be
+    named explicitly. ``systemone`` is the HTTP client.
 
     Raises:
         ValueError: Value not in ``DECISION_PROVIDERS``.

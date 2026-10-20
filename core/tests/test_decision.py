@@ -10,6 +10,11 @@ from core.src.decision.base import (
     DecisionProvider,
     DecisionQuestion,
 )
+from core.src.query.analyzer import _MNO_ALIASES
+
+# An MNO code the rule analyzer recognises, taken from its own alias
+# table rather than written out.
+_MNO = next(iter(dict.fromkeys(_MNO_ALIASES.values())))
 
 
 class TestDecisionQuestion:
@@ -24,7 +29,7 @@ class TestDecisionQuestion:
 
     def test_bool_question_needs_no_options(self):
         q = DecisionQuestion(
-            question_id="mentions_vzw", kind="bool", question="Names VZW?"
+            question_id="mentions_mnoa", kind="bool", question="Names MNOA?"
         )
         assert q.options == ()
 
@@ -102,7 +107,7 @@ class TestMockDecisionProvider:
 
     def test_answers_every_question_once(self):
         questions = [
-            DecisionQuestion("a", "noul", "Names VZW?"),
+            DecisionQuestion("a", "noul", "Names MNOA?"),
             DecisionQuestion("b", "score", "How specific?", ("low", "high")),
             DecisionQuestion("c", "choice", "Shape?", ("fact", "general")),
         ]
@@ -126,9 +131,9 @@ class TestMockDecisionProvider:
         """The value is a probability of yes, not a bool — that is what
         the wire format returns, and thresholding it is the caller's
         decision."""
-        q = DecisionQuestion("vzw", "noul", "Does the query name VZW?")
-        assert self.p.decide("VZW retry rules", [q])[0].value == 1.0
-        assert self.p.decide("TMO retry rules", [q])[0].value == 0.0
+        q = DecisionQuestion("mnoa", "noul", "Does the query name MNOA?")
+        assert self.p.decide("MNOA retry rules", [q])[0].value == 1.0
+        assert self.p.decide("MNOB retry rules", [q])[0].value == 0.0
 
     def test_score_is_constant(self):
         q = DecisionQuestion("s", "score", "How specific?", ("low", "high"))
@@ -232,11 +237,11 @@ class TestDecisionQueryAnalyzer:
             {"query_type": "general", "doc_type_scope": "requirements"}
         )
         intent = DecisionQueryAnalyzer(provider).analyze(
-            "How does VZW T3402 differ from 3GPP TS 24.301?"
+            f"How does {_MNO} T3402 differ from 3GPP TS 24.301?"
         )
         assert "T3402" in intent.entities
         assert "3GPP TS 24.301" in intent.standards_refs
-        assert intent.mnos == ["VZW"]
+        assert intent.mnos == [_MNO]
 
     def test_raw_query_preserved(self):
         provider = _ScriptedProvider(

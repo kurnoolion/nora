@@ -9,6 +9,7 @@ from core.src.env.config import (
     DECISION_API_KEY_ENV_VAR,
     DECISION_CONFIDENCE_FLOOR_ENV_VAR,
     DEFAULT_DECISION_CONFIDENCE_FLOOR,
+    DEFAULT_DECISION_PROVIDER,
     DEFAULT_QUERY_ANALYZER,
     QUERY_ANALYZER_ENV_VAR,
     QUERY_ANALYZERS,
@@ -22,7 +23,7 @@ from core.src.env.config import (
 class TestResolveQueryAnalyzer:
     def test_default_is_rules(self, monkeypatch):
         """Legacy is the default at every phase (design §7) — an
-        operator who sets nothing sees today's behaviour."""
+        administrator who sets nothing sees today's behaviour."""
         monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
         assert resolve_query_analyzer() == "rules"
         assert DEFAULT_QUERY_ANALYZER == "rules"
@@ -65,10 +66,16 @@ class TestResolveQueryAnalyzer:
 
 
 class TestResolveDecisionProvider:
-    def test_default_is_mock(self, monkeypatch):
-        """So the `decision` knob value is exercisable on a laptop with
-        nothing installed."""
+    def test_default_is_empty(self, monkeypatch):
+        """No implicit mock: the mock answers from keyword rules, so a
+        served path that picked it by default would report the decision
+        arm while serving the rules."""
         monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        assert resolve_decision_provider() == ""
+        assert DEFAULT_DECISION_PROVIDER == ""
+
+    def test_mock_when_named(self, monkeypatch):
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
         assert resolve_decision_provider() == "mock"
 
     def test_env_var_selects(self, monkeypatch):
@@ -91,6 +98,7 @@ from core.src.query.analyzer import (
     MockQueryAnalyzer,
     make_query_analyzer,
     make_query_analyzer_from_knob,
+    query_analyzer_arm,
 )
 from core.src.query.schema import QueryType
 
@@ -178,9 +186,18 @@ class TestKnobSelectsEachArm:
         monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "llm")
         assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
 
-    def test_decision_defaults_to_the_mock_provider(self, monkeypatch):
-        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+    @pytest.mark.parametrize("arm", ["decision", "confidence-routed"])
+    def test_decision_without_a_named_provider_degrades_to_rules(
+        self, monkeypatch, arm
+    ):
+        """No implicit mock on a served path."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, arm)
         monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_decision_with_the_mock_named(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
         got = make_query_analyzer_from_knob()
         assert isinstance(got, DecisionQueryAnalyzer)
 
@@ -201,7 +218,7 @@ class TestKnobSelectsEachArm:
 
     def test_decision_arm_actually_classifies(self, monkeypatch):
         monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
-        monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
         got = make_query_analyzer_from_knob()
         intent = got.analyze("please summarize the data retry spec")
         assert intent.query_type is QueryType.SUMMARIZE
@@ -343,7 +360,7 @@ class TestResolveDecisionApiKey:
         fix, the provider receiving the value is."""
         monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
         monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
-        monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://host:8008")
+        monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://example.test")
         monkeypatch.setenv(DECISION_API_KEY_ENV_VAR, "sek-1")
         analyzer = make_query_analyzer_from_knob()
         assert analyzer._provider._api_key == "sek-1"
@@ -353,7 +370,150 @@ class TestResolveDecisionApiKey:
     ):
         monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
         monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
-        monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://host:8008")
+        monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://example.test")
         monkeypatch.delenv(DECISION_API_KEY_ENV_VAR, raising=False)
         analyzer = make_query_analyzer_from_knob()
         assert analyzer._provider._api_key == ""
+
+
+class TestFactoryNeverRaisesOnConfig:
+    """The served path degrades; only the resolvers raise."""
+
+    @pytest.mark.parametrize("env", [
+        {QUERY_ANALYZER_ENV_VAR: "decisions"},
+        {QUERY_ANALYZER_ENV_VAR: "confidence-routed",
+         "NORA_DECISION_PROVIDER": "mock",
+         DECISION_CONFIDENCE_FLOOR_ENV_VAR: "half"},
+        {QUERY_ANALYZER_ENV_VAR: "confidence-routed",
+         "NORA_DECISION_PROVIDER": "mock",
+         DECISION_CONFIDENCE_FLOOR_ENV_VAR: "1.5"},
+        {QUERY_ANALYZER_ENV_VAR: "decision",
+         "NORA_DECISION_PROVIDER": "jev"},
+    ])
+    def test_bad_config_degrades_to_rules(self, monkeypatch, caplog, env):
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        with caplog.at_level("WARNING"):
+            got = make_query_analyzer_from_knob()
+        assert isinstance(got, MockQueryAnalyzer)
+        assert "falling back to rule-based classification" in caplog.text
+
+    def test_floor_is_irrelevant_to_the_decision_arm(self, monkeypatch):
+        """An invalid floor only matters to the arm that reads it."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "half")
+        assert isinstance(
+            make_query_analyzer_from_knob(), DecisionQueryAnalyzer
+        )
+
+
+class TestQueryAnalyzerArm:
+    """`query_analyzer_arm()` reports what the factory builds, after
+    degradation — the value /healthz exposes."""
+
+    @pytest.mark.parametrize("env,expected", [
+        ({}, "rules"),
+        ({QUERY_ANALYZER_ENV_VAR: "rules"}, "rules"),
+        ({QUERY_ANALYZER_ENV_VAR: "llm"}, "rules"),
+        ({QUERY_ANALYZER_ENV_VAR: "nonsense"}, "rules"),
+        ({QUERY_ANALYZER_ENV_VAR: "decision"}, "rules"),
+        ({QUERY_ANALYZER_ENV_VAR: "decision",
+          "NORA_DECISION_PROVIDER": "mock"}, "decision"),
+        ({QUERY_ANALYZER_ENV_VAR: "decision",
+          "NORA_DECISION_PROVIDER": "systemone"}, "rules"),
+        ({QUERY_ANALYZER_ENV_VAR: "decision",
+          "NORA_DECISION_PROVIDER": "systemone",
+          "NORA_DECISION_BASE_URL": "http://example.test"}, "decision"),
+        ({QUERY_ANALYZER_ENV_VAR: "confidence-routed",
+          "NORA_DECISION_PROVIDER": "mock"}, "confidence-routed"),
+        ({QUERY_ANALYZER_ENV_VAR: "confidence-routed",
+          "NORA_DECISION_PROVIDER": "mock",
+          DECISION_CONFIDENCE_FLOOR_ENV_VAR: "half"}, "rules"),
+    ])
+    def test_matches_what_the_factory_builds(
+        self, monkeypatch, env, expected
+    ):
+        for k in (QUERY_ANALYZER_ENV_VAR, "NORA_DECISION_PROVIDER",
+                  "NORA_DECISION_BASE_URL",
+                  DECISION_CONFIDENCE_FLOOR_ENV_VAR):
+            monkeypatch.delenv(k, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        assert query_analyzer_arm() == expected
+        by_class = {
+            MockQueryAnalyzer: "rules",
+            DecisionQueryAnalyzer: "decision",
+            ConfidenceRoutedQueryAnalyzer: "confidence-routed",
+        }
+        assert by_class[type(make_query_analyzer_from_knob())] == expected
+
+    def test_does_no_network_io(self, monkeypatch):
+        import urllib.request
+
+        def _refuse(*a, **k):
+            raise AssertionError("query_analyzer_arm must not do I/O")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _refuse)
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
+        monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://example.test")
+        assert query_analyzer_arm() == "decision"
+
+
+class TestSiraQueryServiceWiring:
+    """sira-query reports the arm on /healthz and keeps a non-rules
+    analyzer off the event loop."""
+
+    def test_healthz_reports_the_arm(self, monkeypatch):
+        import sandbox.sira_query.service as svc
+
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        assert svc.healthz()["query_analyzer"] == "rules"
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
+        assert svc.healthz()["query_analyzer"] == "decision"
+
+    def _scope_thread(self, monkeypatch, analyzer):
+        """Run the multi-cell path up to its scope step; return the thread
+        the analyzer ran on. No cells are loaded, so the call stops with a
+        503 straight after scoping."""
+        import asyncio
+        import threading
+
+        from fastapi import HTTPException
+
+        import sandbox.sira_query.service as svc
+
+        seen = {}
+        inner = analyzer.analyze
+
+        def analyze(query):
+            seen["thread"] = threading.get_ident()
+            return inner(query)
+
+        analyzer.analyze = analyze
+        monkeypatch.setattr(
+            svc, "make_query_analyzer_from_knob", lambda: analyzer
+        )
+        monkeypatch.setattr(svc, "_cells", {})
+
+        async def run():
+            seen["loop_thread"] = threading.get_ident()
+            with pytest.raises(HTTPException):
+                await svc._multi_cell_query(
+                    svc._SiraQueryRequest(query="summarize sms"), 5
+                )
+
+        asyncio.run(run())
+        return seen["thread"], seen["loop_thread"]
+
+    def test_rules_runs_inline(self, monkeypatch):
+        ran_on, loop = self._scope_thread(monkeypatch, MockQueryAnalyzer())
+        assert ran_on == loop
+
+    def test_decision_runs_off_the_event_loop(self, monkeypatch):
+        ran_on, loop = self._scope_thread(
+            monkeypatch, DecisionQueryAnalyzer(MockDecisionProvider())
+        )
+        assert ran_on != loop

@@ -177,7 +177,7 @@ def assert_remote_head(
             expected. Auth failure is diagnosed separately from
             unreachability: a 401 arrives as an `HTTPError`, which is a
             `URLError` subclass, so folding the two would report a healthy
-            server as down and send an operator after a network fault.
+            server as down and send an administrator after a network fault.
     """
     import json as _json
     import urllib.error

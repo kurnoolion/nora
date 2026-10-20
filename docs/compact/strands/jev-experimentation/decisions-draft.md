@@ -18,12 +18,12 @@ reasonably necessary" (zero-retention only via enterprise sales); SOC 2 Type II
 third-party reported but unconfirmed in TypeSafe's own documents; no ISO 27001,
 no BAA. NORA's corpus is proprietary MNO requirement content, `CLAUDE.md` bars
 that content from logs and reports, and the build/serve environment permits
-**no external API calls at all** (confirmed with the operator). There is no
+**no external API calls at all** (confirmed with the strand owner). There is no
 configuration in which hosted Jev runs against this corpus.
 **Consequences:** No TypeSafe contract or budget line. Every candidate must be
 self-hostable on internal hardware. "Jev" in later artifacts means Jev-*class*,
-not the product — state this to the architect so nobody plans around vendor
-access.
+not the product; no plan in this strand may assume access to the hosted vendor
+service.
 
 ### D-DRAFT-2 — First target is query classification, not reranking
 
@@ -65,7 +65,7 @@ obvious integration path is to pull a decision model and point the analyzer at
 it.
 **Decision:** GGUF distributions of decision models must not be used. Serving
 is per-candidate: **Kev runs its own server** (`python -m kev.serve --run
-jaredpalmer/kev-4b --port 8008`, exposing `/v1/systemone`); vLLM is the route
+jaredpalmer/kev-4b --port PORT`, exposing `/v1/systemone`); vLLM is the route
 for the larger AutoTrust candidates if they are ever stood up. Ollama continues
 to serve the legacy LLM path untouched.
 **Why:** Published GGUF builds of these models **contain no decision component
@@ -83,18 +83,18 @@ AutoTrust's own guidance: the file list must contain `head.safetensors`, an
 adapter folder, and `calibration.json`; **a hollow distribution contains only
 `.gguf` files**. What a stripped build omits is the decision adapter, the
 24-slot decision head, and the calibration temperatures. Asserted in code, not
-by inspection. Note the tension: the small models that fit the A4000 are
+by inspection. Note the tension: the small models that fit the 16 GB GPU host are
 precisely those distributed for Ollama / llama.cpp, so "runs on a laptop" in
 any secondary source is unverified for decision capability until checked.
 
-### D-DRAFT-4 — Hardware disposition: A4000 is the practical host; large candidates parked
+### D-DRAFT-4 — Hardware disposition: the 16 GB GPU host is the practical host; large candidates parked
 
 **Date:** 2026-10-13
-**Context:** Available internal hardware: a DGX Spark, currently committed as
+**Context:** Available internal hardware: a large-memory host, currently committed as
 the backup host for LLM synthesis and therefore contended and not plannable
-near-term (explicitly not ruled out), and an A4000 with 16 GB VRAM.
-**Decision:** The A4000 is the iteration-1 target. Candidates requiring more
-are parked, re-entering if DGX Spark frees up.
+near-term (explicitly not ruled out), and an on-prem GPU host with 16 GB VRAM.
+**Decision:** The 16 GB GPU host is the iteration-1 target. Candidates requiring more
+are parked, re-entering if the synthesis backup host frees up.
 **Why:** Verified VRAM requirements. The AutoTrust family — JEV-9B
 (Qwen3.5-9B, 24 GB min), JEV-27B (Qwen3.8-27B, 80 GB+), JEV-27B-VL (80 GB+
 full, Q4_K_M ~24 GB), GEV-26B-Decide (Gemma 4 26B-A4B MoE, 80 GB+ full, NVFP4
@@ -107,7 +107,7 @@ MLX backend wants ~16 GB on Apple silicon, which NORA does not deploy.
 inverts the GGUF trap — the precedent `aioutfitters/JEV-27B-VL-AWQ` quantizes
 the backbone to 4-bit (W4A16_ASYM, group 128) while **keeping the decision
 head in bf16**. Applied to JEV-9B (18 GB bf16), 4-bit weights land near 5 GB
-and should fit the A4000. Its published figures are the strongest of any
+and should fit the 16 GB GPU host. Its published figures are the strongest of any
 candidate: mean KL ~0.019 to hosted Jev, **90% of Jev's accuracy at 16
 options** (exactly `_FEATURE_KEYWORDS`' cardinality), 2.6x faster than
 JEV-27B. Not pursued in iteration 1 because no JEV-9B-AWQ is published — NORA
@@ -116,8 +116,8 @@ inside a first exploration risks failing for reasons unrelated to decision
 models.
 **Consequences:** Iteration 1 carries no hardware dependency beyond what is
 already in place. The general rule for whoever picks this up: **small models
-fit the A4000 as-is; large models fit DGX Spark as-is; anything between needs
-shrinking, and shrinking must use AWQ, not GGUF.** Caveat on the Spark: its
+fit the 16 GB GPU host as-is; large models fit the synthesis backup host as-is; anything between needs
+shrinking, and shrinking must use AWQ, not GGUF.** Caveat on the backup host: its
 unified memory will *fit* the large models but is slower than dedicated GPU
 memory, so "fits" is not "fast" until measured. Its exact specification remains
 an open architect question.
@@ -274,8 +274,8 @@ branch per the CLAUDE.md branch-flow rule.
 **Context:** The iteration-1 candidate had to be a native `/v1/systemone`
 implementation fitting 16 GB, with provenance and licence verified before any
 code or weights enter the corporate network.
-**Decision:** **Kev-4B on the A4000, unmodified**, leads iteration 1. No
-quantization, no DGX Spark dependency. Canonical upstream is
+**Decision:** **Kev-4B on the 16 GB GPU host, unmodified**, leads iteration 1. No
+quantization, no dependency on the synthesis backup host. Canonical upstream is
 **`jaredpalmer/kev`** — the original, no fork marker, 9.1k stars, 343 commits;
 the other `kev` repositories are forks. **Apache-2.0 covers the repository, the
 LoRA adapter and the pointer head**, with Qwen3 / Qwen3.5 / Qwen3.8 bases also
@@ -293,13 +293,13 @@ purpose-trained classifier the counter-evidence favours, with calibrated typed
 outputs and the decision interface.
 **Consequences:**
 - **bf16 is mandatory**, not optional: the card states "4B fp32 needs ~16 GB",
-  which saturates the A4000 leaving nothing for context. `KEV_DTYPE=bf16`
+  which saturates the 16 GB GPU host leaving nothing for context. `KEV_DTYPE=bf16`
   roughly halves it to ~8 GB.
 - **Generic Kev-4B will be weak and badly calibrated on this corpus, by its own
   documentation.** In-distribution accuracy 0.854, **out-of-domain 0.790**, OOD
   Brier 0.328, **ECE 0.096, explicitly described as uncalibrated out of
   domain**; locked test 0.856 / 0.806. Latency ~45 ms on an H100, so slower on
-  an A4000. Its training suite is ~13,576 generic text-classification records
+  the 16 GB GPU host. Its training suite is ~13,576 generic text-classification records
   over two epochs (banking77, BoolQ, AG News, MultiNLI, SST5, Yelp, TREC,
   DBpedia, Amazon Reviews, IMDB) with nothing resembling telecom requirement
   specifications, and the card states that "product-shaped questions with no
@@ -390,7 +390,7 @@ weights-governance question is ruled on.
 **Date:** 2026-10-13
 **Context:** Replacing rule-based classification with a decision model trades
 effectively-free string matching for a model forward pass. Kev-4B is ~45 ms on
-an H100; an A4000 will be slower, so 100-200 ms is the working expectation.
+an H100; the 16 GB GPU host will be slower, so 100-200 ms is the working expectation.
 **Decision:** The regression is **accepted**. Per-arm latency is recorded as
 required output alongside accuracy.
 **Why:** The objective is capability and better classification, not preserving
@@ -414,7 +414,7 @@ all three motivations align.
 
 **Date:** 2026-10-13
 **Context:** The design initially specified a boolean flag selecting
-legacy-versus-decision, plus a roster beneath it. The operator proposed a
+legacy-versus-decision, plus a roster beneath it. The strand owner proposed a
 single knob selecting rule-based, decision-based or LLM-based, initially
 describing the `llm` value as out of scope.
 **Decision:** Configuration is **one three-valued knob**,
@@ -704,7 +704,7 @@ mid-measurement. The baseline is now recorded, so the hold is released.
 samples, both wrong → right, nothing regressed:
 
 - c02 `"Which AT commands must the device support?"` — `cross_doc` → `single_doc`
-- c04 `"Band 13 network access requirements for VZW"` — `cross_doc` → `single_doc`
+- c04 `"Band 13 network access requirements for {MNO_A}"` — `cross_doc` → `single_doc`
 
 **Note on the test suite:** three of the eight new regression tests fail
 against the unfixed code. The other five pass either way, because the
@@ -738,7 +738,7 @@ the word meant, which is the evidence that the name had failed.
 **Rejected: one `decision` value plus a floor knob.** A floor of 0.0 *is* the
 unrouted policy, so the two policies genuinely are one implementation with one
 parameter, and a 4-line subclass is the whole difference. It was rejected
-anyway, because an operator reading a configuration would have had to infer
+anyway, because an administrator reading a configuration would have had to infer
 the policy in force from the value of a second knob — and the specific
 confusion this decision exists to fix was a policy that could not be read off
 its name. The implementation stays shared: `DecisionQueryAnalyzer` holds the
@@ -795,3 +795,58 @@ the decision model on real traffic. **The strand has not said which, and the
 default should not be defended on the strength of a one-sample difference
 until it does.** For a strand whose stated purpose is building expertise
 rather than winning at the first shot, the honest answer is probably 0.20.
+
+### D-DRAFT-27 — `NORA_QUERY_ANALYZER` stays unset on served stacks
+
+**Date:** 2026-10-20
+**Context:** D-254 makes SIRA select-synth the serving path. On that path the
+sira-query service reads only `intent.mnos` and `intent.releases` from the
+analyzer's `QueryIntent` (`sandbox/sira_query/scope.py`, `resolve_cells`). The
+decision model owns `query_type` and `doc_type_scope` (D-DRAFT-7), and only the
+NORA `QueryPipeline` consumes those two fields. D-254 disables that pipeline in
+current builds.
+**Decision:** leave `NORA_QUERY_ANALYZER` unset (the `rules` default) on every
+served stack until one of two things changes: the decision model owns a field
+the serving path reads (for example `mnos` as one `noul` per candidate), or the
+NORA pipeline serves.
+**Why:** enabling `decision` or `confidence-routed` on a served stack adds one
+`/v1/systemone` round trip per query, and the serving path discards the
+result. The cost is real and the benefit is zero. The measurements in
+`phase-3-measurement.md` stay valid for the NORA pipeline; they say nothing
+about SIRA serving quality. TODO (strand owner): confirm that "until the model
+owns scope" is the intended re-entry condition, rather than only "until the
+NORA pipeline serves".
+**Consequences:** the knob is an experimentation and evaluation surface
+(`eval.classify_cli`, a trial stack running the NORA pipeline), not a serving
+control. The commented `NORA_QUERY_ANALYZER` blocks in
+`docker/env.sira-query.example` and `docker/env.nora-web.example` say so. The
+sira-query `/healthz` key `query_analyzer` reports the arm actually built, so a
+served stack with the knob set is visible without reading its env file.
+
+### D-DRAFT-28 — The cross-doc signal counts distinct plan ids, not alias hits
+
+**Date:** 2026-10-20
+**Context:** `MockQueryAnalyzer._classify_query_type` counted `_PLAN_ALIASES`
+hits as the cross-doc signal. A query that names one plan through two of its
+own aliases scored two signals. Found while authoring the dev set (sample c04)
+and held unfixed during the phase-1 measurement (D-DRAFT-24). Fixed in commit
+`18e8ff4`.
+**Decision:** the cross-doc signal counts distinct plan ids. The count comes
+from `_extract_plan_ids`, which already de-duplicates by plan id, rather than
+from a separate alias count.
+**Why:** one plan named through two aliases routed a within-plan lookup to
+`CROSS_DOC`. That class widens `top_k` and sets the BM25 weight to 0.0, so the
+error changed retrieval, not only a label. On `classify-dev-v1` the rules arm
+moved from 0.720 to 0.760 accuracy and from 0.136 to 0.112 weighted cost.
+Exactly two samples changed, both from wrong to right (c02, c04), and none
+regressed.
+**Consequences:**
+- `MockQueryAnalyzer` output changes for such queries. This also changes the
+  NORA `QueryPipeline` classification output, including the golden-eval
+  Stage-2 `pipeline`-mode numbers; a Stage-2 comparison across this commit is
+  not like for like.
+- The phase-2 identity gate (knob unset → `MockQueryAnalyzer`) still holds as a
+  statement about which class is built. It no longer means "output identical
+  to the pre-strand code" for queries of this shape.
+- SIRA serving is not affected: it reads only `intent.mnos` and
+  `intent.releases` (D-254, D-DRAFT-27).

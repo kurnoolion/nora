@@ -502,6 +502,81 @@ def make_query_analyzer(llm_provider=None, decision_provider=None):
     return MockQueryAnalyzer()
 
 
+def _plan_query_analyzer(
+    llm_provider=None,
+    decision_provider=None,
+    cli_value=None,
+):
+    """Decide which arm the knob would build, after degradation.
+
+    Shared by ``make_query_analyzer_from_knob`` and
+    ``query_analyzer_arm`` so the arm a health check reports is the arm a
+    query is served by. Reads configuration only — it builds nothing and
+    does no network I/O.
+
+    Never raises on configuration. Every way the knob can be wrong
+    degrades to ``rules``, and the reason comes back for the caller to
+    log, because a misconfigured classifier must not take the query path
+    down.
+
+    Returns:
+        ``(arm, provider_name, floor, reason)``. ``arm`` is one of
+        ``rules`` / ``llm`` / ``decision`` / ``confidence-routed``.
+        ``provider_name`` is the decision provider to build, or ``None``
+        when the caller supplied one or the arm needs none. ``floor`` is
+        set for ``confidence-routed`` only. ``reason`` is ``None`` unless
+        the requested arm degraded.
+    """
+    from core.src.env.config import (
+        resolve_decision_base_url,
+        resolve_decision_confidence_floor,
+        resolve_decision_provider,
+        resolve_query_analyzer,
+    )
+
+    try:
+        mode = resolve_query_analyzer(cli_value=cli_value)
+    except ValueError as e:
+        return "rules", None, None, str(e)
+
+    if mode == "llm":
+        if llm_provider is None:
+            return "rules", None, None, (
+                "NORA_QUERY_ANALYZER=llm but no LLMProvider was supplied"
+            )
+        return "llm", None, None, None
+
+    if mode in ("decision", "confidence-routed"):
+        floor = None
+        if mode == "confidence-routed":
+            try:
+                floor = resolve_decision_confidence_floor()
+            except ValueError as e:
+                return "rules", None, None, str(e)
+        if decision_provider is not None:
+            return mode, None, floor, None
+        try:
+            name = resolve_decision_provider()
+        except ValueError as e:
+            return "rules", None, None, str(e)
+        if not name:
+            # No implicit mock on a served path: the mock answers from
+            # keyword rules, and reporting it as the decision arm would
+            # label the rules as a model.
+            return "rules", None, None, (
+                f"NORA_QUERY_ANALYZER={mode} but no NORA_DECISION_PROVIDER "
+                "is named"
+            )
+        if name == "systemone" and not resolve_decision_base_url():
+            return "rules", None, None, (
+                "NORA_DECISION_PROVIDER=systemone needs "
+                "NORA_DECISION_BASE_URL"
+            )
+        return mode, name, floor, None
+
+    return "rules", None, None, None
+
+
 def make_query_analyzer_from_knob(
     llm_provider=None,
     decision_provider=None,
@@ -512,7 +587,7 @@ def make_query_analyzer_from_knob(
     The knob is four-valued — ``rules`` / ``llm`` / ``decision`` /
     ``confidence-routed`` — and defaults to ``rules``, so a caller that
     adopts this function in place of ``MockQueryAnalyzer()`` changes
-    nothing for an operator who sets no knob. That is the phase-2
+    nothing for an administrator who sets no knob. That is the phase-2
     identity gate.
 
     ``decision`` and ``confidence-routed`` share a provider and differ
@@ -520,58 +595,70 @@ def make_query_analyzer_from_knob(
     second keeps an answer only where its calibrated confidence clears
     ``NORA_DECISION_CONFIDENCE_FLOOR`` and lets the rules serve the rest.
 
-    Degrades to ``rules`` rather than raising whenever the selected arm
-    has no usable provider: the sira lane has no ``LLMProvider`` wired
-    yet, and the ``systemone`` HTTP provider does not land until phase 3.
-    A misconfigured classifier must not take the query path down.
+    Never raises on configuration. An unknown knob value, an invalid
+    confidence floor, an unknown or unnamed decision provider, or a
+    provider that cannot be built each log a warning and return the
+    rule-based analyzer. A misconfigured classifier must not take the
+    query path down. The resolvers in ``core.src.env.config`` still
+    raise, so a CLI that validates its own flags fails loudly.
 
     Args:
         llm_provider: Used when the knob says ``llm``.
         decision_provider: Used when the knob says ``decision`` or
-            ``confidence-routed``; a ``MockDecisionProvider`` is built
-            when either is selected and none is supplied.
+            ``confidence-routed``. When none is supplied, the provider
+            ``NORA_DECISION_PROVIDER`` names is built; with none named,
+            the arm degrades to ``rules``. ``mock`` is built only when
+            named explicitly.
         cli_value: Explicit override, highest precedence.
 
     Returns:
         A query analyzer with an ``analyze(query) -> QueryIntent`` method.
     """
-    from core.src.env.config import (
-        resolve_decision_confidence_floor,
-        resolve_decision_provider,
-        resolve_query_analyzer,
+    arm, name, floor, reason = _plan_query_analyzer(
+        llm_provider=llm_provider,
+        decision_provider=decision_provider,
+        cli_value=cli_value,
     )
+    if reason:
+        logger.warning(
+            "%s — falling back to rule-based classification", reason
+        )
 
-    mode = resolve_query_analyzer(cli_value=cli_value)
-
-    if mode == "llm":
-        if llm_provider is None:
-            logger.warning(
-                "NORA_QUERY_ANALYZER=llm but no LLMProvider was supplied "
-                "— falling back to rule-based classification"
-            )
-            return MockQueryAnalyzer()
+    if arm == "llm":
         return make_query_analyzer(llm_provider=llm_provider)
 
-    if mode in ("decision", "confidence-routed"):
+    if arm in ("decision", "confidence-routed"):
         if decision_provider is None:
-            decision_provider = _build_decision_provider(
-                resolve_decision_provider()
-            )
+            decision_provider = _build_decision_provider(name)
         if decision_provider is None:
             return MockQueryAnalyzer()
-        if mode == "confidence-routed":
+        if arm == "confidence-routed":
             # Function-local for the same circular-import reason as
             # make_query_analyzer's.
             from core.src.decision.analyzer import (
                 ConfidenceRoutedQueryAnalyzer,
             )
 
-            return ConfidenceRoutedQueryAnalyzer(
-                decision_provider, resolve_decision_confidence_floor()
-            )
+            return ConfidenceRoutedQueryAnalyzer(decision_provider, floor)
         return make_query_analyzer(decision_provider=decision_provider)
 
     return MockQueryAnalyzer()
+
+
+def query_analyzer_arm() -> str:
+    """The arm ``make_query_analyzer_from_knob()`` would build right now.
+
+    One of ``rules`` / ``llm`` / ``decision`` / ``confidence-routed``,
+    after degradation — so a health check reports what serves queries,
+    not what the knob asks for. ``llm`` always reports as ``rules``
+    today, because no served caller supplies an ``LLMProvider``.
+
+    Reads configuration only and logs nothing, so a health endpoint can
+    call it on every probe. It does not contact the decision server: a
+    ``decision`` arm whose server is down still reports ``decision``, and
+    each query then degrades to the rules on its own.
+    """
+    return _plan_query_analyzer()[0]
 
 
 def _build_decision_provider(name: str):

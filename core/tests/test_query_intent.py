@@ -17,6 +17,7 @@ import re
 import networkx as nx
 
 from core.src.query.analyzer import (
+    _MNO_ALIASES,
     LLMQueryAnalyzer,
     MockQueryAnalyzer,
     make_query_analyzer,
@@ -34,6 +35,10 @@ from core.src.query.pipeline import (
 )
 from core.src.query.schema import DocTypeScope, QueryType
 from core.src.vectorstore.store_base import QueryResult
+
+# An MNO code the rule analyzer recognises, taken from its own alias
+# table rather than written out.
+_MNO = next(iter(dict.fromkeys(_MNO_ALIASES.values())))
 
 
 # ── Analyzer classification ────────────────────────────────────
@@ -441,7 +446,7 @@ class TestAliasDoubleCountRegression:
 
     def test_two_aliases_of_one_plan_stay_single_doc(self):
         intent = MockQueryAnalyzer().analyze(
-            "Band 13 network access requirements for VZW"
+            f"Band 13 network access requirements for {_MNO}"
         )
         assert intent.query_type is QueryType.SINGLE_DOC
 
@@ -449,7 +454,7 @@ class TestAliasDoubleCountRegression:
         """Guards the premise: if these ever stop being aliases of the
         same plan, the test above stops testing what it says."""
         intent = MockQueryAnalyzer().analyze(
-            "Band 13 network access requirements for VZW"
+            f"Band 13 network access requirements for {_MNO}"
         )
         assert len(intent.plan_ids) == 1
 

@@ -30,7 +30,7 @@
   recorded ±0.5 mean / ±1.7 median noise floor. The category's pitch addresses
   the actual recorded pain, not a hypothetical one.
 - **Egress adjudicated → D-DRAFT-1.** Hosted Jev is closed-weights,
-  hosted-only, US-only, no VPC/on-prem. Operator confirmed the build/serve
+  hosted-only, US-only, no VPC/on-prem. The strand owner confirmed the build/serve
   environment permits no external API calls at all. Hosted Jev is out; the
   target is an open-weights Jev-class model served in-corp.
 - **Open-weights landscape surveyed.** A family of self-hostable work-alikes
@@ -83,7 +83,7 @@
 
 1. Fully understand the current query-classification implementation and its
    class taxonomy.
-2. Supply full internal infra capability (DGX Spark; A4000 16 GB VRAM; current
+2. Supply full internal infra capability (the synthesis backup host; a 16 GB on-prem GPU host; current
    serving runtime, which is suspected not to support a Jev-class model).
 3. Design a decision-model flow replacing today's LLM decision-making.
    Decide whether it runs **before or after query expansion**. Support a
@@ -116,7 +116,7 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   self-hosts Ollama and qwen3, so constrained-choice decoding over a model
   already inside the network could deliver typed calibrated decisions with
   zero new serving infrastructure, sidestepping both D-DRAFT-3 (vLLM) and
-  D-DRAFT-4 (DGX Spark).
+  D-DRAFT-4 (synthesis backup host).
 - **Build the measurement instrument.** ~40-60 hand-labelled queries →
   expected `QueryType` + `DocTypeScope`. The frozen 39-sample set (digest
   `29088f2a4167`) could not separate bm25x from fts5 in the `corp-db-layer`
@@ -138,14 +138,14 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   phase 1 can be scoped: (a) the current **serving runtime** name — it
   determines whether the D-DRAFT-3 GGUF trap is live or moot; (b) the
   production **image / stack name** referenced for the phase-5 rebuild; (c)
-  the exact **DGX Spark specification**, since directive phase 2 asks for full
+  the exact **specification of the synthesis backup host**, since directive phase 2 asks for full
   infra capability and only fragments are recorded.
 - **The directive assumes the category delivers.** D-DRAFT-5's counter-evidence
   means phase 1 can legitimately end at "use the rule-based analyzer you
   already have, or train a 200M classifier" with phases 2-6 never happening.
   That outcome needs to be acceptable to the architect *before* the
   measurement runs, or the experiment is decoration.
-- **A query-time dependency on DGX Spark** (if GEV-26B wins) introduces
+- **A query-time dependency on the synthesis backup host** (if GEV-26B wins) introduces
   contention and a single point of failure on the interactive Ask path. Not
   evaluated yet.
 - **vLLM is new operational surface** for NORA. Cost belongs to this strand,
@@ -183,15 +183,15 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   gate the exploration. "The baseline won" is a successful outcome of this
   strand. Reporting must keep three questions separate: does the decision path
   work, is it faster, is it more accurate. Legitimate answers: yes / yes / no.
-- **Hardware scoped → D-DRAFT-4 amended.** DGX Spark is currently committed as
+- **Hardware scoped → D-DRAFT-4 amended.** the synthesis backup host is currently committed as
   the backup host for LLM synthesis — contended, likely unavailable near-term,
-  explicitly not ruled out but not plannable. The A4000 (16 GB) is the
+  explicitly not ruled out but not plannable. The 16 GB on-prem GPU host is the
   practical target and can also act as backup. Consequence: **GEV-26B-Decide
   is out of scope for iteration 1** (17.1 GiB NVFP4 weights exceed 16 GB
-  before context) and re-enters only if DGX Spark frees up. First-iteration
+  before context) and re-enters only if the synthesis backup host frees up. First-iteration
   shortlist is the small end: ModernBERT-class (322-421M), sub-9B Qwen3.5
   builds, and SemIf-style constrained decoding over an already-resident model.
-  Favourable side effect: these fit the A4000 comfortably and some run on CPU.
+  Favourable side effect: these fit the 16 GB GPU host comfortably and some run on CPU.
 - **`QueryType` fully enumerated — ten members, not eight.** `SINGLE_DOC`,
   `CROSS_DOC`, `CROSS_MNO_COMPARISON`, `RELEASE_DIFF`,
   `STANDARDS_COMPARISON`, `TRACEABILITY`, `FEATURE_LEVEL`, `SUMMARIZE`,
@@ -235,13 +235,13 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   defect, independent of this strand. Fix before any legacy-vs-decision A/B,
   or the baseline arm is measured against a broken legacy path.
 - Three architect questions still open: serving runtime name, production
-  image/stack name, exact DGX Spark specification.
+  image/stack name, exact specification of the synthesis backup host.
 
 ## 2026-10-13 (cont. 2) — Runtime confirmed, placement settled, interface chosen
 
 ### Done this session
 
-- **Serving runtime confirmed: both Ollama and vLLM are in production.** This
+- **Serving runtime confirmed: both Ollama and vLLM are available.** This
   is the best case and closes the first of the three open architect questions.
   Consequence: the D-DRAFT-3 GGUF trap is avoidable by construction rather
   than by discipline — the legacy LLM path stays on Ollama untouched, the
@@ -286,7 +286,7 @@ requirement has existing precedent in the landed `llm-model-discovery` /
 ### Flags
 
 - Two architect questions still open: production image/stack name (for the
-  phase-5 default-on rebuild) and the exact DGX Spark specification.
+  phase-5 default-on rebuild) and the exact specification of the synthesis backup host.
 
 ## 2026-10-13 (cont. 3) — Shortlist verified first-hand; Kev selected
 
@@ -310,7 +310,7 @@ requirement has existing precedent in the landed `llm-model-discovery` /
     at 64k context; up to 64 concurrent reads. Decision heads are integrated
     into the weights rather than separate files.
 - **Kev selected as iteration-1 lead → D-DRAFT-10.** It is the only verified
-  native-`/v1/systemone` option that fits the A4000, and it validates the
+  native-`/v1/systemone` option that fits the 16 GB GPU host, and it validates the
   D-DRAFT-9 protocol choice directly rather than through an adapter.
 - **Unanticipated finding: Kev's trainability collapses the D-DRAFT-5
   tension.** The counter-evidence held that a small purpose-trained classifier
@@ -320,8 +320,7 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   interface. The baseline arm and the decision arm therefore merge in
   iteration 2 instead of competing, which is a materially better outcome than
   either branch of the original framing.
-- **openjev and GEV-26B parked on VRAM**, both needing 24 GB+. Re-enter if DGX
-  Spark frees up from its LLM-synthesis backup duty.
+- **openjev and GEV-26B parked on VRAM**, both needing 24 GB+. Re-enter if the synthesis backup host frees up from its LLM-synthesis backup duty.
 
 ### Flags
 
@@ -335,8 +334,7 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   openjev. NORA's own labelled set will be the only evidence for this choice,
   which raises its priority from "needed for the comparison" to "needed for
   the decision to be defensible at all".
-- Two architect questions still open: production image/stack name, exact DGX
-  Spark specification.
+- Two architect questions still open: production image/stack name, exact specification of the synthesis backup host.
 
 ## 2026-10-13 (cont. 4) — Design doc written to the house convention
 
@@ -382,7 +380,7 @@ requirement has existing precedent in the landed `llm-model-discovery` /
 
 - Architect review of `decision-model-design.md`, particularly §8's six open
   points.
-- On approval: `superpowers:writing-plans` for the phase-1 implementation plan
+- On approval: write the phase-1 implementation plan
   (defect fix + labelled set + baseline measurement). No code before that.
 
 ### Flags
@@ -485,14 +483,14 @@ requirement has existing precedent in the landed `llm-model-discovery` /
 
 ### Done this session
 
-- **Terminology settled with the architect-side operator.** Decision model =
+- **Terminology settled with the architect side.** Decision model =
   head-bearing model = System One model — same thing. Jev is TypeSafe's hosted
   closed product; the open models are alternatives. One sharpening recorded:
   "classification model" is narrower than the rest, since the category emits
   `choice` (classification) **plus** `score` and `bool`.
 - **AutoTrust AI family enumerated** (Singapore applied-AI lab,
   `huggingface.co/autotrust`), all Apache 2.0 — and **none of it fits the
-  A4000's 16 GB**, so the whole family is DGX-Spark-or-nothing and Kev remains
+  16 GB on-prem GPU host**, so the whole family is backup-host-or-nothing and Kev remains
   the iteration-1 pick:
   - **JEV-9B** — Qwen3.5-9B backbone, ~18 GB download, 24 GB VRAM minimum
     (32-48 comfortable), vision added 2026-10-03. AutoTrust's first integrated
@@ -547,7 +545,7 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   "no published benchmarks" note was accurate only for Kev and openjev
   specifically, not for the category.
 - **The convenience path is the trap path.** The small models that fit the
-  A4000 are the ones distributed for Ollama / llama.cpp — i.e. via GGUF, the
+  the 16 GB GPU host are the ones distributed for Ollama / llama.cpp — i.e. via GGUF, the
   exact format that silently drops decision blocks. Every small candidate
   needs the §7 file-list check before it is believed, and the "runs on a
   laptop" framing in secondary sources should be treated as unverified for
@@ -568,8 +566,8 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   unsettled. Determination is fact- and jurisdiction-specific, so it belongs
   with legal.
 - **Recommendation recorded: drop openjev rather than adjudicate it.** It is
-  already parked on VRAM (does not fit the A4000), so the licence question
-  costs nothing to avoid. Revisit only if DGX Spark frees up and openjev is
+  already parked on VRAM (does not fit the 16 GB GPU host), so the licence question
+  costs nothing to avoid. Revisit only if the synthesis backup host frees up and openjev is
   actually wanted.
 - **New intake item: Kev's adapter/head licence is unverified.** The Qwen3.5
   *bases* are Apache-2.0, but the licence covering Kev's own rank-16 LoRA
@@ -582,17 +580,17 @@ requirement has existing precedent in the landed `llm-model-discovery` /
 
 ### Done this session
 
-- **Kev-4B on the A4000, unmodified, selected for iteration 1 → D-DRAFT-12.**
-  No quantization, no AWQ conversion, no DGX Spark dependency. Rationale: it
+- **Kev-4B on the 16 GB GPU host, unmodified, selected for iteration 1 → D-DRAFT-12.**
+  No quantization, no AWQ conversion, no dependency on the synthesis backup host. Rationale: it
   runs out of the box on hardware already in place with a runtime already in
-  production, so iteration 1 spends its effort on the seam, the labelled set
+  place, so iteration 1 spends its effort on the seam, the labelled set
   and the measurement instead of model engineering. JEV-9B-AWQ remains in the
   roster as a later entry.
 - **Hardware rule recorded in plain terms** for whoever picks this up: small
-  models fit the A4000 as-is; large models (JEV-9B, JEV-27B, JEV-27B-VL,
-  GEV-26B-Decide) fit DGX Spark as-is; anything in between needs shrinking,
+  models fit the 16 GB GPU host as-is; large models (JEV-9B, JEV-27B, JEV-27B-VL,
+  GEV-26B-Decide) fit the synthesis backup host as-is; anything in between needs shrinking,
   and shrinking must use AWQ (keeps the decision block) rather than GGUF
-  (drops it). Caveat attached: DGX Spark's unified memory will fit the large
+  (drops it). Caveat attached: The synthesis backup host's unified memory will fit the large
   models but is slower than dedicated GPU memory, so "fits" is not "fast"
   there until measured.
 - **Accuracy expectation set explicitly.** A generic 4B decision model on
@@ -616,18 +614,18 @@ requirement has existing precedent in the landed `llm-model-discovery` /
   time: the `kev-4b-qwen3` card cites `Qwen/Qwen3-4B-Base` while the repo
   overview says Qwen3.5-4B-Base, so both variants may exist.
 - **Correction 1 — Kev does not use vLLM.** It ships its own server exposing
-  `/v1/systemone`: `python -m kev.serve --run jaredpalmer/kev-4b --port 8008`.
+  `/v1/systemone`: `python -m kev.serve --run jaredpalmer/kev-4b --port PORT`.
   vLLM support is in flight (a `vllm.cpp` PR) but has not landed. Simpler than
   planned rather than harder — one self-contained Python server, no vLLM
   plumbing for iteration 1. The GGUF ban still binds.
-- **Correction 2 — bf16 is mandatory on the A4000.** "4B fp32 needs ~16 GB"
+- **Correction 2 — bf16 is mandatory on the 16 GB GPU host.** "4B fp32 needs ~16 GB"
   exactly saturates the card with nothing left for context; `KEV_DTYPE=bf16`
   roughly halves it to ~8 GB. A flag that must be set, not a default.
 - **Correction 3 — generic Kev-4B will be weak and uncalibrated on this
   corpus, per its own card.** In-distribution 0.854, **out-of-domain 0.790**,
   OOD Brier 0.328, **ECE 0.096 described as uncalibrated out of domain**;
   locked test 0.856 / 0.806. Latency ~45 ms on an H100, so slower on an
-  A4000. Training suite is ~13,576 generic text-classification records over
+  the 16 GB GPU host. Training suite is ~13,576 generic text-classification records over
   two epochs (banking77, BoolQ, AG News, MultiNLI, SST5, Yelp, TREC, DBpedia,
   Amazon Reviews, IMDB) — nothing like telecom requirement specs. The card
   states outright that "product-shaped questions with no training analogue are
@@ -668,8 +666,8 @@ task fine-tuning. Assessment, recorded rather than actioned:
 
 **Where it does not help: phase 1.** The query classifier reads **user
 questions**, not corpus text — "What are all the data-retry requirements?",
-"Compare VZW and TMO on IMS registration", "What changed in eSIM from Oct 2025
-to Feb 2026?". What separates `RELEASE_DIFF` from `TRACEABILITY` is **question
+"Compare MNO-A and MNO-B on IMS registration", "What changed in eSIM from Jan 2031
+to Apr 2031?". What separates `RELEASE_DIFF` from `TRACEABILITY` is **question
 shape**, not telecom vocabulary. CPT on dense spec prose teaches the backbone
 the language of *documents*, a different distribution from the language of
 *questions about* documents, and could plausibly hurt by pulling the
@@ -705,8 +703,8 @@ idea, and it belongs to a successor strand rather than this one.
   corpus is device requirement specifications; whether procurement documents
   are a separate in-scope corpus is unclear.
 
-- **CPT rejected for query classification, confirmed with the architect-side
-  operator → D-DRAFT-14.** Agreed assessment: the target is "mostly pure
+- **CPT rejected for query classification, confirmed with the architect side
+  → D-DRAFT-14.** Agreed assessment: the target is "mostly pure
   English", so SFT on labelled queries is both the simpler and the
   better-aimed intervention; no need to overdo it. CPT stays available as the
   remedy for the chunk-body-reading decision points in a successor strand,
@@ -772,12 +770,12 @@ which is the gap a trained classifier would target.
   `_multi_cell_query` (`service.py:1191`) and expansion happens later inside
   retrieval (`filter_query_expansion` / `search_with_expansion`,
   `:1010`-`:1029`). **Classification precedes expansion in both lanes**;
-  current behaviour is preserved, as the architect-side operator preferred.
+  current behaviour is preserved, as the architect side preferred.
   Terminology recorded: the service calls that stage "query **enrichment**"
   (`:559`) while the core lane calls it expansion/rewrite — one stage, two
   names.
 - **Latency regression accepted → D-DRAFT-16.** Rules are effectively free;
-  Kev-4B is ~45 ms on an H100 and will be slower on an A4000, so 100-200 ms is
+  Kev-4B is ~45 ms on an H100 and will be slower on the 16 GB GPU host, so 100-200 ms is
   the working expectation. Accepted because the objective is capability and
   because the cost is proportionally small — the live path already contains an
   **LLM expansion call** and an **LLM synthesis call** plus BM25 and
@@ -798,7 +796,7 @@ which is the gap a trained classifier would target.
 
 ### Flags
 
-- **Ask the architect why classification is rule-based.** The operator's
+- **Ask the architect why classification is rule-based.** The strand owner's
   hypothesis — an LLM was tried, latency hurt, rules won, and Jev-class speed
   now justifies revisiting — fits the artifacts but is **unsupported by the
   repository**. The distinction matters: if latency was the reason, this
@@ -815,7 +813,7 @@ which is the gap a trained classifier would target.
   `NORA_QUERY_ANALYZER` = `rules` | `llm` | `decision`, resolved
   CLI > env > config > default, defaulting to `rules`; the provider roster
   moves beneath the `decision` value. Replaces the earlier boolean
-  flag-plus-roster design. The operator's proposal and a better fit: it maps
+  flag-plus-roster design. The strand owner's proposal and a better fit: it maps
   onto three implementations that already exist, and the name matches the
   `NORA_*` convention.
 - **The `llm` value brought into scope**, having initially been set aside. It
@@ -831,7 +829,7 @@ which is the gap a trained classifier would target.
   `core/src/query/pipeline.py`, driving retrieved-chunk count, BM25 weighting,
   rerank enable, expansion enable, distance cutoff, grouping and the synthesis
   path; in the sira lane `resolve_cells(intent, ...)` additionally decides
-  which corpus cells are searched at all. Confirms the operator's instinct that
+  which corpus cells are searched at all. Confirms the strand owner's instinct that
   classification is strongly coupled, and supplies the justification for
   weighting the confusion matrix by downstream divergence rather than counting
   label mismatches.
@@ -885,7 +883,7 @@ which is the gap a trained classifier would target.
 
 ### Next
 
-- `superpowers:writing-plans` for the phase-1 implementation plan: defect fix
+- Write the phase-1 implementation plan: defect fix
   shipped with the knob, synthetic labelled dev set, rules and llm baselines.
 - Architect review of `decision-model-design.md` v0.9, especially §8.
 
@@ -921,7 +919,7 @@ which is the gap a trained classifier would target.
   model is, why hosted Jev is unusable, the NORA use case, requirements,
   options, alternatives, risks and roadmap. Private link; no proprietary corpus
   content.
-- **Correction raised by the operator and applied** (design §4.2 → v1.0,
+- **Correction raised by the strand owner and applied** (design §4.2 → v1.0,
   D-DRAFT-10 amended). The earlier framing — "generic Kev will be weak on
   telecom text, so a fine-tune is the experiment" — conflated two different
   things and would have alarmed a reader into expecting telecom training:
@@ -997,7 +995,7 @@ which is the gap a trained classifier would target.
 - **New analyzer public surface noted:** `query/MODULE.md` now lists
   `mno_surface_forms(mno)` — every written form of an MNO the analyzer
   recognises, longest first, read by the golden eval's text check to ignore
-  operator-name-only edits. Relevant because it is new public surface in the
+  MNO-name-only edits. Relevant because it is new public surface in the
   module this strand will modify.
 
 ### Flags
@@ -1022,7 +1020,7 @@ which is the gap a trained classifier would target.
 
 Worked unattended overnight at the user's request ("go ahead all phases").
 Phase 1 is complete and gated. Phase-1 and phase-2 plans written to the strand
-directory via `superpowers:writing-plans`.
+directory.
 
 ### What shipped
 
@@ -1041,7 +1039,7 @@ directory via `superpowers:writing-plans`.
   none either.
 - `core/src/eval/classify.py` — sample schema, loader, divergence weighting,
   runner, confusion-matrix report. `core/src/eval/classify_cli.py` — the
-  operator entrypoint. `eval/MODULE.md` updated in the same branch.
+  CLI entrypoint. `eval/MODULE.md` updated in the same branch.
 - 28 new tests, full suite green.
 
 ### The divergence weighting is derived, not invented
@@ -1064,7 +1062,7 @@ cannot silently pool incomparable runs.
 
 ### The result — the arms are complementary, not ranked
 
-Full numbers in `phase-1-baselines.md`. `rules` 0.720 accuracy / 0.136
+Full numbers in `phase-1-baselines.md` (since folded into `phase-3-measurement.md`). `rules` 0.720 accuracy / 0.136
 weighted cost / sub-millisecond. `llm` (`qwen3:8b`) 0.700 / 0.120 / **15 s
 p50**.
 
@@ -1184,7 +1182,7 @@ roughly 30-200x better than this while being a model rather than a rule.
   `test_embedding_ollama.py::test_satisfies_embedding_provider_protocol` and
   `test_enrich_overlay_store.py::test_routes_registered`). Checked in a
   throwaway worktree at `fcc9fce`, not assumed. **Worth a look independently
-  of this strand** — they fail on this Mac and presumably not on the work PC,
+  of this strand** — they fail on a developer machine and presumably not in the runtime environment,
   which means the local suite has eight permanently red tests that mask real
   regressions.
 
@@ -1366,7 +1364,7 @@ proof the model works, it is the labelled traffic needed to set the threshold.
 - **Arm 4 (fine-tune) not run.** Conditional on the architect's budget answer.
 - **`/close-session` and `/regen-map` not run.** Both are end-of-session
   rituals to run with the user present; MAP.md is still hand-edited.
-- **The Kev server is still running** on port 8008 holding the model in
+- **The Kev server is still running** on port PORT holding the model in
   memory. It is a background process in this session, not a service.
 
 ## 2026-10-20 — The fourth arm, and what the paper version hid
@@ -1576,7 +1574,7 @@ bare `urlopen(url)` with no headers, so the gate itself could not authenticate.
 Worse, a 401 arrives as `urllib.error.HTTPError`, which is a `URLError`
 subclass, so the existing handler caught it and reported **"decision server is
 unreachable"** — for a server that was up and refusing the probe. That
-diagnosis sends an operator after a network fault that does not exist. Filing
+diagnosis sends an administrator after a network fault that does not exist. Filing
 the drift found the missing knob; fixing it found the misdiagnosis.
 
 ### The fix
@@ -1623,3 +1621,44 @@ anyone noticing it was unreachable, because the signature is what gets read.
 `/drift-check dev-full` found it by comparing the declared surface against what
 the construction site actually passes — which is exactly the comparison a human
 reviewer skips.
+
+## 2026-10-20 — Merge review fixes
+
+Documentation and configuration changes that accompany the code fixes on this
+branch. No measurement was re-run.
+
+- **Redaction.** Strand docs and the four MODULE.md files now use MNO-A /
+  MNO-B / MNO-C (or `{MNO_A}`-style placeholders) for MNO codes, neutral or
+  fictitious release labels, `PORT` for ports, and neutral host names ("the
+  16 GB GPU host", "the synthesis backup host", "a developer machine"). A human
+  administrator is no longer called an "operator".
+- **Plans trimmed.** `phase-1-plan.md` and `phase-2-plan.md` keep intent,
+  tasks, interfaces, acceptance criteria and file lists; the embedded code and
+  test copies are removed. `phase-1-baselines.md` is deleted; its still-useful
+  content is the "Superseded phase-1 baselines" section of
+  `phase-3-measurement.md`.
+- **Brief.** `decision-model-brief.html` uses a system font stack and loads no
+  remote stylesheet.
+- **STRAND.md.** Target modules are decision, query, env, eval, sandbox. Active
+  phase is development. A note records that the code is merged and the strand
+  stays in flight.
+- **New drafts.** D-DRAFT-27: the knob stays unset on served stacks, because
+  the serving path (D-254) reads only `mnos` / `releases` and the decision
+  model's fields are unread there. D-DRAFT-28: the cross-doc signal counts
+  distinct plan ids (`18e8ff4`), which changes `MockQueryAnalyzer` and NORA
+  pipeline output but not SIRA serving. `decision-model-design.md` §3 carries a
+  matching paragraph.
+- **MODULE.md.** decision: `DecisionQuestion.descriptions`; the stale "no HTTP
+  transport" invariant replaced (import and construction still cause no
+  network call); the factory's never-raise contract, the empty provider
+  default, `query_analyzer_arm()` and the `/healthz` key, the worker-thread
+  call, and parse errors as `DecisionError`. env: every `NORA_DECISION_*` knob
+  and `NORA_QUERY_ANALYZER` with its default; resolution stated as CLI > env
+  var > default, with the Config-page tier reserved and not wired. eval: the
+  full `classify_cli` flag list and the placeholder substitution in the set
+  loader. query: the identity gate restated as "which class is built", the
+  `llm` arm noted as unreachable, a duplicated word removed.
+- **Env examples.** `docker/env.sira-query.example` and
+  `docker/env.nora-web.example` carry a commented block for
+  `NORA_QUERY_ANALYZER` and the `NORA_DECISION_*` variables, with placeholder
+  values and the D-DRAFT-27 advice to leave the knob unset on served stacks.

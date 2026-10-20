@@ -150,36 +150,36 @@ class TestAssertRemoteHead:
 
     def test_good_server_passes_and_returns_the_card(self, monkeypatch):
         self._serving(monkeypatch, self._CARD)
-        card = assert_remote_head("http://host:8008")
+        card = assert_remote_head("http://example.test")
         assert card["temperature"] == 2.41
         assert card["base"] == "Qwen/Qwen3.5-4B-Base"
 
     def test_probes_v1_models(self, monkeypatch):
         seen = self._serving(monkeypatch, self._CARD)
-        assert_remote_head("http://host:8008")
-        assert seen["url"] == "http://host:8008/v1/models"
+        assert_remote_head("http://example.test")
+        assert seen["url"] == "http://example.test/v1/models"
 
     def test_base_url_already_carrying_v1_is_not_doubled(self, monkeypatch):
         seen = self._serving(monkeypatch, self._CARD)
-        assert_remote_head("http://host:8008/v1")
-        assert seen["url"] == "http://host:8008/v1/models"
+        assert_remote_head("http://example.test/v1")
+        assert seen["url"] == "http://example.test/v1/models"
 
     def test_unreachable_server_raises(self, monkeypatch):
         """The case that slipped through. Not a warning — nothing may be
         recorded when the server was never reached."""
         self._serving(monkeypatch, {}, error=OSError("connection refused"))
         with pytest.raises(DecisionError, match="unreachable"):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")
 
     def test_unreachable_message_names_the_local_check_trap(self, monkeypatch):
         self._serving(monkeypatch, {}, error=OSError("connection refused"))
         with pytest.raises(DecisionError, match="D-DRAFT-20"):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")
 
     def test_no_models_raises(self, monkeypatch):
         self._serving(monkeypatch, {"data": []})
         with pytest.raises(DecisionError, match="no models"):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")
 
     def test_server_without_an_adapter_is_rejected(self, monkeypatch):
         """A plain backbone being served where a decider was expected. It
@@ -187,49 +187,49 @@ class TestAssertRemoteHead:
         card = {"models": [{"name": "qwen", "lora": None, "temperature": 2.41}]}
         self._serving(monkeypatch, card)
         with pytest.raises(DecisionError, match="no adapter reported"):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")
 
     def test_api_key_travels_as_a_bearer_header(self, monkeypatch):
         """DRIFT-3's second half. The probe used a bare GET with no
         headers, so an authenticated server would reject it and the
         gate would report the server unreachable."""
         seen = self._serving(monkeypatch, self._CARD, capture_request=True)
-        assert_remote_head("http://host:8008", api_key="sek-1")
+        assert_remote_head("http://example.test", api_key="sek-1")
         assert seen["headers"].get("Authorization") == "Bearer sek-1"
 
     def test_no_api_key_sends_no_authorization_header(self, monkeypatch):
         """An empty key must not become a literal `Bearer ` — an open
         in-corp server is the normal case."""
         seen = self._serving(monkeypatch, self._CARD, capture_request=True)
-        assert_remote_head("http://host:8008")
+        assert_remote_head("http://example.test")
         assert "Authorization" not in seen["headers"]
 
     def test_401_is_diagnosed_as_auth_not_as_unreachable(self, monkeypatch):
         """The misdiagnosis worth preventing. A 401 arrives as an
         HTTPError, which is a URLError subclass, so the old handler
         reported "unreachable" for a server that was up and refusing the
-        probe — sending an operator after a network fault."""
+        probe — sending an administrator after a network fault."""
         import urllib.error
         self._serving(monkeypatch, {}, error=urllib.error.HTTPError(
-            "http://host:8008/v1/models", 401, "Unauthorized", {}, None))
+            "http://example.test/v1/models", 401, "Unauthorized", {}, None))
         with pytest.raises(DecisionError, match="rejected the credentials"):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")
 
     def test_auth_failure_names_the_knob(self, monkeypatch):
         import urllib.error
         self._serving(monkeypatch, {}, error=urllib.error.HTTPError(
-            "http://host:8008/v1/models", 403, "Forbidden", {}, None))
+            "http://example.test/v1/models", 403, "Forbidden", {}, None))
         with pytest.raises(DecisionError, match="NORA_DECISION_API_KEY"):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")
 
     def test_other_http_errors_remain_unreachable(self, monkeypatch):
         """A 404 or 500 is not an auth problem and must keep its own
         diagnosis."""
         import urllib.error
         self._serving(monkeypatch, {}, error=urllib.error.HTTPError(
-            "http://host:8008/v1/models", 500, "Server Error", {}, None))
+            "http://example.test/v1/models", 500, "Server Error", {}, None))
         with pytest.raises(DecisionError, match="unreachable"):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")
 
     def test_server_without_a_temperature_is_rejected(self, monkeypatch):
         card = {"models": [{"name": "kev", "lora": 16, "temperature": 0}]}
@@ -237,4 +237,4 @@ class TestAssertRemoteHead:
         with pytest.raises(
             DecisionError, match="no calibration temperature"
         ):
-            assert_remote_head("http://host:8008")
+            assert_remote_head("http://example.test")

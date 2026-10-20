@@ -777,7 +777,6 @@ nora/
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── journal.md
 │   │   │   │   ├── kev-runbook.md
-│   │   │   │   ├── phase-1-baselines.md
 │   │   │   │   ├── phase-1-plan.md
 │   │   │   │   ├── phase-2-plan.md
 │   │   │   │   └── phase-3-measurement.md

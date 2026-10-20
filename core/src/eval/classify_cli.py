@@ -23,7 +23,7 @@ Strand jev-experimentation, phase 1.
     # happen to sit on this host too.
     python -m core.src.eval.classify_cli --arm decision \
         --decision-provider systemone \
-        --decision-base-url http://127.0.0.1:8008 \
+        --decision-base-url http://127.0.0.1:PORT/v1 \
         --decision-model kev-latest \
         --weights-dir /models/kev-4b
 
@@ -34,7 +34,7 @@ Strand jev-experimentation, phase 1.
     # number cannot be read without it.
     python -m core.src.eval.classify_cli --arm confidence-routed \
         --decision-provider systemone \
-        --decision-base-url http://127.0.0.1:8008 \
+        --decision-base-url http://127.0.0.1:PORT/v1 \
         --decision-model kev-latest \
         --confidence-floor 0.5
 """
@@ -150,7 +150,13 @@ def _build_decision_arm(args):
         resolve_decision_provider,
     )
 
-    name = resolve_decision_provider(cli_value=args.decision_provider)
+    # The harness keeps `mock` as its own default, unlike a served path:
+    # here the mock is exempt from the head check, measures nothing and
+    # claims nothing, so `--arm decision` with no provider stays an offline
+    # smoke test of the seam.
+    name = (
+        resolve_decision_provider(cli_value=args.decision_provider) or "mock"
+    )
 
     if name != "mock" and args.weights_dir:
         report = assert_decision_head_present(args.weights_dir)
@@ -344,7 +350,7 @@ def main(argv=None) -> int:
         analyzer, model_identity = _build_analyzer(args)
     except DecisionError as e:
         # Exit 2 with the diagnosis, matching golden_cli's convention —
-        # a head-verification refusal is an operator-facing message, not
+        # a head-verification refusal is an administrator-facing message, not
         # a stack trace.
         print(f"error: {e}", file=sys.stderr)
         return 2

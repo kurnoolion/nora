@@ -450,7 +450,9 @@ from sandbox.sira_query.enrich_overlay import (  # noqa: E402
 )
 
 from core.src.query.analyzer import (  # noqa: E402
+    MockQueryAnalyzer,
     make_query_analyzer_from_knob,
+    query_analyzer_arm,
 )
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
 from sandbox.sira_query.fusion import merge_candidates, rank_candidates  # noqa: E402
@@ -1199,7 +1201,15 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
     multi-cell path.
     """
     # 1. Scope: analyze -> (mnos, releases) -> resolve to cells.
-    intent = make_query_analyzer_from_knob().analyze(req.query)
+    # The rules analyzer is pure CPU in microseconds and stays a direct
+    # call. Any other arm makes a blocking HTTP request (urllib), which
+    # would stall every concurrent request on the event loop, so it runs
+    # in a worker thread.
+    analyzer = make_query_analyzer_from_knob()
+    if type(analyzer) is MockQueryAnalyzer:
+        intent = analyzer.analyze(req.query)
+    else:
+        intent = await asyncio.to_thread(analyzer.analyze, req.query)
     resolved, unresolved = resolve_cells(intent, _cells.keys())
     if not resolved:
         raise HTTPException(status_code=503, detail={
@@ -1652,6 +1662,9 @@ def healthz() -> dict[str, Any]:
             "configured": bool(_FALLBACK_LLM_URL and _REFUSAL_MARKERS),
             "used": _FALLBACK_STATS["used"],
         },
+        # The classifier arm actually serving queries, after degradation
+        # (strand jev-experimentation) — not merely what the knob asks for.
+        "query_analyzer": query_analyzer_arm(),
         "query_prompt_loaded": bool(_query_prompt_template),
         "rerank_prompt_loaded": bool(_rerank_prompt_template),
         # Provenance — verify everything ties back to the run you expect.

@@ -1,6 +1,6 @@
 # Running a decision model locally — Kev-4B
 
-Strand `jev-experimentation` · Verified on 2026-10-20 · Apple M-series, 24 GB
+Strand `jev-experimentation` · Verified on 2026-10-20 · a developer machine
 
 What was actually done to get a live `/v1/systemone` endpoint and measure
 NORA's `decision` arm against it. Everything below was run, not drafted.
@@ -37,7 +37,7 @@ uv sync --extra serve          # mlx-lm is selected automatically on arm64 darwi
 #    history once already.
 
 # 3. serve
-uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8008
+uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port PORT
 ```
 
 First start downloads what is missing and loads the model; be patient rather
@@ -46,7 +46,7 @@ than assuming a hang.
 ## Confirm it is really serving a decider
 
 ```bash
-curl -s http://127.0.0.1:8008/v1/models
+curl -s http://127.0.0.1:PORT/v1/models
 ```
 
 The fields that matter are `lora` (non-null — the adapter is attached) and
@@ -68,7 +68,7 @@ device=mps  backend=mlx  dtype=bfloat16  temperature=2.406
 ```bash
 python -m core.src.eval.classify_cli --arm decision \
     --decision-provider systemone \
-    --decision-base-url http://127.0.0.1:8008 \
+    --decision-base-url http://127.0.0.1:PORT \
     --decision-model kev-latest \
     --repeat 3
 ```
@@ -80,13 +80,13 @@ loaded (D-DRAFT-20, D-DRAFT-22).
 
 ## Hardware notes
 
-- The card recommends a **32 GB** Apple Silicon Mac. It ran on **24 GB**
+- The card recommends **32 GB** of unified memory. It ran with **less**
   without an OOM retry, because NORA's state is one query — a few dozen
   tokens. The recommendation is sized for long documents; a classification
   workload is far cheaper. Do not read the 32 GB figure as a hard floor for
   this use case, and do not assume it holds if the state ever becomes a
   document.
-- On the A4000 (16 GB, CUDA) the same command serves it in bf16 with fused
+- On a 16 GB CUDA GPU host the same command serves it in bf16 with fused
   kernels. `KEV_DTYPE=fp32` would need about 16 GB for weights alone and will
   not fit — bf16 is not optional there.
 - `KEV_TEMPERATURE=1.0` returns raw probabilities, `KEV_DTYPE=fp32` selects

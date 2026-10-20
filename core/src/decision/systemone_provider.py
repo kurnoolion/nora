@@ -53,6 +53,7 @@ mis-mapping.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import urllib.error
@@ -82,7 +83,7 @@ class SystemOneDecisionProvider:
 
     No egress: `base_url` must name a host inside the corporate network
     (design §7). This class does not enforce that — it cannot know the
-    network topology — but it is the invariant the operator is holding.
+    network topology — but it is the invariant the administrator is holding.
     """
 
     def __init__(
@@ -169,9 +170,20 @@ class SystemOneDecisionProvider:
                 request, timeout=self._timeout
             ) as response:
                 body = response.read().decode("utf-8")
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
+        except (
+            urllib.error.URLError,
+            OSError,
+            TimeoutError,
+            http.client.HTTPException,
+        ) as e:
+            # HTTPException covers a truncated body (IncompleteRead) and a
+            # malformed status line, neither of which is an OSError.
             raise DecisionError(
                 f"decision request to {self.base_url} failed: {e}"
+            ) from e
+        except UnicodeDecodeError as e:
+            raise DecisionError(
+                f"decision response from {self.base_url} is not UTF-8: {e}"
             ) from e
         finally:
             self.last_latency_ms = (time.perf_counter() - started) * 1000.0
@@ -199,10 +211,17 @@ class SystemOneDecisionProvider:
                 f"question id, got {type(asked).__name__}"
             )
 
-        self.last_server_latency_ms = float(data.get("latency_ms") or 0.0)
+        self.last_server_latency_ms = _as_float(
+            data.get("latency_ms"), default=0.0
+        )
 
         answers = []
         for question_id, raw in asked.items():
+            if not isinstance(raw, dict):
+                raise DecisionError(
+                    f"decision answer {question_id!r} should be an object, "
+                    f"got {type(raw).__name__}"
+                )
             kind = raw.get("type")
             value_key = VALUE_KEY_BY_KIND.get(kind)
             if value_key is None:
@@ -218,11 +237,39 @@ class SystemOneDecisionProvider:
                     f"no {value_key!r} field; server sent keys: "
                     f"{sorted(raw)}"
                 )
+            confidence = raw.get("confidence", 0.0)
+            if kind == "noul" and confidence is None:
+                # A noul answer carries no confidence (module docstring).
+                confidence = 0.0
+            if confidence is None or isinstance(confidence, bool):
+                raise DecisionError(
+                    f"decision answer {question_id!r} has a non-numeric "
+                    f"confidence {confidence!r}"
+                )
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                raise DecisionError(
+                    f"decision answer {question_id!r} has a non-numeric "
+                    f"confidence {confidence!r}"
+                ) from None
             answers.append(
                 DecisionAnswer(
                     question_id=question_id,
                     value=raw[value_key],
-                    confidence=float(raw.get("confidence", 0.0)),
+                    confidence=confidence,
                 )
             )
         return answers
+
+
+def _as_float(value, default: float) -> float:
+    """``value`` as a float, or ``default`` when it is missing or not a
+    number. For informational fields only — a server's self-reported
+    latency is diagnostic, so a malformed one must not fail a decision."""
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

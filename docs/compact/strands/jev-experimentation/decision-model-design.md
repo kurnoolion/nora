@@ -19,7 +19,7 @@ v0.5: §8.2 expanded — NC is a purpose test, so internal corporate use is not
 exempt; recommendation is to drop openjev rather than adjudicate it; Kev's
 adapter/head licence flagged as distinct from its Apache-2.0 base.
 v0.6: §4.3 added — AWQ via llm-compressor keeps the decision head in bf16
-(precedent: JEV-27B-VL-AWQ), so JEV-9B plausibly reaches the A4000; AutoTrust
+(precedent: JEV-27B-VL-AWQ), so JEV-9B plausibly reaches the 16 GB GPU host; AutoTrust
 is parked on VRAM only, never on licence; roster is now two-horse. Seam partition by output shape, `/v1/systemone` as the
 internal wire format, Kev as iteration-1 candidate, four-arm measurement with
 per-class confusion matrix, five gated phases mapping the architect's
@@ -30,9 +30,9 @@ in `journal.md`); `decisions-draft.md` D-DRAFT-1..10; `corp-db-layer`'s
 `storage-design.md` as the pattern for flag-gated phased migration with a
 legacy default and an identity gate; the landed `llm-roster-deploy` /
 `llm-model-discovery` work as the roster precedent; architect-confirmed
-constraints — no external egress from build/serve, Ollama **and** vLLM both in
-production, DGX Spark committed as LLM-synthesis backup, A4000 (16 GB) the
-practical host.
+constraints — no external egress from build/serve, Ollama **and** vLLM both
+available as serving runtimes, the large-memory host committed as LLM-synthesis
+backup, a 16 GB on-prem GPU host the practical host.
 
 ## 1. Shape of the answer
 
@@ -113,7 +113,7 @@ drop-in replacement for the method. The partition follows the data
 |---|---|---|
 | `query_type` | `choice`, 10 options | decision model |
 | `doc_type_scope` | `choice`, 3 options | decision model |
-| `mnos` | closed vocab (VZW/TMO/ATT) | decision model — parallel `bool` per candidate |
+| `mnos` | closed vocab (MNO-A/MNO-B/MNO-C) | decision model — parallel `bool` per candidate |
 | `likely_features` | closed vocab (`_FEATURE_KEYWORDS` keys) | decision model — parallel `bool` per candidate |
 | `plan_ids` | closed vocab (5 values) | decision model — parallel `bool` per candidate |
 | `entities` | free-text spans | regex extractor |
@@ -217,7 +217,7 @@ over a resident model) implement the protocol as a thin in-process adapter
 instead of an HTTP hop.
 
 Configuration is a **single three-valued knob**, not a boolean flag plus a
-roster — revised at v0.9 on the architect-side operator's design, which is
+roster — revised at v0.9 on the architect side's design, which is
 cleaner and maps exactly onto implementations that already exist:
 
 | Value | Implementation | Status today |
@@ -229,7 +229,7 @@ cleaner and maps exactly onto implementations that already exist:
 Named `NORA_QUERY_ANALYZER` to match the established convention
 (`NORA_LLM_PROVIDER`, `NORA_EMBEDDING_PROVIDER`, `NORA_SIRA_INDEX`,
 `NORA_SIRA_ENGINE`) and resolved CLI > env var > config > default like the
-other `resolve_*` knobs. Default stays `rules`, so an operator who sets
+other `resolve_*` knobs. Default stays `rules`, so an administrator who sets
 nothing sees today's behaviour. A **provider roster** still sits *beneath* the
 `decision` value, selecting which decision model serves it — the roster did
 not disappear, it moved one level down.
@@ -257,6 +257,15 @@ should mirror it: configured decision provider → hybrid, otherwise fall
 through to today's two branches unchanged. That fall-through is what makes the
 phase-2 identity gate achievable.
 
+**What the serving path reads (added 2026-10-20, D-DRAFT-27).** D-254 makes
+SIRA select-synth the serving path, and that path reads only `intent.mnos` and
+`intent.releases` from the analyzer. The decision model owns `query_type` and
+`doc_type_scope`, and only the NORA `QueryPipeline` consumes them — a pipeline
+D-254 disables in current builds. Enabling the knob on a served stack therefore
+adds one model call per query whose result nothing reads. The knob stays unset
+on served stacks until the decision model owns a field the serving path reads,
+or the NORA pipeline serves. Until then it is an evaluation surface.
+
 ## 4. Candidates and hardware
 
 Verified first-hand; earlier secondary listings are not load-bearing.
@@ -266,7 +275,7 @@ publishes the reference open family, all Apache 2.0. **No licence problem
 anywhere in it** — it is parked on VRAM alone, and §4.3 shows that constraint
 may dissolve. At full precision none of it fits 16 GB:
 
-| Model | Base | VRAM | Fits A4000 | Note |
+| Model | Base | VRAM | Fits 16 GB host | Note |
 |---|---|---|---|---|
 | JEV-9B | Qwen3.5-9B | 24 GB min, 32-48 comfortable (~18 GB download) | no | vision since 2026-10-03 |
 | JEV-27B | Qwen3.8-27B | 80 GB+ (~54 GB) | no | keeps 96% of hosted Jev's accuracy at 16 options, KL 0.017 |
@@ -275,13 +284,13 @@ may dissolve. At full precision none of it fits 16 GB:
 
 The small end — what actually fits — is a separate and less documented field:
 
-| Candidate | Licence | `/v1/systemone` | Fits A4000 16 GB | Disposition |
+| Candidate | Licence | `/v1/systemone` | Fits 16 GB host | Disposition |
 |---|---|---|---|---|
 | **Kev** 0.8B / 4B | Qwen3.5 bases Apache-2.0 | native | **yes** | **iteration 1** |
 | Tev1 0.8B (812 MB) | unverified | unverified | yes | roster candidate |
 | Nimble, Lev, Laya, Julia-1 | unverified | varies | yes | roster candidates |
 | openjev | **conflicting — see §8** | native + `/v1/decisions` | no | **blocked on licence** |
-| AutoTrust family (above) | Apache 2.0 | native | no | parked — DGX Spark only |
+| AutoTrust family (above) | Apache 2.0 | native | no | parked — synthesis backup host only |
 
 ### 4.0 Why the decision block is small, detachable, and cheap to train
 
@@ -321,7 +330,7 @@ decision arm merge in iteration 2 rather than competing.
 
 Serving, corrected at verification: **Kev does not use vLLM.** It ships its
 own server exposing `/v1/systemone` directly — `python -m kev.serve --run
-jaredpalmer/kev-4b --port 8008`. vLLM support is in flight (a `vllm.cpp` PR)
+jaredpalmer/kev-4b --port PORT`. vLLM support is in flight (a `vllm.cpp` PR)
 but has not landed. This is simpler than planned, not harder: one
 self-contained Python server for iteration 1, no vLLM plumbing. The legacy LLM
 path stays on Ollama, so the arms still do not contend, and the GGUF ban
@@ -330,11 +339,11 @@ regardless of which server the decision model uses. vLLM remains the serving
 route for the larger candidates (§4.3, AutoTrust family) if they are ever
 stood up.
 
-**bf16 is mandatory on the A4000, not optional.** Kev's card states "4B fp32
+**bf16 is mandatory on the 16 GB GPU host, not optional.** Kev's card states "4B fp32
 needs ~16 GB", which exactly saturates the card leaving nothing for context.
 `KEV_DTYPE=bf16` roughly halves it to ~8 GB. A flag that must be set.
 
-### 4.3 AWQ preserves the decision head — JEV-9B may reach the A4000
+### 4.3 AWQ preserves the decision head — JEV-9B may reach the 16 GB GPU host
 
 The VRAM parking above assumed full precision and NVFP4 only. A third path
 exists and inverts the GGUF trap.
@@ -348,7 +357,7 @@ block, this approach *protects* it and compresses only the backbone.
 
 Applied to **JEV-9B** (18 GB bf16): 4-bit backbone weights land near 5 GB, the
 bf16 head is small, and KV cache for single short queries is modest — so it
-should fit the A4000 with headroom. Its published figures are the strongest
+should fit the 16 GB GPU host with headroom. Its published figures are the strongest
 of any candidate here: mean KL ≈ 0.019 against hosted Jev, **90% of Jev's
 accuracy at 16 options**, 2.6× faster than JEV-27B. Sixteen options is exactly
 `_FEATURE_KEYWORDS`' cardinality (§2), so that datapoint is directly on-shape
@@ -368,7 +377,7 @@ Two honest caveats, both measurable rather than arguable:
 one-horse. **Kev** — tiny, native `/v1/systemone`, LoRA-trainable, unverified
 provenance and adapter licence. **JEV-9B-AWQ** — reference family, clean
 Apache 2.0, published benchmarks, needs a quantization step NORA performs
-itself. Both fit the A4000 and both belong in the phase-3 roster; Kev remains
+itself. Both fit the 16 GB GPU host and both belong in the phase-3 roster; Kev remains
 first to stand up because it needs no quantization work.
 
 ### 4.1 "Head-bearing" is the speed mechanism, not a drawback
@@ -389,7 +398,7 @@ generates label token probabilities directly from model outputs".
 
 Base size still sets the cost of that single pass, which is why the small end
 of the field is attractive rather than merely affordable: Kev-0.8B on a local
-A4000 should beat hosted Jev's quoted 70-500 ms end-to-end, because it is both
+the 16 GB GPU host should beat hosted Jev's quoted 70-500 ms end-to-end, because it is both
 a far smaller base and has no network hop. The category's speed claim is not
 something NORA gives up by self-hosting small — it is something self-hosting
 small improves.
@@ -553,7 +562,7 @@ accurate**. Legitimate answers are yes / yes / no.
 
 ## 7. Invariants
 
-- **Legacy is the default** at every phase. An operator who sets no flag sees
+- **Legacy is the default** at every phase. An administrator who sets no flag sees
   today's behaviour, byte-identical.
 - **No external egress.** Every candidate is self-hosted in-corp
   (D-DRAFT-1). No decision-model traffic leaves the network.
@@ -593,9 +602,9 @@ accurate**. Legitimate answers are yes / yes / no.
    additionally does not recommend CC licences for software and acknowledges
    NC is ambiguous, and the status of model weights and fine-tuned derivatives
    under copyright is unsettled. **Practical routing: this costs nothing to
-   avoid.** openjev is already parked on VRAM (it does not fit the A4000), so
+   avoid.** openjev is already parked on VRAM (it does not fit the 16 GB GPU host), so
    the recommendation is to drop it rather than spend legal time — revisit
-   only if DGX Spark frees up and it is actually wanted.
+   only if the synthesis backup host frees up and it is actually wanted.
 
    **Related, and in scope for the same intake review:** Kev's *bases*
    (Qwen3.5) are Apache-2.0, but the licence covering Kev's own LoRA adapter
@@ -614,7 +623,7 @@ accurate**. Legitimate answers are yes / yes / no.
    is likely to underperform for the same OOD reason the cross-encoder did.
    Is the LoRA fine-tune in scope for this strand, or a successor?
 5. **Architect questions still open:** production image/stack name for the
-   phase-5 rebuild; exact DGX Spark specification.
+   phase-5 rebuild; exact specification of the synthesis backup host.
 6. **Phase-5 criteria.** What measurement result justifies flipping the
    default? Stating it now prevents the decision being relitigated later
    against a moving bar.

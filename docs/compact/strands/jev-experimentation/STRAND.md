@@ -4,8 +4,8 @@
 **Opened:** 2026-10-13
 **Landed:**
 **Assignees:** Hanif
-**Target modules:** query, llm, web, env, docker
-**Active phase:**
+**Target modules:** decision, query, env, eval, sandbox
+**Active phase:** development
 
 ## Summary
 
@@ -28,3 +28,8 @@ Patterned on the `corp-db-layer` strand.
 ## Notes
 
 <!-- appended to over the strand's lifetime -->
+
+- 2026-10-20: the strand's code is merged to `main`. The strand stays
+  in-flight: phases 4 (trial stack) and 5 (default flip) are open, the
+  phase-3 gate is not met (D-DRAFT-21), and the drafts in
+  `decisions-draft.md` are not yet promoted to `DECISIONS.md`.
