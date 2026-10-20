@@ -1500,3 +1500,59 @@ and `env`, the last of which had no record of the decision knobs at all.
   constant is a convention call for the architect.
 - Three strands are stale and still `in-flight`: `image-ingestion` (67d),
   `nora-retrieval-quality` (67d), `team-operations` (46d).
+
+## 2026-10-20 — drift-check dev-full
+
+**Last drift-check: 2026-10-20 — mode: dev-full — 2 drifts resolved, 2 skipped,
+0 deferred surfaced.** Recorded here rather than in `STATUS.md`: the strand is
+bound and canonical `STATUS.md` is architect-only, so the marker travels to it
+at `/land-strand`.
+
+### Resolved
+- **DRIFT-1** — `eval` imports `decision` (`classify_cli.py:40-44`) and never
+  declared it. The same omission I had just fixed in `query/MODULE.md`, in the
+  module next door, one hour earlier. Checking one and not the other is the
+  mistake worth remembering: the fix was a search, and I did a lookup.
+- **DRIFT-2** — `decision/MODULE.md` had no **Non-goals** section.
+  `structure-conventions.md:87` marks only Owner and Deferred optional, and all
+  17 other modules carry one. Added seven, the load-bearing ones being that free
+  text stays with the regex extractors permanently, that the hosted Jev service
+  is deliberately not a candidate even though its wire format is, and that this
+  module consumes weights and never produces them.
+
+### Skipped — unresolved, carried forward
+- **DRIFT-3 — the decision `api_key` is unreachable, and the lab will need it.**
+  `SystemOneDecisionProvider.__init__` takes `api_key`
+  (`systemone_provider.py:88-94`); there is no `NORA_DECISION_API_KEY`, no
+  resolver, and `_build_decision_provider` (`query/analyzer.py:601-605`) passes
+  `base_url`, `model` and `timeout` only. `kev-runbook.md` records that the Kev
+  server is **open unless `KEV_API_KEY` is set** — so the moment the lab does the
+  right thing and puts a key on a network-exposed decision server, NORA cannot
+  authenticate and degrades to `rules` with a warning. Silent by design, which is
+  what makes it easy to miss. Left as-is on the user's call; the fix is ~20 lines
+  mirroring `resolve_llm_api_key`. **This should be closed before the arm runs
+  against anything but a laptop.**
+- **DRIFT-4 — 273 of 725 public identifiers (38%) absent from their MODULE.md
+  prose**, 127 of them genuine classes and functions, concentrated in `web` (109),
+  `env` (59) and `eval` (50); plus 9 undeclared import edges in `pipeline`,
+  `profile_miner`, `standards` and `web`. Pre-existing and systemic — `decision`
+  is at 0 and `query` at 2 — so it is a convention question for the architect:
+  whether Public surface enumerates every un-underscored identifier or only what
+  callers import. Raised on PR #22 rather than resolved here.
+
+### Checked and aligned, not assumed
+- `query`'s three Non-goals hold: the new analyzer is read-only, per-query, and
+  not a compliance checker.
+- `eval`'s "no synthetic question generation" holds — `classify-dev-v1` ships
+  with the repo, a provenance that non-goal explicitly permits. Worth stating
+  plainly because the set *is* synthetic, and I checked rather than assumed.
+- `env`'s "no secrets or credentials" holds; the floor is a number.
+- Declared-but-not-imported edges in `graph`, `parser`, `standards`, `eval`,
+  `pipeline` and `profile_miner` are artifact coupling, which
+  `structure-conventions.md:101` makes legal and explicitly not drift.
+
+### A correction worth recording
+I first guessed the undeclared public surface was mostly constant noise and
+nearly reported it that way. Classifying it showed 45 % are genuine classes and
+functions. The guess was cheaper than the check and would have understated a real
+gap in someone else's module.

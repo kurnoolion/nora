@@ -51,6 +51,7 @@ flowchart TD
     m_corrections --> m_profiler
     m_corrections --> m_taxonomy
     m_decision --> m_query
+    m_eval --> m_decision
     m_eval --> m_env
     m_eval --> m_extraction
     m_eval --> m_graph

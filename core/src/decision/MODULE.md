@@ -40,6 +40,15 @@ Selected by the four-valued `NORA_QUERY_ANALYZER` knob (`rules` | `llm` | `decis
 - **Routing is per field, not per query.** Each answer carries its own confidence, and the two questions travel in one request, so there is no cost to routing them independently. This also subsumes a recommendation the phase-3 measurement had reached by hand — keep `doc_type_scope` on the rules, where the rules score 1.000 against the model's 0.760 — without hard-coding it: at any floor from 0.30 up, scope accuracy is 1.000 because the model's scope answers are the low-confidence ones.
 - The three closed-vocabulary multi-selects (`mnos`, `likely_features`, `plan_ids`) are decision-model-ownable as one `noul` question per candidate — 24 booleans plus 2 choices against one state, well inside the concurrency these servers document — but stay on the rules until phase 3 so the first measurement has one variable. A test asserts `CLASSIFICATION_QUESTIONS` still has exactly two entries, so adding them is a deliberate act.
 
+**Non-goals**
+- **Not a text generator.** A decision model has a classification head, not a token decoder. It cannot produce an answer, a summary or a rewritten query — anything free-form stays with [llm](../llm/MODULE.md).
+- **Not a replacement for the regex extractors.** `entities`, `concepts`, `releases` and `standards_refs` are free text, which this category cannot emit. They stay with the rule-based analyzer permanently — a property of the category, not a phase limitation.
+- **No external egress, and no hosted decision API.** Every provider is self-hosted in-corp. Jev itself — the closed-weights hosted service this category is named for — is deliberately not a candidate, which is why the wire format was adopted while the vendor was not.
+- **No training or fine-tuning here.** Adapting a decision model is upstream tooling (`kev.train`); this module consumes weights and never produces them. The fine-tuned arm is unrun and conditional on the design's §8 open point 3.
+- **Not the retrieval policy.** This module answers *what kind of question is this*; what the pipeline does with the answer — top-k, BM25 weight, grouping — lives in [query](../query/MODULE.md)'s pipeline and is unchanged by the classifier arm.
+- **No decision seams beyond classification yet.** Reranking and the other small LLM-backed decisions are the reason the protocol is generic, but `CLASSIFICATION_QUESTIONS` has exactly two entries and a test asserts it, so adding one is a deliberate act rather than a drift.
+- **Does not own the confidence floor.** `ConfidenceRoutedQueryAnalyzer` applies a threshold; choosing a defensible one needs held-out labelled traffic and belongs to whoever has it.
+
 **Depends on**
 [query](../query/MODULE.md) (`MockQueryAnalyzer` for the open-extraction fields and the fallback; `QueryIntent` / `QueryType` / `DocTypeScope` as the contract).
 
