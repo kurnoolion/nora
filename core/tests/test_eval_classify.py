@@ -11,9 +11,14 @@ import pytest
 from core.src.eval.classify import (
     ClassifySample,
     DEFAULT_SET_PATH,
+    KNOB_NAMES,
+    KNOB_PROFILE,
+    divergence_cost,
     load_classify_set,
+    profile_digest,
 )
 from core.src.query.analyzer import _PLAN_ALIASES
+from core.src.query.pipeline import _TYPE_RERANK_ENABLED
 from core.src.query.schema import DocTypeScope, QueryType
 
 
@@ -75,3 +80,52 @@ class TestSetHygiene:
             assert set(sample) == {
                 "sample_id", "query", "query_type", "doc_type_scope"
             }
+
+
+class TestDivergenceCost:
+    def test_identical_type_costs_nothing(self):
+        for t in QueryType:
+            assert divergence_cost(t, t) == 0.0
+
+    def test_fact_summarize_is_maximal(self):
+        """Design §6's catastrophic pair: tight top_k + strict 0.4
+        threshold + rerank on, versus wide top_k + 0.7 + grouping off.
+        All five knobs differ, so the cost is 1.0."""
+        assert divergence_cost(QueryType.FACT, QueryType.SUMMARIZE) == 1.0
+        assert divergence_cost(QueryType.SUMMARIZE, QueryType.FACT) == 1.0
+
+    def test_cross_doc_feature_level_is_free(self):
+        """Design §6's mild pair — both broad, both rewrite-enabled,
+        same BM25 weight, same threshold, same grouping. The two select
+        an identical retrieval configuration, so confusing them costs
+        nothing downstream."""
+        assert divergence_cost(
+            QueryType.CROSS_DOC, QueryType.FEATURE_LEVEL
+        ) == 0.0
+
+    def test_symmetric(self):
+        for a in QueryType:
+            for b in QueryType:
+                assert divergence_cost(a, b) == divergence_cost(b, a)
+
+    def test_bounded(self):
+        for a in QueryType:
+            for b in QueryType:
+                assert 0.0 <= divergence_cost(a, b) <= 1.0
+
+    def test_profile_covers_every_type(self):
+        assert set(KNOB_PROFILE) == set(QueryType)
+        assert all(len(row) == len(KNOB_NAMES) for row in KNOB_PROFILE.values())
+
+    def test_rerank_is_uniform_and_therefore_excluded(self):
+        """The five knobs deliberately exclude rerank: pipeline's
+        per-type map is empty by design, so every class shares
+        _DEFAULT_RERANK_ENABLED and the column would add 0.0 to every
+        pairwise distance. If an entry is ever added, this fails — and
+        the profile then needs a sixth knob."""
+        assert _TYPE_RERANK_ENABLED == {}
+        assert "rerank" not in KNOB_NAMES
+
+    def test_digest_is_stable_and_short(self):
+        assert profile_digest() == profile_digest()
+        assert len(profile_digest()) == 12
