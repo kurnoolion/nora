@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+import statistics
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.src.env.config import (
@@ -122,3 +124,218 @@ def profile_digest() -> str:
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+# ── Running and reporting ──────────────────────────────────────
+
+
+@dataclass
+class ClassifyResult:
+    """One sample's outcome under one arm."""
+
+    sample_id: str
+    query: str
+    expected: QueryType
+    predicted: QueryType
+    expected_scope: DocTypeScope
+    predicted_scope: DocTypeScope
+    cost: float
+    latency_ms: float
+    stable: bool
+
+    @property
+    def correct(self) -> bool:
+        return self.expected is self.predicted
+
+    @property
+    def scope_correct(self) -> bool:
+        return self.expected_scope is self.predicted_scope
+
+
+@dataclass
+class ClassifyReport:
+    """One arm's results over one labelled set.
+
+    Keeps design §6's three questions separate: ``accuracy`` and
+    ``weighted_cost`` answer "is it more accurate", the latency fields
+    answer "is it faster", and ``deterministic`` answers "does it work".
+    """
+
+    arm: str = ""
+    set_id: str = ""
+    profile: str = ""
+    repeats: int = 1
+    results: list[ClassifyResult] = field(default_factory=list)
+
+    @property
+    def accuracy(self) -> float:
+        if not self.results:
+            return 0.0
+        return sum(r.correct for r in self.results) / len(self.results)
+
+    @property
+    def weighted_cost(self) -> float:
+        """Mean divergence cost. Lower is better; 0.0 means every
+        mislabel was downstream-free."""
+        if not self.results:
+            return 0.0
+        return sum(r.cost for r in self.results) / len(self.results)
+
+    @property
+    def scope_accuracy(self) -> float:
+        if not self.results:
+            return 0.0
+        return sum(r.scope_correct for r in self.results) / len(self.results)
+
+    @property
+    def deterministic(self) -> bool:
+        return all(r.stable for r in self.results)
+
+    @property
+    def latency_p50_ms(self) -> float:
+        if not self.results:
+            return 0.0
+        return statistics.median(r.latency_ms for r in self.results)
+
+    @property
+    def latency_p95_ms(self) -> float:
+        if not self.results:
+            return 0.0
+        ordered = sorted(r.latency_ms for r in self.results)
+        idx = min(len(ordered) - 1, int(0.95 * len(ordered)))
+        return ordered[idx]
+
+    def confusion(self) -> dict[QueryType, dict[QueryType, int]]:
+        """Expected (row) against predicted (column), all ten classes
+        present whether or not they occur."""
+        matrix = {a: {b: 0 for b in QueryType} for a in QueryType}
+        for r in self.results:
+            matrix[r.expected][r.predicted] += 1
+        return matrix
+
+    def per_class(self) -> dict[QueryType, dict[str, float]]:
+        matrix = self.confusion()
+        out = {}
+        for t in QueryType:
+            support = sum(matrix[t].values())
+            predicted = sum(matrix[a][t] for a in QueryType)
+            hits = matrix[t][t]
+            out[t] = {
+                "support": support,
+                "recall": hits / support if support else 0.0,
+                "precision": hits / predicted if predicted else 0.0,
+            }
+        return out
+
+    def matrix_text(self) -> str:
+        """Fixed-width confusion matrix. Carries class names and counts
+        only — no query text, so it is chat-pasteable (NFR-8)."""
+        matrix = self.confusion()
+        labels = [t.value[:8] for t in QueryType]
+        head = "expected \\ predicted".ljust(22) + " ".join(
+            lbl.rjust(8) for lbl in labels
+        )
+        lines = [head]
+        for t in QueryType:
+            cells = " ".join(str(matrix[t][b]).rjust(8) for b in QueryType)
+            lines.append(t.value[:8].ljust(22) + cells)
+        stats = self.per_class()
+        lines.append("")
+        lines.append("class".ljust(22) + "support".rjust(9)
+                     + "recall".rjust(9) + "precision".rjust(11))
+        for t in QueryType:
+            s = stats[t]
+            lines.append(
+                t.value[:8].ljust(22)
+                + str(int(s["support"])).rjust(9)
+                + f"{s['recall']:.2f}".rjust(9)
+                + f"{s['precision']:.2f}".rjust(11)
+            )
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        return {
+            "arm": self.arm,
+            "set_id": self.set_id,
+            "profile": self.profile,
+            "repeats": self.repeats,
+            "accuracy": self.accuracy,
+            "weighted_cost": self.weighted_cost,
+            "scope_accuracy": self.scope_accuracy,
+            "deterministic": self.deterministic,
+            "latency_p50_ms": self.latency_p50_ms,
+            "latency_p95_ms": self.latency_p95_ms,
+            "confusion": {
+                a.value: {b.value: n for b, n in row.items()}
+                for a, row in self.confusion().items()
+            },
+            "per_class": {
+                t.value: stats for t, stats in self.per_class().items()
+            },
+            "results": [
+                {
+                    "sample_id": r.sample_id,
+                    "expected": r.expected.value,
+                    "predicted": r.predicted.value,
+                    "expected_scope": r.expected_scope.value,
+                    "predicted_scope": r.predicted_scope.value,
+                    "cost": r.cost,
+                    "latency_ms": r.latency_ms,
+                    "stable": r.stable,
+                }
+                for r in self.results
+            ],
+        }
+
+
+def run_classify(
+    analyzer,
+    samples: list[ClassifySample],
+    repeats: int = 1,
+    arm: str = "",
+    set_id: str = "",
+) -> ClassifyReport:
+    """Run one analyzer over a labelled set.
+
+    Args:
+        analyzer: Any object with ``analyze(query) -> QueryIntent``.
+        samples: Labelled samples.
+        repeats: Runs per sample. >1 probes determinism; the FIRST run's
+            prediction is the one scored, so the score does not depend on
+            how many repeats were asked for.
+        arm: Label for the report ("rules", "llm", ...).
+        set_id: Labelled set's id, stamped for provenance.
+
+    Returns:
+        A report stamped with the current knob-profile digest.
+    """
+    results: list[ClassifyResult] = []
+    for sample in samples:
+        predictions = []
+        latencies = []
+        for _ in range(max(1, repeats)):
+            started = time.perf_counter()
+            intent = analyzer.analyze(sample.query)
+            latencies.append((time.perf_counter() - started) * 1000.0)
+            predictions.append((intent.query_type, intent.doc_type_scope))
+        predicted, predicted_scope = predictions[0]
+        results.append(
+            ClassifyResult(
+                sample_id=sample.sample_id,
+                query=sample.query,
+                expected=sample.query_type,
+                predicted=predicted,
+                expected_scope=sample.doc_type_scope,
+                predicted_scope=predicted_scope,
+                cost=divergence_cost(sample.query_type, predicted),
+                latency_ms=statistics.median(latencies),
+                stable=len(set(predictions)) == 1,
+            )
+        )
+    return ClassifyReport(
+        arm=arm,
+        set_id=set_id,
+        profile=profile_digest(),
+        repeats=max(1, repeats),
+        results=results,
+    )
