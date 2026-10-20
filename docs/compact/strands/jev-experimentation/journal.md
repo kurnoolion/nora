@@ -1015,3 +1015,141 @@ which is the gap a trained classifier would target.
   prompt edit is only today's symptom.
 - Line references will rot again on the next merge. The as-of stamp in the
   design header is the mitigation, not a cure — re-anchor after each sync.
+
+---
+
+## 2026-10-20 — Phase 1 executed: the seam is now measurable
+
+Worked unattended overnight at the user's request ("go ahead all phases").
+Phase 1 is complete and gated. Phase-1 and phase-2 plans written to the strand
+directory via `superpowers:writing-plans`.
+
+### What shipped
+
+- `query/analyzer.py` — the LLM prompt's `query_type` option list is now
+  generated from `QueryType` instead of hand-written. The defect (§2.1) is
+  closed, and closed by construction: adding an enum member extends the prompt
+  with no edit.
+- `core/tests/test_query_intent.py::TestLLMPromptEnumAgreement` — the audit
+  coverage flagged as missing in the previous entry. Asserts the prompt offers
+  every `QueryType` and every `DocTypeScope`, and no unknown value. This is
+  the real fix for the drift-check blind spot; the prompt edit was the symptom.
+- `core/src/eval/classify_set.json` — `classify-dev-v1`, 50 synthetic samples,
+  5 per class, labelled from intent. Query text only, placeholder requirement
+  IDs. Hygiene tests read the real plan codes out of
+  `analyzer._PLAN_ALIASES` to assert their absence, so the test file carries
+  none either.
+- `core/src/eval/classify.py` — sample schema, loader, divergence weighting,
+  runner, confusion-matrix report. `core/src/eval/classify_cli.py` — the
+  operator entrypoint. `eval/MODULE.md` updated in the same branch.
+- 28 new tests, full suite green.
+
+### The divergence weighting is derived, not invented
+
+Design §6 asked for a confusion matrix "weighted by downstream divergence". A
+hand-authored 10x10 cost matrix would have been 90 made-up numbers. Instead
+the cost of confusing A for B is the fraction of the five per-type retrieval
+knobs that differ between them, read at import from
+`env.config._BROAD_QUERY_TYPES` / `DEFAULT_BM25_WEIGHT_BY_TYPE` and
+`query.pipeline._TYPE_*`.
+
+It reproduced both of §6's anchor claims exactly, without being tuned to:
+`FACT`<->`SUMMARIZE` scores **1.0** (all five knobs inverted — §6 called it
+catastrophic) and `CROSS_DOC`<->`FEATURE_LEVEL` scores **0.0** (identical
+configurations — §6 called it mild). Rerank is excluded because
+`_TYPE_RERANK_ENABLED` is empty by design, so the column is constant and adds
+0.0 to every distance; a test fails if an entry is ever added. Reports are
+stamped with a profile digest (`29615196d16c` today), so re-tuning a knob
+cannot silently pool incomparable runs.
+
+### The result — the arms are complementary, not ranked
+
+Full numbers in `phase-1-baselines.md`. `rules` 0.720 accuracy / 0.136
+weighted cost / sub-millisecond. `llm` (`qwen3:8b`) 0.700 / 0.120 / **15 s
+p50**.
+
+The one-sample accuracy gap is a coincidence that hides the actual finding.
+The arms disagree on 21 of 50 samples, in two clean groups:
+
+- The LLM **fixes every rules failure that is a lexical gap** (10 samples):
+  a requirement ID with no plan alias, a spec named through two of its own
+  aliases, an implicit cross-carrier comparison, release and fact phrasings
+  outside the hard-coded trigger tuples, "the 3GPP standard" with no spec
+  number.
+- The LLM **breaks every class that is a house convention** (11 samples):
+  `feature_level` recall goes 0.80 -> **0.00**, collapsing into `general`,
+  `summarize` and `traceability`; two `summarize`, two `cross_doc` and two
+  `single_doc` go the same way.
+
+So the rules encode NORA's taxonomy and miss the language; the LLM reads the
+language and does not know the taxonomy.
+
+**This is evidence for what §4.2 argued on prior grounds.** The model's gap is
+the *unfamiliar label set*, not unfamiliar telecom vocabulary — it handled the
+telecom phrasing and failed on NORA-internal category boundaries. Domain
+continued pre-training is not what this seam needs. A small task fine-tune on
+the label set is the arm that would actually matter, which is exactly the
+position already taken in the brief to the architect. Worth saying plainly to
+him: the experiment now has a measured reason to exist, not just a rationale.
+
+**And the §6 weighting earned its keep on the first run.** Accuracy ranks
+`rules` first; weighted cost ranks `llm` first, because the LLM's errors land
+in cheaper retrieval configurations. Either number alone gives the opposite
+answer. Neither gap is significant at n=50 — the right reading is
+"indistinguishable overall, structurally very different".
+
+### Latency, measured rather than assumed
+
+15.0 s p50 / 22.8 s p95 per query, in series with the whole pipeline. The
+previous entry recorded a guess that the architect "probably tried an LLM and
+the latency hurt". That guess now has a number behind it, and the number is
+disqualifying for a production classification path. It also sets the bar the
+decision model has to clear: Jev-class latency is quoted at 70-500 ms, so
+roughly 30-200x better than this while being a model rather than a rule.
+
+### Two defects found, neither fixed
+
+1. **`LLMQueryAnalyzer` discards a whole analysis over one bad field.** The
+   model returned `"general"` for `doc_type_scope`; `DocTypeScope(...)` raised,
+   the `except (JSONDecodeError, ValueError, KeyError)` arm threw away the
+   entire `QueryIntent` including a correct `query_type`, and fell back to
+   keyword analysis. One sample of fifty, so this baseline is only lightly
+   contaminated, but the behaviour is structurally wrong. A per-field coercion
+   keeping the rule value for only the failed field is strictly better —
+   `HybridQueryAnalyzer._coerce` in the phase-2 plan already has that posture,
+   and the LLM analyzer should be brought into line in its own change.
+2. **The alias-count heuristic counts aliases, not distinct plans.**
+   `_classify_query_type` sums `_PLAN_ALIASES` hits, so a query naming one
+   spec through two of its own aliases ("band 13" and "network access", same
+   plan code) scores two signals and routes to `cross_doc`. Sample c04
+   encodes it. Left alone deliberately: fixing it mid-measurement would
+   invalidate the baseline it anchors.
+
+### Process notes
+
+- **The set was authored before the rules were run**, and the plan carries an
+  explicit stop condition for the failure mode: if `rules` scored above ~0.90,
+  the labels had been bent to the implementation and the set was to be
+  rewritten. It scored 0.720, inside the predicted 0.65-0.80 band. Worth
+  keeping that guard in any successor set.
+- `HybridQueryAnalyzer` composes `MockQueryAnalyzer.analyze()` and replaces two
+  fields rather than reaching into its private `_extract_*` methods. One call
+  fills every open-extraction field and yields a complete fallback for free.
+- Three judgement calls the design left open are recorded at the top of the
+  phase-1 plan rather than decided silently: the knob defers to phase 2, the
+  cost is derived, rerank is excluded.
+
+### Flags for the architect
+
+- `feature_level` vs `cross_doc` is the weakest boundary in the taxonomy. The
+  divergence profile says the two select an **identical** retrieval
+  configuration, so the distinction currently buys nothing downstream. Either
+  it should drive something, or the two should merge. This is a taxonomy
+  question, not a modelling one, and it is his call.
+- `general` is a catch-all sink under the rules: precision 0.31, eleven of
+  sixteen `general` predictions wrong. Every unrecognised shape lands there and
+  gets narrow top_k with no rewrite — so a breadth query that fails to match a
+  trigger phrase is quietly served as a lookup.
+- The `llm` arm has now been measured at this seam for the first time
+  (D-DRAFT-17's standing question). Answer: viable on accuracy, disqualified on
+  latency, and complementary to the rules rather than better.
