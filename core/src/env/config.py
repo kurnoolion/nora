@@ -1734,3 +1734,126 @@ class EnvironmentConfig:
                 p.mkdir(parents=True, exist_ok=True)
                 created.append(str(p))
         return created
+
+
+# ---------------------------------------------------------------------------
+# Query-analyzer selection — strand jev-experimentation, design §3.
+#
+# A single three-valued knob rather than a boolean flag plus a roster. The
+# three values map onto implementations that already exist:
+#
+#   rules     MockQueryAnalyzer      the live default
+#   llm       LLMQueryAnalyzer       written, previously never wired
+#   decision  HybridQueryAnalyzer    + a DecisionProvider beneath it
+#
+# The provider roster did not disappear — it sits one level down, under
+# NORA_DECISION_PROVIDER.
+# ---------------------------------------------------------------------------
+
+QUERY_ANALYZERS: tuple[str, ...] = ("rules", "llm", "decision")
+DEFAULT_QUERY_ANALYZER: str = "rules"
+QUERY_ANALYZER_ENV_VAR: str = "NORA_QUERY_ANALYZER"
+
+
+def resolve_query_analyzer(
+    cli_value: str | None = None,
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve which query analyzer serves classification.
+
+    Precedence: CLI flag > Config-page DB > ``NORA_QUERY_ANALYZER`` env
+    var > default (``rules``). DB above env var, matching
+    ``resolve_llm_provider``'s rationale: a stale shell export must not
+    permanently override a value saved through the UI.
+
+    Default is ``rules``, so an operator who sets nothing gets today's
+    behaviour byte-for-byte.
+
+    Raises:
+        ValueError: A supplied value is not in ``QUERY_ANALYZERS``. A typo
+            in a shell export fails loudly rather than silently serving
+            the default.
+    """
+    for label, value in (
+        ("--query-analyzer", cli_value),
+        ("config_db:query.analyzer", config_store_value),
+        (QUERY_ANALYZER_ENV_VAR, os.environ.get(QUERY_ANALYZER_ENV_VAR)),
+    ):
+        if value:
+            if value not in QUERY_ANALYZERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {QUERY_ANALYZERS}"
+                )
+            return value
+    return DEFAULT_QUERY_ANALYZER
+
+
+# Decision-provider selection, beneath the `decision` value above.
+# Two-tier (CLI > env var > default) rather than the LLM chain's four:
+# there is no config/decision.json because no deployment needs one yet,
+# and a file plus a cached loader plus a reset hook for a key nobody sets
+# would be machinery ahead of demand. A file tier is additive.
+
+DECISION_PROVIDERS: tuple[str, ...] = ("mock", "systemone")
+DEFAULT_DECISION_PROVIDER: str = "mock"
+DEFAULT_DECISION_TIMEOUT: int = 30
+DECISION_PROVIDER_ENV_VAR: str = "NORA_DECISION_PROVIDER"
+DECISION_MODEL_ENV_VAR: str = "NORA_DECISION_MODEL"
+DECISION_BASE_URL_ENV_VAR: str = "NORA_DECISION_BASE_URL"
+DECISION_TIMEOUT_ENV_VAR: str = "NORA_DECISION_TIMEOUT"
+
+
+def resolve_decision_provider(cli_value: str | None = None) -> str:
+    """Resolve which decision provider serves the ``decision`` analyzer.
+
+    Default ``mock`` so the knob value is exercisable with nothing
+    installed. ``systemone`` is the HTTP client that lands in phase 3.
+
+    Raises:
+        ValueError: Value not in ``DECISION_PROVIDERS``.
+    """
+    for label, value in (
+        ("--decision-provider", cli_value),
+        (DECISION_PROVIDER_ENV_VAR,
+         os.environ.get(DECISION_PROVIDER_ENV_VAR)),
+    ):
+        if value:
+            if value not in DECISION_PROVIDERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {DECISION_PROVIDERS}"
+                )
+            return value
+    return DEFAULT_DECISION_PROVIDER
+
+
+def resolve_decision_model(cli_value: str | None = None) -> str:
+    """Resolve the decision model tag. Empty means "the server's own
+    default", which is what a single-model deployment wants."""
+    return (cli_value or os.environ.get(DECISION_MODEL_ENV_VAR, "")).strip()
+
+
+def resolve_decision_base_url(cli_value: str | None = None) -> str:
+    """Resolve the decision endpoint's base URL. Must be in-corp — no
+    decision-model traffic leaves the network (design §7)."""
+    return (cli_value or os.environ.get(DECISION_BASE_URL_ENV_VAR, "")).strip()
+
+
+def resolve_decision_timeout(cli_value: int | None = None) -> int:
+    """Resolve the decision request timeout in seconds.
+
+    Default 30 rather than the LLM chain's 600: a decision model answers
+    in a single forward pass, so a request that takes minutes is a fault,
+    not slow work.
+    """
+    if cli_value:
+        return int(cli_value)
+    raw = os.environ.get(DECISION_TIMEOUT_ENV_VAR, "")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not an integer — using %d",
+                DECISION_TIMEOUT_ENV_VAR, raw, DEFAULT_DECISION_TIMEOUT,
+            )
+    return DEFAULT_DECISION_TIMEOUT
