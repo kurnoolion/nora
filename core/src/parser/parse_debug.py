@@ -598,7 +598,9 @@ def cmd_references(args: argparse.Namespace) -> int:
     print("[4. Standards spec citations]")
     print(f"  hardcoded regexes used by the parser today:")
     print(f"    3GPP TS detail:    {parser._std_detail_re.pattern!r}")
-    print(f"    3GPP TS spec-only: {r'3GPP\s+TS\s+(\d[\d.]*\d)'!r}  (inline)")
+    # Hoisted: a backslash inside an f-string expression needs Python 3.12.
+    spec_only_re = r"3GPP\s+TS\s+(\d[\d.]*\d)"
+    print(f"    3GPP TS spec-only: {spec_only_re!r}  (inline)")
     print(f"    Release:           {parser._std_release_re.pattern!r}")
     print()
     if standards_keys:
