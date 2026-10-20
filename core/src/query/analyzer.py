@@ -379,6 +379,8 @@ class LLMQueryAnalyzer:
             "MNO device requirement specifications."
         )
 
+        type_options = ", ".join(f'"{t.value}"' for t in QueryType)
+
         prompt = f"""Analyze this query and extract structured intent as JSON:
 
 Query: "{query}"
@@ -388,7 +390,7 @@ Return JSON with these fields:
 - concepts: list of telecom concepts mentioned (e.g., "attach reject", "IMS registration")
 - mnos: list of MNO codes ("VZW", "TMO", "ATT") mentioned or implied
 - releases: list of release references (e.g., "Feb 2026", "latest")
-- query_type: one of "single_doc", "cross_doc", "cross_mno_comparison", "release_diff", "standards_comparison", "traceability", "feature_level", "general"
+- query_type: one of {type_options}
 - doc_type_scope: "requirements", "test_cases", or "both"
 - standards_refs: list of 3GPP spec references (e.g., "3GPP TS 24.301")
 - likely_features: list of feature IDs from: {list(_FEATURE_KEYWORDS.keys())}

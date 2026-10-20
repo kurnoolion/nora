@@ -12,6 +12,8 @@ Covers:
 
 from __future__ import annotations
 
+import re
+
 import networkx as nx
 
 from core.src.query.analyzer import (
@@ -30,7 +32,7 @@ from core.src.query.pipeline import (
     _TYPE_RERANK_ENABLED,
     _TYPE_REWRITE_ENABLED,
 )
-from core.src.query.schema import QueryType
+from core.src.query.schema import DocTypeScope, QueryType
 from core.src.vectorstore.store_base import QueryResult
 
 
@@ -376,3 +378,52 @@ class TestMnoAliasBoundaries:
 
     def test_unscoped_query_extracts_nothing(self):
         assert self.a.analyze("Compare SMS retry for all MNOs").mnos == []
+
+
+# ── LLM prompt / enum agreement ────────────────────────────────
+
+
+class TestLLMPromptEnumAgreement:
+    """The prompt's option lists must match the enums they advertise.
+
+    A hand-written option list silently dropped SUMMARIZE and FACT
+    (strand jev-experimentation, design §2.1), making two of ten
+    classes unreachable under the LLM analyzer. /drift-check could not
+    see it: it compares MODULE.md contracts against code, not prompt
+    text against an enum. This test is that missing coverage.
+    """
+
+    class _CapturingProvider:
+        def __init__(self) -> None:
+            self.prompt = ""
+            self.system = ""
+
+        def complete(self, prompt, system=None, temperature=0.0, **kwargs):
+            self.prompt = prompt
+            self.system = system or ""
+            return ""
+
+    def _prompt_for(self, query: str) -> str:
+        provider = self._CapturingProvider()
+        LLMQueryAnalyzer(provider).analyze(query)
+        return provider.prompt
+
+    def test_prompt_offers_every_query_type(self):
+        prompt = self._prompt_for("What is the value of T3402?")
+        missing = [t.value for t in QueryType if f'"{t.value}"' not in prompt]
+        assert missing == [], f"prompt omits QueryType values: {missing}"
+
+    def test_prompt_offers_every_doc_type_scope(self):
+        prompt = self._prompt_for("what test cases cover this?")
+        missing = [s.value for s in DocTypeScope if f'"{s.value}"' not in prompt]
+        assert missing == [], f"prompt omits DocTypeScope values: {missing}"
+
+    def test_prompt_offers_no_unknown_query_type(self):
+        """Guards the other direction — a stale value left in the prompt
+        would be parsed back by QueryType(...) and raise at runtime."""
+        prompt = self._prompt_for("summarize the data retry spec")
+        line = next(
+            ln for ln in prompt.splitlines() if ln.startswith("- query_type:")
+        )
+        quoted = re.findall(r'"([a-z_]+)"', line)
+        assert set(quoted) == {t.value for t in QueryType}
