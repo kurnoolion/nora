@@ -127,7 +127,7 @@ class SystemOneDecisionProvider:
         Raises:
             DecisionError: Transport failure, non-JSON response, or a
                 response whose shape does not match the assumed schema.
-                Callers degrade rather than fail — `HybridQueryAnalyzer`
+                Callers degrade rather than fail — `DecisionQueryAnalyzer`
                 falls back to rule-based classification.
         """
         import time

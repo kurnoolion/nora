@@ -1744,13 +1744,24 @@ class EnvironmentConfig:
 #
 #   rules     MockQueryAnalyzer      the live default
 #   llm       LLMQueryAnalyzer       written, previously never wired
-#   decision  HybridQueryAnalyzer    + a DecisionProvider beneath it
+#   decision  DecisionQueryAnalyzer    + a DecisionProvider beneath it
 #
 # The provider roster did not disappear — it sits one level down, under
 # NORA_DECISION_PROVIDER.
 # ---------------------------------------------------------------------------
 
-QUERY_ANALYZERS: tuple[str, ...] = ("rules", "llm", "decision")
+QUERY_ANALYZERS: tuple[str, ...] = (
+    "rules", "llm", "decision", "confidence-routed"
+)
+"""Four arms, spelled exactly as `--arm` spells them and as the classes
+they build are named.
+
+`decision` and `confidence-routed` differ only in the confidence floor,
+but they are separate values rather than one value plus a floor: a floor
+of 0.0 is the unrouted policy, and an operator reading a config needs to
+see which policy is in force without computing it from a second knob
+(D-DRAFT-25).
+"""
 DEFAULT_QUERY_ANALYZER: str = "rules"
 QUERY_ANALYZER_ENV_VAR: str = "NORA_QUERY_ANALYZER"
 
@@ -1857,3 +1868,54 @@ def resolve_decision_timeout(cli_value: int | None = None) -> int:
                 DECISION_TIMEOUT_ENV_VAR, raw, DEFAULT_DECISION_TIMEOUT,
             )
     return DEFAULT_DECISION_TIMEOUT
+
+
+# Confidence routing, beneath the `confidence-routed` analyzer value.
+
+DEFAULT_DECISION_CONFIDENCE_FLOOR: float = 0.50
+DECISION_CONFIDENCE_FLOOR_ENV_VAR: str = "NORA_DECISION_CONFIDENCE_FLOOR"
+
+
+def resolve_decision_confidence_floor(
+    cli_value: float | None = None,
+) -> float:
+    """Resolve the confidence floor for the ``confidence-routed`` analyzer.
+
+    Answers below this calibrated confidence are served by the rule-based
+    analyzer instead. Default 0.50, the value measured in the strand's
+    `phase-3-measurement.md`.
+
+    **That default is a starting point, not a validated setting.** It was
+    selected on the same 50 samples it was scored on, and the sweep across
+    thresholds is non-monotonic — the shape of n=50 noise rather than of a
+    curve. What survives a held-out set is the separation underneath it
+    (mean confidence 0.425 on correct answers against 0.268 on incorrect
+    ones); the specific number does not. Refit on a labelled sample of the
+    real workload before treating it as settled.
+
+    Raises:
+        ValueError: Not a number, or outside ``[0.0, 1.0]``. Calibrated
+            confidence is a probability, and a floor above 1.0 would route
+            every field to the rules while still labelling the result as
+            routed — the silent-degradation shape design §7 exists to
+            prevent. A typo must not become 0.50 and get reported as
+            though it had been chosen.
+    """
+    raw = cli_value
+    if raw is None:
+        env = os.environ.get(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "").strip()
+        if not env:
+            return DEFAULT_DECISION_CONFIDENCE_FLOOR
+        raw = env
+    try:
+        floor = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{DECISION_CONFIDENCE_FLOOR_ENV_VAR}={raw!r} is not a number"
+        ) from None
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError(
+            f"{DECISION_CONFIDENCE_FLOOR_ENV_VAR}={raw!r} must be between "
+            "0.0 and 1.0 — calibrated confidence is a probability"
+        )
+    return floor

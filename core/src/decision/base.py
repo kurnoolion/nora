@@ -100,8 +100,13 @@ class DecisionAnswer:
             rather than a bool because that is what the wire format
             returns; thresholding it is the caller's decision.
         confidence: Calibrated probability of the returned value where the
-            provider reports one, else 0.0. Recorded rather than acted on in
-            phase 2 — the abstain threshold is a later decision.
+            provider reports one, else 0.0. Acted on by
+            `decision.analyzer.ConfidenceRoutedQueryAnalyzer`, which keeps
+            an answer only where this clears a floor and lets the
+            rule-based analyzer serve the rest. Measured on
+            `classify-dev-v1`: mean 0.425 on correct answers against 0.268
+            on incorrect ones, so it carries signal about its own
+            correctness.
     """
 
     question_id: str

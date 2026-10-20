@@ -1,4 +1,4 @@
-"""The three-valued NORA_QUERY_ANALYZER knob and the phase-2 identity
+"""The four-valued NORA_QUERY_ANALYZER knob and the phase-2 identity
 gate (strand jev-experimentation)."""
 
 from __future__ import annotations
@@ -6,9 +6,12 @@ from __future__ import annotations
 import pytest
 
 from core.src.env.config import (
+    DECISION_CONFIDENCE_FLOOR_ENV_VAR,
+    DEFAULT_DECISION_CONFIDENCE_FLOOR,
     DEFAULT_QUERY_ANALYZER,
     QUERY_ANALYZER_ENV_VAR,
     QUERY_ANALYZERS,
+    resolve_decision_confidence_floor,
     resolve_decision_provider,
     resolve_query_analyzer,
 )
@@ -22,8 +25,13 @@ class TestResolveQueryAnalyzer:
         assert resolve_query_analyzer() == "rules"
         assert DEFAULT_QUERY_ANALYZER == "rules"
 
-    def test_three_values_exactly(self):
-        assert QUERY_ANALYZERS == ("rules", "llm", "decision")
+    def test_four_values_exactly(self):
+        """`confidence-routed` is spelled the same here, as `--arm`, and
+        as the class it builds. One spelling was the point of naming it
+        (D-DRAFT-25)."""
+        assert QUERY_ANALYZERS == (
+            "rules", "llm", "decision", "confidence-routed"
+        )
 
     def test_env_var_selects(self, monkeypatch):
         monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
@@ -71,7 +79,10 @@ class TestResolveDecisionProvider:
             resolve_decision_provider(cli_value="jev")
 
 
-from core.src.decision.analyzer import HybridQueryAnalyzer
+from core.src.decision.analyzer import (
+    ConfidenceRoutedQueryAnalyzer,
+    DecisionQueryAnalyzer,
+)
 from core.src.decision.mock_provider import MockDecisionProvider
 from core.src.query.analyzer import (
     LLMQueryAnalyzer,
@@ -102,15 +113,15 @@ class TestMakeQueryAnalyzerArgumentDispatch:
     def test_llm_provider_is_still_llm(self):
         assert isinstance(make_query_analyzer(_StubLLM()), LLMQueryAnalyzer)
 
-    def test_decision_provider_selects_the_hybrid(self):
+    def test_decision_provider_selects_the_decision_analyzer(self):
         got = make_query_analyzer(decision_provider=MockDecisionProvider())
-        assert isinstance(got, HybridQueryAnalyzer)
+        assert isinstance(got, DecisionQueryAnalyzer)
 
     def test_decision_provider_wins_over_llm(self):
         got = make_query_analyzer(
             _StubLLM(), decision_provider=MockDecisionProvider()
         )
-        assert isinstance(got, HybridQueryAnalyzer)
+        assert isinstance(got, DecisionQueryAnalyzer)
 
 
 class TestIdentityGate:
@@ -169,13 +180,13 @@ class TestKnobSelectsEachArm:
         monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
         monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
         got = make_query_analyzer_from_knob()
-        assert isinstance(got, HybridQueryAnalyzer)
+        assert isinstance(got, DecisionQueryAnalyzer)
 
     def test_decision_with_a_supplied_provider(self, monkeypatch):
         monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
         provider = MockDecisionProvider()
         got = make_query_analyzer_from_knob(decision_provider=provider)
-        assert isinstance(got, HybridQueryAnalyzer)
+        assert isinstance(got, DecisionQueryAnalyzer)
 
     def test_decision_systemone_without_a_provider_degrades_to_rules(
         self, monkeypatch
@@ -192,3 +203,100 @@ class TestKnobSelectsEachArm:
         got = make_query_analyzer_from_knob()
         intent = got.analyze("please summarize the data retry spec")
         assert intent.query_type is QueryType.SUMMARIZE
+
+
+class TestResolveDecisionConfidenceFloor:
+    """The routing threshold for `NORA_QUERY_ANALYZER=confidence-routed`.
+
+    Default 0.50 because that is the value measured in
+    phase-3-measurement.md — with the caveat that it was selected on the
+    same 50 samples it scored on, so it is a starting point, not a
+    validated setting. The resolver logs that caveat the first time it
+    hands back the default.
+    """
+
+    def test_default_is_the_measured_floor(self, monkeypatch):
+        monkeypatch.delenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, raising=False)
+        assert resolve_decision_confidence_floor() == 0.50
+        assert DEFAULT_DECISION_CONFIDENCE_FLOOR == 0.50
+
+    def test_env_var_selects(self, monkeypatch):
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "0.35")
+        assert resolve_decision_confidence_floor() == 0.35
+
+    def test_cli_beats_env(self, monkeypatch):
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "0.35")
+        assert resolve_decision_confidence_floor(cli_value=0.7) == 0.7
+
+    def test_zero_from_the_cli_is_honoured(self, monkeypatch):
+        """0.0 is a meaningful floor — it means "take every answer", the
+        unrouted behaviour — so it must not be swallowed as falsy."""
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "0.35")
+        assert resolve_decision_confidence_floor(cli_value=0.0) == 0.0
+
+    def test_zero_from_the_env_is_honoured(self, monkeypatch):
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "0")
+        assert resolve_decision_confidence_floor() == 0.0
+
+    def test_unparseable_value_raises(self, monkeypatch):
+        """A floor is the one number a routed result cannot be read
+        without, so a typo must not silently become 0.50 and get
+        reported as though it were chosen."""
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "half")
+        with pytest.raises(ValueError, match="half"):
+            resolve_decision_confidence_floor()
+
+    @pytest.mark.parametrize("bad", ["-0.1", "1.5"])
+    def test_out_of_range_raises(self, monkeypatch, bad):
+        """Calibrated confidence is a probability. A floor above 1.0
+        routes everything to the rules while still reporting the arm as
+        routed, which is the silent-degradation shape design §7 is
+        about."""
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, bad)
+        with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+            resolve_decision_confidence_floor()
+
+    def test_one_is_allowed(self, monkeypatch):
+        """Degenerate but legal: only answers the model reports as
+        certain are kept."""
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "1.0")
+        assert resolve_decision_confidence_floor() == 1.0
+
+
+class TestConfidenceRoutedKnobValue:
+    def test_knob_builds_the_routed_analyzer(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "confidence-routed")
+        monkeypatch.delenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, raising=False)
+        got = make_query_analyzer_from_knob(
+            decision_provider=MockDecisionProvider()
+        )
+        assert isinstance(got, ConfidenceRoutedQueryAnalyzer)
+
+    def test_the_floor_reaches_the_analyzer(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "confidence-routed")
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "0.42")
+        got = make_query_analyzer_from_knob(
+            decision_provider=MockDecisionProvider()
+        )
+        assert got.confidence_floor == 0.42
+
+    def test_decision_knob_is_still_unrouted(self, monkeypatch):
+        """The existing value must not acquire a floor. Phase 3's
+        `decision` number was measured at floor 0.0 and has to stay
+        reproducible."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "0.42")
+        got = make_query_analyzer_from_knob(
+            decision_provider=MockDecisionProvider()
+        )
+        assert not isinstance(got, ConfidenceRoutedQueryAnalyzer)
+        assert got.confidence_floor == 0.0
+
+    def test_no_provider_degrades_to_rules(self, monkeypatch):
+        """Same posture as every other arm: a misconfigured classifier
+        must not take the query path down."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "confidence-routed")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
+        monkeypatch.delenv("NORA_DECISION_BASE_URL", raising=False)
+        got = make_query_analyzer_from_knob()
+        assert isinstance(got, MockQueryAnalyzer)

@@ -713,3 +713,85 @@ documenting intent; only three of them are coverage.
 
 **Consequence for the strand:** the bar the decision model has to clear went
 up. 0.760 is the number arm 3 is measured against, not 0.720.
+
+### D-DRAFT-25 — `hybrid` retired as a name; confidence routing is its own arm
+
+**Date:** 2026-10-20
+**Context:** One word had come to mean two unrelated things in this strand.
+`HybridQueryAnalyzer` meant *decision model for the two label fields, regex
+for the spans, rule-based analyzer on provider error* — a composition, with no
+reference to confidence. The headline table's `hybrid` row meant *keep the
+model's answer where its calibrated confidence clears a floor* — a routing
+policy, with no reference to the composition. A reader asked which of the two
+the word meant, which is the evidence that the name had failed.
+
+**Decision:** three renames and one new seam.
+
+1. `HybridQueryAnalyzer` → `DecisionQueryAnalyzer`. The knob value it serves
+   (`NORA_QUERY_ANALYZER=decision`) is unchanged, so no configuration moves.
+2. The routing policy is `ConfidenceRoutedQueryAnalyzer`, spelled identically
+   as the class, as `--arm confidence-routed`, and as
+   `NORA_QUERY_ANALYZER=confidence-routed`. One spelling in three places.
+3. Arms are **named, not numbered**, in this strand's records. The numbering
+   had already collided: both this arm and the Kev fine-tune were "arm 4".
+
+**Rejected: one `decision` value plus a floor knob.** A floor of 0.0 *is* the
+unrouted policy, so the two policies genuinely are one implementation with one
+parameter, and a 4-line subclass is the whole difference. It was rejected
+anyway, because an operator reading a configuration would have had to infer
+the policy in force from the value of a second knob — and the specific
+confusion this decision exists to fix was a policy that could not be read off
+its name. The implementation stays shared: `DecisionQueryAnalyzer` holds the
+logic with `confidence_floor=0.0`, and the subclass exists to name the policy.
+
+**Rejected: routing per query.** Each answer carries its own confidence and
+both questions travel in one request, so per-field routing costs nothing and
+is strictly more informative. It also turned out to matter — see D-DRAFT-26.
+
+**Also decided: the floor's default is 0.50 and the code says why it is soft.**
+0.50 is the value the in-sample sweep peaked at. The resolver raises on a
+non-number or anything outside `[0.0, 1.0]`, the docstrings on the resolver
+and the class both state that the number was selected on the 50 samples it was
+scored on, and the arm prints the caveat with every result rather than relying
+on anyone to repeat it. A floor above 1.0 would route every field to the rules
+while still labelling the output as routed, which is the design §7
+silent-degradation shape arriving through a knob.
+
+**Invariant added:** routing is not a fallback. `fallback_count` means the
+provider was unreachable and the arm is contaminated; a routing means the
+provider answered and the policy declined the answer. Conflating them would
+make a healthy routed run trip `classify_cli`'s D-DRAFT-20 refusal, and would
+let a dead provider hide inside a plausible coverage figure.
+
+### D-DRAFT-26 — A computation over saved output is not a measurement
+
+**Date:** 2026-10-20
+**Context:** The `hybrid` row — 0.860 accuracy, 0.068 weighted cost — was
+computed offline from the `decision` arm's saved per-sample confidences rather
+than measured. When the same policy was implemented and run, the accuracy and
+the weighted cost reproduced to three decimals and the `query_type` coverage
+matched at 28 %. The arithmetic was right.
+
+**What it missed:** scope accuracy. The offline computation routed
+`query_type` only, because `query_type` was the column the question was about.
+The shipped arm routes per field, and **scope accuracy rises from 0.760 to
+1.000 at every floor from 0.30 up** — the model's scope answers are precisely
+its low-confidence ones, so the floor discards them without being told to.
+That is the cheapest win in the whole measurement and it sat unseen for a day
+inside a row that looked complete, with a `—` in the scope column that read as
+"not applicable" rather than "not computed".
+
+**Decision:** a number computed over saved output may decide *whether to build
+something*. It may not be recorded as what an arm does. Where one appears in a
+record, the column it did not compute is marked as uncomputed rather than left
+blank, because a blank in a table of measurements reads as a measurement.
+
+**Second finding, kept separate because it is unresolved:** floor 0.20 scores
+0.840 while routing 80 % of `query_type` to the model; floor 0.50 scores 0.860
+while routing 28 %. The gap is one sample on n=50, which this set cannot
+resolve — but the exposure difference is threefold. Which is better depends on
+whether the objective is the best number on this set or the most contact with
+the decision model on real traffic. **The strand has not said which, and the
+default should not be defended on the strength of a one-sample difference
+until it does.** For a strand whose stated purpose is building expertise
+rather than winning at the first shot, the honest answer is probably 0.20.

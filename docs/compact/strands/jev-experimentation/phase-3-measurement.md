@@ -1,6 +1,7 @@
-# Phase 3 measurement — three arms at the classification seam
+# Phase 3 measurement — four arms at the classification seam
 
-Strand `jev-experimentation` · Recorded 2026-10-20 · Code at `f877e93`
+Strand `jev-experimentation` · Recorded 2026-10-20 · Code at `f877e93`,
+fourth arm added 2026-10-20 (see the amendment at the foot of this file)
 
 Supersedes `phase-1-baselines.md`, whose numbers predate the two defect fixes.
 
@@ -9,9 +10,12 @@ authored from human-read intent. Knob profile digest `29615196d16c`. Counts
 and class names only; per-sample JSON carries query text and stays out of the
 repo.
 
-**Phase 3's gate (design §5) is met for three of four arms.** Arm 4, a Kev-4B
-fine-tuned on NORA's own labels, is not run — it is conditional on §8 open
-point 3, the fine-tuning-budget question, which is the architect's.
+**Phase 3's gate (design §5) is met for all four measured arms.** A
+fine-tuned Kev-4B — trained on NORA's own labels — remains unrun and
+unmeasured; it is conditional on §8 open point 3, the fine-tuning-budget
+question, which is the architect's. It is **not** "arm 5": arms are named
+here, not numbered, because the numbering collided once already (the
+`confidence-routed` arm and the fine-tune were both called "arm 4").
 
 ## Headline
 
@@ -20,12 +24,18 @@ point 3, the fine-tuning-budget question, which is the architect's.
 | `rules` | `MockQueryAnalyzer` | 0.760 | 0.112 | **1.000** | yes (n=3) | <0.1 ms | <0.1 ms |
 | `llm` | `qwen3:8b` via Ollama | 0.680 | 0.128 | 0.960 | **not measured** | 15 373 ms | 31 503 ms |
 | `decision` | Kev-4B via MLX | 0.760 | 0.112 | 0.760 | **yes (n=3)** | 545 ms | 580 ms |
-| `hybrid` | Kev + rules, conf ≥ 0.50 | **0.860** | **0.068** | — | — | 545 ms | — |
+| `confidence-routed` | Kev + rules, floor 0.50 | **0.860** | **0.068** | **1.000** | **yes (n=3)** | 503 ms | 526 ms |
 
 The `llm` arm ran at `--repeat 1` because one pass takes ~13 minutes; its
 `deterministic=True` is vacuous and must not be read as a result. The other
-two ran at `--repeat 3` and are genuinely deterministic — 150 classifications
-each, identical.
+three ran at `--repeat 3` and are genuinely deterministic — 150
+classifications each, identical.
+
+The `confidence-routed` row was originally computed offline from the
+`decision` arm's saved per-sample confidences and reported here as `hybrid`.
+It is now a measured arm in shipped code, and the amendment at the foot of
+this file records what changed when it became one — including one number the
+offline computation could not have produced.
 
 Serving identity, captured from `/v1/models` at run time rather than assumed:
 `base=Qwen/Qwen3.5-4B-Base lora=16 device=mps backend=mlx dtype=bfloat16
@@ -188,8 +198,116 @@ Setup for the third is in `kev-runbook.md`.
    distinction is downstream-free in both directions. Merge, or make it drive
    something.
 2. `general` as a catch-all sink at 0.31 precision under the rules.
-3. The hybrid threshold needs a held-out labelled set from real query traffic.
-   This is the concrete ask that unblocks the most.
-4. Arm 4 (fine-tune on NORA's labels) — §8 open point 3.
+3. The routing floor needs a held-out labelled set from real query traffic.
+   This is the concrete ask that unblocks the most, and it is now a
+   one-command sweep rather than an analysis: `--arm confidence-routed
+   --confidence-floor <f>`.
+4. The fine-tuned arm (train on NORA's labels) — §8 open point 3.
 5. `traceability` is the one class where the LLM beats the decision model
    outright (1.00 vs 0.40). Worth a gloss revision before concluding anything.
+
+---
+
+# Amendment — the `confidence-routed` arm, measured in shipped code
+
+Recorded 2026-10-20, same set, same server, same knob profile. The row the
+headline table used to label `hybrid` was arithmetic over saved per-sample
+confidences; it is now `--arm confidence-routed` and the numbers below come
+from the harness.
+
+## It reproduced, and the two degenerate ends check out
+
+| Floor | Accuracy | Weighted cost | Scope acc. | Coverage `query_type` | Coverage `doc_type_scope` |
+|---|---|---|---|---|---|
+| 0.00 | 0.760 | 0.112 | 0.760 | 1.00 | 1.00 |
+| 0.20 | 0.840 | 0.072 | 0.980 | 0.80 | 0.70 |
+| 0.30 | 0.820 | 0.088 | **1.000** | 0.56 | 0.46 |
+| 0.40 | 0.820 | 0.088 | **1.000** | 0.44 | 0.24 |
+| **0.50** | **0.860** | **0.068** | **1.000** | 0.28 | 0.08 |
+| 0.70 | 0.800 | 0.092 | **1.000** | 0.08 | 0.00 |
+| 1.00 | 0.760 | 0.112 | **1.000** | 0.00 | 0.00 |
+
+**Floor 0.00 is the `decision` arm exactly** — 0.760 / 0.112 / 0.760, every
+field from the model. **Floor 1.00 is the `rules` arm exactly** — 0.760 /
+0.112 / 1.000, no field from the model, because no answer in the set reports
+confidence 1.0. The two ends of the sweep land on two independently measured
+arms, which is the strongest correctness evidence available for an
+implementation of this shape: a routing bug would have to be invisible at
+both limits and at the in-between point that matches the offline computation
+to three decimals.
+
+Coverage is reported per field and is the reason this table is readable. An
+arm that routes 8 % of its scope answers to the model and scores 1.000 is
+reporting the rules, and the accuracy column alone cannot say so.
+
+## One number the offline computation could not produce
+
+**Scope accuracy rises to 1.000 at every floor from 0.30 up**, against the
+`decision` arm's 0.760. The offline computation routed only `query_type`, so
+it left the scope column blank — honestly, but it meant the cheapest win here
+went unseen for a day.
+
+The shipped arm routes **per field**: both questions travel in one request and
+each answer carries its own confidence, so there is no reason to couple them.
+The model's scope answers turn out to be precisely its low-confidence ones,
+so the floor discards them without being told to.
+
+This subsumes a recommendation reached by hand earlier in this file — *keep
+`doc_type_scope` on the rules, where they score 1.000 against the model's
+0.760*. The routing reaches the same place from the confidence signal rather
+than from a hard-coded exception, which means it will keep holding if a later
+model gets better at scope, and a hard-coded exception would not have.
+
+**The lesson, stated plainly:** the paper version answered the question it was
+asked and silently dropped a column. A computation over saved output is a
+cheap way to decide whether to build something and a poor way to decide what
+was learned.
+
+## The floor is still not a validated number
+
+Everything the original caveat said stands, and the sweep from shipped code
+makes it sharper rather than weaker:
+
+- The curve is **non-monotonic** — 0.760 → 0.840 → 0.820 → 0.820 → 0.860 →
+  0.800 → 0.760. That is the shape of n=50 noise, not of a threshold response.
+  The 0.860 peak sits one sample away from the 0.820 either side of it.
+- Every floor was scored on the same 50 samples it was selected on.
+- **0.20 is arguably the better operating point and the table cannot settle
+  it.** It scores 0.840 against 0.860 — one sample — while routing 80 % of
+  `query_type` to the model instead of 28 %. If the objective is to learn how
+  the decision model behaves on real traffic, 0.20 buys roughly three times
+  the exposure for a difference the set cannot resolve. If the objective is
+  the best number on this set, 0.50 wins by one sample. **These are different
+  objectives and the strand should say which it has** before a default gets
+  defended on the strength of a number this soft.
+
+What survives a held-out set is the separation the routing exploits: mean
+confidence 0.425 on correct answers against 0.268 on incorrect ones. The
+specific floor does not. Kev's card prescribes the fix — refit with
+`python -m kev.calibrate` on a labelled sample of the real workload.
+
+The code is built so this caveat travels with the number: the arm prints the
+floor, per-field coverage and the caveat itself, and writes all three under a
+`routing` key in `--out`.
+
+## Naming
+
+`hybrid` is retired as a name in this strand. It had come to mean two
+unrelated things — `HybridQueryAnalyzer`, which is *model for the label
+fields, regex for the spans, rules on provider error*, and the
+confidence-routing policy, which has nothing to do with it. The class is now
+`DecisionQueryAnalyzer` and the policy is `ConfidenceRoutedQueryAnalyzer`,
+spelled identically as the class, the `--arm` value and the
+`NORA_QUERY_ANALYZER` value. D-DRAFT-25.
+
+## Commands
+
+```bash
+python -m core.src.eval.classify_cli --arm confidence-routed \
+    --decision-provider systemone \
+    --decision-base-url http://127.0.0.1:8008 \
+    --decision-model kev-latest \
+    --confidence-floor 0.5 --repeat 3 --out <path>
+```
+
+Floor 0.0 reproduces `--arm decision`; floor 1.0 reproduces `--arm rules`.

@@ -1368,3 +1368,95 @@ proof the model works, it is the labelled traffic needed to set the threshold.
   rituals to run with the user present; MAP.md is still hand-edited.
 - **The Kev server is still running** on port 8008 holding the model in
   memory. It is a background process in this session, not a service.
+
+## 2026-10-20 — The fourth arm, and what the paper version hid
+
+Prompted by a question, not by a plan: *what is hybrid, is it different from
+Kev?* The word had been doing two jobs and the question was the evidence. The
+answer turned into a build.
+
+### What the name had become
+
+`HybridQueryAnalyzer` meant *model for the two label fields, regex for the
+spans, rules on provider error*. The headline table's `hybrid` row meant *keep
+the model's answer where its confidence clears a floor*. Same word, unrelated
+meanings, and one of them was a shipped class name reached by a live knob. The
+class is now `DecisionQueryAnalyzer`; the policy is
+`ConfidenceRoutedQueryAnalyzer`, spelled the same as the class, the `--arm`
+value and the knob value. D-DRAFT-25 carries the reasoning, including the
+one-value-plus-a-floor alternative and why it lost despite being less code.
+
+Arms are named, not numbered, from here. The numbering had collided already:
+the fine-tune and this arm were both "arm 4".
+
+### It reproduced, and both ends of the sweep landed on known arms
+
+Accuracy, weighted cost and `query_type` coverage came out identical to the
+offline computation — 0.860 / 0.068 / 28 %. Better than that, the degenerate
+ends check the implementation against two independently measured arms: floor
+0.00 is the `decision` arm to three decimals, floor 1.00 is the `rules` arm to
+three decimals. A routing bug would have to be invisible at both limits and at
+the midpoint.
+
+### The thing I would have missed
+
+Scope accuracy. The offline computation routed `query_type` only, because
+`query_type` was the question. The shipped arm routes per field, and scope
+accuracy goes **0.760 → 1.000** at every floor from 0.30 up: the model's scope
+answers are exactly its low-confidence ones, so the floor throws them out
+without being told to.
+
+That is the cheapest win in the measurement and it sat unseen for a day behind
+a `—` in a table. The `—` meant "not computed" and read as "not applicable".
+D-DRAFT-26: a computation over saved output can decide whether to build
+something; it cannot be recorded as what an arm does, and the column it did
+not compute gets marked rather than blanked.
+
+It also replaced a hand-made recommendation with a mechanism. Earlier in this
+same file I had written *keep `doc_type_scope` on the rules, 1.000 against
+0.760*. The routing gets there from the confidence signal instead, which means
+it keeps holding if a later model gets better at scope — a hard-coded
+exception would not have.
+
+### The honest part
+
+The floor is still not a validated number, and the sweep from shipped code
+makes that sharper rather than softer. The curve is non-monotonic — 0.760,
+0.840, 0.820, 0.820, 0.860, 0.800, 0.760 — which is n=50 noise, not a
+threshold response.
+
+And the default is open in a way the table cannot close. Floor 0.20 scores
+0.840 routing 80 % of `query_type` to the model; floor 0.50 scores 0.860
+routing 28 %. One sample of difference, three times the exposure. For a strand
+whose purpose is building expertise rather than winning at the first shot,
+0.20 is probably the right default — but that is an objective the strand has
+not stated, so the code ships at the measured 0.50 and D-DRAFT-26 records the
+open question instead of quietly resolving it.
+
+The user chose 0.50 as the default over my suggestion of requiring the flag
+explicitly. The compromise is that the floor and the caveat are printed with
+every result and written into `--out` under `routing`, so the number cannot
+travel bare.
+
+### Mistakes
+
+- **The first new test asserted too much.** It required
+  `routed_to_rules == {"query_type": 1}` while the test's provider answered
+  only one of the two questions, so the unanswered `doc_type_scope` was
+  correctly counted too. The code was right and the assertion was wrong; the
+  fix was to assert the one field and add a second test for the unanswered
+  case, which is behaviour worth pinning anyway.
+- **The `fallback_count` guard in `classify_cli` was keyed to
+  `args.arm == "decision"`.** Adding a fourth arm would have silently excluded
+  it from the D-DRAFT-20 protection — a verified head plus a dead server
+  reporting the rules baseline under a `confidence-routed` label. Caught while
+  reading the guard rather than by a test, which is worth noting: there is no
+  test that asserts every decision-bearing arm is covered by it.
+
+### Verification
+
+Full suite `8 failed, 2268 passed, 112 skipped` — the same eight
+verified-pre-existing failures, and 28 new tests. Both degenerate floors
+reproduce existing arms. Determinism confirmed at `--repeat 3` (150
+classifications, identical). MODULE.md updated for `decision`, `query`, `eval`
+and `env`, the last of which had no record of the decision knobs at all.

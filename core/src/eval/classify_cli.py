@@ -26,6 +26,17 @@ Strand jev-experimentation, phase 1.
         --decision-base-url http://127.0.0.1:8008 \
         --decision-model kev-latest \
         --weights-dir /models/kev-4b
+
+    # the confidence-routed arm: the decision model where its calibrated
+    # confidence clears the floor, the rules everywhere else. Same
+    # provider and same gate as --arm decision; the floor is the only
+    # difference, and it is printed with the result because a routed
+    # number cannot be read without it.
+    python -m core.src.eval.classify_cli --arm confidence-routed \
+        --decision-provider systemone \
+        --decision-base-url http://127.0.0.1:8008 \
+        --decision-model kev-latest \
+        --confidence-floor 0.5
 """
 
 from __future__ import annotations
@@ -121,9 +132,21 @@ def _build_decision_arm(args):
     is now an optional extra check for when the serving host is this host.
 
     The mock is exempt — it measures nothing and claims nothing.
+
+    Serves both decision arms: `decision` builds `DecisionQueryAnalyzer`
+    (every answer kept) and `confidence-routed` builds
+    `ConfidenceRoutedQueryAnalyzer` (answers below the floor served by the
+    rules). The verification gate is identical — routing changes which
+    answers are used, not whether the server is serving a head.
     """
-    from core.src.decision.analyzer import HybridQueryAnalyzer
-    from core.src.env.config import resolve_decision_provider
+    from core.src.decision.analyzer import (
+        ConfidenceRoutedQueryAnalyzer,
+        DecisionQueryAnalyzer,
+    )
+    from core.src.env.config import (
+        resolve_decision_confidence_floor,
+        resolve_decision_provider,
+    )
 
     name = resolve_decision_provider(cli_value=args.decision_provider)
 
@@ -156,20 +179,74 @@ def _build_decision_arm(args):
             f"T={float(card.get('temperature')):.2f}"
         )
 
-    return HybridQueryAnalyzer(provider), provider
+    if args.arm == "confidence-routed":
+        floor = resolve_decision_confidence_floor(
+            cli_value=args.confidence_floor
+        )
+        return ConfidenceRoutedQueryAnalyzer(provider, floor), provider
+
+    return DecisionQueryAnalyzer(provider), provider
+
+
+def _routing_summary(analyzer) -> dict:
+    """Coverage per field, plus the floor it was measured at.
+
+    Coverage is what makes a routed accuracy figure readable. An arm that
+    routes 2 % of fields to the model and scores well is reporting the
+    rules under the model's name, and the accuracy alone cannot show
+    that.
+    """
+    fields = sorted(
+        set(analyzer.routed_to_model) | set(analyzer.routed_to_rules)
+    )
+    return {
+        "confidence_floor": analyzer.confidence_floor,
+        "coverage": {f: analyzer.coverage(f) for f in fields},
+        "routed_to_model": dict(analyzer.routed_to_model),
+        "routed_to_rules": dict(analyzer.routed_to_rules),
+    }
+
+
+def _routing_text(summary: dict) -> str:
+    """The routing block for stdout, caveat included.
+
+    The caveat travels with the number by construction rather than by
+    anyone remembering to repeat it: the default floor was selected on
+    the same 50 samples it was scored on, so a routed accuracy printed
+    bare invites exactly the over-claim phase-3-measurement.md warns
+    about.
+    """
+    lines = [f"confidence_floor={summary['confidence_floor']:.2f}"]
+    for field, cov in summary["coverage"].items():
+        model = summary["routed_to_model"].get(field, 0)
+        rules = summary["routed_to_rules"].get(field, 0)
+        lines.append(
+            f"  {field}: model answered {cov:.1%} "
+            f"({model} of {model + rules} fields), rules answered {rules}"
+        )
+    lines.append(
+        "  note: a floor chosen on the same samples it is scored on does "
+        "not transfer. Refit on held-out labelled traffic before reading "
+        "this accuracy as the routed arm's accuracy."
+    )
+    return "\n".join(lines)
 
 
 def _build_analyzer(args):
     """Returns (analyzer, model_identity)."""
     if args.arm == "rules":
         return MockQueryAnalyzer(), "rules"
-    if args.arm == "decision":
+    if args.arm in ("decision", "confidence-routed"):
         analyzer, provider = _build_decision_arm(args)
         ident = (
             getattr(provider, "model", "")
             or getattr(provider, "base_url", "")
             or "?"
         )
+        if args.arm == "confidence-routed":
+            return analyzer, (
+                f"decision:{ident}@floor={analyzer.confidence_floor:.2f}"
+            )
         return analyzer, f"decision:{ident}"
     provider = _build_llm_provider(args)
     return (
@@ -183,10 +260,13 @@ def main(argv=None) -> int:
         description="Measure a query analyzer against a labelled set."
     )
     parser.add_argument(
-        "--arm", choices=["rules", "llm", "decision"], default="rules",
+        "--arm",
+        choices=["rules", "llm", "decision", "confidence-routed"],
+        default="rules",
         help=(
             "rules = MockQueryAnalyzer (default); llm = LLMQueryAnalyzer; "
-            "decision = HybridQueryAnalyzer"
+            "decision = DecisionQueryAnalyzer; confidence-routed = "
+            "ConfidenceRoutedQueryAnalyzer (see --confidence-floor)"
         ),
     )
     parser.add_argument(
@@ -220,6 +300,16 @@ def main(argv=None) -> int:
             "head is verified before any number is recorded (design §7)"
         ),
     )
+    parser.add_argument(
+        "--confidence-floor", type=float, default=None,
+        help=(
+            "--arm confidence-routed only: keep the model's answer when "
+            "its calibrated confidence is at or above this, else use the "
+            "rule-based answer. Default 0.50 "
+            "(NORA_DECISION_CONFIDENCE_FLOOR). 0.0 keeps every answer, "
+            "which reproduces --arm decision"
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
@@ -249,7 +339,7 @@ def main(argv=None) -> int:
     )
 
     fallbacks = getattr(analyzer, "fallback_count", 0)
-    if fallbacks and args.arm == "decision":
+    if fallbacks and args.arm in ("decision", "confidence-routed"):
         total = getattr(analyzer, "call_count", len(samples))
         print(
             f"error: the decision provider failed on {fallbacks} of "
@@ -280,10 +370,21 @@ def main(argv=None) -> int:
     print()
     print(report.matrix_text())
 
+    routing = None
+    if args.arm == "confidence-routed":
+        routing = _routing_summary(analyzer)
+        print()
+        print(_routing_text(routing))
+
     if args.out:
+        payload_out = report.to_dict()
+        if routing is not None:
+            # Written here rather than added to ClassifyReport: routing is
+            # one arm's provenance, and the report type is shared by four.
+            payload_out["routing"] = routing
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(
-            json.dumps(report.to_dict(), indent=2), encoding="utf-8"
+            json.dumps(payload_out, indent=2), encoding="utf-8"
         )
         print(f"\nreport written to {args.out}")
 

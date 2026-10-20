@@ -150,7 +150,8 @@ class TestMockDecisionProvider:
 from core.src.decision.analyzer import (
     CLASSIFICATION_QUESTIONS,
     DOC_SCOPE_QUESTION,
-    HybridQueryAnalyzer,
+    ConfidenceRoutedQueryAnalyzer,
+    DecisionQueryAnalyzer,
     QUERY_TYPE_QUESTION,
 )
 from core.src.query.analyzer import MockQueryAnalyzer
@@ -217,12 +218,12 @@ class TestClassificationQuestions:
         assert len(CLASSIFICATION_QUESTIONS) == 2
 
 
-class TestHybridQueryAnalyzer:
+class TestDecisionQueryAnalyzer:
     def test_decision_answers_drive_the_two_choice_fields(self):
         provider = _ScriptedProvider(
             {"query_type": "summarize", "doc_type_scope": "both"}
         )
-        intent = HybridQueryAnalyzer(provider).analyze("what is T3402?")
+        intent = DecisionQueryAnalyzer(provider).analyze("what is T3402?")
         assert intent.query_type is QueryType.SUMMARIZE
         assert intent.doc_type_scope is DocTypeScope.BOTH
 
@@ -230,7 +231,7 @@ class TestHybridQueryAnalyzer:
         provider = _ScriptedProvider(
             {"query_type": "general", "doc_type_scope": "requirements"}
         )
-        intent = HybridQueryAnalyzer(provider).analyze(
+        intent = DecisionQueryAnalyzer(provider).analyze(
             "How does VZW T3402 differ from 3GPP TS 24.301?"
         )
         assert "T3402" in intent.entities
@@ -241,14 +242,14 @@ class TestHybridQueryAnalyzer:
         provider = _ScriptedProvider(
             {"query_type": "fact", "doc_type_scope": "requirements"}
         )
-        intent = HybridQueryAnalyzer(provider).analyze("  spaced query  ")
+        intent = DecisionQueryAnalyzer(provider).analyze("  spaced query  ")
         assert intent.raw_query == "  spaced query  "
 
     def test_state_is_the_query(self):
         provider = _ScriptedProvider(
             {"query_type": "fact", "doc_type_scope": "requirements"}
         )
-        HybridQueryAnalyzer(provider).analyze("the query text")
+        DecisionQueryAnalyzer(provider).analyze("the query text")
         assert provider.states == ["the query text"]
 
     def test_one_request_carries_both_questions(self):
@@ -257,11 +258,11 @@ class TestHybridQueryAnalyzer:
         provider = _ScriptedProvider(
             {"query_type": "fact", "doc_type_scope": "requirements"}
         )
-        HybridQueryAnalyzer(provider).analyze("q")
+        DecisionQueryAnalyzer(provider).analyze("q")
         assert provider.seen == [["query_type", "doc_type_scope"]]
 
     def test_provider_failure_falls_back_to_rules(self):
-        intent = HybridQueryAnalyzer(_FailingProvider()).analyze(
+        intent = DecisionQueryAnalyzer(_FailingProvider()).analyze(
             "Summarize the data retry spec"
         )
         assert intent.query_type is QueryType.SUMMARIZE  # the rule's answer
@@ -269,7 +270,7 @@ class TestHybridQueryAnalyzer:
     def test_unexpected_provider_exception_also_falls_back(self):
         """A provider is third-party code; a TypeError from it must not
         take the query down."""
-        intent = HybridQueryAnalyzer(
+        intent = DecisionQueryAnalyzer(
             _FailingProvider(TypeError("bad shape"))
         ).analyze("What is the value of T3402?")
         assert intent.query_type is QueryType.FACT
@@ -278,7 +279,7 @@ class TestHybridQueryAnalyzer:
         provider = _ScriptedProvider(
             {"query_type": "not_a_query_type", "doc_type_scope": "requirements"}
         )
-        intent = HybridQueryAnalyzer(provider).analyze(
+        intent = DecisionQueryAnalyzer(provider).analyze(
             "What is the value of T3402?"
         )
         assert intent.query_type is QueryType.FACT
@@ -287,28 +288,28 @@ class TestHybridQueryAnalyzer:
         """A provider that answers one question but not the other must
         not blank the field it skipped."""
         provider = _ScriptedProvider({"query_type": "summarize"})
-        intent = HybridQueryAnalyzer(provider).analyze(
+        intent = DecisionQueryAnalyzer(provider).analyze(
             "what test cases cover this?"
         )
         assert intent.query_type is QueryType.SUMMARIZE
         assert intent.doc_type_scope is DocTypeScope.TEST_CASES
 
     def test_mock_provider_end_to_end(self):
-        intent = HybridQueryAnalyzer(MockDecisionProvider()).analyze(
+        intent = DecisionQueryAnalyzer(MockDecisionProvider()).analyze(
             "please summarize the data retry spec"
         )
         assert intent.query_type is QueryType.SUMMARIZE
 
     def test_queryintent_contract_unchanged(self):
         """QueryIntent is the contract and does not change (design §7) —
-        the hybrid returns the same shape the rules do."""
+        the decision analyzer returns the same shape the rules do."""
         rules = MockQueryAnalyzer().analyze("q")
         provider = _ScriptedProvider(
             {"query_type": "general", "doc_type_scope": "requirements"}
         )
-        hybrid = HybridQueryAnalyzer(provider).analyze("q")
-        assert type(hybrid) is type(rules)
-        assert vars(hybrid).keys() == vars(rules).keys()
+        decided = DecisionQueryAnalyzer(provider).analyze("q")
+        assert type(decided) is type(rules)
+        assert vars(decided).keys() == vars(rules).keys()
 
 
 class TestFallbackAccounting:
@@ -321,14 +322,14 @@ class TestFallbackAccounting:
         provider = _ScriptedProvider(
             {"query_type": "fact", "doc_type_scope": "requirements"}
         )
-        analyzer = HybridQueryAnalyzer(provider)
+        analyzer = DecisionQueryAnalyzer(provider)
         analyzer.analyze("a")
         analyzer.analyze("b")
         assert analyzer.call_count == 2
         assert analyzer.fallback_count == 0
 
     def test_dead_provider_counts_every_query(self):
-        analyzer = HybridQueryAnalyzer(_FailingProvider())
+        analyzer = DecisionQueryAnalyzer(_FailingProvider())
         for q in ("a", "b", "c"):
             analyzer.analyze(q)
         assert analyzer.call_count == 3
@@ -341,7 +342,7 @@ class TestFallbackAccounting:
         provider = _ScriptedProvider(
             {"query_type": "nonsense", "doc_type_scope": "requirements"}
         )
-        analyzer = HybridQueryAnalyzer(provider)
+        analyzer = DecisionQueryAnalyzer(provider)
         analyzer.analyze("What is the value of T3402?")
         assert analyzer.fallback_count == 0
 
@@ -400,3 +401,208 @@ class TestOptionDescriptions:
             question_id="q", kind="choice", question="?", options=("a",)
         )
         assert q.descriptions == ()
+
+
+class _ConfidenceProvider:
+    """Answers with a stated value AND a stated confidence per question.
+
+    `_ScriptedProvider` carries one confidence for every answer, which
+    cannot express the case this class exists to test: one field the
+    model is sure of travelling in the same response as one it is not.
+    """
+
+    model = "confidence-scripted"
+
+    def __init__(self, answers):
+        self._answers = answers  # {question_id: (value, confidence)}
+
+    def decide(self, state, questions):
+        return [
+            DecisionAnswer(q.question_id, *self._answers[q.question_id])
+            for q in questions
+            if q.question_id in self._answers
+        ]
+
+
+class TestConfidenceRoutedQueryAnalyzer:
+    """The routing policy: take the model's label where its calibrated
+    confidence clears the floor, the rule-based label everywhere else.
+
+    Measured motivation (phase-3-measurement.md): mean confidence 0.425
+    on correct answers against 0.268 on incorrect ones. The confidence
+    carries signal about its own correctness, which is the one thing the
+    rules cannot produce at any price.
+    """
+
+    _SURE = ("summarize", 0.9)
+    _UNSURE = ("summarize", 0.1)
+    _SCOPE_SURE = ("both", 0.9)
+    _SCOPE_UNSURE = ("both", 0.1)
+
+    def test_above_the_floor_the_model_answers(self):
+        provider = _ConfidenceProvider(
+            {"query_type": self._SURE, "doc_type_scope": self._SCOPE_SURE}
+        )
+        intent = ConfidenceRoutedQueryAnalyzer(provider, 0.5).analyze(
+            "please summarize the data retry spec"
+        )
+        assert intent.query_type is QueryType.SUMMARIZE
+        assert intent.doc_type_scope is DocTypeScope.BOTH
+
+    def test_below_the_floor_the_rules_answer(self):
+        provider = _ConfidenceProvider(
+            {"query_type": self._UNSURE,
+             "doc_type_scope": self._SCOPE_UNSURE}
+        )
+        query = "What is the value of T3402?"
+        intent = ConfidenceRoutedQueryAnalyzer(provider, 0.5).analyze(query)
+        rules = MockQueryAnalyzer().analyze(query)
+        assert intent.query_type is rules.query_type
+        assert intent.doc_type_scope is rules.doc_type_scope
+        assert intent.query_type is not QueryType.SUMMARIZE
+
+    def test_confidence_exactly_at_the_floor_is_taken(self):
+        """`>= floor`, not `> floor`. A floor of 0.5 means "0.5 is good
+        enough" — the sweep in phase-3-measurement.md was computed with
+        this boundary, so the reported numbers depend on it."""
+        provider = _ConfidenceProvider({"query_type": ("summarize", 0.5)})
+        intent = ConfidenceRoutedQueryAnalyzer(provider, 0.5).analyze("q")
+        assert intent.query_type is QueryType.SUMMARIZE
+
+    def test_routing_is_per_field(self):
+        """Both answers travel in one request but route independently:
+        the model is sure of the scope and unsure of the type here, and
+        there is no reason to discard the answer it is sure of."""
+        provider = _ConfidenceProvider(
+            {"query_type": self._UNSURE,
+             "doc_type_scope": self._SCOPE_SURE}
+        )
+        intent = ConfidenceRoutedQueryAnalyzer(provider, 0.5).analyze(
+            "What is the value of T3402?"
+        )
+        assert intent.query_type is not QueryType.SUMMARIZE
+        assert intent.doc_type_scope is DocTypeScope.BOTH
+
+    def test_open_extraction_fields_still_come_from_the_rules(self):
+        provider = _ConfidenceProvider({"query_type": self._SURE})
+        intent = ConfidenceRoutedQueryAnalyzer(provider, 0.5).analyze(
+            "compare T3402 in 3GPP TS 24.301"
+        )
+        rules = MockQueryAnalyzer().analyze(
+            "compare T3402 in 3GPP TS 24.301"
+        )
+        assert intent.standards_refs == rules.standards_refs
+        assert intent.concepts == rules.concepts
+
+    def test_floor_zero_is_the_unrouted_analyzer(self):
+        """The identity property. A floor of 0.0 takes every answer the
+        model gives, which is exactly what the `decision` arm measured —
+        so the routed arm cannot silently change the unrouted result."""
+        answers = {"query_type": ("summarize", 0.0),
+                   "doc_type_scope": ("both", 0.0)}
+        routed = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider(answers), 0.0
+        ).analyze("q")
+        plain = DecisionQueryAnalyzer(
+            _ConfidenceProvider(answers)
+        ).analyze("q")
+        assert routed.query_type is plain.query_type
+        assert routed.doc_type_scope is plain.doc_type_scope
+
+    def test_the_floor_is_recorded_on_the_instance(self):
+        """An eval harness stamps it on the report; a number routed at an
+        unstated floor is not reproducible."""
+        analyzer = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider({}), 0.35
+        )
+        assert analyzer.confidence_floor == 0.35
+
+
+class TestRoutingAccounting:
+    """Coverage — how much of the workload the model actually answered —
+    is the number that makes a routed result readable. An arm that routes
+    2 % to the model and scores well is reporting the rules."""
+
+    _BOTH_SURE = {"query_type": ("summarize", 0.9),
+                  "doc_type_scope": ("both", 0.9)}
+    _BOTH_UNSURE = {"query_type": ("summarize", 0.1),
+                    "doc_type_scope": ("both", 0.1)}
+
+    def test_counts_are_per_question_id(self):
+        provider = _ConfidenceProvider(
+            {"query_type": ("summarize", 0.9),
+             "doc_type_scope": ("both", 0.1)}
+        )
+        analyzer = ConfidenceRoutedQueryAnalyzer(provider, 0.5)
+        analyzer.analyze("q")
+        assert analyzer.routed_to_model == {"query_type": 1}
+        assert analyzer.routed_to_rules == {"doc_type_scope": 1}
+
+    def test_counts_accumulate_across_queries(self):
+        analyzer = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider(self._BOTH_SURE), 0.5
+        )
+        for q in ("a", "b", "c"):
+            analyzer.analyze(q)
+        assert analyzer.routed_to_model == {
+            "query_type": 3, "doc_type_scope": 3
+        }
+        assert analyzer.routed_to_rules == {}
+
+    def test_coverage_is_the_fraction_the_model_answered(self):
+        analyzer = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider(self._BOTH_UNSURE), 0.5
+        )
+        analyzer.analyze("q")
+        assert analyzer.coverage("query_type") == 0.0
+        assert analyzer.coverage("doc_type_scope") == 0.0
+
+    def test_coverage_of_a_field_nobody_asked_about_is_zero(self):
+        """Not a crash and not 1.0 — an unasked field was answered by
+        the model 0 % of the time."""
+        analyzer = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider({}), 0.5
+        )
+        assert analyzer.coverage("query_type") == 0.0
+
+    def test_routing_below_the_floor_is_not_a_provider_fallback(self):
+        """The distinction the eval harness depends on. `fallback_count`
+        means the provider was unreachable and the arm is contaminated;
+        routing means the provider answered and the policy declined it.
+        Conflating them would make a healthy routed run look like the
+        D-DRAFT-20 failure and get refused."""
+        analyzer = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider(self._BOTH_UNSURE), 0.5
+        )
+        analyzer.analyze("q")
+        assert analyzer.fallback_count == 0
+        assert analyzer.routed_to_rules["query_type"] == 1
+
+    def test_a_dead_provider_is_still_a_fallback_not_a_routing(self):
+        analyzer = ConfidenceRoutedQueryAnalyzer(_FailingProvider(), 0.5)
+        analyzer.analyze("q")
+        assert analyzer.fallback_count == 1
+        assert analyzer.routed_to_model == {}
+
+    def test_an_unparseable_answer_above_the_floor_routes_to_the_rules(self):
+        """It cleared the floor but is not a member of the enum. The
+        rule-based value serves, and coverage must not credit the model
+        for a value that was discarded."""
+        analyzer = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider({"query_type": ("nonsense", 0.9)}), 0.5
+        )
+        analyzer.analyze("What is the value of T3402?")
+        assert analyzer.routed_to_model == {}
+        assert analyzer.routed_to_rules["query_type"] == 1
+
+    def test_an_unanswered_field_routes_to_the_rules(self):
+        """This provider answers one of the two questions. The silent
+        field is a routing, not an error — and counting it is what keeps
+        coverage from being computed over a denominator that quietly
+        shrinks."""
+        analyzer = ConfidenceRoutedQueryAnalyzer(
+            _ConfidenceProvider({"query_type": ("summarize", 0.9)}), 0.5
+        )
+        analyzer.analyze("q")
+        assert analyzer.routed_to_model == {"query_type": 1}
+        assert analyzer.routed_to_rules == {"doc_type_scope": 1}

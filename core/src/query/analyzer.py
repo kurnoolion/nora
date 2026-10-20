@@ -444,7 +444,7 @@ Return ONLY valid JSON, no other text."""
         ``doc_type_scope: "general"`` on 1 of 50 queries and took a
         correct ``query_type`` down with it.
 
-        Degrading per field is what `HybridQueryAnalyzer._coerce` already
+        Degrading per field is what `DecisionQueryAnalyzer._coerce` already
         does, and the reason is the same: the fields are independent, so
         one bad field is not evidence against the others.
         """
@@ -463,7 +463,7 @@ Return ONLY valid JSON, no other text."""
 def make_query_analyzer(llm_provider=None, decision_provider=None):
     """Select the query analyzer by NORA's standard rule.
 
-    Decision provider supplied → ``HybridQueryAnalyzer`` (decision model
+    Decision provider supplied → ``DecisionQueryAnalyzer`` (decision model
     for ``query_type`` / ``doc_type_scope``, regex for the free-text
     spans; self-falls-back to keyword analysis on a provider failure).
     LLM provider supplied → ``LLMQueryAnalyzer`` (more accurate
@@ -494,9 +494,9 @@ def make_query_analyzer(llm_provider=None, decision_provider=None):
         # Function-local: core.src.decision.analyzer imports
         # MockQueryAnalyzer from this module, so a module-level import
         # here would be circular.
-        from core.src.decision.analyzer import HybridQueryAnalyzer
+        from core.src.decision.analyzer import DecisionQueryAnalyzer
 
-        return HybridQueryAnalyzer(decision_provider)
+        return DecisionQueryAnalyzer(decision_provider)
     if llm_provider is not None:
         return LLMQueryAnalyzer(llm_provider)
     return MockQueryAnalyzer()
@@ -509,10 +509,16 @@ def make_query_analyzer_from_knob(
 ):
     """Select the query analyzer from ``NORA_QUERY_ANALYZER``.
 
-    The knob is three-valued — ``rules`` / ``llm`` / ``decision`` — and
-    defaults to ``rules``, so a caller that adopts this function in place
-    of ``MockQueryAnalyzer()`` changes nothing for an operator who sets
-    no knob. That is the phase-2 identity gate.
+    The knob is four-valued — ``rules`` / ``llm`` / ``decision`` /
+    ``confidence-routed`` — and defaults to ``rules``, so a caller that
+    adopts this function in place of ``MockQueryAnalyzer()`` changes
+    nothing for an operator who sets no knob. That is the phase-2
+    identity gate.
+
+    ``decision`` and ``confidence-routed`` share a provider and differ
+    only in policy: the first keeps every answer the model returns, the
+    second keeps an answer only where its calibrated confidence clears
+    ``NORA_DECISION_CONFIDENCE_FLOOR`` and lets the rules serve the rest.
 
     Degrades to ``rules`` rather than raising whenever the selected arm
     has no usable provider: the sira lane has no ``LLMProvider`` wired
@@ -521,15 +527,16 @@ def make_query_analyzer_from_knob(
 
     Args:
         llm_provider: Used when the knob says ``llm``.
-        decision_provider: Used when the knob says ``decision``; a
-            ``MockDecisionProvider`` is built when the knob says
-            ``decision`` and none is supplied.
+        decision_provider: Used when the knob says ``decision`` or
+            ``confidence-routed``; a ``MockDecisionProvider`` is built
+            when either is selected and none is supplied.
         cli_value: Explicit override, highest precedence.
 
     Returns:
         A query analyzer with an ``analyze(query) -> QueryIntent`` method.
     """
     from core.src.env.config import (
+        resolve_decision_confidence_floor,
         resolve_decision_provider,
         resolve_query_analyzer,
     )
@@ -545,13 +552,23 @@ def make_query_analyzer_from_knob(
             return MockQueryAnalyzer()
         return make_query_analyzer(llm_provider=llm_provider)
 
-    if mode == "decision":
+    if mode in ("decision", "confidence-routed"):
         if decision_provider is None:
             decision_provider = _build_decision_provider(
                 resolve_decision_provider()
             )
         if decision_provider is None:
             return MockQueryAnalyzer()
+        if mode == "confidence-routed":
+            # Function-local for the same circular-import reason as
+            # make_query_analyzer's.
+            from core.src.decision.analyzer import (
+                ConfidenceRoutedQueryAnalyzer,
+            )
+
+            return ConfidenceRoutedQueryAnalyzer(
+                decision_provider, resolve_decision_confidence_floor()
+            )
         return make_query_analyzer(decision_provider=decision_provider)
 
     return MockQueryAnalyzer()
