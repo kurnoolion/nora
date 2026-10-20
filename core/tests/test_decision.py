@@ -125,3 +125,167 @@ class TestMockDecisionProvider:
         self.p.decide("a", [q, q])
         self.p.decide("b", [q])
         assert self.p.call_count == 2
+
+
+from core.src.decision.analyzer import (
+    CLASSIFICATION_QUESTIONS,
+    DOC_SCOPE_QUESTION,
+    HybridQueryAnalyzer,
+    QUERY_TYPE_QUESTION,
+)
+from core.src.query.analyzer import MockQueryAnalyzer
+from core.src.query.schema import DocTypeScope, QueryType
+
+
+class _ScriptedProvider:
+    """Returns fixed values regardless of state; records what it saw."""
+
+    model = "scripted"
+
+    def __init__(self, values, confidence=1.0):
+        self._values = values
+        self._confidence = confidence
+        self.states = []
+        self.seen = []
+
+    def decide(self, state, questions):
+        self.states.append(state)
+        self.seen.append([q.question_id for q in questions])
+        return [
+            DecisionAnswer(
+                q.question_id, self._values[q.question_id], self._confidence
+            )
+            for q in questions
+            if q.question_id in self._values
+        ]
+
+
+class _FailingProvider:
+    model = "failing"
+
+    def __init__(self, exc=None):
+        self.exc = exc or DecisionError("provider down")
+
+    def decide(self, state, questions):
+        raise self.exc
+
+
+class TestClassificationQuestions:
+    def test_query_type_options_are_the_enum(self):
+        assert QUERY_TYPE_QUESTION.options == tuple(
+            t.value for t in QueryType
+        )
+
+    def test_query_type_catch_all_is_last(self):
+        """MockDecisionProvider's choice fallback returns the last
+        option, and GENERAL is the taxonomy's own catch-all."""
+        assert QUERY_TYPE_QUESTION.options[-1] == QueryType.GENERAL.value
+
+    def test_doc_scope_options_are_the_enum(self):
+        assert DOC_SCOPE_QUESTION.options == tuple(
+            s.value for s in DocTypeScope
+        )
+
+    def test_both_questions_are_choices(self):
+        assert [q.kind for q in CLASSIFICATION_QUESTIONS] == [
+            "choice", "choice"
+        ]
+
+    def test_exactly_two_questions_in_phase_2(self):
+        """The three closed-vocabulary multi-selects are deferred to
+        phase 3 so the first measurement has one variable (design §2)."""
+        assert len(CLASSIFICATION_QUESTIONS) == 2
+
+
+class TestHybridQueryAnalyzer:
+    def test_decision_answers_drive_the_two_choice_fields(self):
+        provider = _ScriptedProvider(
+            {"query_type": "summarize", "doc_type_scope": "both"}
+        )
+        intent = HybridQueryAnalyzer(provider).analyze("what is T3402?")
+        assert intent.query_type is QueryType.SUMMARIZE
+        assert intent.doc_type_scope is DocTypeScope.BOTH
+
+    def test_open_extraction_fields_come_from_the_rules(self):
+        provider = _ScriptedProvider(
+            {"query_type": "general", "doc_type_scope": "requirements"}
+        )
+        intent = HybridQueryAnalyzer(provider).analyze(
+            "How does VZW T3402 differ from 3GPP TS 24.301?"
+        )
+        assert "T3402" in intent.entities
+        assert "3GPP TS 24.301" in intent.standards_refs
+        assert intent.mnos == ["VZW"]
+
+    def test_raw_query_preserved(self):
+        provider = _ScriptedProvider(
+            {"query_type": "fact", "doc_type_scope": "requirements"}
+        )
+        intent = HybridQueryAnalyzer(provider).analyze("  spaced query  ")
+        assert intent.raw_query == "  spaced query  "
+
+    def test_state_is_the_query(self):
+        provider = _ScriptedProvider(
+            {"query_type": "fact", "doc_type_scope": "requirements"}
+        )
+        HybridQueryAnalyzer(provider).analyze("the query text")
+        assert provider.states == ["the query text"]
+
+    def test_one_request_carries_both_questions(self):
+        """Parallel questions against one shared state is the whole
+        point of the wire format — two round trips would waste it."""
+        provider = _ScriptedProvider(
+            {"query_type": "fact", "doc_type_scope": "requirements"}
+        )
+        HybridQueryAnalyzer(provider).analyze("q")
+        assert provider.seen == [["query_type", "doc_type_scope"]]
+
+    def test_provider_failure_falls_back_to_rules(self):
+        intent = HybridQueryAnalyzer(_FailingProvider()).analyze(
+            "Summarize the data retry spec"
+        )
+        assert intent.query_type is QueryType.SUMMARIZE  # the rule's answer
+
+    def test_unexpected_provider_exception_also_falls_back(self):
+        """A provider is third-party code; a TypeError from it must not
+        take the query down."""
+        intent = HybridQueryAnalyzer(
+            _FailingProvider(TypeError("bad shape"))
+        ).analyze("What is the value of T3402?")
+        assert intent.query_type is QueryType.FACT
+
+    def test_unparseable_answer_falls_back_to_rules(self):
+        provider = _ScriptedProvider(
+            {"query_type": "not_a_query_type", "doc_type_scope": "requirements"}
+        )
+        intent = HybridQueryAnalyzer(provider).analyze(
+            "What is the value of T3402?"
+        )
+        assert intent.query_type is QueryType.FACT
+
+    def test_missing_answer_keeps_the_rule_value(self):
+        """A provider that answers one question but not the other must
+        not blank the field it skipped."""
+        provider = _ScriptedProvider({"query_type": "summarize"})
+        intent = HybridQueryAnalyzer(provider).analyze(
+            "what test cases cover this?"
+        )
+        assert intent.query_type is QueryType.SUMMARIZE
+        assert intent.doc_type_scope is DocTypeScope.TEST_CASES
+
+    def test_mock_provider_end_to_end(self):
+        intent = HybridQueryAnalyzer(MockDecisionProvider()).analyze(
+            "please summarize the data retry spec"
+        )
+        assert intent.query_type is QueryType.SUMMARIZE
+
+    def test_queryintent_contract_unchanged(self):
+        """QueryIntent is the contract and does not change (design §7) —
+        the hybrid returns the same shape the rules do."""
+        rules = MockQueryAnalyzer().analyze("q")
+        provider = _ScriptedProvider(
+            {"query_type": "general", "doc_type_scope": "requirements"}
+        )
+        hybrid = HybridQueryAnalyzer(provider).analyze("q")
+        assert type(hybrid) is type(rules)
+        assert vars(hybrid).keys() == vars(rules).keys()
