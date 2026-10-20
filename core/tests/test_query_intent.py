@@ -12,9 +12,12 @@ Covers:
 
 from __future__ import annotations
 
+import re
+
 import networkx as nx
 
 from core.src.query.analyzer import (
+    _MNO_ALIASES,
     LLMQueryAnalyzer,
     MockQueryAnalyzer,
     make_query_analyzer,
@@ -30,8 +33,12 @@ from core.src.query.pipeline import (
     _TYPE_RERANK_ENABLED,
     _TYPE_REWRITE_ENABLED,
 )
-from core.src.query.schema import QueryType
+from core.src.query.schema import DocTypeScope, QueryType
 from core.src.vectorstore.store_base import QueryResult
+
+# An MNO code the rule analyzer recognises, taken from its own alias
+# table rather than written out.
+_MNO = next(iter(dict.fromkeys(_MNO_ALIASES.values())))
 
 
 # ── Analyzer classification ────────────────────────────────────
@@ -376,3 +383,145 @@ class TestMnoAliasBoundaries:
 
     def test_unscoped_query_extracts_nothing(self):
         assert self.a.analyze("Compare SMS retry for all MNOs").mnos == []
+
+
+# ── LLM prompt / enum agreement ────────────────────────────────
+
+
+class TestLLMPromptEnumAgreement:
+    """The prompt's option lists must match the enums they advertise.
+
+    A hand-written option list silently dropped SUMMARIZE and FACT
+    (strand jev-experimentation, design §2.1), making two of ten
+    classes unreachable under the LLM analyzer. /drift-check could not
+    see it: it compares MODULE.md contracts against code, not prompt
+    text against an enum. This test is that missing coverage.
+    """
+
+    class _CapturingProvider:
+        def __init__(self) -> None:
+            self.prompt = ""
+            self.system = ""
+
+        def complete(self, prompt, system=None, temperature=0.0, **kwargs):
+            self.prompt = prompt
+            self.system = system or ""
+            return ""
+
+    def _prompt_for(self, query: str) -> str:
+        provider = self._CapturingProvider()
+        LLMQueryAnalyzer(provider).analyze(query)
+        return provider.prompt
+
+    def test_prompt_offers_every_query_type(self):
+        prompt = self._prompt_for("What is the value of T3402?")
+        missing = [t.value for t in QueryType if f'"{t.value}"' not in prompt]
+        assert missing == [], f"prompt omits QueryType values: {missing}"
+
+    def test_prompt_offers_every_doc_type_scope(self):
+        prompt = self._prompt_for("what test cases cover this?")
+        missing = [s.value for s in DocTypeScope if f'"{s.value}"' not in prompt]
+        assert missing == [], f"prompt omits DocTypeScope values: {missing}"
+
+    def test_prompt_offers_no_unknown_query_type(self):
+        """Guards the other direction — a stale value left in the prompt
+        would be parsed back by QueryType(...) and raise at runtime."""
+        prompt = self._prompt_for("summarize the data retry spec")
+        line = next(
+            ln for ln in prompt.splitlines() if ln.startswith("- query_type:")
+        )
+        quoted = re.findall(r'"([a-z_]+)"', line)
+        assert set(quoted) == {t.value for t in QueryType}
+
+
+class TestAliasDoubleCountRegression:
+    """One plan named through two of its own aliases is one plan.
+
+    Found while authoring the phase-1 labelled set (sample c04). The
+    cross-doc signal counted `_PLAN_ALIASES` hits rather than distinct
+    plan ids, so "band 13 network access" scored two signals for the
+    single plan LTEB13NAC and routed a within-plan lookup to CROSS_DOC —
+    which widens top_k and drops the BM25 weight to 0.0.
+    """
+
+    def test_two_aliases_of_one_plan_stay_single_doc(self):
+        intent = MockQueryAnalyzer().analyze(
+            f"Band 13 network access requirements for {_MNO}"
+        )
+        assert intent.query_type is QueryType.SINGLE_DOC
+
+    def test_the_two_aliases_do_resolve_to_one_plan(self):
+        """Guards the premise: if these ever stop being aliases of the
+        same plan, the test above stops testing what it says."""
+        intent = MockQueryAnalyzer().analyze(
+            f"Band 13 network access requirements for {_MNO}"
+        )
+        assert len(intent.plan_ids) == 1
+
+    def test_two_distinct_plans_still_reach_cross_doc(self):
+        """The signal the fix must not disarm."""
+        intent = MockQueryAnalyzer().analyze(
+            "Compare the data retry and SMS requirements"
+        )
+        assert len(intent.plan_ids) == 2
+        assert intent.query_type is QueryType.CROSS_DOC
+
+
+class TestLLMPerFieldFallback:
+    """One unparseable typed field must not discard the whole answer.
+
+    Measured on the phase-1 labelled set: the model answered
+    `doc_type_scope: "general"` — not a DocTypeScope — on 1 of 50
+    queries, and the blanket `except ValueError` threw away a correct
+    `query_type` with it, silently making that sample rule-based.
+    """
+
+    @staticmethod
+    def _provider(payload):
+        class _Stub:
+            def complete(self, prompt, system=None, temperature=0.0, **kw):
+                return payload
+        return _Stub()
+
+    def test_bad_scope_keeps_the_good_query_type(self):
+        provider = self._provider(
+            '{"query_type": "summarize", "doc_type_scope": "general"}'
+        )
+        intent = LLMQueryAnalyzer(provider).analyze("Summarize the spec")
+        assert intent.query_type is QueryType.SUMMARIZE
+
+    def test_bad_scope_falls_back_to_the_rule_based_scope(self):
+        provider = self._provider(
+            '{"query_type": "summarize", "doc_type_scope": "general"}'
+        )
+        intent = LLMQueryAnalyzer(provider).analyze("Summarize the spec")
+        expected = MockQueryAnalyzer().analyze("Summarize the spec")
+        assert intent.doc_type_scope is expected.doc_type_scope
+
+    def test_bad_query_type_keeps_the_good_scope(self):
+        provider = self._provider(
+            '{"query_type": "nonsense", "doc_type_scope": "test_cases"}'
+        )
+        intent = LLMQueryAnalyzer(provider).analyze("Which tests cover it?")
+        assert intent.doc_type_scope is DocTypeScope.TEST_CASES
+
+    def test_free_text_survives_a_bad_typed_field(self):
+        """The fields are independent, so a bad enum is not evidence
+        against the extraction."""
+        provider = self._provider(
+            '{"query_type": "fact", "doc_type_scope": "general",'
+            ' "entities": ["T3402"], "concepts": ["timer"]}'
+        )
+        intent = LLMQueryAnalyzer(provider).analyze("What is T3402?")
+        assert intent.entities == ["T3402"]
+        assert intent.concepts == ["timer"]
+
+    def test_both_fields_bad_still_returns_a_usable_intent(self):
+        provider = self._provider(
+            '{"query_type": "nope", "doc_type_scope": "nope",'
+            ' "entities": ["T3402"]}'
+        )
+        intent = LLMQueryAnalyzer(provider).analyze("What is T3402?")
+        assert isinstance(intent.query_type, QueryType)
+        assert isinstance(intent.doc_type_scope, DocTypeScope)
+        assert intent.entities == ["T3402"]

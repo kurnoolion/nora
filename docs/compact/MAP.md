@@ -1,12 +1,13 @@
 # MAP
 
-Generated 2026-10-18 by regen-map. Do not hand-edit.
+Generated 2026-10-20 by regen-map. Do not hand-edit.
 
 ## Modules
 
 | Module | Purpose |
 | --- | --- |
 | [corrections](../../core/src/corrections/MODULE.md) | Per-environment profile + taxonomy correction handling: store engineer-edited overrides, diff them against pipeline output, and emit compact FIX reports (no proprietary content) that are pasteable back into chat. |
+| [decision](../../core/src/decision/MODULE.md) | Decision models — typed `noul` / `choice` / `score` inference with no token generation. |
 | [env](../../core/src/env/MODULE.md) | Per-environment scoped workspace configuration. |
 | [eval](../../core/src/eval/MODULE.md) | Evaluation framework for the query pipeline. |
 | [extraction](../../core/src/extraction/MODULE.md) | Format-aware content extraction. |
@@ -29,6 +30,7 @@ Generated 2026-10-18 by regen-map. Do not hand-edit.
 ```mermaid
 flowchart TD
     m_corrections[corrections]
+    m_decision[decision]
     m_env[env]
     m_eval[eval]
     m_extraction[extraction]
@@ -48,6 +50,8 @@ flowchart TD
     m_corrections --> m_env
     m_corrections --> m_profiler
     m_corrections --> m_taxonomy
+    m_decision --> m_query
+    m_eval --> m_decision
     m_eval --> m_env
     m_eval --> m_extraction
     m_eval --> m_graph
@@ -83,6 +87,7 @@ flowchart TD
     m_profiler --> m_extraction
     m_profiler --> m_llm
     m_profiler --> m_models
+    m_query --> m_decision
     m_query --> m_env
     m_query --> m_graph
     m_query --> m_llm
@@ -146,6 +151,14 @@ nora/
 │   │   │   ├── compactor.py                             # Compact FIX report generators for profile and taxonomy corrections.
 │   │   │   ├── schema.py                                # Data models for correction FIX reports.
 │   │   │   └── store.py                                 # CorrectionStore — per-environment correction file management.
+│   │   ├── decision/                                    # Decision models — typed `noul` / `choice` / `score` inference with no token generation.
+│   │   │   ├── MODULE.md
+│   │   │   ├── __init__.py                              # Decision models — typed noul/choice/score inference, no token generation.
+│   │   │   ├── analyzer.py                              # Decision-model-backed query analysis.
+│   │   │   ├── base.py                                  # The decision-model wire contract.
+│   │   │   ├── head_check.py                            # Verify a decision model's head actually shipped.
+│   │   │   ├── mock_provider.py                         # Deterministic offline decision provider.
+│   │   │   └── systemone_provider.py                    # `/v1/systemone` HTTP decision provider.
 │   │   ├── env/                                         # Per-environment scoped workspace configuration.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -155,6 +168,9 @@ nora/
 │   │   ├── eval/                                        # Evaluation framework for the query pipeline.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
+│   │   │   ├── classify.py                              # Query-classification evaluation harness.
+│   │   │   ├── classify_cli.py                          # CLI for the query-classification eval harness.
+│   │   │   ├── classify_set.json
 │   │   │   ├── eval_cli.py                              # CLI for the evaluation framework (PoC Step 11).
 │   │   │   ├── golden.py                                # Golden eval set schema + persistence (FR-38, strand golden-eval).
 │   │   │   ├── golden_cli.py                            # Golden eval batch CLI (FR-38, strand golden-eval).
@@ -441,6 +457,9 @@ nora/
 │       ├── test_chunk_builder_definitions.py            # Tests for FR-35 [D-032] inline definition expansion in chunk_builder.
 │       ├── test_chunk_builder_hierarchy.py              # Tests for hierarchy path prefixing in chunk text and metadata.
 │       ├── test_chunk_builder_subsections.py            # Tests for parent-chunk augmentation with child titles.
+│       ├── test_decision.py                             # Tests for the decision-model seam (strand jev-experimentation, phase 2).
+│       ├── test_decision_head_check.py                  # The decision-head verification gate (strand jev-experimentation,
+│       ├── test_decision_systemone.py                   # The /v1/systemone HTTP provider (strand jev-experimentation, phase 3).
 │       ├── test_document_ir.py                          # Tests for DocumentIR serialize/deserialize round-trip.
 │       ├── test_docx_extractor_merges.py                # Tests for the DOCX extractor's merged-cell metadata.
 │       ├── test_embedding_ollama.py                     # Tests for OllamaEmbedder + make_embedder factory.
@@ -450,6 +469,7 @@ nora/
 │       ├── test_enrich_review_ui.py                     # Slice-3 tests: the /enrichment-review page + HTMX partials
 │       ├── test_env_config.py                           # Tests for `EnvironmentConfig` path helpers — focused on `~` expansion.
 │       ├── test_eval.py                                 # Tests for the evaluation framework (Step 11).
+│       ├── test_eval_classify.py                        # Tests for the query-classification eval harness (strand
 │       ├── test_eval_golden.py                          # Tests for the golden eval sample schema + persistence (FR-38).
 │       ├── test_eval_golden_release_cli.py              # Tests for golden_release_cli — migrate / advance / review and the text
 │       ├── test_eval_golden_report_cli.py               # Tests for the golden run report inspector CLI.
@@ -490,6 +510,7 @@ nora/
 │       ├── test_profile_schema.py                       # Tests for DocumentProfile serialize/deserialize round-trip.
 │       ├── test_profile_substitute.py                   # Tests for profile placeholder substitution [D-062].
 │       ├── test_query.py                                # Tests for the query pipeline (PoC Step 10).
+│       ├── test_query_analyzer_knob.py                  # The four-valued NORA_QUERY_ANALYZER knob and the phase-2 identity
 │       ├── test_query_cell_routing.py                   # Query-side cell routing (D-DRAFT-11 slice 2).
 │       ├── test_query_citation_audit.py                 # Tests for Stage 6.5 — per-sentence citation audit.
 │       ├── test_query_grouping.py                       # Tests for hierarchy-based chunk grouping (Stage 4.7).
@@ -749,6 +770,16 @@ nora/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   └── journal.md
+│   │   │   ├── jev-experimentation/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── decision-model-brief.html
+│   │   │   │   ├── decision-model-design.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   ├── journal.md
+│   │   │   │   ├── kev-runbook.md
+│   │   │   │   ├── phase-1-plan.md
+│   │   │   │   ├── phase-2-plan.md
+│   │   │   │   └── phase-3-measurement.md
 │   │   │   ├── llm-model-discovery/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md

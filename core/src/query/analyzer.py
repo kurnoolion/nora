@@ -337,16 +337,20 @@ class MockQueryAnalyzer:
         if any(p in q_lower for p in cross_doc_phrases):
             return QueryType.CROSS_DOC
 
-        # Multi-plan name signal — explicit plan names from aliases
-        cross_doc_signals = 0
-        for alias in _PLAN_ALIASES:
-            if alias in q_lower:
-                cross_doc_signals += 1
-        if cross_doc_signals >= 2:
+        # Multi-plan name signal — two or more DISTINCT plans named.
+        # Counting alias hits instead counted one plan twice whenever a
+        # query used two of its own aliases: "band 13 network access
+        # requirements" names the single plan LTEB13NAC through both of
+        # its aliases and was routed to CROSS_DOC, which widens retrieval
+        # and drops the BM25 weight for what is a within-plan lookup.
+        # `_extract_plan_ids` already de-duplicates by plan id, so the
+        # fix is to ask it rather than to count aliases.
+        plan_ids = self._extract_plan_ids(q_lower)
+        if len(plan_ids) >= 2:
             return QueryType.CROSS_DOC
 
         # Default: single doc if a plan is identified, general otherwise
-        if self._extract_plan_ids(q_lower):
+        if plan_ids:
             return QueryType.SINGLE_DOC
 
         return QueryType.GENERAL
@@ -379,6 +383,8 @@ class LLMQueryAnalyzer:
             "MNO device requirement specifications."
         )
 
+        type_options = ", ".join(f'"{t.value}"' for t in QueryType)
+
         prompt = f"""Analyze this query and extract structured intent as JSON:
 
 Query: "{query}"
@@ -388,7 +394,7 @@ Return JSON with these fields:
 - concepts: list of telecom concepts mentioned (e.g., "attach reject", "IMS registration")
 - mnos: list of MNO codes ("VZW", "TMO", "ATT") mentioned or implied
 - releases: list of release references (e.g., "Feb 2026", "latest")
-- query_type: one of "single_doc", "cross_doc", "cross_mno_comparison", "release_diff", "standards_comparison", "traceability", "feature_level", "general"
+- query_type: one of {type_options}
 - doc_type_scope: "requirements", "test_cases", or "both"
 - standards_refs: list of 3GPP spec references (e.g., "3GPP TS 24.301")
 - likely_features: list of feature IDs from: {list(_FEATURE_KEYWORDS.keys())}
@@ -411,8 +417,14 @@ Return ONLY valid JSON, no other text."""
                 concepts=data.get("concepts", []),
                 mnos=data.get("mnos", []),
                 releases=data.get("releases", []),
-                query_type=QueryType(data.get("query_type", "general")),
-                doc_type_scope=DocTypeScope(data.get("doc_type_scope", "requirements")),
+                query_type=self._typed(
+                    query, data.get("query_type", "general"),
+                    QueryType, "query_type",
+                ),
+                doc_type_scope=self._typed(
+                    query, data.get("doc_type_scope", "requirements"),
+                    DocTypeScope, "doc_type_scope",
+                ),
                 standards_refs=data.get("standards_refs", []),
                 likely_features=data.get("likely_features", []),
                 plan_ids=data.get("plan_ids", []),
@@ -421,27 +433,275 @@ Return ONLY valid JSON, no other text."""
             logger.warning(f"LLM analysis failed ({e}) — falling back to keyword analysis")
             return self._fallback.analyze(query)
 
+    def _typed(self, query: str, raw, enum_cls, field: str):
+        """One enum field, with a fallback scoped to that field.
 
-def make_query_analyzer(llm_provider=None):
+        Constructing the enum inline discarded the **whole** answer when
+        any single typed field was unparseable: an LLM that returned a
+        correct ``query_type`` alongside a ``doc_type_scope`` outside the
+        enum lost both, and the run silently became rule-based. Measured
+        on the phase-1 labelled set, where the model answered
+        ``doc_type_scope: "general"`` on 1 of 50 queries and took a
+        correct ``query_type`` down with it.
+
+        Degrading per field is what `DecisionQueryAnalyzer._coerce` already
+        does, and the reason is the same: the fields are independent, so
+        one bad field is not evidence against the others.
+        """
+        try:
+            return enum_cls(raw)
+        except ValueError:
+            value = getattr(self._fallback.analyze(query), field)
+            logger.warning(
+                "LLM returned %s=%r, which is not a valid %s — using the "
+                "rule-based %s=%s and keeping the rest of the LLM's answer",
+                field, raw, enum_cls.__name__, field, value.value,
+            )
+            return value
+
+
+def make_query_analyzer(llm_provider=None, decision_provider=None):
     """Select the query analyzer by NORA's standard rule.
 
+    Decision provider supplied → ``DecisionQueryAnalyzer`` (decision model
+    for ``query_type`` / ``doc_type_scope``, regex for the free-text
+    spans; self-falls-back to keyword analysis on a provider failure).
     LLM provider supplied → ``LLMQueryAnalyzer`` (more accurate
     extraction; handles oblique MNO references and multi-release
     release-diff queries, and self-falls-back to keyword analysis on a
-    parse failure). ``None`` → ``MockQueryAnalyzer`` (keyword fallback,
-    no LLM).
+    parse failure). Neither → ``MockQueryAnalyzer`` (keyword fallback,
+    no model).
 
-    This makes query analysis follow the same configured-LLM-or-mock
+    This makes query analysis follow the same configured-model-or-mock
     posture as the rest of NORA rather than defaulting to keyword
-    analysis even when an LLM is available (multi-mno-sira D-DRAFT-9).
+    analysis even when a model is available (multi-mno-sira D-DRAFT-9).
+    The decision path mirrors that posture rather than inventing a new
+    one, and the fall-through is what keeps every existing caller — all
+    of which pass a single positional argument — byte-identical
+    (strand jev-experimentation, phase 2).
 
     Args:
         llm_provider: An object satisfying the ``LLMProvider`` Protocol
             (has ``complete()``), or ``None``.
+        decision_provider: An object satisfying the ``DecisionProvider``
+            Protocol (has ``decide()``), or ``None``. Takes precedence
+            over ``llm_provider`` when both are supplied.
 
     Returns:
         A query analyzer with an ``analyze(query) -> QueryIntent`` method.
     """
+    if decision_provider is not None:
+        # Function-local: core.src.decision.analyzer imports
+        # MockQueryAnalyzer from this module, so a module-level import
+        # here would be circular.
+        from core.src.decision.analyzer import DecisionQueryAnalyzer
+
+        return DecisionQueryAnalyzer(decision_provider)
     if llm_provider is not None:
         return LLMQueryAnalyzer(llm_provider)
     return MockQueryAnalyzer()
+
+
+def _plan_query_analyzer(
+    llm_provider=None,
+    decision_provider=None,
+    cli_value=None,
+):
+    """Decide which arm the knob would build, after degradation.
+
+    Shared by ``make_query_analyzer_from_knob`` and
+    ``query_analyzer_arm`` so the arm a health check reports is the arm a
+    query is served by. Reads configuration only — it builds nothing and
+    does no network I/O.
+
+    Never raises on configuration. Every way the knob can be wrong
+    degrades to ``rules``, and the reason comes back for the caller to
+    log, because a misconfigured classifier must not take the query path
+    down.
+
+    Returns:
+        ``(arm, provider_name, floor, reason)``. ``arm`` is one of
+        ``rules`` / ``llm`` / ``decision`` / ``confidence-routed``.
+        ``provider_name`` is the decision provider to build, or ``None``
+        when the caller supplied one or the arm needs none. ``floor`` is
+        set for ``confidence-routed`` only. ``reason`` is ``None`` unless
+        the requested arm degraded.
+    """
+    from core.src.env.config import (
+        resolve_decision_base_url,
+        resolve_decision_confidence_floor,
+        resolve_decision_provider,
+        resolve_query_analyzer,
+    )
+
+    try:
+        mode = resolve_query_analyzer(cli_value=cli_value)
+    except ValueError as e:
+        return "rules", None, None, str(e)
+
+    if mode == "llm":
+        if llm_provider is None:
+            return "rules", None, None, (
+                "NORA_QUERY_ANALYZER=llm but no LLMProvider was supplied"
+            )
+        return "llm", None, None, None
+
+    if mode in ("decision", "confidence-routed"):
+        floor = None
+        if mode == "confidence-routed":
+            try:
+                floor = resolve_decision_confidence_floor()
+            except ValueError as e:
+                return "rules", None, None, str(e)
+        if decision_provider is not None:
+            return mode, None, floor, None
+        try:
+            name = resolve_decision_provider()
+        except ValueError as e:
+            return "rules", None, None, str(e)
+        if not name:
+            # No implicit mock on a served path: the mock answers from
+            # keyword rules, and reporting it as the decision arm would
+            # label the rules as a model.
+            return "rules", None, None, (
+                f"NORA_QUERY_ANALYZER={mode} but no NORA_DECISION_PROVIDER "
+                "is named"
+            )
+        if name == "systemone" and not resolve_decision_base_url():
+            return "rules", None, None, (
+                "NORA_DECISION_PROVIDER=systemone needs "
+                "NORA_DECISION_BASE_URL"
+            )
+        return mode, name, floor, None
+
+    return "rules", None, None, None
+
+
+def make_query_analyzer_from_knob(
+    llm_provider=None,
+    decision_provider=None,
+    cli_value=None,
+):
+    """Select the query analyzer from ``NORA_QUERY_ANALYZER``.
+
+    The knob is four-valued — ``rules`` / ``llm`` / ``decision`` /
+    ``confidence-routed`` — and defaults to ``rules``, so a caller that
+    adopts this function in place of ``MockQueryAnalyzer()`` changes
+    nothing for an administrator who sets no knob. That is the phase-2
+    identity gate.
+
+    ``decision`` and ``confidence-routed`` share a provider and differ
+    only in policy: the first keeps every answer the model returns, the
+    second keeps an answer only where its calibrated confidence clears
+    ``NORA_DECISION_CONFIDENCE_FLOOR`` and lets the rules serve the rest.
+
+    Never raises on configuration. An unknown knob value, an invalid
+    confidence floor, an unknown or unnamed decision provider, or a
+    provider that cannot be built each log a warning and return the
+    rule-based analyzer. A misconfigured classifier must not take the
+    query path down. The resolvers in ``core.src.env.config`` still
+    raise, so a CLI that validates its own flags fails loudly.
+
+    Args:
+        llm_provider: Used when the knob says ``llm``.
+        decision_provider: Used when the knob says ``decision`` or
+            ``confidence-routed``. When none is supplied, the provider
+            ``NORA_DECISION_PROVIDER`` names is built; with none named,
+            the arm degrades to ``rules``. ``mock`` is built only when
+            named explicitly.
+        cli_value: Explicit override, highest precedence.
+
+    Returns:
+        A query analyzer with an ``analyze(query) -> QueryIntent`` method.
+    """
+    arm, name, floor, reason = _plan_query_analyzer(
+        llm_provider=llm_provider,
+        decision_provider=decision_provider,
+        cli_value=cli_value,
+    )
+    if reason:
+        logger.warning(
+            "%s — falling back to rule-based classification", reason
+        )
+
+    if arm == "llm":
+        return make_query_analyzer(llm_provider=llm_provider)
+
+    if arm in ("decision", "confidence-routed"):
+        if decision_provider is None:
+            decision_provider = _build_decision_provider(name)
+        if decision_provider is None:
+            return MockQueryAnalyzer()
+        if arm == "confidence-routed":
+            # Function-local for the same circular-import reason as
+            # make_query_analyzer's.
+            from core.src.decision.analyzer import (
+                ConfidenceRoutedQueryAnalyzer,
+            )
+
+            return ConfidenceRoutedQueryAnalyzer(decision_provider, floor)
+        return make_query_analyzer(decision_provider=decision_provider)
+
+    return MockQueryAnalyzer()
+
+
+def query_analyzer_arm() -> str:
+    """The arm ``make_query_analyzer_from_knob()`` would build right now.
+
+    One of ``rules`` / ``llm`` / ``decision`` / ``confidence-routed``,
+    after degradation — so a health check reports what serves queries,
+    not what the knob asks for. ``llm`` always reports as ``rules``
+    today, because no served caller supplies an ``LLMProvider``.
+
+    Reads configuration only and logs nothing, so a health endpoint can
+    call it on every probe. It does not contact the decision server: a
+    ``decision`` arm whose server is down still reports ``decision``, and
+    each query then degrades to the rules on its own.
+    """
+    return _plan_query_analyzer()[0]
+
+
+def _build_decision_provider(name: str):
+    """Construct a decision provider by name, or ``None`` when it cannot
+    be built.
+
+    ``None`` rather than an exception: the caller degrades to rule-based
+    classification, because a misconfigured classifier must not take the
+    query path down.
+    """
+    if name == "mock":
+        from core.src.decision.mock_provider import MockDecisionProvider
+
+        return MockDecisionProvider()
+
+    if name == "systemone":
+        from core.src.decision.base import DecisionError
+        from core.src.decision.systemone_provider import (
+            SystemOneDecisionProvider,
+        )
+        from core.src.env.config import (
+            resolve_decision_api_key,
+            resolve_decision_base_url,
+            resolve_decision_model,
+            resolve_decision_timeout,
+        )
+
+        try:
+            return SystemOneDecisionProvider(
+                base_url=resolve_decision_base_url(),
+                model=resolve_decision_model(),
+                api_key=resolve_decision_api_key(),
+                timeout=resolve_decision_timeout(),
+            )
+        except DecisionError as e:
+            logger.warning(
+                "Could not build the systemone decision provider (%s) — "
+                "falling back to rule-based classification", e,
+            )
+            return None
+
+    logger.warning(
+        "NORA_DECISION_PROVIDER=%s is not available — falling back to "
+        "rule-based classification", name,
+    )
+    return None

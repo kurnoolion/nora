@@ -1734,3 +1734,225 @@ class EnvironmentConfig:
                 p.mkdir(parents=True, exist_ok=True)
                 created.append(str(p))
         return created
+
+
+# ---------------------------------------------------------------------------
+# Query-analyzer selection — strand jev-experimentation, design §3.
+#
+# A single three-valued knob rather than a boolean flag plus a roster. The
+# three values map onto implementations that already exist:
+#
+#   rules     MockQueryAnalyzer      the live default
+#   llm       LLMQueryAnalyzer       written, previously never wired
+#   decision  DecisionQueryAnalyzer    + a DecisionProvider beneath it
+#
+# The provider roster did not disappear — it sits one level down, under
+# NORA_DECISION_PROVIDER.
+# ---------------------------------------------------------------------------
+
+QUERY_ANALYZERS: tuple[str, ...] = (
+    "rules", "llm", "decision", "confidence-routed"
+)
+"""Four arms, spelled exactly as `--arm` spells them and as the classes
+they build are named.
+
+`decision` and `confidence-routed` differ only in the confidence floor,
+but they are separate values rather than one value plus a floor: a floor
+of 0.0 is the unrouted policy, and an administrator reading a config needs to
+see which policy is in force without computing it from a second knob
+(D-DRAFT-25).
+"""
+DEFAULT_QUERY_ANALYZER: str = "rules"
+QUERY_ANALYZER_ENV_VAR: str = "NORA_QUERY_ANALYZER"
+
+
+def resolve_query_analyzer(
+    cli_value: str | None = None,
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve which query analyzer serves classification.
+
+    Precedence: CLI flag > ``config_store_value`` > ``NORA_QUERY_ANALYZER``
+    env var > default (``rules``).
+
+    The ``config_store_value`` tier is **reserved and not wired yet**: no
+    caller passes it, and there is no Config-page field that saves it.
+    It sits above the env var so that, once a Config-page value exists,
+    it follows ``resolve_llm_provider``'s rationale — a stale shell export
+    must not permanently override a value saved through the UI.
+
+    Default is ``rules``, so an administrator who sets nothing gets
+    today's behaviour byte-for-byte.
+
+    Raises:
+        ValueError: A supplied value is not in ``QUERY_ANALYZERS``. A typo
+            in a shell export fails loudly rather than silently serving
+            the default.
+    """
+    for label, value in (
+        ("--query-analyzer", cli_value),
+        ("config_db:query.analyzer", config_store_value),
+        (QUERY_ANALYZER_ENV_VAR, os.environ.get(QUERY_ANALYZER_ENV_VAR)),
+    ):
+        if value:
+            if value not in QUERY_ANALYZERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {QUERY_ANALYZERS}"
+                )
+            return value
+    return DEFAULT_QUERY_ANALYZER
+
+
+# Decision-provider selection, beneath the `decision` value above.
+# Two-tier (CLI > env var > default) rather than the LLM chain's four:
+# there is no config/decision.json because no deployment needs one yet,
+# and a file plus a cached loader plus a reset hook for a key nobody sets
+# would be machinery ahead of demand. A file tier is additive.
+
+DECISION_PROVIDERS: tuple[str, ...] = ("mock", "systemone")
+DEFAULT_DECISION_PROVIDER: str = ""
+"""Empty: no provider unless one is named. ``mock`` answers from keyword
+rules dressed as a model, so an implicit mock on a served path would
+report the ``decision`` arm while serving nothing a model decided. A
+served path with no provider named degrades to ``rules`` with a warning;
+``mock`` must be named explicitly."""
+DEFAULT_DECISION_TIMEOUT: int = 30
+DECISION_PROVIDER_ENV_VAR: str = "NORA_DECISION_PROVIDER"
+DECISION_MODEL_ENV_VAR: str = "NORA_DECISION_MODEL"
+DECISION_BASE_URL_ENV_VAR: str = "NORA_DECISION_BASE_URL"
+DECISION_TIMEOUT_ENV_VAR: str = "NORA_DECISION_TIMEOUT"
+DECISION_API_KEY_ENV_VAR: str = "NORA_DECISION_API_KEY"
+
+
+def resolve_decision_provider(cli_value: str | None = None) -> str:
+    """Resolve which decision provider serves the ``decision`` analyzer.
+
+    Default empty — no provider is named, and a served path degrades to
+    ``rules``. ``mock`` is exercisable with nothing installed but must be
+    named explicitly. ``systemone`` is the HTTP client.
+
+    Raises:
+        ValueError: Value not in ``DECISION_PROVIDERS``.
+    """
+    for label, value in (
+        ("--decision-provider", cli_value),
+        (DECISION_PROVIDER_ENV_VAR,
+         os.environ.get(DECISION_PROVIDER_ENV_VAR)),
+    ):
+        if value:
+            if value not in DECISION_PROVIDERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {DECISION_PROVIDERS}"
+                )
+            return value
+    return DEFAULT_DECISION_PROVIDER
+
+
+def resolve_decision_model(cli_value: str | None = None) -> str:
+    """Resolve the decision model tag. Empty means "the server's own
+    default", which is what a single-model deployment wants."""
+    return (cli_value or os.environ.get(DECISION_MODEL_ENV_VAR, "")).strip()
+
+
+def resolve_decision_api_key(cli_value: str | None = None) -> str:
+    """Resolve the bearer token for the decision endpoint.
+
+    Empty means "send unauthenticated", which is what an open in-corp
+    server wants, and the provider omits the header entirely rather than
+    sending a literal ``Bearer ``.
+
+    Two tiers (CLI > env var) rather than the LLM chain's five: there is
+    no ``config/decision.json``, and a key does not belong in a committed
+    config file anyway.
+
+    Whitespace is stripped. A key read from a secret file or pasted from a
+    terminal commonly carries a trailing newline, which would otherwise
+    travel into the header and be rejected for a reason nothing reports.
+
+    Found missing by `/drift-check dev-full` (strand jev-experimentation,
+    DRIFT-3): `SystemOneDecisionProvider` had always accepted an
+    ``api_key`` and nothing could supply one. The reference Kev server is
+    **open unless ``KEV_API_KEY`` is set**, so putting a key on a
+    network-exposed decision server made classification degrade to the
+    rules with a warning and keep serving — silent by design, which is
+    what made the gap easy to miss.
+    """
+    return (cli_value or os.environ.get(DECISION_API_KEY_ENV_VAR, "")).strip()
+
+
+def resolve_decision_base_url(cli_value: str | None = None) -> str:
+    """Resolve the decision endpoint's base URL. Must be in-corp — no
+    decision-model traffic leaves the network (design §7)."""
+    return (cli_value or os.environ.get(DECISION_BASE_URL_ENV_VAR, "")).strip()
+
+
+def resolve_decision_timeout(cli_value: int | None = None) -> int:
+    """Resolve the decision request timeout in seconds.
+
+    Default 30 rather than the LLM chain's 600: a decision model answers
+    in a single forward pass, so a request that takes minutes is a fault,
+    not slow work.
+    """
+    if cli_value:
+        return int(cli_value)
+    raw = os.environ.get(DECISION_TIMEOUT_ENV_VAR, "")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not an integer — using %d",
+                DECISION_TIMEOUT_ENV_VAR, raw, DEFAULT_DECISION_TIMEOUT,
+            )
+    return DEFAULT_DECISION_TIMEOUT
+
+
+# Confidence routing, beneath the `confidence-routed` analyzer value.
+
+DEFAULT_DECISION_CONFIDENCE_FLOOR: float = 0.50
+DECISION_CONFIDENCE_FLOOR_ENV_VAR: str = "NORA_DECISION_CONFIDENCE_FLOOR"
+
+
+def resolve_decision_confidence_floor(
+    cli_value: float | None = None,
+) -> float:
+    """Resolve the confidence floor for the ``confidence-routed`` analyzer.
+
+    Answers below this calibrated confidence are served by the rule-based
+    analyzer instead. Default 0.50, the value measured in the strand's
+    `phase-3-measurement.md`.
+
+    **That default is a starting point, not a validated setting.** It was
+    selected on the same 50 samples it was scored on, and the sweep across
+    thresholds is non-monotonic — the shape of n=50 noise rather than of a
+    curve. What survives a held-out set is the separation underneath it
+    (mean confidence 0.425 on correct answers against 0.268 on incorrect
+    ones); the specific number does not. Refit on a labelled sample of the
+    real workload before treating it as settled.
+
+    Raises:
+        ValueError: Not a number, or outside ``[0.0, 1.0]``. Calibrated
+            confidence is a probability, and a floor above 1.0 would route
+            every field to the rules while still labelling the result as
+            routed — the silent-degradation shape design §7 exists to
+            prevent. A typo must not become 0.50 and get reported as
+            though it had been chosen.
+    """
+    raw = cli_value
+    if raw is None:
+        env = os.environ.get(DECISION_CONFIDENCE_FLOOR_ENV_VAR, "").strip()
+        if not env:
+            return DEFAULT_DECISION_CONFIDENCE_FLOOR
+        raw = env
+    try:
+        floor = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{DECISION_CONFIDENCE_FLOOR_ENV_VAR}={raw!r} is not a number"
+        ) from None
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError(
+            f"{DECISION_CONFIDENCE_FLOOR_ENV_VAR}={raw!r} must be between "
+            "0.0 and 1.0 — calibrated confidence is a probability"
+        )
+    return floor
