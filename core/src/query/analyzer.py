@@ -337,16 +337,20 @@ class MockQueryAnalyzer:
         if any(p in q_lower for p in cross_doc_phrases):
             return QueryType.CROSS_DOC
 
-        # Multi-plan name signal — explicit plan names from aliases
-        cross_doc_signals = 0
-        for alias in _PLAN_ALIASES:
-            if alias in q_lower:
-                cross_doc_signals += 1
-        if cross_doc_signals >= 2:
+        # Multi-plan name signal — two or more DISTINCT plans named.
+        # Counting alias hits instead counted one plan twice whenever a
+        # query used two of its own aliases: "band 13 network access
+        # requirements" names the single plan LTEB13NAC through both of
+        # its aliases and was routed to CROSS_DOC, which widens retrieval
+        # and drops the BM25 weight for what is a within-plan lookup.
+        # `_extract_plan_ids` already de-duplicates by plan id, so the
+        # fix is to ask it rather than to count aliases.
+        plan_ids = self._extract_plan_ids(q_lower)
+        if len(plan_ids) >= 2:
             return QueryType.CROSS_DOC
 
         # Default: single doc if a plan is identified, general otherwise
-        if self._extract_plan_ids(q_lower):
+        if plan_ids:
             return QueryType.SINGLE_DOC
 
         return QueryType.GENERAL
@@ -413,8 +417,14 @@ Return ONLY valid JSON, no other text."""
                 concepts=data.get("concepts", []),
                 mnos=data.get("mnos", []),
                 releases=data.get("releases", []),
-                query_type=QueryType(data.get("query_type", "general")),
-                doc_type_scope=DocTypeScope(data.get("doc_type_scope", "requirements")),
+                query_type=self._typed(
+                    query, data.get("query_type", "general"),
+                    QueryType, "query_type",
+                ),
+                doc_type_scope=self._typed(
+                    query, data.get("doc_type_scope", "requirements"),
+                    DocTypeScope, "doc_type_scope",
+                ),
                 standards_refs=data.get("standards_refs", []),
                 likely_features=data.get("likely_features", []),
                 plan_ids=data.get("plan_ids", []),
@@ -422,6 +432,32 @@ Return ONLY valid JSON, no other text."""
         except (json.JSONDecodeError, ValueError, KeyError) as e:
             logger.warning(f"LLM analysis failed ({e}) — falling back to keyword analysis")
             return self._fallback.analyze(query)
+
+    def _typed(self, query: str, raw, enum_cls, field: str):
+        """One enum field, with a fallback scoped to that field.
+
+        Constructing the enum inline discarded the **whole** answer when
+        any single typed field was unparseable: an LLM that returned a
+        correct ``query_type`` alongside a ``doc_type_scope`` outside the
+        enum lost both, and the run silently became rule-based. Measured
+        on the phase-1 labelled set, where the model answered
+        ``doc_type_scope: "general"`` on 1 of 50 queries and took a
+        correct ``query_type`` down with it.
+
+        Degrading per field is what `HybridQueryAnalyzer._coerce` already
+        does, and the reason is the same: the fields are independent, so
+        one bad field is not evidence against the others.
+        """
+        try:
+            return enum_cls(raw)
+        except ValueError:
+            value = getattr(self._fallback.analyze(query), field)
+            logger.warning(
+                "LLM returned %s=%r, which is not a valid %s — using the "
+                "rule-based %s=%s and keeping the rest of the LLM's answer",
+                field, raw, enum_cls.__name__, field, value.value,
+            )
+            return value
 
 
 def make_query_analyzer(llm_provider=None, decision_provider=None):
