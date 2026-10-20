@@ -7,11 +7,14 @@ erroring**. A silent degradation to base-model generation would invalidate
 an accuracy comparison while looking like a successful run, so the check
 runs in code before a number is recorded — not by inspection.
 
-The check is a file-list check on the weights directory, which is what
-D-DRAFT-3 specifies and what can actually be verified. It therefore runs
-wherever the weights live; for a remote server that is the serving host, not
-the client. `confidence_is_calibrated` is the complementary behavioural
-signal available to a client.
+Two checks, because the file check alone was not enough. A file-list check
+on the weights directory runs wherever the weights live — for a remote
+server that is the serving host, not the eval client — which left the gap
+D-DRAFT-20 found: a run with a verified local head against an *unreachable*
+server completed and reported the rule-based baseline. `assert_remote_head`
+closes it by asking the server what it actually loaded, over the same
+connection the decisions will travel. `confidence_is_calibrated` is the
+weaker behavioural signal on top of both.
 """
 
 from __future__ import annotations
@@ -23,13 +26,19 @@ from core.src.decision.base import DecisionAnswer, DecisionError
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_HEAD_FILES: tuple[str, ...] = ("head.safetensors", "calibration.json")
+REQUIRED_HEAD_FILES: tuple[str, ...] = ("head.pt",)
 """Files a head-bearing distribution must carry.
 
-`head.safetensors` is the decision head itself; `calibration.json` holds the
-per-slot temperatures that make `confidence` a probability rather than a
-raw logit. Both are separate files from the backbone, which is exactly why
-a format conversion drops them.
+`head.pt` is the decision head, and it carries the calibration temperature
+inside it rather than alongside it — verified against jaredpalmer/kev-4b,
+whose card states "One temperature, T = 2.41, stored in `head.pt`".
+
+This list was first written as `("head.safetensors", "calibration.json")`
+from the design doc, and both entries were wrong: the real distribution
+ships neither name, so the gate rejected the genuine article. A guess about
+a file name reads as a verified invariant once it is in code, which is the
+same failure as D-DRAFT-20 one level down — the gate was never run against
+a real distribution before being trusted.
 """
 
 ADAPTER_MARKERS: tuple[str, ...] = (
@@ -72,7 +81,7 @@ def assert_decision_head_present(model_dir: Path) -> dict:
 
     Raises:
         DecisionError: The directory is missing, empty, GGUF-only, or
-            missing the head, adapter or calibration files. The message
+            missing the head or adapter files. The message
             names what was missing — a hollow build is indistinguishable
             from a good one at inference time, so the diagnosis has to
             come from here.
@@ -126,3 +135,87 @@ def confidence_is_calibrated(answers: list[DecisionAnswer]) -> bool:
     confidence — so this informs a warning, never a hard failure.
     """
     return bool(answers) and any(a.confidence > 0.0 for a in answers)
+
+
+REMOTE_PROBE_PATH = "/v1/models"
+"""The route that reports what a server loaded. Part of the wire format, not
+a Kev extension, and it is the only verification that runs on the connection
+the decisions themselves will use."""
+
+
+def assert_remote_head(base_url: str, timeout: int = 10) -> dict:
+    """Raise unless the server at ``base_url`` is serving a calibrated head.
+
+    The remote half of the gate. A file check on this client proves nothing
+    about the process answering the questions — it may be a different build,
+    a different checkpoint, or not running at all (D-DRAFT-20). This asks the
+    server, and it fails on an unreachable host rather than letting a caller
+    degrade quietly into the rule-based baseline.
+
+    Args:
+        base_url: Server origin, with or without a trailing ``/v1``.
+        timeout: Seconds to wait. Short by design — this is a liveness gate
+            run before a measurement, not a request that should be retried.
+
+    Returns:
+        The first model card, which carries ``temperature``, ``lora``,
+        ``base``, ``device``, ``backend`` and ``dtype``. Worth stamping onto
+        a run: it records what was actually measured.
+
+    Raises:
+        DecisionError: Unreachable, non-JSON, no model cards, or a card
+            reporting no adapter or no calibration temperature — a plain
+            backbone being served where a decider was expected.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    origin = base_url.rstrip("/")
+    if origin.endswith("/v1"):
+        origin = origin[: -len("/v1")]
+    url = f"{origin}{REMOTE_PROBE_PATH}"
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            data = _json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        raise DecisionError(
+            f"decision server at {url} is unreachable: {e}. Nothing was "
+            "measured — a reachable head check on local weights does not "
+            "mean the server is up (D-DRAFT-20)."
+        ) from e
+    except ValueError as e:
+        raise DecisionError(
+            f"decision server at {url} did not return JSON: {e}"
+        ) from e
+
+    cards = data.get("models") if isinstance(data, dict) else None
+    if not cards:
+        raise DecisionError(
+            f"decision server at {url} reported no models; sent keys: "
+            f"{sorted(data) if isinstance(data, dict) else type(data).__name__}"
+        )
+
+    card = cards[0]
+    faults = []
+    if not card.get("lora"):
+        faults.append("no adapter reported")
+    temperature = card.get("temperature")
+    if not temperature:
+        faults.append("no calibration temperature reported")
+    if faults:
+        raise DecisionError(
+            f"the server at {url} is not serving a head-bearing model: "
+            f"{'; '.join(faults)}. It will answer without erroring, but as "
+            "a plain backbone. Card: "
+            f"{ {k: card.get(k) for k in ('name', 'base', 'lora', 'temperature', 'backend', 'dtype')} }"
+        )
+
+    logger.info(
+        "Decision server verified at %s (model=%s base=%s backend=%s "
+        "dtype=%s T=%.2f)",
+        url, card.get("name"), card.get("base"), card.get("backend"),
+        card.get("dtype"), float(temperature),
+    )
+    return card

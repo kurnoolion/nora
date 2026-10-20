@@ -26,14 +26,15 @@ _QUESTION_STOPWORDS = frozenset({
     "what", "shape", "and", "a",
 })
 """Capitalised words that carry no signal — sentence-initial words are
-capitalised too, so without this every bool question matches everything."""
+capitalised too, so without this every noul question matches everything."""
 
 
 class MockDecisionProvider:
     """Keyword-matching stub. Deterministic, offline, no network.
 
-    `bool` is true when a content word of the question appears in the
-    state. `choice` returns the first option named in the state, else the
+    `noul` returns 1.0 when a content word of the question appears in the
+    state, mirroring the wire format's probability-of-yes rather than a
+    bool. `choice` returns the first option named in the state, else the
     LAST option — callers order their options with the catch-all last,
     which is how `QueryType` itself is ordered.
     """
@@ -60,15 +61,15 @@ class MockDecisionProvider:
             return DecisionAnswer(q.question_id, _MOCK_SCORE, 0.0)
         return DecisionAnswer(
             q.question_id, self._keyword_hit(lowered, q.question), 0.0
-        )
+        )  # noul: probability of yes
 
     @staticmethod
-    def _keyword_hit(lowered: str, question: str) -> bool:
-        """True when any capitalised or all-caps token of the question
-        appears in the state. Enough to make bool questions testable
-        without pretending to be a classifier."""
+    def _keyword_hit(lowered: str, question: str) -> float:
+        """1.0 when any capitalised or all-caps token of the question
+        appears in the state, else 0.0. Enough to make noul questions
+        testable without pretending to be a classifier."""
         tokens = re.findall(r"\b[A-Z][A-Za-z0-9_]{1,}\b", question)
-        return any(
+        return 1.0 * any(
             t.lower() in lowered
             for t in tokens
             if t.lower() not in _QUESTION_STOPWORDS

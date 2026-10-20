@@ -36,14 +36,31 @@ class TestDecisionQuestion:
                 question_id="q", kind="choice", question="?", options=()
             )
 
-    def test_options_on_a_bool_is_rejected(self):
+    def test_options_on_a_noul_is_rejected(self):
+        """A noul's two options are implicit, so supplying any is a
+        caller error rather than something to quietly drop."""
         with pytest.raises(ValueError, match="options"):
             DecisionQuestion(
-                question_id="q", kind="bool", question="?", options=("a",)
+                question_id="q", kind="noul", question="?", options=("a",)
             )
 
+    def test_score_without_options_is_rejected(self):
+        """A score's options are its ordered level descriptions, which the
+        wire format requires — the first version of this validator
+        forbade them, which would have made every score question
+        unbuildable."""
+        with pytest.raises(ValueError, match="options"):
+            DecisionQuestion(question_id="q", kind="score", question="?")
+
+    def test_score_with_options_is_accepted(self):
+        q = DecisionQuestion(
+            question_id="q", kind="score", question="?",
+            options=("low", "high"),
+        )
+        assert q.options == ("low", "high")
+
     def test_frozen(self):
-        q = DecisionQuestion(question_id="q", kind="bool", question="?")
+        q = DecisionQuestion(question_id="q", kind="noul", question="?")
         with pytest.raises(Exception):
             q.question_id = "other"
 
@@ -85,8 +102,8 @@ class TestMockDecisionProvider:
 
     def test_answers_every_question_once(self):
         questions = [
-            DecisionQuestion("a", "bool", "Names VZW?"),
-            DecisionQuestion("b", "score", "How specific?"),
+            DecisionQuestion("a", "noul", "Names VZW?"),
+            DecisionQuestion("b", "score", "How specific?", ("low", "high")),
             DecisionQuestion("c", "choice", "Shape?", ("fact", "general")),
         ]
         answers = self.p.decide("some query", questions)
@@ -105,13 +122,16 @@ class TestMockDecisionProvider:
         answer = self.p.decide("nothing matches here", [q])[0]
         assert answer.value == "general"
 
-    def test_bool_is_keyword_driven(self):
-        q = DecisionQuestion("vzw", "bool", "Does the query name VZW?")
-        assert self.p.decide("VZW retry rules", [q])[0].value is True
-        assert self.p.decide("TMO retry rules", [q])[0].value is False
+    def test_noul_is_keyword_driven(self):
+        """The value is a probability of yes, not a bool — that is what
+        the wire format returns, and thresholding it is the caller's
+        decision."""
+        q = DecisionQuestion("vzw", "noul", "Does the query name VZW?")
+        assert self.p.decide("VZW retry rules", [q])[0].value == 1.0
+        assert self.p.decide("TMO retry rules", [q])[0].value == 0.0
 
     def test_score_is_constant(self):
-        q = DecisionQuestion("s", "score", "How specific?")
+        q = DecisionQuestion("s", "score", "How specific?", ("low", "high"))
         assert self.p.decide("anything", [q])[0].value == 0.5
 
     def test_deterministic_across_calls(self):
@@ -121,7 +141,7 @@ class TestMockDecisionProvider:
         assert first == second
 
     def test_call_count_tracks_requests_not_questions(self):
-        q = DecisionQuestion("t", "bool", "?")
+        q = DecisionQuestion("t", "noul", "?")
         self.p.decide("a", [q, q])
         self.p.decide("b", [q])
         assert self.p.call_count == 2

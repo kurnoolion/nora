@@ -3,27 +3,52 @@
 Stdlib `urllib` only, no SDK — the same posture that kept
 `OpenAICompatibleProvider` vendor-neutral behind `/v1/chat/completions`.
 
-**The request and response shapes below are UNVERIFIED against a live
-server.** No decision-model endpoint was reachable when this was written, so
-the payload is built from the wire format as documented rather than as
-observed. The parse therefore fails loudly and prints the keys the server
-actually sent (`DecisionError`), so the first real run names exactly what to
-correct instead of silently mapping a field to the wrong place. Treat a
-`DecisionError` naming unexpected keys as a schema correction, not a bug in
-the server.
+Shapes **verified** against the reference server's own request and response
+models — `kev/api.py` at jaredpalmer/kev `1f04cfa` — which implements
+TypeSafe's public System One API. The first draft of this module guessed four
+things wrong, each of which a server rejects or mis-parses:
 
-Assumed request::
+===========================  ==========================  ====================
+Guessed                      Actual                      Consequence
+===========================  ==========================  ====================
+``questions`` is a list      an object keyed by id       422
+``question``                 ``instructions``            422
+``options`` (list)           ``criteria`` (dict/list)    422
+``answers`` is a list        an object keyed by id       mis-parse
+answer holds ``value``       holds ``choice`` /          mis-parse
+                             ``noul`` / ``score``
+===========================  ==========================  ====================
 
-    POST {base_url}/systemone
-    {"model": "<tag>",            # omitted when empty
+Request::
+
+    POST {base_url}/v1/systemone
+    {"model": "kev-latest",       # omitted when empty
      "state": "<shared context>",
-     "questions": [{"id": "query_type", "type": "choice",
-                    "question": "...", "options": ["fact", ...]}]}
+     "questions": {"query_type": {"type": "choice",
+                                  "instructions": "...",
+                                  "criteria": {"fact": null, ...}}}}
 
-Assumed response::
+A ``criteria`` value is an optional per-option description; ``null`` means the
+option is presented by name alone. A ``score`` question's ``criteria`` is an
+ordered list of level descriptions instead, and a ``noul`` question's two
+options are implicit.
 
-    {"answers": [{"id": "query_type", "value": "fact",
-                  "confidence": 0.91}]}
+Response::
+
+    {"model": "kev-latest",
+     "answers": {"query_type": {"type": "choice", "choice": "fact",
+                                "confidence": 0.91,
+                                "probabilities": {"fact": 0.91, ...}}},
+     "usage": {"input_tokens": 118, "output_tokens": 31},
+     "latency_ms": 94.2}
+
+A ``noul`` answer carries no ``confidence`` — its ``noul`` field is already
+the probability of yes — so `confidence_is_calibrated` is uninformative for a
+noul-only response.
+
+The parse still fails loudly and names the keys the server actually sent, so a
+future schema change is a correction with a diagnosis rather than a silent
+mis-mapping.
 """
 
 from __future__ import annotations
@@ -41,6 +66,15 @@ from core.src.decision.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+VALUE_KEY_BY_KIND: dict[str, str] = {
+    "choice": "choice",
+    "noul": "noul",
+    "score": "score",
+}
+"""Where each answer type keeps its value. The wire format names the field
+after the type rather than using a single `value` key, so the type has to be
+read before the value can be."""
 
 
 class SystemOneDecisionProvider:
@@ -69,6 +103,21 @@ class SystemOneDecisionProvider:
         self._timeout = timeout
         self.call_count = 0
         self.last_latency_ms = 0.0
+        self.last_server_latency_ms = 0.0
+        """Latency the server reports for itself, against `last_latency_ms`
+        measured at this client. The difference is network, which is what
+        tells a slow model from a slow hop."""
+
+    @property
+    def _endpoint(self) -> str:
+        """The `/v1/systemone` URL, whether or not `base_url` already ends
+        in `/v1`. Both spellings are in circulation — an OpenAI-compatible
+        `base_url` conventionally carries `/v1`, while the reference
+        server's own example passes the bare origin — and posting to the
+        wrong one is a 404 that looks like an outage."""
+        if self.base_url.endswith("/v1"):
+            return f"{self.base_url}/systemone"
+        return f"{self.base_url}/v1/systemone"
 
     def decide(
         self, state: str, questions: Sequence[DecisionQuestion]
@@ -83,23 +132,23 @@ class SystemOneDecisionProvider:
         """
         import time
 
-        payload: dict = {
-            "state": state,
-            "questions": [
-                {
-                    "id": q.question_id,
-                    "type": q.kind,
-                    "question": q.question,
-                    **({"options": list(q.options)} if q.options else {}),
-                }
-                for q in questions
-            ],
-        }
+        asked: dict = {}
+        for q in questions:
+            entry: dict = {"type": q.kind, "instructions": q.question}
+            if q.kind == "choice":
+                # dict, not list: the value is an optional per-option
+                # description and None presents the option by name alone.
+                entry["criteria"] = {opt: None for opt in q.options}
+            elif q.kind == "score":
+                entry["criteria"] = list(q.options)
+            asked[q.question_id] = entry
+
+        payload: dict = {"state": state, "questions": asked}
         if self.model:
             payload["model"] = self.model
 
         request = urllib.request.Request(
-            f"{self.base_url}/systemone",
+            self._endpoint,
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
@@ -138,24 +187,40 @@ class SystemOneDecisionProvider:
 
         if not isinstance(data, dict) or "answers" not in data:
             raise DecisionError(
-                "decision response has no 'answers' key — the wire schema "
-                f"in this module is unverified; server sent keys: "
+                "decision response has no 'answers' key; server sent keys: "
                 f"{sorted(data) if isinstance(data, dict) else type(data).__name__}"
             )
 
+        asked = data["answers"]
+        if not isinstance(asked, dict):
+            raise DecisionError(
+                "decision response 'answers' should be an object keyed by "
+                f"question id, got {type(asked).__name__}"
+            )
+
+        self.last_server_latency_ms = float(data.get("latency_ms") or 0.0)
+
         answers = []
-        for raw in data["answers"]:
-            missing = [k for k in ("id", "value") if k not in raw]
-            if missing:
+        for question_id, raw in asked.items():
+            kind = raw.get("type")
+            value_key = VALUE_KEY_BY_KIND.get(kind)
+            if value_key is None:
                 raise DecisionError(
-                    f"decision answer is missing {missing} — the wire "
-                    f"schema in this module is unverified; server sent "
-                    f"keys: {sorted(raw)}"
+                    f"decision answer {question_id!r} has unknown type "
+                    f"{kind!r}; expected one of "
+                    f"{sorted(VALUE_KEY_BY_KIND)}. Server sent keys: "
+                    f"{sorted(raw)}"
+                )
+            if value_key not in raw:
+                raise DecisionError(
+                    f"decision answer {question_id!r} is a {kind} but has "
+                    f"no {value_key!r} field; server sent keys: "
+                    f"{sorted(raw)}"
                 )
             answers.append(
                 DecisionAnswer(
-                    question_id=raw["id"],
-                    value=raw["value"],
+                    question_id=question_id,
+                    value=raw[value_key],
                     confidence=float(raw.get("confidence", 0.0)),
                 )
             )

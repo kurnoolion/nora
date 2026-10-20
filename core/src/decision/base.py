@@ -15,8 +15,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, Sequence, runtime_checkable
 
-DecisionKind = Literal["bool", "score", "choice"]
+DecisionKind = Literal["noul", "choice", "score"]
 """The three output shapes a decision model can emit.
+
+The names are the wire format's own, verified against `kev/api.py` at
+jaredpalmer/kev `1f04cfa`: a yes/no question is a **`noul`**, not a
+`bool`. A server validates `type` against this literal and rejects
+anything else with a 422, so the spelling is load-bearing rather than
+stylistic.
 
 A decision model has a typed head, not a token decoder, so these are the
 whole answer space. Fields needing free text (QueryIntent's `entities`,
@@ -41,9 +47,12 @@ class DecisionQuestion:
     Args:
         question_id: Stable key. The answer is matched back by this, not
             by position, so a provider may reorder or parallelise freely.
-        kind: One of ``bool``, ``score``, ``choice``.
-        question: Natural-language question text.
-        options: The answer space for ``choice``; empty for the others.
+        kind: One of ``noul``, ``choice``, ``score``.
+        question: Natural-language question text. Serialised as the wire
+            format's ``instructions``.
+        options: The answer space. Named options for ``choice``, ordered
+            level descriptions for ``score``, empty for ``noul`` (whose
+            two options are implicit). Serialised as ``criteria``.
     """
 
     question_id: str
@@ -52,15 +61,15 @@ class DecisionQuestion:
     options: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.kind == "choice" and not self.options:
+        if self.kind in ("choice", "score") and not self.options:
             raise ValueError(
-                f"question {self.question_id!r}: a choice question needs "
-                "a non-empty options tuple"
+                f"question {self.question_id!r}: a {self.kind} question "
+                "needs a non-empty options tuple"
             )
-        if self.kind != "choice" and self.options:
+        if self.kind == "noul" and self.options:
             raise ValueError(
-                f"question {self.question_id!r}: options are only "
-                f"meaningful for a choice question, not {self.kind!r}"
+                f"question {self.question_id!r}: a noul question's two "
+                "options are implicit, so options must be empty"
             )
 
 
@@ -70,8 +79,11 @@ class DecisionAnswer:
 
     Args:
         question_id: Echoes the question's id.
-        value: ``bool`` for a bool question, ``float`` for a score, one of
-            the question's ``options`` for a choice.
+        value: One of the question's ``options`` for a choice, the
+            probability of yes (``float``) for a noul, the expected level
+            index (``float``) for a score. A noul carries a probability
+            rather than a bool because that is what the wire format
+            returns; thresholding it is the caller's decision.
         confidence: Calibrated probability of the returned value where the
             provider reports one, else 0.0. Recorded rather than acted on in
             phase 2 — the abstain threshold is a later decision.

@@ -17,13 +17,14 @@ Strand jev-experimentation, phase 1.
     # the decision arm, offline mock — exercises the seam, measures nothing
     python -m core.src.eval.classify_cli --arm decision
 
-    # the decision arm against a real decider. --weights-dir is REQUIRED:
-    # design §7 forbids recording a number before the decision head is
-    # verified present, because a hollow build answers without erroring.
+    # the decision arm against a real decider. The server is probed for a
+    # loaded adapter and calibration temperature before anything is
+    # measured; --weights-dir adds the local file check when the weights
+    # happen to sit on this host too.
     python -m core.src.eval.classify_cli --arm decision \
         --decision-provider systemone \
-        --decision-base-url http://<host>:8008/v1 \
-        --decision-model kev-4b \
+        --decision-base-url http://127.0.0.1:8008 \
+        --decision-model kev-latest \
         --weights-dir /models/kev-4b
 """
 
@@ -37,7 +38,10 @@ import sys
 from pathlib import Path
 
 from core.src.decision.base import DecisionError
-from core.src.decision.head_check import assert_decision_head_present
+from core.src.decision.head_check import (
+    assert_decision_head_present,
+    assert_remote_head,
+)
 from core.src.env.config import (
     DECISION_BASE_URL_ENV_VAR,
     DECISION_MODEL_ENV_VAR,
@@ -101,35 +105,32 @@ def _build_llm_provider(args):
 
 
 def _build_decision_arm(args):
-    """Build the decision analyzer, refusing to proceed unless the
-    decision head is verified present.
+    """Build the decision analyzer, refusing to proceed unless the server
+    is verified to be serving a head.
 
     Design §7: "Decision heads must be asserted loaded before any
     accuracy number is recorded." A GGUF or backbone-only build loads and
     answers without erroring, so a number recorded against one would
-    measure the backbone and look like a successful run. The mock is
-    exempt — it measures nothing and claims nothing.
+    measure the backbone and look like a successful run.
+
+    The authority is the **remote** probe, not the local file check. The
+    first version required `--weights-dir` and trusted it, which is how
+    D-DRAFT-20 happened: verified local weights, unreachable server, the
+    rule-based baseline reported under `arm=decision`, exit 0. The weights
+    a client can see are not the weights the server loaded. `--weights-dir`
+    is now an optional extra check for when the serving host is this host.
+
+    The mock is exempt — it measures nothing and claims nothing.
     """
     from core.src.decision.analyzer import HybridQueryAnalyzer
     from core.src.env.config import resolve_decision_provider
 
     name = resolve_decision_provider(cli_value=args.decision_provider)
 
-    if name != "mock":
-        if not args.weights_dir:
-            raise SystemExit(
-                f"--arm decision with --decision-provider {name} requires "
-                "--weights-dir: the decision head must be asserted present "
-                "before any accuracy number is recorded (design §7). A "
-                "hollow build answers without erroring, so an unverified "
-                "number would measure the backbone. Pass the weights "
-                "directory on the serving host, or use "
-                "--decision-provider mock to exercise the seam without "
-                "recording a measurement."
-            )
+    if name != "mock" and args.weights_dir:
         report = assert_decision_head_present(args.weights_dir)
         print(
-            f"decision head verified: {report['file_count']} files, "
+            f"local weights verified: {report['file_count']} files, "
             f"adapter present, {', '.join(report['present'])}"
         )
 
@@ -145,6 +146,16 @@ def _build_decision_arm(args):
             "warning above. Refusing to silently measure the rule-based "
             "analyzer under the 'decision' label."
         )
+
+    if name != "mock":
+        card = assert_remote_head(provider.base_url)
+        print(
+            "decision server verified: "
+            f"model={card.get('name')} base={card.get('base')} "
+            f"backend={card.get('backend')} dtype={card.get('dtype')} "
+            f"T={float(card.get('temperature')):.2f}"
+        )
+
     return HybridQueryAnalyzer(provider), provider
 
 
