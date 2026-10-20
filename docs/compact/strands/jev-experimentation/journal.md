@@ -1275,3 +1275,96 @@ a long-term answer for a remote deployment.
   section, and the new files in the tree — a bounded, deterministic edit — but
   the header says "do not hand-edit" for a reason. **A real `/regen-map` run
   is worth doing** to confirm it produces no further diff.
+
+## 2026-10-20 — Kev-4B served, arm 3 measured, two defects fixed
+
+Session with the user present. Branch pushed on request (no PR). Four things
+done: set Kev up for real, corrected the wire contract against it, fixed both
+held defects, measured arm 3.
+
+### The wire schema was guessed and the guess was wrong
+
+`systemone_provider.py` shipped with a docstring saying the schema was
+unverified and a parse built to fail loudly. Both paid off — having the real
+`kev/api.py` in hand turned six guesses into corrections in an afternoon, and
+the loud parse would have named each one on first contact.
+
+Four of the six 422 and announce themselves. The one that would not was
+`REQUIRED_HEAD_FILES = ("head.safetensors", "calibration.json")`: the real
+distribution ships **neither name**, only `head.pt` with the calibration
+temperature inside it. The gate would have rejected every genuine Kev
+distribution, and the instinctive reading of a firing gate is "the artefact is
+bad", not "the gate is wrong". Recorded as D-DRAFT-23 with the generalisable
+form: **a guess becomes an invariant the moment it is written as a constant in
+a gate, and nothing in the code distinguishes the two.** The constant now
+carries a comment saying what it used to be.
+
+`/v1/models` turned out to answer the open limitation from D-DRAFT-20 — it
+reports the loaded adapter and calibration temperature, so verification can
+run over the connection the decisions travel instead of on the eval client's
+filesystem. The local check is now optional and the remote probe is the gate.
+That is the right way round: the local check was the thing that gave false
+assurance.
+
+### 0.460 vs 0.760 on identical weights
+
+The first decision-arm run scored 0.460 and I nearly wrote it down. The
+options were bare enum identifiers; the wire format carries a description per
+option and every one was null. Glossing them scored 0.760.
+
+What makes this worth a journal entry rather than a commit message is how
+plausible the wrong number was. 0.460 fits a story everyone in this strand
+already half-believes — generic weights do not know telecom — and it would
+have been filed as confirmation. The actual cause was that nobody had told the
+model what `feature_level` means. **The gloss is where the taxonomy is stated,
+and the taxonomy is the one thing the model cannot infer.** Checking before
+recording cost twenty minutes; not checking would have cost the strand its
+premise.
+
+### The real result is the confidence, not the accuracy
+
+Arm 3 ties the rules at 0.760 / 0.112 and shares almost no errors with them.
+Both models fix the lexical-gap classes (`fact`, `release_diff`,
+`standards_comparison` → 1.00) and both score **0.00** on `feature_level`.
+Second model, same finding as phase 1 — so it is a property of the seam.
+
+The thing neither the rules nor the LLM can offer is a calibrated confidence,
+and it carries signal: mean 0.425 on correct answers against 0.268 on
+incorrect. Routing to the rules below a threshold measures 0.860 / 0.068,
+above both single arms. **I have written the caveat into
+`phase-3-measurement.md` more prominently than the number**, because the
+thresholds are selected in-sample on n=50 and the curve is non-monotonic — the
+0.860 will not survive a held-out set. The separation will.
+
+This is the first concrete, measured answer to "why a decision model here",
+and it reframes the ask: the deliverable from internal infrastructure is not
+proof the model works, it is the labelled traffic needed to set the threshold.
+
+### Flags
+
+- **`feature_level` and `cross_doc` select an identical retrieval
+  configuration.** Raised in phase 1 as a taxonomy question; now load-bearing,
+  because it is why arm 3 ties on weighted cost while losing a whole class. A
+  distinction that is free to get wrong is a distinction that buys nothing to
+  get right.
+- **`--out` was not passed on the phase-1 runs**, so the `llm` arm's 0.700 →
+  0.680 move cannot be attributed to a sample. One sample, two explanations,
+  no way to separate them after the fact. Per-sample output is what makes a
+  re-run comparable; the harness supports it and I did not use it.
+- **`traceability` is the one class where the LLM beats the decision model
+  outright** (1.00 vs 0.40). Given what the glosses did elsewhere, that is a
+  gloss to revise before drawing a conclusion.
+- The eight permanently-red local tests remain. The user will raise them with
+  the architect separately.
+
+### Not done, deliberately
+
+- **No PR.** Standing instruction; implementation continues.
+- **Labelled set not grown.** The user's call: build it inside the lab from
+  real traffic rather than inventing more synthetic samples here. The
+  threshold finding above is the argument for doing so.
+- **Arm 4 (fine-tune) not run.** Conditional on the architect's budget answer.
+- **`/close-session` and `/regen-map` not run.** Both are end-of-session
+  rituals to run with the user present; MAP.md is still hand-edited.
+- **The Kev server is still running** on port 8008 holding the model in
+  memory. It is a background process in this session, not a service.
