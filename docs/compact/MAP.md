@@ -1,12 +1,13 @@
 # MAP
 
-Generated 2026-10-18 by regen-map. Do not hand-edit.
+Generated 2026-10-20 by regen-map. Do not hand-edit.
 
 ## Modules
 
 | Module | Purpose |
 | --- | --- |
 | [corrections](../../core/src/corrections/MODULE.md) | Per-environment profile + taxonomy correction handling: store engineer-edited overrides, diff them against pipeline output, and emit compact FIX reports (no proprietary content) that are pasteable back into chat. |
+| [decision](../../core/src/decision/MODULE.md) | Decision models — typed `bool` / `score` / `choice` inference with no token generation. |
 | [env](../../core/src/env/MODULE.md) | Per-environment scoped workspace configuration. |
 | [eval](../../core/src/eval/MODULE.md) | Evaluation framework for the query pipeline. |
 | [extraction](../../core/src/extraction/MODULE.md) | Format-aware content extraction. |
@@ -29,6 +30,7 @@ Generated 2026-10-18 by regen-map. Do not hand-edit.
 ```mermaid
 flowchart TD
     m_corrections[corrections]
+    m_decision[decision]
     m_env[env]
     m_eval[eval]
     m_extraction[extraction]
@@ -48,6 +50,7 @@ flowchart TD
     m_corrections --> m_env
     m_corrections --> m_profiler
     m_corrections --> m_taxonomy
+    m_decision --> m_query
     m_eval --> m_env
     m_eval --> m_extraction
     m_eval --> m_graph
@@ -83,6 +86,7 @@ flowchart TD
     m_profiler --> m_extraction
     m_profiler --> m_llm
     m_profiler --> m_models
+    m_query --> m_decision
     m_query --> m_env
     m_query --> m_graph
     m_query --> m_llm
@@ -146,6 +150,12 @@ nora/
 │   │   │   ├── compactor.py                             # Compact FIX report generators for profile and taxonomy corrections.
 │   │   │   ├── schema.py                                # Data models for correction FIX reports.
 │   │   │   └── store.py                                 # CorrectionStore — per-environment correction file management.
+│   │   ├── decision/                                    # Decision models — typed `bool` / `score` / `choice` inference with no token generation.
+│   │   │   ├── MODULE.md
+│   │   │   ├── __init__.py                              # Decision models — typed bool/score/choice inference, no token generation.
+│   │   │   ├── analyzer.py                              # Decision-model-backed query analysis.
+│   │   │   ├── base.py                                  # The decision-model wire contract.
+│   │   │   └── mock_provider.py                         # Deterministic offline decision provider.
 │   │   ├── env/                                         # Per-environment scoped workspace configuration.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -155,6 +165,9 @@ nora/
 │   │   ├── eval/                                        # Evaluation framework for the query pipeline.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
+│   │   │   ├── classify.py                              # Query-classification evaluation harness.
+│   │   │   ├── classify_cli.py                          # CLI for the query-classification eval harness.
+│   │   │   ├── classify_set.json
 │   │   │   ├── eval_cli.py                              # CLI for the evaluation framework (PoC Step 11).
 │   │   │   ├── golden.py                                # Golden eval set schema + persistence (FR-38, strand golden-eval).
 │   │   │   ├── golden_cli.py                            # Golden eval batch CLI (FR-38, strand golden-eval).

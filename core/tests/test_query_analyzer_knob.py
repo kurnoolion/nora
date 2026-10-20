@@ -69,3 +69,126 @@ class TestResolveDecisionProvider:
         monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
         with pytest.raises(ValueError, match="jev"):
             resolve_decision_provider(cli_value="jev")
+
+
+from core.src.decision.analyzer import HybridQueryAnalyzer
+from core.src.decision.mock_provider import MockDecisionProvider
+from core.src.query.analyzer import (
+    LLMQueryAnalyzer,
+    MockQueryAnalyzer,
+    make_query_analyzer,
+    make_query_analyzer_from_knob,
+)
+from core.src.query.schema import QueryType
+
+
+class _StubLLM:
+    model = "stub"
+
+    def complete(self, prompt, system=None, temperature=0.0, **kwargs):
+        return ""
+
+
+class TestMakeQueryAnalyzerArgumentDispatch:
+    """The existing factory's behaviour must not move — every current
+    caller passes a single positional argument."""
+
+    def test_no_arguments_is_still_rules(self):
+        assert isinstance(make_query_analyzer(), MockQueryAnalyzer)
+
+    def test_none_is_still_rules(self):
+        assert isinstance(make_query_analyzer(None), MockQueryAnalyzer)
+
+    def test_llm_provider_is_still_llm(self):
+        assert isinstance(make_query_analyzer(_StubLLM()), LLMQueryAnalyzer)
+
+    def test_decision_provider_selects_the_hybrid(self):
+        got = make_query_analyzer(decision_provider=MockDecisionProvider())
+        assert isinstance(got, HybridQueryAnalyzer)
+
+    def test_decision_provider_wins_over_llm(self):
+        got = make_query_analyzer(
+            _StubLLM(), decision_provider=MockDecisionProvider()
+        )
+        assert isinstance(got, HybridQueryAnalyzer)
+
+
+class TestIdentityGate:
+    """With the knob unset, classification is byte-identical to today."""
+
+    def test_knob_unset_builds_the_rule_analyzer(self, monkeypatch):
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_knob_unset_classifies_identically_to_today(self, monkeypatch):
+        """The gate proper: same verdict on every sample of the phase-1
+        labelled set, compared against MockQueryAnalyzer directly."""
+        from core.src.eval.classify import load_classify_set
+
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        legacy = MockQueryAnalyzer()
+        knobbed = make_query_analyzer_from_knob()
+        for sample in load_classify_set():
+            assert (
+                knobbed.analyze(sample.query) == legacy.analyze(sample.query)
+            ), sample.sample_id
+
+    def test_pipeline_default_analyzer_comes_from_the_knob(self, monkeypatch):
+        """pipeline.py's own default must come out of the knob and land
+        on today's behaviour. Asserted on the source because
+        QueryPipeline.__init__ needs a graph, embedder and store to
+        construct — core/tests/test_pipeline.py has those fixtures and is
+        the better home if this proves annoying."""
+        import inspect
+
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        from core.src.query.pipeline import QueryPipeline
+
+        source = inspect.getsource(QueryPipeline.__init__)
+        assert "make_query_analyzer_from_knob" in source
+
+
+class TestKnobSelectsEachArm:
+    def test_rules(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "rules")
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_llm_with_a_supplied_provider(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "llm")
+        got = make_query_analyzer_from_knob(llm_provider=_StubLLM())
+        assert isinstance(got, LLMQueryAnalyzer)
+
+    def test_llm_without_a_provider_degrades_to_rules(self, monkeypatch):
+        """The sira lane has no LLMProvider wired yet (service.py's own
+        recorded follow-up). Selecting `llm` there must degrade, not
+        crash the query path."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "llm")
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_decision_defaults_to_the_mock_provider(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        got = make_query_analyzer_from_knob()
+        assert isinstance(got, HybridQueryAnalyzer)
+
+    def test_decision_with_a_supplied_provider(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        provider = MockDecisionProvider()
+        got = make_query_analyzer_from_knob(decision_provider=provider)
+        assert isinstance(got, HybridQueryAnalyzer)
+
+    def test_decision_systemone_without_a_provider_degrades_to_rules(
+        self, monkeypatch
+    ):
+        """Phase 2 ships no HTTP provider. Asking for one must degrade
+        rather than import something that does not exist."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_decision_arm_actually_classifies(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        got = make_query_analyzer_from_knob()
+        intent = got.analyze("please summarize the data retry spec")
+        assert intent.query_type is QueryType.SUMMARIZE

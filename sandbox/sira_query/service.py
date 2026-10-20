@@ -449,7 +449,9 @@ from sandbox.sira_query.enrich_overlay import (  # noqa: E402
     make_verdict_fn,
 )
 
-from core.src.query.analyzer import make_query_analyzer  # noqa: E402
+from core.src.query.analyzer import (  # noqa: E402
+    make_query_analyzer_from_knob,
+)
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
 from sandbox.sira_query.fusion import merge_candidates, rank_candidates  # noqa: E402
 from sandbox.sira_query.scope import resolve_cells  # noqa: E402
@@ -1190,13 +1192,14 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
     provenance and the unresolved-scope list (FR-multi-5).
 
     Note (first cut): scope extraction uses the keyword MockQueryAnalyzer
-    (make_query_analyzer(None)); wiring an LLMProvider around the
+    (make_query_analyzer_from_knob() with NORA_QUERY_ANALYZER unset);
+    wiring an LLMProvider around the
     service's httpx LLM for LLMQueryAnalyzer is a follow-up (D-DRAFT-9).
     Doc/section fan-out (plan-aware-sira) is not yet ported to the
     multi-cell path.
     """
     # 1. Scope: analyze -> (mnos, releases) -> resolve to cells.
-    intent = make_query_analyzer(None).analyze(req.query)
+    intent = make_query_analyzer_from_knob().analyze(req.query)
     resolved, unresolved = resolve_cells(intent, _cells.keys())
     if not resolved:
         raise HTTPException(status_code=503, detail={

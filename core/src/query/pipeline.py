@@ -21,7 +21,10 @@ from pathlib import Path
 
 import networkx as nx
 
-from core.src.query.analyzer import MockQueryAnalyzer
+from core.src.query.analyzer import (
+    MockQueryAnalyzer,
+    make_query_analyzer_from_knob,
+)
 from core.src.query.resolver import MNOReleaseResolver
 from core.src.query.graph_scope import GraphScoper
 from core.src.query.rag_retriever import RAGRetriever
@@ -219,7 +222,9 @@ class QueryPipeline:
             graph: Knowledge graph (NetworkX DiGraph).
             embedder: Embedding provider for query embedding.
             store: Vector store for chunk retrieval.
-            analyzer: Query analyzer (default: MockQueryAnalyzer).
+            analyzer: Query analyzer (default: whatever
+                ``NORA_QUERY_ANALYZER`` selects, which is
+                ``MockQueryAnalyzer`` when the knob is unset).
             synthesizer: LLM synthesizer (default: MockSynthesizer).
             rewriter: Optional pre-retrieval query rewriter
                 (default: MockQueryRewriter — no rewrites). Pass an
@@ -268,7 +273,7 @@ class QueryPipeline:
         from core.src.query.reranker import MockReranker
         from core.src.vectorstore.cell_loader import FLAT_CELL
 
-        self._analyzer = analyzer or MockQueryAnalyzer()
+        self._analyzer = analyzer or make_query_analyzer_from_knob()
         self._resolver = MNOReleaseResolver(graph)
         self._scoper = GraphScoper(graph, max_depth=max_depth)
         # D-DRAFT-11: one retriever per (mno, release) cell. A single flat

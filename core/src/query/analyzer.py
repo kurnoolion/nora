@@ -424,26 +424,112 @@ Return ONLY valid JSON, no other text."""
             return self._fallback.analyze(query)
 
 
-def make_query_analyzer(llm_provider=None):
+def make_query_analyzer(llm_provider=None, decision_provider=None):
     """Select the query analyzer by NORA's standard rule.
 
+    Decision provider supplied → ``HybridQueryAnalyzer`` (decision model
+    for ``query_type`` / ``doc_type_scope``, regex for the free-text
+    spans; self-falls-back to keyword analysis on a provider failure).
     LLM provider supplied → ``LLMQueryAnalyzer`` (more accurate
     extraction; handles oblique MNO references and multi-release
     release-diff queries, and self-falls-back to keyword analysis on a
-    parse failure). ``None`` → ``MockQueryAnalyzer`` (keyword fallback,
-    no LLM).
+    parse failure). Neither → ``MockQueryAnalyzer`` (keyword fallback,
+    no model).
 
-    This makes query analysis follow the same configured-LLM-or-mock
+    This makes query analysis follow the same configured-model-or-mock
     posture as the rest of NORA rather than defaulting to keyword
-    analysis even when an LLM is available (multi-mno-sira D-DRAFT-9).
+    analysis even when a model is available (multi-mno-sira D-DRAFT-9).
+    The decision path mirrors that posture rather than inventing a new
+    one, and the fall-through is what keeps every existing caller — all
+    of which pass a single positional argument — byte-identical
+    (strand jev-experimentation, phase 2).
 
     Args:
         llm_provider: An object satisfying the ``LLMProvider`` Protocol
             (has ``complete()``), or ``None``.
+        decision_provider: An object satisfying the ``DecisionProvider``
+            Protocol (has ``decide()``), or ``None``. Takes precedence
+            over ``llm_provider`` when both are supplied.
 
     Returns:
         A query analyzer with an ``analyze(query) -> QueryIntent`` method.
     """
+    if decision_provider is not None:
+        # Function-local: core.src.decision.analyzer imports
+        # MockQueryAnalyzer from this module, so a module-level import
+        # here would be circular.
+        from core.src.decision.analyzer import HybridQueryAnalyzer
+
+        return HybridQueryAnalyzer(decision_provider)
     if llm_provider is not None:
         return LLMQueryAnalyzer(llm_provider)
     return MockQueryAnalyzer()
+
+
+def make_query_analyzer_from_knob(
+    llm_provider=None,
+    decision_provider=None,
+    cli_value=None,
+):
+    """Select the query analyzer from ``NORA_QUERY_ANALYZER``.
+
+    The knob is three-valued — ``rules`` / ``llm`` / ``decision`` — and
+    defaults to ``rules``, so a caller that adopts this function in place
+    of ``MockQueryAnalyzer()`` changes nothing for an operator who sets
+    no knob. That is the phase-2 identity gate.
+
+    Degrades to ``rules`` rather than raising whenever the selected arm
+    has no usable provider: the sira lane has no ``LLMProvider`` wired
+    yet, and the ``systemone`` HTTP provider does not land until phase 3.
+    A misconfigured classifier must not take the query path down.
+
+    Args:
+        llm_provider: Used when the knob says ``llm``.
+        decision_provider: Used when the knob says ``decision``; a
+            ``MockDecisionProvider`` is built when the knob says
+            ``decision`` and none is supplied.
+        cli_value: Explicit override, highest precedence.
+
+    Returns:
+        A query analyzer with an ``analyze(query) -> QueryIntent`` method.
+    """
+    from core.src.env.config import (
+        resolve_decision_provider,
+        resolve_query_analyzer,
+    )
+
+    mode = resolve_query_analyzer(cli_value=cli_value)
+
+    if mode == "llm":
+        if llm_provider is None:
+            logger.warning(
+                "NORA_QUERY_ANALYZER=llm but no LLMProvider was supplied "
+                "— falling back to rule-based classification"
+            )
+            return MockQueryAnalyzer()
+        return make_query_analyzer(llm_provider=llm_provider)
+
+    if mode == "decision":
+        if decision_provider is None:
+            decision_provider = _build_decision_provider(
+                resolve_decision_provider()
+            )
+        if decision_provider is None:
+            return MockQueryAnalyzer()
+        return make_query_analyzer(decision_provider=decision_provider)
+
+    return MockQueryAnalyzer()
+
+
+def _build_decision_provider(name: str):
+    """Construct a decision provider by name, or ``None`` when it cannot
+    be built. Phase 2 ships only the mock."""
+    if name == "mock":
+        from core.src.decision.mock_provider import MockDecisionProvider
+
+        return MockDecisionProvider()
+    logger.warning(
+        "NORA_DECISION_PROVIDER=%s is not available yet (phase 3) — "
+        "falling back to rule-based classification", name,
+    )
+    return None
