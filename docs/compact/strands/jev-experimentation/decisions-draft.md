@@ -615,3 +615,101 @@ and explicitly **not** claim the gate. Two arms of four are measured.
 a team-usage round; phase 5's default flip needs both a measurement that
 supports it and §8 open point 5's criteria from the architect. Neither is
 unattendable work that was skipped — both require people.
+
+### D-DRAFT-22 — The server, not the weights directory, is the verification authority
+
+**Date:** 2026-10-20
+**Context:** D-DRAFT-20's limitation — "the weights check is a filesystem
+check, so it runs where the weights are" — turned out to have an answer
+already in the wire format. The reference server exposes `GET /v1/models`,
+which reports the loaded `lora`, the calibration `temperature`, the `base`,
+the `device`, the `backend` and the `dtype`.
+
+**Decision:** make `assert_remote_head(base_url)` the gate for the decision
+arm and demote `assert_decision_head_present(model_dir)` to an optional extra
+check. `--weights-dir` is no longer required.
+
+**Why, and why this is not a weakening:** the local check was the thing that
+produced false assurance. It passed, the server was unreachable, and the run
+reported the rules baseline under `arm=decision`. A check that runs on the
+eval client can only ever describe the eval client. The remote probe runs over
+the same connection the decisions will travel, so it fails on an unreachable
+host — which is precisely the case that slipped through.
+
+**Rejected alternative:** keep `--weights-dir` mandatory *and* add the probe.
+Rejected because it keeps a requirement that cannot be satisfied in the
+deployment this is being built for — the serving host is a different machine,
+and the eval client has no weights to point at. A mandatory flag that cannot
+be satisfied honestly invites a fake value.
+
+**Generalisable:** ask the thing that will do the work what it is, rather than
+inspecting an artefact you believe it will use.
+
+### D-DRAFT-23 — The wire schema was guessed, and the guess was wrong in four places
+
+**Date:** 2026-10-20
+**Context:** `systemone_provider.py` was written with a docstring stating
+plainly that the schema was **unverified against a live server**, and a parse
+designed to fail loudly and name the keys the server actually sent. Setting
+Kev up made verification possible against `kev/api.py` at jaredpalmer/kev
+`1f04cfa`, the reference implementation of TypeSafe's public System One API.
+
+**What was wrong:**
+
+| Guessed | Actual | Consequence |
+|---|---|---|
+| `questions` is a list | an object keyed by question id | 422 |
+| `question` | `instructions` | 422 |
+| `options` (list) | `criteria` (dict for choice, list for score) | 422 |
+| `answers` is a list | an object keyed by question id | mis-parse |
+| answer holds `value` | holds `choice` / `noul` / `score` | mis-parse |
+| a yes/no question is a `bool` | it is a **`noul`** | 422 |
+| head ships `head.safetensors` + `calibration.json` | ships `head.pt`, temperature inside it | the gate **rejects the genuine article** |
+
+**Decision:** correct all of it and keep the loud-failure parse, which did its
+job — it would have named each mismatch rather than mis-mapping a field.
+
+**The lesson is about the ones that were silent, not the ones that 422.** The
+four request-shape errors announce themselves on first contact. The head-file
+names do the opposite: a wrong `REQUIRED_HEAD_FILES` makes the gate reject
+every real distribution, and the natural reaction to a gate that fires is to
+assume the artefact is bad. A guess becomes an invariant the moment it is
+written as a constant in a gate, and nothing in the code distinguishes the two.
+`REQUIRED_HEAD_FILES` now carries a comment saying what it was and why it was
+wrong.
+
+**Also worth recording:** `pip install kev` installs an unrelated PyPI package
+(it pulls jupyterlab, boto3, redis and ~90 others). The decision model is
+installed from `github.com/jaredpalmer/kev`. The obvious command is the wrong
+one, which is worth a line in any runbook.
+
+### D-DRAFT-24 — Both found defects fixed, and one of them moved the baseline
+
+**Date:** 2026-10-20
+**Context:** Two defects were found during the phase-1 measurement and
+deliberately left unfixed so that fixing them could not alter an arm
+mid-measurement. The baseline is now recorded, so the hold is released.
+
+**Decision:** fix both.
+
+1. `LLMQueryAnalyzer` discarded a whole `QueryIntent` when any single typed
+   field was unparseable. Now degrades per field, matching
+   `HybridQueryAnalyzer._coerce`.
+2. The cross-doc signal counted `_PLAN_ALIASES` hits rather than distinct plan
+   ids, so one plan named through two of its own aliases routed a within-plan
+   lookup to `CROSS_DOC`.
+
+**Measured effect of (2):** the rules arm moves **0.720 → 0.760** accuracy and
+**0.136 → 0.112** weighted cost on `classify-dev-v1`, from exactly two
+samples, both wrong → right, nothing regressed:
+
+- c02 `"Which AT commands must the device support?"` — `cross_doc` → `single_doc`
+- c04 `"Band 13 network access requirements for VZW"` — `cross_doc` → `single_doc`
+
+**Note on the test suite:** three of the eight new regression tests fail
+against the unfixed code. The other five pass either way, because the
+rule-based fallback happens to agree on those inputs. They are kept for
+documenting intent; only three of them are coverage.
+
+**Consequence for the strand:** the bar the decision model has to clear went
+up. 0.760 is the number arm 3 is measured against, not 0.720.
