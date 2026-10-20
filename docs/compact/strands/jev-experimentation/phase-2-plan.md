@@ -925,3 +925,778 @@ property that makes design §2.1's defect unrepeatable on this path.
 
 Strand: jev-experimentation, phase 2. Design §2, §3."
 ```
+
+---
+
+## Task 4: The three-valued `NORA_QUERY_ANALYZER` knob
+
+Design §3: "a **single three-valued knob**, not a boolean flag plus a roster",
+named to match `NORA_LLM_PROVIDER` / `NORA_EMBEDDING_PROVIDER` and resolved
+CLI > env > config > default like the other `resolve_*` knobs, with the
+default staying `rules`.
+
+**Files:**
+- Modify: `core/src/env/config.py` (append a section after the LLM block)
+- Test: `core/tests/test_query_analyzer_knob.py` (create)
+
+**Interfaces produced:**
+- `QUERY_ANALYZERS: tuple[str, ...] = ("rules", "llm", "decision")`
+- `DEFAULT_QUERY_ANALYZER: str = "rules"`
+- `QUERY_ANALYZER_ENV_VAR: str = "NORA_QUERY_ANALYZER"`
+- `resolve_query_analyzer(cli_value=None, config_store_value=None) -> str`
+- `DECISION_PROVIDERS: tuple[str, ...] = ("mock", "systemone")`
+- `DEFAULT_DECISION_PROVIDER`, `DEFAULT_DECISION_TIMEOUT`,
+  `DECISION_PROVIDER_ENV_VAR`, `DECISION_MODEL_ENV_VAR`,
+  `DECISION_BASE_URL_ENV_VAR`, `DECISION_TIMEOUT_ENV_VAR`
+- `resolve_decision_provider`, `resolve_decision_model`,
+  `resolve_decision_base_url`, `resolve_decision_timeout`
+
+Note on tiers: the decision knobs resolve **CLI > env var > default**, two
+tiers rather than the LLM chain's four. There is no `config/decision.json`
+yet because no deployment needs one, and inventing a file plus a cached
+loader plus a `_reset` test hook for a key nobody sets would be machinery
+ahead of demand. `resolve_standards_source` in the same module is two-tier for
+the same reason. A file tier is additive when phase 3 or 4 wants it.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `core/tests/test_query_analyzer_knob.py`:
+
+```python
+"""The three-valued NORA_QUERY_ANALYZER knob and the phase-2 identity
+gate (strand jev-experimentation)."""
+
+from __future__ import annotations
+
+import pytest
+
+from core.src.env.config import (
+    DEFAULT_QUERY_ANALYZER,
+    QUERY_ANALYZER_ENV_VAR,
+    QUERY_ANALYZERS,
+    resolve_decision_provider,
+    resolve_query_analyzer,
+)
+
+
+class TestResolveQueryAnalyzer:
+    def test_default_is_rules(self, monkeypatch):
+        """Legacy is the default at every phase (design §7) — an
+        operator who sets nothing sees today's behaviour."""
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        assert resolve_query_analyzer() == "rules"
+        assert DEFAULT_QUERY_ANALYZER == "rules"
+
+    def test_three_values_exactly(self):
+        assert QUERY_ANALYZERS == ("rules", "llm", "decision")
+
+    def test_env_var_selects(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        assert resolve_query_analyzer() == "decision"
+
+    def test_cli_beats_env(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        assert resolve_query_analyzer(cli_value="llm") == "llm"
+
+    def test_config_store_beats_env(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "rules")
+        assert resolve_query_analyzer(config_store_value="llm") == "llm"
+
+    def test_unknown_value_raises(self, monkeypatch):
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        with pytest.raises(ValueError, match="nonsense"):
+            resolve_query_analyzer(cli_value="nonsense")
+
+    def test_unknown_env_value_raises(self, monkeypatch):
+        """A typo in a shell export must fail loudly, not silently
+        serve the default."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decisions")
+        with pytest.raises(ValueError, match="decisions"):
+            resolve_query_analyzer()
+
+    def test_empty_env_value_falls_through(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "")
+        assert resolve_query_analyzer() == "rules"
+
+
+class TestResolveDecisionProvider:
+    def test_default_is_mock(self, monkeypatch):
+        """So the `decision` knob value is exercisable on a laptop with
+        nothing installed."""
+        monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        assert resolve_decision_provider() == "mock"
+
+    def test_env_var_selects(self, monkeypatch):
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
+        assert resolve_decision_provider() == "systemone"
+
+    def test_unknown_value_raises(self, monkeypatch):
+        monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        with pytest.raises(ValueError, match="jev"):
+            resolve_decision_provider(cli_value="jev")
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+```bash
+python -m pytest core/tests/test_query_analyzer_knob.py -v
+```
+
+Expected: `ImportError: cannot import name 'DEFAULT_QUERY_ANALYZER'`.
+
+- [ ] **Step 3: Write the implementation**
+
+Append to `core/src/env/config.py`, after the LLM-provider section:
+
+```python
+# ---------------------------------------------------------------------------
+# Query-analyzer selection — strand jev-experimentation, design §3.
+#
+# A single three-valued knob rather than a boolean flag plus a roster. The
+# three values map onto implementations that already exist:
+#
+#   rules     MockQueryAnalyzer      the live default
+#   llm       LLMQueryAnalyzer       written, previously never wired
+#   decision  HybridQueryAnalyzer    + a DecisionProvider beneath it
+#
+# The provider roster did not disappear — it sits one level down, under
+# NORA_DECISION_PROVIDER.
+# ---------------------------------------------------------------------------
+
+QUERY_ANALYZERS: tuple[str, ...] = ("rules", "llm", "decision")
+DEFAULT_QUERY_ANALYZER: str = "rules"
+QUERY_ANALYZER_ENV_VAR: str = "NORA_QUERY_ANALYZER"
+
+
+def resolve_query_analyzer(
+    cli_value: str | None = None,
+    config_store_value: str | None = None,
+) -> str:
+    """Resolve which query analyzer serves classification.
+
+    Precedence: CLI flag > Config-page DB > ``NORA_QUERY_ANALYZER`` env
+    var > default (``rules``). DB above env var, matching
+    ``resolve_llm_provider``'s rationale: a stale shell export must not
+    permanently override a value saved through the UI.
+
+    Default is ``rules``, so an operator who sets nothing gets today's
+    behaviour byte-for-byte.
+
+    Raises:
+        ValueError: A supplied value is not in ``QUERY_ANALYZERS``. A typo
+            in a shell export fails loudly rather than silently serving
+            the default.
+    """
+    for label, value in (
+        ("--query-analyzer", cli_value),
+        ("config_db:query.analyzer", config_store_value),
+        (QUERY_ANALYZER_ENV_VAR, os.environ.get(QUERY_ANALYZER_ENV_VAR)),
+    ):
+        if value:
+            if value not in QUERY_ANALYZERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {QUERY_ANALYZERS}"
+                )
+            return value
+    return DEFAULT_QUERY_ANALYZER
+
+
+# Decision-provider selection, beneath the `decision` value above.
+# Two-tier (CLI > env var > default) rather than the LLM chain's four:
+# there is no config/decision.json because no deployment needs one yet,
+# and a file plus a cached loader plus a reset hook for a key nobody sets
+# would be machinery ahead of demand. A file tier is additive.
+
+DECISION_PROVIDERS: tuple[str, ...] = ("mock", "systemone")
+DEFAULT_DECISION_PROVIDER: str = "mock"
+DEFAULT_DECISION_TIMEOUT: int = 30
+DECISION_PROVIDER_ENV_VAR: str = "NORA_DECISION_PROVIDER"
+DECISION_MODEL_ENV_VAR: str = "NORA_DECISION_MODEL"
+DECISION_BASE_URL_ENV_VAR: str = "NORA_DECISION_BASE_URL"
+DECISION_TIMEOUT_ENV_VAR: str = "NORA_DECISION_TIMEOUT"
+
+
+def resolve_decision_provider(cli_value: str | None = None) -> str:
+    """Resolve which decision provider serves the ``decision`` analyzer.
+
+    Default ``mock`` so the knob value is exercisable with nothing
+    installed. ``systemone`` is the HTTP client that lands in phase 3.
+
+    Raises:
+        ValueError: Value not in ``DECISION_PROVIDERS``.
+    """
+    for label, value in (
+        ("--decision-provider", cli_value),
+        (DECISION_PROVIDER_ENV_VAR,
+         os.environ.get(DECISION_PROVIDER_ENV_VAR)),
+    ):
+        if value:
+            if value not in DECISION_PROVIDERS:
+                raise ValueError(
+                    f"{label}={value!r} not in {DECISION_PROVIDERS}"
+                )
+            return value
+    return DEFAULT_DECISION_PROVIDER
+
+
+def resolve_decision_model(cli_value: str | None = None) -> str:
+    """Resolve the decision model tag. Empty means "the server's own
+    default", which is what a single-model deployment wants."""
+    return (
+        cli_value
+        or os.environ.get(DECISION_MODEL_ENV_VAR, "")
+    ).strip()
+
+
+def resolve_decision_base_url(cli_value: str | None = None) -> str:
+    """Resolve the decision endpoint's base URL. Must be in-corp — no
+    decision-model traffic leaves the network (design §7)."""
+    return (
+        cli_value
+        or os.environ.get(DECISION_BASE_URL_ENV_VAR, "")
+    ).strip()
+
+
+def resolve_decision_timeout(cli_value: int | None = None) -> int:
+    """Resolve the decision request timeout in seconds.
+
+    Default 30 rather than the LLM chain's 600: a decision model answers
+    in a single forward pass, so a request that takes minutes is a fault,
+    not slow work.
+    """
+    if cli_value:
+        return int(cli_value)
+    raw = os.environ.get(DECISION_TIMEOUT_ENV_VAR, "")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not an integer — using %d",
+                DECISION_TIMEOUT_ENV_VAR, raw, DEFAULT_DECISION_TIMEOUT,
+            )
+    return DEFAULT_DECISION_TIMEOUT
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+```bash
+python -m pytest core/tests/test_query_analyzer_knob.py -v
+python -m pytest core/tests/test_env_config.py -v
+```
+
+Expected: all PASS, including the pre-existing env-config suite.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add core/src/env/config.py core/tests/test_query_analyzer_knob.py
+git commit -m "env: three-valued NORA_QUERY_ANALYZER knob + decision chain
+
+rules | llm | decision, resolved CLI > config DB > env var > default,
+default rules so an operator who sets nothing gets today's behaviour.
+An unrecognised value raises rather than silently serving the
+default, so a typo in a shell export fails loudly.
+
+The decision-provider chain sits one level beneath the `decision`
+value and is two-tier on purpose — no config/decision.json until a
+deployment needs one. Timeout defaults to 30s, not the LLM chain's
+600: a decision model answers in one forward pass, so minutes mean a
+fault rather than slow work.
+
+Strand: jev-experimentation, phase 2. Design §3."
+```
+
+---
+
+## Task 5: Wire the knob, prove the identity gate, document the module
+
+The gate (design §5): "full suite green; with the flag off, behaviour is
+byte-identical to today (identity gate, per `corp-db-layer`'s precedent)."
+
+`make_query_analyzer` gains a `decision_provider` argument and keeps its
+two existing branches untouched, so every current caller
+(`make_query_analyzer(None)`) is unchanged by construction. A second factory
+reads the knob and is what the two call sites adopt.
+
+**Import-cycle warning, read rather than assumed:**
+`core/src/decision/analyzer.py` imports `MockQueryAnalyzer` from
+`core/src/query/analyzer.py`. A module-level import of `HybridQueryAnalyzer`
+in `query/analyzer.py` would therefore be circular. The decision import must
+be **function-local** inside the factory — the same technique
+`PipelineContext.create_llm_provider` uses for `core.src.llm.refusal`.
+
+**Files:**
+- Modify: `core/src/query/analyzer.py` (`make_query_analyzer`, + new factory)
+- Modify: `core/src/query/pipeline.py:271`
+- Modify: `sandbox/sira_query/service.py:1199`
+- Create: `core/src/decision/MODULE.md`
+- Modify: `core/src/query/MODULE.md`, `docs/compact/MAP.md`
+- Test: `core/tests/test_query_analyzer_knob.py` (append)
+
+**Interfaces produced:**
+- `make_query_analyzer(llm_provider=None, decision_provider=None)` —
+  decision provider supplied → `HybridQueryAnalyzer`; else LLM provider
+  supplied → `LLMQueryAnalyzer`; else `MockQueryAnalyzer`
+- `make_query_analyzer_from_knob(llm_provider=None,
+  decision_provider=None, cli_value=None)` — reads
+  `resolve_query_analyzer()` and builds what it names
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `core/tests/test_query_analyzer_knob.py`:
+
+```python
+from core.src.decision.analyzer import HybridQueryAnalyzer
+from core.src.decision.mock_provider import MockDecisionProvider
+from core.src.query.analyzer import (
+    LLMQueryAnalyzer,
+    MockQueryAnalyzer,
+    make_query_analyzer,
+    make_query_analyzer_from_knob,
+)
+from core.src.query.schema import QueryType
+
+
+class _StubLLM:
+    model = "stub"
+
+    def complete(self, prompt, system=None, temperature=0.0, **kwargs):
+        return ""
+
+
+class TestMakeQueryAnalyzerArgumentDispatch:
+    """The existing factory's behaviour must not move — every current
+    caller passes a single positional argument."""
+
+    def test_no_arguments_is_still_rules(self):
+        assert isinstance(make_query_analyzer(), MockQueryAnalyzer)
+
+    def test_none_is_still_rules(self):
+        assert isinstance(make_query_analyzer(None), MockQueryAnalyzer)
+
+    def test_llm_provider_is_still_llm(self):
+        assert isinstance(make_query_analyzer(_StubLLM()), LLMQueryAnalyzer)
+
+    def test_decision_provider_selects_the_hybrid(self):
+        got = make_query_analyzer(decision_provider=MockDecisionProvider())
+        assert isinstance(got, HybridQueryAnalyzer)
+
+    def test_decision_provider_wins_over_llm(self):
+        got = make_query_analyzer(
+            _StubLLM(), decision_provider=MockDecisionProvider()
+        )
+        assert isinstance(got, HybridQueryAnalyzer)
+
+
+class TestIdentityGate:
+    """With the knob unset, classification is byte-identical to today."""
+
+    def test_knob_unset_builds_the_rule_analyzer(self, monkeypatch):
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_knob_unset_classifies_identically_to_today(self, monkeypatch):
+        """The gate proper: same verdict on every sample of the phase-1
+        labelled set, compared against MockQueryAnalyzer directly."""
+        from core.src.eval.classify import load_classify_set
+
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        legacy = MockQueryAnalyzer()
+        knobbed = make_query_analyzer_from_knob()
+        for sample in load_classify_set():
+            assert (
+                knobbed.analyze(sample.query) == legacy.analyze(sample.query)
+            ), sample.sample_id
+
+    def test_pipeline_default_analyzer_is_the_rule_analyzer(self, monkeypatch):
+        """pipeline.py's own default must come out of the knob and land
+        on today's behaviour."""
+        monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
+        from core.src.query.pipeline import QueryPipeline
+
+        import inspect
+
+        source = inspect.getsource(QueryPipeline.__init__)
+        assert "make_query_analyzer_from_knob" in source
+
+
+class TestKnobSelectsEachArm:
+    def test_rules(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "rules")
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_llm_with_a_supplied_provider(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "llm")
+        got = make_query_analyzer_from_knob(llm_provider=_StubLLM())
+        assert isinstance(got, LLMQueryAnalyzer)
+
+    def test_llm_without_a_provider_degrades_to_rules(self, monkeypatch):
+        """The sira lane has no LLMProvider wired yet (service.py's own
+        recorded follow-up). Selecting `llm` there must degrade, not
+        crash the query path."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "llm")
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_decision_defaults_to_the_mock_provider(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
+        got = make_query_analyzer_from_knob()
+        assert isinstance(got, HybridQueryAnalyzer)
+
+    def test_decision_with_a_supplied_provider(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        provider = MockDecisionProvider()
+        got = make_query_analyzer_from_knob(decision_provider=provider)
+        assert isinstance(got, HybridQueryAnalyzer)
+
+    def test_decision_systemone_without_a_url_degrades_to_rules(
+        self, monkeypatch
+    ):
+        """Phase 2 ships no HTTP provider. Asking for one must degrade
+        rather than import something that does not exist."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
+        monkeypatch.delenv("NORA_DECISION_BASE_URL", raising=False)
+        assert isinstance(make_query_analyzer_from_knob(), MockQueryAnalyzer)
+
+    def test_decision_arm_actually_classifies(self, monkeypatch):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        got = make_query_analyzer_from_knob()
+        intent = got.analyze("please summarize the data retry spec")
+        assert intent.query_type is QueryType.SUMMARIZE
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+```bash
+python -m pytest core/tests/test_query_analyzer_knob.py -v
+```
+
+Expected: `ImportError: cannot import name 'make_query_analyzer_from_knob'`.
+
+- [ ] **Step 3: Write the implementation**
+
+In `core/src/query/analyzer.py`, replace the body of `make_query_analyzer`
+with the three-way dispatch and append the knob-reading factory. Keep the
+existing docstring's `multi-mno-sira` D-DRAFT-9 posture note — the decision
+path mirrors it.
+
+```python
+def make_query_analyzer(llm_provider=None, decision_provider=None):
+    """Select the query analyzer by NORA's standard rule.
+
+    Decision provider supplied → ``HybridQueryAnalyzer`` (decision model
+    for ``query_type`` / ``doc_type_scope``, regex for the free-text
+    spans; self-falls-back to keyword analysis on a provider failure).
+    LLM provider supplied → ``LLMQueryAnalyzer``. Neither →
+    ``MockQueryAnalyzer`` (keyword fallback, no model).
+
+    This makes query analysis follow the same configured-model-or-mock
+    posture as the rest of NORA rather than defaulting to keyword
+    analysis even when a model is available (multi-mno-sira D-DRAFT-9).
+    The decision path mirrors that posture rather than inventing a new
+    one, and the fall-through is what keeps every existing caller —
+    all of which pass a single positional argument — byte-identical.
+
+    Args:
+        llm_provider: An object satisfying the ``LLMProvider`` Protocol
+            (has ``complete()``), or ``None``.
+        decision_provider: An object satisfying the ``DecisionProvider``
+            Protocol (has ``decide()``), or ``None``. Takes precedence
+            over ``llm_provider`` when both are supplied.
+
+    Returns:
+        A query analyzer with an ``analyze(query) -> QueryIntent`` method.
+    """
+    if decision_provider is not None:
+        # Function-local: core.src.decision.analyzer imports
+        # MockQueryAnalyzer from this module, so a module-level import
+        # here would be circular.
+        from core.src.decision.analyzer import HybridQueryAnalyzer
+
+        return HybridQueryAnalyzer(decision_provider)
+    if llm_provider is not None:
+        return LLMQueryAnalyzer(llm_provider)
+    return MockQueryAnalyzer()
+
+
+def make_query_analyzer_from_knob(
+    llm_provider=None,
+    decision_provider=None,
+    cli_value=None,
+):
+    """Select the query analyzer from ``NORA_QUERY_ANALYZER``.
+
+    The knob is three-valued — ``rules`` / ``llm`` / ``decision`` — and
+    defaults to ``rules``, so a caller that adopts this function in place
+    of ``MockQueryAnalyzer()`` changes nothing for an operator who sets
+    no knob. That is the phase-2 identity gate.
+
+    Degrades to ``rules`` rather than raising whenever the selected arm
+    has no usable provider: the sira lane has no ``LLMProvider`` wired
+    yet, and the ``systemone`` HTTP provider does not land until phase 3.
+    A misconfigured classifier must not take the query path down.
+
+    Args:
+        llm_provider: Used when the knob says ``llm``.
+        decision_provider: Used when the knob says ``decision``; a
+            ``MockDecisionProvider`` is built when the knob says
+            ``decision`` and none is supplied.
+        cli_value: Explicit override, highest precedence.
+
+    Returns:
+        A query analyzer with an ``analyze(query) -> QueryIntent`` method.
+    """
+    from core.src.env.config import (
+        resolve_decision_provider,
+        resolve_query_analyzer,
+    )
+
+    mode = resolve_query_analyzer(cli_value=cli_value)
+
+    if mode == "llm":
+        if llm_provider is None:
+            logger.warning(
+                "NORA_QUERY_ANALYZER=llm but no LLMProvider was supplied "
+                "— falling back to rule-based classification"
+            )
+            return MockQueryAnalyzer()
+        return make_query_analyzer(llm_provider=llm_provider)
+
+    if mode == "decision":
+        if decision_provider is None:
+            decision_provider = _build_decision_provider(
+                resolve_decision_provider()
+            )
+        if decision_provider is None:
+            return MockQueryAnalyzer()
+        return make_query_analyzer(decision_provider=decision_provider)
+
+    return MockQueryAnalyzer()
+
+
+def _build_decision_provider(name: str):
+    """Construct a decision provider by name, or ``None`` when it cannot
+    be built. Phase 2 ships only the mock."""
+    if name == "mock":
+        from core.src.decision.mock_provider import MockDecisionProvider
+
+        return MockDecisionProvider()
+    logger.warning(
+        "NORA_DECISION_PROVIDER=%s is not available yet (phase 3) — "
+        "falling back to rule-based classification", name,
+    )
+    return None
+```
+
+In `core/src/query/pipeline.py:271`, change:
+
+```python
+        self._analyzer = analyzer or MockQueryAnalyzer()
+```
+
+to:
+
+```python
+        self._analyzer = analyzer or make_query_analyzer_from_knob()
+```
+
+and extend that module's import of `MockQueryAnalyzer` to include
+`make_query_analyzer_from_knob`. Leave `MockQueryAnalyzer` imported — other
+references in the module use it.
+
+In `sandbox/sira_query/service.py`, change both `make_query_analyzer(None)`
+call sites (`:1193`'s comment context and `:1199`) to
+`make_query_analyzer_from_knob()`, and update the import. Keep the existing
+comment recording that wiring an `LLMProvider` here is an outstanding
+follow-up — it is still true, and the new `llm`-degrades-to-`rules` branch is
+precisely what makes the knob safe to read on this lane before that work
+happens.
+
+- [ ] **Step 4: Run to verify it passes**
+
+```bash
+python -m pytest core/tests/test_query_analyzer_knob.py -v
+python -m pytest core/tests/ -q
+```
+
+Expected: all PASS, no new failures anywhere. The identity-gate test compares
+`make_query_analyzer_from_knob()` against `MockQueryAnalyzer()` on all 50
+labelled samples and must show zero differences.
+
+- [ ] **Step 5: Write `core/src/decision/MODULE.md`**
+
+Follow the house format used by the other sixteen — `**Purpose**`,
+`**Public surface**`, `**Invariants**`, `**Key choices**`. Content:
+
+```markdown
+# decision
+
+**Purpose**
+Decision models — typed `bool` / `score` / `choice` inference with no token
+generation. A decision model has a classification head rather than a token
+decoder, so it answers in a single forward pass and its latency does not
+scale with the number of options. This module owns the abstraction and the
+query-classification application of it. Strand jev-experimentation; design
+`docs/compact/strands/jev-experimentation/decision-model-design.md`.
+
+Separate from [llm](../llm/MODULE.md) deliberately: a different abstraction
+(typed heads, not completions), and one-package-per-concern is the convention
+here.
+
+**Public surface**
+- `DecisionProvider` (base.py) — `@runtime_checkable Protocol`; the only
+  decision-model interface the rest of the project sees. Attribute `model`,
+  method `decide(state, questions) -> list[DecisionAnswer]`. Shaped on
+  `/v1/systemone`: a batch of typed questions evaluated in parallel against
+  one shared `state`. Implementations may be HTTP clients, in-process
+  adapters, or mocks — a candidate without a `/v1/systemone` endpoint
+  satisfies this as a thin adapter rather than an HTTP hop.
+- `DecisionQuestion(question_id, kind, question, options=())` (base.py) —
+  frozen. `kind` is `bool` | `score` | `choice`; `options` is required for
+  `choice` and rejected for the others, validated at construction.
+- `DecisionAnswer(question_id, value, confidence=0.0)` (base.py) — frozen.
+  Matched back to its question by `question_id`, never by position, so a
+  provider may reorder or parallelise. `confidence` is the calibrated
+  probability where the provider reports one; recorded, not yet acted on —
+  an abstain threshold is a later decision.
+- `DecisionError` (base.py) — a provider could not answer. Callers degrade
+  rather than fail.
+- `MockDecisionProvider` (mock_provider.py) — deterministic keyword stub,
+  offline, no network; `model`, `call_count`. What the `decision` knob value
+  resolves to when no real provider is configured, so the seam is exercisable
+  with nothing installed. `choice` returns the first option named in the
+  state, else the LAST option.
+- `HybridQueryAnalyzer(provider, fallback=None)` (analyzer.py) —
+  `analyze(query) -> QueryIntent`. Decision model for `query_type` and
+  `doc_type_scope`; the rule-based analyzer for everything else.
+- `QUERY_TYPE_QUESTION`, `DOC_SCOPE_QUESTION`, `CLASSIFICATION_QUESTIONS`
+  (analyzer.py) — the two choice questions, options generated from
+  `QueryType` and `DocTypeScope`.
+
+**Invariants**
+- **No external egress.** Every decision provider is self-hosted in-corp.
+  Phase 2 ships no HTTP transport at all — importing this package cannot
+  cause a network call.
+- **Option lists are generated from their enums, never hand-written.** A
+  hand-listed option set is exactly how `LLMQueryAnalyzer`'s prompt came to
+  omit `summarize` and `fact` (design §2.1). Adding a `QueryType` member
+  extends the question with no edit here.
+- **`QueryIntent` is the contract and does not change.**
+  `HybridQueryAnalyzer` returns the same shape the rule-based analyzer does.
+- **A provider failure degrades, never fails.** Any exception from a
+  provider, and any answer that is not a member of its enum, falls back to
+  the rule-based value — per field, so one bad answer does not discard a
+  good one. A classifier outage degrades classification; it does not fail
+  the query.
+- **Answers are matched by `question_id`.** Never by list position.
+- **Free-text fields are not expressible here.** A decision model emits only
+  `bool` / `score` / `choice`, so `entities`, `concepts`, `releases` and
+  `standards_refs` stay with the regex extractors permanently — not as a
+  phase limitation but as a property of the category.
+
+**Key choices**
+- `/v1/systemone` as the wire shape, not a bespoke interface: it is the
+  de-facto decision-model format, so a candidate swap is a config change.
+  Same reasoning that kept the LLM roster vendor-neutral behind
+  `/v1/chat/completions` with no SDK dependency.
+- `HybridQueryAnalyzer` composes `MockQueryAnalyzer.analyze()` rather than
+  reusing its private `_extract_*` methods. One call fills every
+  open-extraction field and yields a complete fallback value for free; the
+  wasted rule classification costs microseconds.
+- The three closed-vocabulary multi-selects (`mnos`, `likely_features`,
+  `plan_ids`) are decision-model-ownable as one `bool` question per
+  candidate — 24 booleans plus 2 choices against one state, well inside the
+  concurrency these servers document — but stay on the rules until phase 3
+  so the first measurement has one variable.
+```
+
+Also add a one-line pointer to the new module in `core/src/query/MODULE.md`'s
+analyzer entry, naming `make_query_analyzer_from_knob` and the knob.
+
+- [ ] **Step 6: Regenerate the map and run the full suite**
+
+```bash
+python -m pytest core/tests/ -q
+```
+
+Then `/regen-map` — `decision` is a 17th package and `MAP.md`'s module table
+and Mermaid graph both need it. The new edges are `decision → query` and
+`query → decision` (the latter function-local, to break the cycle); note that
+in the map rather than leaving a reader to discover it.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add core/src/query/analyzer.py core/src/query/pipeline.py \
+    core/src/query/MODULE.md core/src/decision/MODULE.md \
+    sandbox/sira_query/service.py docs/compact/MAP.md \
+    core/tests/test_query_analyzer_knob.py
+git commit -m "query: wire the three-valued analyzer knob, identity gate green
+
+make_query_analyzer gains a decision_provider argument and keeps both
+existing branches, so every current caller is unchanged by
+construction. make_query_analyzer_from_knob reads
+NORA_QUERY_ANALYZER and is what pipeline.py and the sira service
+adopt; with the knob unset both land on MockQueryAnalyzer and the
+identity gate asserts byte-identical verdicts across all 50 labelled
+samples.
+
+Every arm degrades to rules rather than raising when its provider is
+missing — the sira lane still has no LLMProvider wired, and the
+systemone HTTP provider does not land until phase 3. A misconfigured
+classifier must not take the query path down.
+
+The decision import in the factory is function-local because
+decision.analyzer imports MockQueryAnalyzer from this module.
+
+Strand: jev-experimentation, phase 2. Design §3, §5."
+```
+
+---
+
+## Self-Review
+
+**1. Spec coverage.**
+
+| Spec requirement | Task |
+|---|---|
+| §3 `DecisionProvider` protocol speaking `/v1/systemone` | 1 |
+| §3 `core/src/decision/` as a 17th package with its own MODULE.md | 1, 5 |
+| §5 a mock provider | 2 |
+| §2 `QueryIntent` partitioned by output shape | 3 |
+| §2 open-extraction fields stay on the regex extractors | 3 |
+| §2 the three multi-selects deferred to phase 3 | 3 (asserted by test) |
+| §2.1 option sets are schemas, not prose | 3 (generated from enums) |
+| §3 three-valued knob, house precedence, default `rules` | 4 |
+| §3 roster one level beneath the `decision` value | 4 |
+| §3 `make_query_analyzer` signature extension | 5 |
+| §5 identity gate — flag off is byte-identical | 5 |
+| §5 full suite green | 5 step 6 |
+| §7 no external egress | 1 (no transport ships) |
+| `CLAUDE.md` MODULE.md ships with its surface | 5 |
+
+Out of scope with reasons: the `systemone` HTTP provider and the three
+multi-selects (phase 3); the trial stack and A/B (phase 4); the default flip
+(phase 5); a `config/decision.json` tier (no deployment needs one).
+
+**2. Placeholders.** None. Every code step carries runnable code, every
+command is exact, and MODULE.md's content is written out rather than
+described.
+
+**3. Type consistency.** `DecisionQuestion` / `DecisionAnswer` field names are
+identical in Tasks 1–3 and in MODULE.md. `decide(state, questions)` keeps that
+signature in the Protocol, the mock, both test doubles and the hybrid's call.
+`CLASSIFICATION_QUESTIONS` is a tuple in Task 3's definition, its tests and
+MODULE.md. `make_query_analyzer(llm_provider, decision_provider)` and
+`make_query_analyzer_from_knob(llm_provider, decision_provider, cli_value)`
+match between Task 5's interface block, implementation and tests.
+
+**4. Known risk.** `test_pipeline_default_analyzer_is_the_rule_analyzer`
+asserts on `inspect.getsource`, which is brittle — it checks the call site
+adopted the factory rather than checking behaviour. It is there because
+`QueryPipeline.__init__` requires a graph, embedder and store to construct,
+so asserting on the built analyzer needs fixtures the rest of this file does
+not have. `core/tests/test_pipeline.py` has those fixtures; moving the
+assertion there is the better home if this proves annoying.
