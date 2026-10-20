@@ -289,3 +289,38 @@ class TestHybridQueryAnalyzer:
         hybrid = HybridQueryAnalyzer(provider).analyze("q")
         assert type(hybrid) is type(rules)
         assert vars(hybrid).keys() == vars(rules).keys()
+
+
+class TestFallbackAccounting:
+    """Per-query fallback is correct serving behaviour, but it makes a
+    total provider outage look like a successful run with the
+    rule-based numbers. The counter is what lets an eval harness refuse
+    to report a contaminated arm."""
+
+    def test_healthy_provider_records_no_fallbacks(self):
+        provider = _ScriptedProvider(
+            {"query_type": "fact", "doc_type_scope": "requirements"}
+        )
+        analyzer = HybridQueryAnalyzer(provider)
+        analyzer.analyze("a")
+        analyzer.analyze("b")
+        assert analyzer.call_count == 2
+        assert analyzer.fallback_count == 0
+
+    def test_dead_provider_counts_every_query(self):
+        analyzer = HybridQueryAnalyzer(_FailingProvider())
+        for q in ("a", "b", "c"):
+            analyzer.analyze(q)
+        assert analyzer.call_count == 3
+        assert analyzer.fallback_count == 3
+
+    def test_unparseable_answer_is_not_a_fallback(self):
+        """An answer that arrived but did not parse degrades one field;
+        the provider was reachable, so the arm is not contaminated the
+        same way."""
+        provider = _ScriptedProvider(
+            {"query_type": "nonsense", "doc_type_scope": "requirements"}
+        )
+        analyzer = HybridQueryAnalyzer(provider)
+        analyzer.analyze("What is the value of T3402?")
+        assert analyzer.fallback_count == 0

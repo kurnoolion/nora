@@ -155,7 +155,9 @@ nora/
 │   │   │   ├── __init__.py                              # Decision models — typed bool/score/choice inference, no token generation.
 │   │   │   ├── analyzer.py                              # Decision-model-backed query analysis.
 │   │   │   ├── base.py                                  # The decision-model wire contract.
-│   │   │   └── mock_provider.py                         # Deterministic offline decision provider.
+│   │   │   ├── head_check.py                            # Verify a decision model's head actually shipped.
+│   │   │   ├── mock_provider.py                         # Deterministic offline decision provider.
+│   │   │   └── systemone_provider.py                    # `/v1/systemone` HTTP decision provider.
 │   │   ├── env/                                         # Per-environment scoped workspace configuration.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py

@@ -69,6 +69,19 @@ class HybridQueryAnalyzer:
     def __init__(self, provider, fallback=None) -> None:
         self._provider = provider
         self._fallback = fallback or MockQueryAnalyzer()
+        self.call_count = 0
+        self.fallback_count = 0
+        """Queries served entirely from the rule-based analyzer because
+        the provider raised.
+
+        Load-bearing, not diagnostic: per-query fallback is the right
+        serving behaviour but it makes a total provider outage look like
+        a successful run with the rule-based numbers. An evaluation
+        harness MUST check this before recording anything under a
+        `decision` label — see `eval.classify_cli`, which refuses a
+        non-zero count. Found the hard way: a verified head with an
+        unreachable server reported the rules baseline as the decision
+        arm's result."""
 
     def analyze(self, query: str) -> QueryIntent:
         """Analyze a query into structured intent.
@@ -80,10 +93,12 @@ class HybridQueryAnalyzer:
             A ``QueryIntent``. Same shape the rule-based analyzer returns —
             ``QueryIntent`` is the contract and does not change.
         """
+        self.call_count += 1
         base = self._fallback.analyze(query)
         try:
             answers = self._provider.decide(query, CLASSIFICATION_QUESTIONS)
         except Exception as e:  # provider is third-party code
+            self.fallback_count += 1
             logger.warning(
                 "Decision provider failed (%s) — falling back to "
                 "rule-based classification", e,

@@ -13,6 +13,18 @@ Strand jev-experimentation, phase 1.
     python -m core.src.eval.classify_cli --arm llm \
         --llm-provider openai-compatible \
         --base-url http://<host>:<port>/v1 --model <tag>
+
+    # the decision arm, offline mock — exercises the seam, measures nothing
+    python -m core.src.eval.classify_cli --arm decision
+
+    # the decision arm against a real decider. --weights-dir is REQUIRED:
+    # design §7 forbids recording a number before the decision head is
+    # verified present, because a hollow build answers without erroring.
+    python -m core.src.eval.classify_cli --arm decision \
+        --decision-provider systemone \
+        --decision-base-url http://<host>:8008/v1 \
+        --decision-model kev-4b \
+        --weights-dir /models/kev-4b
 """
 
 from __future__ import annotations
@@ -20,10 +32,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
+from core.src.decision.base import DecisionError
+from core.src.decision.head_check import assert_decision_head_present
 from core.src.env.config import (
+    DECISION_BASE_URL_ENV_VAR,
+    DECISION_MODEL_ENV_VAR,
     resolve_llm_api_key,
     resolve_llm_base_url,
     resolve_llm_model,
@@ -35,7 +52,11 @@ from core.src.eval.classify import (
     load_classify_set,
     run_classify,
 )
-from core.src.query.analyzer import LLMQueryAnalyzer, MockQueryAnalyzer
+from core.src.query.analyzer import (
+    LLMQueryAnalyzer,
+    MockQueryAnalyzer,
+    _build_decision_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +100,71 @@ def _build_llm_provider(args):
     raise SystemExit(f"unsupported --llm-provider: {provider}")
 
 
+def _build_decision_arm(args):
+    """Build the decision analyzer, refusing to proceed unless the
+    decision head is verified present.
+
+    Design §7: "Decision heads must be asserted loaded before any
+    accuracy number is recorded." A GGUF or backbone-only build loads and
+    answers without erroring, so a number recorded against one would
+    measure the backbone and look like a successful run. The mock is
+    exempt — it measures nothing and claims nothing.
+    """
+    from core.src.decision.analyzer import HybridQueryAnalyzer
+    from core.src.env.config import resolve_decision_provider
+
+    name = resolve_decision_provider(cli_value=args.decision_provider)
+
+    if name != "mock":
+        if not args.weights_dir:
+            raise SystemExit(
+                f"--arm decision with --decision-provider {name} requires "
+                "--weights-dir: the decision head must be asserted present "
+                "before any accuracy number is recorded (design §7). A "
+                "hollow build answers without erroring, so an unverified "
+                "number would measure the backbone. Pass the weights "
+                "directory on the serving host, or use "
+                "--decision-provider mock to exercise the seam without "
+                "recording a measurement."
+            )
+        report = assert_decision_head_present(args.weights_dir)
+        print(
+            f"decision head verified: {report['file_count']} files, "
+            f"adapter present, {', '.join(report['present'])}"
+        )
+
+    if args.decision_base_url:
+        os.environ[DECISION_BASE_URL_ENV_VAR] = args.decision_base_url
+    if args.decision_model:
+        os.environ[DECISION_MODEL_ENV_VAR] = args.decision_model
+
+    provider = _build_decision_provider(name)
+    if provider is None:
+        raise SystemExit(
+            f"could not build the {name!r} decision provider — see the "
+            "warning above. Refusing to silently measure the rule-based "
+            "analyzer under the 'decision' label."
+        )
+    return HybridQueryAnalyzer(provider), provider
+
+
 def _build_analyzer(args):
+    """Returns (analyzer, model_identity)."""
     if args.arm == "rules":
-        return MockQueryAnalyzer()
-    return LLMQueryAnalyzer(_build_llm_provider(args))
+        return MockQueryAnalyzer(), "rules"
+    if args.arm == "decision":
+        analyzer, provider = _build_decision_arm(args)
+        ident = (
+            getattr(provider, "model", "")
+            or getattr(provider, "base_url", "")
+            or "?"
+        )
+        return analyzer, f"decision:{ident}"
+    provider = _build_llm_provider(args)
+    return (
+        LLMQueryAnalyzer(provider),
+        f"llm:{getattr(provider, 'model', '') or '?'}",
+    )
 
 
 def main(argv=None) -> int:
@@ -90,8 +172,11 @@ def main(argv=None) -> int:
         description="Measure a query analyzer against a labelled set."
     )
     parser.add_argument(
-        "--arm", choices=["rules", "llm"], default="rules",
-        help="rules = MockQueryAnalyzer (default); llm = LLMQueryAnalyzer",
+        "--arm", choices=["rules", "llm", "decision"], default="rules",
+        help=(
+            "rules = MockQueryAnalyzer (default); llm = LLMQueryAnalyzer; "
+            "decision = HybridQueryAnalyzer"
+        ),
     )
     parser.add_argument(
         "--set", dest="set_path", type=Path, default=None,
@@ -110,6 +195,20 @@ def main(argv=None) -> int:
     parser.add_argument("--base-url", default=None)
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--timeout", type=int, default=None)
+    parser.add_argument(
+        "--decision-provider", default=None,
+        help="mock (default) | systemone",
+    )
+    parser.add_argument("--decision-model", default=None)
+    parser.add_argument("--decision-base-url", default=None)
+    parser.add_argument(
+        "--weights-dir", default=None,
+        help=(
+            "weights directory of a real decision model; required for "
+            "--arm decision with a non-mock provider, so the decision "
+            "head is verified before any number is recorded (design §7)"
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
@@ -122,17 +221,42 @@ def main(argv=None) -> int:
     payload = json.loads(
         (args.set_path or DEFAULT_SET_PATH).read_text(encoding="utf-8")
     )
+    try:
+        analyzer, model_identity = _build_analyzer(args)
+    except DecisionError as e:
+        # Exit 2 with the diagnosis, matching golden_cli's convention —
+        # a head-verification refusal is an operator-facing message, not
+        # a stack trace.
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     report = run_classify(
-        _build_analyzer(args),
+        analyzer,
         samples,
         repeats=args.repeat,
         arm=args.arm,
         set_id=payload.get("set_id", ""),
     )
 
+    fallbacks = getattr(analyzer, "fallback_count", 0)
+    if fallbacks and args.arm == "decision":
+        total = getattr(analyzer, "call_count", len(samples))
+        print(
+            f"error: the decision provider failed on {fallbacks} of "
+            f"{total} queries, so those queries were answered by the "
+            "rule-based analyzer. Reporting this as the decision arm "
+            "would record the rules baseline under a 'decision' label — "
+            "the same silent-degradation failure design §7 guards "
+            "against, arriving by transport rather than by a hollow "
+            "build. Fix the provider and re-run; see the warnings above "
+            "for the cause.",
+            file=sys.stderr,
+        )
+        return 2
+
     print(
-        f"arm={report.arm} set={report.set_id} profile={report.profile} "
-        f"n={len(report.results)} repeats={report.repeats}"
+        f"arm={report.arm} model={model_identity} set={report.set_id} "
+        f"profile={report.profile} n={len(report.results)} "
+        f"repeats={report.repeats}"
     )
     print(
         f"accuracy={report.accuracy:.3f} "

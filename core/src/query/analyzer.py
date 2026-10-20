@@ -523,13 +523,43 @@ def make_query_analyzer_from_knob(
 
 def _build_decision_provider(name: str):
     """Construct a decision provider by name, or ``None`` when it cannot
-    be built. Phase 2 ships only the mock."""
+    be built.
+
+    ``None`` rather than an exception: the caller degrades to rule-based
+    classification, because a misconfigured classifier must not take the
+    query path down.
+    """
     if name == "mock":
         from core.src.decision.mock_provider import MockDecisionProvider
 
         return MockDecisionProvider()
+
+    if name == "systemone":
+        from core.src.decision.base import DecisionError
+        from core.src.decision.systemone_provider import (
+            SystemOneDecisionProvider,
+        )
+        from core.src.env.config import (
+            resolve_decision_base_url,
+            resolve_decision_model,
+            resolve_decision_timeout,
+        )
+
+        try:
+            return SystemOneDecisionProvider(
+                base_url=resolve_decision_base_url(),
+                model=resolve_decision_model(),
+                timeout=resolve_decision_timeout(),
+            )
+        except DecisionError as e:
+            logger.warning(
+                "Could not build the systemone decision provider (%s) — "
+                "falling back to rule-based classification", e,
+            )
+            return None
+
     logger.warning(
-        "NORA_DECISION_PROVIDER=%s is not available yet (phase 3) — "
-        "falling back to rule-based classification", name,
+        "NORA_DECISION_PROVIDER=%s is not available — falling back to "
+        "rule-based classification", name,
     )
     return None
