@@ -1,0 +1,65 @@
+{
+  "set_id": "classify-dev-v1",
+  "description": "Synthetic query-classification dev set. Query text only, no corpus content, placeholder requirement IDs, no real plan codes. Labels are authored from human-read intent, NOT from rule output.",
+  "samples": [
+    {"sample_id": "c01", "query": "What are the SMS requirements?", "query_type": "single_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c02", "query": "Which AT commands must the device support?", "query_type": "single_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c03", "query": "What does VZ_REQ_PLAN_A_0001 require?", "query_type": "single_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c04", "query": "Band 13 network access requirements for VZW", "query_type": "single_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c05", "query": "Where in the data retry spec is the backoff timer defined?", "query_type": "single_doc", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c06", "query": "What are all the requirements for IMS registration?", "query_type": "cross_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c07", "query": "What requirements exist across all VZW specs for throttling?", "query_type": "cross_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c08", "query": "List every requirement that touches PDN connectivity.", "query_type": "cross_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c09", "query": "Which specs contain attach reject handling rules?", "query_type": "cross_doc", "doc_type_scope": "requirements"},
+    {"sample_id": "c10", "query": "Requirements for both SMS and AT commands", "query_type": "cross_doc", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c11", "query": "Compare VZW and TMO data retry requirements", "query_type": "cross_mno_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c12", "query": "How does VZW differ from ATT on SMS over IMS?", "query_type": "cross_mno_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c13", "query": "Does TMO require the same backoff timer as VZW?", "query_type": "cross_mno_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c14", "query": "Is the VZW throttling rule stricter than the other carriers?", "query_type": "cross_mno_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c15", "query": "VZW vs TMO: band 13 network access", "query_type": "cross_mno_comparison", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c16", "query": "What changed in the SMS requirements between Feb 2026 and May 2026?", "query_type": "release_diff", "doc_type_scope": "requirements"},
+    {"sample_id": "c17", "query": "What's the delta from the previous release for data retry?", "query_type": "release_diff", "doc_type_scope": "requirements"},
+    {"sample_id": "c18", "query": "Show the diff between Feb 2026 and the latest release", "query_type": "release_diff", "doc_type_scope": "requirements"},
+    {"sample_id": "c19", "query": "Which requirements were added in the newest release?", "query_type": "release_diff", "doc_type_scope": "requirements"},
+    {"sample_id": "c20", "query": "Did the T3402 timer value change in May 2026?", "query_type": "release_diff", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c21", "query": "How does VZW T3402 differ from 3GPP TS 24.301?", "query_type": "standards_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c22", "query": "Compare the attach reject cause codes with 3GPP TS 24.008", "query_type": "standards_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c23", "query": "Is the VZW timer value compliant with the 3GPP standard?", "query_type": "standards_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c24", "query": "Where does the spec deviate from 3GPP TS 23.401?", "query_type": "standards_comparison", "doc_type_scope": "requirements"},
+    {"sample_id": "c25", "query": "VZW SMS over IMS vs 3GPP TS 24.341 behaviour", "query_type": "standards_comparison", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c26", "query": "What test cases cover the data retry requirements?", "query_type": "traceability", "doc_type_scope": "both"},
+    {"sample_id": "c27", "query": "Which requirements mention the backoff timer?", "query_type": "traceability", "doc_type_scope": "requirements"},
+    {"sample_id": "c28", "query": "Where is cause code 19 mentioned?", "query_type": "traceability", "doc_type_scope": "requirements"},
+    {"sample_id": "c29", "query": "Show the traceability matrix for band 13", "query_type": "traceability", "doc_type_scope": "requirements"},
+    {"sample_id": "c30", "query": "Which test plan validates IMS registration?", "query_type": "traceability", "doc_type_scope": "test_cases"},
+
+    {"sample_id": "c31", "query": "What are all requirements related to IMS?", "query_type": "feature_level", "doc_type_scope": "requirements"},
+    {"sample_id": "c32", "query": "Tell me everything about throttling", "query_type": "feature_level", "doc_type_scope": "requirements"},
+    {"sample_id": "c33", "query": "All requirements related to device management", "query_type": "feature_level", "doc_type_scope": "requirements"},
+    {"sample_id": "c34", "query": "What covers the authentication feature end to end?", "query_type": "feature_level", "doc_type_scope": "requirements"},
+    {"sample_id": "c35", "query": "Everything about band 13 network access", "query_type": "feature_level", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c36", "query": "Explain the IMS registration requirements", "query_type": "summarize", "doc_type_scope": "requirements"},
+    {"sample_id": "c37", "query": "Summarize the data retry spec", "query_type": "summarize", "doc_type_scope": "requirements"},
+    {"sample_id": "c38", "query": "Give me an overview of band 13 network access", "query_type": "summarize", "doc_type_scope": "requirements"},
+    {"sample_id": "c39", "query": "Describe how throttling works", "query_type": "summarize", "doc_type_scope": "requirements"},
+    {"sample_id": "c40", "query": "What's the big picture on device management?", "query_type": "summarize", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c41", "query": "What is the value of T3402?", "query_type": "fact", "doc_type_scope": "requirements"},
+    {"sample_id": "c42", "query": "How many retries are allowed?", "query_type": "fact", "doc_type_scope": "requirements"},
+    {"sample_id": "c43", "query": "What is the default value for the backoff timer?", "query_type": "fact", "doc_type_scope": "requirements"},
+    {"sample_id": "c44", "query": "What is the maximum number of PDN connections?", "query_type": "fact", "doc_type_scope": "requirements"},
+    {"sample_id": "c45", "query": "T3402 timer duration in seconds?", "query_type": "fact", "doc_type_scope": "requirements"},
+
+    {"sample_id": "c46", "query": "What is 5G NR?", "query_type": "general", "doc_type_scope": "requirements"},
+    {"sample_id": "c47", "query": "What does NAS stand for?", "query_type": "general", "doc_type_scope": "requirements"},
+    {"sample_id": "c48", "query": "Is LTE still supported?", "query_type": "general", "doc_type_scope": "requirements"},
+    {"sample_id": "c49", "query": "Who maintains these specifications?", "query_type": "general", "doc_type_scope": "requirements"},
+    {"sample_id": "c50", "query": "What is the purpose of this document set?", "query_type": "general", "doc_type_scope": "requirements"}
+  ]
+}
