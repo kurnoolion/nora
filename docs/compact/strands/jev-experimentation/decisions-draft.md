@@ -443,3 +443,175 @@ signature extension; its docstring records the governing posture from
 rest of NORA"), which the knob should mirror. Default `rules` preserves today's
 behaviour byte-identically, which is what makes a phase-2 identity gate
 achievable.
+
+---
+
+<!-- Drafts 15-21 added 2026-10-20 during the phase-1/2/3 implementation
+     pass. Each records a choice where an alternative was seriously
+     considered and rejected, per CLAUDE.md's branch-flow rule. -->
+
+### D-DRAFT-15 — Confusion cost is derived from the live knob tables, not hand-authored
+
+**Date:** 2026-10-20
+**Context:** Design §6 requires the confusion matrix be "weighted by
+downstream divergence" because each `QueryType` selects a different retrieval
+configuration. It does not say how to obtain the weights.
+
+**Alternative rejected:** a hand-authored cost matrix. With ten classes that
+is ninety numbers, every one of them invented, and nothing would keep them
+honest as the pipeline's tuning moved.
+
+**Decision:** the cost of predicting B when the truth is A is the fraction of
+the five per-type retrieval knobs whose values differ between A and B,
+computed at import from `env.config._BROAD_QUERY_TYPES` /
+`DEFAULT_BM25_WEIGHT_BY_TYPE` and `query.pipeline._TYPE_REWRITE_ENABLED` /
+`_TYPE_MAX_DISTANCE` / `_TYPE_DISABLE_GROUPING`. Derived, never copied — a
+copy would need an agreement test to stay honest, and deriving is both less
+code and structurally correct.
+
+**Evidence it is the right measure:** it reproduced both of §6's anchor claims
+without being tuned to them. `FACT`↔`SUMMARIZE` scores 1.0 (all five knobs
+inverted; §6 called it catastrophic). `CROSS_DOC`↔`FEATURE_LEVEL` scores 0.0
+(identical configurations; §6 called it mild).
+
+**Consequence:** the cost function moves when the pipeline's tuning moves, so
+every report is stamped with `profile_digest()` and two reports are comparable
+on weighted cost only when their digests agree. Same comparability-key pattern
+`eval/golden.py` already uses.
+
+### D-DRAFT-16 — Rerank is excluded from the knob profile
+
+**Date:** 2026-10-20
+**Context:** Six per-type knobs exist, not five. `_TYPE_RERANK_ENABLED`
+(`pipeline.py:163`) is the sixth.
+
+**Decision:** exclude it. The map is empty by design — the
+`nora-retrieval-parent-displacement` strand deliberately removed its gating —
+so every class resolves to the same `_DEFAULT_RERANK_ENABLED = True`. A
+constant column contributes 0.0 to every pairwise distance and would only
+dilute the five that carry signal.
+
+**Guard:** a test asserts `_TYPE_RERANK_ENABLED == {}` and that `"rerank"` is
+not in `KNOB_NAMES`. The day someone adds a per-type override, that test fails
+and the profile is forced to grow a sixth knob rather than silently
+mis-weighting.
+
+### D-DRAFT-17 — `HybridQueryAnalyzer` composes the rule analyzer rather than reusing its extractors
+
+**Date:** 2026-10-20
+**Context:** Design §2 assigns `entities`, `concepts`, `releases` and
+`standards_refs` to "the regex extractor", which lives in
+`MockQueryAnalyzer._extract_*` — private methods in another module.
+
+**Alternative rejected:** calling those private methods from
+`core/src/decision/`. Reaching across a module boundary into privates couples
+the two permanently and makes the rule analyzer's internals load-bearing
+public surface by accident.
+
+**Decision:** call `MockQueryAnalyzer.analyze()` once and replace the two
+choice fields with `dataclasses.replace`. One call fills every
+open-extraction field *and* yields a complete fallback `QueryIntent` for free.
+The rule classifier then runs needlessly, which costs microseconds.
+
+**Consequence:** `decision` imports `query` at module level, so `query` may
+import `decision` only function-locally — the local import inside
+`make_query_analyzer` is what breaks the cycle, and that is recorded in both
+MODULE.md files rather than left for a reader to rediscover.
+
+### D-DRAFT-18 — The knob is read by a separate factory, not inside `make_query_analyzer`
+
+**Date:** 2026-10-20
+**Context:** Design §3 says adding the decision path needs "a signature
+extension (a decision-provider argument, or a config read inside the
+factory)".
+
+**Alternative rejected:** reading `NORA_QUERY_ANALYZER` inside
+`make_query_analyzer`. Every existing caller passes a single positional
+argument, so a config read there would make all of them knob-sensitive at
+once and put the phase-2 identity gate at risk from a function nobody
+reviewed for it.
+
+**Decision:** `make_query_analyzer(llm_provider=None, decision_provider=None)`
+stays pure argument dispatch, with both existing branches untouched — so every
+current caller is byte-identical by construction. A second function,
+`make_query_analyzer_from_knob`, reads the knob, and only the two call sites
+that should be knob-aware adopt it.
+
+**Also decided:** every arm **degrades to `rules` rather than raising** when
+its provider is missing. The sira lane has no `LLMProvider` wired yet (its own
+recorded follow-up) and the `systemone` provider needs a base URL that may not
+be set. A misconfigured classifier must not take the query path down.
+
+### D-DRAFT-19 — No `config/decision.json` yet
+
+**Date:** 2026-10-20
+**Context:** Design §3 says a provider roster sits beneath the `decision`
+value. The LLM chain's precedent is four tiers — CLI > config DB > env var >
+`config/llm.json` — plus a named multi-entry roster with a cached loader and a
+test reset hook.
+
+**Decision:** implement the single-provider `NORA_DECISION_*` chain only, two
+tiers (CLI > env var > default). A file plus a cached loader plus a reset hook
+for keys nobody sets is machinery ahead of demand, and
+`resolve_standards_source` in the same module is two-tier for the same reason.
+`core/src/llm/` grew the same way — single chain first, the roster added later
+by `llm-model-discovery` when there was a second endpoint to choose between.
+
+**Revisit when:** phase 3 has two real candidates to select between, which is
+exactly when a roster earns its cost.
+
+### D-DRAFT-20 — Two independent gates against silently measuring the wrong thing
+
+**Date:** 2026-10-20
+**Context:** Design §7 requires decision heads be asserted loaded before any
+accuracy number is recorded, because a hollow build answers without erroring.
+Implementing that surfaced a second route to the same failure.
+
+**Decision:** two gates, because the degradation arrives two ways.
+
+1. **Weights** — `assert_decision_head_present(model_dir)` requires
+   `head.safetensors`, `calibration.json` and a decision adapter, and rejects
+   a GGUF-only directory with the hollow-build diagnosis. `classify_cli`
+   requires `--weights-dir` for any non-mock decision provider and exits 2.
+   The mock is exempt: it measures nothing and claims nothing.
+2. **Transport** — `HybridQueryAnalyzer.fallback_count`. Per-query fallback to
+   the rules is the correct *serving* behaviour, but it makes a dead provider
+   look like a successful run. `classify_cli` refuses any non-zero count under
+   a `decision` label.
+
+**Found the hard way, which is why gate 2 exists:** a run with a verified head
+and an unreachable server completed, exited 0, and reported accuracy 0.720 /
+weighted cost 0.136 — *exactly the rules baseline* — labelled `arm=decision`.
+The head check had passed; nothing was watching the wire.
+
+**Limitation to raise with the architect:** the weights check is a filesystem
+check, so it runs where the weights are. For a remotely served model that is
+the serving host, not the eval client. Either the check runs as a deploy-time
+assertion on the serving host, or the server grows a route that reports its
+loaded components. The current CLI chooses to refuse rather than to trust.
+
+### D-DRAFT-21 — Phase 3's gate is NOT met; the code landed without the measurement
+
+**Date:** 2026-10-20
+**Context:** Phase 3's gate is "four-arm comparison complete". The work was
+done unattended overnight on the user's instruction to proceed through all
+phases.
+
+**Decision:** land phase 3's *code* — the `/v1/systemone` provider, both
+verification gates, the `decision` arm in the CLI, all tested against stubs —
+and explicitly **not** claim the gate. Two arms of four are measured.
+
+**Why the remaining two were not run, rather than left unexplained:**
+
+- **Arm 3 (generic Kev-4B)** needs roughly 8 GB of third-party model weights
+  fetched from Hugging Face. That is a large external download plus
+  third-party code to run it, on a machine whose owner was asleep. `CLAUDE.md`
+  requires confirmation before anything that leaves the machine, and a
+  pre-pull was offered and not yet answered.
+- **Arm 4 (fine-tuned Kev-4B)** is conditional on §8's fine-tuning-budget
+  question, which is the architect's to answer.
+
+**Also blocked, for the record:** phase 4 needs a trial stack on new ports and
+a team-usage round; phase 5's default flip needs both a measurement that
+supports it and §8 open point 5's criteria from the architect. Neither is
+unattendable work that was skipped — both require people.
