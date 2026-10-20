@@ -138,7 +138,8 @@ class SystemOneDecisionProvider:
             if q.kind == "choice":
                 # dict, not list: the value is an optional per-option
                 # description and None presents the option by name alone.
-                entry["criteria"] = {opt: None for opt in q.options}
+                glosses = q.descriptions or (None,) * len(q.options)
+                entry["criteria"] = dict(zip(q.options, glosses))
             elif q.kind == "score":
                 entry["criteria"] = list(q.options)
             asked[q.question_id] = entry

@@ -344,3 +344,59 @@ class TestFallbackAccounting:
         analyzer = HybridQueryAnalyzer(provider)
         analyzer.analyze("What is the value of T3402?")
         assert analyzer.fallback_count == 0
+
+
+class TestOptionDescriptions:
+    """Glosses are load-bearing: measured on classify-dev-v1 against a
+    live Kev-4B, bare option identifiers scored 0.460 and the same
+    options glossed scored 0.760."""
+
+    def test_every_query_type_has_a_gloss(self):
+        """Keyed by the enum, so adding a member fails here rather than
+        silently shipping a bare option — the same property §2.1 wants
+        for the option list itself."""
+        from core.src.decision.analyzer import QUERY_TYPE_DESCRIPTIONS
+        from core.src.query.schema import QueryType
+
+        assert set(QUERY_TYPE_DESCRIPTIONS) == set(QueryType)
+        assert all(QUERY_TYPE_DESCRIPTIONS[t].strip() for t in QueryType)
+
+    def test_every_doc_scope_has_a_gloss(self):
+        from core.src.decision.analyzer import DOC_SCOPE_DESCRIPTIONS
+        from core.src.query.schema import DocTypeScope
+
+        assert set(DOC_SCOPE_DESCRIPTIONS) == set(DocTypeScope)
+        assert all(DOC_SCOPE_DESCRIPTIONS[s].strip() for s in DocTypeScope)
+
+    def test_questions_carry_one_gloss_per_option_in_order(self):
+        from core.src.decision.analyzer import (
+            DOC_SCOPE_QUESTION,
+            QUERY_TYPE_DESCRIPTIONS,
+            QUERY_TYPE_QUESTION,
+        )
+        from core.src.query.schema import QueryType
+
+        assert len(QUERY_TYPE_QUESTION.descriptions) == len(
+            QUERY_TYPE_QUESTION.options
+        )
+        assert len(DOC_SCOPE_QUESTION.descriptions) == len(
+            DOC_SCOPE_QUESTION.options
+        )
+        assert QUERY_TYPE_QUESTION.descriptions == tuple(
+            QUERY_TYPE_DESCRIPTIONS[t] for t in QueryType
+        )
+
+    def test_partial_descriptions_are_rejected(self):
+        """Matched by position, so a short list would gloss the wrong
+        option rather than leaving one unglossed."""
+        with pytest.raises(ValueError, match="descriptions"):
+            DecisionQuestion(
+                question_id="q", kind="choice", question="?",
+                options=("a", "b"), descriptions=("only one",),
+            )
+
+    def test_no_descriptions_is_still_valid(self):
+        q = DecisionQuestion(
+            question_id="q", kind="choice", question="?", options=("a",)
+        )
+        assert q.descriptions == ()

@@ -53,12 +53,20 @@ class DecisionQuestion:
         options: The answer space. Named options for ``choice``, ordered
             level descriptions for ``score``, empty for ``noul`` (whose
             two options are implicit). Serialised as ``criteria``.
+        descriptions: One gloss per option, in the same order, or empty
+            for none. The wire format carries these as the values of a
+            choice question's ``criteria`` object, and they are not
+            decoration: measured on classify-dev-v1, glossing the ten
+            `QueryType` options moved a live Kev-4B from 0.460 to 0.760
+            accuracy. An option named only by its identifier asks the
+            model to guess what the identifier means.
     """
 
     question_id: str
     kind: DecisionKind
     question: str
     options: tuple[str, ...] = ()
+    descriptions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind in ("choice", "score") and not self.options:
@@ -70,6 +78,13 @@ class DecisionQuestion:
             raise ValueError(
                 f"question {self.question_id!r}: a noul question's two "
                 "options are implicit, so options must be empty"
+            )
+        if self.descriptions and len(self.descriptions) != len(self.options):
+            raise ValueError(
+                f"question {self.question_id!r}: {len(self.descriptions)} "
+                f"descriptions for {len(self.options)} options — they are "
+                "matched by position, so a partial list would gloss the "
+                "wrong option"
             )
 
 

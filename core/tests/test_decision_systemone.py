@@ -326,3 +326,30 @@ class TestFailureDiagnostics:
             with pytest.raises(DecisionError):
                 p.decide("q", _QUESTIONS)
         assert p.last_latency_ms >= 0.0
+
+
+class TestOptionDescriptionsOnTheWire:
+    """A choice question's `criteria` values are its per-option glosses.
+    Sending None for all of them is what scored 0.460 against a live
+    Kev-4B where the glossed question scored 0.760."""
+
+    def test_descriptions_become_the_criteria_values(self, monkeypatch):
+        p = SystemOneDecisionProvider("http://host:8008/v1")
+        question = DecisionQuestion(
+            "query_type", "choice", "Shape?", ("fact", "general"),
+            descriptions=("One specific value.", "Anything else."),
+        )
+        with _served(monkeypatch, _EMPTY) as cap:
+            p.decide("q", [question])
+        assert cap["payload"]["questions"]["query_type"]["criteria"] == {
+            "fact": "One specific value.",
+            "general": "Anything else.",
+        }
+
+    def test_without_descriptions_criteria_values_are_null(self, monkeypatch):
+        p = SystemOneDecisionProvider("http://host:8008/v1")
+        with _served(monkeypatch, _EMPTY) as cap:
+            p.decide("q", _QUESTIONS)
+        assert cap["payload"]["questions"]["query_type"]["criteria"] == {
+            "fact": None, "general": None,
+        }

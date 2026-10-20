@@ -22,6 +22,58 @@ from core.src.query.schema import DocTypeScope, QueryIntent, QueryType
 
 logger = logging.getLogger(__name__)
 
+QUERY_TYPE_DESCRIPTIONS: dict[QueryType, str] = {
+    QueryType.SINGLE_DOC:
+        "A lookup whose answer lives inside one named specification or "
+        "plan document.",
+    QueryType.CROSS_DOC:
+        "The answer spans several specification documents, e.g. 'all "
+        "requirements for X'.",
+    QueryType.CROSS_MNO_COMPARISON:
+        "Compares two or more mobile network operators.",
+    QueryType.RELEASE_DIFF:
+        "Compares two releases or quarters of the same specification: "
+        "what changed.",
+    QueryType.STANDARDS_COMPARISON:
+        "Compares an operator requirement against a 3GPP or industry "
+        "standard.",
+    QueryType.TRACEABILITY:
+        "Links requirements to the test cases that verify them, or asks "
+        "about coverage.",
+    QueryType.FEATURE_LEVEL:
+        "Asks for all requirements belonging to one named device feature.",
+    QueryType.SUMMARIZE:
+        "Asks for an overview, explanation or summary rather than one "
+        "specific fact.",
+    QueryType.FACT:
+        "Asks for one specific value: a number, a timer value, a default, "
+        "a cause code.",
+    QueryType.GENERAL:
+        "Anything that fits none of the other categories.",
+}
+"""One gloss per `QueryType`, carried as the wire format's `criteria`
+values.
+
+**These are load-bearing, not documentation.** Measured on
+`classify-dev-v1` against a live Kev-4B: bare option identifiers scored
+0.460, the same options glossed scored 0.760 — the difference between
+"worse than the rules" and "level with them". A bare `feature_level`
+asks the model to guess what the identifier means; the gloss is where
+NORA's taxonomy, which is the thing generic weights do not know, is
+actually stated.
+
+They are keyed by the enum rather than listed, and a test asserts every
+member has one, so the §2.1 property survives: adding a `QueryType`
+member fails the suite instead of silently shipping a bare option.
+"""
+
+DOC_SCOPE_DESCRIPTIONS: dict[DocTypeScope, str] = {
+    DocTypeScope.REQUIREMENTS: "Search requirement specification documents.",
+    DocTypeScope.TEST_CASES: "Search test case documents.",
+    DocTypeScope.BOTH:
+        "Search both requirement specifications and test case documents.",
+}
+
 QUERY_TYPE_QUESTION = DecisionQuestion(
     question_id="query_type",
     kind="choice",
@@ -30,6 +82,7 @@ QUERY_TYPE_QUESTION = DecisionQuestion(
         "best match for the asker's intent."
     ),
     options=tuple(t.value for t in QueryType),
+    descriptions=tuple(QUERY_TYPE_DESCRIPTIONS[t] for t in QueryType),
 )
 """Options generated from the enum, never hand-listed.
 
@@ -46,6 +99,7 @@ DOC_SCOPE_QUESTION = DecisionQuestion(
         "Which document types should be searched to answer this question?"
     ),
     options=tuple(s.value for s in DocTypeScope),
+    descriptions=tuple(DOC_SCOPE_DESCRIPTIONS[s] for s in DocTypeScope),
 )
 
 CLASSIFICATION_QUESTIONS: tuple[DecisionQuestion, ...] = (
