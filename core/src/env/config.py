@@ -1812,6 +1812,7 @@ DECISION_PROVIDER_ENV_VAR: str = "NORA_DECISION_PROVIDER"
 DECISION_MODEL_ENV_VAR: str = "NORA_DECISION_MODEL"
 DECISION_BASE_URL_ENV_VAR: str = "NORA_DECISION_BASE_URL"
 DECISION_TIMEOUT_ENV_VAR: str = "NORA_DECISION_TIMEOUT"
+DECISION_API_KEY_ENV_VAR: str = "NORA_DECISION_API_KEY"
 
 
 def resolve_decision_provider(cli_value: str | None = None) -> str:
@@ -1841,6 +1842,32 @@ def resolve_decision_model(cli_value: str | None = None) -> str:
     """Resolve the decision model tag. Empty means "the server's own
     default", which is what a single-model deployment wants."""
     return (cli_value or os.environ.get(DECISION_MODEL_ENV_VAR, "")).strip()
+
+
+def resolve_decision_api_key(cli_value: str | None = None) -> str:
+    """Resolve the bearer token for the decision endpoint.
+
+    Empty means "send unauthenticated", which is what an open in-corp
+    server wants, and the provider omits the header entirely rather than
+    sending a literal ``Bearer ``.
+
+    Two tiers (CLI > env var) rather than the LLM chain's five: there is
+    no ``config/decision.json``, and a key does not belong in a committed
+    config file anyway.
+
+    Whitespace is stripped. A key read from a secret file or pasted from a
+    terminal commonly carries a trailing newline, which would otherwise
+    travel into the header and be rejected for a reason nothing reports.
+
+    Found missing by `/drift-check dev-full` (strand jev-experimentation,
+    DRIFT-3): `SystemOneDecisionProvider` had always accepted an
+    ``api_key`` and nothing could supply one. The reference Kev server is
+    **open unless ``KEV_API_KEY`` is set**, so putting a key on a
+    network-exposed decision server made classification degrade to the
+    rules with a warning and keep serving — silent by design, which is
+    what made the gap easy to miss.
+    """
+    return (cli_value or os.environ.get(DECISION_API_KEY_ENV_VAR, "")).strip()
 
 
 def resolve_decision_base_url(cli_value: str | None = None) -> str:

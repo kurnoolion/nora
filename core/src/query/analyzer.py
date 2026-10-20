@@ -593,6 +593,7 @@ def _build_decision_provider(name: str):
             SystemOneDecisionProvider,
         )
         from core.src.env.config import (
+            resolve_decision_api_key,
             resolve_decision_base_url,
             resolve_decision_model,
             resolve_decision_timeout,
@@ -602,6 +603,7 @@ def _build_decision_provider(name: str):
             return SystemOneDecisionProvider(
                 base_url=resolve_decision_base_url(),
                 model=resolve_decision_model(),
+                api_key=resolve_decision_api_key(),
                 timeout=resolve_decision_timeout(),
             )
         except DecisionError as e:

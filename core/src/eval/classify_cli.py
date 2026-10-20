@@ -54,6 +54,7 @@ from core.src.decision.head_check import (
     assert_remote_head,
 )
 from core.src.env.config import (
+    DECISION_API_KEY_ENV_VAR,
     DECISION_BASE_URL_ENV_VAR,
     DECISION_MODEL_ENV_VAR,
     resolve_llm_api_key,
@@ -144,6 +145,7 @@ def _build_decision_arm(args):
         DecisionQueryAnalyzer,
     )
     from core.src.env.config import (
+        resolve_decision_api_key,
         resolve_decision_confidence_floor,
         resolve_decision_provider,
     )
@@ -161,6 +163,8 @@ def _build_decision_arm(args):
         os.environ[DECISION_BASE_URL_ENV_VAR] = args.decision_base_url
     if args.decision_model:
         os.environ[DECISION_MODEL_ENV_VAR] = args.decision_model
+    if args.decision_api_key:
+        os.environ[DECISION_API_KEY_ENV_VAR] = args.decision_api_key
 
     provider = _build_decision_provider(name)
     if provider is None:
@@ -171,7 +175,13 @@ def _build_decision_arm(args):
         )
 
     if name != "mock":
-        card = assert_remote_head(provider.base_url)
+        # The probe carries the same credentials the decisions will, or it
+        # fails on exactly the servers that are configured correctly.
+        card = assert_remote_head(
+            provider.base_url, api_key=resolve_decision_api_key(
+                cli_value=args.decision_api_key
+            )
+        )
         print(
             "decision server verified: "
             f"model={card.get('name')} base={card.get('base')} "
@@ -292,6 +302,14 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--decision-model", default=None)
     parser.add_argument("--decision-base-url", default=None)
+    parser.add_argument(
+        "--decision-api-key", default=None,
+        help=(
+            "bearer token for the decision endpoint "
+            "(NORA_DECISION_API_KEY). Omit for an open in-corp server; the "
+            "reference server is open unless KEV_API_KEY is set"
+        ),
+    )
     parser.add_argument(
         "--weights-dir", default=None,
         help=(

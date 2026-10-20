@@ -143,7 +143,9 @@ a Kev extension, and it is the only verification that runs on the connection
 the decisions themselves will use."""
 
 
-def assert_remote_head(base_url: str, timeout: int = 10) -> dict:
+def assert_remote_head(
+    base_url: str, timeout: int = 10, api_key: str = ""
+) -> dict:
     """Raise unless the server at ``base_url`` is serving a calibrated head.
 
     The remote half of the gate. A file check on this client proves nothing
@@ -156,6 +158,12 @@ def assert_remote_head(base_url: str, timeout: int = 10) -> dict:
         base_url: Server origin, with or without a trailing ``/v1``.
         timeout: Seconds to wait. Short by design — this is a liveness gate
             run before a measurement, not a request that should be retried.
+        api_key: Bearer token, when the server requires one. Empty sends no
+            `Authorization` header at all rather than a literal `Bearer `,
+            because an open in-corp server is the normal case. The probe
+            must carry the same credentials the decisions do, or the gate
+            fails on exactly the servers that are configured correctly
+            (DRIFT-3).
 
     Returns:
         The first model card, which carries ``temperature``, ``lora``,
@@ -163,9 +171,13 @@ def assert_remote_head(base_url: str, timeout: int = 10) -> dict:
         a run: it records what was actually measured.
 
     Raises:
-        DecisionError: Unreachable, non-JSON, no model cards, or a card
-            reporting no adapter or no calibration temperature — a plain
-            backbone being served where a decider was expected.
+        DecisionError: Unreachable, rejected credentials, non-JSON, no
+            model cards, or a card reporting no adapter or no calibration
+            temperature — a plain backbone being served where a decider was
+            expected. Auth failure is diagnosed separately from
+            unreachability: a 401 arrives as an `HTTPError`, which is a
+            `URLError` subclass, so folding the two would report a healthy
+            server as down and send an operator after a network fault.
     """
     import json as _json
     import urllib.error
@@ -176,9 +188,32 @@ def assert_remote_head(base_url: str, timeout: int = 10) -> dict:
         origin = origin[: -len("/v1")]
     url = f"{origin}{REMOTE_PROBE_PATH}"
 
+    request = urllib.request.Request(
+        url,
+        headers=(
+            {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        ),
+        method="GET",
+    )
+
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             data = _json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise DecisionError(
+                f"decision server at {url} rejected the credentials "
+                f"(HTTP {e.code}). The server is up; it refused the probe. "
+                "Set NORA_DECISION_API_KEY (or --decision-api-key) to the "
+                "token the server was started with — the reference server "
+                "is open unless KEV_API_KEY is set, and a key on the server "
+                "with none configured here is this error."
+            ) from e
+        raise DecisionError(
+            f"decision server at {url} is unreachable: {e}. Nothing was "
+            "measured — a reachable head check on local weights does not "
+            "mean the server is up (D-DRAFT-20)."
+        ) from e
     except (urllib.error.URLError, OSError, TimeoutError) as e:
         raise DecisionError(
             f"decision server at {url} is unreachable: {e}. Nothing was "

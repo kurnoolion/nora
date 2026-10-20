@@ -1556,3 +1556,70 @@ I first guessed the undeclared public surface was mostly constant noise and
 nearly reported it that way. Classifying it showed 45 % are genuine classes and
 functions. The guess was cheaper than the check and would have understated a real
 gap in someone else's module.
+
+## 2026-10-20 — DRIFT-3 closed: the decision endpoint can authenticate
+
+Carried forward as unresolved two entries ago, then fixed on the user's call.
+Four parts, because the gap had a second half I had not seen when I filed it.
+
+### What was broken
+
+`SystemOneDecisionProvider.__init__` had always accepted an `api_key` and
+nothing could supply one — no env var, no resolver, and
+`_build_decision_provider` passed `base_url`, `model` and `timeout` only. The
+reference Kev server is **open unless `KEV_API_KEY` is set**, so putting a key
+on a network-exposed decision server made every `decide()` 401, every query
+fall back to the rules, and the pipeline keep serving. No error to the caller.
+
+**The second half, found while fixing the first:** `assert_remote_head` sent a
+bare `urlopen(url)` with no headers, so the gate itself could not authenticate.
+Worse, a 401 arrives as `urllib.error.HTTPError`, which is a `URLError`
+subclass, so the existing handler caught it and reported **"decision server is
+unreachable"** — for a server that was up and refusing the probe. That
+diagnosis sends an operator after a network fault that does not exist. Filing
+the drift found the missing knob; fixing it found the misdiagnosis.
+
+### The fix
+
+1. `resolve_decision_api_key` / `NORA_DECISION_API_KEY` — two tiers (CLI > env),
+   no config-file tier, so `env`'s "no secrets or credentials" non-goal holds.
+   Whitespace-stripped: a key read from a secret file carries a trailing
+   newline that would otherwise travel into the header and be rejected for a
+   reason nothing reports.
+2. `_build_decision_provider` passes it.
+3. `assert_remote_head(base_url, timeout=10, api_key="")` sends the bearer
+   token and diagnoses 401/403 separately from unreachability, naming the knob.
+   A 500 keeps the unreachable diagnosis.
+4. `--decision-api-key` on `classify_cli`, reaching both the provider and the
+   probe.
+
+Empty key omits the `Authorization` header entirely rather than sending a
+literal `Bearer `, because an open in-corp server is the normal case.
+
+### Verified against a live authenticated server, not just by tests
+
+The whole defect was that the tests passed while the path could not work, so a
+green suite was not going to be the evidence. Restarted Kev with
+`KEV_API_KEY=<token>`, confirmed `/v1/models` gives 401 bare and 200 with the
+header, then:
+
+| Path | Result |
+|---|---|
+| eval gate, no key | `rejected the credentials (HTTP 401)`, exit **2** — not "unreachable" |
+| eval arm, `--decision-api-key` | gate verified, **0.860 / 0.068 / scope 1.000**, p50 541 ms — identical to the unauthenticated run |
+| serving path, `NORA_DECISION_API_KEY` | `ConfidenceRoutedQueryAnalyzer`, key reached the provider, **0 fallbacks** |
+| serving path, key omitted (negative control) | **2 of 2 queries fell back**, two 401 warnings, no error to the caller |
+
+The last row is the bug reproduced, and the 0-fallback row is the proof the fix
+reaches the POSTs and not only the probe — a probe-only fix would have passed
+the gate and then failed every decision.
+
+### The lesson worth keeping
+
+A parameter nothing can set is not a feature with a missing knob; it is a
+feature that does not exist, and it reads as present in every review. `api_key`
+sat in the signature through a design doc, a measurement phase and a PR without
+anyone noticing it was unreachable, because the signature is what gets read.
+`/drift-check dev-full` found it by comparing the declared surface against what
+the construction site actually passes — which is exactly the comparison a human
+reviewer skips.

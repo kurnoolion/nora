@@ -118,7 +118,7 @@ class TestAssertRemoteHead:
     """
 
     @staticmethod
-    def _serving(monkeypatch, payload, error=None):
+    def _serving(monkeypatch, payload, error=None, capture_request=False):
         import json
         from io import BytesIO
 
@@ -132,7 +132,10 @@ class TestAssertRemoteHead:
         seen = {}
 
         def fake_urlopen(url, timeout=None):
-            seen["url"] = url
+            # urllib accepts a str or a Request; the probe sends a
+            # Request once it carries headers.
+            seen["url"] = getattr(url, "full_url", url)
+            seen["headers"] = dict(getattr(url, "headers", {}) or {})
             if error is not None:
                 raise error
             return _Response(json.dumps(payload).encode("utf-8"))
@@ -184,6 +187,48 @@ class TestAssertRemoteHead:
         card = {"models": [{"name": "qwen", "lora": None, "temperature": 2.41}]}
         self._serving(monkeypatch, card)
         with pytest.raises(DecisionError, match="no adapter reported"):
+            assert_remote_head("http://host:8008")
+
+    def test_api_key_travels_as_a_bearer_header(self, monkeypatch):
+        """DRIFT-3's second half. The probe used a bare GET with no
+        headers, so an authenticated server would reject it and the
+        gate would report the server unreachable."""
+        seen = self._serving(monkeypatch, self._CARD, capture_request=True)
+        assert_remote_head("http://host:8008", api_key="sek-1")
+        assert seen["headers"].get("Authorization") == "Bearer sek-1"
+
+    def test_no_api_key_sends_no_authorization_header(self, monkeypatch):
+        """An empty key must not become a literal `Bearer ` — an open
+        in-corp server is the normal case."""
+        seen = self._serving(monkeypatch, self._CARD, capture_request=True)
+        assert_remote_head("http://host:8008")
+        assert "Authorization" not in seen["headers"]
+
+    def test_401_is_diagnosed_as_auth_not_as_unreachable(self, monkeypatch):
+        """The misdiagnosis worth preventing. A 401 arrives as an
+        HTTPError, which is a URLError subclass, so the old handler
+        reported "unreachable" for a server that was up and refusing the
+        probe — sending an operator after a network fault."""
+        import urllib.error
+        self._serving(monkeypatch, {}, error=urllib.error.HTTPError(
+            "http://host:8008/v1/models", 401, "Unauthorized", {}, None))
+        with pytest.raises(DecisionError, match="rejected the credentials"):
+            assert_remote_head("http://host:8008")
+
+    def test_auth_failure_names_the_knob(self, monkeypatch):
+        import urllib.error
+        self._serving(monkeypatch, {}, error=urllib.error.HTTPError(
+            "http://host:8008/v1/models", 403, "Forbidden", {}, None))
+        with pytest.raises(DecisionError, match="NORA_DECISION_API_KEY"):
+            assert_remote_head("http://host:8008")
+
+    def test_other_http_errors_remain_unreachable(self, monkeypatch):
+        """A 404 or 500 is not an auth problem and must keep its own
+        diagnosis."""
+        import urllib.error
+        self._serving(monkeypatch, {}, error=urllib.error.HTTPError(
+            "http://host:8008/v1/models", 500, "Server Error", {}, None))
+        with pytest.raises(DecisionError, match="unreachable"):
             assert_remote_head("http://host:8008")
 
     def test_server_without_a_temperature_is_rejected(self, monkeypatch):

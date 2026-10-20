@@ -6,11 +6,13 @@ from __future__ import annotations
 import pytest
 
 from core.src.env.config import (
+    DECISION_API_KEY_ENV_VAR,
     DECISION_CONFIDENCE_FLOOR_ENV_VAR,
     DEFAULT_DECISION_CONFIDENCE_FLOOR,
     DEFAULT_QUERY_ANALYZER,
     QUERY_ANALYZER_ENV_VAR,
     QUERY_ANALYZERS,
+    resolve_decision_api_key,
     resolve_decision_confidence_floor,
     resolve_decision_provider,
     resolve_query_analyzer,
@@ -300,3 +302,58 @@ class TestConfidenceRoutedKnobValue:
         monkeypatch.delenv("NORA_DECISION_BASE_URL", raising=False)
         got = make_query_analyzer_from_knob()
         assert isinstance(got, MockQueryAnalyzer)
+
+
+class TestResolveDecisionApiKey:
+    """Auth for the decision endpoint.
+
+    `SystemOneDecisionProvider` has always accepted an `api_key`, and
+    nothing could supply one: no env var, no resolver, and
+    `_build_decision_provider` passed only base_url / model / timeout.
+    The Kev reference server is **open unless `KEV_API_KEY` is set**
+    (`kev-runbook.md`), so the moment a key is put on a network-exposed
+    decision server, classification degrades to the rules with a warning
+    and keeps serving. Silent by design, which is what made it easy to
+    miss. Found by `/drift-check dev-full` (DRIFT-3).
+    """
+
+    def test_default_is_empty(self, monkeypatch):
+        """Empty means "send unauthenticated", which is what an open
+        in-corp server wants. It must not become a literal empty Bearer
+        header."""
+        monkeypatch.delenv(DECISION_API_KEY_ENV_VAR, raising=False)
+        assert resolve_decision_api_key() == ""
+
+    def test_env_var_selects(self, monkeypatch):
+        monkeypatch.setenv(DECISION_API_KEY_ENV_VAR, "sek-1")
+        assert resolve_decision_api_key() == "sek-1"
+
+    def test_cli_beats_env(self, monkeypatch):
+        monkeypatch.setenv(DECISION_API_KEY_ENV_VAR, "sek-1")
+        assert resolve_decision_api_key(cli_value="sek-2") == "sek-2"
+
+    def test_surrounding_whitespace_is_stripped(self, monkeypatch):
+        """A key pasted from a terminal or a secret file commonly carries
+        a trailing newline, which would travel into the header."""
+        monkeypatch.setenv(DECISION_API_KEY_ENV_VAR, "  sek-1\n")
+        assert resolve_decision_api_key() == "sek-1"
+
+    def test_the_key_reaches_the_provider(self, monkeypatch):
+        """The whole point of DRIFT-3: the resolver existing is not the
+        fix, the provider receiving the value is."""
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
+        monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://host:8008")
+        monkeypatch.setenv(DECISION_API_KEY_ENV_VAR, "sek-1")
+        analyzer = make_query_analyzer_from_knob()
+        assert analyzer._provider._api_key == "sek-1"
+
+    def test_no_key_configured_leaves_the_provider_unauthenticated(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(QUERY_ANALYZER_ENV_VAR, "decision")
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "systemone")
+        monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://host:8008")
+        monkeypatch.delenv(DECISION_API_KEY_ENV_VAR, raising=False)
+        analyzer = make_query_analyzer_from_knob()
+        assert analyzer._provider._api_key == ""
