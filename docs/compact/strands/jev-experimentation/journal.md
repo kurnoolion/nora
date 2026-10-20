@@ -1460,3 +1460,43 @@ verified-pre-existing failures, and 28 new tests. Both degenerate floors
 reproduce existing arms. Determinism confirmed at `--repeat 3` (150
 classifications, identical). MODULE.md updated for `decision`, `query`, `eval`
 and `env`, the last of which had no record of the decision knobs at all.
+
+## 2026-10-20 — Session close: regen-map, and a module that cannot be read
+
+### Done this session
+- `/regen-map`: 4 Structure sections regenerated (decision, env, eval,
+  query) plus MAP.md. Validated first — 13 of 18 modules reproduced
+  byte-identical, which is what made the four trustworthy.
+- `decision/MODULE.md` had been the only module in the repo using a flat
+  `Class.method` Structure format; the other 17 nest members. Normalized.
+  The regeneration also surfaced public surface that had never been listed:
+  `assert_remote_head`, `VALUE_KEY_BY_KIND`, `REMOTE_PROBE_PATH`, every
+  `__init__`, and `DecisionAnswer`/`DecisionQuestion` typed `class` when
+  they are `dataclass`.
+- Fixed three drifts this strand had created: `query/MODULE.md` never
+  declared its dependency on `decision` (MAP.md had the edge hand-added);
+  `QUERY_TYPE_DESCRIPTIONS` / `DOC_SCOPE_DESCRIPTIONS` / `VALUE_KEY_BY_KIND`
+  were undeclared public surface; `decision/__init__.py` still said
+  `bool/score/choice`.
+- `doctor`: 11 passed, 0 failed, 3 skipped (source-repo docs not installed).
+
+### In progress
+- Nothing. The strand's implementation is complete and measured.
+
+### Next
+- PR for the branch.
+- `/drift-check dev-full` — design and implementation both moved.
+- `/land-strand` eventually: 26 draft decisions to promote.
+
+### Flags
+- **`core/src/parser/parse_debug.py` cannot be imported on Python 3.11**,
+  and has not been since 2026-05-15 (commit `2500b2a`). Line 601 puts a
+  backslash inside an f-string expression, legal only from 3.12. It is a CLI
+  entrypoint with a `main()`, so every subcommand crashes. Unrelated to this
+  strand and not fixed here; `parser` was excluded from regen-map rather
+  than let its Structure section silently lose the file's entries.
+- `env` and `eval` carry ~59 and ~50 undeclared public constants. Systemic
+  and long-standing — whether MODULE.md should enumerate every env-var
+  constant is a convention call for the architect.
+- Three strands are stale and still `in-flight`: `image-ingestion` (67d),
+  `nora-retrieval-quality` (67d), `team-operations` (46d).

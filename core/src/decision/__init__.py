@@ -1,4 +1,4 @@
-"""Decision models — typed bool/score/choice inference, no token generation.
+"""Decision models — typed noul/choice/score inference, no token generation.
 
 Strand jev-experimentation. See MODULE.md for the contract and
 docs/compact/strands/jev-experimentation/decision-model-design.md for why
