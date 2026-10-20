@@ -10,6 +10,14 @@ authored from human-read intent (`core/src/eval/classify_set.json`).
 Knob profile digest `29615196d16c`. Counts and class names only; the
 per-sample JSON holds query text and stays out of the repo.
 
+> **Superseded on 2026-10-20 by `phase-3-measurement.md`.** Both numbers
+> below were measured before the two defects found during this run were
+> fixed, and the alias double-count fix moves the `rules` arm to 0.760
+> accuracy / 0.112 weighted cost (two samples, c02 and c04, both wrong →
+> right). This file is kept as the phase-1 gate record — what was measured,
+> when, against which code — not as the current standing numbers. Do not
+> quote the table below as today's baseline.
+
 ## Headline
 
 | Arm | Model | Accuracy | Weighted cost | Scope acc. | Deterministic | p50 | p95 |
