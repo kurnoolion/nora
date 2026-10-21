@@ -2,7 +2,7 @@
 
 Loads the per-(MNO, release) SQLite cell DBs that `sandbox/cell_db_convert.py`
 emits, and provides the FTS5 scoring path. The service selects this source
-with `NORA_SIRA_INDEX=cell-db`; the default (`flat`) path never imports the
+with `NORA_STORE_INDEX=cell-db`; the default (`flat`) path never imports the
 functions here at runtime, so existing deployments are untouched.
 
 Design: docs/compact/strands/corp-db-layer/{storage,converter}-design.md.

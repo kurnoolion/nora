@@ -27,7 +27,7 @@ converted into a SQLite cell DB under `<db_root>/cell-dbs/` via
 sandbox.cell_db_convert — flat files remain the primary output and the
 default (`--index=flat`) stays byte-identical to today. The DBs ride
 label promotion with the rest of the build tree; a cell-db stack mounts
-`<label>/sira/cell-dbs` as its NORA_SIRA_DB_ROOT.
+`<label>/sira/cell-dbs` as its NORA_STORE_ROOT.
 
 `--only` restricts BOTH steps to the named cells (same <MNO>__<REL> format
 either side). After the lane completes, restart the nora-store service(s) so

@@ -5,7 +5,7 @@ Strand: `corp-db-layer` · Analysis date: 2026-10-08 · Status: draft for review
 **Method.** Enumerated from code, not from memory: `env.config.ENV_DIR_DIRS` +
 `pipeline.stage_output` (build side), `web/config.py` + compose mounts
 (serve side), `promote.sh` / `serve-push.sh` / `serve-flip.sh` (labels),
-`sandbox/sira_query/service.py` (SIRA cell datasets). Sizes measured on the
+`nora_store/service.py` (SIRA cell datasets). Sizes measured on the
 OA dev environment (single MNO, one release) — order-of-magnitude only; the
 production corpus is larger but the same shape.
 

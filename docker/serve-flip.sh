@@ -8,7 +8,7 @@
 #   1. resolve the stack env (.env.<stack>) and the target label
 #      (serve/<label>/MANIFEST.json), show new-vs-current MANIFEST facts
 #   2. ask for an explicit "yes" (the promote go/no-go lives here)
-#   3. rewrite NORA_ENV_DIR / SIRA_DB_ROOT in the stack env (a .prev copy
+#   3. rewrite NORA_ENV_DIR / STORE_ROOT in the stack env (a .prev copy
 #      is kept beside it) — only the pointers the label carries data for
 #   4. RECREATE the stack (`compose up -d`; a plain `restart` does not
 #      re-read env files)
@@ -94,8 +94,8 @@ NEW="$SERVE_ROOT/$LABEL"
   "re-run serve-push.sh on the build machine until it reports 'pushed'"
 
 cur_nora="$(envget "$ENVFILE" NORA_ENV_DIR)"
-cur_sira="$(envget "$ENVFILE" SIRA_DB_ROOT)"
-[ -n "$cur_nora" ] && [ -n "$cur_sira" ] || die 004 "stack env lacks NORA_ENV_DIR and/or SIRA_DB_ROOT" \
+cur_sira="$(envget "$ENVFILE" STORE_ROOT)"
+[ -n "$cur_nora" ] && [ -n "$cur_sira" ] || die 004 "stack env lacks NORA_ENV_DIR and/or STORE_ROOT" \
   "the stack env must carry both keys (see env.example); add them, then re-run"
 # current label = the serve/<label>/ ancestor of the current pointers
 label_of() { case "$1" in "$SERVE_ROOT"/*) basename "$(dirname "$1")";; *) echo "(not a serve label: $1)";; esac; }
@@ -126,8 +126,8 @@ show_manifest "$(dirname "$cur_sira")" "current:"
 show_manifest "$NEW" "new:"
 [ -n "$new_nora" ] && echo "  NORA_ENV_DIR : $cur_nora -> $new_nora" \
                    || echo "  NORA_ENV_DIR : $cur_nora (unchanged — label carries no nora/)"
-[ -n "$new_sira" ] && echo "  SIRA_DB_ROOT : $cur_sira -> $new_sira" \
-                   || echo "  SIRA_DB_ROOT : $cur_sira (unchanged — label carries no sira/)"
+[ -n "$new_sira" ] && echo "  STORE_ROOT : $cur_sira -> $new_sira" \
+                   || echo "  STORE_ROOT : $cur_sira (unchanged — label carries no sira/)"
 if [ "$CUR_LABEL" = "$LABEL" ]; then
   echo "NOTE: stack already points at $LABEL — this flip only recreates the stack"
 fi
@@ -145,20 +145,20 @@ cp -p "$ENVFILE" "$ENVFILE.prev"
 # a space is re-inserted before the kept comment so compose still parses it
 [ -n "$new_nora" ] && sed -i -E -e "s|^(NORA_ENV_DIR=)[^#]*(#.*)$|\1$new_nora \2|" \
                                 -e "s|^(NORA_ENV_DIR=)[^#]*$|\1$new_nora|" "$ENVFILE"
-[ -n "$new_sira" ] && sed -i -E -e "s|^(SIRA_DB_ROOT=)[^#]*(#.*)$|\1$new_sira \2|" \
-                                -e "s|^(SIRA_DB_ROOT=)[^#]*$|\1$new_sira|" "$ENVFILE"
+[ -n "$new_sira" ] && sed -i -E -e "s|^(STORE_ROOT=)[^#]*(#.*)$|\1$new_sira \2|" \
+                                -e "s|^(STORE_ROOT=)[^#]*$|\1$new_sira|" "$ENVFILE"
 echo "env rewritten ($ENVFILE.prev kept)"
 
 # ---- 4. recreate ------------------------------------------------------------
 # compose resolves relative env_file paths against the compose-file dir, so
-# stack envs living outside docker/ must name WEB_ENV_FILE / SIRA_QUERY_ENV_FILE
+# stack envs living outside docker/ must name WEB_ENV_FILE / STORE_ENV_FILE
 # (and SECRETS_ENV_FILE) with absolute paths.
 ( cd "$HERE" && docker compose --env-file "$ENVFILE" --profile serve up -d ) \
   || die 010 "compose up failed — stack env already rewritten" \
      "inspect 'docker compose --env-file $ENVFILE ps'; roll back with: $0 $STACK $CUR_LABEL --mode expedited --yes"
 
 # ---- 5. verify identity -----------------------------------------------------
-PORT="$(envget "$ENVFILE" SIRA_QUERY_PORT)"; PORT="${PORT:-8040}"
+PORT="$(envget "$ENVFILE" STORE_PORT)"; PORT="${PORT:-8040}"
 HZ="http://127.0.0.1:$PORT/healthz"
 body="" got=""
 for _ in $(seq 1 30); do

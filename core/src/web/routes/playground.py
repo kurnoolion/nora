@@ -41,20 +41,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# URL of the SIRA per-query probe service (sandbox/sira_query/service.py).
+# URL of the SIRA per-query probe service (nora_store/service.py).
 # Defaults assume the service is started locally on port 8040; in
 # production deployments this typically points at a same-host service
 # the operator started alongside NORA's web app. See sandbox/SETUP.md
 # "Per-query SIRA probe" for the full launch procedure.
-_SIRA_QUERY_URL = os.getenv(
-    "NORA_SIRA_QUERY_URL", "http://127.0.0.1:8040",
+_STORE_URL = os.getenv(
+    "NORA_STORE_URL", "http://127.0.0.1:8040",
 ).rstrip("/")
 
 # Timeout matches the SIRA service's own LLM call timeout (300s per
 # llm_call) plus rerank-stage budget. At concurrency=1 + ~36s/call on
 # a proxy-throttled LLM, top_n=20 reranks → ~12 min worst case for a
 # single query. Set generously.
-_SIRA_QUERY_TIMEOUT = float(os.getenv("NORA_SIRA_QUERY_TIMEOUT", "1200"))
+_STORE_TIMEOUT = float(os.getenv("NORA_STORE_TIMEOUT", "1200"))
 
 # Score-based filter: which SIRA-ranked chunks should be pinned to
 # NORA's synthesizer. A chunk must pass BOTH gates:
@@ -250,7 +250,7 @@ async def _snapshot_sira_lane_config() -> dict[str, Any]:
     later)."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{_SIRA_QUERY_URL}/healthz")
+            resp = await client.get(f"{_STORE_URL}/healthz")
     except Exception as exc:
         return {"_error": f"healthz fetch failed: {exc}"[:200]}
     if resp.status_code != 200:
@@ -439,7 +439,7 @@ async def _run_sira_lane_for_merged(
         )
     await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
-        sira_result = await _call_sira_query(question, label=label)
+        sira_result = await _call_store_query(question, label=label)
     except Exception as exc:
         logger.exception("SIRA service call failed in merged tab")
         await _say(f"SIRA service error: {exc}")
@@ -832,7 +832,7 @@ async def _run_select_synth_lane(
         f"(reranker bypassed)…"
     )
     try:
-        sira_result = await _call_sira_query(
+        sira_result = await _call_store_query(
             question, top_k=_SELECT_SYNTH_TOP_K,
             text_chars=_SELECT_SYNTH_TEXT_CHARS, label=label,
         )
@@ -890,7 +890,7 @@ async def _run_select_synth_lane(
     }
 
 
-async def _call_sira_query(
+async def _call_store_query(
     question: str, top_k: int | None = None, text_chars: int | None = None,
     label: str = "",
 ) -> dict[str, Any]:
@@ -912,9 +912,9 @@ async def _call_sira_query(
         # corrections-overlay branch view (enrichment review labels):
         # retrieval runs against the main + <label> variant index
         payload["label"] = label
-    async with httpx.AsyncClient(timeout=_SIRA_QUERY_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_STORE_TIMEOUT) as client:
         resp = await client.post(
-            f"{_SIRA_QUERY_URL}/sira-query", json=payload,
+            f"{_STORE_URL}/query", json=payload,
         )
     if resp.status_code != 200:
         raise RuntimeError(
@@ -1076,7 +1076,7 @@ def _ingested_rows() -> "list[dict[str, Any]]":
     # cells are invisible here.
     sira_rows: dict[tuple[str, str], dict[str, Any]] = {}
     try:
-        resp = httpx.get(f"{_SIRA_QUERY_URL}/cells", timeout=10.0)
+        resp = httpx.get(f"{_STORE_URL}/cells", timeout=10.0)
         resp.raise_for_status()
         for c in resp.json().get("cells", []):
             sira_rows[(c.get("mno", ""), c.get("release", ""))] = c
@@ -1395,7 +1395,7 @@ async def playground_ask(request: Request):
         # lane (NORA hybrid vs. SIRA BM25+enrich+rerank) differs.
         start = time.time()
         try:
-            sira_result = await _call_sira_query(question, label=label)
+            sira_result = await _call_store_query(question, label=label)
         except Exception as exc:
             logger.exception("SIRA query failed")
             return _template_response(request, "test/_answer.html", {

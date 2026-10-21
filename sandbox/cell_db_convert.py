@@ -53,7 +53,7 @@ from pathlib import Path
 
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells
 from core.src.stores.overlay import open_overlay_store
-from sandbox.sira_query.enrich_overlay import (
+from nora_store.enrich_overlay import (
     allowed_labels,
     apply_overlay_to_req,
     filter_overlay,
@@ -148,7 +148,7 @@ class CellData:
 
 def _sha256_files(paths: list[Path | None]) -> str:
     """Per-cell data fingerprint — MUST match service._sha256_files
-    (sira_query/service.py): streamed sha256 over corpus.jsonl + the
+    (nora_store/service.py): streamed sha256 over corpus.jsonl + the
     applied phrases file, absent files hashing as a marker."""
     h = hashlib.sha256()
     for p in paths:

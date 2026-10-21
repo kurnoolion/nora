@@ -168,7 +168,7 @@ require_phase() {  # require_phase <phase> <fix-hint>
 need_wiring() {
   [ -f "$WIRING" ] || die 003 "no builds wiring env ($ENV_ROOT/.env.builds or docker/.env.builds)" \
     "copy a stack env to .env.builds (README Phase 0) — all seven path vars present"
-  grep -q "^NORA_ENV_DIR=$NB\$" "$WIRING" && grep -q "^SIRA_DB_ROOT=$SB\$" "$WIRING" \
+  grep -q "^NORA_ENV_DIR=$NB\$" "$WIRING" && grep -q "^STORE_ROOT=$SB\$" "$WIRING" \
     || die 004 "wiring env does not point at build $BUILD" "./cycle.sh start rewrote it; check $WIRING for a later manual edit"
 }
 detach() {  # detach <phase> <service> <log-in-container> <inner command...>
@@ -229,7 +229,7 @@ start)
   mkdir -p "$NB/reports" "$NB/prompts" "$SB"
   [ -n "$src" ] && cp "$src" "$NB/profiles.json"
   cyc init "$CJ" "$BUILD" "$ME" "$images"
-  sed -i "s|^NORA_ENV_DIR=.*|NORA_ENV_DIR=$NB|; s|^SIRA_DB_ROOT=.*|SIRA_DB_ROOT=$SB|" "$WIRING"
+  sed -i "s|^NORA_ENV_DIR=.*|NORA_ENV_DIR=$NB|; s|^STORE_ROOT=.*|STORE_ROOT=$SB|" "$WIRING"
   echo "$BUILD" > "$ACTIVE"
   n=$(cells | wc -l)
   cyc_block start ok <<EOF

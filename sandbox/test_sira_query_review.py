@@ -10,7 +10,7 @@ import pytest
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-import sandbox.sira_query.service as svc  # noqa: E402
+import nora_store.service as svc  # noqa: E402
 
 
 class FakeBM25:
@@ -327,7 +327,7 @@ class TestOverlayStoreAndFingerprints:
     def test_fingerprints_name_matches_adapter(self):
         import ast
         from pathlib import Path
-        src = (Path(svc.__file__).parents[1] / "adapter" / "nora_to_beir.py").read_text()
+        src = (Path(svc.__file__).parents[1] / "sandbox" / "adapter" / "nora_to_beir.py").read_text()
         consts = {n.targets[0].id: n.value.value for n in ast.parse(src).body
                   if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
                   and isinstance(n.value, ast.Constant)}

@@ -10,7 +10,7 @@ schema-2 cells, and the fts5 engine refusing a composed cell.
 Synthetic data only. Requires bm25x + fastapi (sandbox venv); skips
 cleanly where unavailable.
 
-Run from the repo root:  pytest sandbox/sira_query/test_cell_db_loader.py
+Run from the repo root:  pytest nora_store/test_cell_db_loader.py
 """
 
 from __future__ import annotations
@@ -61,15 +61,15 @@ def make_flat_cells(db_root: Path) -> None:
 
 def load_service(monkeypatch, db_root: Path, *, index="flat", engine="bm25x",
                  corrections: Path | None = None, expect_cells: bool = True):
-    monkeypatch.setenv("NORA_SIRA_DB_ROOT", str(db_root))
-    monkeypatch.setenv("NORA_SIRA_INDEX", index)
-    monkeypatch.setenv("NORA_SIRA_ENGINE", engine)
+    monkeypatch.setenv("NORA_STORE_ROOT", str(db_root))
+    monkeypatch.setenv("NORA_STORE_INDEX", index)
+    monkeypatch.setenv("NORA_STORE_ENGINE", engine)
     if corrections is not None:
-        monkeypatch.setenv("NORA_SIRA_CORRECTIONS_ROOT", str(corrections))
+        monkeypatch.setenv("NORA_STORE_CORRECTIONS_ROOT", str(corrections))
     else:
-        monkeypatch.delenv("NORA_SIRA_CORRECTIONS_ROOT", raising=False)
+        monkeypatch.delenv("NORA_STORE_CORRECTIONS_ROOT", raising=False)
     monkeypatch.delenv("NORA_SIRA_USE_LATEST_RUNS", raising=False)
-    import sandbox.sira_query.service as service
+    import nora_store.service as service
     service = importlib.reload(service)
     service._load_cells()
     if expect_cells:
@@ -178,10 +178,10 @@ def test_identity_with_review_edits(tmp_path, monkeypatch, converted):
 def test_flat_default_untouched_and_bad_engine_loud(monkeypatch, converted):
     flat, out = converted
     # No env set beyond DB root: mode defaults to flat and loads flat dirs.
-    monkeypatch.setenv("NORA_SIRA_DB_ROOT", str(flat))
-    monkeypatch.delenv("NORA_SIRA_INDEX", raising=False)
-    monkeypatch.delenv("NORA_SIRA_ENGINE", raising=False)
-    import sandbox.sira_query.service as service
+    monkeypatch.setenv("NORA_STORE_ROOT", str(flat))
+    monkeypatch.delenv("NORA_STORE_INDEX", raising=False)
+    monkeypatch.delenv("NORA_STORE_ENGINE", raising=False)
+    import nora_store.service as service
     service = importlib.reload(service)
     assert service._INDEX_MODE == "flat"
     service._load_cells()
@@ -189,9 +189,9 @@ def test_flat_default_untouched_and_bad_engine_loud(monkeypatch, converted):
 
     # Unsupported engine value fails loudly, serving nothing quietly.
     svc = None
-    monkeypatch.setenv("NORA_SIRA_DB_ROOT", str(out))
-    monkeypatch.setenv("NORA_SIRA_INDEX", "cell-db")
-    monkeypatch.setenv("NORA_SIRA_ENGINE", "memory")
+    monkeypatch.setenv("NORA_STORE_ROOT", str(out))
+    monkeypatch.setenv("NORA_STORE_INDEX", "cell-db")
+    monkeypatch.setenv("NORA_STORE_ENGINE", "memory")
     svc = importlib.reload(service)
     svc._load_cells()
     assert not svc._cells

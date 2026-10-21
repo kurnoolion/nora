@@ -431,9 +431,9 @@ Available once verify-D has completed (SIRA's BM25 index + doc enrichments are o
 │   whatever)     │      "sira_retrieval" }     └──────────────────────────┘
 └────────┬────────┘                                       │
          │ HTTP POST                                      │
-         │ NORA_SIRA_QUERY_URL                            ▼
+         │ NORA_STORE_URL                            ▼
          ▼                                       ┌──────────────────────────┐
-┌─────────────────┐   POST /sira-query           │  template renders        │
+┌─────────────────┐   POST /query           │  template renders        │
 │  SIRA query     │ ◀────────────────────────────│  ranked req_ids + scores │
 │  service        │   { query, top_k }           │  + text previews         │
 │  (port :8040)   │                              └──────────────────────────┘
@@ -464,13 +464,13 @@ uvicorn sandbox.shim.openai_shim:app --port 8030
 
 # Terminal 2 — SIRA query service
 source sandbox/activate.sh
-export NORA_SIRA_DB_ROOT=$(realpath sandbox/adapter/out)
+export NORA_STORE_ROOT=$(realpath sandbox/adapter/out)
 # Optional knobs:
 # export NORA_SIRA_TOP_K=10              # default top_k when caller doesn't supply
 # export NORA_SIRA_RERANK_TOP_N=20       # candidates fed to LLM reranker
 # export NORA_SIRA_MAX_DF_RATIO=0.05     # DF-filter cap for query expansion
 # export NORA_SIRA_EXPANSION_WEIGHT=0.5  # BM25 expansion weight
-uvicorn sandbox.sira_query.service:app --port 8040
+uvicorn nora_store.service:app --port 8040
 
 # Verify the SIRA service loaded its state:
 curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
@@ -479,7 +479,7 @@ curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 
 # Terminal 3 — NORA web app
 # By default it points at http://127.0.0.1:8040 for the SIRA service.
-# Override with NORA_SIRA_QUERY_URL=... if you run the service elsewhere.
+# Override with NORA_STORE_URL=... if you run the service elsewhere.
 python -m core.src.web.app   # or however you normally start NORA's web
 ```
 
@@ -824,8 +824,8 @@ python -m sandbox.sira_multi --db-root <db_root> --sira-clone sandbox/sira
 #    to run a subset.
 
 # 5. Launch the query service pointed at the cell db_root.
-export NORA_SIRA_DB_ROOT=<db_root>
-uvicorn sandbox.sira_query.service:app --port 8040
+export NORA_STORE_ROOT=<db_root>
+uvicorn nora_store.service:app --port 8040
 #    On first query the service enumerates <mno>__<MMMYYYY>/ cells and
 #    routes through the multi-cell path. /healthz / startup logs show
 #    "Multi-cell mode: loaded N cell(s): ...".
@@ -846,7 +846,7 @@ uvicorn sandbox.sira_query.service:app --port 8040
 | `sira_multi`: `ModuleNotFoundError: bm25x` (or hydra) in the subprocess | `sira_multi` run under the wrong Python | activate the SIRA venv first (the gotcha above) |
 | `run_pipeline.py`: `Could not override 'data.name'` | SIRA's Hydra config doesn't accept the `data.name` override (D-DRAFT-6 assumption) | the one unverified spot — likely a small config-syntax tweak in `scripts/configs/data/nora.yaml` (or pass `+data.name=`); inspect the `--dry-run` command |
 | bm25 stage: `index/best` FileNotFoundError | eval+pick-best produced no best index | confirmed-mitigated: the adapter emits a dummy index-build query/qrel; if it recurs, check the cell's `raw/queries-test.jsonl` has the `_idxbuild_0` row |
-| service `/healthz` shows no cells / legacy mode | `NORA_SIRA_DB_ROOT` not pointed at the cell db_root, or cells lack `raw/metadata.json` | confirm `<db_root>/<mno>__<release>/raw/metadata.json` exists; re-run the adapter |
+| service `/healthz` shows no cells / legacy mode | `NORA_STORE_ROOT` not pointed at the cell db_root, or cells lack `raw/metadata.json` | confirm `<db_root>/<mno>__<release>/raw/metadata.json` exists; re-run the adapter |
 | service `ModuleNotFoundError: bm25x` at query time | service launched under the wrong Python | launch uvicorn under the SIRA venv |
 
 ### Notes

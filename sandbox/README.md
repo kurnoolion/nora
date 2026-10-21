@@ -20,7 +20,7 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_patches/test/probe_per_stage_endpoints.py` | Stdlib sanity probe — POSTs a tiny chat-completion to each configured endpoint and reports compact `SPK` lines. Use before running the pipeline to confirm reachability + response shape. | ✅ |
 | `adapter/nora_to_beir.py` | Converts NORA parse output (`<env_dir>/out/parse/**/*_tree.json` — recursive, covers the per-cell `<mno>/<rel>/` layout, NORA D-DRAFT-12) + the 18-Q eval set into BEIR-format `corpus.jsonl` + `queries.jsonl` + `qrels/test.tsv`. `--multi-cell` emits one dataset per `(mno, release)` cell. | ✅ |
 | `sira_multi.py` | Multi-MNO batch orchestrator — enumerates the `(mno, release)` cells under a db_root and runs SIRA's `run_pipeline.py` once per cell (writes each cell's `configs/data/<cell>.yaml` from the `nora.yaml` template first); `--verify` sweeps the same cells with read-only verify-run reports instead of building. See "Running — multi-MNO" below. | ✅ |
-| `sira_query/service.py` | Cell-aware FastAPI per-query service (`/sira-query`, `/healthz`) — loads every cell at startup; resolves query scope → retrieve per cell → merge → rerank. Query-time config in the multi-mno-sira runbook. | ✅ |
+| `nora_store/service.py` | Cell-aware FastAPI per-query service (`/query`, `/healthz`) — loads every cell at startup; resolves query scope → retrieve per cell → merge → rerank. Query-time config in the multi-mno-sira runbook. | ✅ |
 | `sira_cells.py` | Cell-identity helpers (`cell_dirname`, `parse_cell_dirname`, `enumerate_cells`); release ordering re-exported from `core.extraction.release_key`. | ✅ |
 | `llm_refusal.py` | Permanent-refusal detection shared by the batch enrich lane and the query service: a marker-prefixed, JSON-free response means the endpoint will refuse that input on every retry — route the call to a configured fallback LLM instead (or fail fast as `llm_refused`). Markers/fallback endpoints are env-local (`NORA_LLM_REFUSAL_MARKERS`, `NORA_SIRA_ENRICH_FALLBACK_LLM_*`, `NORA_SIRA_QUERY_FALLBACK_LLM_*`). `fallback_reasoning_fields(env, prefix)` gives the fallback call its own reasoning fields (`<prefix>REASONING(_CONTROL)`, else `NORA_LLM_FALLBACK_REASONING(_CONTROL)`; same wire rule as core's provider). Copied flat into the SIRA clone by `install_configs.sh`. | ✅ |
 | `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`; `--failed` inverts it into a triage listing (failed reqs per cell grouped status → plan; local-only, ids redacted before sharing). | ✅ |
@@ -330,9 +330,9 @@ processed (see `SETUP.md` §"Verifying enrichment completeness").
 ### SIRA query service
 
     source sandbox/activate.sh              # SIRA venv (bm25x) + NO_PROXY + HF-offline
-    export NORA_SIRA_DB_ROOT="$DB"
+    export NORA_STORE_ROOT="$DB"
     export NORA_SIRA_DOC_ENRICH_RUN="$RUN"  # must match the ingest --run-name
-    uvicorn sandbox.sira_query.service:app --port 8040
+    uvicorn nora_store.service:app --port 8040
     curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 
 The service loads **every** cell under `$DB` at startup (RAM grows with
@@ -355,7 +355,7 @@ cross-encoder calls, D-116; resilience D-117), routed by
 
 Static config in `config/web.json` (host, port, `env_dir`, path mappings);
 CLI `--host/--port/--env-dir` override it. The web reaches the SIRA
-service via `NORA_SIRA_QUERY_URL` (default `http://127.0.0.1:8040`).
+service via `NORA_STORE_URL` (default `http://127.0.0.1:8040`).
 Which cells answer a query is decided **per query on the SIRA side**
 (`resolve_cells` over the MNOs/releases detected in the query text) — the
 web env config's `mnos`/`releases` lists only feed the corpus label shown
@@ -510,9 +510,9 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   breaks); `--strict` also fails on WARN (quality signals) for CI-style
   gating. Run after every build; run before trusting a heal/retry pass.
 
-### Query-service env vars (`sandbox/sira_query/service.py`)
+### Query-service env vars (`nora_store/service.py`)
 
-- `NORA_SIRA_DB_ROOT` — the cell db_root (required for multi-cell mode).
+- `NORA_STORE_ROOT` — the cell db_root (required for multi-cell mode).
 - `NORA_SIRA_DOC_ENRICH_RUN` — pinned doc-enrich run to load phrases from.
 - `NORA_LLM_SHIM_URL` / `NORA_LLM_MODEL` / `NORA_LLM_SHIM_API_KEY` (falls
   back to `NORA_LLM_API_KEY`) — query-enrichment endpoint, base **without**
@@ -532,8 +532,8 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   `NORA_SIRA_MAX_DF_RATIO` (0.05), `NORA_SIRA_EXPANSION_WEIGHT` (0.5),
   `NORA_SIRA_QUERY_ENRICH_ENABLED` (true).
 
-Web-side: `NORA_SIRA_QUERY_URL` (default `http://127.0.0.1:8040`),
-`NORA_SIRA_QUERY_TIMEOUT` (1200s).
+Web-side: `NORA_STORE_URL` (default `http://127.0.0.1:8040`),
+`NORA_STORE_TIMEOUT` (1200s).
 
 ### `run_stack.sh` args (D-120)
 
@@ -555,7 +555,7 @@ import-checks `uvicorn`/`fastapi`/`bm25x` per role); `--reasoning-sentinel`
   release dir before extraction (D-109).
 - `sandbox.verify_tables [--parse DIR] [--db-root DIR]` — tables inlined in
   parse text and present in each cell's corpus (D-119); `--db-root`
-  defaults to `$NORA_SIRA_DB_ROOT`.
+  defaults to `$NORA_STORE_ROOT`.
 - `sandbox.sira_enrich_inspect <req_id> [--db-root DIR] [--cell NAME]
   [--run NAME] [--text] [--trace]` — the enrichment phrases (and
   optionally corpus text / raw trace row) for one requirement.

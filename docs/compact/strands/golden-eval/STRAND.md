@@ -4,7 +4,7 @@
 **Opened:** 2026-08-04
 **Landed:**
 **Assignees:** kurnoolion
-**Target modules:** web, eval (+ runtime service edge: sandbox/sira_query, outside the module system)
+**Target modules:** web, eval (+ runtime service edge: store, outside the module system)
 **Active phase:** development
 
 ## Summary
@@ -33,7 +33,7 @@ Lands in code at development time; this note is the design contract.
 
 **Error codes (`error_codes.py`):**
 - `GEV-E001` — sample failed validation: unresolvable/ambiguous req_id {rid} in {sample_id} → fix ground truth in Eval Studio
-- `GEV-E002` — stack {url_label} unreachable or /sira-query failed for {sample_id} → check serve stack health
+- `GEV-E002` — stack {url_label} unreachable or /query failed for {sample_id} → check serve stack health
 - `GEV-E003` — Stage-2 synthesis failed: ground-truth/retrieved chunk `req:{rid}` not in NORA store → re-ingest or fix qualifier
 - `GEV-E004` — judge call failed or verdict unparseable for {sample_id} → check judge provider / prompt version
 - `GEV-W001` — sample {sample_id} skipped: status not ready for requested stage (draft vs stage1-ready vs golden-ready)

@@ -166,7 +166,7 @@ mode cannot recur on the decision path.
 **CORRECTED v0.8 — the defect is latent, not live (D-DRAFT-15).**
 `LLMQueryAnalyzer` is never constructed in any live path:
 `core/src/query/pipeline.py:271` is `self._analyzer = analyzer or
-MockQueryAnalyzer()`, and `sandbox/sira_query/service.py:1199` is
+MockQueryAnalyzer()`, and `nora_store/service.py:1199` is
 `make_query_analyzer(None)` with a comment recording that wiring an
 `LLMProvider` for it is a deliberate follow-up. Classification in the serving
 path is **100% rule-based today**, `MockQueryAnalyzer` emits both classes, and
@@ -227,8 +227,8 @@ cleaner and maps exactly onto implementations that already exist:
 | `decision` | `HybridQueryAnalyzer` + `DecisionProvider` | new (§2, §3) |
 
 Named `NORA_QUERY_ANALYZER` to match the established convention
-(`NORA_LLM_PROVIDER`, `NORA_EMBEDDING_PROVIDER`, `NORA_SIRA_INDEX`,
-`NORA_SIRA_ENGINE`) and resolved CLI > env var > config > default like the
+(`NORA_LLM_PROVIDER`, `NORA_EMBEDDING_PROVIDER`, `NORA_STORE_INDEX`,
+`NORA_STORE_ENGINE`) and resolved CLI > env var > config > default like the
 other `resolve_*` knobs. Default stays `rules`, so an administrator who sets
 nothing sees today's behaviour. A **provider roster** still sits *beneath* the
 `decision` value, selecting which decision model serves it — the roster did
@@ -242,7 +242,7 @@ rather than a hypothetical. And it finally permits the comparison that
 D-DRAFT-17 shows **has never been run at this seam**: rules vs LLM vs decision
 model, same input, same harness. Cost is a few lines in the factory for the
 `nora` lane, plus a thin adapter in the `sira` lane, where
-`sandbox/sira_query/service.py:1193` records that wrapping the service's httpx
+`nora_store/service.py:1193` records that wrapping the service's httpx
 LLM in an `LLMProvider` is an outstanding follow-up. Small, not free.
 
 One implementation detail, read rather than assumed: `make_query_analyzer()`

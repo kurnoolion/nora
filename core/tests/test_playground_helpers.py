@@ -285,7 +285,7 @@ def test_sira_lane_runner_emits_progress_at_stage_boundaries():
     async def _fake_snapshot():
         return {"rerank_enabled": True}
 
-    with patch.object(pg, "_call_sira_query", _fake_sira_call), \
+    with patch.object(pg, "_call_store_query", _fake_sira_call), \
          patch.object(pg, "_run_query_for_test", _fake_run_query), \
          patch.object(pg, "_snapshot_sira_lane_config", _fake_snapshot):
         out = _run(pg._run_sira_lane_for_merged(
@@ -312,7 +312,7 @@ def test_sira_lane_runner_emits_progress_on_service_failure():
     async def _fail_sira(question, top_k=None):
         raise RuntimeError("SIRA down")
 
-    with patch.object(pg, "_call_sira_query", _fail_sira):
+    with patch.object(pg, "_call_store_query", _fail_sira):
         out = _run(pg._run_sira_lane_for_merged(
             "q", _make_fake_request(), emit_progress=emit,
         ))

@@ -10,7 +10,7 @@
 #   sandbox/run_stack.sh [--state-dir DIR] --stop <label>
 #
 #   <label>        short id (e.g. qwen, prop) — names the state dir + log prefix
-#   <db_root>      the ingestion dir (NORA_SIRA_DB_ROOT) for this stack
+#   <db_root>      the ingestion dir (NORA_STORE_ROOT) for this stack
 #   <svc_port>     SIRA service port (e.g. 8040)
 #   <web_port>     NORA web port (e.g. 8080)
 #   <llm_base_url> LLM endpoint base WITHOUT /v1 (e.g. http://dgx:8000);
@@ -229,14 +229,14 @@ if [[ $DRY -eq 1 ]]; then
 
 # SIRA service  → $svc_log
 ${service_activate:+source $service_activate; }add_localhost_noproxy
-NORA_SIRA_DB_ROOT=$db_root NORA_SIRA_DOC_ENRICH_RUN=$enrich_run \\
+NORA_STORE_ROOT=$db_root NORA_SIRA_DOC_ENRICH_RUN=$enrich_run \\
 NORA_SIRA_RERANK_ENABLED=false \\
 NORA_LLM_SHIM_URL=$llm_base NORA_LLM_MODEL=$llm_model \\
-  $service_python -m uvicorn sandbox.sira_query.service:app --port $svc_port
+  $service_python -m uvicorn nora_store.service:app --port $svc_port
 
 # NORA web  → $web_log
 ${web_activate:+source $web_activate; }add_localhost_noproxy
-NORA_SIRA_QUERY_URL=http://127.0.0.1:$svc_port NORA_SIRA_SYNTH_MODE=select-synth \\
+NORA_STORE_URL=http://127.0.0.1:$svc_port NORA_SIRA_SYNTH_MODE=select-synth \\
 NORA_LLM_PROVIDER=$provider NORA_LLM_BASE_URL=$llm_base/v1 \\
 NORA_LLM_MODEL=$llm_model NORA_LLM_API_KEY=${api_key:+<set>} ${sentinel_env}\\
   $web_python -m core.src.web.app --port $web_port \\
@@ -288,7 +288,7 @@ cd "$REPO_ROOT"
 (
     set +u; [[ -n "$service_activate" ]] && source "$service_activate" >/dev/null 2>&1; set -u
     add_localhost_noproxy
-    export NORA_SIRA_DB_ROOT="$db_root"
+    export NORA_STORE_ROOT="$db_root"
     export NORA_SIRA_DOC_ENRICH_RUN="$enrich_run"
     export NORA_SIRA_RERANK_ENABLED=false
     # Query-enrich stays on (service default). It's the service's one live LLM
@@ -303,7 +303,7 @@ cd "$REPO_ROOT"
     [[ -n "$api_key" ]] && export NORA_LLM_SHIM_API_KEY="$api_key"
     [[ -n "$api_key" ]] && export NORA_SIRA_RERANK_LLM_API_KEY="$api_key"
     write_header service "$svc_log" "$service_python" "$service_activate"
-    nohup "$service_python" -m uvicorn sandbox.sira_query.service:app --port "$svc_port" \
+    nohup "$service_python" -m uvicorn nora_store.service:app --port "$svc_port" \
         >> "$svc_log" 2>&1 &
     echo $! > "$sdir/service.pid"
 )
@@ -312,7 +312,7 @@ cd "$REPO_ROOT"
 (
     set +u; [[ -n "$web_activate" ]] && source "$web_activate" >/dev/null 2>&1; set -u
     add_localhost_noproxy
-    export NORA_SIRA_QUERY_URL="http://127.0.0.1:$svc_port"
+    export NORA_STORE_URL="http://127.0.0.1:$svc_port"
     export NORA_SIRA_SYNTH_MODE=select-synth
     export NORA_LLM_PROVIDER="$provider"
     export NORA_LLM_BASE_URL="$llm_base/v1"

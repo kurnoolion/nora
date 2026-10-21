@@ -37,7 +37,7 @@ from typing import Any
 from core.src.stores.overlay import OverlayStore, open_overlay_store
 # stdlib-only by design so the web side can share the exact label-view
 # projection the service applies (see its module docstring)
-from sandbox.sira_query.enrich_overlay import allowed_labels, filter_overlay
+from nora_store.enrich_overlay import allowed_labels, filter_overlay
 
 DEFAULT_REASON_CATEGORIES = [
     "misleading-enrichment",

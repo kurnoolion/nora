@@ -466,7 +466,7 @@ class TestSiraQueryServiceWiring:
     analyzer off the event loop."""
 
     def test_healthz_reports_the_arm(self, monkeypatch):
-        import sandbox.sira_query.service as svc
+        import nora_store.service as svc
 
         monkeypatch.delenv(QUERY_ANALYZER_ENV_VAR, raising=False)
         assert svc.healthz()["query_analyzer"] == "rules"
@@ -483,7 +483,7 @@ class TestSiraQueryServiceWiring:
 
         from fastapi import HTTPException
 
-        import sandbox.sira_query.service as svc
+        import nora_store.service as svc
 
         seen = {}
         inner = analyzer.analyze

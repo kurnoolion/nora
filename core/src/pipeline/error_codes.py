@@ -121,7 +121,7 @@ _DEFS: list[ErrorDef] = [
     #     (strand golden-eval, D-DRAFT-1). Raised as eval.golden.GoldenEvalError;
     #     registered here so the code catalog stays the single human-readable index.
     ErrorDef("GEV-E001", "Golden sample invalid: {reason}", "Fix ground truth / fields in the Eval Studio"),
-    ErrorDef("GEV-E002", "Serving stack unreachable or /sira-query failed: {reason}", "Check the stack URL and its health endpoint"),
+    ErrorDef("GEV-E002", "Serving stack unreachable or /query failed: {reason}", "Check the stack URL and its health endpoint"),
     ErrorDef("GEV-E003", "NORA store unusable for Stage 2: {reason}", "Missing or empty store: run the vectorstore stage. Missing chunk: re-ingest the cell or fix the entry's qualifiers"),
     ErrorDef("GEV-E004", "Judge call failed or verdict unparseable for {sample_id}: {reason}", "Check judge provider and prompt version"),
     ErrorDef("GEV-E005", "Relative release unresolvable for {sample_id}: {reason}", "Write or advance the golden set's release map, or fix the entry"),

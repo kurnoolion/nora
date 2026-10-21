@@ -132,9 +132,9 @@ absolute** (compose resolves relative `env_file` paths against
 `docker/`, which is now per-user):
 
 ```
-/srv/nora/env/.env.builds            # wiring: all SEVEN path vars; NORA_ENV_DIR/SIRA_DB_ROOT are
+/srv/nora/env/.env.builds            # wiring: all SEVEN path vars; NORA_ENV_DIR/STORE_ROOT are
                                      #   rewritten by cycle.sh start; REQUIREMENTS_DIR=/srv/nora/requirements
-                                     #   PIPELINE_ENV_FILE=/srv/nora/env/.env.nora-batch
+                                     #   BATCH_ENV_FILE=/srv/nora/env/.env.nora-batch
                                      #   SIRA_BATCH_ENV_FILE=/srv/nora/env/.env.sira-batch
                                      #   SECRETS_ENV_FILE=/srv/nora/env/.env.secrets
 /srv/nora/env/.env.nora-batch     # NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts + LLM routing

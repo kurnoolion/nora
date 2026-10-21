@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sandbox.sira_query.scope import normalize_release, resolve_cells
+from nora_store.scope import normalize_release, resolve_cells
 
 
 def _intent(mnos=None, releases=None):

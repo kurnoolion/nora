@@ -17,7 +17,7 @@ live); images ship as Release-asset tarballs on the internal GitHub
 
 Lineage: nora-web / nora-batch share the `nora-base` dependency layer
 (`nora.Dockerfile`); nora-store / sira-batch share `sira-base` with the
-pinned SIRA clone baked in (`sira.Dockerfile`, `SIRA_REF`).
+pinned SIRA clone baked in (`store.Dockerfile`, `SIRA_REF`).
 
 How they connect (build → promote → serve, and the query path):
 
@@ -34,7 +34,7 @@ How they connect (build → promote → serve, and the query path):
         ┌────────────┴────────────┐
         ▼                         ▼
     [nora-web :8000] ───────► [nora-store :8040]
-        │      NORA_SIRA_QUERY_URL (compose network)
+        │      NORA_STORE_URL (compose network)
         ▼                         ▼
      browser              LLM endpoints (env files;
                           host.docker.internal for host-local)
@@ -128,7 +128,7 @@ In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
     NORA_ENV_DIR=/home/<you>/nora-data/serve/<label>/nora     # or a nora-build while iterating
-    SIRA_DB_ROOT=/home/<you>/nora-data/serve/<label>/sira     # or a sira-build while iterating
+    STORE_ROOT=/home/<you>/nora-data/serve/<label>/sira     # or a sira-build while iterating
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
     CORRECTIONS_DIR=/home/<you>/nora-data/corrections
@@ -245,7 +245,7 @@ cp /home/<you>/nora-data/nora-builds/<previous-build>/profiles.json \
 
 # 0.5 repoint the builds wiring env at the new dirs (only these two lines):
 #     .env.builds:  NORA_ENV_DIR=/home/<you>/nora-data/nora-builds/<build>
-#                   SIRA_DB_ROOT=/home/<you>/nora-data/sira-builds/<build>
+#                   STORE_ROOT=/home/<you>/nora-data/sira-builds/<build>
 ```
 
 ### Phase 1 — parse the corpus (ALL cells, one shot)
@@ -700,7 +700,7 @@ a full rebuild re-enriches everything anyway.
 ./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
     --sira-build /home/<you>/nora-data/sira-builds/<build>
 
-# stack .env: NORA_ENV_DIR/SIRA_DB_ROOT -> serve/<label>/{nora,sira}, then
+# stack .env: NORA_ENV_DIR/STORE_ROOT -> serve/<label>/{nora,sira}, then
 # RECREATE (a plain `restart` does NOT re-read .env or the env_files —
 # recreate does):
 docker compose --env-file <stack .env> --profile serve up -d
@@ -842,15 +842,15 @@ The two-variant instance of the lineage pattern above (with the LLM as
 the recipe delta). Same images; each stack gets its own wiring env + its
 own service runtime files. Per stack: STACK_NAME, ports, its `web-state-<x>/` directory, and the
 LLM-bearing runtime files. Shared (same values in both wiring envs):
-NORA_ENV_DIR, SIRA_DB_ROOT (one ingest serves both) and FEEDBACK_DIR (the
+NORA_ENV_DIR, STORE_ROOT (one ingest serves both) and FEEDBACK_DIR (the
 pooled feedback DB → attributable A/B, D-120). To A/B *ingestions* instead of
-LLMs, point each stack's SIRA_DB_ROOT at a different `sira/<build>`.
+LLMs, point each stack's STORE_ROOT at a different `sira/<build>`.
 
     # stack A
     cp env.example .env.stack-a            # STACK_NAME=stack-a, ports 8000/8040,
                                            # WEB_STATE_DIR=/home/<you>/nora-data/web-state-a,
                                            # WEB_ENV_FILE=.env.nora-web.a,
-                                           # SIRA_QUERY_ENV_FILE=.env.nora-store.a
+                                           # STORE_ENV_FILE=.env.nora-store.a
     cp env.nora-web.example  .env.nora-web.a     # LLM A (+ its sentinel setting)
     cp env.nora-store.example .env.nora-store.a  # shim/rerank -> LLM A
 
@@ -948,7 +948,7 @@ the affected cell on the serving nora-store so they can immediately
 re-test queries on the Test page. Corrections live as a delta overlay
 under `CORRECTIONS_DIR` (never inside builds or serve labels; they survive
 re-enrichment and re-promotion). With both a/b stacks live, set
-`NORA_SIRA_QUERY_URLS` in `.env.nora-web.<x>` so one Apply reloads both
+`NORA_STORE_URLS` in `.env.nora-web.<x>` so one Apply reloads both
 (see env.nora-web.example). Team-mode gate admits the page.
 
 ## Build + distribute

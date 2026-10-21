@@ -20,7 +20,7 @@ and plan codes — local-only, redact before sharing (the paste-safe
 counterpart is `sira_multi --verify` / `sira_incremental verify-run`).
 
 Usage:
-    export NORA_SIRA_DB_ROOT=$HOME/work/nora/sandbox/adapter/out-db
+    export NORA_STORE_ROOT=$HOME/work/nora/sandbox/adapter/out-db
     python -m sandbox.sira_enrich_inspect <req_id>
     python -m sandbox.sira_enrich_inspect <req_id> --text     # + corpus text
     python -m sandbox.sira_enrich_inspect <req_id> --trace    # + raw LLM trace
@@ -353,9 +353,9 @@ def main(argv: list[str] | None = None) -> int:
              "(default 10; 0 = all)",
     )
     ap.add_argument(
-        "--db-root", default=os.getenv("NORA_SIRA_DB_ROOT", ""),
+        "--db-root", default=os.getenv("NORA_STORE_ROOT", ""),
         help="SIRA db_root (parent of the per-cell datasets); "
-             "defaults to $NORA_SIRA_DB_ROOT",
+             "defaults to $NORA_STORE_ROOT",
     )
     ap.add_argument(
         "--cell", default=None,
@@ -395,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("req_id required (or use --failed for the triage listing)")
 
     if not args.db_root:
-        print("error: set --db-root or $NORA_SIRA_DB_ROOT", file=sys.stderr)
+        print("error: set --db-root or $NORA_STORE_ROOT", file=sys.stderr)
         return 2
     db_root = Path(args.db_root)
     if not db_root.is_dir():

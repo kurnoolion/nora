@@ -603,8 +603,8 @@ nora/
 │   ├── serve-flip.sh                                    # serve-flip.sh — point a serve stack at a promoted label and recreate it
 │   ├── serve-push.sh                                    # serve-push.sh — push a promoted serve label from the BUILD machine to the
 │   ├── serve-up.sh                                      # serve-up.sh — start a serve stack with SERVE_UID/SERVE_GID defaulted to
-│   ├── sira.Dockerfile
-│   └── skopeo-pull-bases.sh                             # skopeo-pull-bases.sh — fetch the BASE images the docker/*.Dockerfile builds
+│   ├── skopeo-pull-bases.sh                             # skopeo-pull-bases.sh — fetch the BASE images the docker/*.Dockerfile builds
+│   └── store.Dockerfile
 ├── docs/
 │   ├── compact/
 │   │   ├── DECISIONS.md
@@ -831,6 +831,21 @@ nora/
 │       ├── requirements-paddle.txt
 │       ├── run_bakeoff.py                               # Run ONE layout provider over one or more PDFs and write normalized outputs.
 │       └── summarize.py                                 # Combine all `*.json` bake-off outputs in a dir into one comparison report.
+├── nora_store/
+│   ├── __init__.py
+│   ├── cell_db_store.py                                 # Cell-DB read side for the SIRA query service (corp-db-layer phase 2).
+│   ├── enrich_overlay.py                                # Enrichment-corrections overlay — load, filter, apply (sira-enrichment-review).
+│   ├── fusion.py                                        # Cross-cell fusion for multi-MNO SIRA (multi-mno-sira D-DRAFT-10).
+│   ├── scope.py                                         # Query-scope resolution for multi-MNO SIRA (multi-mno-sira D-DRAFT-9/10).
+│   ├── service.py                                       # SIRA per-query inference service — for NORA's Test page SIRA tab.
+│   ├── sira_debug.py                                    # SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
+│   ├── test_cell_db_loader.py                           # Tests for the cell-db serving mode (corp-db-layer phase 2).
+│   ├── test_fusion.py                                   # Tests for cross-cell fusion (multi-mno-sira D-DRAFT-10).
+│   ├── test_llm_fallback.py                             # Permanent-refusal fallback in the service's _llm_call choke point.
+│   ├── test_no_autosave.py                              # Regression tests: loading + enriching an index must never mutate it on disk.
+│   ├── test_scope.py                                    # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
+│   ├── test_service_identity.py                         # Serving-identity tests (strand golden-eval).
+│   └── test_service_multi_cell.py                       # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
 ├── presentations/
 │   ├── create.py                                        # Generate NORA leadership presentation.
 │   └── update.py                                        # Add Human Filter philosophy to NORA presentation.
@@ -880,25 +895,10 @@ nora/
 │   │       ├── __init__.py
 │   │       └── probe_per_stage_endpoints.py             # Probe SIRA per-stage LLM endpoints to confirm wire shapes + reachability.
 │   ├── sira_preflight.py                                # Input-layout pre-flight for multi-MNO SIRA (multi-mno-sira D-DRAFT-5).
-│   ├── sira_query/
-│   │   ├── __init__.py
-│   │   ├── cell_db_store.py                             # Cell-DB read side for the SIRA query service (corp-db-layer phase 2).
-│   │   ├── enrich_overlay.py                            # Enrichment-corrections overlay — load, filter, apply (sira-enrichment-review).
-│   │   ├── fusion.py                                    # Cross-cell fusion for multi-MNO SIRA (multi-mno-sira D-DRAFT-10).
-│   │   ├── scope.py                                     # Query-scope resolution for multi-MNO SIRA (multi-mno-sira D-DRAFT-9/10).
-│   │   ├── service.py                                   # SIRA per-query inference service — for NORA's Test page SIRA tab.
-│   │   ├── sira_debug.py                                # SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
-│   │   ├── test_cell_db_loader.py                       # Tests for the cell-db serving mode (corp-db-layer phase 2).
-│   │   ├── test_fusion.py                               # Tests for cross-cell fusion (multi-mno-sira D-DRAFT-10).
-│   │   ├── test_llm_fallback.py                         # Permanent-refusal fallback in the service's _llm_call choke point.
-│   │   ├── test_no_autosave.py                          # Regression tests: loading + enriching an index must never mutate it on disk.
-│   │   ├── test_scope.py                                # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
-│   │   ├── test_service_identity.py                     # Serving-identity tests (strand golden-eval).
-│   │   └── test_service_multi_cell.py                   # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
 │   ├── test_cell_db_convert.py                          # Tests for sandbox/cell_db_convert.py — label flat files -> cell DBs.
 │   ├── test_cell_db_convert_fold.py                     # Pure-Python tests for the converter's overlay fold (no bm25x needed):
 │   ├── test_enrich_batching.py                          # Tests for the batched doc-enrichment logic (strand sira-enrichment-pe):
-│   ├── test_enrich_overlay.py                           # Tests for sandbox/sira_query/enrich_overlay.py (sira-enrichment-review
+│   ├── test_enrich_overlay.py                           # Tests for nora_store/enrich_overlay.py (sira-enrichment-review
 │   ├── test_llm_refusal.py                              # Permanent-refusal detection (sandbox/llm_refusal.py). Markers here
 │   ├── test_sira_cells.py                               # Tests for the shared (MNO, release) cell primitives (multi-mno-sira).
 │   ├── test_sira_enrich_inspect.py                      # Tests for the SIRA doc-enrichment inspector CLI.

@@ -58,6 +58,7 @@ COPY core/ core/
 COPY customizations/ customizations/
 COPY config/ config/
 COPY sandbox/ sandbox/
+COPY nora_store/ nora_store/
 ENV ENV_DIR=/data/env
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
@@ -98,6 +99,7 @@ COPY core/ core/
 COPY customizations/ customizations/
 COPY config/ config/
 COPY sandbox/ sandbox/
+COPY nora_store/ nora_store/
 ENV ENV_DIR=/data/env
 # Toolbox by default; ingest jobs pass their own command, e.g.
 #   python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion ...

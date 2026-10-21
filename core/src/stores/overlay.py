@@ -4,7 +4,7 @@
 Storage-level interface at entry-dict granularity. Edit semantics (ops,
 labels as branches, the label-view digest) live in the caller
 (`core.src.web.enrich_overlay_store.EnrichOverlayStore`, the sole writer)
-and in the stdlib fold (`sandbox.sira_query.enrich_overlay`). A backend
+and in the stdlib fold (`nora_store.enrich_overlay`). A backend
 only stores and returns per-MNO `{req_id: entry}` maps plus the label and
 reason-category lists.
 

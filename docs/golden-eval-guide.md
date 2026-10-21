@@ -17,7 +17,7 @@ curated reference answer (golden response) — scored against a live
 serving stack in two stages:
 
 - **Stage 1 — retrieval recall.** Each sample's query is POSTed to the
-  stack's `/sira-query` endpoint (black-box, over HTTP — the metric
+  stack's `/query` endpoint (black-box, over HTTP — the metric
   measures what the stack actually serves). Recall = fraction of
   ground-truth req_ids present in the retrieved results; per-hit ranks
   are recorded, so recall@5 / recall@10 derive from the same run.
@@ -100,7 +100,7 @@ in `docker/README.md` for the full list):
   `GOLDEN_DIR` mount, the Stage-2 LLM wiring); the scoring target is
   chosen independently per invocation — that's what makes the release
   A/B "same env, two `--stack-url`s" possible. Read the port off the
-  target stack's `SIRA_QUERY_PORT` when composing the URL.
+  target stack's `STORE_PORT` when composing the URL.
 
 **On a dev checkout** (stack reachable directly), from the repo root:
 
@@ -119,7 +119,7 @@ Useful flags:
 - `--stack-label` — short name stamped into the run id and GEV block
   (e.g. `v1` / `v2`); make it meaningful, it's how you tell runs apart.
 - `--top-k N` / `--label OVERLAY` — retrieval overrides passed to
-  `/sira-query`.
+  `/query`.
 - `--mno <carrier>` — run only samples tagged with that carrier. The
   filter applies before the eval-set digest freezes, so filtered runs
   key apart from full runs (they are not comparable to them).
@@ -365,7 +365,7 @@ Line by line:
 | Code | Level | Meaning |
 |---|---|---|
 | `GEV-E001` | error | Sample file unreadable / schema-invalid — the load aborts (fail-loud; fix the file). |
-| `GEV-E002` | error | Stack `/sira-query` failed or returned no results list. |
+| `GEV-E002` | error | Stack `/query` failed or returned no results list. |
 | `GEV-E003` | error | Stage-2 pipeline setup problem (e.g. empty vector store). |
 | `GEV-E004` | error | Judge failure — missing prompt file, or unparseable verdict after a strict-format retry. |
 | `GEV-E005` | error | A relative release (`N`, `N-1`, ...) could not be resolved: the set has no release map, or `N-k` is beyond the MNO's listed releases. Per sample; the run continues. |

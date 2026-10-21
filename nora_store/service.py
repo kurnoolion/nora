@@ -1,7 +1,7 @@
 """SIRA per-query inference service — for NORA's Test page SIRA tab.
 
 Loads SIRA's BM25 index + corpus + telecom prompts once at startup,
-exposes `POST /sira-query` for interactive per-query retrieval.
+exposes `POST /query` for interactive per-query retrieval.
 Mirrors the same end-to-end pipeline SIRA's batch scripts run:
 
     1. Query enrichment via LLM (uses `query_requirement_v01.txt`)
@@ -19,8 +19,8 @@ env var expects it WITH `/v1`).
 Run (from the sandbox/sira/.venv):
 
     source ~/work/nora/sandbox/activate.sh
-    export NORA_SIRA_DB_ROOT=$HOME/work/nora/sandbox/adapter/out
-    uvicorn sandbox.sira_query.service:app --port 8040
+    export NORA_STORE_ROOT=$HOME/work/nora/sandbox/adapter/out
+    uvicorn nora_store.service:app --port 8040
 
 NORA's Test page (`/test`) gets a SIRA tab that posts to this service.
 See sandbox/SETUP.md "Per-query SIRA probe" for the full setup.
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 # ── Config from env ─────────────────────────────────────────────────
 
-_DB_ROOT = os.getenv("NORA_SIRA_DB_ROOT", "")
+_DB_ROOT = os.getenv("NORA_STORE_ROOT", "")
 # corp-db-layer phase 2: where cells come from, and which engine scores.
 # flat (default) = today's path, byte-untouched. cell-db = <db_root> holds
 # `cell-<mno>-<release>.db` files from sandbox/cell_db_convert.py.
@@ -61,11 +61,11 @@ _DB_ROOT = os.getenv("NORA_SIRA_DB_ROOT", "")
 #   fts5  = FTS5 MATCH scoring inside SQLite (tokenization and DF filter
 #           still via the blob-loaded index, so the scorer is the only
 #           variable the A/B measures).
-_INDEX_MODE = os.getenv("NORA_SIRA_INDEX", "flat").strip().lower()
-_ENGINE = os.getenv("NORA_SIRA_ENGINE", "bm25x").strip().lower()
+_INDEX_MODE = os.getenv("NORA_STORE_INDEX", "flat").strip().lower()
+_ENGINE = os.getenv("NORA_STORE_ENGINE", "bm25x").strip().lower()
 # Enrichment-corrections overlay root (strand sira-enrichment-review):
 # mounted ro in containers; unset = overlay machinery inert (vanilla behavior).
-_CORR_ROOT = os.getenv("NORA_SIRA_CORRECTIONS_ROOT", "")
+_CORR_ROOT = os.getenv("NORA_STORE_CORRECTIONS_ROOT", "")
 # Overlay store as a SQLite file (strand corp-db-layer S3): when set it wins
 # over the corrections root for overlay reads. nora-web is the only writer;
 # this service opens the same file read-only (WAL, same host).
@@ -74,7 +74,7 @@ _OVERLAY_DB = os.getenv("NORA_OVERLAY_DB", "").strip()
 # (sandbox.adapter.nora_to_beir.FINGERPRINTS_NAME; not imported — the
 # adapter pulls in the parser stack)
 _FINGERPRINTS_NAME = "fingerprints.jsonl"
-_DATASET = os.getenv("NORA_SIRA_DATASET", "nora")
+_DATASET = os.getenv("NORA_STORE_DATASET", "nora")
 _SHIM_URL = os.getenv("NORA_LLM_SHIM_URL", "http://127.0.0.1:8030").rstrip("/")
 _SHIM_MODEL = os.getenv("NORA_LLM_MODEL", "")
 # Bearer key for the shim/query-enrich path. A bare local shim needs none, but
@@ -448,7 +448,7 @@ def _compute_identity() -> None:
 
 from dataclasses import dataclass, field  # noqa: E402
 
-from sandbox.sira_query.enrich_overlay import (  # noqa: E402
+from nora_store.enrich_overlay import (  # noqa: E402
     allowed_labels,
     apply_overlay_to_req,
     filter_overlay,
@@ -462,8 +462,8 @@ from core.src.query.analyzer import (  # noqa: E402
     query_analyzer_arm,
 )
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
-from sandbox.sira_query.fusion import merge_candidates, rank_candidates  # noqa: E402
-from sandbox.sira_query.scope import resolve_cells  # noqa: E402
+from nora_store.fusion import merge_candidates, rank_candidates  # noqa: E402
+from nora_store.scope import resolve_cells  # noqa: E402
 
 
 @dataclass
@@ -616,7 +616,7 @@ def _load_state() -> None:
 
     if not _DB_ROOT:
         _load_error = (
-            "NORA_SIRA_DB_ROOT not set. Point at the adapter output, "
+            "NORA_STORE_ROOT not set. Point at the adapter output, "
             "e.g. ~/work/nora/sandbox/adapter/out"
         )
         return
@@ -960,17 +960,17 @@ def _load_one_cell_db(db_path: Path) -> CellState:
     `_apply_overlay_and_enrich`, exactly as for a flat cell, so Apply and
     label views work. Mirrors the flat loader's id semantics (every row
     keeps its slot; id lookups are last-wins)."""
-    from sandbox.sira_query.cell_db_store import load_cell_db
+    from nora_store.cell_db_store import load_cell_db
 
     data = load_cell_db(db_path, keep_connection=(_ENGINE == "fts5"))
     if _ENGINE == "fts5" and data.composed:
         raise RuntimeError(
             f"{db_path.name}: schema {data.schema} composes the index at load; "
-            "the fts5 engine needs a baked schema-1 DB — use NORA_SIRA_ENGINE=bm25x")
+            "the fts5 engine needs a baked schema-1 DB — use NORA_STORE_ENGINE=bm25x")
     if _ENGINE == "fts5" and not data.has_fts:
         raise RuntimeError(
             f"{db_path.name}: no fts table — reconvert without --no-fts5 "
-            "or set NORA_SIRA_ENGINE=bm25x")
+            "or set NORA_STORE_ENGINE=bm25x")
 
     doc_ids: list[str] = []
     doc_id_to_idx: dict[str, int] = {}
@@ -1015,7 +1015,7 @@ def _load_one_cell_db(db_path: Path) -> CellState:
 
 def _load_cells() -> None:
     """Populate `_cells` from `<db_root>` — flat cell dirs by default, or
-    SQLite cell DBs when NORA_SIRA_INDEX=cell-db.
+    SQLite cell DBs when NORA_STORE_INDEX=cell-db.
 
     Idempotent. On any per-cell load failure, that cell is skipped and
     the error recorded in `_cells_load_error`; other cells still load so
@@ -1032,7 +1032,7 @@ def _load_cells() -> None:
     if _INDEX_MODE == "cell-db":
         if _ENGINE not in ("bm25x", "fts5"):
             _cells_load_error = (
-                f"NORA_SIRA_ENGINE={_ENGINE!r} unsupported — use bm25x or "
+                f"NORA_STORE_ENGINE={_ENGINE!r} unsupported — use bm25x or "
                 "fts5 (the DB's blobs ARE the engine state; a rebuild-from-"
                 "rows engine would need build params the index does not expose)")
             return
@@ -1103,7 +1103,7 @@ def _build_retrieve_fn(query: str, raw_phrases: list[str], label: str = ""):
             # the scorer is the only A/B variable); scoring runs inside
             # SQLite via two MATCH passes combined per
             # search_with_expansion semantics.
-            from sandbox.sira_query.cell_db_store import fts5_search
+            from nora_store.cell_db_store import fts5_search
             hits = fts5_search(
                 cstate.db_con, cstate.bm25.tokenize(query), stems,
                 k, _EXPANSION_WEIGHT,
@@ -1482,7 +1482,7 @@ _CELL_STATS_CACHE: dict[CellKey, dict[str, Any]] = {}
 #
 # Read surface + per-cell hot reload for the /enrichment-review web UI.
 # The overlay itself is written by nora-web (sole writer); this service
-# only reads it (NORA_OVERLAY_DB read-only, else NORA_SIRA_CORRECTIONS_ROOT
+# only reads it (NORA_OVERLAY_DB read-only, else NORA_STORE_CORRECTIONS_ROOT
 # mounted ro) and applies it at cell load. Reload is idempotent re-read-from-disk; per-cell locks
 # stop stampedes, and in-flight queries finish on the old CellState.
 
@@ -2100,7 +2100,7 @@ def _parse_batch_scores(raw: str, expected_ids: list[int]) -> dict[int, int]:
 
 # ── Main endpoint ──────────────────────────────────────────────────
 
-@app.post("/sira-query")
+@app.post("/query")
 async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
     """Run the full SIRA pipeline on a single query and return the
     top-K reranked results.

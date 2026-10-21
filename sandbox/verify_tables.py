@@ -29,7 +29,7 @@ this was written down):
 
 Usage:
     python -m sandbox.verify_tables --parse <env_dir>/out/parse
-    python -m sandbox.verify_tables --db-root $NORA_SIRA_DB_ROOT
+    python -m sandbox.verify_tables --db-root $NORA_STORE_ROOT
     python -m sandbox.verify_tables --parse <...>/out/parse --db-root <...>  # both + cross-check
 
 Exit codes: 0 ok · 1 MISSING_inline>0 or tables absent from a non-empty corpus · 2 usage.
@@ -134,12 +134,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--parse", default=None,
                     help="NORA parse dir (<env_dir>/out/parse)")
-    ap.add_argument("--db-root", default=os.getenv("NORA_SIRA_DB_ROOT", ""),
-                    help="SIRA db_root (defaults to $NORA_SIRA_DB_ROOT)")
+    ap.add_argument("--db-root", default=os.getenv("NORA_STORE_ROOT", ""),
+                    help="SIRA db_root (defaults to $NORA_STORE_ROOT)")
     args = ap.parse_args(argv)
 
     if not args.parse and not args.db_root:
-        print("error: pass --parse and/or --db-root (or set $NORA_SIRA_DB_ROOT)",
+        print("error: pass --parse and/or --db-root (or set $NORA_STORE_ROOT)",
               file=sys.stderr)
         return 2
 

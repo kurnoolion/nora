@@ -1,6 +1,6 @@
 # SIRA images — build context is the REPO ROOT, plus a named `vendor` context
 # (docker/vendor — see docker-compose.yml additional_contexts):
-#   docker build -f docker/sira.Dockerfile --build-context vendor=docker/vendor \
+#   docker build -f docker/store.Dockerfile --build-context vendor=docker/vendor \
 #       --target nora-store -t nora-store .
 #
 # Source selection (ARG OFFLINE selects the stage):
@@ -102,6 +102,7 @@ COPY core/ core/
 COPY customizations/ customizations/
 COPY config/ config/
 COPY sandbox/ sandbox/
+COPY nora_store/ nora_store/
 # The baked clone is READ-ONLY at run time: per-cell data configs are
 # generated under <db_root>/.hydra-configs and read via SIRA_EXTRA_CONFIG_DIR
 # (extra-config-dir.patch); SIRA's own hydra outputs are already disabled
@@ -119,11 +120,11 @@ FROM sira-base AS nora-store
 # served them. Pass --build-arg CODE_VERSION="$(git rev-parse --short HEAD)".
 ARG CODE_VERSION=""
 ENV NORA_CODE_VERSION=$CODE_VERSION
-ENV NORA_SIRA_DB_ROOT=/data/db
+ENV NORA_STORE_ROOT=/data/db
 EXPOSE 8040
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8040/healthz', timeout=4)"
-CMD ["uvicorn", "sandbox.sira_query.service:app", "--host", "0.0.0.0", "--port", "8040"]
+CMD ["uvicorn", "nora_store.service:app", "--host", "0.0.0.0", "--port", "8040"]
 
 # --------------------------------------------------------------- sira-batch --
 FROM sira-base AS sira-batch

@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from core.src.web.enrich_overlay_store import EDIT_OPS, EnrichOverlayStore
 from core.src.web.team_mode import is_admin
-from sandbox.sira_query.enrich_overlay import allowed_labels
+from nora_store.enrich_overlay import allowed_labels
 
 # edit ops that CREATE records — these must carry a label (branch); undo
 # ops only delete records and stay label-free
@@ -38,11 +38,11 @@ router = APIRouter()
 api = APIRouter(prefix="/api/enrich-review")
 
 # nora-store endpoints (same wiring as the test page's SIRA lane). Apply
-# loops over every URL in NORA_SIRA_QUERY_URLS (comma-separated, e.g. both
+# loops over every URL in NORA_STORE_URLS (comma-separated, e.g. both
 # a/b stacks); reads use the first.
 _SIRA_URLS = [u.strip().rstrip("/") for u in os.getenv(
-    "NORA_SIRA_QUERY_URLS",
-    os.getenv("NORA_SIRA_QUERY_URL", "http://127.0.0.1:8040"),
+    "NORA_STORE_URLS",
+    os.getenv("NORA_STORE_URL", "http://127.0.0.1:8040"),
 ).split(",") if u.strip()]
 
 

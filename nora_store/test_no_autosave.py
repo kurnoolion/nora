@@ -17,7 +17,7 @@ the constructor form cannot quietly start mutating labels. These tests pin
 both semantics and the service-level invariant.
 
 Run from the repo root inside the sandbox venv:
-    pytest sandbox/sira_query/test_no_autosave.py
+    pytest nora_store/test_no_autosave.py
 """
 
 from __future__ import annotations
@@ -105,11 +105,11 @@ def test_repeated_enrich_compounds_tf(tmp_path):
 
 def _service(monkeypatch, db_root: Path):
     """Import the service with a controlled env (full-deps machines only)."""
-    monkeypatch.setenv("NORA_SIRA_DB_ROOT", str(db_root))
-    monkeypatch.delenv("NORA_SIRA_CORRECTIONS_ROOT", raising=False)
+    monkeypatch.setenv("NORA_STORE_ROOT", str(db_root))
+    monkeypatch.delenv("NORA_STORE_CORRECTIONS_ROOT", raising=False)
     monkeypatch.delenv("NORA_SIRA_USE_LATEST_RUNS", raising=False)
     import importlib
-    import sandbox.sira_query.service as service
+    import nora_store.service as service
     return importlib.reload(service)
 
 

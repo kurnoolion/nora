@@ -3,7 +3,7 @@
 Single home for the cell identity / ordering / enumeration logic used by:
   - the adapter (`nora_to_beir.py`) — partitions trees into cells,
   - the batch orchestrator (`sira_multi.py`) — enumerates cells to run,
-  - the runtime query service (`sira_query/service.py`) — loads cells +
+  - the runtime query service (`nora_store/service.py`) — loads cells +
     resolves query scope to a target cell set.
 
 Centralizing avoids three drifting copies of the MMMYYYY convention.
