@@ -337,3 +337,30 @@
 
 ### Flags
 - 3 sira verify-run tests fail on a clean main (pre-existing, unrelated).
+
+## 2026-10-21 — phase 2 closed; phase 4 opened
+
+### Done this session
+- Team-usage round completed clean: phase 2 closed (identity gate,
+  recall and judge checks, bm25x engine, team round all met).
+- Open points resolved: the team-mode gate replaces `NORA_SURFACE`
+  (D-DRAFT-20); corp corrections ride the next publish (D-DRAFT-21).
+- Phase 4 scoped: 4a cell DBs become the default and official locally,
+  flat stacks retire; 4b publish pipeline built and tested against a
+  stand-in corp volume; 4c corp deployment waits on open points 2 and 3.
+
+### Next
+- Phase-4 plan (4a + 4b), then implementation.
+
+## 2026-10-21 — store split designed; phase-4 plan rewritten
+
+### Done this session
+- Design `store-split-design.md`: four stores (Cells, Trees, History,
+  Overlay) behind interfaces with local and HTTP implementations; index
+  composed at load from vanilla + SIRA + Overlay with a disposable cache;
+  shared `req_fingerprint`; SQLite for all four (D-DRAFT-22..26).
+- Overlay becomes a live store: D-DRAFT-21 withdrawn.
+- `phase-4-plan.md` v1: 4a store split (S1–S6), 4b publish (B1–B8).
+
+### Next
+- Review the design; then S1–S3 and the trial checkpoint.

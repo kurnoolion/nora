@@ -440,3 +440,47 @@ section.
 **Decision:** Ask reroutes a permanent refusal once to the roster's `fallback_provider`, on all stacks; `NORA_LLM_REFUSAL_MARKERS` is the switch. Curation chat stays without a fallback.
 **Why:** Automatic, disclosed reroute (D-220). Rejected: manual switch — puts recovery on every asker; curation-chat fallback — not needed for authoring.
 **Consequences:** Each web env file needs the markers and the roster a distinct `fallback_provider`; removing `NORA_LLM_FALLBACK_*` alone doesn't disable it.
+
+## D-DRAFT-20 — The team-mode gate replaces the planned `NORA_SURFACE` knob
+
+**Decision:** No `NORA_SURFACE=ask|full`; corp deployments restrict the UI with the team-mode gate (FR-41).
+**Why:** The gate already limits non-admins to an allowlist and the SIRA lane. Rejected: both — two switches for one concern.
+**Consequences:** Corp exposure is set by `NORA_WEB_TEAM_MODE` and the allowlist.
+
+## D-DRAFT-21 — In corp, corrections reach serving only with the next publish
+
+**Withdrawn 2026-10-21** — superseded by D-DRAFT-24 (Overlay is a live store).
+
+**Decision:** Corp serving has no live overlay Apply; correction-shaped fixes ride the next publish's cell DBs.
+**Why:** The corrections surface is dev-only (scope ruling); cell DBs stay write-once. Rejected: a corp-side corrections path — new mutable state for a dev-only surface.
+**Consequences:** A correction's latency to corp is one publish cycle.
+
+## D-DRAFT-22 — Four orthogonal stores: Cells, Trees, History, Overlay
+
+**Decision:** Split corpus data by kind into four stores, each behind its own interface (`store-split-design.md`).
+**Why:** One baked cell DB lost raw SIRA output and broke review in cell-db mode. Rejected: extending the baked DB — every new use would widen one file.
+**Consequences:** Phase 4 starts with the split; publish ships Cells, Trees and History.
+
+## D-DRAFT-23 — The index is composed at load from separate layers, with a disposable cache
+
+**Decision:** Cells store the vanilla index and raw SIRA phrases; sira-query folds Overlay in and enriches at load; the composed index is cached by (vanilla, SIRA run, overlay) fingerprints.
+**Why:** Keeps layers editable and inspectable; the cache keeps startup fast. Rejected: baking (today) — freezes corrections.
+**Consequences:** Cell DB schema_version 2; an identity gate proves v2 == baked on equal inputs.
+
+## D-DRAFT-24 — Overlay is a live store keyed by (req_id, fingerprint), similarity-guarded
+
+**Decision:** Review edits live in a mutable Overlay store, not in published cells; an edit applies on fingerprint match, else at Jaccard ≥ 0.85 against its origin, else is held.
+**Why:** Corrections go live without republish; the guard keeps edits through trivial text changes. Rejected: exact fingerprint only — a typo fix would hold every edit.
+**Consequences:** Overlay is deployment state (backed up, not published).
+
+## D-DRAFT-25 — Store interfaces with local and HTTP implementations
+
+**Decision:** One protocol per store; local backend or HTTP client chosen by `NORA_<STORE>_URL`; routes under `/stores/<store>/v1`; no store reads another's backend.
+**Why:** Stores can move to their own services by config. Rejected: four services now — deployment cost without a consumer that needs it.
+**Consequences:** Composition lives in consumers; each store has a parity test (local == HTTP).
+
+## D-DRAFT-26 — SQLite for the published stores; trees as parent id + materialized path
+
+**Decision:** SQLite for Cells, Trees, History; Overlay and registry SQLite in dev/test, SQLite or Postgres in corp by deployment facts (design §9.4); tree nodes carry `parent_id` and an indexed ordinal `path`; schemas stay Postgres-portable.
+**Why:** Small, write-once, read-mostly hierarchies; path gives subtree/ancestor reads, `WITH RECURSIVE` the rest. Rejected: a graph DB — hierarchies, not graphs (the knowledge graph is separate).
+**Consequences:** Postgres maps `path` to `ltree` if corp provides it.

@@ -1,5 +1,7 @@
 # Storage design — dev/test and corp-prod deployment
 
+> **2026-10-21:** §2.1 (baked enriched cell DB) and §5a step 1 are superseded by `store-split-design.md` (four stores, composed index).
+
 Strand: `corp-db-layer` · Draft v0.9, 2026-10-11 · Status: approved in review
 (v0.2: engine-agnostic cell schema, registry tiers + scale analysis,
 phased validation plan replacing the big-bang publish sequence.
@@ -403,10 +405,11 @@ serving may adopt the same cell-DB path (optional, later).
 3. Transfer mechanism dev → corp volume (rsync/scp vs an upload
    endpoint on a corp-side admin service): depends what corp network
    allows between the dev PCs and corp storage. (phase 4)
-4. `NORA_SURFACE=ask|full` naming and whether team-mode gate subsumes it.
-   (phase 4)
-5. The §7 overlay-semantics change (corrections ride the next publish in
-   corp) — confirm acceptable. For phases 1–3 the converter BAKES the
+4. ~~`NORA_SURFACE=ask|full`~~ — resolved 2026-10-21: the team-mode gate
+   (FR-41) replaces it; no separate surface knob (D-DRAFT-20).
+5. ~~The §7 overlay-semantics change~~ — superseded 2026-10-21: Overlay
+   is a live store, so corrections reach corp serving without a publish
+   (D-DRAFT-24; D-DRAFT-21 withdrawn). For phases 1–3 the converter BAKES the
    current overlay state into the cell DB at convert time; the FTS5
    stack's Apply/pending machinery is inert during the trial (surface
    is dormant anyway).
@@ -421,3 +424,4 @@ serving may adopt the same cell-DB path (optional, later).
    complexity. Converter output lives outside the serve root
    (`<data-root>/cell-dbs/<label>/<stack>/`); labels and promote.sh
    untouched in phases 1–3.
+7. Corp backend for the mutable stores — see `store-split-design.md` §9.4.
