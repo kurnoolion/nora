@@ -144,7 +144,7 @@ the decisions themselves will use."""
 
 
 def assert_remote_head(
-    base_url: str, timeout: int = 10, api_key: str = ""
+    base_url: str, timeout: int = 10, api_key: str = "", model: str = ""
 ) -> dict:
     """Raise unless the server at ``base_url`` is serving a calibrated head.
 
@@ -164,9 +164,14 @@ def assert_remote_head(
             must carry the same credentials the decisions do, or the gate
             fails on exactly the servers that are configured correctly
             (DRIFT-3).
+        model: The model the decisions will name. When set, the gate checks
+            THAT card and fails if the server does not list it: a server can
+            list several models, and verifying whichever comes first proves
+            nothing about the one being measured. Empty keeps the first card,
+            for servers that list exactly one.
 
     Returns:
-        The first model card, which carries ``temperature``, ``lora``,
+        The checked model card, which carries ``temperature``, ``lora``,
         ``base``, ``device``, ``backend`` and ``dtype``. Worth stamping onto
         a run: it records what was actually measured.
 
@@ -232,7 +237,16 @@ def assert_remote_head(
             f"{sorted(data) if isinstance(data, dict) else type(data).__name__}"
         )
 
-    card = cards[0]
+    if model:
+        named = [c for c in cards if c.get("name") == model]
+        if not named:
+            raise DecisionError(
+                f"decision server at {url} does not list model {model!r}; "
+                f"it lists {[c.get('name') for c in cards]}"
+            )
+        card = named[0]
+    else:
+        card = cards[0]
     faults = []
     if not card.get("lora"):
         faults.append("no adapter reported")

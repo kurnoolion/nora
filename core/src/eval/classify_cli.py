@@ -186,7 +186,7 @@ def _build_decision_arm(args):
         card = assert_remote_head(
             provider.base_url, api_key=resolve_decision_api_key(
                 cli_value=args.decision_api_key
-            )
+            ), model=getattr(provider, "model", "") or "",
         )
         print(
             "decision server verified: "

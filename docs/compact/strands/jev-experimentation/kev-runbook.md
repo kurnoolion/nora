@@ -63,6 +63,23 @@ name=kev-latest  base=Qwen/Qwen3.5-4B-Base  lora=16
 device=mps  backend=mlx  dtype=bfloat16  temperature=2.406
 ```
 
+Observed on a 16 GB CUDA host (2026-10-21), served behind a reverse proxy
+that strips a path prefix, so the decision provider's base URL is
+`http://<decision-host>/systemone`:
+
+```
+name=kev-latest  base=Qwen/Qwen3.5-4B-Base  lora=16
+device=cuda  backend=torch  dtype=bfloat16  temperature=2.41
+latency per request: p50 ~185 ms, p95 ~189 ms warm (356 ms on a cold first run)
+```
+
+That host runs without the `causal_conv1d` and `flash-linear-attention`
+kernels, so it uses the fallback path; latency is higher than it would be
+with them installed, and correctness is unaffected. The server lists a
+second card (`jev-latest`) after `kev-latest`; `assert_remote_head` checks
+the card of the model named with `--decision-model`, so the order does not
+matter.
+
 ## Measure NORA's decision arm against it
 
 ```bash

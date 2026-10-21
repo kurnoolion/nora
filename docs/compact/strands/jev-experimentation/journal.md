@@ -1662,3 +1662,42 @@ branch. No measurement was re-run.
   `docker/env.nora-web.example` carry a commented block for
   `NORA_QUERY_ANALYZER` and the `NORA_DECISION_*` variables, with placeholder
   values and the D-DRAFT-27 advice to leave the knob unset on served stacks.
+
+## 2026-10-21 — decision arm measured against a served CUDA decider
+
+### Done this session
+- The merged code is on all three stacks with the knob unset:
+  `query_analyzer` reports `rules` in sira-query's health check, one new
+  health key and no value changed, rules eval 0.760 / 0.112 in the
+  pipeline image.
+- A 4B decider now serves on the 16 GB CUDA host (bf16, torch backend,
+  weights baked into its image, open server inside the corporate network).
+  Model cards: `kev-latest` first, `jev-latest` second, both with the
+  adapter (lora 16) and a calibration temperature (2.41).
+- `assert_remote_head` passes. Decision arm on classify-dev-v1, n=50,
+  three repeats: accuracy 0.760, weighted cost 0.112, doc-type scope
+  accuracy 0.760, 0 of 50 samples unstable. Level with the
+  developer-machine run and with the rules arm on accuracy and cost.
+- The two arms agree on the predicted class for 30 of 50 samples; the tie
+  is in the totals (38 correct each), not sample by sample.
+- Latency per request: p50 about 185 ms, p95 189 ms warm (356 ms on a
+  cold first run), on fallback kernels.
+- Recorded the host's observed line in `kev-runbook.md`.
+
+### Findings
+- Doc-type scope is the decision arm's weak field: 38 of 50 against the
+  rules arm's 50 of 50. This is `doc_type_scope`, not MNO or release
+  scope; the decision analyzer leaves `mnos` and releases to the rules, so
+  the SIRA serving path's scope is the same under either arm.
+- `assert_remote_head` verified only the first model card, not the model
+  named with `--decision-model`. Harmless on this server because
+  `kev-latest` is listed first. Fixed the same day: the gate takes
+  `model=`, checks that card, and raises if the server does not list it;
+  `classify_cli` passes `--decision-model`.
+
+### Next
+- Check whether the 12 doc-type scope misses and the 12 class misses are
+  the same samples; decide whether the decision arm should own
+  `doc_type_scope` at all.
+- Fine-tuning on NORA's labels remains the main lever (the arms are level
+  untrained).

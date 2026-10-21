@@ -154,6 +154,28 @@ class TestAssertRemoteHead:
         assert card["temperature"] == 2.41
         assert card["base"] == "Qwen/Qwen3.5-4B-Base"
 
+    _TWO_CARDS = {"models": [
+        {"name": "other-latest", "base": "b", "lora": None,
+         "temperature": 0, "backend": "torch", "dtype": "bfloat16"},
+        {"name": "kev-latest", "base": "b", "lora": 16,
+         "temperature": 2.41, "backend": "torch", "dtype": "bfloat16"},
+    ]}
+
+    def test_named_model_checks_its_own_card_not_the_first(self, monkeypatch):
+        self._serving(monkeypatch, self._TWO_CARDS)
+        card = assert_remote_head("http://example.test", model="kev-latest")
+        assert card["name"] == "kev-latest"
+
+    def test_unnamed_model_still_checks_the_first_card(self, monkeypatch):
+        self._serving(monkeypatch, self._TWO_CARDS)
+        with pytest.raises(DecisionError, match="no adapter"):
+            assert_remote_head("http://example.test")
+
+    def test_named_model_missing_from_the_server_raises(self, monkeypatch):
+        self._serving(monkeypatch, self._TWO_CARDS)
+        with pytest.raises(DecisionError, match="does not list model"):
+            assert_remote_head("http://example.test", model="absent")
+
     def test_probes_v1_models(self, monkeypatch):
         seen = self._serving(monkeypatch, self._CARD)
         assert_remote_head("http://example.test")
