@@ -433,3 +433,10 @@ page never sends a legacy section, so refusing costs nothing.
 **Consequences:** Direct-POST clients under the gate must send
 `section=merged`. Gate-on tests cover a missing section and each legacy
 section.
+
+## D-DRAFT-19 — Web refusal fallback restored for the Ask page (reverses 2026-10-18)
+
+**Context:** Switching models by hand after a refusal proved inconvenient.
+**Decision:** Ask reroutes a permanent refusal once to the roster's `fallback_provider`, on all stacks; `NORA_LLM_REFUSAL_MARKERS` is the switch. Curation chat stays without a fallback.
+**Why:** Automatic, disclosed reroute (D-220). Rejected: manual switch — puts recovery on every asker; curation-chat fallback — not needed for authoring.
+**Consequences:** Each web env file needs the markers and the roster a distinct `fallback_provider`; removing `NORA_LLM_FALLBACK_*` alone doesn't disable it.

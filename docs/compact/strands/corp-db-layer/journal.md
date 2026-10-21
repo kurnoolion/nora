@@ -310,3 +310,30 @@
 
 ### Flags
 - 3 sira verify-run tests fail on a clean main (pre-existing, unrelated).
+
+## 2026-10-21 — web refusal fallback restored; all three images rebuilt
+
+### Done this session
+- Reversed the 2026-10-18 "no refusal fallback on web" decision
+  (D-DRAFT-19): the web refusal fallback is active again on all three
+  stacks, Ask page only. NORA_LLM_REFUSAL_MARKERS is set in each web env
+  file (stack-A for the first time); the roster's fallback_provider
+  supplies the endpoint. The curation chat (no-roster path) stays without
+  a fallback: no NORA_LLM_FALLBACK_* lines. Each stack logs "Refusal
+  fallback active".
+- All three images rebuilt on all three stacks at code that includes the
+  decision-model merge (knob unset; sira-query health check gains
+  query_analyzer = rules, no other value changed). sira-query is now named
+  explicitly in every sync request.
+- Host-user serving ticked done in the channel-side checklist.
+
+### In progress
+- None.
+
+### Next
+- Team-usage round on the trial stack (closes phase 2), then the
+  maintenance window.
+- Upstream parse item: join PDF tables split at a page break.
+
+### Flags
+- 3 sira verify-run tests fail on a clean main (pre-existing, unrelated).
