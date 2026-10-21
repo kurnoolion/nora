@@ -5,7 +5,7 @@
 #
 # nora-base     shared dependency layer (requirements.txt, torch)
 # nora-web      the web app (serving)
-# nora-pipeline batch pipeline + SIRA adapter + Docling (ingest jobs / dev toolbox)
+# nora-batch batch pipeline + SIRA adapter + Docling (ingest jobs / dev toolbox)
 #
 # OFFLINE=1 (hosts with no container egress at all, or deterministic vendored
 # builds): every dependency installs from the vendored wheels prepared by
@@ -64,8 +64,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/', timeout=4)"
 CMD ["uvicorn", "core.src.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
-# ----------------------------------------------------------- nora-pipeline --
-FROM nora-base AS nora-pipeline
+# ----------------------------------------------------------- nora-batch --
+FROM nora-base AS nora-batch
 ARG OFFLINE=0
 # Install build essentials for torch._inductor (g++ required by docling/torch
 # tensor-compile path — without a C++ compiler the layout provider aborts).

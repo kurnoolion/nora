@@ -296,7 +296,7 @@ class TestPreview:
         monkeypatch.delenv("NORA_SIRA_QUERY_URLS", raising=False)
         monkeypatch.delenv("NORA_SIRA_QUERY_URL", raising=False)
         r = client.post("/api/eval-studio/sample/gs-0001/preview")
-        assert "No sira-query stack" in r.text
+        assert "No nora-store stack" in r.text
 
 
 class _FakeLLM:

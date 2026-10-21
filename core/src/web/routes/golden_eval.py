@@ -81,7 +81,7 @@ def _env_dir() -> Path:
 
 
 def _stack_url() -> str:
-    """Primary sira-query stack URL — first of NORA_SIRA_QUERY_URLS,
+    """Primary nora-store stack URL — first of NORA_SIRA_QUERY_URLS,
     falling back to NORA_SIRA_QUERY_URL (same convention as the Test
     page / enrichment-review surfaces).
     """
@@ -663,7 +663,7 @@ def stage1_preview(request: Request, sid: str):
     stack = _stack_url()
     if not stack:
         return HTMLResponse(
-            '<div class="alert alert-warning small">No sira-query stack '
+            '<div class="alert alert-warning small">No nora-store stack '
             "configured (NORA_SIRA_QUERY_URLS).</div>"
         )
     from core.src.eval.golden_runner import run_stage1

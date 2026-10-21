@@ -1,9 +1,9 @@
 # NORA + SIRA stack — two views, one image set (docker-distro design).
 #
 #   OPS  serve:   docker compose --profile serve up -d
-#   OPS  ingest:  docker compose --profile ingest run --rm nora-pipeline <cmd>
+#   OPS  ingest:  docker compose --profile ingest run --rm nora-batch <cmd>
 #                 docker compose --profile ingest run --rm sira-batch   <cmd>
-#                 docker compose restart sira-query
+#                 docker compose restart nora-store
 #   A/B  stacks:  docker compose -p stack-a --env-file .env.stack-a --profile serve up -d
 #                 (per-stack ports/env-files via the stack .env; pooled feedback volume)
 #
@@ -19,20 +19,20 @@
 name: ${STACK_NAME:-nora}
 
 services:
-  sira-query:
+  nora-store:
     build:
       context: ..
       additional_contexts:
         vendor: ./vendor
       dockerfile: docker/sira.Dockerfile
-      target: sira-query
+      target: nora-store
       args:
         OFFLINE: ${OFFLINE:-0}
         SIRA_REF: ${SIRA_REF:-62ec59cfb0d76f28ceb3c3d80023ac58a98e4b7a}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-    image: ${IMAGE_PREFIX:-local}/sira-query:${IMAGE_TAG:-dev}
+    image: ${IMAGE_PREFIX:-local}/nora-store:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
     # Serve containers default to root (0:0 — today's behavior). Set
     # SERVE_UID/SERVE_GID to the host user so bind-mount writes land
@@ -49,7 +49,7 @@ services:
       # (applied at cell load; POST /cells/<cell>/reload re-applies)
       - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections:ro
     env_file:
-      - path: ${SIRA_QUERY_ENV_FILE:-.env.sira-query}
+      - path: ${SIRA_QUERY_ENV_FILE:-.env.nora-store}
         required: false
       - path: ${SECRETS_ENV_FILE:-.env.secrets}   # creds only; never committed
         required: false                           # (later file wins on overlap)
@@ -80,7 +80,7 @@ services:
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/nora-web:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
-    # See sira-query: default 0:0 is today's behavior; set SERVE_UID and
+    # See nora-store: default 0:0 is today's behavior; set SERVE_UID and
     # SERVE_GID so web-state/feedback/corrections/golden writes land
     # user-owned.
     user: "${SERVE_UID:-0}:${SERVE_GID:-0}"
@@ -103,7 +103,7 @@ services:
         required: false
     environment:
       ENV_DIR: /data/env
-      # See sira-query: a writable HOME for non-root, and no hub fetches.
+      # See nora-store: a writable HOME for non-root, and no hub fetches.
       HOME: /tmp
       HF_HUB_OFFLINE: "1"
       NORA_JOBS_DB: /data/web-state/nora_jobs.db
@@ -111,28 +111,28 @@ services:
       NORA_CONFIG_DB: /data/web-state/nora_config.db
       NORA_FEEDBACK_DB: /data/feedback/nora_feedback.db
       NORA_CORRECTIONS_ROOT: /data/corrections
-      NORA_SIRA_QUERY_URL: http://sira-query:8040
+      NORA_SIRA_QUERY_URL: http://nora-store:8040
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - sira-query
+      - nora-store
     restart: unless-stopped
 
   # ------------------------------------------------ ingest jobs (no daemon) --
-  nora-pipeline:
+  nora-batch:
     build:
       context: ..
       additional_contexts:
         vendor: ./vendor
       dockerfile: docker/nora.Dockerfile
-      target: nora-pipeline
+      target: nora-batch
       args:
         OFFLINE: ${OFFLINE:-0}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-    image: ${IMAGE_PREFIX:-local}/nora-pipeline:${IMAGE_TAG:-dev}
+    image: ${IMAGE_PREFIX:-local}/nora-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
       - ${NORA_ENV_DIR:?}:/data/env
@@ -147,7 +147,7 @@ services:
     # JOB_UID=1000 / `id -u`). Default 0 = root (current behavior).
     user: "${JOB_UID:-0}:${JOB_GID:-0}"
     env_file:
-      - path: ${PIPELINE_ENV_FILE:-.env.nora-pipeline}
+      - path: ${PIPELINE_ENV_FILE:-.env.nora-batch}
         required: false
       - path: ${SECRETS_ENV_FILE:-.env.secrets}
         required: false

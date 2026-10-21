@@ -147,6 +147,62 @@ class TestVerdictFn:
         assert v("Nov2025", "R1") == "unknown"
 
 
+class TestFingerprintVerdict:
+    """store-split-design §4: a record whose fingerprint equals the loaded
+    release's applies without the Jaccard guard; otherwise the guard runs
+    as before; records without a fingerprint behave exactly as before."""
+
+    # R1's text changed a lot between releases (Jaccard ~0) ...
+    TOKENS = {("Jan2031", "R1"): {"a", "b", "c"},
+              ("Oct2030", "R1"): {"x", "y", "z"}}
+    # ... but the loaded release carries a known fingerprint for it
+    FPS = {("Jan2031", "R1"): "fp-current"}
+
+    def _verdict(self):
+        return make_verdict_fn(lambda rel, rid: self.TOKENS.get((rel, rid)),
+                               "Jan2031",
+                               fingerprint_of=lambda rel, rid: self.FPS.get((rel, rid)))
+
+    def _fold(self, rec):
+        return apply_overlay_to_req(["a", "b"], {"remove": [rec]}, None,
+                                    self._verdict(), "R1")
+
+    def test_matching_fingerprint_applies_despite_low_jaccard(self):
+        r = self._fold(_rec("b", origin_release="Oct2030", fingerprint="fp-current"))
+        assert r.effective == ["a"] and not r.held
+
+    def test_mismatched_fingerprint_falls_back_to_jaccard(self):
+        r = self._fold(_rec("b", origin_release="Oct2030", fingerprint="fp-old"))
+        assert r.effective == ["a", "b"]
+        assert [h["word"] for h in r.held] == ["b"]
+        assert r.held[0]["fingerprint"] == "fp-old"
+        # ... and the Jaccard path still applies a similar req
+        tokens = {("Jan2031", "R1"): {f"t{i}" for i in range(20)},
+                  ("Oct2030", "R1"): {f"t{i}" for i in range(1, 20)}}
+        v = make_verdict_fn(lambda rel, rid: tokens.get((rel, rid)), "Jan2031",
+                            fingerprint_of=lambda rel, rid: "fp-current")
+        assert v("Oct2030", "R1", "fp-old") == "ok"
+
+    def test_mismatched_fingerprint_same_release_still_ok(self):
+        v = self._verdict()
+        assert v("Jan2031", "R1", "fp-old") == "ok"
+
+    def test_no_fingerprint_is_old_behaviour(self):
+        r = self._fold(_rec("b", origin_release="Oct2030"))
+        assert r.effective == ["a", "b"] and len(r.held) == 1
+        assert self._verdict()("Oct2030", "R1") == "changed"
+
+    def test_unknown_current_fingerprint_falls_back(self):
+        v = make_verdict_fn(lambda rel, rid: self.TOKENS.get((rel, rid)),
+                            "Jan2031", fingerprint_of=lambda rel, rid: None)
+        assert v("Oct2030", "R1", "fp-current") == "changed"
+
+    def test_two_arg_verdict_fn_still_works_for_legacy_records(self):
+        r = apply_overlay_to_req(["a", "b"], {"remove": [_rec("b", origin_release="Oct2030")]},
+                                 None, ALWAYS_OK, "R1")
+        assert r.effective == ["a"]
+
+
 class TestJaccard:
     def test_both_empty_is_one(self):
         assert jaccard(set(), set()) == 1.0

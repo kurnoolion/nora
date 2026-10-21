@@ -11,12 +11,12 @@ live); images ship as Release-asset tarballs on the internal GitHub
 | Image | Profile | Runs | Purpose | Reads (mounts) | Writes (mounts) |
 |---|---|---|---|---|---|
 | **nora-web** | serve | uvicorn `:8000`, long-lived | Web UI + API: query, compare, compliance views; jobs/metrics/config; feedback capture | `/data/env` (promoted nora label: vectorstore, graph, taxonomy) | `/data/web-state` (per stack), `/data/feedback` + `/data/corrections` (pooled) |
-| **sira-query** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells), `/data/corrections` (ro — overlay applied at cell load) | — |
-| **nora-pipeline** | ingest | `run --rm` jobs | Batch lanes over the corpus: **ingestion** lane (extract → parse → resolve → standards) and **nora** lane (taxonomy → graph → vectorstore → eval); Docling layout for opt-in corpora | `/data/requirements` (ro, the corpus), `/data/models` | `/data/env` (a nora-BUILD dir: `out/`, images incl.) |
+| **nora-store** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells), `/data/corrections` (ro — overlay applied at cell load) | — |
+| **nora-batch** | ingest | `run --rm` jobs | Batch lanes over the corpus: **ingestion** lane (extract → parse → resolve → standards) and **nora** lane (taxonomy → graph → vectorstore → eval); Docling layout for opt-in corpora | `/data/requirements` (ro, the corpus), `/data/models` | `/data/env` (a nora-BUILD dir: `out/`, images incl.) |
 | **sira-batch** | ingest | `run --rm` jobs | SIRA lane: NORA→BEIR adapter, per-cell index build, batch doc-enrichment, incremental retries | `/data/env` outputs via adapter | `/data/db` (a sira-BUILD dir: cells) |
 
-Lineage: nora-web / nora-pipeline share the `nora-base` dependency layer
-(`nora.Dockerfile`); sira-query / sira-batch share `sira-base` with the
+Lineage: nora-web / nora-batch share the `nora-base` dependency layer
+(`nora.Dockerfile`); nora-store / sira-batch share `sira-base` with the
 pinned SIRA clone baked in (`sira.Dockerfile`, `SIRA_REF`).
 
 How they connect (build → promote → serve, and the query path):
@@ -24,7 +24,7 @@ How they connect (build → promote → serve, and the query path):
     requirements/ corpus (ro)
         │  ingestion lane                 sira lane
         ▼                                    ▼
-    [nora-pipeline] ──► nora-builds/<b> ─► [sira-batch] ──► sira-builds/<b>
+    [nora-batch] ──► nora-builds/<b> ─► [sira-batch] ──► sira-builds/<b>
         │   (also nora lane:                     │
         │    taxonomy/graph/vectorstore)         │
         └────────────┬───────────────────────────┘
@@ -33,14 +33,14 @@ How they connect (build → promote → serve, and the query path):
                      │ mounted ro-by-convention
         ┌────────────┴────────────┐
         ▼                         ▼
-    [nora-web :8000] ───────► [sira-query :8040]
+    [nora-web :8000] ───────► [nora-store :8040]
         │      NORA_SIRA_QUERY_URL (compose network)
         ▼                         ▼
      browser              LLM endpoints (env files;
                           host.docker.internal for host-local)
 
 The serve pair talks over the compose-internal network (`nora-web` reaches
-`sira-query` by service name); everything else connects through the shared
+`nora-store` by service name); everything else connects through the shared
 host directories — there is no other coupling between images. LLM endpoints
 are never baked in; each service gets them from its env file at run time.
 
@@ -70,7 +70,7 @@ paths (`$HOME` does not expand there).
     ├── web-state-b/                   #   (stack identity = directory, not filename)
     ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)
     ├── corrections/                   # ONE pooled dir: enrichment-review overlay
-    │                                  #   (web writes, sira-query reads at load)
+    │                                  #   (web writes, nora-store reads at load)
     └── models/
         └── docling/                   # DOCLING_ARTIFACTS -> /data/models/docling
 
@@ -79,8 +79,8 @@ paths (`$HOME` does not expand there).
     cd docker
     cp env.example .env                        # build + stack wiring (paths, ports)
     cp env.nora-web.example .env.nora-web      # per-service runtime knobs
-    cp env.sira-query.example .env.sira-query  #   (endpoints, tuning — never commit)
-    cp env.nora-pipeline.example .env.nora-pipeline   # for ingest jobs
+    cp env.nora-store.example .env.nora-store  #   (endpoints, tuning — never commit)
+    cp env.nora-batch.example .env.nora-batch   # for ingest jobs
     cp env.sira-batch.example .env.sira-batch         # for enrichment jobs
 
 Edit the per-service files with your LLM endpoints. Gotcha: when
@@ -112,7 +112,7 @@ that roster means commit → rebuild `nora-web` → `up -d --force-recreate`,
 never editing a file on the host; the file-shaped `/data/web-state` recipe
 above remains the path for deployments without the internal repo.
 
-`NORA_LLM_CONFIG` is a web setting only. The `nora-pipeline` image does not set
+`NORA_LLM_CONFIG` is a web setting only. The `nora-batch` image does not set
 it, so pipeline jobs read the repo's `config/llm.json`. The two files are
 separate: a value set in the web roster does not reach the pipeline, and a
 value set in `config/llm.json` does not reach the web Ask page (unless the
@@ -215,20 +215,20 @@ cd docker
 
 # 0.1 snapshot current images as a rollback point (BEFORE git pull, so the
 #     tag records the sha the images were built from):
-for i in nora-web nora-pipeline sira-query sira-batch; do
+for i in nora-web nora-batch nora-store sira-batch; do
   docker tag local/$i:dev local/$i:pre-<cycle>
 done
 TAG="images-pre-<cycle>-$(git rev-parse --short HEAD)"
-DRY_RUN=1 ./push.sh "$TAG" local/nora-web:dev local/nora-pipeline:dev \
-  local/sira-query:dev local/sira-batch:dev        # check sizes first
-./push.sh "$TAG" local/nora-web:dev local/nora-pipeline:dev \
-  local/sira-query:dev local/sira-batch:dev
+DRY_RUN=1 ./push.sh "$TAG" local/nora-web:dev local/nora-batch:dev \
+  local/nora-store:dev local/sira-batch:dev        # check sizes first
+./push.sh "$TAG" local/nora-web:dev local/nora-batch:dev \
+  local/nora-store:dev local/sira-batch:dev
 
 # 0.2 pull the latest code (internal remote) and rebuild the ingest images —
 #     lane code rides IN the images, so any code change must be baked in
 #     BEFORE the lanes run:
 git pull
-docker compose --env-file .env.builds --profile ingest build nora-pipeline sira-batch
+docker compose --env-file .env.builds --profile ingest build nora-batch sira-batch
 
 # 0.3 create the new build dirs and stage the source docs
 mkdir -p /home/<you>/nora-data/nora-builds/<build>
@@ -266,7 +266,7 @@ fails loud with PIP-E003):
 ```bash
 # all cells, detached, console log on the host like ingest.sh does it:
 TS=$(date +%Y%m%d_%H%M%S)
-docker compose --env-file .env.builds --profile ingest run -d --rm -T nora-pipeline \
+docker compose --env-file .env.builds --profile ingest run -d --rm -T nora-batch \
   sh -c "mkdir -p /data/env/reports && exec python -m core.src.pipeline.run_cli \
     --env-dir /data/env --lane ingestion --skip-taxonomy \
     > /data/env/reports/lane-ingestion-ALL-$TS.log 2>&1"
@@ -353,14 +353,14 @@ too is a recipe, stated explicitly.
 (`COPY customizations/`); rebuild after committing them:
 
 ```bash
-docker compose --env-file .env.builds --profile ingest build nora-pipeline sira-batch
+docker compose --env-file .env.builds --profile ingest build nora-batch sira-batch
 ```
 
 Set once in the per-service env files (paths shown for option A; for
 option B use `/app/customizations/prompts` instead):
 
 ```
-# .env.nora-pipeline
+# .env.nora-batch
 NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts
 
 # .env.sira-batch
@@ -413,7 +413,7 @@ Multi-release + resilience semantics:
 
 ```bash
 TS=$(date +%Y%m%d_%H%M%S)
-docker compose --env-file .env.builds --profile ingest run -d --rm -T nora-pipeline \
+docker compose --env-file .env.builds --profile ingest run -d --rm -T nora-batch \
   sh -c "mkdir -p /data/env/reports && exec python -m core.src.pipeline.run_cli \
     --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy \
     > /data/env/reports/stage-taxonomy-$TS.log 2>&1"
@@ -600,7 +600,7 @@ retry rounds on them is pure waste. The refusal detector + fallback
 model handles these:
 
 - **Detect**: set `NORA_LLM_REFUSAL_MARKERS` (in `.env.sira-batch` AND
-  `.env.sira-query`; `||`-separated prefixes). A response that starts
+  `.env.nora-store`; `||`-separated prefixes). A response that starts
   with a marker and carries no JSON payload is a permanent refusal.
   Marker values are deployment-specific — env files only, never commit
   them.
@@ -611,7 +611,7 @@ model handles these:
   `fallback-answered N` count. Markers set but no fallback → reqs fail
   fast as `llm_refused` (no retry-round burn).
 - **Fallback (query service)**: set `NORA_SIRA_QUERY_FALLBACK_LLM_URL`
-  (+`_MODEL`, `_API_KEY`; URL WITHOUT `/v1`) in `.env.sira-query` —
+  (+`_MODEL`, `_API_KEY`; URL WITHOUT `/v1`) in `.env.nora-store` —
   covers query enrichment and chat rerank; `/healthz` reports
   `refusal_fallback {configured, used}`. Recreate the serve stack after
   editing.
@@ -706,12 +706,12 @@ a full rebuild re-enriches everything anyway.
 docker compose --env-file <stack .env> --profile serve up -d
 curl localhost:8040/healthz          # cells loaded
 # web UI: releases visible, enrichment model header correct
-# (NORA_SIRA_ENRICH_MODEL_NAME override in .env.sira-query if the served
+# (NORA_SIRA_ENRICH_MODEL_NAME override in .env.nora-store if the served
 #  model name needs pinning)
 ```
 
 If the batch used a pinned run name, point the query service at the same
-enrichment run: `NORA_SIRA_DOC_ENRICH_RUN=<run-name>` in `.env.sira-query`,
+enrichment run: `NORA_SIRA_DOC_ENRICH_RUN=<run-name>` in `.env.nora-store`,
 then recreate.
 
 First promotion note: `--nora-build` / `--sira-build` accept ANY dir in build
@@ -809,15 +809,15 @@ reverse proxy (Caddy)" below.
 ## Golden-eval runbook notes (field-learned)
 
 1. **A code change rebakes FOUR build targets across the two
-   dockerfiles**, not two: the ingest/eval pair (`nora-pipeline`,
+   dockerfiles**, not two: the ingest/eval pair (`nora-batch`,
    `sira-batch`) AND every stack's serving images (`nora-web`,
-   `sira-query` per stack tag). A stale image surfaces as a missing CLI
+   `nora-store` per stack tag). A stale image surfaces as a missing CLI
    subcommand or as eval behavior that ignores the change you just
    pulled.
 2. **Bake the code version into serving images** so eval StackStamps
    attribute scores to the code that served them:
    `--build-arg CODE_VERSION="$(git rev-parse --short HEAD)"` on
-   `nora-web` and `sira-query` builds (surfaces as `code_version` on
+   `nora-web` and `nora-store` builds (surfaces as `code_version` on
    `/healthz`).
 3. **Promote with `--scheme <sira-prompt-scheme>`** so the label
    MANIFEST records which enrichment-prompt scheme produced the served
@@ -850,16 +850,16 @@ LLMs, point each stack's SIRA_DB_ROOT at a different `sira/<build>`.
     cp env.example .env.stack-a            # STACK_NAME=stack-a, ports 8000/8040,
                                            # WEB_STATE_DIR=/home/<you>/nora-data/web-state-a,
                                            # WEB_ENV_FILE=.env.nora-web.a,
-                                           # SIRA_QUERY_ENV_FILE=.env.sira-query.a
+                                           # SIRA_QUERY_ENV_FILE=.env.nora-store.a
     cp env.nora-web.example  .env.nora-web.a     # LLM A (+ its sentinel setting)
-    cp env.sira-query.example .env.sira-query.a  # shim/rerank -> LLM A
+    cp env.nora-store.example .env.nora-store.a  # shim/rerank -> LLM A
 
     # stack B — STACK_NAME=stack-b, ports 8001/8041,
     # WEB_STATE_DIR=/home/<you>/nora-data/web-state-b,
-    # and .env.nora-web.b / .env.sira-query.b pointing at LLM B
+    # and .env.nora-web.b / .env.nora-store.b pointing at LLM B
     cp env.example .env.stack-b
     cp env.nora-web.example  .env.nora-web.b
-    cp env.sira-query.example .env.sira-query.b
+    cp env.nora-store.example .env.nora-store.b
 
     docker compose --env-file .env.stack-a --profile serve up -d
     docker compose --env-file .env.stack-b --profile serve up -d
@@ -869,7 +869,7 @@ All stack env files live in this same `docker/` directory (gitignored; only
 the `*.example` templates are committed). The pipeline/batch runtime files
 usually need no per-stack variants — ingest is stack-independent; run jobs
 with either wiring env. After ingesting a new cell (shared db_root), restart
-BOTH stacks' sira-query — a plain `restart` suffices here (data reload, same
+BOTH stacks' nora-store — a plain `restart` suffices here (data reload, same
 config); only env-file/.env CHANGES need an `up -d` recreate.
 
 ## Serving behind a reverse proxy (Caddy)
@@ -944,7 +944,7 @@ prefix.
 `/enrichment-review` on nora-web lets domain experts browse SIRA's
 per-requirement enrichment keywords (MNO → Release → Plan), delete/add
 words (with campaign labels + reasons), and hit **Apply** — which reloads
-the affected cell on the serving sira-query so they can immediately
+the affected cell on the serving nora-store so they can immediately
 re-test queries on the Test page. Corrections live as a delta overlay
 under `CORRECTIONS_DIR` (never inside builds or serve labels; they survive
 re-enrichment and re-promotion). With both a/b stacks live, set
@@ -989,13 +989,13 @@ Publish + fetch (either build mode). Both scripts read `GHHOST` / `GHORG` /
     # optional rehearsal — stages tarballs in ./push-staging/, uploads nothing,
     # needs no token:
     DRY_RUN=1 ./push.sh images-$(git -C .. rev-parse --short HEAD) \
-        <prefix>/nora-web:<tag> <prefix>/sira-query:<tag>
+        <prefix>/nora-web:<tag> <prefix>/nora-store:<tag>
 
     # publish to the internal GitHub release (host process; image names per
     # your IMAGE_PREFIX/IMAGE_TAG — `docker image ls` shows them):
     ./push.sh images-$(git -C .. rev-parse --short HEAD) \
-        <prefix>/nora-web:<tag> <prefix>/sira-query:<tag> \
-        <prefix>/nora-pipeline:<tag> <prefix>/sira-batch:<tag>
+        <prefix>/nora-web:<tag> <prefix>/nora-store:<tag> \
+        <prefix>/nora-batch:<tag> <prefix>/sira-batch:<tag>
 
     # any other internal host: §Bring up from a published release
     ./pull.sh images-<sha>

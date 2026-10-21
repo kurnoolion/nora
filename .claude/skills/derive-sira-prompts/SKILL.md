@@ -308,7 +308,7 @@ Refuse to overwrite an existing version unless `--force` is passed.
 Deployment note: both docker images `COPY customizations/` at build,
 so after an image rebuild the files are visible in-container at
 `/app/customizations/prompts` — point `NORA_SIRA_DOC_PROMPT_DIR`
-(sira-batch) and `NORA_TAXONOMY_OVERVIEW_DIR` (nora-pipeline) there.
+(sira-batch) and `NORA_TAXONOMY_OVERVIEW_DIR` (nora-batch) there.
 A prompt update requires rebuilding both images.
 
 Note on deployment (wiring lands in the sira-enrichment-pe batch

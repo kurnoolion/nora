@@ -103,7 +103,7 @@ class WebConfig:
     feedback_db: str = ""
     # Enrichment-corrections volume root (strand sira-enrichment-review):
     # <corrections_root>/sira-enrich/ holds the per-MNO overlay files the
-    # review UI writes and sira-query reads. "" = surface disabled.
+    # review UI writes and nora-store reads. "" = surface disabled.
     corrections_root: str = ""
 
     @classmethod

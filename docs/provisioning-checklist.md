@@ -73,7 +73,7 @@ sudo chmod 2750 /srv/nora/env                                                   
   remove the probe file.
 - Probe (container writes land group-owned): with a wiring env whose
   `JOB_UID`/`JOB_GID` are the operator's, `docker compose --env-file
-  <wiring> --profile ingest run --rm -T nora-pipeline sh -c 'touch
+  <wiring> --profile ingest run --rm -T nora-batch sh -c 'touch
   /data/env/.probe'` → the file on the host is `<user>:nora-ops`.
 
 ### A4. NAS mounts (requirements/, archive/)
@@ -120,9 +120,9 @@ admin's call, the paths are not.
   egress misbehaves).
 - Set `IMAGE_PREFIX`/`IMAGE_TAG` in the wiring env to the loaded
   images (defaults `local`/`dev` mean "built here").
-- Probe: `docker image ls | grep -E 'nora-pipeline|sira-batch'` shows
+- Probe: `docker image ls | grep -E 'nora-batch|sira-batch'` shows
   the expected tag; `docker compose --env-file /srv/nora/env/.env.builds
-  --profile ingest run --rm -T nora-pipeline python -m
+  --profile ingest run --rm -T nora-batch python -m
   core.src.pipeline.run_cli --help` prints usage.
 
 ### A6. Env files under /srv/nora/env
@@ -134,10 +134,10 @@ absolute** (compose resolves relative `env_file` paths against
 ```
 /srv/nora/env/.env.builds            # wiring: all SEVEN path vars; NORA_ENV_DIR/SIRA_DB_ROOT are
                                      #   rewritten by cycle.sh start; REQUIREMENTS_DIR=/srv/nora/requirements
-                                     #   PIPELINE_ENV_FILE=/srv/nora/env/.env.nora-pipeline
+                                     #   PIPELINE_ENV_FILE=/srv/nora/env/.env.nora-batch
                                      #   SIRA_BATCH_ENV_FILE=/srv/nora/env/.env.sira-batch
                                      #   SECRETS_ENV_FILE=/srv/nora/env/.env.secrets
-/srv/nora/env/.env.nora-pipeline     # NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts + LLM routing
+/srv/nora/env/.env.nora-batch     # NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts + LLM routing
 /srv/nora/env/.env.sira-batch        # NORA_SIRA_DOC_PROMPT_DIR=/data/env/prompts, NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy,
                                      #   ENRICH LLM URL (WITH /v1) + model, refusal markers, fallback LLM
 /srv/nora/env/.env.secrets           # API keys only; 0640 root:nora-ops

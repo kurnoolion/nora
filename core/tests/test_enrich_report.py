@@ -194,18 +194,18 @@ class TestExportEndpoint:
         from fastapi import HTTPException
 
         def down(path, params=None):
-            raise HTTPException(status_code=502, detail="sira-query unreachable")
+            raise HTTPException(status_code=502, detail="nora-store unreachable")
 
         monkeypatch.setattr(er, "_service_get", down)
         r = client.get("/api/enrich-review/export")
         assert r.status_code == 200
-        assert "note: sira-query unavailable" in r.text
+        assert "note: nora-store unavailable" in r.text
 
     def test_scorecard_requires_service(self, client, monkeypatch):
         from fastapi import HTTPException
 
         def down(path, params=None):
-            raise HTTPException(status_code=502, detail="sira-query unreachable")
+            raise HTTPException(status_code=502, detail="nora-store unreachable")
 
         monkeypatch.setattr(er, "_service_get", down)
         r = client.get("/api/enrich-review/export",

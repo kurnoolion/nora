@@ -175,7 +175,7 @@ CELLS="$(printf '%s' "$body" | grep -o '"data_fingerprint_cells": *{[^}]*}' | gr
 echo "healthz    : label=${got:-?} fp=${FP:0:12} code=$(hz code_version) scheme=$(hz sira_prompt_scheme) cells=${CELLS:-0}"
 if [ "$got" != "$LABEL" ]; then
   die 020 "healthz on $HZ does not report serve_label=$LABEL (got '${got:-<none>}')" \
-      "docker compose --env-file $ENVFILE logs sira-query; roll back: $0 $STACK $CUR_LABEL --mode expedited --yes"
+      "docker compose --env-file $ENVFILE logs nora-store; roll back: $0 $STACK $CUR_LABEL --mode expedited --yes"
 fi
 [ -n "$FP" ] || echo "WARN: no data_fingerprint on healthz — eval StackStamps will fall back to the label name"
 

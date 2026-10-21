@@ -66,6 +66,14 @@ _ENGINE = os.getenv("NORA_SIRA_ENGINE", "bm25x").strip().lower()
 # Enrichment-corrections overlay root (strand sira-enrichment-review):
 # mounted ro in containers; unset = overlay machinery inert (vanilla behavior).
 _CORR_ROOT = os.getenv("NORA_SIRA_CORRECTIONS_ROOT", "")
+# Overlay store as a SQLite file (strand corp-db-layer S3): when set it wins
+# over the corrections root for overlay reads. nora-web is the only writer;
+# this service opens the same file read-only (WAL, same host).
+_OVERLAY_DB = os.getenv("NORA_OVERLAY_DB", "").strip()
+# adapter sidecar of per-req content fingerprints in a flat cell's raw/
+# (sandbox.adapter.nora_to_beir.FINGERPRINTS_NAME; not imported — the
+# adapter pulls in the parser stack)
+_FINGERPRINTS_NAME = "fingerprints.jsonl"
 _DATASET = os.getenv("NORA_SIRA_DATASET", "nora")
 _SHIM_URL = os.getenv("NORA_LLM_SHIM_URL", "http://127.0.0.1:8030").rstrip("/")
 _SHIM_MODEL = os.getenv("NORA_LLM_MODEL", "")
@@ -99,7 +107,7 @@ _RERANK_LLM_API_KEY = os.getenv("NORA_SIRA_RERANK_LLM_API_KEY", "")
 # marker-prefixed non-answer for a given input, it will do so on every
 # retry — route that one call to a fallback model instead. One fallback
 # pair covers every _llm_call site (query enrichment AND rerank).
-# Marker values are deployment-local (.env.sira-query, gitignored).
+# Marker values are deployment-local (.env.nora-store, gitignored).
 _FALLBACK_LLM_URL = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_URL", "").rstrip("/")
 _FALLBACK_LLM_MODEL = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_MODEL", "")
 _FALLBACK_LLM_API_KEY = os.getenv("NORA_SIRA_QUERY_FALLBACK_LLM_API_KEY", "")
@@ -444,10 +452,9 @@ from sandbox.sira_query.enrich_overlay import (  # noqa: E402
     allowed_labels,
     apply_overlay_to_req,
     filter_overlay,
-    load_accepted_labels,
-    load_overlay,
     make_verdict_fn,
 )
+from core.src.stores.overlay import open_overlay_store  # noqa: E402
 
 from core.src.query.analyzer import (  # noqa: E402
     MockQueryAnalyzer,
@@ -493,6 +500,10 @@ class CellState:
     overlay_snapshot: dict = field(default_factory=dict)
     accepted_snapshot: set = field(default_factory=set)
     _token_cache: dict[str, frozenset] = field(default_factory=dict)
+    # req_id -> req_fingerprint (store-split-design §3): schema-2 cell DBs
+    # carry them; flat cells read the adapter sidecar. Empty = unknown, and
+    # overlay records then fall back to the Jaccard guard.
+    fingerprints: dict[str, str] = field(default_factory=dict)
     # --- cell-db mode (corp-db-layer phase 2) ---
     # engine: "flat" (file-loaded, today's path) | "bm25x" | "fts5".
     # db_meta carries the cell DB's meta table (fingerprint, schema,
@@ -501,6 +512,11 @@ class CellState:
     engine: str = "flat"
     db_meta: dict = field(default_factory=dict)
     db_con: "Any" = field(default=None, repr=False)
+    # schema-2 cell DB: vanilla index + raw SIRA phrases, composed with the
+    # Overlay at load like a flat cell (store-split-design §4); db_path lets
+    # Apply and label views rebuild from the same immutable file.
+    db_path: str = ""
+    composed: bool = False
 
     def vanilla_tokens(self, req_id: str) -> "frozenset | None":
         """VANILLA index token set for a req (the fingerprint basis —
@@ -782,6 +798,7 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
         cell=cell, bm25=bm25, doc_ids=doc_ids,
         doc_id_to_idx=doc_id_to_idx, corpus_by_id=corpus_by_id, max_df=max_df,
     )
+    cstate.fingerprints = _read_fingerprints(base / "raw" / _FINGERPRINTS_NAME)
 
     # Doc enrichment — apply phrases to this cell's index (same precedence
     # as the legacy path: pinned/latest run's enrichments.kept.jsonl, else
@@ -819,6 +836,47 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
     return cstate
 
 
+def _read_fingerprints(path: Path) -> dict[str, str]:
+    """`{_id, fingerprint}` per line; absent sidecar (pre-S1 builds) -> {}."""
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                row = json.loads(line)
+                if row.get("fingerprint"):
+                    out[row["_id"]] = row["fingerprint"]
+    return out
+
+
+def _overlay_store():
+    """Read-only Overlay store for this process: $NORA_OVERLAY_DB (SQLite)
+    wins over the corrections root (JSON); None = overlay inert."""
+    return open_overlay_store(_CORR_ROOT, db_path=_OVERLAY_DB, read_only=True)
+
+
+def _read_view_overlay(mno: str, label: str) -> tuple[dict, set]:
+    """(overlay filtered to the `label` view, accepted labels). No store
+    -> ({}, set()). A backend read failure degrades to the same (logged),
+    like a missing or malformed JSON file always has."""
+    store = _overlay_store()
+    if store is None:
+        return {}, set()
+    try:
+        accepted = store.accepted_labels()
+        # project the overlay onto this view: main (accepted + unlabeled)
+        # plus this variant's own label — other labels are invisible here
+        overlay = filter_overlay(store.get_overlay(mno),
+                                 allowed_labels(accepted, label))
+    except Exception as exc:
+        logger.error("overlay read failed for %s (%s) — serving without it",
+                     mno, type(exc).__name__)
+        return {}, set()
+    return overlay, accepted
+
+
 def _overlay_digest(filtered_overlay: dict) -> str:
     """Canonical content digest of the APPLIED view: the overlay filtered
     to the view's allowed labels. The filtered records fully determine
@@ -842,14 +900,7 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
     already be in `_cells` for cross-release verdicts."""
     mno, release = cstate.cell
 
-    if _CORR_ROOT:
-        accepted = load_accepted_labels(_CORR_ROOT)
-        # project the overlay onto this view: main (accepted + unlabeled)
-        # plus this variant's own label — other labels are invisible here
-        overlay = filter_overlay(load_overlay(_CORR_ROOT, mno),
-                                 allowed_labels(accepted, cstate.label))
-    else:
-        overlay, accepted = {}, set()
+    overlay, accepted = _read_view_overlay(mno, cstate.label)
     cstate.overlay_digest = _overlay_digest(overlay)
     cstate.overlay_snapshot = overlay
     cstate.accepted_snapshot = set(accepted)
@@ -858,7 +909,11 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
         peer = _cells.get((mno, rel)) if rel != release else cstate
         return peer.vanilla_tokens(req_id) if peer is not None else None
 
-    verdict = make_verdict_fn(token_sets, release)
+    def fingerprint_of(rel: str, req_id: str):
+        peer = _cells.get((mno, rel)) if rel != release else cstate
+        return peer.fingerprints.get(req_id) if peer is not None else None
+
+    verdict = make_verdict_fn(token_sets, release, fingerprint_of=fingerprint_of)
 
     effective: dict[str, list[str]] = {}
     held_by_id: dict[str, list[dict]] = {}
@@ -897,16 +952,21 @@ def _apply_overlay_and_enrich(cstate: CellState) -> None:
 
 
 def _load_one_cell_db(db_path: Path) -> CellState:
-    """Load one cell from its SQLite cell DB (corp-db-layer phase 2).
+    """Load one cell from its SQLite cell DB.
 
-    The DB carries the ENRICHED index as blobs, so there is no enrichment
-    or overlay pass here — overlay state was baked at convert time and
-    the Apply machinery is inert for cell-db cells. Mirrors the flat
-    loader's id semantics exactly (every row keeps its slot; id lookups
-    are last-wins)."""
+    Schema 1 carries the ENRICHED index (overlay baked at convert time):
+    served as-is, Apply inert. Schema 2 carries the VANILLA index and SIRA's
+    raw phrases: the caller composes the Overlay in with
+    `_apply_overlay_and_enrich`, exactly as for a flat cell, so Apply and
+    label views work. Mirrors the flat loader's id semantics (every row
+    keeps its slot; id lookups are last-wins)."""
     from sandbox.sira_query.cell_db_store import load_cell_db
 
     data = load_cell_db(db_path, keep_connection=(_ENGINE == "fts5"))
+    if _ENGINE == "fts5" and data.composed:
+        raise RuntimeError(
+            f"{db_path.name}: schema {data.schema} composes the index at load; "
+            "the fts5 engine needs a baked schema-1 DB — use NORA_SIRA_ENGINE=bm25x")
     if _ENGINE == "fts5" and not data.has_fts:
         raise RuntimeError(
             f"{db_path.name}: no fts table — reconvert without --no-fts5 "
@@ -929,8 +989,18 @@ def _load_one_cell_db(db_path: Path) -> CellState:
         cell=data.cell, bm25=bm25, doc_ids=doc_ids,
         doc_id_to_idx=doc_id_to_idx, corpus_by_id=corpus_by_id, max_df=max_df,
         engine=_ENGINE, db_meta=data.meta, db_con=data.con,
+        db_path=str(db_path), composed=data.composed,
     )
-    # Provenance for healthz / review surfaces. llm_words holds the
+    cstate.enrich_model = data.meta.get("enrich_model", "")
+    cstate.fingerprints = dict(data.fingerprints)
+    if data.composed:
+        # SIRA's raw phrases; the effective sets and overlay state are set
+        # by _apply_overlay_and_enrich once every peer cell is loaded.
+        cstate.llm_words = dict(data.enrichment)
+        cstate.doc_enrich_source = (
+            f"{db_path.name}: sira run {data.meta.get('enrich_run', '') or 'none'}")
+        return cstate
+    # Schema 1 — provenance for healthz / review surfaces. llm_words holds the
     # EFFECTIVE (post-fold) sets here — the pre-overlay LLM output is not
     # stored in the DB; the review surface is read-only for cell-db cells.
     cstate.llm_words = dict(data.enrichment)
@@ -938,7 +1008,6 @@ def _load_one_cell_db(db_path: Path) -> CellState:
     cstate.doc_enrich_applied_docs = int(data.meta.get("enriched_docs", "0") or 0)
     cstate.doc_enrich_source = (
         f"{db_path.name}: baked (run {data.meta.get('enrich_run', '') or 'none'})")
-    cstate.enrich_model = data.meta.get("enrich_model", "")
     cstate.overlay_digest = data.meta.get("overlay_digest_baked", "")
     cstate.loaded_at = time.time()
     return cstate
@@ -973,8 +1042,12 @@ def _load_cells() -> None:
                 _cells[cstate.cell] = cstate
             except Exception as exc:
                 errors.append(f"{db_path.name}: {exc}")
-        # Overlay + enrichment were baked at convert time (see loader),
-        # so no second application step runs here.
+        # Schema 2 cells compose the Overlay in now (second sweep: the
+        # cross-release verdicts need every peer present). Schema 1 cells
+        # were baked at convert time and skip this.
+        for cstate in _cells.values():
+            if cstate.composed:
+                _apply_overlay_and_enrich(cstate)
         _cells_load_error = "; ".join(errors) if errors else None
         if _cells:
             logger.info(
@@ -1408,9 +1481,9 @@ _CELL_STATS_CACHE: dict[CellKey, dict[str, Any]] = {}
 # ── Enrichment review (strand sira-enrichment-review) ───────────────
 #
 # Read surface + per-cell hot reload for the /enrichment-review web UI.
-# The overlay itself is written by nora-web (file owner); this service
-# only reads it (NORA_SIRA_CORRECTIONS_ROOT, mounted ro) and applies it
-# at cell load. Reload is idempotent re-read-from-disk; per-cell locks
+# The overlay itself is written by nora-web (sole writer); this service
+# only reads it (NORA_OVERLAY_DB read-only, else NORA_SIRA_CORRECTIONS_ROOT
+# mounted ro) and applies it at cell load. Reload is idempotent re-read-from-disk; per-cell locks
 # stop stampedes, and in-flight queries finish on the old CellState.
 
 import re as _plan_re_mod  # noqa: E402
@@ -1465,12 +1538,10 @@ def _pending_plans(st: CellState, plans: list[str], label: str) -> list[str]:
     by definition. An accepted-labels (merge log) change needs no special
     case: the newly (un)accepted label's records enter/leave the filtered
     live overlay, so the per-req diff flags exactly the plans they touch."""
-    if not _CORR_ROOT:
+    if _overlay_store() is None:
         return []
     mno, _release = st.cell
-    accepted = load_accepted_labels(_CORR_ROOT)
-    cur = filter_overlay(load_overlay(_CORR_ROOT, mno),
-                         allowed_labels(accepted, label))
+    cur, _accepted = _read_view_overlay(mno, label)
     snap = st.overlay_snapshot
     pending: set[str] = set()
     for rid in set(cur) | set(snap):
@@ -1489,10 +1560,9 @@ def _get_variant(ck: CellKey, label: str,
     touches the default cell, so other users' serving is unaffected."""
     if not label:
         return _cells.get(ck)
-    if _INDEX_MODE == "cell-db":
-        # Label branch variants rebuild from flat files + live overlay —
-        # inert for cell-db cells (overlay is baked at convert time).
-        # Serve the default view rather than a stale or impossible build.
+    if _INDEX_MODE == "cell-db" and not _cell_is_composed(ck):
+        # Schema-1 cells have the overlay baked in — a branch variant is
+        # impossible. Serve the default view rather than a stale build.
         return _cells.get(ck)
     st = _label_cells.get((ck, label))
     if st is not None or not build:
@@ -1502,7 +1572,7 @@ def _get_variant(ck: CellKey, label: str,
     with lock:
         st = _label_cells.get((ck, label))
         if st is None:
-            st = _load_one_cell(Path(_DB_ROOT) / cell_dirname(ck), ck)
+            st = _fresh_cell(ck)
             st.label = label
             _apply_overlay_and_enrich(st)
             _label_cells[(ck, label)] = st
@@ -1544,6 +1614,9 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "",
             "effective": st.effective_words.get(rid, []),
             "suppressed": rid in st.suppressed_ids,
             "held": held,
+            # content fingerprint in this release ("" = unknown): the web
+            # stamps it on the records an edit writes
+            "fingerprint": st.fingerprints.get(rid, ""),
         })
     # operator override beats the run-config-derived name (config.json can
     # name a model the serving port never actually hosted)
@@ -1551,6 +1624,19 @@ def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "",
             "loaded_at": st.loaded_at,
             "enrich_model": _ENRICH_MODEL_NAME or st.enrich_model,
             "overlay_digest": st.overlay_digest, "rows": rows}
+
+
+def _cell_is_composed(ck: CellKey) -> bool:
+    cstate = _cells.get(ck)
+    return bool(cstate is not None and cstate.composed)
+
+
+def _fresh_cell(ck: CellKey) -> CellState:
+    """A newly loaded, not-yet-composed state for `ck` from its source: the
+    flat cell dir, or the same schema-2 DB file the live cell came from."""
+    if _INDEX_MODE == "cell-db":
+        return _load_one_cell_db(Path(_cells[ck].db_path))
+    return _load_one_cell(Path(_DB_ROOT) / cell_dirname(ck), ck)
 
 
 @app.post("/cells/{cell_name}/reload")
@@ -1564,21 +1650,19 @@ def cell_reload(cell_name: str, label: str = "") -> dict[str, Any]:
     rebuild on next labeled use."""
     label = label.strip()
     ck = _parse_cell_or_404(cell_name)
-    if _INDEX_MODE == "cell-db":
-        # Cell-db cells are write-once snapshots with overlay baked at
-        # convert time — there is nothing fresher on disk to apply. New
-        # content arrives as a new DB file + service restart (trial) or a
-        # registry flip (later phases).
+    if _INDEX_MODE == "cell-db" and not _cell_is_composed(ck):
+        # Schema-1 cells are write-once snapshots with the overlay baked at
+        # convert time — there is nothing fresher to apply. Schema-2 cells
+        # recompose from the same immutable file plus the live Overlay.
         raise HTTPException(
             status_code=409,
-            detail="reload is a flat-mode operation; cell-db cells are "
-                   "immutable snapshots — reconvert and restart instead")
+            detail="reload needs a flat or schema-2 cell; schema-1 cell DBs "
+                   "have the overlay baked in — reconvert and restart instead")
     with _reload_locks_guard:
         lock = _reload_locks.setdefault(ck, threading.Lock())
     with lock:
-        base = Path(_DB_ROOT) / cell_dirname(ck)
         try:
-            fresh = _load_one_cell(base, ck)
+            fresh = _fresh_cell(ck)
         except Exception as exc:
             raise HTTPException(status_code=500,
                                 detail=f"reload failed: {exc}") from exc
@@ -2216,7 +2300,7 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
             "call_ms": rerank_call_ms,
         }
         logger.info(
-            "sira-query rerank: count=%d total=%dms mean=%dms p50=%dms p95=%dms max=%dms",
+            "nora-store rerank: count=%d total=%dms mean=%dms p50=%dms p95=%dms max=%dms",
             len(sorted_ms), sum(sorted_ms),
             rerank_call_stats["mean_ms"],
             rerank_call_stats["p50_ms"],

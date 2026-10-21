@@ -30,7 +30,7 @@ label promotion with the rest of the build tree; a cell-db stack mounts
 `<label>/sira/cell-dbs` as its NORA_SIRA_DB_ROOT.
 
 `--only` restricts BOTH steps to the named cells (same <MNO>__<REL> format
-either side). After the lane completes, restart the sira-query service(s) so
+either side). After the lane completes, restart the nora-store service(s) so
 new cells load (/healthz shows them).
 """
 
@@ -301,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         if rc != 0:
             return rc
     if not args.dry_run:
-        print("sira-lane: done. Restart sira-query service(s) to load new cells "
+        print("sira-lane: done. Restart nora-store service(s) to load new cells "
               "(/healthz lists them).")
     return 0
 

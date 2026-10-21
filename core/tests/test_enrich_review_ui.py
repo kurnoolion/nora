@@ -148,6 +148,29 @@ class TestRowEdit:
         # accidental-click guard: the suppress form asks for confirmation
         assert "hx-confirm" in r.text and "Are you sure" in r.text
 
+    def test_edit_stamps_served_row_fingerprint(self, client, tmp_path,
+                                                monkeypatch):
+        # strand corp-db-layer S3: the row's content fingerprint (from the
+        # service) is stamped on the records the edit writes
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        base = er._service_get
+
+        def with_fp(path, params=None):
+            data = base(path, params)
+            return {**data, "rows": [{**r, "fingerprint": f"fp-{r['req_id']}"}
+                                     for r in data.get("rows", [])]}
+        monkeypatch.setattr(er, "_service_get", with_fp)
+        self._edit(client, op="remove", word="handover")
+        rec = EnrichOverlayStore(tmp_path).get_entry("GP", "R1")["remove"][0]
+        assert rec["fingerprint"] == "fp-R1"
+
+    def test_edit_without_service_fingerprint_is_legacy_shape(self, client,
+                                                             tmp_path):
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        self._edit(client, op="remove", word="handover")
+        rec = EnrichOverlayStore(tmp_path).get_entry("GP", "R1")["remove"][0]
+        assert "fingerprint" not in rec
+
     def test_pending_clears_when_all_edits_undone(self, client, tmp_path,
                                                   monkeypatch):
         # serving applied the (empty) overlay at load — its digest is the
@@ -272,7 +295,7 @@ class TestApply:
 
     def test_apply_banner_reflects_primary_not_stale_secondary(
             self, client, tmp_path, monkeypatch):
-        # a secondary sira-query on an older image reports a digest from a
+        # a secondary nora-store on an older image reports a digest from a
         # stale formula with a LATER loaded_at — it must not wedge the
         # banner on "pending" when the primary reloaded in sync
         from core.src.web.enrich_overlay_store import EnrichOverlayStore

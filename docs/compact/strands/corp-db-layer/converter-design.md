@@ -12,7 +12,7 @@ textbook postings tables; the SQL `postings` engine is deferred.)
 
 Convert one promoted label's SIRA flat files into one SQLite **cell DB**
 per `(MNO, release)` cell, carrying corpus, enrichment, and the BM25
-index as data, such that a second sira-query stack can serve from the
+index as data, such that a second nora-store stack can serve from the
 cell DBs and be A/B-evaluated against the flat-file stack on identical
 content (phase 2). The converter is the embryo of the phase-4 publisher.
 
@@ -153,7 +153,7 @@ shipped.
 
 ## 6. Service loader contract (the phase-2 branch)
 
-sira-query gains two knobs, both read at startup:
+nora-store gains two knobs, both read at startup:
 
 - `NORA_SIRA_INDEX = flat | cell-db` — where cells come from. `flat`
   is today's path, untouched. `cell-db` enumerates `cell-*.db` under

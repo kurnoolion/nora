@@ -1,38 +1,40 @@
 """Enrichment-corrections overlay store — the WEB side's writer
-(strand sira-enrichment-review, D-DRAFT-1/2).
+(strand sira-enrichment-review, D-DRAFT-1/2; storage moved behind
+`core.src.stores.overlay` in strand corp-db-layer S3, D-DRAFT-24).
 
-Owns read-modify-write of the per-MNO overlay files under
-`<corrections_root>/sira-enrich/`:
+Owns the edit semantics (ops, labels as branches, the label-view digest)
+on top of an `OverlayStore` backend:
 
-    <MNO>.json                # {req_id: entry} — word records
-    accepted-labels.json      # {"accepted": [...]} — labels merged into main
-    labels.json               # {"disabled": [...]} (legacy; report annotation)
-    reason-categories.json    # extensible category list
+- JSON (default): `<corrections_root>/sira-enrich/` — `<MNO>.json`
+  ({req_id: entry}), `accepted-labels.json` (merge log), `labels.json`
+  (disabled; legacy report annotation), `reason-categories.json`.
+- SQLite: `$NORA_OVERLAY_DB` (one file per deployment; wins over the
+  corrections root).
 
-The web app is the SOLE writer (sira-query mounts the volume ro and applies
-the overlay at cell load). Concurrency: a single flock'd lock file guards
-every mutation (both stacks' web UIs share the volume); last-writer-wins per
-record. Writes are atomic (tmp + rename).
+The web app is the SOLE writer (nora-store reads the same backend
+read-only and applies the overlay at cell load). Concurrency: every
+mutation runs in one backend transaction (JSON: a flock'd lock file;
+SQLite: BEGIN IMMEDIATE); last-writer-wins per record. Writes are atomic.
 
 Record shape (word-level granularity):
     {"word": w, "label": l, "reason": {"category": c, "note": n},
-     "by": user, "at": iso8601, "origin": {"release": rel}}
+     "by": user, "at": iso8601, "origin": {"release": rel},
+     "fingerprint": fp}      # fingerprint only when the caller knew it
 One active record per (word, direction): re-editing a word replaces its
 record. `suppress_all` is an entry-level record with the same stamp fields
-plus {"value": true}.
+plus {"value": true}. `fingerprint` is the requirement's content
+fingerprint at edit time (store-split-design §3) — the fold applies a
+record without the Jaccard guard while the req still carries it.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
-import os
-import tempfile
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.src.stores.overlay import OverlayStore, open_overlay_store
 # stdlib-only by design so the web side can share the exact label-view
 # projection the service applies (see its module docstring)
 from sandbox.sira_query.enrich_overlay import allowed_labels, filter_overlay
@@ -53,79 +55,42 @@ EDIT_OPS = ("remove", "unremove", "add", "unadd", "suppress", "unsuppress",
 
 
 class EnrichOverlayStore:
-    """Filesystem store bound to a corrections root ("" = disabled)."""
+    """Edit semantics over an `OverlayStore` bound to a corrections root
+    ("" and no $NORA_OVERLAY_DB = disabled). `backend` overrides the
+    factory (tests, the import CLI)."""
 
-    def __init__(self, corrections_root: str | Path):
+    def __init__(self, corrections_root: str | Path,
+                 backend: "OverlayStore | None" = None):
         self.root = Path(corrections_root) if corrections_root else None
+        self.backend: "OverlayStore | None" = (
+            backend if backend is not None
+            else open_overlay_store(str(corrections_root or "")))
 
     @property
     def enabled(self) -> bool:
-        return self.root is not None
+        return self.backend is not None
 
-    @property
-    def dir(self) -> Path:
-        assert self.root is not None
-        return self.root / "sira-enrich"
+    def _require(self) -> OverlayStore:
+        if self.backend is None:
+            raise RuntimeError("corrections_root not configured")
+        return self.backend
 
-    # ── locking + IO ────────────────────────────────────────────────
-
-    @contextmanager
-    def _locked(self):
-        self.dir.mkdir(parents=True, exist_ok=True)
-        lock_path = self.dir / ".lock"
-        with open(lock_path, "w") as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lf, fcntl.LOCK_UN)
-
-    @staticmethod
-    def _read_json(path: Path, default: Any) -> Any:
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return default
-
-    @staticmethod
-    def _write_json(path: Path, data: Any) -> None:
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=1, sort_keys=True)
-                f.write("\n")
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-
-    def _mno_path(self, mno: str) -> Path:
-        return self.dir / f"{mno}.json"
-
-    # ── reads (no lock: single-file atomic reads) ──────────────────
+    # ── reads ──────────────────────────────────────────────────────
 
     def get_overlay(self, mno: str) -> dict[str, Any]:
-        return self._read_json(self._mno_path(mno), {}) if self.enabled else {}
+        return self.backend.get_overlay(mno) if self.enabled else {}
 
     def get_entry(self, mno: str, req_id: str) -> dict[str, Any] | None:
-        return self.get_overlay(mno).get(req_id)
+        return self.backend.get_entry(mno, req_id) if self.enabled else None
 
     def list_mnos(self) -> list[str]:
-        """MNOs with an overlay file (sorted)."""
-        if not self.enabled or not self.dir.is_dir():
-            return []
-        skip = ("labels.json", "accepted-labels.json", "reason-categories.json")
-        return sorted(p.stem for p in self.dir.glob("*.json") if p.name not in skip)
+        """MNOs with an overlay (sorted)."""
+        return self.backend.list_mnos() if self.enabled else []
 
     def overlay_mtime(self, mno: str) -> float:
-        """0.0 when absent — pending = mtime > cell loaded_at."""
-        try:
-            return self._mno_path(mno).stat().st_mtime
-        except OSError:
-            return 0.0
+        """Backend change marker (JSON: file mtime); 0.0 when absent —
+        pending = marker > cell loaded_at."""
+        return self.backend.version(mno) if self.enabled else 0.0
 
     def overlay_digest(self, mno: str, label: str = "") -> str:
         """Canonical content digest of the `label` VIEW of the MNO overlay
@@ -133,10 +98,10 @@ class EnrichOverlayStore:
         filtered records fully determine what the view serves — the merge
         log itself stays OUT of the formula, so a merge/un-merge flags
         only the MNOs the label actually touches. Pending detection
-        compares this against the digest sira-query reports for its
+        compares this against the digest nora-store reports for its
         APPLIED view — edits that are fully undone digest back to the
         served state, so no false 'pending'. Formula must match
-        sira-query's `_overlay_digest`."""
+        nora-store's `_overlay_digest`."""
         import hashlib
         filtered = filter_overlay(self.get_overlay(mno),
                                   allowed_labels(self.accepted_labels(), label))
@@ -145,30 +110,23 @@ class EnrichOverlayStore:
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def accepted_labels(self) -> set[str]:
-        """Labels merged into main (the default view). File = merge log."""
-        if not self.enabled:
-            return set()
-        data = self._read_json(self.dir / "accepted-labels.json", {})
-        return set(data.get("accepted", []))
+        """Labels merged into main (the default view) — the merge log."""
+        return self.backend.accepted_labels() if self.enabled else set()
 
     def disabled_labels(self) -> set[str]:
+        return self.backend.disabled_labels() if self.enabled else set()
+
+    def _overlays(self, mnos: "list[str] | None") -> list[tuple[str, dict]]:
         if not self.enabled:
-            return set()
-        data = self._read_json(self.dir / "labels.json", {})
-        return set(data.get("disabled", []))
+            return []
+        return [(m, self.backend.get_overlay(m) or {})
+                for m in (mnos if mnos is not None else self.list_mnos())]
 
     def label_counts(self, mnos: "list[str] | None" = None) -> dict[str, int]:
-        """Record counts per label across MNO files (drawer display)."""
+        """Record counts per label across MNOs (drawer display)."""
         counts: dict[str, int] = {}
-        if not self.enabled:
-            return counts
-        paths = ([self._mno_path(m) for m in mnos] if mnos is not None
-                 else sorted(self.dir.glob("*.json")))
-        for p in paths:
-            if p.name in ("labels.json", "accepted-labels.json",
-                          "reason-categories.json"):
-                continue
-            for entry in (self._read_json(p, {}) or {}).values():
+        for _mno, overlay in self._overlays(mnos):
+            for entry in overlay.values():
                 for rec in (entry.get("remove") or []) + (entry.get("add") or []):
                     counts[rec.get("label") or ""] = counts.get(rec.get("label") or "", 0) + 1
                 sup = entry.get("suppress_all")
@@ -177,32 +135,23 @@ class EnrichOverlayStore:
         return counts
 
     def label_req_counts(self, mnos: "list[str] | None" = None) -> dict[str, int]:
-        """Distinct requirements touched per label across MNO files
+        """Distinct requirements touched per label across MNOs
         (drawer display renders reqs:records)."""
         reqs: dict[str, set] = {}
-        if not self.enabled:
-            return {}
-        paths = ([self._mno_path(m) for m in mnos] if mnos is not None
-                 else sorted(self.dir.glob("*.json")))
-        for p in paths:
-            if p.name in ("labels.json", "accepted-labels.json",
-                          "reason-categories.json"):
-                continue
-            for rid, entry in (self._read_json(p, {}) or {}).items():
+        for mno, overlay in self._overlays(mnos):
+            for rid, entry in overlay.items():
                 for rec in (entry.get("remove") or []) + (entry.get("add") or []):
-                    reqs.setdefault(rec.get("label") or "", set()).add((p.name, rid))
+                    reqs.setdefault(rec.get("label") or "", set()).add((mno, rid))
                 sup = entry.get("suppress_all")
                 if isinstance(sup, dict) and sup.get("value"):
-                    reqs.setdefault(sup.get("label") or "", set()).add((p.name, rid))
+                    reqs.setdefault(sup.get("label") or "", set()).add((mno, rid))
         return {label: len(rids) for label, rids in reqs.items()}
 
     def reason_categories(self) -> list[str]:
-        if not self.enabled:
-            return list(DEFAULT_REASON_CATEGORIES)
-        cats = self._read_json(self.dir / "reason-categories.json", None)
+        cats = self.backend.reason_categories() if self.enabled else None
         return cats if isinstance(cats, list) and cats else list(DEFAULT_REASON_CATEGORIES)
 
-    # ── mutations (locked) ─────────────────────────────────────────
+    # ── mutations (one backend transaction each) ──────────────────
 
     def edit(self, mno: str, req_id: str, op: str, *,
              words: "list[str] | None" = None,
@@ -210,17 +159,19 @@ class EnrichOverlayStore:
              label: str = "",
              reason: "dict | None" = None,
              by: str = "",
-             origin_release: str = "") -> "dict[str, Any] | None":
+             origin_release: str = "",
+             fingerprint: str = "") -> "dict[str, Any] | None":
         """Apply one edit op; returns the req's updated entry (None when the
         entry emptied away). `words` drives remove/unremove/add/unadd;
         `pairs` [{direction, word}] drives reaffirm/discard (held-record
         refs from the service); suppress/unsuppress need neither.
         `origin_release` = the release the reviewer is VIEWING (stamped as
-        the record's origin; for reaffirm it is the NEW origin)."""
+        the record's origin; for reaffirm it is the NEW origin).
+        `fingerprint` = the req's content fingerprint in that release
+        (stamped on every record written; "" = unknown, legacy shape)."""
         if op not in EDIT_OPS:
             raise ValueError(f"unknown op: {op}")
-        if not self.enabled:
-            raise RuntimeError("corrections_root not configured")
+        backend = self._require()
 
         stamp = {"label": label or "",
                  "reason": {"category": (reason or {}).get("category", ""),
@@ -228,11 +179,21 @@ class EnrichOverlayStore:
                  "by": by or "",
                  "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                  "origin": {"release": origin_release or ""}}
+        if fingerprint:
+            stamp["fingerprint"] = fingerprint
 
-        with self._locked():
-            path = self._mno_path(mno)
-            overlay = self._read_json(path, {})
-            entry = overlay.setdefault(req_id, {})
+        def _restamp(rec: dict) -> None:
+            # reaffirm: the record now speaks for the viewed release's
+            # content — a stale fingerprint must not outlive its origin
+            rec["origin"] = {"release": origin_release}
+            rec["by"], rec["at"] = stamp["by"], stamp["at"]
+            if fingerprint:
+                rec["fingerprint"] = fingerprint
+            else:
+                rec.pop("fingerprint", None)
+
+        with backend.transaction():
+            entry = backend.get_entry(mno, req_id) or {}
             entry.setdefault("remove", [])
             entry.setdefault("add", [])
 
@@ -265,68 +226,54 @@ class EnrichOverlayStore:
                             if op == "discard":
                                 entry.pop("suppress_all", None)
                             else:
-                                sup["origin"] = {"release": origin_release}
-                                sup["by"], sup["at"] = stamp["by"], stamp["at"]
+                                _restamp(sup)
                     elif d in ("remove", "add"):
                         if op == "discard":
                             _drop(d, w)
                         else:
                             for r in entry[d]:
                                 if r.get("word") == w:
-                                    r["origin"] = {"release": origin_release}
-                                    r["by"], r["at"] = stamp["by"], stamp["at"]
+                                    _restamp(r)
 
             # prune empties
             if not entry["remove"]:
                 entry.pop("remove")
             if not entry["add"]:
                 entry.pop("add")
-            if not entry:
-                overlay.pop(req_id, None)
-            result = overlay.get(req_id)
-            self._write_json(path, overlay)
+            result = entry or None
+            backend.put_entry(mno, req_id, result)
         return result
 
     def set_label_merged(self, label: str, merged: bool) -> set[str]:
         """Merge a label into main (or un-merge it) — the admin's
         branch-landing action. Only mutates the merge log; records keep
         their label, so provenance survives and un-merge is exact."""
-        if not self.enabled:
-            raise RuntimeError("corrections_root not configured")
-        with self._locked():
-            p = self.dir / "accepted-labels.json"
-            data = self._read_json(p, {})
-            cur = set(data.get("accepted", []))
+        backend = self._require()
+        with backend.transaction():
+            cur = backend.accepted_labels()
             (cur.add if merged else cur.discard)(label)
-            self._write_json(p, {"accepted": sorted(cur)})
+            backend.set_accepted_labels(cur)
         return cur
 
     def set_label_disabled(self, label: str, disabled: bool) -> set[str]:
-        if not self.enabled:
-            raise RuntimeError("corrections_root not configured")
-        with self._locked():
-            p = self.dir / "labels.json"
-            data = self._read_json(p, {})
-            cur = set(data.get("disabled", []))
+        backend = self._require()
+        with backend.transaction():
+            cur = backend.disabled_labels()
             (cur.add if disabled else cur.discard)(label)
-            self._write_json(p, {"disabled": sorted(cur)})
+            backend.set_disabled_labels(cur)
         return cur
 
     def delete_label(self, label: str) -> int:
-        """Strip every record carrying `label` from every MNO file (the
+        """Strip every record carrying `label` from every MNO (the
         prompt-fix cleanup, D-DRAFT-5). Returns records removed."""
-        if not self.enabled:
-            raise RuntimeError("corrections_root not configured")
+        backend = self._require()
         removed = 0
-        with self._locked():
-            for p in sorted(self.dir.glob("*.json")):
-                if p.name in ("labels.json", "accepted-labels.json",
-                          "reason-categories.json"):
-                    continue
-                overlay = self._read_json(p, {})
-                changed = False
+        with backend.transaction():
+            for mno in backend.list_mnos():
+                overlay = backend.get_overlay(mno)
                 for rid in list(overlay):
                     entry = overlay[rid]
+                    changed = False
                     for d in ("remove", "add"):
                         recs = entry.get(d) or []
                         kept = [r for r in recs if (r.get("label") or "") != label]
@@ -342,30 +289,23 @@ class EnrichOverlayStore:
                         entry.pop("suppress_all")
                         removed += 1
                         changed = True
-                    if not entry:
-                        overlay.pop(rid)
-                if changed:
-                    self._write_json(p, overlay)
+                    if changed:
+                        backend.put_entry(mno, rid, entry or None)
             # a deleted label needn't linger in the disabled/accepted lists
-            lp = self.dir / "labels.json"
-            data = self._read_json(lp, {})
-            if label in data.get("disabled", []):
-                self._write_json(lp, {"disabled": sorted(
-                    set(data["disabled"]) - {label})})
-            ap = self.dir / "accepted-labels.json"
-            data = self._read_json(ap, {})
-            if label in data.get("accepted", []):
-                self._write_json(ap, {"accepted": sorted(
-                    set(data["accepted"]) - {label})})
+            disabled = backend.disabled_labels()
+            if label in disabled:
+                backend.set_disabled_labels(disabled - {label})
+            accepted = backend.accepted_labels()
+            if label in accepted:
+                backend.set_accepted_labels(accepted - {label})
         return removed
 
     def add_reason_category(self, category: str) -> list[str]:
-        if not self.enabled:
-            raise RuntimeError("corrections_root not configured")
+        backend = self._require()
         category = category.strip()
-        with self._locked():
+        with backend.transaction():
             cats = self.reason_categories()
             if category and category not in cats:
                 cats.append(category)
-                self._write_json(self.dir / "reason-categories.json", cats)
+                backend.set_reason_categories(cats)
         return cats

@@ -64,12 +64,12 @@ promoted.
 One invocation scores one stack.
 
 **On a docker deployment** (the normal case), the CLI runs as a
-one-shot job in the `nora-pipeline` container, which mounts the pooled
+one-shot job in the `nora-batch` container, which mounts the pooled
 golden set at `/data/env/eval/golden`:
 
 ```bash
 cd docker
-docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-pipeline \
+docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-batch \
     python -m core.src.eval.golden_cli \
     --env-dir /data/env \
     --stack-url http://host.docker.internal:PORT \
@@ -91,7 +91,7 @@ in `docker/README.md` for the full list):
   the failure mode is a plausible-looking run with n=0 and one
   GEV-E002 per sample). `host.docker.internal` is wired in the compose
   file to reach host-published ports.
-- After a code change, rebuild **both** the `nora-pipeline` image and
+- After a code change, rebuild **both** the `nora-batch` image and
   the serving images — a stale image surfaces as a missing CLI flag or
   as eval behavior ignoring the change.
 - `--stack-url` / `--stack-label` / `--env-name` are **explicit CLI
@@ -488,7 +488,7 @@ every cell's report, so nothing has to be collected afterwards.
 
 ### 3. Run under the serving env file of the stack being scored
 
-Each cell runs as the one-shot `nora-pipeline` job under
+Each cell runs as the one-shot `nora-batch` job under
 `.env.<stack>` (the stack it scores) — never a builds wiring env. That
 file carries the three things a cell needs at once: the pooled
 `GOLDEN_DIR` mount (overridden to the snapshot as above), the stack's
@@ -497,7 +497,7 @@ service, and the image-name variables. Before the first cell, probe the
 image under that same env file:
 
 ```bash
-docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-pipeline \
+docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-batch \
     python -c "import core.src.eval.golden_cli"          # silent = fresh image
 ```
 
@@ -531,7 +531,7 @@ meaningless). Note the wall-clock per cell after the first one — that,
 not any earlier estimate, is the campaign's ETA.
 
 The arm flip between blocks is a by-hand act on every stack in the
-grid: edit the knob in `.env.sira-query.<stack>`, `docker compose
+grid: edit the knob in `.env.nora-store.<stack>`, `docker compose
 --env-file .env.<stack> --profile serve up -d` (recreate — a restart
 does not re-read env files), then `curl` the healthz and confirm the
 knobs digest is the anchored one for the new arm **and `code=`/`fp=`

@@ -130,6 +130,12 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("GEV-W001", "Sample {sample_id} skipped: {reason}", "Advance the sample's status in the Eval Studio"),
     ErrorDef("GEV-W002", "Sample {sample_id} pending review after a release move: Stage 2 skipped", "Review the flagged entries and golden response, then clear the flag (golden_release_cli review --clear)"),
 
+    # --- Overlay store (OVL) — core.src.stores.overlay_import (strand corp-db-layer S3) ---
+    ErrorDef("OVL-E001", "Corrections root has no overlay directory: {path}", "Point --corrections-root at the dir that holds sira-enrich/"),
+    ErrorDef("OVL-E002", "Target overlay DB is not empty: {path}", "Pass --force to replace its contents, or choose a new file"),
+    ErrorDef("OVL-E003", "Import verification failed — {what}: {count} mismatch(es)", "Nothing was written; check the JSON files for hand-edited or duplicate records"),
+    ErrorDef("OVL-E004", "Overlay DB write failed: {reason}", "Check the target path, permissions and free space; a busy DB means another writer holds it"),
+
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),

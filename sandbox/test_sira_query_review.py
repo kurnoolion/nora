@@ -255,3 +255,80 @@ class TestEndpoints:
         c = TestClient(svc.app)
         assert c.get("/cells/XX__Jan2020/plans").status_code == 404
         assert c.post("/cells/not-a-cell/reload").status_code == 404
+
+
+class TestOverlayStoreAndFingerprints:
+    """strand corp-db-layer S3: overlay reads through the Overlay store
+    (SQLite wins when NORA_OVERLAY_DB is set) and per-req fingerprints."""
+
+    def _sqlite_copy(self, tmp_path, monkeypatch):
+        from core.src.stores.overlay import JsonOverlayStore, SqliteOverlayStore
+        db = tmp_path / "overlay.db"
+        src, dst = JsonOverlayStore(tmp_path), SqliteOverlayStore(db)
+        for rid, entry in src.get_overlay("GP").items():
+            dst.put_entry("GP", rid, entry)
+        monkeypatch.setattr(svc, "_OVERLAY_DB", str(db))
+        return db
+
+    def test_sqlite_overlay_serves_like_json(self, two_release_cells,
+                                             tmp_path, monkeypatch):
+        feb, _ = two_release_cells
+        svc._apply_overlay_and_enrich(feb)
+        json_state = (feb.effective_words, feb.overlay_applied, feb.overlay_digest)
+        self._sqlite_copy(tmp_path, monkeypatch)
+        # the JSON files are no longer consulted once the DB is set
+        (tmp_path / "sira-enrich" / "GP.json").write_text("{}")
+        svc._apply_overlay_and_enrich(feb)
+        assert (feb.effective_words, feb.overlay_applied,
+                feb.overlay_digest) == json_state
+
+    def test_missing_sqlite_file_is_empty_overlay(self, two_release_cells,
+                                                  tmp_path, monkeypatch):
+        feb, _ = two_release_cells
+        monkeypatch.setattr(svc, "_OVERLAY_DB", str(tmp_path / "absent.db"))
+        svc._apply_overlay_and_enrich(feb)
+        assert feb.effective_words == {"R1": ["handover", "retry"],
+                                       "R2": ["roaming"]}
+        assert not (tmp_path / "absent.db").exists()   # read-only: never created
+
+    def test_matching_fingerprint_applies_changed_req(self, two_release_cells,
+                                                      tmp_path):
+        feb, _ = two_release_cells
+        # R2 changed across releases (held by Jaccard) — a record stamped
+        # with the loaded release's own fingerprint for R2 applies anyway
+        overlay = json.loads((tmp_path / "sira-enrich" / "GP.json").read_text())
+        overlay["R2"]["add"][0]["fingerprint"] = "fp-r2"
+        (tmp_path / "sira-enrich" / "GP.json").write_text(json.dumps(overlay))
+        feb.fingerprints = {"R2": "fp-r2"}
+        svc._apply_overlay_and_enrich(feb)
+        assert feb.effective_words["R2"] == ["roaming", "newword"]
+        assert "R2" not in feb.held_by_id
+        feb.fingerprints = {"R2": "fp-other"}
+        svc._apply_overlay_and_enrich(feb)
+        assert feb.effective_words["R2"] == ["roaming"]
+        assert feb.held_by_id["R2"][0]["word"] == "newword"
+
+    def test_enrichments_rows_carry_fingerprint(self, two_release_cells):
+        feb, _ = two_release_cells
+        feb.fingerprints = {"R1": "fp-r1"}
+        svc._apply_overlay_and_enrich(feb)
+        rows = {r["req_id"]: r for r in TestClient(svc.app).get(
+            f"/cells/{svc.cell_dirname(feb.cell)}/enrichments").json()["rows"]}
+        assert rows["R1"]["fingerprint"] == "fp-r1"
+        assert rows["R2"]["fingerprint"] == ""
+
+    def test_read_fingerprints_sidecar(self, tmp_path):
+        p = tmp_path / svc._FINGERPRINTS_NAME
+        assert svc._read_fingerprints(p) == {}
+        p.write_text(json.dumps({"_id": "R1", "fingerprint": "fp-r1"}) + "\n\n"
+                     + json.dumps({"_id": "doc:X", "fingerprint": ""}) + "\n")
+        assert svc._read_fingerprints(p) == {"R1": "fp-r1"}
+
+    def test_fingerprints_name_matches_adapter(self):
+        import ast
+        from pathlib import Path
+        src = (Path(svc.__file__).parents[1] / "adapter" / "nora_to_beir.py").read_text()
+        consts = {n.targets[0].id: n.value.value for n in ast.parse(src).body
+                  if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                  and isinstance(n.value, ast.Constant)}
+        assert consts["FINGERPRINTS_NAME"] == svc._FINGERPRINTS_NAME

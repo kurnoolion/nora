@@ -221,9 +221,9 @@ start)
     [ -n "$src" ] || die 024 "--profiles '$PROFILES' is neither a file nor a build-id with profiles.json" "point at a profiles.json"
   fi
   images="{}"
-  for i in nora-pipeline sira-batch; do
+  for i in nora-batch sira-batch; do
     id="$(docker image inspect -f '{{.Id}}' "local/$i:dev" 2>/dev/null | cut -c8-19)" || true
-    [ -n "$id" ] || die 025 "image local/$i:dev not found" "rebake: docker compose --env-file $WIRING --profile ingest build nora-pipeline sira-batch"
+    [ -n "$id" ] || die 025 "image local/$i:dev not found" "rebake: docker compose --env-file $WIRING --profile ingest build nora-batch sira-batch"
     images="$(printf '%s' "$images" | python3 -c "import json,sys; d=json.load(sys.stdin); d['$i']='$id'; print(json.dumps(d))")"
   done
   mkdir -p "$NB/reports" "$NB/prompts" "$SB"
@@ -254,7 +254,7 @@ parse)
   resolve_build; need_wiring
   [ -f "$NB/profiles.json" ] || die 030 "no $NB/profiles.json (PIP-E003 would fail the lane)" "./cycle.sh start ... --profiles <prev-build> or author bindings (README Phase 0.4)"
   [ "$(phase_state parse)" != running ] || die 031 "parse already running" "./cycle.sh status; wait for CYC-EXIT"
-  detach parse nora-pipeline "/data/env/reports/lane-ingestion-ALL-$TS.log" \
+  detach parse nora-batch "/data/env/reports/lane-ingestion-ALL-$TS.log" \
     "exec python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --skip-taxonomy $FORCE $SKIPSTD"
   ;;
 
@@ -279,7 +279,7 @@ prompts)
     echo "  $m: doc=$(basename "$doc") overview=$(basename "$ov") shape=$shape"
   done
   (( bad == 0 )) || die 041 "$bad MNO prompt set(s) mis-shaped (see above)" "fix the files under customizations/prompts/ and re-run"
-  for f in .env.nora-pipeline .env.sira-batch; do
+  for f in .env.nora-batch .env.sira-batch; do
     ef="$ENV_ROOT/$f"; [ -f "$ef" ] || ef="$HERE/$f"
     [ -f "$ef" ] && grep -qE '^NORA_(TAXONOMY_OVERVIEW|SIRA_DOC_PROMPT)_DIR=/data/env/prompts' "$ef" \
       || echo "  WARN: $f lacks the /data/env/prompts *_DIR setting (README Phase 3) — mounted prompts will be ignored"
@@ -296,7 +296,7 @@ taxonomy)
   resolve_build; need_wiring
   require_phase prompts "./cycle.sh prompts (gate) first"
   [ "$(phase_state taxonomy)" != running ] || die 050 "taxonomy already running" "./cycle.sh status"
-  detach taxonomy nora-pipeline "/data/env/reports/stage-taxonomy-$TS.log" \
+  detach taxonomy nora-batch "/data/env/reports/stage-taxonomy-$TS.log" \
     "exec python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $FORCE"
   echo "  re-running this verb after completion retries only failed docs (README Phase 4)"
   ;;

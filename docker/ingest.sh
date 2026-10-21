@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ingest.sh — quoting-proof launcher for containerized pipeline lane runs.
 #
-# Wraps the `docker compose run nora-pipeline` invocation so the inner
+# Wraps the `docker compose run nora-batch` invocation so the inner
 # `sh -c` string is authored HERE once (no nested-quoting on the command
 # line). Runs detached by default; console output is redirected inside the
 # container to <env>/reports/ on the /data/env mount, so the full log lands
@@ -77,7 +77,7 @@ else
 fi
 
 CMD=(docker compose --env-file "$ENVFILE" --profile ingest
-     run "${RUNFLAGS[@]}" nora-pipeline sh -c "$INNER")
+     run "${RUNFLAGS[@]}" nora-batch sh -c "$INNER")
 if [ "${DRY_RUN:-0}" = "1" ]; then printf 'DRY:'; printf ' %q' "${CMD[@]}"; echo; exit 0; fi
 "${CMD[@]}"
 

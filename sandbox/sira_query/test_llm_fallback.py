@@ -1,7 +1,7 @@
 """Permanent-refusal fallback in the service's _llm_call choke point.
 
 Markers are invented test strings — real values are deployment-local
-env config (.env.sira-query) and never appear in the repo.
+env config (.env.nora-store) and never appear in the repo.
 """
 
 from __future__ import annotations

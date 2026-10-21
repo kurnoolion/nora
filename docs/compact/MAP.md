@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-10-20 by regen-map. Do not hand-edit.
+Generated 2026-10-21 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -21,6 +21,7 @@ Generated 2026-10-20 by regen-map. Do not hand-edit.
 | [query](../../core/src/query/MODULE.md) | Online query pipeline (TDD §7). |
 | [resolver](../../core/src/resolver/MODULE.md) | Deterministic cross-reference resolver (TDD §5.5, Methods 1 & 2). |
 | [standards](../../core/src/standards/MODULE.md) | 3GPP standards ingestion — generic, release-aware, LLM-free (TDD §5.6, D-004). |
+| [stores](../../core/src/stores/MODULE.md) | Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`). |
 | [taxonomy](../../core/src/taxonomy/MODULE.md) | Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). |
 | [vectorstore](../../core/src/vectorstore/MODULE.md) | Unified vector-store construction and configuration. |
 | [web](../../core/src/web/MODULE.md) | FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). |
@@ -44,6 +45,7 @@ flowchart TD
     m_query[query]
     m_resolver[resolver]
     m_standards[standards]
+    m_stores[stores]
     m_taxonomy[taxonomy]
     m_vectorstore[vectorstore]
     m_web[web]
@@ -95,6 +97,7 @@ flowchart TD
     m_resolver --> m_parser
     m_standards --> m_parser
     m_standards --> m_resolver
+    m_stores --> m_pipeline
     m_taxonomy --> m_env
     m_taxonomy --> m_llm
     m_taxonomy --> m_parser
@@ -111,6 +114,7 @@ flowchart TD
     m_web --> m_pipeline
     m_web --> m_query
     m_web --> m_resolver
+    m_web --> m_stores
 ```
 
 ## Project File Structure
@@ -214,7 +218,8 @@ nora/
 │   │   ├── models/                                      # Shared document intermediate representation.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
-│   │   │   └── document.py                              # Normalized intermediate representation for extracted documents.
+│   │   │   ├── document.py                              # Normalized intermediate representation for extracted documents.
+│   │   │   └── fingerprint.py                           # Requirement content fingerprint — the join key across stores and releases.
 │   │   ├── parser/                                      # Generic, profile-driven structural parser.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -292,6 +297,11 @@ nora/
 │   │   │   ├── spec_parser.py                           # 3GPP specification document parser (DOC/DOCX to section tree).
 │   │   │   ├── spec_resolver.py                         # 3GPP spec version resolver and URL builder.
 │   │   │   └── standards_cli.py                         # CLI entry point for standards ingestion pipeline.
+│   │   ├── stores/                                      # Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`).
+│   │   │   ├── MODULE.md
+│   │   │   ├── __init__.py                              # Data stores behind service interfaces (strand corp-db-layer,
+│   │   │   ├── overlay.py                               # Overlay store — review edits to SIRA enrichments (store-split-design §2,
+│   │   │   └── overlay_import.py                        # One-time import of the JSON Overlay into SQLite (strand corp-db-layer S3).
 │   │   ├── taxonomy/                                    # Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7).
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -487,6 +497,7 @@ nora/
 │       ├── test_layout_provider_foundation.py           # Phase-1 foundation for the Docling/LayoutProvider integration (mno-c-ingestion).
 │       ├── test_llm_refusal.py                          # Refusal detection + fallback provider (core twin of the sandbox
 │       ├── test_model_discovery.py                      # Model discovery cache for the Ask page (strand llm-model-discovery).
+│       ├── test_models_fingerprint.py                   # req_fingerprint — the cross-store join key (store-split-design §3).
 │       ├── test_openai_provider.py                      # Tests for OpenAICompatibleProvider — fully mocked, no network.
 │       ├── test_parse_audit.py                          # Tests for the per-document parse-audit tool (parse_audit.py).
 │       ├── test_parse_log.py                            # Tests for ParseLog generation: dropped block recording, range merging,
@@ -526,6 +537,7 @@ nora/
 │       ├── test_revhist_scoring.py                      # Tests for the signal-based revhist scorer (RevhistDetection).
 │       ├── test_stages_per_cell.py                      # Per-cell stage routing tests (D-DRAFT-6/7/10).
 │       ├── test_standards.py                            # Tests for the standards ingestion pipeline (Step 7).
+│       ├── test_stores_overlay.py                       # Tests for core/src/stores/overlay.py + overlay_import.py (strand
 │       ├── test_strike_runs.py                          # Tests for the unified strike model [D-060].
 │       ├── test_structural_parser_announced_id.py       # Announced-requirement path (strand req-recall).
 │       ├── test_structural_parser_content_start.py      # Tests for the content-start cutoff (D-DRAFT-4).
@@ -578,10 +590,10 @@ nora/
 │   ├── debug-egress.sh                                  # debug-egress.sh — pinpoint WHY container network egress fails on this host.
 │   ├── docker-compose.yml
 │   ├── env.example
-│   ├── env.nora-pipeline.example
+│   ├── env.nora-batch.example
+│   ├── env.nora-store.example
 │   ├── env.nora-web.example
 │   ├── env.sira-batch.example
-│   ├── env.sira-query.example
 │   ├── ingest.sh                                        # ingest.sh — quoting-proof launcher for containerized pipeline lane runs.
 │   ├── nora.Dockerfile
 │   ├── prep-offline.sh                                  # prep-offline.sh — HOST-side prep for OFFLINE=1 docker builds.
@@ -760,7 +772,9 @@ nora/
 │   │   │   │   ├── converter-design.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── journal.md
-│   │   │   │   └── storage-design.md
+│   │   │   │   ├── phase-4-plan.md
+│   │   │   │   ├── storage-design.md
+│   │   │   │   └── store-split-design.md
 │   │   │   ├── golden-eval/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
@@ -830,7 +844,7 @@ nora/
 │   │   ├── __init__.py
 │   │   ├── nora_to_beir.py                              # NORA → BEIR adapter for the SIRA standalone-sandbox experiment.
 │   │   └── test_nora_to_beir.py                         # Tests for the NORA → BEIR adapter — multi-cell partitioning (multi-mno-sira).
-│   ├── cell_db_convert.py                               # Cell-DB converter — phase 1 of the corp-db-layer strand.
+│   ├── cell_db_convert.py                               # Cell-DB converter — the Cells store builder (corp-db-layer).
 │   ├── enrich_batching.py                               # Batched doc-enrichment support (strand sira-enrichment-pe).
 │   ├── install_configs.sh                               # Install the NORA-specific SIRA hydra configs + prompts into the
 │   ├── llm_refusal.py                                   # Permanent-refusal detection for LLM responses (shared by the batch
@@ -882,6 +896,7 @@ nora/
 │   │   ├── test_service_identity.py                     # Serving-identity tests (strand golden-eval).
 │   │   └── test_service_multi_cell.py                   # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
 │   ├── test_cell_db_convert.py                          # Tests for sandbox/cell_db_convert.py — label flat files -> cell DBs.
+│   ├── test_cell_db_convert_fold.py                     # Pure-Python tests for the converter's overlay fold (no bm25x needed):
 │   ├── test_enrich_batching.py                          # Tests for the batched doc-enrichment logic (strand sira-enrichment-pe):
 │   ├── test_enrich_overlay.py                           # Tests for sandbox/sira_query/enrich_overlay.py (sira-enrichment-review
 │   ├── test_llm_refusal.py                              # Permanent-refusal detection (sandbox/llm_refusal.py). Markers here
@@ -896,6 +911,7 @@ nora/
 │   ├── test_verify_req_recall.py                        # Tests for sandbox/verify_req_recall.py — extract-vs-parse req-id diff.
 │   ├── test_verify_tables.py                            # Tests for the verify_tables helper.
 │   ├── tests/
+│   │   ├── test_adapter_fingerprints.py                 # The adapter writes one fingerprint per requirement row, beside corpus.jsonl.
 │   │   └── test_sira_incremental.py                     # Tests for sandbox/sira_incremental.py — content-hash-aware
 │   ├── verify_req_recall.py                             # verify_req_recall — diff req-ids visible at extract time against the ids
 │   └── verify_tables.py                                 # verify_tables — confirm parsed tables are inlined into NORA parse text and

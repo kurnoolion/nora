@@ -16,10 +16,10 @@ and lets new uses be added without touching the others.
 
 | Store | Holds | Unit | Written | Read by |
 |---|---|---|---|---|
-| **Cells** (retrieval) | corpus rows, **vanilla** BM25 index, SIRA phrases per req (raw, per run) | one DB per (MNO, release) version | build; publish (write-once) | sira-query |
+| **Cells** (retrieval) | corpus rows, **vanilla** BM25 index, SIRA phrases per req (raw, per run) | one DB per (MNO, release) version | build; publish (write-once) | nora-store |
 | **Trees** (parsed) | full requirement text and tables, document/section/requirement hierarchy | one DB per (MNO, release) version | build; publish (write-once) | nora-web (display, `/api/req`, diff) |
 | **History** (release lineage) | one tree per MNO across releases; per node and release: added / changed / unchanged / removed; roll-ups per section and plan | one DB per MNO, rebuilt per publish | derived from Trees at publish | nora-web, eval, future apps |
-| **Overlay** (review edits) | per MNO: `(req_id, fingerprint) → adds / removes / suppress_all`, with label, reason, author, time, origin release | one DB per deployment | review UI (live) | sira-query (compose), nora-web (review) |
+| **Overlay** (review edits) | per MNO: `(req_id, fingerprint) → adds / removes / suppress_all`, with label, reason, author, time, origin release | one DB per deployment | review UI (live) | nora-store (compose), nora-web (review) |
 
 Cells, Trees and History are immutable per version. Overlay is the only
 mutable store, so corrections go live without a republish (D-DRAFT-21
@@ -60,13 +60,13 @@ outside the stores.
   **HTTP client** with the same methods. `NORA_<STORE>_URL` set → client;
   unset → local.
 - A hosting service mounts a store's routes under `/stores/<store>/v1/…`
-  (JSON). Hosts today: sira-query (`cells`), nora-web (`trees`, `history`,
+  (JSON). Hosts today: nora-store (`cells`), nora-web (`trees`, `history`,
   `overlay`). Moving a store to its own service = deploy the same routes,
   set the URL; no consumer change.
 - **No store reads another store's backend.** Composition (§4) happens in
-  the consumer: sira-query reads Overlay through `OverlayStore`.
+  the consumer: nora-store reads Overlay through `OverlayStore`.
 - Overlay has one writer (nora-web). Until it moves to its own service,
-  sira-query reads the same SQLite file read-only (WAL) via the local
+  nora-store reads the same SQLite file read-only (WAL) via the local
   implementation.
 - Minimum surface (v1):
   - `CellStore`: list cells, cell meta/identity, corpus rows, vanilla index, SIRA phrases.

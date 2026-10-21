@@ -1,7 +1,7 @@
 # SIRA images — build context is the REPO ROOT, plus a named `vendor` context
 # (docker/vendor — see docker-compose.yml additional_contexts):
 #   docker build -f docker/sira.Dockerfile --build-context vendor=docker/vendor \
-#       --target sira-query -t sira-query .
+#       --target nora-store -t nora-store .
 #
 # Source selection (ARG OFFLINE selects the stage):
 #   OFFLINE=0  sira-src-0: clone upstream @ SIRA_REF, rustup, build the bm25x
@@ -14,7 +14,7 @@
 # sira-base    trimmed runtime (SETUP.md §2a): no torch/sglang; BM25 + HTTP
 #              LLM routing only. NORA repo at /app, SIRA clone at
 #              /app/sandbox/sira (pinned via SIRA_REF).
-# sira-query   the per-query FastAPI service (:8040)
+# nora-store   the per-query FastAPI service (:8040)
 # sira-batch   sira_multi / run_pipeline.py / sira_incremental jobs
 #
 # No endpoints or corpus data baked in — env vars + /data/* volumes only.
@@ -112,8 +112,8 @@ COPY --from=sira-src /sira/ sandbox/sira/
 RUN if [ "$OFFLINE" = "1" ]; then echo "offline: clone pre-patched by prep-offline.sh"; \
     else bash sandbox/install_configs.sh; fi
 
-# --------------------------------------------------------------- sira-query --
-FROM sira-base AS sira-query
+# --------------------------------------------------------------- nora-store --
+FROM sira-base AS nora-store
 # Serving-code identity for /healthz (strand golden-eval): bake the git
 # sha at build so eval StackStamps attribute scores to the code that
 # served them. Pass --build-arg CODE_VERSION="$(git rev-parse --short HEAD)".

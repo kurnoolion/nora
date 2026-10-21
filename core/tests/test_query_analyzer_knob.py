@@ -462,7 +462,7 @@ class TestQueryAnalyzerArm:
 
 
 class TestSiraQueryServiceWiring:
-    """sira-query reports the arm on /healthz and keeps a non-rules
+    """nora-store reports the arm on /healthz and keeps a non-rules
     analyzer off the event loop."""
 
     def test_healthz_reports_the_arm(self, monkeypatch):

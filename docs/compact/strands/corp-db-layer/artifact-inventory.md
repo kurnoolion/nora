@@ -100,14 +100,14 @@ Notes that change the design:
 | System | Path | Writer → readers | Semantics |
 |---|---|---|---|
 | Pipeline corrections | `<env_dir>/corrections/{profile,taxonomy}.json` | human (web editor) → pipeline stages | full-copy override; stage prefers correction over its own output on every rerun (D-011) |
-| Enrichment overlay | `<corrections_root>/sira-enrich/<MNO>.json` + `accepted-labels.json` | web `EnrichOverlayStore` (sole writer, flock + atomic rename) → sira-query (ro, folds at cell load) | per-(word, direction) records; labels-are-branches; merge log; view digest formula byte-locked across both images |
+| Enrichment overlay | `<corrections_root>/sira-enrich/<MNO>.json` + `accepted-labels.json` | web `EnrichOverlayStore` (sole writer, flock + atomic rename) → nora-store (ro, folds at cell load) | per-(word, direction) records; labels-are-branches; merge log; view digest formula byte-locked across both images |
 | Bootstrap annotations | `<env_dir>/annotations/<plan>_annotations.json` | human (Bootstrap tab) → parser pre-pass | per-doc annotation records, atomic write |
 
 - **These are the most DB-shaped files in the system** — record-oriented,
   concurrent-edit-prone, with hand-rolled locking that a DB gives for free.
   Overlay records become rows keyed `(mno, req_id, word, direction, label)`;
   the merge log a `labels` table; "pending" becomes a digest over a view
-  query (the formula-parity invariant with sira-query must move with it —
+  query (the formula-parity invariant with nora-store must move with it —
   both sides must compute the digest over identical row serialization).
 - Corrections must stay **durable across labels and builds** (they pool
   across stacks today). They are the one category that is explicitly NOT
