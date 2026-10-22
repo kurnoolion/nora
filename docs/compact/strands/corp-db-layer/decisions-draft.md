@@ -461,11 +461,11 @@ section.
 **Why:** One baked cell DB lost raw SIRA output and broke review in cell-db mode. Rejected: extending the baked DB — every new use would widen one file.
 **Consequences:** Phase 4 starts with the split; publish ships Cells, Trees and History.
 
-## D-DRAFT-23 — The index is composed at load from separate layers, with a disposable cache
+## D-DRAFT-23 — The index is composed at load from separate layers; no cache
 
-**Decision:** Cells store the vanilla index and raw SIRA phrases; sira-query folds Overlay in and enriches at load; the composed index is cached by (vanilla, SIRA run, overlay) fingerprints.
-**Why:** Keeps layers editable and inspectable; the cache keeps startup fast. Rejected: baking (today) — freezes corrections.
-**Consequences:** Cell DB schema_version 2; an identity gate proves v2 == baked on equal inputs.
+**Decision:** Cells store the vanilla index and raw SIRA phrases; nora-store folds Overlay in and enriches at load. No composed-index cache.
+**Why:** Keeps layers editable and inspectable. Rejected: baking — freezes corrections; a cache — measured load 1.4 s for 40k rows (flat path 1.7 s), so it would save about 1 s per start.
+**Consequences:** Cell DB schema_version 2; an identity gate proves v2 == baked on equal inputs. Revisit the cache if load passes about 30 s.
 
 ## D-DRAFT-24 — Overlay is a live store keyed by (req_id, fingerprint), similarity-guarded
 

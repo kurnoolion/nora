@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-10-21 by regen-map. Do not hand-edit.
+Generated 2026-10-22 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -97,6 +97,8 @@ flowchart TD
     m_resolver --> m_parser
     m_standards --> m_parser
     m_standards --> m_resolver
+    m_stores --> m_extraction
+    m_stores --> m_models
     m_stores --> m_pipeline
     m_taxonomy --> m_env
     m_taxonomy --> m_llm
@@ -301,7 +303,9 @@ nora/
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py                              # Data stores behind service interfaces (strand corp-db-layer,
 │   │   │   ├── overlay.py                               # Overlay store — review edits to SIRA enrichments (store-split-design §2,
-│   │   │   └── overlay_import.py                        # One-time import of the JSON Overlay into SQLite (strand corp-db-layer S3).
+│   │   │   ├── overlay_import.py                        # One-time import of the JSON Overlay into SQLite (strand corp-db-layer S3).
+│   │   │   ├── trees.py                                 # Trees store — parsed requirement trees per (MNO, release) cell
+│   │   │   └── trees_build.py                           # Build the Trees store: one SQLite DB per cell (strand corp-db-layer S4).
 │   │   ├── taxonomy/                                    # Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7).
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -343,7 +347,7 @@ nora/
 │   │       ├── middleware.py                            # Request timing middleware for NORA Web UI.
 │   │       ├── model_discovery.py                       # Discovered model lists for roster providers (strand llm-model-discovery).
 │   │       ├── path_mapper.py                           # Path translation between Windows UNC paths and Linux mount points.
-│   │       ├── req_tree.py                              # Shared requirement-tree loading over parse output (strand golden-eval).
+│   │       ├── req_tree.py                              # Shared requirement-tree loading (strand golden-eval; Trees store since
 │   │       ├── resource_sampler.py                      # Background resource sampler for NORA observability.
 │   │       ├── routes/
 │   │       │   ├── __init__.py                          # Web UI route packages.
@@ -538,6 +542,7 @@ nora/
 │       ├── test_stages_per_cell.py                      # Per-cell stage routing tests (D-DRAFT-6/7/10).
 │       ├── test_standards.py                            # Tests for the standards ingestion pipeline (Step 7).
 │       ├── test_stores_overlay.py                       # Tests for core/src/stores/overlay.py + overlay_import.py (strand
+│       ├── test_stores_trees.py                         # Tests for core/src/stores/trees.py + trees_build.py (strand corp-db-layer
 │       ├── test_strike_runs.py                          # Tests for the unified strike model [D-060].
 │       ├── test_structural_parser_announced_id.py       # Announced-requirement path (strand req-recall).
 │       ├── test_structural_parser_content_start.py      # Tests for the content-start cutoff (D-DRAFT-4).
@@ -841,8 +846,10 @@ nora/
 │   ├── sira_debug.py                                    # SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
 │   ├── test_cell_db_loader.py                           # Tests for the cell-db serving mode (corp-db-layer phase 2).
 │   ├── test_fusion.py                                   # Tests for cross-cell fusion (multi-mno-sira D-DRAFT-10).
+│   ├── test_health_prompts.py                           # A configured-but-missing prompt fails health, and prompt presence is part
 │   ├── test_llm_fallback.py                             # Permanent-refusal fallback in the service's _llm_call choke point.
 │   ├── test_no_autosave.py                              # Regression tests: loading + enriching an index must never mutate it on disk.
+│   ├── test_package_paths.py                            # Paths the service derives from its own location must survive the package
 │   ├── test_scope.py                                    # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
 │   ├── test_service_identity.py                         # Serving-identity tests (strand golden-eval).
 │   └── test_service_multi_cell.py                       # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).

@@ -1,33 +1,45 @@
-"""Shared requirement-tree loading over parse output (strand golden-eval).
+"""Shared requirement-tree loading (strand golden-eval; Trees store since
+strand corp-db-layer S4).
 
 Lifted from ``routes/req_browser.py`` so the Requirement Browser and the
-Eval Studio's ground-truth picker read ``out/parse/`` through one code
+Eval Studio's ground-truth picker read parsed trees through one code
 path — duplicating tree loading in two routers is how the two surfaces
 would drift apart (D-DRAFT-5).
 
-Layout awareness: per-cell trees live at ``out/parse/<mno>/<release>/``
-(D-DRAFT-6); a legacy flat layout keeps trees directly under
-``out/parse/``. All helpers accept optional cell qualifiers and fall back
-to a recursive search.
+A thin wrapper over the Trees store (``core.src.stores.trees``): every
+function keeps its signature (env dir first) and delegates to
+``open_tree_store(env_dir)`` — the SQLite cell DBs when
+``$NORA_TREES_ROOT`` is set, else the JSON trees under ``out/parse/``. One
+store is kept per (env dir, root), so the file backend's tree cache lives
+across calls. ``parse_dir`` / ``find_tree`` are file-layout helpers only.
 """
 
 from __future__ import annotations
 
-import json
-import logging
+import os
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from core.src.stores.trees import (  # noqa: F401  (re-exports)
+    TREES_ROOT_ENV,
+    TreeStore,
+    build_tree_hierarchy,
+    find_tree,
+    latest_match,
+    open_tree_store,
+    parse_dir,
+)
+
+_STORES: dict[tuple[str, str], TreeStore] = {}
 
 
-def parse_dir(env_dir_path: Path) -> Path:
-    return env_dir_path / "out" / "parse"
-
-
-def _release_sort_key(release: str):
-    from core.src.extraction.release_key import release_order_key
-
-    return release_order_key(release) or (0, 0)
+def tree_store(env_dir_path: Path) -> TreeStore:
+    """The cached store for this env dir and the current ``$NORA_TREES_ROOT``."""
+    root = os.getenv(TREES_ROOT_ENV, "").strip()
+    key = (str(env_dir_path), root)
+    store = _STORES.get(key)
+    if store is None:
+        store = _STORES[key] = open_tree_store(env_dir_path, root)
+    return store
 
 
 def list_cells(env_dir_path: Path) -> list[dict]:
@@ -35,16 +47,7 @@ def list_cells(env_dir_path: Path) -> list[dict]:
     tree. Sorted by MNO then chronological release (MMMYYYY order —
     the same rule the query side uses for "latest").
     """
-    root = parse_dir(env_dir_path)
-    cells: list[dict] = []
-    if not root.is_dir():
-        return cells
-    for mno_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        for rel_dir in sorted(p for p in mno_dir.iterdir() if p.is_dir()):
-            if any(rel_dir.glob("*_tree.json")):
-                cells.append({"mno": mno_dir.name, "release": rel_dir.name})
-    cells.sort(key=lambda c: (c["mno"], _release_sort_key(c["release"])))
-    return cells
+    return tree_store(env_dir_path).list_cells()
 
 
 def list_docs(
@@ -53,38 +56,7 @@ def list_docs(
     """Doc ids with a parsed tree — scoped to one cell when qualifiers
     are given, whole corpus (flat + per-cell) otherwise.
     """
-    root = parse_dir(env_dir_path)
-    if mno and release:
-        root = root / mno / release
-    if not root.is_dir():
-        return []
-    return sorted(p.stem.replace("_tree", "") for p in root.rglob("*_tree.json"))
-
-
-def find_tree(
-    env_dir_path: Path, doc_id: str, mno: str = "", release: str = ""
-) -> Path | None:
-    """Resolve a doc's tree file. Cell-qualified path first, flat legacy
-    path second, recursive search last (first match wins).
-    """
-    root = parse_dir(env_dir_path)
-    if mno and release:
-        p = root / mno / release / f"{doc_id}_tree.json"
-        return p if p.exists() else None
-    flat = root / f"{doc_id}_tree.json"
-    if flat.exists():
-        return flat
-    if root.is_dir():
-        for p in root.rglob(f"{doc_id}_tree.json"):
-            return p
-    return None
-
-
-# (mtime, size, tree) per absolute path — parse trees are written by the
-# pipeline, not the web app, so mtime+size staleness checks suffice. Real
-# corpora make repeated JSON parses the dominant page cost (D-DRAFT-6
-# anticipated this cache).
-_TREE_CACHE: dict[str, tuple[float, int, dict]] = {}
+    return tree_store(env_dir_path).list_docs(mno, release)
 
 
 def load_tree(
@@ -94,21 +66,7 @@ def load_tree(
     Empty dict when missing or unreadable. The returned dict is a shared
     cache entry — callers must treat it as read-only.
     """
-    p = find_tree(env_dir_path, doc_id, mno, release)
-    if p is None:
-        return {}
-    try:
-        st = p.stat()
-        key = str(p)
-        hit = _TREE_CACHE.get(key)
-        if hit is not None and hit[0] == st.st_mtime and hit[1] == st.st_size:
-            return hit[2]
-        tree = json.loads(p.read_text(encoding="utf-8"))
-        _TREE_CACHE[key] = (st.st_mtime, st.st_size, tree)
-        return tree
-    except Exception as exc:
-        logger.warning("Failed to load tree %s: %s", p, exc)
-        return {}
+    return tree_store(env_dir_path).load_tree(doc_id, mno, release)
 
 
 def load_tree_flat(
@@ -118,35 +76,7 @@ def load_tree_flat(
     return load_tree(env_dir_path, doc_id, mno, release).get("requirements", [])
 
 
-def build_tree_hierarchy(reqs: list[dict]) -> list[dict]:
-    """Convert flat requirement list into nested tree (child_nodes
-    populated). Reqs with an empty req_id are skipped (parser artefacts).
-    """
-    nodes: dict[str, dict] = {}
-    for r in reqs:
-        rid = r.get("req_id", "")
-        if rid:
-            nodes[rid] = {**r, "child_nodes": []}
-
-    roots: list[dict] = []
-    for node in nodes.values():
-        parent_id = node.get("parent_req_id", "")
-        if parent_id and parent_id in nodes:
-            nodes[parent_id]["child_nodes"].append(node)
-        else:
-            roots.append(node)
-
-    return roots
-
-
 # ─── Plan discovery (Eval Studio picker cascade) ────────────────────
-
-
-def _req_plan(req: dict, tree: dict) -> str:
-    """A requirement's effective plan: per-req plan_id (multi-plan docs)
-    falling back to the tree-level scalar — same rule the parser stamps.
-    """
-    return req.get("plan_id") or tree.get("plan_id") or ""
 
 
 def plans_for_mno(env_dir_path: Path, mno: str) -> dict[str, list[str]]:
@@ -155,21 +85,7 @@ def plans_for_mno(env_dir_path: Path, mno: str) -> dict[str, list[str]]:
     actually contain it (drives the Release dropdown filter). Releases
     chronological per MMMYYYY.
     """
-    out: dict[str, set[str]] = {}
-    for cell in list_cells(env_dir_path):
-        if cell["mno"] != mno:
-            continue
-        rel = cell["release"]
-        for doc_id in list_docs(env_dir_path, mno, rel):
-            tree = load_tree(env_dir_path, doc_id, mno, rel)
-            for req in tree.get("requirements", []):
-                plan = _req_plan(req, tree)
-                if plan:
-                    out.setdefault(plan, set()).add(rel)
-    return {
-        plan: sorted(rels, key=_release_sort_key)
-        for plan, rels in sorted(out.items())
-    }
+    return tree_store(env_dir_path).plans_for_mno(mno)
 
 
 def find_req(
@@ -179,10 +95,10 @@ def find_req(
     """Locate a req_id across the corpus — direct-entry validation and
     auto-qualification in the Eval Studio picker (an id found in exactly
     one cell auto-fills its qualifiers). Returns
-    ``[{mno, release, plan, plan_name, doc_id, title, section_number,
-    parent_section, text}]``, one row per cell the id appears in. Falls back
-    to the legacy flat layout (empty mno/release) when no per-cell trees
-    exist.
+    ``[{req_id, mno, release, plan, plan_name, doc_id, title,
+    section_number, parent_section, text}]``, one row per cell the id
+    appears in. The file backend falls back to the legacy flat layout
+    (empty mno/release) when no per-cell trees exist.
 
     ``section_number`` / ``parent_section`` / ``plan_name`` are for display
     beside a requirement snippet (strand req-bubble-metadata). Two contracts
@@ -208,46 +124,8 @@ def find_req(
     m3 rule); each row's ``req_id`` is the tree's own spelling, so a
     caller can store the canonical form.
     """
-    want = req_id.casefold() if ignore_case else req_id
-    matches: list[dict] = []
-    if mno and release:
-        cells: list[dict] = [{"mno": mno, "release": release}]
-    else:
-        cells = list_cells(env_dir_path) or [{"mno": "", "release": ""}]
-    for cell in cells:
-        mno, rel = cell["mno"], cell["release"]
-        for doc_id in list_docs(env_dir_path, mno, rel):
-            tree = load_tree(env_dir_path, doc_id, mno, rel)
-            for req in tree.get("requirements", []):
-                rid = req.get("req_id") or ""
-                if (rid.casefold() if ignore_case else rid) == want:
-                    plan = _req_plan(req, tree)
-                    is_primary = plan == tree.get("plan_id", "")
-                    matches.append({
-                        "req_id": rid,
-                        "mno": mno,
-                        "release": rel,
-                        "plan": plan,
-                        "plan_name": (
-                            tree.get("plan_name", "") if is_primary else ""),
-                        "doc_id": doc_id,
-                        "title": req.get("title", ""),
-                        "section_number": req.get("section_number", ""),
-                        "parent_section": req.get("parent_section", ""),
-                        "text": req.get("text", ""),
-                    })
-    return matches
-
-
-def latest_match(matches: list[dict]) -> dict:
-    """Pick the newest cell from ``find_req`` results — the match with the
-    latest release/revision. Used for direct-entry auto-qualification when a
-    req_id appears across several releases (e.g. Mar vs Jun): the expert wants
-    the current revision, not an ambiguity error. Ties (same release, multiple
-    docs/plans) resolve to the first for determinism. Empty in → KeyError is
-    the caller's bug; callers pass a non-empty list.
-    """
-    return max(matches, key=lambda m: _release_sort_key(m["release"]))
+    return tree_store(env_dir_path).find_req(req_id, mno, release,
+                                             ignore_case=ignore_case)
 
 
 def reqs_for_plan(
@@ -257,10 +135,4 @@ def reqs_for_plan(
     the cell's trees, each row annotated with its source ``doc_id``.
     Ordering: doc_id, then tree order (the parser's document order).
     """
-    rows: list[dict] = []
-    for doc_id in list_docs(env_dir_path, mno, release):
-        tree = load_tree(env_dir_path, doc_id, mno, release)
-        for req in tree.get("requirements", []):
-            if _req_plan(req, tree) == plan:
-                rows.append({**req, "doc_id": doc_id})
-    return rows
+    return tree_store(env_dir_path).reqs_for_plan(mno, release, plan)

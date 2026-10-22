@@ -87,7 +87,9 @@ async def req_browser_index(request: Request):
     docs = _list_docs(env_dir)
     return _template_response(request, "req_browser/index.html", {
         "docs": docs,
-        "no_parse_output": not _parse_dir(env_dir).is_dir(),
+        # Ask the store, not the filesystem: a host serving SQLite trees
+        # (NORA_TREES_ROOT) has no out/parse/ and still has data.
+        "no_parse_output": not docs and not _parse_dir(env_dir).is_dir(),
     })
 
 

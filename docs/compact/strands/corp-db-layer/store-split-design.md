@@ -45,10 +45,10 @@ Per cell, at load:
    is **held** for re-affirmation (unchanged rule, now keyed by fingerprint).
 4. `enrich_batch(effective)` → serving index.
 
-**Composed-index cache:** the result is cached (local disk, disposable),
-keyed by (vanilla fingerprint, SIRA run fingerprint, overlay digest). An
-Overlay change invalidates only the affected MNO's cells. Nothing composed
-is ever published.
+**No composed-index cache** (D-DRAFT-23, measured 2026-10-22): composing at
+load took 1.4 s for 40k rows on a schema-2 stack against 1.7 s for the
+flat path. Revisit if load passes about 30 s. Nothing composed is ever
+published.
 
 Query-time expansion (with `NORA_SIRA_MAX_DF_RATIO`) is unchanged and
 outside the stores.

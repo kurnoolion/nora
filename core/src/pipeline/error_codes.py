@@ -136,6 +136,14 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("OVL-E003", "Import verification failed — {what}: {count} mismatch(es)", "Nothing was written; check the JSON files for hand-edited or duplicate records"),
     ErrorDef("OVL-E004", "Overlay DB write failed: {reason}", "Check the target path, permissions and free space; a busy DB means another writer holds it"),
 
+    # --- Trees store (TRS) — core.src.stores.trees_build (strand corp-db-layer S4) ---
+    ErrorDef("TRS-E001", "No per-cell parse trees under {path}", "Point --env-dir at an env dir whose out/parse/<mno>/<release>/ holds *_tree.json; the legacy flat layout is not built"),
+    ErrorDef("TRS-E002", "Trees DB already exists: {path}", "Pass --force to replace it, or choose another --out dir"),
+    ErrorDef("TRS-E003", "Requested cell has no parse trees: {cell}", "Name cells as MNO__REL, matching out/parse/<mno>/<release>/"),
+    ErrorDef("TRS-E004", "Unreadable or malformed tree in cell {cell}: {reason}", "Re-run the parse stage for that cell"),
+    ErrorDef("TRS-E005", "Trees DB verification failed for cell {cell} — {what}: {count} mismatch(es)", "Nothing was replaced; check the cell for nested or oddly named tree files"),
+    ErrorDef("TRS-E006", "Trees DB write failed: {reason}", "Check the --out path, permissions and free space"),
+
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),
