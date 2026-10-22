@@ -56,7 +56,7 @@ _SERVICE_URL = os.getenv("NORA_STORE_URL", "http://127.0.0.1:8040").rstrip("/")
 
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
-    str(Path(__file__).resolve().parents[1] / "sira"),
+    str(Path(__file__).resolve().parents[1] / "sandbox" / "sira"),
 ))
 _QUERY_PROMPT_PATH = os.getenv(
     "NORA_QUERY_PROMPT",

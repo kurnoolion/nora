@@ -202,10 +202,11 @@ _FANOUT_ENABLED = os.getenv("NORA_SIRA_FANOUT_ENABLED", "true").lower() in {
 # otherwise dominate the top-K.
 _FANOUT_PER_HIT = int(os.getenv("NORA_SIRA_FANOUT_PER_HIT", "50"))
 
-# Defaults to ../sira/ relative to this file (the upstream clone).
+# Defaults to <repo>/sandbox/sira (the upstream clone) — resolved from this
+# package so it holds in the image (/app) and in a checkout alike.
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
-    str(Path(__file__).resolve().parents[1] / "sira"),
+    str(Path(__file__).resolve().parents[1] / "sandbox" / "sira"),
 ))
 _QUERY_PROMPT_PATH = os.getenv(
     "NORA_QUERY_PROMPT",
@@ -381,7 +382,7 @@ def _code_version() -> str:
         return env
     try:
         import subprocess
-        repo = Path(__file__).resolve().parents[2]
+        repo = Path(__file__).resolve().parents[1]
         out = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5,
@@ -677,6 +678,10 @@ def _load_state() -> None:
             phrases_path = cand
     if phrases_path is None:
         fallback = base / "enrichments" / "doc" / "best.jsonl"
+        if fallback.is_symlink() and not fallback.exists():
+            logger.warning("%s: enrichments/doc/best.jsonl is a dangling link — "
+                           "serving without doc enrichment; pin a run with "
+                           "NORA_SIRA_DOC_ENRICH_RUN", base.name)
         if fallback.exists() and fallback.stat().st_size > 0:
             phrases_path = fallback
 
@@ -813,6 +818,10 @@ def _load_one_cell(base: Path, cell: CellKey) -> CellState:
             phrases_path = cand
     if phrases_path is None:
         fallback = base / "enrichments" / "doc" / "best.jsonl"
+        if fallback.is_symlink() and not fallback.exists():
+            logger.warning("%s: enrichments/doc/best.jsonl is a dangling link — "
+                           "serving without doc enrichment; pin a run with "
+                           "NORA_SIRA_DOC_ENRICH_RUN", base.name)
         if fallback.exists() and fallback.stat().st_size > 0:
             phrases_path = fallback
     if phrases_path is not None:

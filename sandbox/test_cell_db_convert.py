@@ -321,3 +321,16 @@ def test_fingerprint_match_applies_unverifiable_record(tmp_path):
     by_cell = {c["cell"]: c for c in report["cells"]}
     assert by_cell["mnoa__Apr2098"]["overlay"]["removes"] == 1
     assert by_cell["mnoa__Apr2098"]["overlay"]["held"] == 0
+
+
+def test_dangling_best_link_is_cnv011(tmp_path):
+    """Field finding: best.jsonl pointing at a pruned run silently produced
+    a cell with no phrases. The converter refuses instead."""
+    db_root = tmp_path / "cells"
+    base = make_cell(db_root, "mnoa", "Apr2098")
+    enr = base / "enrichments" / "doc"
+    enr.mkdir(parents=True)
+    (enr / "best.jsonl").symlink_to(enr / "pruned-run.jsonl")
+    with pytest.raises(ConvertError) as ei:
+        convert(db_root, tmp_path / "out", verify_n=0)
+    assert ei.value.code == "CNV-011"

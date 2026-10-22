@@ -32,6 +32,7 @@ Error codes (stable, content-free — NFR-9):
     CNV-008  overlay fold failure
     CNV-009  no cells found under the input root
     CNV-010  FTS5 requested — schema 2 stores the vanilla index only
+    CNV-011  best.jsonl is a dangling link (pin the run with --enrich-run)
 
 The report (stdout + <out>/conversion-report.json) carries counts and
 digests only — never requirement text, titles, or enrichment words (D-012).
@@ -247,6 +248,10 @@ def _load_cell(base: Path, cell: CellKey, enrich_run: str, use_latest: bool) -> 
         run_id = run_dir.name
     if phrases_path is None:
         fallback = base / "enrichments" / "doc" / "best.jsonl"
+        if fallback.is_symlink() and not fallback.exists():
+            # Field finding: a best pointer to a pruned run silently produced
+            # a cell with no phrases. Refuse; pin the run with --enrich-run.
+            raise ConvertError("CNV-011", f"enrichments/doc/best.jsonl is a dangling link in {cell_dirname(cell)} — pin the run with --enrich-run")
         if fallback.exists() and fallback.stat().st_size > 0:
             phrases_path = fallback
             run_id = "best"
