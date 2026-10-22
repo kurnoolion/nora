@@ -1691,6 +1691,19 @@ def cell_reload(cell_name: str, label: str = "") -> dict[str, Any]:
             "requirements": len(fresh.doc_ids)}
 
 
+def _missing_prompts() -> list[str]:
+    """Prompts the configuration needs but the service did not load: the
+    query prompt when query expansion is on, the rerank prompt when an
+    LLM rerank backend is on (tei / openai-dedicated need none)."""
+    missing: list[str] = []
+    if _QUERY_ENRICH_ENABLED and not _query_prompt_template:
+        missing.append("query")
+    if (_RERANK_ENABLED and _RERANK_BACKEND not in ("tei", "openai-dedicated")
+            and not _rerank_prompt_template):
+        missing.append("rerank")
+    return missing
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
     # Multi-cell (D-DRAFT-7): aggregate health across loaded cells. A pure
@@ -1701,8 +1714,13 @@ def healthz() -> dict[str, Any]:
     )
     first_meta = next(
         (c.db_meta for c in _cells.values() if c.db_meta), {}) if multi else {}
+    missing = _missing_prompts()
     return {
-        "ok": multi or (_bm25 is not None),
+        # A configured-but-missing prompt is a failure, not a warning: the
+        # service would serve without expansion or rerank and stay "healthy"
+        # (field-found after an uncached image rebuild dropped the files).
+        "ok": (multi or (_bm25 is not None)) and not missing,
+        "missing_prompts": missing,
         "mode": "multi-cell" if multi else "single-dataset",
         # corp-db-layer phase 2: where cells come from + which engine
         # scores. flat/bm25x-flat is today's path; golden StackStamps key
@@ -1807,6 +1825,11 @@ def healthz() -> dict[str, Any]:
             # digest (field-found — engine arms pooled as one stack).
             "index_mode": _INDEX_MODE,
             "engine": _ENGINE if _INDEX_MODE == "cell-db" else "flat",
+            # Prompt presence shapes retrieval too: without the query prompt
+            # expansion is skipped (field-found — two runs differing only in
+            # a missing prompt keyed as comparable).
+            "query_prompt_loaded": bool(_query_prompt_template),
+            "rerank_prompt_loaded": bool(_rerank_prompt_template),
             "max_df_ratio": _MAX_DF_RATIO,
             "max_df_absolute": _max_df_absolute,
             "expansion_weight": _EXPANSION_WEIGHT,

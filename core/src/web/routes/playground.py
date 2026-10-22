@@ -46,9 +46,8 @@ router = APIRouter()
 # production deployments this typically points at a same-host service
 # the operator started alongside NORA's web app. See sandbox/SETUP.md
 # "Per-query SIRA probe" for the full launch procedure.
-_STORE_URL = os.getenv(
-    "NORA_STORE_URL", "http://127.0.0.1:8040",
-).rstrip("/")
+_STORE_URL = (os.getenv("NORA_STORE_URL", "").strip()
+              or "http://127.0.0.1:8040").rstrip("/")   # empty = unset
 
 # Timeout matches the SIRA service's own LLM call timeout (300s per
 # llm_call) plus rerank-stage budget. At concurrency=1 + ~36s/call on

@@ -112,6 +112,13 @@ COPY --from=sira-src /sira/ sandbox/sira/
 # did this on the host against the vendored clone.
 RUN if [ "$OFFLINE" = "1" ]; then echo "offline: clone pre-patched by prep-offline.sh"; \
     else bash sandbox/install_configs.sh; fi
+# Fail the build, not the first query, when the prompts the service loads by
+# default are absent (field-found: an uncached rebuild dropped them and the
+# service served without expansion or rerank).
+RUN for f in enrich/prompts/query_requirement_v01.txt \
+             rerank/prompts/relevance_requirement_v01.txt; do \
+      test -s "sandbox/sira/scripts/configs/$f" || { echo "missing prompt: $f" >&2; exit 1; }; \
+    done
 
 # --------------------------------------------------------------- nora-store --
 FROM sira-base AS nora-store

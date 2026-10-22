@@ -40,9 +40,13 @@ api = APIRouter(prefix="/api/enrich-review")
 # nora-store endpoints (same wiring as the test page's SIRA lane). Apply
 # loops over every URL in NORA_STORE_URLS (comma-separated, e.g. both
 # a/b stacks); reads use the first.
-_SIRA_URLS = [u.strip().rstrip("/") for u in os.getenv(
-    "NORA_STORE_URLS",
-    os.getenv("NORA_STORE_URL", "http://127.0.0.1:8040"),
+# An empty value counts as unset (field-found: an env file carrying
+# `NORA_STORE_URLS=` left the list empty, so Apply reloaded nothing and
+# still returned 200).
+_SIRA_URLS = [u.strip().rstrip("/") for u in (
+    os.getenv("NORA_STORE_URLS", "").strip()
+    or os.getenv("NORA_STORE_URL", "").strip()
+    or "http://127.0.0.1:8040"
 ).split(",") if u.strip()]
 
 

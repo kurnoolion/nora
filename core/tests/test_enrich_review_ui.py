@@ -370,3 +370,20 @@ class TestApplyAll:
                          "http://b:8041/cells/GP__Feb2026/reload",
                          "http://a:8040/cells/GP__Nov2025/reload",
                          "http://b:8041/cells/GP__Nov2025/reload"]
+
+
+def test_empty_store_urls_value_counts_as_unset(monkeypatch):
+    """Field finding: `NORA_STORE_URLS=` in an env file emptied the list, so
+    Apply reloaded nothing and still returned 200."""
+    import importlib
+    import core.src.web.routes.enrich_review as er
+    monkeypatch.setenv("NORA_STORE_URLS", "")
+    monkeypatch.setenv("NORA_STORE_URL", "http://example.test:1")
+    er = importlib.reload(er)
+    assert er._SIRA_URLS == ["http://example.test:1"]
+    monkeypatch.setenv("NORA_STORE_URL", "")
+    er = importlib.reload(er)
+    assert er._SIRA_URLS == ["http://127.0.0.1:8040"]
+    monkeypatch.delenv("NORA_STORE_URLS")
+    monkeypatch.delenv("NORA_STORE_URL")
+    importlib.reload(er)
