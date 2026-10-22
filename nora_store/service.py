@@ -1691,6 +1691,14 @@ def cell_reload(cell_name: str, label: str = "") -> dict[str, Any]:
             "requirements": len(fresh.doc_ids)}
 
 
+def _short_sha(text: str) -> str:
+    """12-hex sha256 of a prompt's content; "" when not loaded."""
+    if not text:
+        return ""
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
 def _missing_prompts() -> list[str]:
     """Prompts the configuration needs but the service did not load: the
     query prompt when query expansion is on, the rerank prompt when an
@@ -1830,6 +1838,11 @@ def healthz() -> dict[str, Any]:
             # a missing prompt keyed as comparable).
             "query_prompt_loaded": bool(_query_prompt_template),
             "rerank_prompt_loaded": bool(_rerank_prompt_template),
+            # WHICH prompt: a short content hash, so a prompt-version change
+            # (not just a missing prompt) breaks golden comparability. The
+            # scheme tag alone says nothing about the serving prompts.
+            "query_prompt_sha": _short_sha(_query_prompt_template),
+            "rerank_prompt_sha": _short_sha(_rerank_prompt_template),
             "max_df_ratio": _MAX_DF_RATIO,
             "max_df_absolute": _max_df_absolute,
             "expansion_weight": _EXPANSION_WEIGHT,

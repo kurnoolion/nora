@@ -64,3 +64,24 @@
   baked in by D-040. Related prior art: the 2026-05-02 chunk-augmentation
   flag (include_children_titles default-off — parents displacing children in
   cross-doc retrieval is a known corpus property).
+
+## 2026-10-22 — document and query prompts were on different versions
+
+### Flags
+- Documents were enriched with the `_v02` doc prompt while every serving
+  stack expanded queries with the `_v01` query prompt (the store's default
+  path; the `_v02` files come from an internal install step). Only the
+  query-expansion prompt affects retrieval today: LLM rerank is off.
+- The prompt-scheme tag (`scheme-v1` / `scheme-v2`) is set at promote time
+  and says nothing about the serving prompts.
+
+### Done
+- Serving moves to the `_v02` query and rerank prompts by deployment
+  configuration (`NORA_QUERY_PROMPT` / `NORA_RERANK_PROMPT`), so both sides
+  use one version.
+- `query_prompt_sha` / `rerank_prompt_sha` in the store's retrieval knobs:
+  a prompt-version change now breaks golden-run comparability.
+
+### Next
+- A new Stage-1 baseline per stack after the switch (repeat runs: query
+  expansion is run-to-run noisy).

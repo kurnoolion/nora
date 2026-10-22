@@ -364,3 +364,34 @@
 
 ### Next
 - Review the design; then S1–S3 and the trial checkpoint.
+
+## 2026-10-22 — S1–S3 checkpoint passed on trial; trial serves store-split
+
+### Done this session
+- S1–S3 and the deep rename on branch `store-split`: shared
+  `req_fingerprint`; cell DB schema 2 (vanilla index + raw SIRA phrases +
+  fingerprints, overlay composed at load); `core/src/stores` Overlay store
+  (JSON default, SQLite opt-in); images `nora-store` / `nora-batch`,
+  package `nora_store`, route `/query`, `NORA_STORE_*` service variables.
+- Trial checkpoint passed and trial stays migrated: identity gate 25/25
+  probes on all 5 cells; data fingerprints 5/5 and enriched docs equal;
+  0 of 21 retrieval knobs changed; health ok with both prompts; gated Ask
+  200; review Apply on cell-db works (was 409 on schema 1).
+- Golden Stage-1 within noise, not identical: two runs with identical
+  stamps differ on 36 of 39 samples (LLM query expansion varies); recall
+  0.683 before, 0.660 / 0.678 after.
+- Fixed along the way: package-move path bugs (clone root, git root);
+  dangling `best.jsonl` refused (CNV-011); missing configured prompts fail
+  health and the image build; prompt presence keys golden runs; an empty
+  store-URL value counts as unset.
+
+### Next
+- S4 Trees store, S5 History, S6 store HTTP routes and clients.
+- Merge `store-split` to main, then migrate stack-A and stack-B.
+- `nora-store-test` build target with pytest so the bm25x suites run.
+
+### Flags
+- The converter needs bm25x, which `nora-batch` lacks; it runs in the
+  `nora-store` image for now (argues for merging the two batch images).
+- Store default prompts are `_v01` while the batch lanes use `_v02`; moving
+  the store default changes Stage-1 behaviour and needs a new baseline.

@@ -46,3 +46,14 @@ def test_missing_prompt_fails_health_and_shows_in_knobs(svc, monkeypatch):
     assert h["ok"] is False and h["missing_prompts"] == ["query"]
     assert h["retrieval_knobs"]["query_prompt_loaded"] is False
     assert h["retrieval_knobs"]["rerank_prompt_loaded"] is True
+
+
+def test_prompt_content_hash_is_in_the_knobs(svc, monkeypatch):
+    monkeypatch.setattr(svc, "_query_prompt_template", "version one")
+    monkeypatch.setattr(svc, "_rerank_prompt_template", "")
+    a = svc.healthz()["retrieval_knobs"]
+    monkeypatch.setattr(svc, "_query_prompt_template", "version two")
+    b = svc.healthz()["retrieval_knobs"]
+    assert a["query_prompt_sha"] and a["query_prompt_sha"] != b["query_prompt_sha"]
+    assert len(a["query_prompt_sha"]) == 12
+    assert a["rerank_prompt_sha"] == ""
