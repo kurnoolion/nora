@@ -7,11 +7,11 @@ Scope: 4a + 4b now; 4c (corp deployment) waits on storage-design §8 points 2 an
 
 | # | Change |
 |---|---|
-| S1 | `req_fingerprint` in one shared module; computed at build; tests pin the normalization. |
+| S1 | `text_fp` (was `req_fingerprint`) in one shared module, canonical form v2, versioned values; computed at build; tests pin the normalization. |
 | S2 | Cells v2: converter writes the vanilla index and `sira_phrases` (raw, per run), no effective set; `schema_version` 2. nora-store composes at load (§4); no cache (measured, D-DRAFT-23). Identity gate: v2 composed index == today's baked index on the same inputs. |
 | S3 | `OverlayStore`: SQLite backend, one-time import of the per-MNO JSON corrections (provenance kept), fingerprint recorded per edit. nora-web writes through it; nora-store reads through it. Apply works in cell-db mode. |
 | S4 | `TreeStore`: protocol; file backend over `out/parse` (today's `req_tree` logic moves behind it); SQLite backend and builder. |
-| S5 | `HistoryStore`: builder from `TreeStore` across releases; SQLite; status and roll-ups. |
+| S5 | `HistoryStore` (design §6a): builder from `TreeStore` across an MNO's releases computing `node_fp` / `subtree_fp`; version intervals + content-addressed text in SQLite; the six query kinds. |
 | S6 | `/stores/<store>/v1` routes and HTTP clients; tests that local and HTTP implementations return the same results. |
 
 Checkpoint after S2–S3: rebuild, trial stack on Cells v2 + Overlay

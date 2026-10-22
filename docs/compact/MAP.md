@@ -221,7 +221,7 @@ nora/
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
 │   │   │   ├── document.py                              # Normalized intermediate representation for extracted documents.
-│   │   │   └── fingerprint.py                           # Requirement content fingerprint — the join key across stores and releases.
+│   │   │   └── fingerprint.py                           # Requirement fingerprints — the join key across stores and releases.
 │   │   ├── parser/                                      # Generic, profile-driven structural parser.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py
@@ -302,6 +302,8 @@ nora/
 │   │   ├── stores/                                      # Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`).
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py                              # Data stores behind service interfaces (strand corp-db-layer,
+│   │   │   ├── history.py                               # History store — release lineage of an MNO's plans, sections and
+│   │   │   ├── history_build.py                         # Build the History store: one SQLite DB per MNO (strand corp-db-layer S5).
 │   │   │   ├── overlay.py                               # Overlay store — review edits to SIRA enrichments (store-split-design §2,
 │   │   │   ├── overlay_import.py                        # One-time import of the JSON Overlay into SQLite (strand corp-db-layer S3).
 │   │   │   ├── trees.py                                 # Trees store — parsed requirement trees per (MNO, release) cell
@@ -501,7 +503,7 @@ nora/
 │       ├── test_layout_provider_foundation.py           # Phase-1 foundation for the Docling/LayoutProvider integration (mno-c-ingestion).
 │       ├── test_llm_refusal.py                          # Refusal detection + fallback provider (core twin of the sandbox
 │       ├── test_model_discovery.py                      # Model discovery cache for the Ask page (strand llm-model-discovery).
-│       ├── test_models_fingerprint.py                   # req_fingerprint — the cross-store join key (store-split-design §3).
+│       ├── test_models_fingerprint.py                   # Fingerprints — text_fp (the cross-store join key) and the History
 │       ├── test_openai_provider.py                      # Tests for OpenAICompatibleProvider — fully mocked, no network.
 │       ├── test_parse_audit.py                          # Tests for the per-document parse-audit tool (parse_audit.py).
 │       ├── test_parse_log.py                            # Tests for ParseLog generation: dropped block recording, range merging,
@@ -541,6 +543,7 @@ nora/
 │       ├── test_revhist_scoring.py                      # Tests for the signal-based revhist scorer (RevhistDetection).
 │       ├── test_stages_per_cell.py                      # Per-cell stage routing tests (D-DRAFT-6/7/10).
 │       ├── test_standards.py                            # Tests for the standards ingestion pipeline (Step 7).
+│       ├── test_stores_history.py                       # Tests for core/src/stores/history.py + history_build.py (strand
 │       ├── test_stores_overlay.py                       # Tests for core/src/stores/overlay.py + overlay_import.py (strand
 │       ├── test_stores_trees.py                         # Tests for core/src/stores/trees.py + trees_build.py (strand corp-db-layer
 │       ├── test_strike_runs.py                          # Tests for the unified strike model [D-060].

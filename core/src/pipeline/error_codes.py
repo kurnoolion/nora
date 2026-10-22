@@ -144,6 +144,13 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("TRS-E005", "Trees DB verification failed for cell {cell} — {what}: {count} mismatch(es)", "Nothing was replaced; check the cell for nested or oddly named tree files"),
     ErrorDef("TRS-E006", "Trees DB write failed: {reason}", "Check the --out path, permissions and free space"),
 
+    # --- History store (HIS) — core.src.stores.history_build (strand corp-db-layer S5) ---
+    ErrorDef("HIS-E001", "Trees store has no cells ({source})", "Build the Trees store first, or point --env-dir / --trees-root at one with parse trees"),
+    ErrorDef("HIS-E002", "History DB already exists: {path}", "Pass --force to replace it, or choose another --out dir"),
+    ErrorDef("HIS-E003", "Requested MNO has no cells in the Trees store: {mno}", "Name MNOs as they appear in the Trees store's cells"),
+    ErrorDef("HIS-E004", "History DB write failed: {reason}", "Check the --out path, permissions and free space"),
+    ErrorDef("HIS-E005", "History DB verification failed for {mno} — {what}: {count} mismatch(es)", "Nothing was replaced; rebuild the Trees store for that MNO and retry"),
+
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),

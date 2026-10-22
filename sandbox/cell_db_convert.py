@@ -84,7 +84,7 @@ CREATE TABLE corpus(
                                         -- is last-wins (max doc per id).
   title   TEXT NOT NULL DEFAULT '',
   text    TEXT NOT NULL DEFAULT '',
-  fingerprint TEXT NOT NULL DEFAULT ''  -- req_fingerprint; '' for composite
+  fingerprint TEXT NOT NULL DEFAULT ''  -- text_fp; '' for composite
                                         -- doc:/section: rows and pre-sidecar builds
 );
 CREATE INDEX corpus_req_id_idx ON corpus(req_id);

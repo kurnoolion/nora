@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from core.src.models.fingerprint import req_fingerprint
+from core.src.models.fingerprint import text_fp
 from core.src.pipeline.error_codes import CODES
 from core.src.stores import trees_build
 from core.src.stores.trees import (
@@ -125,7 +125,7 @@ def test_parity_every_method(stores):
         assert f.find_req(rid) == s.find_req(rid)
         assert f.find_req(rid.lower(), ignore_case=True) == \
             s.find_req(rid.lower(), ignore_case=True)
-    fp = req_fingerprint("title REQ_A_0001", "body of REQ_A_0001")
+    fp = text_fp("title REQ_A_0001", "body of REQ_A_0001")
     for mno in ("", "mno-a", "mno-b"):
         assert f.find_by_fingerprint(fp, mno) == s.find_by_fingerprint(fp, mno)
 
@@ -178,14 +178,14 @@ def test_traversal(stores, backend):
 @pytest.mark.parametrize("backend", [0, 1])
 def test_find_by_fingerprint_across_cells(stores, backend):
     st = stores[backend]
-    fp = req_fingerprint("title REQ_A_0001", "body of REQ_A_0001")
+    fp = text_fp("title REQ_A_0001", "body of REQ_A_0001")
     rows = st.find_by_fingerprint(fp)
     assert [(r["mno"], r["release"], r["req_id"]) for r in rows] == [
         ("mno-a", "Jan2031", "REQ_A_0001"), ("mno-a", "Apr2031", "REQ_A_0001"),
         ("mno-b", "Jan2031", "REQ_C_0001")]
     assert set(rows[0]) == set(st.find_req("REQ_A_0001")[0])
     assert len(st.find_by_fingerprint(fp, "mno-b")) == 1
-    changed = req_fingerprint("title REQ_A_0002", "changed body")
+    changed = text_fp("title REQ_A_0002", "changed body")
     assert [r["release"] for r in st.find_by_fingerprint(changed)] == ["Apr2031"]
 
 

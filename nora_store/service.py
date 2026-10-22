@@ -501,7 +501,7 @@ class CellState:
     overlay_snapshot: dict = field(default_factory=dict)
     accepted_snapshot: set = field(default_factory=set)
     _token_cache: dict[str, frozenset] = field(default_factory=dict)
-    # req_id -> req_fingerprint (store-split-design §3): schema-2 cell DBs
+    # req_id -> text_fp (store-split-design §3): schema-2 cell DBs
     # carry them; flat cells read the adapter sidecar. Empty = unknown, and
     # overlay records then fall back to the Jaccard guard.
     fingerprints: dict[str, str] = field(default_factory=dict)

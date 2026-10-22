@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol, runtime_checkable
 from urllib.parse import quote
 
-from core.src.models.fingerprint import req_fingerprint
+from core.src.models.fingerprint import FINGERPRINT_VERSION, text_fp
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,9 @@ def req_plan(req: dict, tree: dict) -> str:
     return req.get("plan_id") or tree.get("plan_id") or ""
 
 
-def node_fingerprint(req: dict) -> str:
-    """``req_fingerprint`` over the requirement's title and body."""
-    return req_fingerprint(_s(req.get("title")), _s(req.get("text")))
+def req_text_fp(req: dict) -> str:
+    """``text_fp`` over the requirement's title and body."""
+    return text_fp(_s(req.get("title")), _s(req.get("text")))
 
 
 def build_tree_hierarchy(reqs: list[dict]) -> list[dict]:
@@ -277,7 +277,7 @@ class _DocIndex:
 
     def fingerprints(self) -> list[str]:
         if self.fps is None:
-            self.fps = [node_fingerprint(r) for r in self.reqs]
+            self.fps = [req_text_fp(r) for r in self.reqs]
         return self.fps
 
 
@@ -551,7 +551,7 @@ def write_tree_db(db_path: "str | Path", mno: str, release: str,
                     _s(req.get("section_number")), _s(req.get("title")),
                     _s(req_plan(req, tree)),
                     None if is_req is None else int(bool(is_req)),
-                    node_fingerprint(req),
+                    req_text_fp(req),
                     json.dumps(req, ensure_ascii=False)))
             con.executemany(
                 "INSERT INTO node (id, doc_id, seq, parent_id, path, depth, req_id,"
@@ -569,6 +569,7 @@ def write_tree_db(db_path: "str | Path", mno: str, release: str,
             "n_docs": str(n_docs),
             "n_nodes": str(n_nodes),
             "source_fingerprint": source_fingerprint,
+            "fingerprint_version": FINGERPRINT_VERSION,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         con.executemany("INSERT INTO meta (key, value) VALUES (?, ?)",
@@ -679,6 +680,11 @@ class SqliteTreeStore:
 
     def list_cells(self) -> list[dict]:
         return [{"mno": m, "release": r} for m, r in self._cells()]
+
+    def cell_meta(self, mno: str, release: str) -> dict[str, str]:
+        """The cell DB's ``meta`` table; {} when the cell is absent."""
+        p = self._cells().get((mno, release))
+        return dict(self._meta_cache[str(p)][2]) if p is not None else {}
 
     def list_docs(self, mno: str = "", release: str = "") -> list[str]:
         out: list[str] = []

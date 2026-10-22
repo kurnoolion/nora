@@ -2,7 +2,7 @@
 
 import json
 
-from core.src.models.fingerprint import req_fingerprint
+from core.src.models.fingerprint import text_fp
 from sandbox.adapter.nora_to_beir import FINGERPRINTS_NAME, _emit_corpus
 
 
@@ -23,7 +23,7 @@ def test_sidecar_has_one_fingerprint_per_requirement_row(tmp_path):
     _emit_corpus([_tree(reqs)], out)
     rows = [json.loads(line) for line in (out.parent / FINGERPRINTS_NAME).read_text().splitlines()]
     assert [r["_id"] for r in rows] == ["REQ-A-1", "REQ-A-2"]
-    assert rows[0]["fingerprint"] == req_fingerprint("Retry", "Retry after T1.")
+    assert rows[0]["fingerprint"] == text_fp("Retry", "Retry after T1.")
 
 
 def test_fingerprint_ignores_section_number(tmp_path):

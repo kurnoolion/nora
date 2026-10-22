@@ -25,12 +25,34 @@ Cells, Trees and History are immutable per version. Overlay is the only
 mutable store, so corrections go live without a republish (D-DRAFT-21
 withdrawn, D-DRAFT-24).
 
-## 3. Shared requirement fingerprint
+## 3. Fingerprints
 
-`req_fingerprint` = sha256 of the normalized requirement content (title,
-body, tables; whitespace and case normalized). Computed once at build,
-stored in Cells, Trees and History, and recorded on every Overlay edit.
-It is the join key across stores and releases.
+Three requirement-level hashes, each with one job (D-DRAFT-27). Each value
+carries its canonical-form version (`v2:<sha256>`), so values from
+different versions never compare equal.
+
+| Hash | Covers | Used by |
+|---|---|---|
+| `text_fp` | title + body (tables inline), canonical form | the shared join key: SIRA adapter sidecar, Cells, Overlay edits and fold, Trees |
+| `node_fp` | `text_fp` + priority + applicability | History: did the node itself change? |
+| `subtree_fp` | `node_fp` + one entry per child, **in document order**: hash of (child key, child location, child `subtree_fp`) | History: did anything under it change? |
+
+**Canonical form (v2):** Unicode NFKC, case fold, typographic variants
+unified (quotes, dashes, bullets), whitespace collapsed to one space,
+trimmed. Display text is never altered. Numbers, units, modal verbs and
+negations stay significant. Location (section number, path), plan,
+context and cross-references are excluded: a move is recorded as a
+location change, not a content change.
+
+`text_fp` says the requirement's own content is unchanged; it does not say
+its SIRA enrichment is still valid, because phrases are generated from the
+full corpus row (context and cross-references included). Reusing
+enrichment across releases must key on a hash of the corpus row.
+
+Only `text_fp` leaves History. `node_fp` and `subtree_fp` are computed when
+History is built from Trees. Data, prompt, profile and overlay digests
+elsewhere in the code are a different kind of fingerprint and keep their
+names.
 
 ## 4. Index composition (Cells + Overlay → BM25)
 
@@ -87,13 +109,53 @@ in Cells stays optional).
   `req_body(req_id, text, tables_json, fingerprint)`. `path` is a
   zero-padded ordinal path, indexed: subtree = range scan, ancestors =
   prefixes; `WITH RECURSIVE` for the rest (Postgres: `ltree`).
-- **History:** `node(key, kind, parent_key, path)`,
-  `presence(key, release, fingerprint, status)`,
-  `rollup(key, release, changed_descendants)` (materialized at build).
-  Key = (plan_id, req_id) for requirements, (plan_id, section_number) for sections.
+- **History:** one DB per MNO (§6a).
 - **Overlay:** `edit(id, mno, req_id, fingerprint, op, word, label, reason_json, by, at, origin_release)`,
   `suppress(mno, req_id, …)`, `accepted_label(label)`. Records are never
   rewritten (provenance), as today.
+
+## 6a. History — structure and queries
+
+**Identity.** A node's key is stable across releases: a plan is its
+`plan_id`; a section is `(plan_id, section_number)`; a requirement is
+`(plan_id, req_id)`, with its section kept as a location attribute. A
+renumbered section is a removed node plus an added node; a requirement that
+moves keeps its key and records a new location.
+
+**Tables** (SQLite, Postgres-portable):
+
+| Table | Holds |
+|---|---|
+| `release(mno, release, ord)` | release order |
+| `node(key, kind, plan_id, local_id, parent_key)` | stable identity, the latest parent |
+| `version(node_key, valid_from, valid_to, node_fp, subtree_fp, child_set_fp, text_fp, attrs_json, location_json)` | a row only when a hash or the location changes; `valid_to` empty while current |
+| `content(text_fp, title, text)` | content-addressed: each distinct text stored once (first-seen spelling) |
+
+`child_set_fp` hashes the same child entries sorted: when it is equal and
+`subtree_fp` differs, the change is a **reorder**. A child entry carries
+the child's key and location, not only its hash: with bare hashes a
+renumbered section or a same-content rename would leave every ancestor's
+`subtree_fp` unchanged and the diff descent would never reach it.
+
+**Change kinds between two releases:** added, removed, changed (`node_fp`),
+moved (location), reordered (above); a likely rename (a new key whose
+`text_fp` equals a removed key's) is tagged on the added/removed pair, not
+counted instead of it.
+
+**Queries:**
+
+| Question | Query |
+|---|---|
+| Version history of a requirement (from–to, default oldest→latest) | its `version` rows; consecutive `content` rows diffed word by word |
+| Version history of a plan | the same for every node under the plan whose `subtree_fp` differs between releases |
+| When did a requirement last change? | the latest `valid_from` with a new `node_fp` |
+| When did a plan last change? | the latest `valid_from` with a new `subtree_fp` on the plan node |
+| Changes between two releases of an MNO | descend from the plans, only into nodes whose `subtree_fp` differs; counts per change kind per plan and section, plus the diffs |
+| Changes in the latest release | the same for releases N and N−1 |
+
+Summaries are deterministic (counts, most-changed sections, diffs); an LLM
+paragraph may be written over them, never in place of them. Mapping a name
+such as a plan's display name to a `plan_id` belongs to the query layer.
 
 ## 7. Publish (replaces storage-design §5a step 1)
 
@@ -114,8 +176,7 @@ rollback by flip. Overlay is not published; it lives with the deployment.
 
 ## 9. Open questions
 
-1. History keys when a requirement moves section or is renumbered across
-   releases: key on req_id only, with section as an attribute?
+1. ~~History keys~~ — decided 2026-10-22 (§6a).
 2. Overlay retention: purge held edits after N releases?
 3. Corp metrics/config DBs and transfer (storage-design §8 points 2, 3).
 4. Corp backend for the mutable stores (Overlay, registry): Postgres if
