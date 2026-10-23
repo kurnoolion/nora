@@ -17,7 +17,7 @@ Scope: 4a + 4b now; 4c (corp deployment) waits on storage-design §8 points 2 an
 Checkpoint after S2–S3: rebuild, trial stack on Cells v2 + Overlay
 store; golden Stage-1 equal to the current trial; review Apply works.
 
-## 4b — publish (against a stand-in corp volume)
+## 4b — publish (against a stand-in corp volume) — design: `publish-design.md`
 
 | # | Change |
 |---|---|

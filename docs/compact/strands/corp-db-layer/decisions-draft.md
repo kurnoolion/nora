@@ -502,3 +502,9 @@ section.
 **Decision:** Design §9: readers ignore unknown keys and tolerate missing additive columns; `schema_version` bumps only for breaking changes, with migrate-on-read or a refuse-and-rebuild code; Overlay alone gets in-place migrations; HTTP `/v1` → `/v2` on break.
 **Why:** Parse trees will grow fields; rebuilding every store for each is not acceptable. Rejected: strict schemas with a bump per field — every addition would force rebuilds.
 **Consequences:** Tolerance tests per store; a column is promoted only when queried.
+
+## D-DRAFT-30 — Publish by registry: store versions per unit, release sets by label, gated flips
+
+**Decision:** `publish-design.md`: content-fingerprinted store versions per cell/MNO, reused when unchanged; a release set named by the build label; stage (temp + sha256 + rename, pluggable transfer) → recorded golden gate (expansion-off deterministic + expansion-on quality) → flip of `active` rows in one transaction; rollback = flip back; nora-store reads `active` via `NORA_STORE_REGISTRY`.
+**Why:** Keeps promote/flip's properties (identity, explicit go, one-command rollback) while pushing only changed units and making "what served when" a table. Rejected: whole-label snapshots in corp — every release re-ships every cell; date ids — break continuity with eval stamps.
+**Consequences:** Dev stacks keep promote.sh/serve-flip until B8 passes on trial; the registry is the second mutable store and follows the Overlay's backend rule.
