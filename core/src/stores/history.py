@@ -700,6 +700,8 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
             loc = json.loads(n["location_json"])
             out.append({"key": key, "node": n["kind"], "plan_id": n["plan_id"],
                         "local_id": n["local_id"],
+                        # what /req/last-changed and req_history take
+                        "req_id": n["local_id"] if n["kind"] == REQUIREMENT else "",
                         "section": (n["local_id"] if n["kind"] == SECTION
                                     else loc.get("section", "")),
                         "change": kinds,

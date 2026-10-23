@@ -107,7 +107,8 @@ erDiagram
 - `meta` keys: `schema_version` (2), `converter_version`, `cell_mno`,
   `cell_release`, `source_label`, `source_fingerprint` (identity of the
   served data: sha256 over `corpus.jsonl` + the phrase file), `enrich_run`,
-  `enrich_model`, `sira_docs`, `fingerprinted_docs`, `n_docs`,
+  `enrich_model`, `sira_docs`, `fingerprinted_docs`, `fingerprint_version`
+  (empty when the label predates the adapter sidecar), `n_docs`,
   `bm25x_max_n`, `bm25x_ngrams`, `index_files`, `created_at`.
 - **Not stored:** effective (post-overlay) phrases, review edits, an
   enriched index. Schema 1 (baked enriched index, `enrichment` table) is

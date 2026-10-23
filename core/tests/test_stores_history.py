@@ -313,3 +313,28 @@ def test_word_diff():
         {"op": "eq", "text": "a"}, {"op": "del", "text": "b"},
         {"op": "add", "text": "x"}, {"op": "eq", "text": "c"}]
     assert word_diff("", "") == []
+
+
+def test_change_rows_carry_req_id_and_the_route_takes_a_key(built):
+    """Field finding: a change row's `key` passed as req_id to
+    /req/last-changed answered 200 with no release. Rows now carry
+    `req_id`; the route also accepts `key=`."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from core.src.stores.api import history_router
+    from core.src.stores.history import REQUIREMENT
+    h, _, _ = built
+    rels = h.releases(MNO)
+    rows = [r for a, b in zip(rels, rels[1:])
+            for r in h.diff_releases(MNO, a, b)["changes"] if r["node"] == REQUIREMENT]
+    assert rows and all(r["req_id"] == r["local_id"] for r in rows)
+    app = FastAPI(); app.include_router(history_router(h))
+    c = TestClient(app)
+    row = rows[0]
+    by_id = c.get("/stores/history/v1/req/last-changed",
+                  params={"mno": MNO, "plan_id": row["plan_id"], "req_id": row["req_id"]}).json()
+    by_key = c.get("/stores/history/v1/req/last-changed",
+                   params={"mno": MNO, "key": row["key"]}).json()
+    assert by_id == by_key and by_id
+    assert c.get("/stores/history/v1/req/last-changed",
+                 params={"mno": MNO, "key": "not json"}).status_code == 422

@@ -52,6 +52,7 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.src.models.fingerprint import FINGERPRINT_VERSION
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells
 from core.src.stores.overlay import open_overlay_store
 from nora_store.enrich_overlay import (
@@ -441,6 +442,7 @@ def _write_db(cd: CellData, out_dir: Path, source_label: str,
 
         fingerprint = _sha256_files(
             [cd.base / "raw" / "corpus.jsonl", cd.enrich_source])
+        n_fp = sum(1 for r in cd.rows if cd.fingerprints.get(r[1]))
         meta = {
             "schema_version": str(SCHEMA_VERSION),
             "converter_version": CONVERTER_VERSION,
@@ -452,7 +454,10 @@ def _write_db(cd: CellData, out_dir: Path, source_label: str,
             "enrich_run": cd.enrich_run_id,
             "enrich_model": cd.enrich_model,
             "sira_docs": str(len(cd.llm_words)),
-            "fingerprinted_docs": str(sum(1 for r in cd.rows if cd.fingerprints.get(r[1]))),
+            "fingerprinted_docs": str(n_fp),
+            # '' when the label was adapted before the sidecar existed: review
+            # edits on this cell then take the Jaccard-guarded legacy path.
+            "fingerprint_version": FINGERPRINT_VERSION if n_fp else "",
             "bm25x_max_n": str(cd.bm25.max_n()),
             "bm25x_ngrams": json.dumps(cd.bm25.ngrams()),
             "n_docs": str(len(cd.rows)),
@@ -472,6 +477,7 @@ def _write_db(cd: CellData, out_dir: Path, source_label: str,
         "cell": cell_dirname(cd.cell),
         "n_docs": len(cd.rows),
         "sira_docs": len(cd.llm_words),
+        "fingerprinted_docs": n_fp,   # 0 = no raw/fingerprints.jsonl: re-run the adapter
         "enriched_docs": len(cd.effective),   # composed with the overlay (verify only)
         "overlay": cd.overlay_counts,
         "overlay_digest": cd.overlay_digest,
@@ -618,7 +624,10 @@ def print_report(report: dict) -> None:
         print(f"{c['cell']:24s} docs={c['n_docs']:<6d} enriched={c['enriched_docs']:<6d} "
               f"blobs={c['blob_files']}({c['blob_stored_bytes'] >> 10}K stored, "
               f"{c['blob_bytes'] >> 20}M raw) "
-              f"sira={c['sira_docs']:<6d} {vtxt}  -> {c['file']}")
+              f"sira={c['sira_docs']:<6d} fp={c.get('fingerprinted_docs', 0):<6d} {vtxt}  -> {c['file']}")
+        if not c.get("fingerprinted_docs"):
+            print(f"  WARNING {c['cell']}: no per-requirement fingerprints (raw/fingerprints.jsonl "
+                  f"absent) — review edits on this cell stay Jaccard-guarded; re-run the adapter")
 
 
 if __name__ == "__main__":

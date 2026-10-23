@@ -24,6 +24,7 @@ No `nora_store` import: this module depends on the stores package only.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
@@ -158,7 +159,17 @@ def history_router(store: "HistoryStore | Callable[[], HistoryStore | None] | No
         return _guard(lambda: st().plan_history(mno, plan_id, from_rel, to_rel))
 
     @r.get("/req/last-changed")
-    def req_last_changed(mno: str, plan_id: str, req_id: str) -> "str | None":
+    def req_last_changed(mno: str, plan_id: str = "", req_id: str = "",
+                         key: str = "") -> "str | None":
+        """`plan_id` + `req_id`, or the change row's `key` (field-found: a
+        key passed as req_id answered 200 with no release)."""
+        if key:
+            try:
+                kind, plan_id, req_id = json.loads(key)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=422, detail="key is not a node key")
+            if kind != "requirement":
+                raise HTTPException(status_code=422, detail="key is not a requirement")
         return _guard(lambda: st().last_changed(mno, plan_id, req_id))
 
     @r.get("/plan/last-changed")
