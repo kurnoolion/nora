@@ -168,6 +168,31 @@ def test_reload_swaps_only_changed_units(world):
     assert _versions(world["client"].get("/healthz").json(), "history") == {MNO_A: 1, MNO_B: 1}
 
 
+def test_reload_reports_unopened_stores_as_unchanged(world):
+    """Trees and History open lazily; a reload before anything queried
+    them must not list every unit as changed (field-found: a flip's
+    "0 changed" check read it as change)."""
+    _publish(world, "set-1", base="none")
+    _flip(world, "set-1")
+    svc._load_cells()                                        # no healthz, no store opened
+    assert "trees" not in svc._STORES and "trees" not in svc._STORES_PATHS
+    body = world["client"].post("/registry/reload").json()
+    assert body["changed"] == {"cells": [], "trees": [], "history": []}
+    body = world["client"].post("/registry/reload").json()
+    assert body["changed"] == {"cells": [], "trees": [], "history": []}
+    # the lazy open serves the current set, and a real change is still reported
+    assert len(world["client"].get("/stores/trees/v1/cells").json()) == 3
+    write_parse(world["env"], MNO_B, R1, "docB", [_req("REQ_B_1", section="1"), _req("REQ_B_2", "REQ_B_1")])
+    _publish(world, "set-2")
+    _flip(world, "set-2")
+    body = world["client"].post("/registry/reload").json()
+    # Trees was opened above, so its change is reported; History never was
+    assert body["changed"] == {"cells": [], "trees": [f"{MNO_B}__{R1}"], "history": []}
+    assert world["client"].get("/stores/history/v1/mnos").json() == [MNO_A, MNO_B]
+    body = world["client"].post("/registry/reload").json()
+    assert body["changed"] == {"cells": [], "trees": [], "history": []}
+
+
 def test_reload_drops_cells_that_left_the_set(world):
     _publish(world, "set-1", base="none")
     _flip(world, "set-1")

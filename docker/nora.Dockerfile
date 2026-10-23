@@ -68,6 +68,11 @@ CMD ["uvicorn", "core.src.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
 # ----------------------------------------------------------- nora-batch --
 FROM nora-base AS nora-batch
 ARG OFFLINE=0
+# Publish attribution: release sets record the build's code version
+# (core.src.stores.publish reads NORA_CODE_VERSION; the image has no git).
+# Pass --build-arg CODE_VERSION="$(git rev-parse --short HEAD)", as for nora-web.
+ARG CODE_VERSION=""
+ENV NORA_CODE_VERSION=$CODE_VERSION
 # Install build essentials for torch._inductor (g++ required by docling/torch
 # tensor-compile path — without a C++ compiler the layout provider aborts).
 RUN apt-get update && apt-get install -y --no-install-recommends \

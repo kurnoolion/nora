@@ -1883,11 +1883,18 @@ def registry_reload() -> dict[str, Any]:
         changed: dict[str, list[str]] = {"cells": sorted(cell_dirname(c) for c in fresh)}
         for store in ("trees", "history"):
             paths = {u: root / sv.file for u, sv in sorted(units[store].items())}
-            prev = _STORES_PATHS.get(store, {})
-            if store in _STORES and paths == prev:
+            prev = _STORES_PATHS.get(store)
+            if prev is None:
+                # Not opened in registry mode yet (lazy open, or an explicit
+                # root serves it): nothing is served from the old list, so
+                # nothing changed; the lazy open reads the new resolution.
+                changed[store] = []
+                continue
+            if paths == prev:
                 changed[store] = []
                 continue
             _STORES.pop(store, None)          # reopened lazily over the new list
+            _STORES_PATHS[store] = paths
             changed[store] = sorted(set(paths) ^ set(prev)
                                     | {u for u in paths if u in prev and paths[u] != prev[u]})
         _compute_identity()
