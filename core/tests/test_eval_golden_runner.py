@@ -129,7 +129,7 @@ def test_run_stage1_scores_and_carries_provenance(monkeypatch):
         GroundTruthEntry(req_id="REQ_FOO_0004"),
     ])
     r = run_stage1(sample, "http://127.0.0.1:9999", top_k=20)
-    assert captured["url"] == "http://127.0.0.1:9999/sira-query"
+    assert captured["url"] == "http://127.0.0.1:9999/query"
     assert captured["payload"] == {"query": "widget retry?", "top_k": 20}
     assert r.recall == pytest.approx(0.5)
     assert r.recall_at(5) == pytest.approx(0.25)

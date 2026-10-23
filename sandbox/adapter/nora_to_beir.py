@@ -4,6 +4,9 @@ Reads parsed `_tree.json` artifacts from `<env_dir>/out/parse/` and emits
 the four files in the SIRA-internal `raw/` layout:
 
   <out>/raw/corpus.jsonl         — one row per Requirement {_id, title, text}
+  <out>/raw/fingerprints.jsonl   — {_id, fingerprint} per requirement row
+                                    (`core.src.models.fingerprint`; the
+                                    cross-store join key)
   <out>/raw/queries-test.jsonl   — one row per eval question {_id, text}
                                     (from `core.src.eval.questions`)
   <out>/raw/qrels-test.jsonl     — {query-id, corpus-id, score} per qrel
@@ -58,6 +61,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+FINGERPRINTS_NAME = "fingerprints.jsonl"
+
+from core.src.models.fingerprint import text_fp
 from core.src.parser.structural_parser import build_context_string
 from core.src.vectorstore.chunk_builder import ChunkBuilder
 
@@ -564,6 +570,7 @@ def _emit_corpus(
     section_ids: list[tuple[str, str, str]] = []   # (req_id, section_number, title)
     dup_ids: list[str] = []
     noid_nodes: list[tuple[str, str]] = []          # (section_number, title)
+    fingerprints: list[tuple[str, str]] = []        # (req_id, text_fp)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with _atomic_open(out_path) as f:
         # Per-requirement rows (existing behavior, unchanged shape)
@@ -629,11 +636,19 @@ def _emit_corpus(
                     "text": _build_text(req, tree, defs_re, definitions_map, section_index),
                 }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                fingerprints.append((req_id, text_fp(
+                    req.get("title") or "", req.get("text") or "")))
                 written += 1
         # Doc-level + section-level rows (plan-aware-sira / D-DRAFT-10)
         n_doc, n_section = _emit_multigranularity_rows(
             trees, f, section_max_depth=section_max_depth,
         )
+    # Sidecar, not a corpus field: SIRA's readers stay on the BEIR row shape.
+    # Content fingerprint per requirement row — the store join key
+    # (store-split-design §3). Composite doc:/section: rows carry none.
+    with _atomic_open(out_path.parent / FINGERPRINTS_NAME) as ff:
+        for rid, fp in fingerprints:
+            ff.write(json.dumps({"_id": rid, "fingerprint": fp}) + "\n")
     print(f"  corpus.jsonl: wrote {written} per-req rows "
           f"(skipped: {skipped_no_id} no-id, {skipped_dup} duplicate, "
           f"{skipped_section} section)")

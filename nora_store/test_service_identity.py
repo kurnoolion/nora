@@ -12,9 +12,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import sandbox.sira_query.service as svc
+import nora_store.service as svc
 from sandbox.sira_cells import CellKey
-from sandbox.sira_query.service import CellState
+from nora_store.service import CellState
 
 CELL_A: CellKey = ("AAA", "May2030")
 CELL_B: CellKey = ("BBB", "Aug2031")

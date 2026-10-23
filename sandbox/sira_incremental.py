@@ -68,7 +68,7 @@ so the trace accumulates):
 
 Usage (work-PC flow, run_name pinned):
   RUN=enrich-stable
-  DS=$NORA_SIRA_DB_ROOT/$NORA_SIRA_DATASET
+  DS=$NORA_STORE_ROOT/$NORA_STORE_DATASET
 
   # 1. adapter rebuild (keeps runs/ cache):
   python -m sandbox.adapter.nora_to_beir --env-dir <env> \\

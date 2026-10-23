@@ -2,7 +2,7 @@
 
 Loads the per-(MNO, release) SQLite cell DBs that `sandbox/cell_db_convert.py`
 emits, and provides the FTS5 scoring path. The service selects this source
-with `NORA_SIRA_INDEX=cell-db`; the default (`flat`) path never imports the
+with `NORA_STORE_INDEX=cell-db`; the default (`flat`) path never imports the
 functions here at runtime, so existing deployments are untouched.
 
 Design: docs/compact/strands/corp-db-layer/{storage,converter}-design.md.
@@ -19,7 +19,10 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SUPPORTED_SCHEMA = "1"
+# 1: baked enriched index + effective `enrichment` table (served as-is).
+# 2: vanilla index + raw `sira_phrases`; the service composes the Overlay
+#    store in at load (store-split-design §4).
+SUPPORTED_SCHEMAS = ("1", "2")
 
 
 class CellDbError(Exception):
@@ -33,9 +36,12 @@ class CellDbData:
     meta: dict[str, str]
     cell: tuple[str, str]                     # (mno, release) from meta
     rows: list[tuple[int, str, str, str]]     # (doc, req_id, title, text) in doc order
-    enrichment: dict[str, list[str]]          # effective sets (post-fold, baked)
+    enrichment: dict[str, list[str]]          # schema 1: effective (baked); schema 2: SIRA raw
     index_dir: str                            # extracted bm25x blobs (temp dir)
     has_fts: bool = False
+    schema: str = "1"
+    composed: bool = False                    # True when the index blobs are vanilla (schema 2)
+    fingerprints: dict[str, str] = field(default_factory=dict)
     con: sqlite3.Connection | None = field(default=None, repr=False)
 
 
@@ -52,17 +58,19 @@ def open_ro(db_path: str | Path, *, for_queries: bool = False) -> sqlite3.Connec
 
 def load_cell_db(db_path: str | Path, *, keep_connection: bool = False) -> CellDbData:
     """Read one cell DB: meta (schema-checked), corpus rows in doc order,
-    baked enrichment sets, and the bm25x index blobs extracted to a fresh
+    the phrase sets (schema 1: baked effective; schema 2: SIRA raw, to be
+    composed by the caller), and the bm25x index blobs extracted to a fresh
     temp dir for `BM25.load`. Raises CellDbError on anything unservable."""
     db_path = str(db_path)
     con = open_ro(db_path, for_queries=keep_connection)
     try:
         meta = dict(con.execute("SELECT key, value FROM meta"))
         schema = meta.get("schema_version", "")
-        if schema != SUPPORTED_SCHEMA:
+        if schema not in SUPPORTED_SCHEMAS:
             raise CellDbError(
                 f"{Path(db_path).name}: schema_version {schema!r} unsupported "
-                f"(loader supports {SUPPORTED_SCHEMA}) — reconvert the cell")
+                f"(loader supports {', '.join(SUPPORTED_SCHEMAS)}) — reconvert the cell")
+        composed = schema == "2"
         mno, release = meta.get("cell_mno", ""), meta.get("cell_release", "")
         if not mno or not release:
             raise CellDbError(f"{Path(db_path).name}: meta lacks cell identity")
@@ -72,10 +80,15 @@ def load_cell_db(db_path: str | Path, *, keep_connection: bool = False) -> CellD
         if not rows:
             raise CellDbError(f"{Path(db_path).name}: empty corpus")
 
+        phrase_table = "sira_phrases" if composed else "enrichment"
         enrichment = {
             rid: json.loads(ph) for rid, ph in
-            con.execute("SELECT req_id, phrases FROM enrichment")
+            con.execute(f"SELECT req_id, phrases FROM {phrase_table}")
         }
+        fingerprints = (
+            {rid: fp for rid, fp in con.execute(
+                "SELECT req_id, fingerprint FROM corpus WHERE fingerprint != ''")}
+            if composed else {})
 
         index_dir = tempfile.mkdtemp(prefix=f"cell-db-{mno}-{release}-")
         for fname, codec, data in con.execute(
@@ -96,6 +109,7 @@ def load_cell_db(db_path: str | Path, *, keep_connection: bool = False) -> CellD
             db_path=db_path, meta=meta, cell=(mno, release), rows=rows,
             enrichment=enrichment, index_dir=index_dir, has_fts=has_fts,
             con=con if keep_connection else None,
+            schema=schema, composed=composed, fingerprints=fingerprints,
         )
     except Exception:
         con.close()

@@ -15,7 +15,7 @@ Usage (work PC):
         [--run <doc-enrich run name>] [--chars-per-token 3.5] \
         [--prompt-cap-tokens 50000] [--overhead-tokens 4000]
 
-Enrichments resolve like sira-query: --run pins runs/doc-enrich/<name>,
+Enrichments resolve like nora-store: --run pins runs/doc-enrich/<name>,
 else the most-recently-modified run dir, else enrichments/doc/best.jsonl.
 """
 

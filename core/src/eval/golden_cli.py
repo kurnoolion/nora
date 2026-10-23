@@ -1,7 +1,7 @@
 """Golden eval batch CLI (FR-38, strand golden-eval).
 
 Runs the golden sample set against one serving stack — Stage 1 (retrieval
-recall over ``POST /sira-query``) and optionally Stage 2 (pinned
+recall over ``POST /query``) and optionally Stage 2 (pinned
 regeneration + LLM judge). One invocation per stack; run twice with
 different ``--stack-url``/``--stack-label`` for a release A/B, then compare
 the two run reports.
@@ -156,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage", choices=["1", "all"], default="all")
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--label", default=None,
-                        help="overlay label view for /sira-query")
+                        help="overlay label view for /query")
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--graph", type=Path, default=None)
     parser.add_argument("--vectorstore-dir", type=Path, default=None)

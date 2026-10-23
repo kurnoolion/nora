@@ -10,7 +10,7 @@
 # Usage:
 #   ./push.sh <release-tag> <image[:tag]> [<image[:tag]> ...]
 #   e.g. ./push.sh images-v1-$(git rev-parse --short HEAD) \
-#            local/nora-web:dev local/sira-query:dev
+#            local/nora-web:dev local/nora-store:dev
 #
 # Env:
 #   SPLIT_MB=1900   split threshold/chunk size in MB (stay under the asset cap)

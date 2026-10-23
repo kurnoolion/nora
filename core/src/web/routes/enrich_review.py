@@ -1,8 +1,10 @@
 """Enrichment-review edit API (strand sira-enrichment-review, slice 2).
 
 The web app is the overlay's sole WRITER (D-DRAFT-4): these endpoints
-mutate `<corrections_root>/sira-enrich/` via `EnrichOverlayStore`. Reads of
-cell data (req text, LLM words, held verdicts) are proxied from sira-query
+mutate the Overlay store via `EnrichOverlayStore` (JSON files under
+`<corrections_root>/sira-enrich/`, or the `$NORA_OVERLAY_DB` SQLite file
+when set). Reads of
+cell data (req text, LLM words, held verdicts) are proxied from nora-store
 and land with the page route in a later slice; this module is the
 persistence surface only.
 
@@ -24,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from core.src.web.enrich_overlay_store import EDIT_OPS, EnrichOverlayStore
 from core.src.web.team_mode import is_admin
-from sandbox.sira_query.enrich_overlay import allowed_labels
+from nora_store.enrich_overlay import allowed_labels
 
 # edit ops that CREATE records — these must carry a label (branch); undo
 # ops only delete records and stay label-free
@@ -35,24 +37,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 api = APIRouter(prefix="/api/enrich-review")
 
-# sira-query endpoints (same wiring as the test page's SIRA lane). Apply
-# loops over every URL in NORA_SIRA_QUERY_URLS (comma-separated, e.g. both
+# nora-store endpoints (same wiring as the test page's SIRA lane). Apply
+# loops over every URL in NORA_STORE_URLS (comma-separated, e.g. both
 # a/b stacks); reads use the first.
-_SIRA_URLS = [u.strip().rstrip("/") for u in os.getenv(
-    "NORA_SIRA_QUERY_URLS",
-    os.getenv("NORA_SIRA_QUERY_URL", "http://127.0.0.1:8040"),
+# An empty value counts as unset (field-found: an env file carrying
+# `NORA_STORE_URLS=` left the list empty, so Apply reloaded nothing and
+# still returned 200).
+_SIRA_URLS = [u.strip().rstrip("/") for u in (
+    os.getenv("NORA_STORE_URLS", "").strip()
+    or os.getenv("NORA_STORE_URL", "").strip()
+    or "http://127.0.0.1:8040"
 ).split(",") if u.strip()]
 
 
 def _service_get(path: str, params: dict | None = None) -> dict:
-    """GET from the primary sira-query; service errors surface as 502."""
+    """GET from the primary nora-store; service errors surface as 502."""
     try:
         r = httpx.get(f"{_SIRA_URLS[0]}{path}", params=params or {}, timeout=15.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502,
-                            detail=f"sira-query unreachable: {exc}") from exc
+                            detail=f"nora-store unreachable: {exc}") from exc
 
 
 def _store() -> EnrichOverlayStore:
@@ -62,7 +68,8 @@ def _store() -> EnrichOverlayStore:
         raise HTTPException(
             status_code=503,
             detail="corrections_root is not configured (config/web.json "
-                   "corrections_root, $NORA_CORRECTIONS_ROOT, or config/env.json) "
+                   "corrections_root, $NORA_CORRECTIONS_ROOT, or config/env.json; "
+                   "or $NORA_OVERLAY_DB) "
                    "— the enrichment-review surface is disabled.")
     return store
 
@@ -232,17 +239,20 @@ async def row_edit(request: Request,
     word_list = [phrase] if phrase else []
     pairs = ([{"direction": direction or "remove", "word": word}]
              if op in ("reaffirm", "discard") else [])
+    # the row as served before the edit: its content fingerprint is stamped
+    # on the records this edit writes (store-split-design §3; "" from a
+    # service that predates fingerprints = legacy, Jaccard-guarded record)
+    pre = _service_get(f"/cells/{cell}/enrichments",
+                       {"req_id": req_id, "label": label}).get("rows", [])
+    fingerprint = str(pre[0].get("fingerprint") or "") if pre else ""
     if op in ("reaffirm", "discard") and direction == "__all_held__":
         # act on every held record of the req (the banner's bulk buttons):
-        svc = _service_get(f"/cells/{cell}/enrichments",
-                           {"req_id": req_id, "label": label})
-        rows = svc.get("rows", [])
         pairs = [{"direction": h.get("direction"), "word": h.get("word", "")}
-                 for h in (rows[0].get("held", []) if rows else [])]
+                 for h in (pre[0].get("held", []) if pre else [])]
 
     store.edit(mno, req_id, op, words=word_list, pairs=pairs, label=label,
                reason={"category": reason_category, "note": reason_note},
-               by=by, origin_release=release)
+               by=by, origin_release=release, fingerprint=fingerprint)
 
     svc = _service_get(f"/cells/{cell}/enrichments",
                        {"req_id": req_id, "label": label})
@@ -263,7 +273,7 @@ def export(label: str = "", mno: str = "", mode: str = "report",
            download: int = 0):
     """The label x category pivot report / prompt-fix scorecard
     (D-DRAFT-5). Plans + current LLM words come from each MNO's LATEST
-    loaded release; report mode degrades gracefully when sira-query is
+    loaded release; report mode degrades gracefully when nora-store is
     down, scorecard mode requires it (it measures against live output)."""
     from datetime import datetime, timezone
 
@@ -300,7 +310,7 @@ def export(label: str = "", mno: str = "", mode: str = "report",
     except HTTPException as exc:
         if mode == "scorecard":
             raise
-        service_note = f"sira-query unavailable — plan counts omitted ({exc.detail})"
+        service_note = f"nora-store unavailable — plan counts omitted ({exc.detail})"
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%MZ")
     if mode == "report":
@@ -331,7 +341,7 @@ async def pending(request: Request, cell: str, label: str = ""):
 @api.post("/apply", response_class=HTMLResponse)
 async def apply(request: Request, cell: str = Form(...),
                 label: str = Form("")):
-    """The expert's Apply: reload the cell on EVERY configured sira-query
+    """The expert's Apply: reload the cell on EVERY configured nora-store
     (both stacks when a/b are live) — D-DRAFT-4 self-service loop. With a
     label, only that branch variant rebuilds — the default view everyone
     else queries is untouched (branching, D-DRAFT merge workflow)."""
@@ -389,7 +399,7 @@ class ApplyAllRequest(BaseModel):
 @api.post("/apply-all")
 def apply_all(req: ApplyAllRequest) -> dict[str, Any]:
     """Apply for every stale cell of the current view, on EVERY
-    configured sira-query. Like /apply it is not admin-gated: a reload
+    configured nora-store. Like /apply it is not admin-gated: a reload
     can only sync serving to what the overlay already contains."""
     label = req.label.strip()
     cells = _stale_cells(_store(), label)
@@ -416,6 +426,7 @@ class EditRequest(BaseModel):
     reason: dict = Field(default_factory=dict)        # {category, note}
     by: str = ""
     origin_release: str = ""                          # release being VIEWED
+    fingerprint: str = ""                             # req content fingerprint there
 
 
 @api.post("/edit")
@@ -428,7 +439,8 @@ def edit(req: EditRequest) -> dict[str, Any]:
     entry = store.edit(
         req.mno, req.req_id, req.op,
         words=req.words, pairs=req.pairs, label=req.label,
-        reason=req.reason, by=req.by, origin_release=req.origin_release)
+        reason=req.reason, by=req.by, origin_release=req.origin_release,
+        fingerprint=req.fingerprint)
     return {"mno": req.mno, "req_id": req.req_id, "entry": entry,
             "overlay_mtime": store.overlay_mtime(req.mno)}
 

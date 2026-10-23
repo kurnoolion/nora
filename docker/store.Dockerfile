@@ -1,7 +1,7 @@
 # SIRA images — build context is the REPO ROOT, plus a named `vendor` context
 # (docker/vendor — see docker-compose.yml additional_contexts):
-#   docker build -f docker/sira.Dockerfile --build-context vendor=docker/vendor \
-#       --target sira-query -t sira-query .
+#   docker build -f docker/store.Dockerfile --build-context vendor=docker/vendor \
+#       --target nora-store -t nora-store .
 #
 # Source selection (ARG OFFLINE selects the stage):
 #   OFFLINE=0  sira-src-0: clone upstream @ SIRA_REF, rustup, build the bm25x
@@ -14,7 +14,7 @@
 # sira-base    trimmed runtime (SETUP.md §2a): no torch/sglang; BM25 + HTTP
 #              LLM routing only. NORA repo at /app, SIRA clone at
 #              /app/sandbox/sira (pinned via SIRA_REF).
-# sira-query   the per-query FastAPI service (:8040)
+# nora-store   the per-query FastAPI service (:8040)
 # sira-batch   sira_multi / run_pipeline.py / sira_incremental jobs
 #
 # No endpoints or corpus data baked in — env vars + /data/* volumes only.
@@ -102,6 +102,7 @@ COPY core/ core/
 COPY customizations/ customizations/
 COPY config/ config/
 COPY sandbox/ sandbox/
+COPY nora_store/ nora_store/
 # The baked clone is READ-ONLY at run time: per-cell data configs are
 # generated under <db_root>/.hydra-configs and read via SIRA_EXTRA_CONFIG_DIR
 # (extra-config-dir.patch); SIRA's own hydra outputs are already disabled
@@ -111,19 +112,26 @@ COPY --from=sira-src /sira/ sandbox/sira/
 # did this on the host against the vendored clone.
 RUN if [ "$OFFLINE" = "1" ]; then echo "offline: clone pre-patched by prep-offline.sh"; \
     else bash sandbox/install_configs.sh; fi
+# Fail the build, not the first query, when the prompts the service loads by
+# default are absent (field-found: an uncached rebuild dropped them and the
+# service served without expansion or rerank).
+RUN for f in enrich/prompts/query_requirement_v01.txt \
+             rerank/prompts/relevance_requirement_v01.txt; do \
+      test -s "sandbox/sira/scripts/configs/$f" || { echo "missing prompt: $f" >&2; exit 1; }; \
+    done
 
-# --------------------------------------------------------------- sira-query --
-FROM sira-base AS sira-query
+# --------------------------------------------------------------- nora-store --
+FROM sira-base AS nora-store
 # Serving-code identity for /healthz (strand golden-eval): bake the git
 # sha at build so eval StackStamps attribute scores to the code that
 # served them. Pass --build-arg CODE_VERSION="$(git rev-parse --short HEAD)".
 ARG CODE_VERSION=""
 ENV NORA_CODE_VERSION=$CODE_VERSION
-ENV NORA_SIRA_DB_ROOT=/data/db
+ENV NORA_STORE_ROOT=/data/db
 EXPOSE 8040
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8040/healthz', timeout=4)"
-CMD ["uvicorn", "sandbox.sira_query.service:app", "--host", "0.0.0.0", "--port", "8040"]
+CMD ["uvicorn", "nora_store.service:app", "--host", "0.0.0.0", "--port", "8040"]
 
 # --------------------------------------------------------------- sira-batch --
 FROM sira-base AS sira-batch

@@ -40,7 +40,7 @@ Two deployment profiles, one codebase, one new seam:
   Eval Studio, parse review, enrichment corrections, promote/serve
   rehearsal. Nothing about the build side changes.
 - **corp-prod** runs the two serve containers only (nora-web with the
-  Ask surface, sira-query), reading a **SQLite-family data layer**:
+  Ask surface, nora-store), reading a **SQLite-family data layer**:
   one corpus DB file per (MNO, release) cell version, a small registry
   DB that says which versions serve, and a pooled feedback DB.
 - The seam between them is a **storage protocol** in code (same pattern
@@ -70,7 +70,7 @@ pipeline corrections / overlay / golden authoring (dev-only surfaces).
 │ │ (grown from the │  cells only,├────┼─▶        │ /query (cell, question)   │
 │ │  converter)     │  checksum + │    │          ▼                           │
 │ └─────────────────┘  rename)    │    │   ┌─────────────┐   ┌─────────────┐  │
-└─────────────────────────────────┘    │   │ sira-query  │──▶│ corp LLM    │  │
+└─────────────────────────────────┘    │   │ nora-store  │──▶│ corp LLM    │  │
                                        │   │             │   │ endpoints   │  │
                                        │   └──────┬──────┘   └─────────────┘  │
                                        │          │ CorpusStore (sqlite)      │
@@ -87,8 +87,8 @@ pipeline corrections / overlay / golden authoring (dev-only surfaces).
 **Query and response path** (one question, `postings` engine shown;
 the engine choice changes only steps 4–5):
 
-1. **nora-web → sira-query.** The Ask page posts the question and the
-   selected cell to sira-query's `/query`.
+1. **nora-web → nora-store.** The Ask page posts the question and the
+   selected cell to nora-store's `/query`.
 2. **Resolve and open the cell.** The loader asks `registry.db` for the
    cell's active version → filename. If the cell is not already open:
    open the file (`mode=ro, immutable=1`), read `meta` (k1, b, N,
@@ -111,7 +111,7 @@ the engine choice changes only steps 4–5):
    IN (top-k)` — the retrieved chunks.
 7. **Rerank + answer (LLM).** Optional rerank call, then the answer
    call over the top chunks, as today.
-8. **Respond.** sira-query returns the answer and the retrieved chunks
+8. **Respond.** nora-store returns the answer and the retrieved chunks
    to nora-web; the page renders both. Req-ID bubbles resolve through
    the same seam (`CorpusStore.find_req` → one indexed `requirements`
    lookup). User feedback writes to the pooled `feedback.db` — the
@@ -211,7 +211,7 @@ CorpusStore
   `corpus.jsonl`, enrichment jsonl). Default; dev/test unchanged.
 - `SqliteCorpusStore` — reads cell DBs + registry.
 - Consumers changed to go through the seam: `web/req_tree.py` (the only
-  web corpus-reader on the Ask path) and sira-query's `_load_one_cell`.
+  web corpus-reader on the Ask path) and nora-store's `_load_one_cell`.
   Everything else (parse review, Eval Studio pickers, req browser) keeps
   reading files and simply does not ship in the corp profile.
 - A deploy-profile knob (e.g. `NORA_SURFACE=ask|full`) gates the web
@@ -241,7 +241,7 @@ same data across phase-2 A/B stacks, or inside the converter's offline
 removed at implementation: the index's build parameters are neither
 introspectable from bm25x nor recorded anywhere, so a rebuild cannot be
 faithful; the blob engine already provides the byte-exact parity
-control. `NORA_SIRA_ENGINE=memory` fails loudly at startup.)
+control. `NORA_STORE_ENGINE=memory` fails loudly at startup.)
 
 A custom SQL `postings` engine (per-(term/ngram, doc) contribution dump
 + service-side summation) remains mathematically possible —
@@ -312,7 +312,7 @@ bm25-only builds), `--force` implied since the lane just rebuilt the
 cells. The DBs ride label promotion with the build tree; a cell-db
 stack mounts `<label>/sira/cell-dbs`. The value names the artifact's granularity and kind,
 not an engine or vendor — the engine is a serve-time choice
-(`NORA_SIRA_ENGINE`), schema evolution rides `schema_version`, and the
+(`NORA_STORE_ENGINE`), schema evolution rides `schema_version`, and the
 flag is an enum, so any future storage shape is a new additive value.
 (Renamed from the earlier working name `--index=fts5`, which named one
 optional table in the file and would turn wrong the day `postings`
@@ -372,7 +372,7 @@ serving may adopt the same cell-DB path (optional, later).
 ## 7. Invariants carried over (and where they now live)
 
 - **Backward compatibility** → every phase-1–3 change is additive and
-  flag-gated with today's behavior as the default (`NORA_SIRA_INDEX`
+  flag-gated with today's behavior as the default (`NORA_STORE_INDEX`
   defaults to `flat`; the ingestion `--index` flag defaults to legacy
   flat files; `FsCorpusStore` is the default store and must be a pure
   extraction of today's reads, not a rewrite — the phase-2

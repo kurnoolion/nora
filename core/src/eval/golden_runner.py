@@ -1,7 +1,7 @@
 """Golden eval runners (FR-38, strand golden-eval).
 
 Stage 1 — retrieval recall: POST the sample query to a serving stack's
-``/sira-query`` endpoint (black-box over HTTP, D-DRAFT-2) and score the
+``/query`` endpoint (black-box over HTTP, D-DRAFT-2) and score the
 fraction of ground-truth req_ids present in the returned results. One run
 per stack URL is the release A/B.
 
@@ -85,7 +85,7 @@ def query_stack(
     timeout: float = _DEFAULT_TIMEOUT,
     text_chars: int | None = None,
 ) -> dict:
-    """POST /sira-query on a stack. Raises GoldenEvalError (GEV-E002) on
+    """POST /query on a stack. Raises GoldenEvalError (GEV-E002) on
     any transport or protocol failure — a sample is never silently skipped.
 
     ``text_chars`` opts into full row text (the service's Path-B knob) —
@@ -99,12 +99,12 @@ def query_stack(
         payload["label"] = label
     if text_chars:
         payload["text_chars"] = text_chars
-    url = stack_url.rstrip("/") + "/sira-query"
+    url = stack_url.rstrip("/") + "/query"
     try:
         body = _post_json(url, payload, timeout)
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
         raise GoldenEvalError(
-            "GEV-E002", f"stack {stack_url} /sira-query failed: {exc}"
+            "GEV-E002", f"stack {stack_url} /query failed: {exc}"
         ) from exc
     if not isinstance(body.get("results"), list):
         raise GoldenEvalError(

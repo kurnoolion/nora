@@ -42,9 +42,9 @@ image rebuild the files are available in-container at
 `/app/customizations/prompts`:
 
 - `.env.sira-batch`: `NORA_SIRA_DOC_PROMPT_DIR=/app/customizations/prompts`
-- `.env.nora-pipeline`: `NORA_TAXONOMY_OVERVIEW_DIR=/app/customizations/prompts`
+- `.env.nora-batch`: `NORA_TAXONOMY_OVERVIEW_DIR=/app/customizations/prompts`
 
-A prompt update therefore requires rebuilding the `nora-pipeline` and
+A prompt update therefore requires rebuilding the `nora-batch` and
 `sira-batch` images. (The overview files are hashed into the taxonomy
 cache fingerprint, so the next pipeline run re-derives taxonomies
 without `--force`.)

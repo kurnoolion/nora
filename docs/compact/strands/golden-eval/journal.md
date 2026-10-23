@@ -422,3 +422,17 @@
 
 ### Next
 - Unchanged from the previous entry.
+
+## 2026-10-22 — Stage-1 is not reproducible run to run
+
+### Flags
+- Two Stage-1 runs with identical stamps (same image, data, knobs) differ
+  on 36 of 39 samples' retrieved ids and by about 0.02 recall: query
+  expansion is an LLM call per query and varies even at temperature 0.
+  Per-sample comparison across runs is therefore noise-bound.
+- One stack's served release lags release map v1 for one MNO; runs there
+  need `--allow-map-mismatch`.
+
+### Next
+- Make Stage-1 reproducible: record each run's expansions and replay them,
+  or offer an expansion-off Stage-1 mode for store-level comparisons.

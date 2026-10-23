@@ -32,7 +32,8 @@ DOCS = [
 
 
 def make_cell(db_root: Path, mno: str, release: str,
-              docs=DOCS, enrich: dict[str, list[str]] | None = None) -> Path:
+              docs=DOCS, enrich: dict[str, list[str]] | None = None,
+              fingerprints: dict[str, str] | None = None) -> Path:
     base = db_root / f"{mno}__{release}"
     (base / "raw").mkdir(parents=True)
     (base / "raw" / "metadata.json").write_text("{}", encoding="utf-8")
@@ -45,6 +46,10 @@ def make_cell(db_root: Path, mno: str, release: str,
     b.disable_auto_save()
     b.add([text for _, _, text in docs])
     b.save(str(index_dir))
+    if fingerprints is not None:
+        with open(base / "raw" / "fingerprints.jsonl", "w", encoding="utf-8") as f:
+            for rid, fp in fingerprints.items():
+                f.write(json.dumps({"_id": rid, "fingerprint": fp}) + "\n")
     if enrich is not None:
         enr = base / "enrichments" / "doc"
         enr.mkdir(parents=True)
@@ -59,7 +64,8 @@ ENRICH = {"REQ-0": ["cbm", "callback service"], "REQ-2": ["attach", "registratio
 
 def test_convert_end_to_end(tmp_path):
     db_root = tmp_path / "cells"
-    make_cell(db_root, "mnoa", "Apr2098", enrich=ENRICH)
+    make_cell(db_root, "mnoa", "Apr2098", enrich=ENRICH,
+              fingerprints={"REQ-0": "f0", "REQ-1": "f1"})
     out = tmp_path / "out"
 
     report = convert(db_root, out, verify_n=4, source_label="test-label")
@@ -70,18 +76,23 @@ def test_convert_end_to_end(tmp_path):
     (cell_rep,) = report["cells"]
     assert cell_rep["verify"] == {"probes": 4, "k": 10, "mismatches": 0}
     assert cell_rep["n_docs"] == len(DOCS)
-    assert cell_rep["enriched_docs"] == len(ENRICH)
+    assert cell_rep["sira_docs"] == len(ENRICH)
 
     con = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
     try:
         rows = con.execute(
             "SELECT doc, req_id, title, text FROM corpus ORDER BY doc").fetchall()
         assert rows == [(i, rid, t, x) for i, (rid, t, x) in enumerate(DOCS)]
-        enr = {rid: json.loads(ph) for rid, ph in
-               con.execute("SELECT req_id, phrases FROM enrichment")}
-        assert enr == ENRICH  # no overlay: effective == llm words
+        fps = dict(con.execute("SELECT req_id, fingerprint FROM corpus"))
+        assert fps["REQ-0"] == "f0" and fps["REQ-2"] == ""   # sidecar, else empty
+        sira = {rid: json.loads(ph) for rid, ph in
+                con.execute("SELECT req_id, phrases FROM sira_phrases")}
+        assert sira == ENRICH  # SIRA's raw phrases
+        tables = {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "enrichment" not in tables and "fts" not in tables
         meta = dict(con.execute("SELECT key, value FROM meta"))
-        assert meta["schema_version"] == "1"
+        assert meta["schema_version"] == "2"
         assert meta["n_docs"] == str(len(DOCS))
         assert meta["source_label"] == "test-label"
         assert meta["enrich_run"] == "best"
@@ -91,19 +102,14 @@ def test_convert_end_to_end(tmp_path):
         expect = _sha256_files([base / "raw" / "corpus.jsonl",
                                 base / "enrichments" / "doc" / "best.jsonl"])
         assert meta["source_fingerprint"] == expect
-        # FTS5 side: one row per doc; enrichment tokens searchable
-        assert con.execute("SELECT count(*) FROM fts").fetchone()[0] == len(DOCS)
-        hit = con.execute(
-            "SELECT rowid FROM fts WHERE fts MATCH 'cbm'").fetchall()
-        assert hit == [(0,)]
     finally:
         con.close()
 
 
 def test_db_index_parity_with_flat_pipeline(tmp_path):
-    """Acceptance sanity: an index loaded from DB blobs ranks identically
-    to the flat pipeline (load index/best + enrich in memory) — built
-    here independently of the converter's own code path."""
+    """Identity gate, built independently of the converter's code path: the
+    VANILLA index loaded from DB blobs, composed with the same phrases, ranks
+    identically to the flat pipeline (load index/best + enrich in memory)."""
     db_root = tmp_path / "cells"
     base = make_cell(db_root, "mnoa", "Apr2098", enrich=ENRICH)
     out = tmp_path / "out"
@@ -127,6 +133,7 @@ def test_db_index_parity_with_flat_pipeline(tmp_path):
     con.close()
     got = bm25x.BM25.load(str(blob_dir))
     got.disable_auto_save()
+    got.enrich_batch([(rid_to_idx[rid], ph) for rid, ph in ENRICH.items()])
 
     queries = [t for _, t, _ in DOCS] + ["cbm", "emergency callback"]
     expansions = [""] * len(DOCS) + ["callback service", ""]
@@ -138,7 +145,7 @@ def test_db_index_parity_with_flat_pipeline(tmp_path):
             assert rs == pytest.approx(gs, abs=1e-6)
 
 
-def test_overlay_fold_baked(tmp_path):
+def test_overlay_is_folded_for_the_gate_but_not_stored(tmp_path):
     db_root = tmp_path / "cells"
     make_cell(db_root, "mnoa", "Apr2098", enrich=ENRICH)
     corr = tmp_path / "corrections"
@@ -154,18 +161,16 @@ def test_overlay_fold_baked(tmp_path):
     report = convert(db_root, out, verify_n=4, overlay_root=str(corr))
 
     con = sqlite3.connect(f"file:{out / 'cell-mnoa-Apr2098.db'}?mode=ro", uri=True)
-    enr = {rid: json.loads(ph) for rid, ph in
-           con.execute("SELECT req_id, phrases FROM enrichment")}
+    sira = {rid: json.loads(ph) for rid, ph in
+            con.execute("SELECT req_id, phrases FROM sira_phrases")}
     meta = dict(con.execute("SELECT key, value FROM meta"))
     con.close()
 
-    assert enr["REQ-0"] == ["callback service", "ecall"]  # cbm removed, ecall added
-    assert enr["REQ-2"] == ENRICH["REQ-2"]                # untouched req unchanged
-    assert meta["overlay_digest_baked"]
-    counts = json.loads(meta["overlay_counts"])
-    assert counts["removes"] == 1 and counts["adds"] == 1
+    assert sira == ENRICH                     # raw SIRA phrases, edits not stored
+    assert "overlay_digest_baked" not in meta
     (cell_rep,) = report["cells"]
-    assert cell_rep["overlay"] == counts
+    assert cell_rep["overlay"]["removes"] == 1 and cell_rep["overlay"]["adds"] == 1
+    assert cell_rep["verify"]["mismatches"] == 0   # composed == in-memory enriched
 
 
 def test_cross_release_record_is_held(tmp_path):
@@ -192,23 +197,13 @@ def test_cross_release_record_is_held(tmp_path):
         json.dumps(overlay), encoding="utf-8")
 
     out = tmp_path / "out"
-    convert(db_root, out, verify_n=0, overlay_root=str(corr))
-
-    con = sqlite3.connect(f"file:{out / 'cell-mnoa-Apr2098.db'}?mode=ro", uri=True)
-    enr_apr = {rid: json.loads(ph) for rid, ph in
-               con.execute("SELECT req_id, phrases FROM enrichment")}
-    meta_apr = dict(con.execute("SELECT key, value FROM meta"))
-    con.close()
-    assert enr_apr["REQ-0"] == ["callback service"]   # same-release: applied
-    assert enr_apr["REQ-2"] == ENRICH["REQ-2"]        # Aug-origin, unverifiable: held
-    assert json.loads(meta_apr["overlay_counts"])["held"] == 1
-
-    con = sqlite3.connect(f"file:{out / 'cell-mnoa-Aug2098.db'}?mode=ro", uri=True)
-    enr_aug = {rid: json.loads(ph) for rid, ph in
-               con.execute("SELECT req_id, phrases FROM enrichment")}
-    con.close()
-    # Apr-origin remove of cbm verifies OK in Aug (same text both releases)
-    assert enr_aug["REQ-0"] == ["callback service"]
+    report = convert(db_root, out, verify_n=0, overlay_root=str(corr))
+    by_cell = {c["cell"]: c for c in report["cells"]}
+    # Apr: same-release remove applied; Aug-origin record unverifiable -> held
+    assert by_cell["mnoa__Apr2098"]["overlay"]["removes"] == 1
+    assert by_cell["mnoa__Apr2098"]["overlay"]["held"] == 1
+    # Aug: Apr-origin remove of cbm verifies OK (same text both releases)
+    assert by_cell["mnoa__Aug2098"]["overlay"]["removes"] == 1
 
 
 def test_existing_output_needs_force(tmp_path):
@@ -296,3 +291,46 @@ def test_verify_catches_blob_corruption(tmp_path):
     with pytest.raises(ConvertError) as ei:
         _verify(cd, db_path, [("emergency callback", "")])
     assert ei.value.code in ("CNV-006", "CNV-007")
+
+
+def test_fts5_request_is_cnv010(tmp_path):
+    db_root = tmp_path / "cells"
+    make_cell(db_root, "mnoa", "Apr2098", enrich=ENRICH)
+    with pytest.raises(ConvertError) as ei:
+        convert(db_root, tmp_path / "out", verify_n=0, fts5=True)
+    assert ei.value.code == "CNV-010"
+
+
+def test_fingerprint_match_applies_unverifiable_record(tmp_path):
+    """strand corp-db-layer S3: a record stamped with the loaded release's
+    fingerprint for the req applies even when the Jaccard guard cannot
+    verify it (origin release lacks the req). Read via --overlay-db."""
+    from core.src.stores.overlay import SqliteOverlayStore
+
+    db_root = tmp_path / "cells"
+    make_cell(db_root, "mnoa", "Apr2098", enrich=ENRICH,
+              fingerprints={"REQ-2": "fp-req2"})
+    make_cell(db_root, "mnoa", "Aug2098", docs=DOCS[:2],
+              enrich={"REQ-0": ["cbm", "callback service"]})
+    db = tmp_path / "overlay.db"
+    SqliteOverlayStore(db).put_entry("mnoa", "REQ-2", {
+        "remove": [{"word": "attach", "at": "t1", "fingerprint": "fp-req2",
+                    "origin": {"release": "Aug2098"}}]})
+
+    report = convert(db_root, tmp_path / "out", verify_n=0, overlay_db=str(db))
+    by_cell = {c["cell"]: c for c in report["cells"]}
+    assert by_cell["mnoa__Apr2098"]["overlay"]["removes"] == 1
+    assert by_cell["mnoa__Apr2098"]["overlay"]["held"] == 0
+
+
+def test_dangling_best_link_is_cnv011(tmp_path):
+    """Field finding: best.jsonl pointing at a pruned run silently produced
+    a cell with no phrases. The converter refuses instead."""
+    db_root = tmp_path / "cells"
+    base = make_cell(db_root, "mnoa", "Apr2098")
+    enr = base / "enrichments" / "doc"
+    enr.mkdir(parents=True)
+    (enr / "best.jsonl").symlink_to(enr / "pruned-run.jsonl")
+    with pytest.raises(ConvertError) as ei:
+        convert(db_root, tmp_path / "out", verify_n=0)
+    assert ei.value.code == "CNV-011"

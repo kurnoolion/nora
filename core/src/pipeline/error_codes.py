@@ -121,7 +121,7 @@ _DEFS: list[ErrorDef] = [
     #     (strand golden-eval, D-DRAFT-1). Raised as eval.golden.GoldenEvalError;
     #     registered here so the code catalog stays the single human-readable index.
     ErrorDef("GEV-E001", "Golden sample invalid: {reason}", "Fix ground truth / fields in the Eval Studio"),
-    ErrorDef("GEV-E002", "Serving stack unreachable or /sira-query failed: {reason}", "Check the stack URL and its health endpoint"),
+    ErrorDef("GEV-E002", "Serving stack unreachable or /query failed: {reason}", "Check the stack URL and its health endpoint"),
     ErrorDef("GEV-E003", "NORA store unusable for Stage 2: {reason}", "Missing or empty store: run the vectorstore stage. Missing chunk: re-ingest the cell or fix the entry's qualifiers"),
     ErrorDef("GEV-E004", "Judge call failed or verdict unparseable for {sample_id}: {reason}", "Check judge provider and prompt version"),
     ErrorDef("GEV-E005", "Relative release unresolvable for {sample_id}: {reason}", "Write or advance the golden set's release map, or fix the entry"),
@@ -129,6 +129,30 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("GEV-E007", "Stage-2 synthesis failed for {sample_id}: {reason}", "Check the synthesis LLM and its refusal fallback; the sample was not judged"),
     ErrorDef("GEV-W001", "Sample {sample_id} skipped: {reason}", "Advance the sample's status in the Eval Studio"),
     ErrorDef("GEV-W002", "Sample {sample_id} pending review after a release move: Stage 2 skipped", "Review the flagged entries and golden response, then clear the flag (golden_release_cli review --clear)"),
+
+    # --- Overlay store (OVL) — core.src.stores.overlay_import (strand corp-db-layer S3) ---
+    ErrorDef("OVL-E001", "Corrections root has no overlay directory: {path}", "Point --corrections-root at the dir that holds sira-enrich/"),
+    ErrorDef("OVL-E002", "Target overlay DB is not empty: {path}", "Pass --force to replace its contents, or choose a new file"),
+    ErrorDef("OVL-E003", "Import verification failed — {what}: {count} mismatch(es)", "Nothing was written; check the JSON files for hand-edited or duplicate records"),
+    ErrorDef("OVL-E004", "Overlay DB write failed: {reason}", "Check the target path, permissions and free space; a busy DB means another writer holds it"),
+    ErrorDef("OVL-E005", "Overlay DB {name} has unsupported schema_version {found}", "Re-import the overlay with core.src.stores.overlay_import, or run a newer build"),
+
+    # --- Trees store (TRS) — core.src.stores.trees_build (strand corp-db-layer S4) ---
+    ErrorDef("TRS-E001", "No per-cell parse trees under {path}", "Point --env-dir at an env dir whose out/parse/<mno>/<release>/ holds *_tree.json; the legacy flat layout is not built"),
+    ErrorDef("TRS-E002", "Trees DB already exists: {path}", "Pass --force to replace it, or choose another --out dir"),
+    ErrorDef("TRS-E003", "Requested cell has no parse trees: {cell}", "Name cells as MNO__REL, matching out/parse/<mno>/<release>/"),
+    ErrorDef("TRS-E004", "Unreadable or malformed tree in cell {cell}: {reason}", "Re-run the parse stage for that cell"),
+    ErrorDef("TRS-E005", "Trees DB verification failed for cell {cell} — {what}: {count} mismatch(es)", "Nothing was replaced; check the cell for nested or oddly named tree files"),
+    ErrorDef("TRS-E006", "Trees DB write failed: {reason}", "Check the --out path, permissions and free space"),
+    ErrorDef("TRS-E007", "Trees DB {name} has unsupported schema_version {found}", "Rebuild the cell with core.src.stores.trees_build, or run a newer build"),
+
+    # --- History store (HIS) — core.src.stores.history_build (strand corp-db-layer S5) ---
+    ErrorDef("HIS-E001", "Trees store has no cells ({source})", "Build the Trees store first, or point --env-dir / --trees-root at one with parse trees"),
+    ErrorDef("HIS-E002", "History DB already exists: {path}", "Pass --force to replace it, or choose another --out dir"),
+    ErrorDef("HIS-E003", "Requested MNO has no cells in the Trees store: {mno}", "Name MNOs as they appear in the Trees store's cells"),
+    ErrorDef("HIS-E004", "History DB write failed: {reason}", "Check the --out path, permissions and free space"),
+    ErrorDef("HIS-E005", "History DB verification failed for {mno} — {what}: {count} mismatch(es)", "Nothing was replaced; rebuild the Trees store for that MNO and retry"),
+    ErrorDef("HIS-E006", "History DB {name} has unsupported schema_version {found}", "Rebuild the MNO with core.src.stores.history_build, or run a newer build"),
 
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),

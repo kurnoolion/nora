@@ -17,7 +17,7 @@ curated reference answer (golden response) — scored against a live
 serving stack in two stages:
 
 - **Stage 1 — retrieval recall.** Each sample's query is POSTed to the
-  stack's `/sira-query` endpoint (black-box, over HTTP — the metric
+  stack's `/query` endpoint (black-box, over HTTP — the metric
   measures what the stack actually serves). Recall = fraction of
   ground-truth req_ids present in the retrieved results; per-hit ranks
   are recorded, so recall@5 / recall@10 derive from the same run.
@@ -64,12 +64,12 @@ promoted.
 One invocation scores one stack.
 
 **On a docker deployment** (the normal case), the CLI runs as a
-one-shot job in the `nora-pipeline` container, which mounts the pooled
+one-shot job in the `nora-batch` container, which mounts the pooled
 golden set at `/data/env/eval/golden`:
 
 ```bash
 cd docker
-docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-pipeline \
+docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-batch \
     python -m core.src.eval.golden_cli \
     --env-dir /data/env \
     --stack-url http://host.docker.internal:PORT \
@@ -91,7 +91,7 @@ in `docker/README.md` for the full list):
   the failure mode is a plausible-looking run with n=0 and one
   GEV-E002 per sample). `host.docker.internal` is wired in the compose
   file to reach host-published ports.
-- After a code change, rebuild **both** the `nora-pipeline` image and
+- After a code change, rebuild **both** the `nora-batch` image and
   the serving images — a stale image surfaces as a missing CLI flag or
   as eval behavior ignoring the change.
 - `--stack-url` / `--stack-label` / `--env-name` are **explicit CLI
@@ -100,7 +100,7 @@ in `docker/README.md` for the full list):
   `GOLDEN_DIR` mount, the Stage-2 LLM wiring); the scoring target is
   chosen independently per invocation — that's what makes the release
   A/B "same env, two `--stack-url`s" possible. Read the port off the
-  target stack's `SIRA_QUERY_PORT` when composing the URL.
+  target stack's `STORE_PORT` when composing the URL.
 
 **On a dev checkout** (stack reachable directly), from the repo root:
 
@@ -119,7 +119,7 @@ Useful flags:
 - `--stack-label` — short name stamped into the run id and GEV block
   (e.g. `v1` / `v2`); make it meaningful, it's how you tell runs apart.
 - `--top-k N` / `--label OVERLAY` — retrieval overrides passed to
-  `/sira-query`.
+  `/query`.
 - `--mno <carrier>` — run only samples tagged with that carrier. The
   filter applies before the eval-set digest freezes, so filtered runs
   key apart from full runs (they are not comparable to them).
@@ -365,7 +365,7 @@ Line by line:
 | Code | Level | Meaning |
 |---|---|---|
 | `GEV-E001` | error | Sample file unreadable / schema-invalid — the load aborts (fail-loud; fix the file). |
-| `GEV-E002` | error | Stack `/sira-query` failed or returned no results list. |
+| `GEV-E002` | error | Stack `/query` failed or returned no results list. |
 | `GEV-E003` | error | Stage-2 pipeline setup problem (e.g. empty vector store). |
 | `GEV-E004` | error | Judge failure — missing prompt file, or unparseable verdict after a strict-format retry. |
 | `GEV-E005` | error | A relative release (`N`, `N-1`, ...) could not be resolved: the set has no release map, or `N-k` is beyond the MNO's listed releases. Per sample; the run continues. |
@@ -488,7 +488,7 @@ every cell's report, so nothing has to be collected afterwards.
 
 ### 3. Run under the serving env file of the stack being scored
 
-Each cell runs as the one-shot `nora-pipeline` job under
+Each cell runs as the one-shot `nora-batch` job under
 `.env.<stack>` (the stack it scores) — never a builds wiring env. That
 file carries the three things a cell needs at once: the pooled
 `GOLDEN_DIR` mount (overridden to the snapshot as above), the stack's
@@ -497,7 +497,7 @@ service, and the image-name variables. Before the first cell, probe the
 image under that same env file:
 
 ```bash
-docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-pipeline \
+docker compose --env-file .env.<stack> --profile ingest run --rm -T nora-batch \
     python -c "import core.src.eval.golden_cli"          # silent = fresh image
 ```
 
@@ -531,7 +531,7 @@ meaningless). Note the wall-clock per cell after the first one — that,
 not any earlier estimate, is the campaign's ETA.
 
 The arm flip between blocks is a by-hand act on every stack in the
-grid: edit the knob in `.env.sira-query.<stack>`, `docker compose
+grid: edit the knob in `.env.nora-store.<stack>`, `docker compose
 --env-file .env.<stack> --profile serve up -d` (recreate — a restart
 does not re-read env files), then `curl` the healthz and confirm the
 knobs digest is the anchored one for the new arm **and `code=`/`fp=`

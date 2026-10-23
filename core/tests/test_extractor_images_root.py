@@ -1,7 +1,7 @@
 """images_root redirect — extracted-image artifacts belong in the BUILD
 output, not next to the source document.
 
-The input corpus may be a read-only mount (the nora-pipeline container mounts
+The input corpus may be a read-only mount (the nora-batch container mounts
 /data/requirements:ro); the legacy next-to-source `extracted_images/` layout
 failed there with Errno 30 and silently polluted writable input trees. The
 pipeline extract stage passes `images_root=<cell out>/images`; paths recorded

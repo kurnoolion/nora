@@ -14,7 +14,7 @@ Each expected requirement in a golden sample is stored as
 matching rejects a row whose release differs from a set qualifier
 (`golden_runner._entry_matches`). Serving answers a question that names
 no release from each MNO's latest release only (FR-multi-6,
-`sandbox/sira_query/scope.py:112`).
+`nora_store/scope.py:112`).
 
 So when a new release of an MNO is served, every release-less sample
 for that MNO scores zero on its old-release entries, even when the

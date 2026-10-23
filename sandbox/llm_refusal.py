@@ -1,5 +1,5 @@
 """Permanent-refusal detection for LLM responses (shared by the batch
-enrich lane and the sira-query service).
+enrich lane and the nora-store service).
 
 Some endpoints deterministically refuse certain inputs: instead of an
 answer they return a fixed notice, and retrying the SAME endpoint can

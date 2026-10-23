@@ -6,7 +6,7 @@ with synthetic data — no bm25x, no live LLM.
 
 from __future__ import annotations
 
-from sandbox.sira_query.fusion import Candidate, fuse, rank_candidates
+from nora_store.fusion import Candidate, fuse, rank_candidates
 
 
 def _retriever(table):

@@ -12,7 +12,7 @@ textbook postings tables; the SQL `postings` engine is deferred.)
 
 Convert one promoted label's SIRA flat files into one SQLite **cell DB**
 per `(MNO, release)` cell, carrying corpus, enrichment, and the BM25
-index as data, such that a second sira-query stack can serve from the
+index as data, such that a second nora-store stack can serve from the
 cell DBs and be A/B-evaluated against the flat-file stack on identical
 content (phase 2). The converter is the embryo of the phase-4 publisher.
 
@@ -21,7 +21,7 @@ in both phase-2 stacks (isolates the experiment variable). Parse-tree
 fields for nora-web (`find_req` etc.) enter the schema in a later
 revision, when the web side migrates.
 
-## 2. Inputs (verified against `sandbox/sira_query/service.py`)
+## 2. Inputs (verified against `nora_store/service.py`)
 
 Per cell dir `<label>/sira/<mno>__<release>/`:
 
@@ -153,12 +153,12 @@ shipped.
 
 ## 6. Service loader contract (the phase-2 branch)
 
-sira-query gains two knobs, both read at startup:
+nora-store gains two knobs, both read at startup:
 
-- `NORA_SIRA_INDEX = flat | cell-db` — where cells come from. `flat`
+- `NORA_STORE_INDEX = flat | cell-db` — where cells come from. `flat`
   is today's path, untouched. `cell-db` enumerates `cell-*.db` under
-  `NORA_SIRA_DB_ROOT` instead of cell directories.
-- `NORA_SIRA_ENGINE = bm25x | fts5` (cell-db mode only) — **exactly one
+  `NORA_STORE_ROOT` instead of cell directories.
+- `NORA_STORE_ENGINE = bm25x | fts5` (cell-db mode only) — **exactly one
   engine per process, read once at startup**; every query scores
   through it. No per-query switching or fallback. Engines only meet
   across phase-2 A/B stacks (via the golden harness) and inside this
@@ -179,7 +179,7 @@ sira-query gains two knobs, both read at startup:
     tokenizer) are neither introspectable from bm25x nor recorded, so a
     rebuild cannot be faithful — and its parity-control role is filled
     byte-exactly by `bm25x`, which loads the same engine state the flat
-    stack builds. `NORA_SIRA_ENGINE=memory` fails loudly at startup.
+    stack builds. `NORA_STORE_ENGINE=memory` fails loudly at startup.
 - `NORA_SIRA_PROMPTS_FROM` (cell-db mode): a flat cell dir to load the
   query-enrich/rerank prompts from (the DB carries no prompt files), so
   both A/B stacks serve byte-identical prompts; unset falls back to the
@@ -215,7 +215,7 @@ sira-query gains two knobs, both read at startup:
 ## 9. Implementation findings (2026-10-09, grounded in the real bm25x)
 
 Facts discovered at build time that amended v0.2's assumptions; tests in
-`sandbox/test_cell_db_convert.py` + `sandbox/sira_query/test_no_autosave.py`
+`sandbox/test_cell_db_convert.py` + `nora_store/test_no_autosave.py`
 pin them.
 
 1. **bm25x is a Rust engine with a multi-gram tier and hashed feature

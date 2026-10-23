@@ -6,6 +6,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 **Public surface**
 - App (app.py):
   - `app: FastAPI` — the ASGI application; wires middleware, static mounts, routers, templates
+  - `GET /api/health` — liveness plus roster diagnostics and, since strand corp-db-layer S6, `stores: {overlay, trees, history}` = the backend each store runs on (`http` = nora-store's `/stores` routes via `NORA_<STORE>_URL`, `local` = this container's files, `off` = not configured), resolved the way the routes resolve them (`_store_backends`).
 - Team gate (team_mode.py + middleware.py + app.py):
   - `NORA_WEB_TEAM_MODE` (`1`/`true`/`yes`/`on`) turns the gate on; read once at import into `TEAM_MODE`. Off (the default) = no-op, full access, both lanes.
   - `TeamModeMiddleware` (middleware.py) — for a gated request whose root_path-stripped path is not allowlisted, returns a 302 to `<root_path>/test`. Added after `MetricsMiddleware`, so it is outermost and runs first.
@@ -28,12 +29,13 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - `build_timeline(stages_ms, total_ms, lane) -> dict | None` — normalizes one lane's per-stage timings into a renderable structure: ordered `segments` (`slug`, `label`, `band`, `ms`, `pct`), band aggregates, `measured_ms` and `unaccounted_ms`. `lane` selects the vocabulary — `"nora"` reads `query.schema.STAGE_ORDER` slugs off `QueryResponse.timings_ms`; `"sira"` reads the SIRA service's `expand_ms` / `search_ms` / `rerank_ms` plus the `synth_ms` the playground route injects. Returns None when there is nothing worth drawing (no stages reported, non-positive total, or only unrecognized keys).
   - Rendered by `templates/test/_timeline.html`, included from `test/_answer.html` ABOVE the "Engineering details" collapse — answer latency is the everyday user's question, not an engineering-review detail. Both `/test` lanes draw the same component.
 - Enrichment-corrections overlay (enrich_overlay_store.py + routes/enrich_review.py, strand sira-enrichment-review):
-  - `EnrichOverlayStore(corrections_root)` — sole WRITER of `<root>/sira-enrich/` (sira-query mounts ro): word-record edits (`edit(mno, req_id, op, words|pairs, label, reason, by, origin_release)` with ops remove/unremove/add/unadd/suppress/unsuppress/reaffirm/discard; one active record per (word, direction)), label ops (`disabled_labels`, `set_label_disabled`, `delete_label`, `label_counts`, `label_req_counts` — drawer badge reqs:records), merge log (`accepted_labels`, `set_label_merged` — `accepted-labels.json`, labels-are-branches), reason categories (seeded, extensible), pending signals (`overlay_digest(mno, label)` — canonical view digest, formula locked to sira-query's `_overlay_digest`; `overlay_mtime` as legacy fallback). flock'd read-modify-write, atomic tmp+rename, last-writer-wins per record.
-  - `POST /api/enrich-review/edit`, `GET /api/enrich-review/labels`, `POST /api/enrich-review/labels/merge`, `POST /api/enrich-review/labels/delete`, `GET/POST /api/enrich-review/reasons` — JSON edit API; missing corrections_root -> 503 (fail-loud, not silent no-op). Merge/un-merge and delete are admin-gated in team mode (`team_mode.is_admin`); edits are not (they land invisibly on the editor's label branch). The label-view projection is shared code: the store and the route import `allowed_labels` / `filter_overlay` from `sandbox/sira_query/enrich_overlay.py`, so web and service filter a view identically. The record fold (`apply_overlay_to_req`) is not imported — the row view mirrors it — so record semantics are validated against the service-side fold by a cross-side test.
-  - `GET /enrichment-review` (page) + HTMX partials: `/api/enrich-review/cells|plans` (proxied sira-query reads over NORA_SIRA_QUERY_URLS — comma-separated, both stacks; the PRIMARY = first URL is the read/banner authority), `/table` (server-rendered rows: service data ⊕ CURRENT overlay projected onto the `label` view — edits visible instantly regardless of service state; index-words column shows the base BM25 layer; enrichments header carries the enrich model name the service reports), `/row-edit` (one chip interaction → store edit → row partial + OOB pending banner), `/apply` (POST /cells/<cell>/reload on EVERY configured sira-query — with a label only that branch variant rebuilds; the default view is untouched), `/pending`, `/pending-cells` + `/apply-all` (per-MNO staleness sweep behind the labels drawer's Apply-all button — reloads every stale cell of the current view). Exactly ONE `#pending-banner` exists, in the sticky stamp bar; the table response updates it OOB. Chip grammar per the strand design: plain ×→ghost ↺, green adds, suppress-collapse, muted read-only chips for merged (main) records, newer-add-countermands-older-remove rendered as an active add, held banner with Re-affirm/Discard (bulk via __all_held__). Team-mode gate admits `/enrichment-review` + `/api/enrich-review` (domain experts are the gated team).
-  - Exports (enrich_report.py + `GET /api/enrich-review/export?mode=report|scorecard&label=&mno=&download=`): pure text builders over flattened word records — `build_report` (label × category pivot, top removed/added words with req/plan counts, suppressions, origin drift, verbatim notes by category; D-012 posture — never requirement body text) and `build_scorecard` (per remove-record: does the CURRENT LLM output — latest loaded release per MNO — still produce the word? gone = fixed; per-label fixed/unfixed + unfixed word list). Report mode degrades to a note when sira-query is down; scorecard mode requires it. Deterministic ordering (successive exports diff cleanly). The export is the input to a prompt-revision pass; after re-enrichment the scorecard measures fix efficacy, then `delete_label` retires the campaign's records.
+  - `EnrichOverlayStore(corrections_root, backend=None)` — the web's edit surface over a `core.src.stores.overlay.OverlayStore` backend from `open_overlay_store`: `$NORA_OVERLAY_URL` set → `HttpOverlayStore` on nora-store, the Overlay AUTHORITY (wins; `remote` is True and every mutation is ONE `POST /stores/overlay/v1/edit`, run inside the store's transaction — no client-side read-modify-write); else `$NORA_OVERLAY_DB` → SQLite file; else JSON files under `<root>/sira-enrich/`; none → disabled. The op logic is `core.src.stores.overlay_ops`, the same code the authority runs, so the local path is the dev fallback with identical semantics. A store that cannot be reached raises `StoreUnavailable` (routes surface it as 5xx; nothing is masked). Word-record edits (`edit(mno, req_id, op, words|pairs, label, reason, by, origin_release, fingerprint)` — `fingerprint` = the req's content fingerprint, stamped on every record written, re-stamped by reaffirm (dropped when reaffirmed without one); "" = legacy shape — with ops remove/unremove/add/unadd/suppress/unsuppress/reaffirm/discard; one active record per (word, direction)), label ops (`disabled_labels`, `set_label_disabled`, `delete_label`, `label_counts`, `label_req_counts` — drawer badge reqs:records), merge log (`accepted_labels`, `set_label_merged` — `accepted-labels.json`, labels-are-branches), reason categories (seeded, extensible), pending signals (`overlay_digest(mno, label)` — canonical view digest, formula locked to nora-store's `_overlay_digest`; `overlay_mtime` as legacy fallback = backend `version`). Every mutation is one backend transaction (JSON: flock + atomic tmp+rename; SQLite: `BEGIN IMMEDIATE`), last-writer-wins per record.
+  - `POST /api/enrich-review/row-edit` fetches the served row first and passes its `fingerprint` (from nora-store `/cells/{cell}/enrichments`; "" when the service has none) to `edit`; `POST /api/enrich-review/edit` takes an optional `fingerprint` field.
+  - `POST /api/enrich-review/edit`, `GET /api/enrich-review/labels`, `POST /api/enrich-review/labels/merge`, `POST /api/enrich-review/labels/delete`, `GET/POST /api/enrich-review/reasons` — JSON edit API; missing corrections_root -> 503 (fail-loud, not silent no-op). Merge/un-merge and delete are admin-gated in team mode (`team_mode.is_admin`); edits are not (they land invisibly on the editor's label branch). The label-view projection is shared code: the store and the route import `allowed_labels` / `filter_overlay` from `nora_store/enrich_overlay.py`, so web and service filter a view identically. The record fold (`apply_overlay_to_req`) is not imported — the row view mirrors it — so record semantics are validated against the service-side fold by a cross-side test.
+  - `GET /enrichment-review` (page) + HTMX partials: `/api/enrich-review/cells|plans` (proxied nora-store reads over NORA_STORE_URLS — comma-separated, both stacks; the PRIMARY = first URL is the read/banner authority), `/table` (server-rendered rows: service data ⊕ CURRENT overlay projected onto the `label` view — edits visible instantly regardless of service state; index-words column shows the base BM25 layer; enrichments header carries the enrich model name the service reports), `/row-edit` (one chip interaction → store edit → row partial + OOB pending banner), `/apply` (POST /cells/<cell>/reload on EVERY configured nora-store — with a label only that branch variant rebuilds; the default view is untouched), `/pending`, `/pending-cells` + `/apply-all` (per-MNO staleness sweep behind the labels drawer's Apply-all button — reloads every stale cell of the current view). Exactly ONE `#pending-banner` exists, in the sticky stamp bar; the table response updates it OOB. Chip grammar per the strand design: plain ×→ghost ↺, green adds, suppress-collapse, muted read-only chips for merged (main) records, newer-add-countermands-older-remove rendered as an active add, held banner with Re-affirm/Discard (bulk via __all_held__). Team-mode gate admits `/enrichment-review` + `/api/enrich-review` (domain experts are the gated team).
+  - Exports (enrich_report.py + `GET /api/enrich-review/export?mode=report|scorecard&label=&mno=&download=`): pure text builders over flattened word records — `build_report` (label × category pivot, top removed/added words with req/plan counts, suppressions, origin drift, verbatim notes by category; D-012 posture — never requirement body text) and `build_scorecard` (per remove-record: does the CURRENT LLM output — latest loaded release per MNO — still produce the word? gone = fixed; per-label fixed/unfixed + unfixed word list). Report mode degrades to a note when nora-store is down; scorecard mode requires it. Deterministic ordering (successive exports diff cleanly). The export is the input to a prompt-revision pass; after re-enrichment the scorecard measures fix efficacy, then `delete_label` retires the campaign's records.
 - Ingested-corpus inventory (routes/playground.py, D-DRAFT-14 docker-distro):
-  - `GET /api/test/ingested` — HTMX partial for the Test page's corpus table: one row per served `(MNO, release)` cell with distinct plans, distinct requirements, ingestion date, Latest badge (MMMYYYY order — mirrors query-side latest resolution), Lane badges. Merges the nora vectorstore scan with the sira-query service's `GET /cells` (SIRA-only cells appear from service data; both-lane cells with diverging counts render BOTH numbers — lane staleness indicator). Cached on a cell-dir mtime fingerprint + 5-min TTL.
+  - `GET /api/test/ingested` — HTMX partial for the Test page's corpus table: one row per served `(MNO, release)` cell with distinct plans, distinct requirements, ingestion date, Latest badge (MMMYYYY order — mirrors query-side latest resolution), Lane badges. Merges the nora vectorstore scan with the nora-store service's `GET /cells` (SIRA-only cells appear from service data; both-lane cells with diverging counts render BOTH numbers — lane staleness indicator). Cached on a cell-dir mtime fingerprint + 5-min TTL.
 - Feedback (feedback_db.py):
   - `FeedbackStore(db_path)` — aiosqlite store for the Test page's Q&A + feedback log; `initialize()`, `record_qa()` (returns row id), `record_feedback(row_id, vote, free_form_feedback)` (legacy thumbs vote), `record_user_feedback()` (team-eval: 0–9 score + categories + comment + user name, per lane), `get_row()`, `list_recent()`. Surface for offline review of LLM hallucinations (D-043 driver) and the team-eval round.
 - Config store (config_db.py) [D-053]:
@@ -53,7 +55,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - Direct-paste entry — accepts BULK ids (split on comma/space/newline, strand eval-studio-ux-2 [D-207]); each id is validated against the store at save time; an id resolving in exactly one cell is auto-qualified, an id matching SEVERAL releases auto-picks the LATEST release (`req_tree.latest_match`) with a muted per-pick notice — no ambiguity error (the expert wants the current revision; D-207 records the contract change); unresolvable ids block `stage1-ready`.
   - Round-2 UX (strand eval-studio-ux-2, teammate-authored): sortable columns + bounded scrollable lists (attribute-driven client-side sorter, per-table state surviving HTMX re-renders), board author + MNO filters, sample MNO tag (D-206), copy buttons, golden-tab stay-on-save + `golden_meta.edited` provenance badge, in-place question edit, sticky new-sample form values, Enter-to-submit, in-context tab-preserving promote buttons.
   - Retrieval-assisted seeding — run the sample's query against a stack, tick relevant results in. Carries a bias caution (ground truth seeded from retrieval can't capture what retrieval misses); the QC template requires ≥1 independently-sourced entry per sample.
-  - Stage-1 preview — single-sample run (`POST /sira-query` on a configured stack) rendering recall + hit/miss per ground-truth entry, so an expert sanity-checks a sample without waiting for a batch run.
+  - Stage-1 preview — single-sample run (`POST /query` on a configured stack) rendering recall + hit/miss per ground-truth entry, so an expert sanity-checks a sample without waiting for a batch run.
   - Stage-2 curation chat — free-form chat with the on-prem LLM over the ground-truth chunk texts (fetched by `req:<id>` from the store); the chat is a scratchpad, only the final text + meta persist as `golden_response` via eval's `golden.py` (single schema, no parallel write path).
   - Release handling (strand golden-eval, release-handling design — the schema and rules are eval's):
     - **Kind selector** on the meta card (`standard` | `version`, saved by `POST .../meta` `kind`); a switch the entries do not support (relative releases on a standard sample) is refused with the validation reason, the old kind kept.
@@ -64,7 +66,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
     - **Golden save keeps a review flag** (field-found risk: `golden_meta` was rebuilt wholesale on save, which silently dropped the flag and the Stage-2 skip with it).
     - Stage-1 preview and the curation chat resolve relative entries through the release map (preview reports GEV-E005 when one cannot resolve); the chat reads requirement texts case-insensitively.
   - Team-mode gate admits `/eval-studio` (domain experts are the gated team; the review and kind routes sit under the admitted `/api/eval-studio` prefix — verified with the gate on); draft-sample delete is expert-allowed (UI-confirmed), deleting promoted (non-draft) samples admin-gated.
-- Shared requirement-tree loader (req_tree.py, strand golden-eval): `load_tree_flat` / `build_tree_hierarchy` / `load_tree` / `find_tree` / cell-and-doc discovery (`list_cells` / `list_docs`), picker cascade data (`plans_for_mno` — plan → releases union, `reqs_for_plan`), and `find_req` (corpus-wide id lookup driving direct-entry validation + auto-qualification; `ignore_case=True` matches ids case-insensitively, and every row carries the tree's own `req_id` spelling) plus `latest_match` (newest-release pick over `find_req` results, ties→first for determinism — the latest-on-conflict contract, D-207) — lifted from `routes/req_browser.py`'s module-private helpers; used by both req_browser and the Eval Studio picker. Per-cell layout first, legacy flat fallback.
+- Shared requirement-tree loader (req_tree.py, strand golden-eval): `load_tree_flat` / `build_tree_hierarchy` / `load_tree` / `find_tree` / cell-and-doc discovery (`list_cells` / `list_docs`), picker cascade data (`plans_for_mno` — plan → releases union, `reqs_for_plan`), and `find_req` (corpus-wide id lookup driving direct-entry validation + auto-qualification; `ignore_case=True` matches ids case-insensitively, and every row carries the tree's own `req_id` spelling) plus `latest_match` (newest-release pick over `find_req` results, ties→first for determinism — the latest-on-conflict contract, D-207) — lifted from `routes/req_browser.py`'s module-private helpers; used by both req_browser and the Eval Studio picker. Since strand corp-db-layer S4 a thin wrapper over the Trees store (`stores.trees`): same functions and signatures (env dir first), each delegating to `open_tree_store(env_dir)` — nora-store's `/stores/trees/v1` when `NORA_TREES_URL` is set (S6: the web is a client and needs no parse mount), else the SQLite cell DBs when `NORA_TREES_ROOT` is set, else the JSON trees under `out/parse/` (per-cell layout first, legacy flat fallback). `tree_store(env_dir)` returns the store, cached per (env dir, root, url) so the file backend's tree cache persists across calls. `build_tree_hierarchy` / `latest_match` / `parse_dir` / `find_tree` are re-exported from the store module; `parse_dir` / `find_tree` are file-layout helpers only (req_browser's `no_parse_output` banner still checks `out/parse/`).
   - `find_req` row shape (strand req-bubble-metadata): `{mno, release, plan, plan_name, doc_id, title, section_number, parent_section, text}`. `section_number` / `parent_section` / `plan_name` feed the metadata line in the answer bubble. Additive — the three call sites (`playground.py`, `golden_eval.py` ×2) all read by key.
 - `MetricsMiddleware` (middleware.py) — captures every request's timing and error count; fire-and-forget
 - `PathMapper(mappings)` (path_mapper.py) — `to_linux()`, `to_windows()`; translates Windows UNC paths to Linux mount points
@@ -94,7 +96,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - **`find_req`'s `plan_name` is primary-plan-only** (strand req-bubble-metadata): it carries the tree's `plan_name` only when the requirement's effective plan equals the tree's own `plan_id`, and `""` otherwise. A document can carry several plans while the document-level `plan_name` describes just one; `graph/builder.py` stamps secondary plans with an empty name for the same reason, and no per-plan-id-to-name mapping exists anywhere. Rendering the document name beside a secondary plan's requirement would label it with the wrong plan. Consumers show the plan id when `plan_name` is empty. Related: `section_number` is routinely `""` (table-anchored and leading-id-body reqs, TOC pair misses) and `parent_section` is the fallback — the keys are always present, so branch on emptiness, never on absence.
 - **Logging configured at module-import time**, not just inside the `if __name__ == "__main__":` launcher block. Required because `uvicorn.run(reload=True)` spawns a worker that re-imports the module but never executes the launcher block; without basicConfig at import, the worker's loggers default to WARNING and silently drop every `logger.info(...)` in the request path (verification lines like `Web LLM resolved`, `[Query knobs]`, `ConfigStore active` would never reach stderr).
 - **Labels are branches; Apply is never a publish** (strand sira-enrichment-review): the default (main) view = unlabeled records + labels in the `accepted-labels.json` merge log; a label view = main + that label's records. Merge/un-merge only edit the merge log — records are never rewritten, so both are instant and reversible. Apply/apply-all are deliberately NOT admin-gated: a reload can only sync serving to what the overlay + merge log already contain, never expose an unmerged label to main.
-- **Pending is a view-scoped content digest, formula-locked to sira-query**: `overlay_digest` hashes only the view's filtered records (the filter is the service's own `filter_overlay`, imported) — the merge log itself stays out, so a merge/un-merge flags only the MNOs the label touches; fully-undone edits digest back to "in sync". The hash step is duplicated, so the formula must byte-match sira-query's `_overlay_digest` (cross-side parity test); both images must ship formula changes together. Pending/banner state always renders from the PRIMARY configured service (`NORA_SIRA_QUERY_URLS[0]`) — the one every read path queries.
+- **Pending is a view-scoped content digest, formula-locked to nora-store**: `overlay_digest` hashes only the view's filtered records (the filter is the service's own `filter_overlay`, imported) — the merge log itself stays out, so a merge/un-merge flags only the MNOs the label touches; fully-undone edits digest back to "in sync". The hash step is duplicated, so the formula must byte-match nora-store's `_overlay_digest` (cross-side parity test); both images must ship formula changes together. Pending/banner state always renders from the PRIMARY configured service (`NORA_STORE_URLS[0]`) — the one every read path queries.
 - **Eval Studio writes samples only through eval's `golden.py`** (strand golden-eval): the sample schema has one owner; web never serializes `<env_dir>/eval/golden/` JSON itself. Golden samples are proprietary content — no sample query, req_id, or golden-response text in metric tags, logs, or error messages (NFR-8; same posture as D-012).
 - **`nora-ask-history` entries may have no `path`** (strand ask-rerun): the question is recorded at SUBMIT time, so an ask that errored or minted no stored row is still listed — that is the one worth re-running after a fix. Any consumer must tolerate a pathless entry: `history.html` previously called `entry.path.replace()` unconditionally and would have thrown on the first one. The store is written in two phases, and the pending entry is REPLACED by its per-lane entries rather than a second set being appended; without that every ask double-records.
 - **Share-link copy lives once, in `app.js` (`askCopyShare`)** (strand ask-rerun): it was duplicated in `test/index.html` and `test/history.html`, `window.prompt` fallback and all, so a cross-browser fix landed in one and not the other. Templates call it; they must not re-implement it. `_answer.html` invokes it from an inline `onclick`, which is why the global name is load-bearing. `navigator.clipboard` exists only in a SECURE CONTEXT, so the non-secure fallback (detached textarea + `execCommand`) is not optional — reaching the app over plain http via a hostname or LAN IP has no clipboard API at all.
@@ -124,6 +126,7 @@ _Alphabetical, regenerated by regen-map._
 - `WEB_DIR` — constant — pub
 - `_duration_filter` — function — internal — Human-readable duration for a Job.
 - `_start_time` — constant — internal
+- `_store_backends` — function — internal — `local` | `http` | `off` per store, resolved the way the routes
 - `_template_response` — function — internal — Render a template with root_path injected into context.
 - `admin_unlock` — function — pub — Admin full-access unlock for team mode: a correct ?token sets an HttpOnly
 - `app` — constant — pub
@@ -186,29 +189,26 @@ _Alphabetical, regenerated by regen-map._
 - `find_field` — function — pub
 
 `enrich_overlay_store.py`
-- `DEFAULT_REASON_CATEGORIES` — constant — pub
-- `EDIT_OPS` — constant — pub
-- `EnrichOverlayStore` — class — pub — Filesystem store bound to a corrections root ("" = disabled).
+- `EnrichOverlayStore` — class — pub — Edit semantics over an `OverlayStore` bound to a corrections root
   - `__init__` — constructor — internal
-  - `_locked` — method — internal
-  - `_mno_path` — method — internal
-  - `_read_json` — staticmethod — internal
-  - `_write_json` — staticmethod — internal
-  - `accepted_labels` — method — pub — Labels merged into main (the default view). File = merge log.
+  - `_overlays` — method — internal
+  - `_require` — method — internal
+  - `_run` — method — internal — Run one store op where the lock is: on the authority over HTTP
+  - `accepted_labels` — method — pub — Labels merged into main (the default view) — the merge log.
   - `add_reason_category` — method — pub
-  - `delete_label` — method — pub — Strip every record carrying `label` from every MNO file (the
-  - `dir` — property — pub
+  - `delete_label` — method — pub — Strip every record carrying `label` from every MNO (the
   - `disabled_labels` — method — pub
   - `edit` — method — pub — Apply one edit op; returns the req's updated entry (None when the
   - `enabled` — property — pub
   - `get_entry` — method — pub
   - `get_overlay` — method — pub
-  - `label_counts` — method — pub — Record counts per label across MNO files (drawer display).
-  - `label_req_counts` — method — pub — Distinct requirements touched per label across MNO files
-  - `list_mnos` — method — pub — MNOs with an overlay file (sorted).
+  - `label_counts` — method — pub — Record counts per label across MNOs (drawer display).
+  - `label_req_counts` — method — pub — Distinct requirements touched per label across MNOs
+  - `list_mnos` — method — pub — MNOs with an overlay (sorted).
   - `overlay_digest` — method — pub — Canonical content digest of the `label` VIEW of the MNO overlay
-  - `overlay_mtime` — method — pub — 0.0 when absent — pending = mtime > cell loaded_at.
+  - `overlay_mtime` — method — pub — Backend change marker (JSON: file mtime); 0.0 when absent —
   - `reason_categories` — method — pub
+  - `remote` — property — pub — True when edits run on the Overlay authority over HTTP.
   - `set_label_disabled` — method — pub
   - `set_label_merged` — method — pub — Merge a label into main (or un-merge it) — the admin's
 
@@ -345,21 +345,15 @@ _Alphabetical, regenerated by regen-map._
 - `_normalize_win` — function — internal — Normalize a Windows path: forward slashes to backslashes, strip trailing.
 
 `req_tree.py`
-- `_TREE_CACHE` — constant — internal
-- `_release_sort_key` — function — internal
-- `_req_plan` — function — internal — A requirement's effective plan: per-req plan_id (multi-plan docs)
-- `build_tree_hierarchy` — function — pub — Convert flat requirement list into nested tree (child_nodes
+- `_STORES` — constant — internal
 - `find_req` — function — pub — Locate a req_id across the corpus — direct-entry validation and
-- `find_tree` — function — pub — Resolve a doc's tree file. Cell-qualified path first, flat legacy
-- `latest_match` — function — pub — Pick the newest cell from ``find_req`` results — the match with the
 - `list_cells` — function — pub — Discover ``(mno, release)`` cells that have at least one parsed
 - `list_docs` — function — pub — Doc ids with a parsed tree — scoped to one cell when qualifiers
 - `load_tree` — function — pub — Full tree dict (incl. plan_id / plan_name / requirements).
 - `load_tree_flat` — function — pub — The tree's flat requirements list (req_browser's historical shape).
-- `logger` — constant — pub
-- `parse_dir` — function — pub
 - `plans_for_mno` — function — pub — ``{plan_id: [release, ...]}`` — the union of plans across the
 - `reqs_for_plan` — function — pub — Every requirement in one cell belonging to ``plan``, across all of
+- `tree_store` — function — pub — The cached store for this env dir and the current
 
 `resource_sampler.py`
 - `_DEFAULT_INTERVAL` — constant — internal
@@ -422,11 +416,11 @@ _Alphabetical, regenerated by regen-map._
 - `_cell_mno_release` — function — internal
 - `_pending_ctx` — function — internal — Pending = the label VIEW's overlay content differs from what its
 - `_row_view` — function — internal — Merge a service row with the CURRENT overlay entry into template
-- `_service_get` — function — internal — GET from the primary sira-query; service errors surface as 502.
+- `_service_get` — function — internal — GET from the primary nora-store; service errors surface as 502.
 - `_stale_cells` — function — internal — Cells whose `label`-view serving digest lags the live overlay.
 - `_store` — function — internal
 - `api` — constant — pub
-- `apply` — function — pub — The expert's Apply: reload the cell on EVERY configured sira-query
+- `apply` — function — pub — The expert's Apply: reload the cell on EVERY configured nora-store
 - `apply_all` — function — pub — Apply for every stale cell of the current view, on EVERY
 - `cells` — function — pub — Proxied cell list for the MNO/Release cascade.
 - `edit` — function — pub
@@ -486,7 +480,7 @@ _Alphabetical, regenerated by regen-map._
 - `_release_map` — function — internal — The golden set's release map, or None (no map yet, or unreadable —
 - `_resolved_release` — function — internal — The absolute release an entry points at ("" when a relative entry
 - `_review_rows` — function — internal — One block per flagged MNO — built from ``golden_meta.review`` itself,
-- `_stack_url` — function — internal — Primary sira-query stack URL — first of NORA_SIRA_QUERY_URLS,
+- `_stack_url` — function — internal — Primary nora-store stack URL — first of NORA_STORE_URLS,
 - `_template` — function — internal
 - `curation_chat` — function — pub
 - `eval_studio_page` — function — pub
@@ -569,8 +563,8 @@ _Alphabetical, regenerated by regen-map._
 - `_SELECT_SYNTH_TEXT_CHARS` — constant — internal
 - `_SELECT_SYNTH_TOP_K` — constant — internal
 - `_SIRA_HEALTHZ_SNAPSHOT_KEYS` — constant — internal
-- `_SIRA_QUERY_TIMEOUT` — constant — internal
-- `_SIRA_QUERY_URL` — constant — internal
+- `_STORE_TIMEOUT` — constant — internal
+- `_STORE_URL` — constant — internal
 - `_SYNTH_MODE` — constant — internal
 - `_SYNTH_TOKEN_BUDGET` — constant — internal
 - `_balanced_pin` — function — internal — Round-robin across (mno, release) cells, capped at `limit`.
@@ -578,7 +572,7 @@ _Alphabetical, regenerated by regen-map._
 - `_build_merged_response_html` — function — internal — Post-process lane outputs and render the merged container to a
 - `_build_sections` — function — internal — Build the per-request section registry with a corpus-aware blurb.
 - `_build_select_synth_context` — function — internal — Group packed chunks by (mno, release) with explicit headers + full text,
-- `_call_sira_query` — function — internal — POST the question to the SIRA per-query probe service and
+- `_call_store_query` — function — internal — POST the question to the SIRA per-query probe service and
 - `_corpus_label` — function — internal — Best-effort short label for the corpus the web UI is bound to.
 - `_count_cell` — function — internal — (distinct plans, distinct requirements) from chunk metadata.
 - `_decode_json_column` — function — internal — Decode a JSON text column defensively. A corrupt value degrades to the
@@ -694,8 +688,8 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[env](../env/MODULE.md), [llm](../llm/MODULE.md) (`model_discovery` imports `llm.list_models`; `playground.py` already imports `llm.openai_provider` without the edge being declared — adding it once covers both), [models](../models/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md), [query](../query/MODULE.md), [resolver](../resolver/MODULE.md), [corrections](../corrections/MODULE.md), [eval](../eval/MODULE.md) (eval-invocation routes; Eval Studio consumes `golden.py` schema/loaders — edge declared at strand golden-eval design time, closing the asymmetry with eval's Depended-on-by), [extraction](../extraction/MODULE.md) (`release_key.release_order_key` — release ordering in req_tree.py, playground.py and enrich_review.py).
-**sira-query service** — two edges. Code import: enrich_overlay_store.py and routes/enrich_review.py import `sandbox.sira_query.enrich_overlay` (`allowed_labels`, `filter_overlay`) so the label-view projection is the service's own code (stdlib-only module, so the import carries no service dependencies). Runtime edge over HTTP (`NORA_SIRA_QUERY_URL`; the enrichment-review surface reads `NORA_SIRA_QUERY_URLS` — comma-separated, first = primary/read authority) — the Test page's SIRA retrieval lane, the corpus inventory's `GET /cells` (D-DRAFT-14 docker-distro), and the enrichment-review proxied reads + `POST /cells/<cell>/reload` (Apply). Degrades gracefully when unreachable (review page: report export degrades, scorecard requires it).
+[env](../env/MODULE.md), [llm](../llm/MODULE.md) (`model_discovery` imports `llm.list_models`; `playground.py` already imports `llm.openai_provider` without the edge being declared — adding it once covers both), [models](../models/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md), [query](../query/MODULE.md), [resolver](../resolver/MODULE.md), [corrections](../corrections/MODULE.md), [eval](../eval/MODULE.md) (eval-invocation routes; Eval Studio consumes `golden.py` schema/loaders — edge declared at strand golden-eval design time, closing the asymmetry with eval's Depended-on-by), [extraction](../extraction/MODULE.md) (`release_key.release_order_key` — release ordering in req_tree.py, playground.py and enrich_review.py), [stores](../stores/MODULE.md) (`open_overlay_store` / `OverlayStore` + `overlay_ops` — the enrichment overlay store's backend and edit semantics, strand corp-db-layer S3/S6; `open_tree_store` / `TreeStore` — req_tree.py's backend, S4; `open_history_store`, `clients.store_backend_kind` — health reporting, S6).
+**nora-store service** — two edges. Code import: enrich_overlay_store.py and routes/enrich_review.py import `nora_store.enrich_overlay` (`allowed_labels`, `filter_overlay`) so the label-view projection is the service's own code (stdlib-only module, so the import carries no service dependencies). Runtime edge over HTTP (`NORA_STORE_URL`; the enrichment-review surface reads `NORA_STORE_URLS` — comma-separated, first = primary/read authority) — the Test page's SIRA retrieval lane, the corpus inventory's `GET /cells` (D-DRAFT-14 docker-distro), and the enrichment-review proxied reads + `POST /cells/<cell>/reload` (Apply). Degrades gracefully when unreachable (review page: report export degrades, scorecard requires it).
 
 **Depended on by**
 None — top of the stack.

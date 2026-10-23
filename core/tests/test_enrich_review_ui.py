@@ -148,6 +148,29 @@ class TestRowEdit:
         # accidental-click guard: the suppress form asks for confirmation
         assert "hx-confirm" in r.text and "Are you sure" in r.text
 
+    def test_edit_stamps_served_row_fingerprint(self, client, tmp_path,
+                                                monkeypatch):
+        # strand corp-db-layer S3: the row's content fingerprint (from the
+        # service) is stamped on the records the edit writes
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        base = er._service_get
+
+        def with_fp(path, params=None):
+            data = base(path, params)
+            return {**data, "rows": [{**r, "fingerprint": f"fp-{r['req_id']}"}
+                                     for r in data.get("rows", [])]}
+        monkeypatch.setattr(er, "_service_get", with_fp)
+        self._edit(client, op="remove", word="handover")
+        rec = EnrichOverlayStore(tmp_path).get_entry("GP", "R1")["remove"][0]
+        assert rec["fingerprint"] == "fp-R1"
+
+    def test_edit_without_service_fingerprint_is_legacy_shape(self, client,
+                                                             tmp_path):
+        from core.src.web.enrich_overlay_store import EnrichOverlayStore
+        self._edit(client, op="remove", word="handover")
+        rec = EnrichOverlayStore(tmp_path).get_entry("GP", "R1")["remove"][0]
+        assert "fingerprint" not in rec
+
     def test_pending_clears_when_all_edits_undone(self, client, tmp_path,
                                                   monkeypatch):
         # serving applied the (empty) overlay at load — its digest is the
@@ -272,7 +295,7 @@ class TestApply:
 
     def test_apply_banner_reflects_primary_not_stale_secondary(
             self, client, tmp_path, monkeypatch):
-        # a secondary sira-query on an older image reports a digest from a
+        # a secondary nora-store on an older image reports a digest from a
         # stale formula with a LATER loaded_at — it must not wedge the
         # banner on "pending" when the primary reloaded in sync
         from core.src.web.enrich_overlay_store import EnrichOverlayStore
@@ -347,3 +370,20 @@ class TestApplyAll:
                          "http://b:8041/cells/GP__Feb2026/reload",
                          "http://a:8040/cells/GP__Nov2025/reload",
                          "http://b:8041/cells/GP__Nov2025/reload"]
+
+
+def test_empty_store_urls_value_counts_as_unset(monkeypatch):
+    """Field finding: `NORA_STORE_URLS=` in an env file emptied the list, so
+    Apply reloaded nothing and still returned 200."""
+    import importlib
+    import core.src.web.routes.enrich_review as er
+    monkeypatch.setenv("NORA_STORE_URLS", "")
+    monkeypatch.setenv("NORA_STORE_URL", "http://example.test:1")
+    er = importlib.reload(er)
+    assert er._SIRA_URLS == ["http://example.test:1"]
+    monkeypatch.setenv("NORA_STORE_URL", "")
+    er = importlib.reload(er)
+    assert er._SIRA_URLS == ["http://127.0.0.1:8040"]
+    monkeypatch.delenv("NORA_STORE_URLS")
+    monkeypatch.delenv("NORA_STORE_URL")
+    importlib.reload(er)

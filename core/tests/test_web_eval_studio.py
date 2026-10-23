@@ -277,7 +277,7 @@ class TestPreview:
         _create(client)
         client.post("/api/eval-studio/sample/gs-0001/gt/add",
                     data={"req_id": "REQ_FOO_0002"})
-        monkeypatch.setenv("NORA_SIRA_QUERY_URLS", "http://127.0.0.1:9999")
+        monkeypatch.setenv("NORA_STORE_URLS", "http://127.0.0.1:9999")
         from core.src.eval import golden_runner
         monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {
             "results": [
@@ -293,10 +293,10 @@ class TestPreview:
 
     def test_preview_without_stack_warns(self, client, monkeypatch):
         _create(client)
-        monkeypatch.delenv("NORA_SIRA_QUERY_URLS", raising=False)
-        monkeypatch.delenv("NORA_SIRA_QUERY_URL", raising=False)
+        monkeypatch.delenv("NORA_STORE_URLS", raising=False)
+        monkeypatch.delenv("NORA_STORE_URL", raising=False)
         r = client.post("/api/eval-studio/sample/gs-0001/preview")
-        assert "No sira-query stack" in r.text
+        assert "No nora-store stack" in r.text
 
 
 class _FakeLLM:
@@ -570,7 +570,7 @@ def test_new_routes_reachable_with_gate_on(client, tmp_path, monkeypatch):
 
 
 def test_preview_uses_release_map(client, tmp_path, monkeypatch):
-    monkeypatch.setenv("NORA_SIRA_QUERY_URLS", "http://127.0.0.1:9999")
+    monkeypatch.setenv("NORA_STORE_URLS", "http://127.0.0.1:9999")
     from core.src.eval import golden_runner
 
     monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {

@@ -155,7 +155,7 @@ Three follow-up steps the user runs (the playbook does NOT auto-trigger these):
 
 3. **Validate via sira_debug:**
    ```
-   python -m sandbox.sira_query.sira_debug phrases --filter <SUBDOMAIN>
+   python -m nora_store.sira_debug phrases --filter <SUBDOMAIN>
    ```
    The phrases for a VoWiFi req should now contain `epdg`, `ipsec`, `ike_sa`,
    `swu` — not `nas_attach` / `emm_procedure`. Similarly Android-platform reqs

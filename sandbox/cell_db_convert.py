@@ -1,25 +1,25 @@
-"""Cell-DB converter — phase 1 of the corp-db-layer strand.
+"""Cell-DB converter — the Cells store builder (corp-db-layer).
 
 Converts one promoted label's SIRA flat files into one SQLite **cell DB**
-per (MNO, release) cell: corpus + enrichment as rows, and the ENRICHED
-serialized bm25x index as blobs. A cell-db stack (phase 2) serves from
-these files and is A/B-evaluated against the flat-file stack on identical
-content. Design: docs/compact/strands/corp-db-layer/converter-design.md.
+per (MNO, release) cell. Schema 2 (store-split-design §2, §4) keeps the
+layers separate: corpus rows with their content fingerprint, the VANILLA
+serialized bm25x index, and SIRA's raw per-requirement phrases. Review
+edits are not stored here — the service folds the Overlay store in at
+load. Design: docs/compact/strands/corp-db-layer/store-split-design.md.
 
-Parity by construction: the converter applies enrichment with the exact
-steps the service uses (BM25.load → disable_auto_save → enrich_batch of
-the overlay-folded effective sets) and stores the resulting index bytes —
-a cell-db stack loads the same engine from the same bytes. Self-verify
-(--verify N) replays probe queries through the in-memory enriched index
-vs a fresh index loaded from the DB blobs; any ranking difference fails
-that cell's conversion.
+Identity gate (--verify N): the converter folds the overlay into SIRA's
+phrases exactly as the service does, enriches the in-memory index, then
+loads the VANILLA index back from the DB blobs, applies the same effective
+sets, and requires identical rankings on N probe queries. That proves a
+schema-2 cell composed at load serves what a baked schema-1 cell served.
 
 Usage (inside the sandbox venv, from the repo root):
 
     python -m sandbox.cell_db_convert --label <serve-root>/<label> --out <dir>
     python -m sandbox.cell_db_convert --db-root <cells-dir> --out <dir> \
         [--cells <mno>__<release>,...] [--enrich-run NAME | --latest-runs] \
-        [--overlay-root <corrections-root>] [--no-fts5] [--verify N] [--force]
+        [--overlay-root <corrections-root> | --overlay-db <overlay.db>] \
+        [--verify N] [--force]
 
 Error codes (stable, content-free — NFR-9):
     CNV-001  corpus.jsonl missing for a cell
@@ -31,6 +31,8 @@ Error codes (stable, content-free — NFR-9):
     CNV-007  blob round-trip failure (saved index does not reload)
     CNV-008  overlay fold failure
     CNV-009  no cells found under the input root
+    CNV-010  FTS5 requested — schema 2 stores the vanilla index only
+    CNV-011  best.jsonl is a dangling link (pin the run with --enrich-run)
 
 The report (stdout + <out>/conversion-report.json) carries counts and
 digests only — never requirement text, titles, or enrichment words (D-012).
@@ -51,17 +53,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells
-from sandbox.sira_query.enrich_overlay import (
+from core.src.stores.overlay import open_overlay_store
+from nora_store.enrich_overlay import (
     allowed_labels,
     apply_overlay_to_req,
     filter_overlay,
-    load_accepted_labels,
-    load_overlay,
     make_verdict_fn,
 )
 
-SCHEMA_VERSION = 1   # pre-release; frozen when the first loader ships
-CONVERTER_VERSION = "0.2"  # 0.2: corpus.req_id UNIQUE dropped — real cells
+SCHEMA_VERSION = 2   # 2: vanilla index + raw SIRA phrases + fingerprints
+#   (store-split-design D-DRAFT-23); 1: baked enriched index (loader still reads it)
+CONVERTER_VERSION = "0.3"  # 0.3: schema 2. 0.2: corpus.req_id UNIQUE dropped — real cells
 #   carry duplicate doc/section `_id` rows (field finding, 2026-10-10);
 #   the row set must stay byte- and position-faithful to corpus.jsonl
 #   because the index blobs score every row. Id lookups are last-wins
@@ -81,22 +83,24 @@ CREATE TABLE corpus(
                                         -- Service semantics for id lookup
                                         -- is last-wins (max doc per id).
   title   TEXT NOT NULL DEFAULT '',
-  text    TEXT NOT NULL DEFAULT ''
+  text    TEXT NOT NULL DEFAULT '',
+  fingerprint TEXT NOT NULL DEFAULT ''  -- text_fp; '' for composite
+                                        -- doc:/section: rows and pre-sidecar builds
 );
 CREATE INDEX corpus_req_id_idx ON corpus(req_id);
-CREATE TABLE enrichment(
-  req_id  TEXT PRIMARY KEY,             -- post-overlay-fold EFFECTIVE set
+CREATE TABLE sira_phrases(
+  req_id  TEXT PRIMARY KEY,             -- SIRA's RAW phrases (pre-overlay)
   phrases TEXT NOT NULL,                -- JSON array of phrases
   run_id  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE index_blob(
-  filename TEXT PRIMARY KEY,            -- bm25x serialized file name
+  filename TEXT PRIMARY KEY,            -- VANILLA bm25x serialized file name
   codec    TEXT NOT NULL DEFAULT 'zlib',-- 'zlib' | 'raw'
   data     BLOB NOT NULL                -- codec-encoded file bytes
 );
 """
 
-_FTS_DDL = "CREATE VIRTUAL TABLE fts USING fts5(toks);"
+FINGERPRINTS_NAME = "fingerprints.jsonl"   # adapter sidecar (raw/)
 
 
 class ConvertError(Exception):
@@ -120,6 +124,8 @@ class CellData:
     enrich_source: Path | None
     enrich_run_id: str
     enrich_model: str
+    vanilla_blobs: list[tuple[str, bytes]] = field(default_factory=list)
+    fingerprints: dict[str, str] = field(default_factory=dict)
     # filled in pass 2
     effective: dict[str, list[str]] = field(default_factory=dict)
     overlay_digest: str = ""
@@ -143,7 +149,7 @@ class CellData:
 
 def _sha256_files(paths: list[Path | None]) -> str:
     """Per-cell data fingerprint — MUST match service._sha256_files
-    (sira_query/service.py): streamed sha256 over corpus.jsonl + the
+    (nora_store/service.py): streamed sha256 over corpus.jsonl + the
     applied phrases file, absent files hashing as a marker."""
     h = hashlib.sha256()
     for p in paths:
@@ -216,6 +222,22 @@ def _load_cell(base: Path, cell: CellKey, enrich_run: str, use_latest: bool) -> 
     # Defensive, same as the service and SIRA's own scripts: mutations on
     # a path-bound index auto-save; never touch the label's index/best.
     bm25.disable_auto_save()
+    # Capture the VANILLA serialization now, before pass 2 enriches the
+    # in-memory index — schema 2 stores the vanilla layer only.
+    with tempfile.TemporaryDirectory(prefix="cnv-vanilla-") as td:
+        bm25.save(td)
+        vanilla_blobs = [(p.name, p.read_bytes())
+                         for p in sorted(Path(td).iterdir()) if p.is_file()]
+
+    fingerprints: dict[str, str] = {}
+    fp_path = base / "raw" / FINGERPRINTS_NAME
+    if fp_path.is_file():
+        with open(fp_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    row = json.loads(line)
+                    fingerprints[row["_id"]] = row.get("fingerprint", "")
 
     run_dir = _resolve_run_dir(base / "runs" / "doc-enrich", enrich_run, use_latest)
     enrich_model = _enrich_model_of_run(run_dir) if run_dir is not None else ""
@@ -226,6 +248,10 @@ def _load_cell(base: Path, cell: CellKey, enrich_run: str, use_latest: bool) -> 
         run_id = run_dir.name
     if phrases_path is None:
         fallback = base / "enrichments" / "doc" / "best.jsonl"
+        if fallback.is_symlink() and not fallback.exists():
+            # Field finding: a best pointer to a pruned run silently produced
+            # a cell with no phrases. Refuse; pin the run with --enrich-run.
+            raise ConvertError("CNV-011", f"enrichments/doc/best.jsonl is a dangling link in {cell_dirname(cell)} — pin the run with --enrich-run")
         if fallback.exists() and fallback.stat().st_size > 0:
             phrases_path = fallback
             run_id = "best"
@@ -247,20 +273,26 @@ def _load_cell(base: Path, cell: CellKey, enrich_run: str, use_latest: bool) -> 
         cell=cell, base=base, doc_ids=doc_ids, doc_id_to_idx=doc_id_to_idx,
         rows=rows, bm25=bm25, llm_words=llm_words,
         enrich_source=phrases_path, enrich_run_id=run_id, enrich_model=enrich_model,
+        vanilla_blobs=vanilla_blobs, fingerprints=fingerprints,
     )
 
 
 def _fold_and_enrich(cd: CellData, cells: dict[CellKey, CellData],
-                     overlay_root: str) -> None:
+                     overlay_root: str, overlay_db: str = "") -> None:
     """Pass 2: fold the corrections overlay (main view) into the effective
     sets and apply them to the in-memory index. Mirrors
     service._apply_overlay_and_enrich with label='' — peers for the
-    cross-release verdict are the cells being converted."""
+    cross-release verdict are the cells being converted. The overlay is
+    read through the Overlay store (`overlay_db`, else $NORA_OVERLAY_DB,
+    else the JSON files under `overlay_root`); neither given = no overlay."""
     mno, release = cd.cell
     try:
-        if overlay_root:
-            accepted = load_accepted_labels(overlay_root)
-            overlay = filter_overlay(load_overlay(overlay_root, mno),
+        store = (open_overlay_store(overlay_root, db_path=overlay_db,
+                                    read_only=True)
+                 if (overlay_root or overlay_db) else None)
+        if store is not None:
+            accepted = store.accepted_labels()
+            overlay = filter_overlay(store.get_overlay(mno),
                                      allowed_labels(accepted, ""))
         else:
             overlay = {}
@@ -272,7 +304,11 @@ def _fold_and_enrich(cd: CellData, cells: dict[CellKey, CellData],
         peer = cells.get((mno, rel)) if rel != release else cd
         return peer.vanilla_tokens(req_id) if peer is not None else None
 
-    verdict = make_verdict_fn(token_sets, release)
+    def fingerprint_of(rel: str, req_id: str):
+        peer = cells.get((mno, rel)) if rel != release else cd
+        return peer.fingerprints.get(req_id) if peer is not None else None
+
+    verdict = make_verdict_fn(token_sets, release, fingerprint_of=fingerprint_of)
 
     effective: dict[str, list[str]] = {}
     n_rem = n_add = n_held = n_sup = 0
@@ -327,8 +363,9 @@ def _rankings(bm25, probes: list[tuple[str, str]], k: int, weight: float):
 
 def _verify(cd: CellData, db_path: Path, probes: list[tuple[str, str]],
             k: int = 10, weight: float = 0.5) -> dict:
-    """Load the index back from the DB blobs and require rankings
-    IDENTICAL to the in-memory enriched index."""
+    """Identity gate: load the VANILLA index back from the DB blobs, apply
+    the same effective sets the service would compose at load, and require
+    rankings IDENTICAL to the in-memory enriched index."""
     from bm25x import BM25
     with tempfile.TemporaryDirectory(prefix="cnv-verify-") as td:
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -346,6 +383,12 @@ def _verify(cd: CellData, db_path: Path, probes: list[tuple[str, str]],
             db_bm25.disable_auto_save()
         except Exception as exc:
             raise ConvertError("CNV-007", f"DB index blobs do not reload for {cell_dirname(cd.cell)}: {type(exc).__name__}") from exc
+        items = [(cd.doc_id_to_idx[rid], ph) for rid, ph in cd.effective.items()]
+        try:
+            if items:
+                db_bm25.enrich_batch(items)
+        except Exception as exc:
+            raise ConvertError("CNV-005", f"composing the DB index failed for {cell_dirname(cd.cell)}: {type(exc).__name__}") from exc
 
         ref = _rankings(cd.bm25, probes, k, weight)
         got = _rankings(db_bm25, probes, k, weight)
@@ -366,19 +409,8 @@ def _verify(cd: CellData, db_path: Path, probes: list[tuple[str, str]],
     return {"probes": len(probes), "k": k, "mismatches": 0}
 
 
-def _fts_token_stream(cd: CellData, rid: str, text: str) -> str:
-    """Unigram token stream for the optional FTS5 table: the index's own
-    tokenizer over the corpus text, plus each effective phrase tokenized
-    in isolation (matching bm25x enrich semantics — no cross-boundary
-    tokens, repetitions preserved)."""
-    toks = list(cd.bm25.tokenize(text))
-    for phrase in cd.effective.get(rid, []):
-        toks.extend(cd.bm25.tokenize(phrase))
-    return " ".join(toks)
-
-
 def _write_db(cd: CellData, out_dir: Path, source_label: str,
-              fts5: bool, force: bool) -> tuple[Path, dict]:
+              force: bool) -> tuple[Path, dict]:
     mno, release = cd.cell
     final = out_dir / f"cell-{mno}-{release}.db"
     if final.exists() and not force:
@@ -386,35 +418,26 @@ def _write_db(cd: CellData, out_dir: Path, source_label: str,
     tmp = out_dir / f".tmp-{final.name}"
     tmp.unlink(missing_ok=True)
 
-    # Serialize the ENRICHED index to blobs. zlib matters: bm25x's hashed
-    # n-gram side serializes its full slot table (~134 MB of mostly zeros
-    # at default n_features) regardless of corpus size; compression takes
-    # it down ~500x. Decompression restores byte-identical files, so
-    # parity is untouched.
-    with tempfile.TemporaryDirectory(prefix="cnv-save-") as td:
-        cd.bm25.save(td)
-        blob_files = sorted(p for p in Path(td).iterdir() if p.is_file())
-        blobs = [(p.name, p.read_bytes()) for p in blob_files]
-        stored = [(name, "zlib", zlib.compress(data, 6)) for name, data in blobs]
+    # The VANILLA index blobs (captured in pass 1). zlib matters: bm25x's
+    # hashed n-gram side serializes its full slot table (~134 MB of mostly
+    # zeros at default n_features) regardless of corpus size; compression
+    # takes it down ~500x. Decompression restores byte-identical files.
+    blobs = cd.vanilla_blobs
+    stored = [(name, "zlib", zlib.compress(data, 6)) for name, data in blobs]
 
     con = sqlite3.connect(tmp)
     try:
         con.executescript(_DDL)
-        if fts5:
-            con.executescript(_FTS_DDL)
         con.executemany(
-            "INSERT INTO corpus(doc, req_id, title, text) VALUES (?,?,?,?)", cd.rows)
+            "INSERT INTO corpus(doc, req_id, title, text, fingerprint) VALUES (?,?,?,?,?)",
+            [(doc, rid, title, text, cd.fingerprints.get(rid, ""))
+             for doc, rid, title, text in cd.rows])
         con.executemany(
-            "INSERT INTO enrichment(req_id, phrases, run_id) VALUES (?,?,?)",
+            "INSERT INTO sira_phrases(req_id, phrases, run_id) VALUES (?,?,?)",
             [(rid, json.dumps(ph, ensure_ascii=False), cd.enrich_run_id)
-             for rid, ph in sorted(cd.effective.items())])
+             for rid, ph in sorted(cd.llm_words.items())])
         con.executemany(
             "INSERT INTO index_blob(filename, codec, data) VALUES (?,?,?)", stored)
-        if fts5:
-            con.executemany(
-                "INSERT INTO fts(rowid, toks) VALUES (?,?)",
-                [(doc, _fts_token_stream(cd, rid, text))
-                 for doc, rid, _title, text in cd.rows])
 
         fingerprint = _sha256_files(
             [cd.base / "raw" / "corpus.jsonl", cd.enrich_source])
@@ -428,13 +451,12 @@ def _write_db(cd: CellData, out_dir: Path, source_label: str,
             "source_fingerprint": fingerprint,
             "enrich_run": cd.enrich_run_id,
             "enrich_model": cd.enrich_model,
-            "enriched_docs": str(len(cd.effective)),
-            "overlay_digest_baked": cd.overlay_digest,
-            "overlay_counts": json.dumps(cd.overlay_counts),
+            "sira_docs": str(len(cd.llm_words)),
+            "fingerprinted_docs": str(sum(1 for r in cd.rows if cd.fingerprints.get(r[1]))),
             "bm25x_max_n": str(cd.bm25.max_n()),
             "bm25x_ngrams": json.dumps(cd.bm25.ngrams()),
             "n_docs": str(len(cd.rows)),
-            "fts5": "1" if fts5 else "0",
+            "fts5": "0",
             "index_files": json.dumps(
                 {name: hashlib.sha256(data).hexdigest() for name, data in blobs}),
         }
@@ -449,7 +471,8 @@ def _write_db(cd: CellData, out_dir: Path, source_label: str,
     cell_report = {
         "cell": cell_dirname(cd.cell),
         "n_docs": len(cd.rows),
-        "enriched_docs": len(cd.effective),
+        "sira_docs": len(cd.llm_words),
+        "enriched_docs": len(cd.effective),   # composed with the overlay (verify only)
         "overlay": cd.overlay_counts,
         "overlay_digest": cd.overlay_digest,
         "enrich_run": cd.enrich_run_id,
@@ -457,7 +480,7 @@ def _write_db(cd: CellData, out_dir: Path, source_label: str,
         "blob_files": len(blobs),
         "blob_bytes": sum(len(d) for _, d in blobs),          # raw (decoded)
         "blob_stored_bytes": sum(len(d) for _, _, d in stored),  # on-disk
-        "fts5": fts5,
+        "fts5": False,
     }
     return tmp, cell_report
 
@@ -472,11 +495,16 @@ def _finalize(tmp: Path, out_dir: Path, cell: CellKey) -> Path:
 
 def convert(db_root: Path, out_dir: Path, *, cells_filter: list[str] | None = None,
             enrich_run: str = "", use_latest: bool = False, overlay_root: str = "",
-            fts5: bool = True, verify_n: int = 25, force: bool = False,
+            overlay_db: str = "", fts5: bool = False, verify_n: int = 25, force: bool = False,
             source_label: str = "") -> dict:
     """Convert every selected cell under db_root; returns the report dict.
     Raises ConvertError on the first failing cell (already-finalized cells
-    stay in place; the failed cell leaves no final file)."""
+    stay in place; the failed cell leaves no final file). `overlay_root` /
+    `overlay_db` feed the identity gate only — schema 2 never stores review
+    edits."""
+    if fts5:
+        raise ConvertError("CNV-010", "FTS5 needs a baked enriched index; "
+                           "schema 2 stores the vanilla index (use bm25x)")
     out_dir.mkdir(parents=True, exist_ok=True)
     cells = enumerate_cells(db_root)
     if cells_filter:
@@ -492,7 +520,7 @@ def convert(db_root: Path, out_dir: Path, *, cells_filter: list[str] | None = No
                                   enrich_run, use_latest)
     # Pass 2: fold + enrich.
     for cd in loaded.values():
-        _fold_and_enrich(cd, loaded, overlay_root)
+        _fold_and_enrich(cd, loaded, overlay_root, overlay_db)
 
     report: dict = {
         "converter_version": CONVERTER_VERSION,
@@ -502,7 +530,7 @@ def convert(db_root: Path, out_dir: Path, *, cells_filter: list[str] | None = No
     }
     for cell in cells:
         cd = loaded[cell]
-        tmp, cell_report = _write_db(cd, out_dir, source_label, fts5, force)
+        tmp, cell_report = _write_db(cd, out_dir, source_label, force)
         if verify_n > 0:
             probes = _probe_queries(cd, verify_n)
             cell_report["verify"] = _verify(cd, tmp, probes)
@@ -545,8 +573,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--latest-runs", action="store_true",
                     help="use the most-recent doc-enrich run (mirrors NORA_SIRA_USE_LATEST_RUNS)")
     ap.add_argument("--overlay-root", default="",
-                    help="corrections root — bake the overlay (main view) into the DB")
-    ap.add_argument("--no-fts5", action="store_true", help="skip the optional FTS5 table")
+                    help="corrections root — folded in for the identity gate only "
+                         "(schema 2 never stores review edits)")
+    ap.add_argument("--overlay-db", default="",
+                    help="Overlay store SQLite file (wins over --overlay-root); "
+                         "identity gate only")
+    ap.add_argument("--no-fts5", action="store_true",
+                    help="accepted for compatibility; schema 2 never writes FTS5")
     ap.add_argument("--verify", type=int, default=25, metavar="N",
                     help="probe queries per cell for self-verify (0 disables; default 25)")
     ap.add_argument("--force", action="store_true", help="overwrite existing cell DBs")
@@ -558,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
         report = convert(
             db_root, Path(args.out), cells_filter=cells_filter,
             enrich_run=args.enrich_run, use_latest=args.latest_runs,
-            overlay_root=args.overlay_root, fts5=not args.no_fts5,
+            overlay_root=args.overlay_root, overlay_db=args.overlay_db,
             verify_n=args.verify, force=args.force, source_label=source_label)
     except ConvertError as exc:
         print(f"FAILED {exc}", file=sys.stderr)
@@ -585,7 +618,7 @@ def print_report(report: dict) -> None:
         print(f"{c['cell']:24s} docs={c['n_docs']:<6d} enriched={c['enriched_docs']:<6d} "
               f"blobs={c['blob_files']}({c['blob_stored_bytes'] >> 10}K stored, "
               f"{c['blob_bytes'] >> 20}M raw) "
-              f"fts5={'y' if c['fts5'] else 'n'}  {vtxt}  -> {c['file']}")
+              f"sira={c['sira_docs']:<6d} {vtxt}  -> {c['file']}")
 
 
 if __name__ == "__main__":

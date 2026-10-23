@@ -33,7 +33,7 @@ that refusal, talk to the owner it names rather than working around it.
 - ssh from the build machine to the serving host as yourself,
   key-based (check: `ssh -o BatchMode=yes <serving-host> true`).
 - The wiring and runtime env files present under `/srv/nora/env/`
-  (`.env.builds`, `.env.nora-pipeline`, `.env.sira-batch`, and the
+  (`.env.builds`, `.env.nora-batch`, `.env.sira-batch`, and the
   stack envs `.env.<stack>` on the serving host). You never create
   these; if one is missing, that is an architect task.
 - The source documents for the release staged on the requirements
@@ -356,11 +356,11 @@ with the same HTTP status") and keep the ids on the machine.
 | `CYC-E040 parse dirs < staged cells` | a cell failed to parse | first `PIP-E` code in the parse log |
 | `CYC-E041 ... mis-shaped` | a derived prompt file has the wrong placeholders | fix under `customizations/prompts/` (architect commits) |
 | `CYC-E061 taxonomy ledger has N failed` | LLM/server errors during taxonomy | `./cycle.sh taxonomy` again (retry); escalate after 3 identical runs |
-| `CYC-E062 TAX-W003` | overviews were not attached | `.env.nora-pipeline` lacks `NORA_TAXONOMY_OVERVIEW_DIR`, or `prompts/` is empty — re-run `prompts` |
+| `CYC-E062 TAX-W003` | overviews were not attached | `.env.nora-batch` lacks `NORA_TAXONOMY_OVERVIEW_DIR`, or `prompts/` is empty — re-run `prompts` |
 | `CYC-E070 verify reports FAIL` | structural break in a cell | triage locally, `enrich --cell X --retry-failed`, verify again |
 | `SPUSH-E012 remote label already exists` | label name reused | promote again under a new label (`abandon` is NOT needed — the cycle is still open until push succeeds) |
 | `SPUSH-E020 checksum verify found differences` | transfer incomplete | re-run the same `promote` command — the push resumes |
-| `SFLIP-E020 healthz does not report serve_label` | stack came up on the wrong data or not at all | the printed rollback one-liner; then `docker compose --env-file <stack env> logs sira-query` |
+| `SFLIP-E020 healthz does not report serve_label` | stack came up on the wrong data or not at all | the printed rollback one-liner; then `docker compose --env-file <stack env> logs nora-store` |
 | `CYC-E004 wiring env does not point at build` | `.env.builds` was edited by hand mid-cycle | restore the two path lines to the active build dirs |
 
 Every error prints a `fix:` line; that line is the first thing to try.

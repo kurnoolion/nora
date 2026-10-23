@@ -1,9 +1,9 @@
 # NORA + SIRA stack — two views, one image set (docker-distro design).
 #
 #   OPS  serve:   docker compose --profile serve up -d
-#   OPS  ingest:  docker compose --profile ingest run --rm nora-pipeline <cmd>
+#   OPS  ingest:  docker compose --profile ingest run --rm nora-batch <cmd>
 #                 docker compose --profile ingest run --rm sira-batch   <cmd>
-#                 docker compose restart sira-query
+#                 docker compose restart nora-store
 #   A/B  stacks:  docker compose -p stack-a --env-file .env.stack-a --profile serve up -d
 #                 (per-stack ports/env-files via the stack .env; pooled feedback volume)
 #
@@ -19,20 +19,20 @@
 name: ${STACK_NAME:-nora}
 
 services:
-  sira-query:
+  nora-store:
     build:
       context: ..
       additional_contexts:
         vendor: ./vendor
-      dockerfile: docker/sira.Dockerfile
-      target: sira-query
+      dockerfile: docker/store.Dockerfile
+      target: nora-store
       args:
         OFFLINE: ${OFFLINE:-0}
         SIRA_REF: ${SIRA_REF:-62ec59cfb0d76f28ceb3c3d80023ac58a98e4b7a}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-    image: ${IMAGE_PREFIX:-local}/sira-query:${IMAGE_TAG:-dev}
+    image: ${IMAGE_PREFIX:-local}/nora-store:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
     # Serve containers default to root (0:0 — today's behavior). Set
     # SERVE_UID/SERVE_GID to the host user so bind-mount writes land
@@ -42,20 +42,35 @@ services:
     # (web-state, feedback, golden dir) to that user first.
     user: "${SERVE_UID:-0}:${SERVE_GID:-0}"
     ports:
-      - "${SIRA_QUERY_PORT:-8040}:8040"
+      - "${STORE_PORT:-8040}:8040"
     volumes:
-      - ${SIRA_DB_ROOT:?set SIRA_DB_ROOT in .env}:/data/db
-      # enrichment-corrections overlay — web writes, this service READS
-      # (applied at cell load; POST /cells/<cell>/reload re-applies)
-      - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections:ro
+      - ${STORE_ROOT:?set STORE_ROOT in .env}:/data/db
+      # enrichment-corrections overlay — this service is the Overlay
+      # AUTHORITY (corp-db-layer S6): it WRITES the edits nora-web sends
+      # over /stores/overlay/v1 and applies them at cell load (POST
+      # /cells/<cell>/reload re-applies). Read-write mount, therefore.
+      - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections
+      # parse trees for the Trees store (/stores/trees/v1): the Requirement
+      # Browser, /api/req and the Eval Studio picker read them from here
+      # once nora-web sets NORA_TREES_URL. Read-only: nora-store never
+      # writes under the env dir.
+      - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env:ro
+      # Pre-built SQLite stores (optional; see .env.nora-store):
+      # - ${TREES_ROOT}:/data/trees:ro        # trees-<mno>-<release>.db
+      # - ${HISTORY_ROOT}:/data/history:ro    # history-<mno>.db
     env_file:
-      - path: ${SIRA_QUERY_ENV_FILE:-.env.sira-query}
+      - path: ${STORE_ENV_FILE:-.env.nora-store}
         required: false
       - path: ${SECRETS_ENV_FILE:-.env.secrets}   # creds only; never committed
         required: false                           # (later file wins on overlap)
     environment:
-      NORA_SIRA_DB_ROOT: /data/db
-      NORA_SIRA_CORRECTIONS_ROOT: /data/corrections
+      NORA_STORE_ROOT: /data/db
+      NORA_STORE_CORRECTIONS_ROOT: /data/corrections
+      NORA_ENV_DIR: /data/env
+      # Uncomment with the mounts above to serve the pre-built stores
+      # instead of the parse trees (Trees) / nothing (History).
+      # NORA_TREES_ROOT: /data/trees
+      # NORA_HISTORY_ROOT: /data/history
       # SERVE_UID has no passwd entry in the image, so HOME would be `/`;
       # libs that write caches need a writable one. Serving never fetches
       # from the HuggingFace hub (embeddings/rerank come from a TEI server).
@@ -80,7 +95,7 @@ services:
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ${IMAGE_PREFIX:-local}/nora-web:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
-    # See sira-query: default 0:0 is today's behavior; set SERVE_UID and
+    # See nora-store: default 0:0 is today's behavior; set SERVE_UID and
     # SERVE_GID so web-state/feedback/corrections/golden writes land
     # user-owned.
     user: "${SERVE_UID:-0}:${SERVE_GID:-0}"
@@ -90,7 +105,11 @@ services:
       - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env
       - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
-      # enrichment-corrections overlay — this app is the sole WRITER
+      # enrichment-corrections overlay — the dev FALLBACK (local backend).
+      # With NORA_OVERLAY_URL set below (the default) every review edit goes
+      # to nora-store over HTTP and this mount is unused; the same holds for
+      # the parse trees under /data/env once NORA_TREES_URL is set. Kept so
+      # a stack with the URLs unset keeps working as before.
       - ${CORRECTIONS_DIR:?}:/data/corrections
       # golden eval set (FR-38) — pooled across stacks and durable across
       # promote labels: shadows <env>/eval/golden so samples/runs never live
@@ -103,7 +122,7 @@ services:
         required: false
     environment:
       ENV_DIR: /data/env
-      # See sira-query: a writable HOME for non-root, and no hub fetches.
+      # See nora-store: a writable HOME for non-root, and no hub fetches.
       HOME: /tmp
       HF_HUB_OFFLINE: "1"
       NORA_JOBS_DB: /data/web-state/nora_jobs.db
@@ -111,33 +130,43 @@ services:
       NORA_CONFIG_DB: /data/web-state/nora_config.db
       NORA_FEEDBACK_DB: /data/feedback/nora_feedback.db
       NORA_CORRECTIONS_ROOT: /data/corrections
-      NORA_SIRA_QUERY_URL: http://sira-query:8040
+      NORA_STORE_URL: http://nora-store:8040
+      # Store clients (corp-db-layer S6): nora-web is a web layer and reads
+      # the Overlay, Trees and History through nora-store's /stores routes.
+      # Interpolated from the wiring .env (not .env.nora-web — compose
+      # `environment:` wins over env files): set one to empty there to fall
+      # back to the local backend, or to another stack's nora-store to
+      # share its Overlay (that store is then the authority; see
+      # env.nora-store.example).
+      NORA_OVERLAY_URL: ${NORA_OVERLAY_URL-http://nora-store:8040}
+      NORA_TREES_URL: ${NORA_TREES_URL-http://nora-store:8040}
+      NORA_HISTORY_URL: ${NORA_HISTORY_URL-http://nora-store:8040}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - sira-query
+      - nora-store
     restart: unless-stopped
 
   # ------------------------------------------------ ingest jobs (no daemon) --
-  nora-pipeline:
+  nora-batch:
     build:
       context: ..
       additional_contexts:
         vendor: ./vendor
       dockerfile: docker/nora.Dockerfile
-      target: nora-pipeline
+      target: nora-batch
       args:
         OFFLINE: ${OFFLINE:-0}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-    image: ${IMAGE_PREFIX:-local}/nora-pipeline:${IMAGE_TAG:-dev}
+    image: ${IMAGE_PREFIX:-local}/nora-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
       - ${NORA_ENV_DIR:?}:/data/env
       - ${REQUIREMENTS_DIR:?set REQUIREMENTS_DIR in .env}:/data/requirements:ro
-      - ${SIRA_DB_ROOT:?}:/data/db
+      - ${STORE_ROOT:?}:/data/db
       - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
       # golden eval set — same pooled mount as nora-web, so the batch CLI
       # (core.src.eval.golden_cli) reads/writes the same samples + runs
@@ -147,7 +176,7 @@ services:
     # JOB_UID=1000 / `id -u`). Default 0 = root (current behavior).
     user: "${JOB_UID:-0}:${JOB_GID:-0}"
     env_file:
-      - path: ${PIPELINE_ENV_FILE:-.env.nora-pipeline}
+      - path: ${BATCH_ENV_FILE:-.env.nora-batch}
         required: false
       - path: ${SECRETS_ENV_FILE:-.env.secrets}
         required: false
@@ -166,7 +195,7 @@ services:
       context: ..
       additional_contexts:
         vendor: ./vendor
-      dockerfile: docker/sira.Dockerfile
+      dockerfile: docker/store.Dockerfile
       target: sira-batch
       args:
         OFFLINE: ${OFFLINE:-0}
@@ -177,7 +206,7 @@ services:
     image: ${IMAGE_PREFIX:-local}/sira-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
-      - ${SIRA_DB_ROOT:?}:/data/db
+      - ${STORE_ROOT:?}:/data/db
       # sira_lane's adapter step reads the nora build's out/ tree
       - ${NORA_ENV_DIR:?}:/data/env
     user: "${JOB_UID:-0}:${JOB_GID:-0}"

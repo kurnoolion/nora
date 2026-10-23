@@ -216,8 +216,8 @@ Host/port resolve CLI flag > `config/web.json`; `env_dir` resolves
 proxy.
 
 **SIRA lane in the web app** — the playground can pin SIRA-ranked chunks by
-calling the SIRA per-query probe service. Point `NORA_SIRA_QUERY_URL` at it
-(default `http://127.0.0.1:8040`); `NORA_SIRA_QUERY_TIMEOUT` (seconds,
+calling the SIRA per-query probe service. Point `NORA_STORE_URL` at it
+(default `http://127.0.0.1:8040`); `NORA_STORE_TIMEOUT` (seconds,
 default 1200) bounds the call.
 
 **SIRA query service + enrichment stacks** — started and operated per

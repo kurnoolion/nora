@@ -1,15 +1,16 @@
 """Tests for the cell-db serving mode (corp-db-layer phase 2).
 
-The identity gate in miniature: a service loading cells from converted
-SQLite cell DBs (engine bm25x) must return retrieval result sets
-IDENTICAL to the same service loading the flat files. Plus: fts5 engine
-shape, healthz identity keys, flag-gating (flat default untouched),
-reload refusal, and label-variant fallback.
+The identity gate in miniature: a service loading schema-2 cell DBs
+(vanilla index + raw SIRA phrases, composed with the Overlay at load) must
+return retrieval result sets IDENTICAL to the same service loading the flat
+files — with and without review edits. Plus: healthz identity keys,
+flag-gating (flat default untouched), Apply (reload) and label variants on
+schema-2 cells, and the fts5 engine refusing a composed cell.
 
 Synthetic data only. Requires bm25x + fastapi (sandbox venv); skips
 cleanly where unavailable.
 
-Run from the repo root:  pytest sandbox/sira_query/test_cell_db_loader.py
+Run from the repo root:  pytest nora_store/test_cell_db_loader.py
 """
 
 from __future__ import annotations
@@ -58,17 +59,28 @@ def make_flat_cells(db_root: Path) -> None:
                 f.write(json.dumps({"doc_id": rid, "phrases": phrases}) + "\n")
 
 
-def load_service(monkeypatch, db_root: Path, *, index="flat", engine="bm25x"):
-    monkeypatch.setenv("NORA_SIRA_DB_ROOT", str(db_root))
-    monkeypatch.setenv("NORA_SIRA_INDEX", index)
-    monkeypatch.setenv("NORA_SIRA_ENGINE", engine)
-    monkeypatch.delenv("NORA_SIRA_CORRECTIONS_ROOT", raising=False)
+def load_service(monkeypatch, db_root: Path, *, index="flat", engine="bm25x",
+                 corrections: Path | None = None, expect_cells: bool = True):
+    monkeypatch.setenv("NORA_STORE_ROOT", str(db_root))
+    monkeypatch.setenv("NORA_STORE_INDEX", index)
+    monkeypatch.setenv("NORA_STORE_ENGINE", engine)
+    if corrections is not None:
+        monkeypatch.setenv("NORA_STORE_CORRECTIONS_ROOT", str(corrections))
+    else:
+        monkeypatch.delenv("NORA_STORE_CORRECTIONS_ROOT", raising=False)
     monkeypatch.delenv("NORA_SIRA_USE_LATEST_RUNS", raising=False)
-    import sandbox.sira_query.service as service
+    import nora_store.service as service
     service = importlib.reload(service)
     service._load_cells()
-    assert service._cells, service._cells_load_error
+    if expect_cells:
+        assert service._cells, service._cells_load_error
     return service
+
+
+def write_overlay(root: Path, mno: str, overlay: dict) -> Path:
+    (root / "sira-enrich").mkdir(parents=True, exist_ok=True)
+    (root / "sira-enrich" / f"{mno}.json").write_text(json.dumps(overlay), encoding="utf-8")
+    return root
 
 
 def retrieve_all(service, k: int = 5):
@@ -114,7 +126,7 @@ def test_cell_db_healthz_identity(monkeypatch, converted):
     health = svc.healthz()
     assert health["index_mode"] == "cell-db"
     assert health["engine"] == "bm25x"
-    assert health["cell_db_schema_version"] == "1"
+    assert health["cell_db_schema_version"] == "2"
     assert flat_health["index_mode"] == "flat"
     assert flat_health["engine"] == "flat"
     # identity parity: per-cell fingerprints equal the flat stack's
@@ -123,44 +135,53 @@ def test_cell_db_healthz_identity(monkeypatch, converted):
     assert svc._data_fingerprint == svc_flat._data_fingerprint
 
 
-def test_engine_is_in_the_knob_tuple(monkeypatch, converted):
-    """Two stacks differing only in NORA_SIRA_ENGINE must not share a
-    knob set — the eval StackStamp builds its comparability key from the
-    healthz retrieval_knobs sub-dict (field-found: engine arms pooled as
-    one stack before index_mode/engine joined the knobs)."""
+def test_index_mode_and_engine_are_in_the_knob_tuple(monkeypatch, converted):
+    """The eval StackStamp builds its comparability key from the healthz
+    retrieval_knobs sub-dict, so a cell-db stack and a flat stack must not
+    share a knob set."""
     _flat, out = converted
-    knobs_bm25x = load_service(
+    knobs_db = load_service(
         monkeypatch, out, index="cell-db", engine="bm25x").healthz()["retrieval_knobs"]
-    knobs_fts5 = load_service(
-        monkeypatch, out, index="cell-db", engine="fts5").healthz()["retrieval_knobs"]
-    assert knobs_bm25x["index_mode"] == knobs_fts5["index_mode"] == "cell-db"
-    assert knobs_bm25x["engine"] == "bm25x" and knobs_fts5["engine"] == "fts5"
-    assert knobs_bm25x != knobs_fts5
-    # flat default reports itself distinctly too
     flat_knobs = load_service(monkeypatch, _flat, index="flat").healthz()["retrieval_knobs"]
+    assert knobs_db["index_mode"] == "cell-db" and knobs_db["engine"] == "bm25x"
     assert flat_knobs["index_mode"] == "flat" and flat_knobs["engine"] == "flat"
+    assert knobs_db != flat_knobs
 
 
-def test_fts5_engine_serves_and_ranks(monkeypatch, converted):
+def test_fts5_engine_refuses_a_composed_cell(monkeypatch, converted):
+    """fts5 scores a baked FTS table; a schema-2 cell composes at load, so
+    the cell fails to load loudly instead of serving vanilla-only scores."""
     _flat, out = converted
-    svc = load_service(monkeypatch, out, index="cell-db", engine="fts5")
-    for cell in sorted(svc._cells):
-        assert svc._cells[cell].engine == "fts5"
-        hits = svc._build_retrieve_fn("emergency callback mode", [])(cell, 3)
-        assert hits and hits[0][0] == "REQ-0"      # exact-title query wins
-        assert all(s > 0 for _, s in hits)          # normalized positive scores
-        # expansion path: phrase tokens reach the second MATCH pass
-        hits_exp = svc._build_retrieve_fn("network attach", ["attach"])(cell, 3)
-        assert hits_exp
+    svc = load_service(monkeypatch, out, index="cell-db", engine="fts5",
+                       expect_cells=False)
+    assert not svc._cells
+    assert "fts5" in (svc._cells_load_error or "")
+
+
+def test_identity_with_review_edits(tmp_path, monkeypatch, converted):
+    """Flat and schema-2 cell-db stacks reading the SAME Overlay serve the
+    same results: the edits are composed at load, not baked."""
+    flat, out = converted
+    corr = write_overlay(tmp_path / "corr", "mnoa", {
+        "REQ-0": {"remove": [{"word": "cbm", "at": "t1"}],
+                  "add": [{"word": "ecall", "at": "t1"}]}})
+    ref = retrieve_all(load_service(monkeypatch, flat, index="flat", corrections=corr))
+    svc = load_service(monkeypatch, out, index="cell-db", corrections=corr)
+    got = retrieve_all(svc)
+    for key in ref:
+        assert [d for d, _ in ref[key]] == [d for d, _ in got[key]], key
+    cell = ("mnoa", "Apr2098")
+    assert svc._cells[cell].effective_words["REQ-0"] == ["callback service", "ecall"]
+    assert svc._cells[cell].llm_words["REQ-0"] == ENRICH["REQ-0"]   # raw SIRA kept
 
 
 def test_flat_default_untouched_and_bad_engine_loud(monkeypatch, converted):
     flat, out = converted
     # No env set beyond DB root: mode defaults to flat and loads flat dirs.
-    monkeypatch.setenv("NORA_SIRA_DB_ROOT", str(flat))
-    monkeypatch.delenv("NORA_SIRA_INDEX", raising=False)
-    monkeypatch.delenv("NORA_SIRA_ENGINE", raising=False)
-    import sandbox.sira_query.service as service
+    monkeypatch.setenv("NORA_STORE_ROOT", str(flat))
+    monkeypatch.delenv("NORA_STORE_INDEX", raising=False)
+    monkeypatch.delenv("NORA_STORE_ENGINE", raising=False)
+    import nora_store.service as service
     service = importlib.reload(service)
     assert service._INDEX_MODE == "flat"
     service._load_cells()
@@ -168,22 +189,38 @@ def test_flat_default_untouched_and_bad_engine_loud(monkeypatch, converted):
 
     # Unsupported engine value fails loudly, serving nothing quietly.
     svc = None
-    monkeypatch.setenv("NORA_SIRA_DB_ROOT", str(out))
-    monkeypatch.setenv("NORA_SIRA_INDEX", "cell-db")
-    monkeypatch.setenv("NORA_SIRA_ENGINE", "memory")
+    monkeypatch.setenv("NORA_STORE_ROOT", str(out))
+    monkeypatch.setenv("NORA_STORE_INDEX", "cell-db")
+    monkeypatch.setenv("NORA_STORE_ENGINE", "memory")
     svc = importlib.reload(service)
     svc._load_cells()
     assert not svc._cells
     assert "unsupported" in (svc._cells_load_error or "")
 
 
-def test_cell_db_reload_refused_and_variant_falls_back(monkeypatch, converted):
+def test_apply_recomposes_a_schema2_cell(tmp_path, monkeypatch, converted):
+    """Apply (reload) on a schema-2 cell re-reads the same DB file and folds
+    in the CURRENT Overlay — corrections go live without a republish."""
     _flat, out = converted
-    svc = load_service(monkeypatch, out, index="cell-db", engine="bm25x")
-    cell = sorted(svc._cells)[0]
-    from fastapi import HTTPException
-    with pytest.raises(HTTPException) as ei:
-        svc.cell_reload(svc.cell_dirname(cell))
-    assert ei.value.status_code == 409
-    # label variants are flat-mode machinery: fall back to the default view
-    assert svc._get_variant(cell, "expert-x", build=True) is svc._cells[cell]
+    corr = write_overlay(tmp_path / "corr", "mnoa", {})
+    svc = load_service(monkeypatch, out, index="cell-db", corrections=corr)
+    cell = ("mnoa", "Apr2098")
+    assert svc._cells[cell].effective_words["REQ-0"] == ENRICH["REQ-0"]
+
+    write_overlay(corr, "mnoa", {"REQ-0": {"remove": [{"word": "cbm", "at": "t1"}]}})
+    resp = svc.cell_reload(svc.cell_dirname(cell))
+    assert resp["corrections"]["removes"] == 1
+    assert svc._cells[cell].effective_words["REQ-0"] == ["callback service"]
+    assert svc._cells[cell].composed and svc._cells[cell].db_path
+
+
+def test_label_variant_builds_on_a_schema2_cell(tmp_path, monkeypatch, converted):
+    _flat, out = converted
+    corr = write_overlay(tmp_path / "corr", "mnoa", {
+        "REQ-0": {"remove": [{"word": "cbm", "at": "t1", "label": "expert-x"}]}})
+    svc = load_service(monkeypatch, out, index="cell-db", corrections=corr)
+    cell = ("mnoa", "Apr2098")
+    variant = svc._get_variant(cell, "expert-x", build=True)
+    assert variant is not svc._cells[cell]
+    assert variant.effective_words["REQ-0"] == ["callback service"]   # label view
+    assert svc._cells[cell].effective_words["REQ-0"] == ENRICH["REQ-0"]  # main view

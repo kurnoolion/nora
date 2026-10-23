@@ -81,14 +81,14 @@ def _env_dir() -> Path:
 
 
 def _stack_url() -> str:
-    """Primary sira-query stack URL — first of NORA_SIRA_QUERY_URLS,
-    falling back to NORA_SIRA_QUERY_URL (same convention as the Test
+    """Primary nora-store stack URL — first of NORA_STORE_URLS,
+    falling back to NORA_STORE_URL (same convention as the Test
     page / enrichment-review surfaces).
     """
-    urls = os.environ.get("NORA_SIRA_QUERY_URLS", "")
+    urls = os.environ.get("NORA_STORE_URLS", "")
     if urls.strip():
         return urls.split(",")[0].strip()
-    return os.environ.get("NORA_SIRA_QUERY_URL", "").strip()
+    return os.environ.get("NORA_STORE_URL", "").strip()
 
 
 def _release_map():
@@ -663,8 +663,8 @@ def stage1_preview(request: Request, sid: str):
     stack = _stack_url()
     if not stack:
         return HTMLResponse(
-            '<div class="alert alert-warning small">No sira-query stack '
-            "configured (NORA_SIRA_QUERY_URLS).</div>"
+            '<div class="alert alert-warning small">No nora-store stack '
+            "configured (NORA_STORE_URLS).</div>"
         )
     from core.src.eval.golden_runner import run_stage1
 

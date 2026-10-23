@@ -21,10 +21,13 @@ Semantics implemented here (D-DRAFT-1/2/3 of strand sira-enrichment-review):
   accepted-labels.json; records are never rewritten, so provenance
   (label / by / reason) survives merging.
 - Cross-release guard: a record applies to the viewed/loaded release only
-  when the requirement is still "the same" as at origin — token-set Jaccard
-  over VANILLA index tokens >= threshold. Verdicts are supplied by the
-  caller via a callback (the service owns tokenization + other releases'
-  corpora); this module owns only the fold.
+  when the requirement is still "the same" as at origin — its content
+  fingerprint (stamped on the record at edit time) equals the loaded
+  release's, else token-set Jaccard over VANILLA index tokens >= threshold
+  (store-split-design §4, strand corp-db-layer D-DRAFT-24). Verdicts are
+  supplied by the caller via a callback (the service owns tokenization,
+  fingerprints and other releases' corpora); this module owns only the
+  fold.
 - Effective = suppress_all ? (applied adds) : (llm − applied removes) +
   applied adds. REMOVE WINS: an applied add never survives an applied
   remove of the same word.
@@ -33,20 +36,32 @@ Semantics implemented here (D-DRAFT-1/2/3 of strand sira-enrichment-review):
   re-affirm/discard. Records outside the view's allowed labels are
   neither applied nor held — they are invisible to that view.
 
-This module is dependency-free (stdlib only) so the web side can reuse it.
+Storage: `load_overlay` / `load_accepted_labels` read the JSON layout
+directly (back-compat); serving code reads through
+`core.src.stores.overlay.open_overlay_store`, which also covers SQLite.
+
+This module is dependency-free (stdlib + the stdlib-only overlay store) so
+the web side can reuse it.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from core.src.stores.overlay import JsonOverlayStore
+# The label-view projection moved to overlay_ops (S6: the store routes need
+# it without importing this package); re-exported so importers of the fold
+# keep one source for it.
+from core.src.stores.overlay_ops import allowed_labels, filter_overlay  # noqa: F401
+
 JACCARD_THRESHOLD_DEFAULT = 0.85
 
-# verdict_fn(origin_release, req_id) -> "ok" | "changed" | "unknown"
-VerdictFn = Callable[[str, str], str]
+# verdict_fn(origin_release, req_id[, fingerprint]) -> "ok" | "changed" |
+# "unknown". The fold passes the record's fingerprint only when it has one,
+# so two-argument verdict functions keep working for legacy records.
+VerdictFn = Callable[..., str]
 
 
 def sira_enrich_dir(corrections_root: Path | str) -> Path:
@@ -55,54 +70,17 @@ def sira_enrich_dir(corrections_root: Path | str) -> Path:
 
 def load_overlay(corrections_root: Path | str, mno: str) -> dict[str, Any]:
     """Load `<root>/sira-enrich/<MNO>.json`; missing/malformed -> {} (loud log
-    is the caller's concern — this module stays quiet + total)."""
-    p = sira_enrich_dir(corrections_root) / f"{mno}.json"
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    is the caller's concern — this module stays quiet + total). JSON layout
+    only (back-compat wrapper); serving reads go through
+    `open_overlay_store`, which also covers SQLite."""
+    return JsonOverlayStore(corrections_root, read_only=True).get_overlay(mno)
 
 
 def load_accepted_labels(corrections_root: Path | str) -> set[str]:
     """Labels merged into "main" — the default view everyone gets. The
-    file is the merge log: appending a label merges it, removing it
-    un-merges. Records themselves are never rewritten."""
-    p = sira_enrich_dir(corrections_root) / "accepted-labels.json"
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return set(data.get("accepted", []))
-    except (OSError, json.JSONDecodeError):
-        return set()
-
-
-def allowed_labels(accepted: set[str], label: str = "") -> set[str]:
-    """The labels visible in a view: unlabeled legacy records ("") always
-    count as main; `label` is the branch the viewer opted into."""
-    allowed = {""} | set(accepted)
-    if label:
-        allowed.add(label)
-    return allowed
-
-
-def filter_overlay(overlay: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
-    """Project an overlay onto a label view: keep only records whose label
-    is allowed, pruning emptied directions/entries. Canonical basis for
-    view digests — the web store must filter identically (it imports this
-    function) so served-vs-current comparisons are content-exact."""
-    out: dict[str, Any] = {}
-    for rid, entry in overlay.items():
-        kept: dict[str, Any] = {}
-        for direction in ("remove", "add"):
-            recs = [r for r in (entry.get(direction) or [])
-                    if (r.get("label") or "") in allowed]
-            if recs:
-                kept[direction] = recs
-        sup = entry.get("suppress_all")
-        if isinstance(sup, dict) and (sup.get("label") or "") in allowed:
-            kept["suppress_all"] = sup
-        if kept:
-            out[rid] = kept
-    return out
+    merge log: adding a label merges it, removing it un-merges. Records
+    themselves are never rewritten. JSON layout only (back-compat)."""
+    return JsonOverlayStore(corrections_root, read_only=True).accepted_labels()
 
 
 def jaccard(a: set[str], b: set[str]) -> float:
@@ -134,7 +112,8 @@ def _record_state(rec: dict[str, Any], allowed: "set[str] | None",
     origin = (rec.get("origin") or {}).get("release", "")
     if not origin:
         return "applied"  # no origin recorded: legacy/manual entry — apply
-    verdict = verdict_fn(origin, req_id)
+    fp = rec.get("fingerprint") or ""
+    verdict = verdict_fn(origin, req_id, fp) if fp else verdict_fn(origin, req_id)
     return "applied" if verdict == "ok" else "held"
 
 
@@ -208,16 +187,25 @@ def make_verdict_fn(
     token_sets: Callable[[str, str], "set[str] | None"],
     current_release: str,
     threshold: float = JACCARD_THRESHOLD_DEFAULT,
+    fingerprint_of: "Callable[[str, str], str | None] | None" = None,
 ) -> VerdictFn:
     """Build the cross-release guard from a token-set source.
 
     `token_sets(release, req_id)` returns the VANILLA index token set for the
     req in that release, or None when unavailable (release not loaded /
-    req absent). Same-release records short-circuit to "ok".
+    req absent). `fingerprint_of(release, req_id)` returns the req's
+    content fingerprint in that release (None/"" when unknown).
+
+    Order: a record fingerprint equal to the CURRENT release's fingerprint
+    -> "ok" (same content, no Jaccard needed); else same-release records
+    -> "ok"; else the Jaccard guard against the origin release.
     Cannot-verify == verified-changed: both yield a non-"ok" verdict
     ("unknown" / "changed") and the record is HELD.
     """
-    def verdict(origin_release: str, req_id: str) -> str:
+    def verdict(origin_release: str, req_id: str, fingerprint: str = "") -> str:
+        if fingerprint and fingerprint_of is not None:
+            if fingerprint_of(current_release, req_id) == fingerprint:
+                return "ok"
         if origin_release == current_release:
             return "ok"
         cur = token_sets(current_release, req_id)

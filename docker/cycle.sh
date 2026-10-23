@@ -168,7 +168,7 @@ require_phase() {  # require_phase <phase> <fix-hint>
 need_wiring() {
   [ -f "$WIRING" ] || die 003 "no builds wiring env ($ENV_ROOT/.env.builds or docker/.env.builds)" \
     "copy a stack env to .env.builds (README Phase 0) — all seven path vars present"
-  grep -q "^NORA_ENV_DIR=$NB\$" "$WIRING" && grep -q "^SIRA_DB_ROOT=$SB\$" "$WIRING" \
+  grep -q "^NORA_ENV_DIR=$NB\$" "$WIRING" && grep -q "^STORE_ROOT=$SB\$" "$WIRING" \
     || die 004 "wiring env does not point at build $BUILD" "./cycle.sh start rewrote it; check $WIRING for a later manual edit"
 }
 detach() {  # detach <phase> <service> <log-in-container> <inner command...>
@@ -221,15 +221,15 @@ start)
     [ -n "$src" ] || die 024 "--profiles '$PROFILES' is neither a file nor a build-id with profiles.json" "point at a profiles.json"
   fi
   images="{}"
-  for i in nora-pipeline sira-batch; do
+  for i in nora-batch sira-batch; do
     id="$(docker image inspect -f '{{.Id}}' "local/$i:dev" 2>/dev/null | cut -c8-19)" || true
-    [ -n "$id" ] || die 025 "image local/$i:dev not found" "rebake: docker compose --env-file $WIRING --profile ingest build nora-pipeline sira-batch"
+    [ -n "$id" ] || die 025 "image local/$i:dev not found" "rebake: docker compose --env-file $WIRING --profile ingest build nora-batch sira-batch"
     images="$(printf '%s' "$images" | python3 -c "import json,sys; d=json.load(sys.stdin); d['$i']='$id'; print(json.dumps(d))")"
   done
   mkdir -p "$NB/reports" "$NB/prompts" "$SB"
   [ -n "$src" ] && cp "$src" "$NB/profiles.json"
   cyc init "$CJ" "$BUILD" "$ME" "$images"
-  sed -i "s|^NORA_ENV_DIR=.*|NORA_ENV_DIR=$NB|; s|^SIRA_DB_ROOT=.*|SIRA_DB_ROOT=$SB|" "$WIRING"
+  sed -i "s|^NORA_ENV_DIR=.*|NORA_ENV_DIR=$NB|; s|^STORE_ROOT=.*|STORE_ROOT=$SB|" "$WIRING"
   echo "$BUILD" > "$ACTIVE"
   n=$(cells | wc -l)
   cyc_block start ok <<EOF
@@ -254,7 +254,7 @@ parse)
   resolve_build; need_wiring
   [ -f "$NB/profiles.json" ] || die 030 "no $NB/profiles.json (PIP-E003 would fail the lane)" "./cycle.sh start ... --profiles <prev-build> or author bindings (README Phase 0.4)"
   [ "$(phase_state parse)" != running ] || die 031 "parse already running" "./cycle.sh status; wait for CYC-EXIT"
-  detach parse nora-pipeline "/data/env/reports/lane-ingestion-ALL-$TS.log" \
+  detach parse nora-batch "/data/env/reports/lane-ingestion-ALL-$TS.log" \
     "exec python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --skip-taxonomy $FORCE $SKIPSTD"
   ;;
 
@@ -279,7 +279,7 @@ prompts)
     echo "  $m: doc=$(basename "$doc") overview=$(basename "$ov") shape=$shape"
   done
   (( bad == 0 )) || die 041 "$bad MNO prompt set(s) mis-shaped (see above)" "fix the files under customizations/prompts/ and re-run"
-  for f in .env.nora-pipeline .env.sira-batch; do
+  for f in .env.nora-batch .env.sira-batch; do
     ef="$ENV_ROOT/$f"; [ -f "$ef" ] || ef="$HERE/$f"
     [ -f "$ef" ] && grep -qE '^NORA_(TAXONOMY_OVERVIEW|SIRA_DOC_PROMPT)_DIR=/data/env/prompts' "$ef" \
       || echo "  WARN: $f lacks the /data/env/prompts *_DIR setting (README Phase 3) — mounted prompts will be ignored"
@@ -296,7 +296,7 @@ taxonomy)
   resolve_build; need_wiring
   require_phase prompts "./cycle.sh prompts (gate) first"
   [ "$(phase_state taxonomy)" != running ] || die 050 "taxonomy already running" "./cycle.sh status"
-  detach taxonomy nora-pipeline "/data/env/reports/stage-taxonomy-$TS.log" \
+  detach taxonomy nora-batch "/data/env/reports/stage-taxonomy-$TS.log" \
     "exec python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $FORCE"
   echo "  re-running this verb after completion retries only failed docs (README Phase 4)"
   ;;

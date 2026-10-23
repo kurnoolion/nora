@@ -1,6 +1,6 @@
 """SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
 
-Mirrors `sandbox/sira_query/service.py`'s loaders so it runs against the
+Mirrors `nora_store/service.py`'s loaders so it runs against the
 same on-disk artifacts. No FastAPI; no server. Just a CLI that surfaces
 what the service "sees" and how a query flows through expansion + BM25
 + optional rerank.
@@ -17,18 +17,18 @@ Subcommands:
     service                              Ping the running FastAPI service
 
 Env vars (same as service.py):
-    NORA_SIRA_DB_ROOT, NORA_SIRA_DATASET, NORA_LLM_SHIM_URL,
+    NORA_STORE_ROOT, NORA_STORE_DATASET, NORA_LLM_SHIM_URL,
     NORA_LLM_MODEL, NORA_SIRA_CLONE_ROOT, NORA_SIRA_MAX_DF_RATIO,
     NORA_SIRA_EXPANSION_WEIGHT, NORA_SIRA_RERANK_TOP_N
 
 Run from the same venv as the service:
 
     source ~/work/nora/sandbox/activate.sh
-    export NORA_SIRA_DB_ROOT=$HOME/work/nora/sandbox/adapter/out
-    python -m sandbox.sira_query.sira_debug env
-    python -m sandbox.sira_query.sira_debug corpus --filter VOWIFI
-    python -m sandbox.sira_query.sira_debug phrases --filter VOWIFI
-    python -m sandbox.sira_query.sira_debug query "Summarize WiFi Calling requirements" --rerank --top-n 50
+    export NORA_STORE_ROOT=$HOME/work/nora/sandbox/adapter/out
+    python -m nora_store.sira_debug env
+    python -m nora_store.sira_debug corpus --filter VOWIFI
+    python -m nora_store.sira_debug phrases --filter VOWIFI
+    python -m nora_store.sira_debug query "Summarize WiFi Calling requirements" --rerank --top-n 50
 """
 
 from __future__ import annotations
@@ -48,15 +48,15 @@ logger = logging.getLogger("sira_debug")
 
 # ── Config (parallel to service.py) ────────────────────────────────
 
-_DB_ROOT = os.getenv("NORA_SIRA_DB_ROOT", "")
-_DATASET = os.getenv("NORA_SIRA_DATASET", "nora")
+_DB_ROOT = os.getenv("NORA_STORE_ROOT", "")
+_DATASET = os.getenv("NORA_STORE_DATASET", "nora")
 _SHIM_URL = os.getenv("NORA_LLM_SHIM_URL", "http://127.0.0.1:8030").rstrip("/")
 _SHIM_MODEL = os.getenv("NORA_LLM_MODEL", "")
-_SERVICE_URL = os.getenv("NORA_SIRA_QUERY_URL", "http://127.0.0.1:8040").rstrip("/")
+_SERVICE_URL = os.getenv("NORA_STORE_URL", "http://127.0.0.1:8040").rstrip("/")
 
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
-    str(Path(__file__).resolve().parents[1] / "sira"),
+    str(Path(__file__).resolve().parents[1] / "sandbox" / "sira"),
 ))
 _QUERY_PROMPT_PATH = os.getenv(
     "NORA_QUERY_PROMPT",
@@ -194,11 +194,11 @@ def _parse_score(raw: str) -> int:
 def cmd_env(args) -> int:
     paths = _paths()
     print("Resolved config:")
-    print(f"  NORA_SIRA_DB_ROOT          = {_DB_ROOT or '(unset)'}")
-    print(f"  NORA_SIRA_DATASET          = {_DATASET}")
+    print(f"  NORA_STORE_ROOT          = {_DB_ROOT or '(unset)'}")
+    print(f"  NORA_STORE_DATASET          = {_DATASET}")
     print(f"  NORA_LLM_SHIM_URL          = {_SHIM_URL}")
     print(f"  NORA_LLM_MODEL             = {_SHIM_MODEL or '(unset, falls to sira-shim)'}")
-    print(f"  NORA_SIRA_QUERY_URL        = {_SERVICE_URL}")
+    print(f"  NORA_STORE_URL        = {_SERVICE_URL}")
     print(f"  NORA_SIRA_CLONE_ROOT       = {_SIRA_CLONE_ROOT}")
     print(f"  NORA_SIRA_MAX_DF_RATIO     = {_MAX_DF_RATIO}")
     print(f"  NORA_SIRA_EXPANSION_WEIGHT = {_EXPANSION_WEIGHT}")
