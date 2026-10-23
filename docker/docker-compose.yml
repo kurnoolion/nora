@@ -55,9 +55,12 @@ services:
       # once nora-web sets NORA_TREES_URL. Read-only: nora-store never
       # writes under the env dir.
       - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env:ro
-      # Pre-built SQLite stores (optional; see .env.nora-store):
-      # - ${TREES_ROOT}:/data/trees:ro        # trees-<mno>-<release>.db
-      # - ${HISTORY_ROOT}:/data/history:ro    # history-<mno>.db
+      # Pre-built SQLite stores, optional: set TREES_ROOT / HISTORY_ROOT in
+      # the wiring .env. Unset mounts an empty dir and leaves the matching
+      # NORA_*_ROOT empty, so the store falls back (Trees: the parse trees
+      # under /data/env; History: not served).
+      - ${TREES_ROOT:-./empty}:/data/trees:ro        # trees-<mno>-<release>.db
+      - ${HISTORY_ROOT:-./empty}:/data/history:ro    # history-<mno>.db
     env_file:
       - path: ${STORE_ENV_FILE:-.env.nora-store}
         required: false
@@ -67,10 +70,10 @@ services:
       NORA_STORE_ROOT: /data/db
       NORA_STORE_CORRECTIONS_ROOT: /data/corrections
       NORA_ENV_DIR: /data/env
-      # Uncomment with the mounts above to serve the pre-built stores
-      # instead of the parse trees (Trees) / nothing (History).
-      # NORA_TREES_ROOT: /data/trees
-      # NORA_HISTORY_ROOT: /data/history
+      # Set only when the host variable is set (compose `:+`): empty means
+      # "not configured" to the store factories.
+      NORA_TREES_ROOT: ${TREES_ROOT:+/data/trees}
+      NORA_HISTORY_ROOT: ${HISTORY_ROOT:+/data/history}
       # SERVE_UID has no passwd entry in the image, so HOME would be `/`;
       # libs that write caches need a writable one. Serving never fetches
       # from the HuggingFace hub (embeddings/rerank come from a TEI server).
