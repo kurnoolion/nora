@@ -19,6 +19,11 @@ store; golden Stage-1 equal to the current trial; review Apply works.
 
 ## 4b — publish (against a stand-in corp volume) — design: `publish-design.md`
 
+Status 2026-10-23: B1–B7 built and unit/integration tested
+(`core/src/stores/registry.py`, `publish.py`; nora-store registry mode;
+`core/tests/test_stores_publish.py`, `nora_store/test_registry_mode.py`).
+B8 pending (trial).
+
 | # | Change |
 |---|---|
 | B1 | `corpus_publish`: publishes Cells and Trees per cell, rebuilds History per MNO, deterministic fingerprints, skips unchanged units. |

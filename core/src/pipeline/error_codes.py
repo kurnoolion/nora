@@ -154,6 +154,28 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("HIS-E005", "History DB verification failed for {mno} — {what}: {count} mismatch(es)", "Nothing was replaced; rebuild the Trees store for that MNO and retry"),
     ErrorDef("HIS-E006", "History DB {name} has unsupported schema_version {found}", "Rebuild the MNO with core.src.stores.history_build, or run a newer build"),
 
+    # --- Publish registry (PUB) — core.src.stores.publish (strand corp-db-layer 4b) ---
+    ErrorDef("PUB-E001", "Release set {label} already exists", "Release sets are immutable; publish under a new label"),
+    ErrorDef("PUB-E002", "Unit source unusable: {path} ({reason})", "Every store file needs a meta table with its identity; rebuild it with the converter, trees_build or history_build"),
+    ErrorDef("PUB-E003", "Nothing to publish for {label}", "Pass --cells-src / --trees-src / --env-dir / --sira-root, or a --base set to inherit from"),
+    ErrorDef("PUB-E004", "Flip refused: release set {label} has no passing gate ({detail})", "Record a gate run with `publish gate`, or flip with --force --reason to waive it"),
+    ErrorDef("PUB-E005", "Release set {label} member file missing: {file}", "The file was garbage-collected or the serving root moved; republish the set"),
+    ErrorDef("PUB-E006", "Unknown release set {label}", "See `publish status` for the sets in this registry"),
+    ErrorDef("PUB-E007", "Staging failed for {file}: {reason}", "Nothing was recorded; check free space and permissions under the serving root"),
+    ErrorDef("PUB-E008", "Serving verification failed after flip to {label}: {what}", "The registry already points at the set; check the store's logs, then roll back with `publish rollback --to <previous>`"),
+    ErrorDef("PUB-E009", "Rollback target {label} never served", "Roll back only to a set that was flipped before; use `publish flip` for a new set, or --force"),
+    ErrorDef("PUB-E010", "Registry unusable at {path}: {reason}", "Publish once to create it, or point --serve-root at the serving root that holds registry.db"),
+
+    # --- Publish registry file (REG) — core.src.stores.registry.RegistryError ---
+    ErrorDef("REG-E001", "Registry not found: {path}", "Publish once to create it (core.src.stores.publish), or fix NORA_STORE_REGISTRY / --serve-root"),
+    ErrorDef("REG-E002", "Registry opened read-only", "Writers open Registry(path, read_only=False); serving never writes the registry"),
+    ErrorDef("REG-E003", "Registry schema_version {found} unsupported (this build writes {supported})", "Run a newer build, or start a new serving root"),
+    ErrorDef("REG-E004", "Release set {label} already exists", "Release sets are immutable; publish under a new label"),
+    ErrorDef("REG-E005", "Unknown store {store}", "Stores are cells, trees, history"),
+    ErrorDef("REG-E006", "Unit {unit} listed twice in one release set", "A unit has one version per set; check the base set and the sources"),
+    ErrorDef("REG-E007", "Unknown release set {label}", "See `publish status` for the sets in this registry"),
+    ErrorDef("REG-E008", "Bad gate / flip argument: {detail}", "Kinds: golden-stage1, golden-stage2, manual; verdicts: pass, fail, waived; flip modes: staged, expedited, override"),
+
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),

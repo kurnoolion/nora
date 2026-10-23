@@ -44,7 +44,12 @@ services:
     ports:
       - "${STORE_PORT:-8040}:8040"
     volumes:
-      - ${STORE_ROOT:?set STORE_ROOT in .env}:/data/db
+      # Cells: flat cell dirs or cell-*.db files. Optional once
+      # SERVE_REGISTRY_ROOT is set (registry mode resolves the files itself).
+      - ${STORE_ROOT:-./empty}:/data/db
+      # Publish registry (corp-db-layer 4b): registry.db + versioned store
+      # files, written by core.src.stores.publish on the host; read-only here.
+      - ${SERVE_REGISTRY_ROOT:-./empty}:/data/serve:ro
       # enrichment-corrections overlay — this service is the Overlay
       # AUTHORITY (corp-db-layer S6): it WRITES the edits nora-web sends
       # over /stores/overlay/v1 and applies them at cell load (POST
@@ -74,6 +79,8 @@ services:
       # "not configured" to the store factories.
       NORA_TREES_ROOT: ${TREES_ROOT:+/data/trees}
       NORA_HISTORY_ROOT: ${HISTORY_ROOT:+/data/history}
+      NORA_STORE_REGISTRY: ${SERVE_REGISTRY_ROOT:+/data/serve/registry.db}
+      NORA_STORE_RELEASE_SET: ${SERVE_RELEASE_SET:-}
       # SERVE_UID has no passwd entry in the image, so HOME would be `/`;
       # libs that write caches need a writable one. Serving never fetches
       # from the HuggingFace hub (embeddings/rerank come from a TEI server).
@@ -169,7 +176,7 @@ services:
     volumes:
       - ${NORA_ENV_DIR:?}:/data/env
       - ${REQUIREMENTS_DIR:?set REQUIREMENTS_DIR in .env}:/data/requirements:ro
-      - ${STORE_ROOT:?}:/data/db
+      - ${STORE_ROOT:-./empty}:/data/db   # optional in registry mode (serve only)
       - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
       # golden eval set — same pooled mount as nora-web, so the batch CLI
       # (core.src.eval.golden_cli) reads/writes the same samples + runs
@@ -209,7 +216,7 @@ services:
     image: ${IMAGE_PREFIX:-local}/sira-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
-      - ${STORE_ROOT:?}:/data/db
+      - ${STORE_ROOT:-./empty}:/data/db   # optional in registry mode (serve only)
       # sira_lane's adapter step reads the nora build's out/ tree
       - ${NORA_ENV_DIR:?}:/data/env
     user: "${JOB_UID:-0}:${JOB_GID:-0}"

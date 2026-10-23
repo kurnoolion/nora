@@ -1,7 +1,7 @@
 # stores
 
 **Purpose**
-Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`). Each store is one Python protocol with local backends; consumers compose stores, and no store reads another store's backend. Step S3 ships the **Overlay** store: the review edits to SIRA enrichments (word-level remove/add records, entry-level `suppress_all`, label merge log, disabled labels, reason categories), the only mutable store. Step S4 ships the **Trees** store: parsed requirement trees per (MNO, release) cell, with traversal by `parent_req_id`. Step S5 ships the **History** store: release lineage per MNO built from Trees (version intervals, content-addressed text, change queries). Step S6 ships the **HTTP layer**: one client per store (`clients.py`, chosen by `NORA_<STORE>_URL`), the generic store routers (`api.py`, mounted by nora-store and hostable on their own by `serve.py`), the shared Overlay edit ops (`overlay_ops.py`, run by nora-web locally or by the Overlay authority over HTTP) and schema-tolerance rules (design §9). Implements D-DRAFT-22 (four orthogonal stores), D-DRAFT-24 (Overlay is a live store keyed by requirement and fingerprint), D-DRAFT-25 (local and HTTP implementations per protocol) and D-DRAFT-28 (nora-store hosts every store and is the Overlay writer); a `CellStore` protocol lands in a later step (the Cells routes live in `nora_store/stores_api.py` over the service's loaded state).
+Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`). Each store is one Python protocol with local backends; consumers compose stores, and no store reads another store's backend. Step S3 ships the **Overlay** store: the review edits to SIRA enrichments (word-level remove/add records, entry-level `suppress_all`, label merge log, disabled labels, reason categories), the only mutable store. Step S4 ships the **Trees** store: parsed requirement trees per (MNO, release) cell, with traversal by `parent_req_id`. Step S5 ships the **History** store: release lineage per MNO built from Trees (version intervals, content-addressed text, change queries). Step S6 ships the **HTTP layer**: one client per store (`clients.py`, chosen by `NORA_<STORE>_URL`), the generic store routers (`api.py`, mounted by nora-store and hostable on their own by `serve.py`), the shared Overlay edit ops (`overlay_ops.py`, run by nora-web locally or by the Overlay authority over HTTP) and schema-tolerance rules (design §9). Phase **4b** ships the **publish registry** (`registry.py`, `publish.py`; `publish-design.md`): versioned store files under a serving root, release sets named by build label, gate runs, and the one `active` row set nora-store serves from (`NORA_STORE_REGISTRY`), with flips and rollbacks as single transactions. Implements D-DRAFT-22 (four orthogonal stores), D-DRAFT-24 (Overlay is a live store keyed by requirement and fingerprint), D-DRAFT-25 (local and HTTP implementations per protocol) and D-DRAFT-28 (nora-store hosts every store and is the Overlay writer); a `CellStore` protocol lands in a later step (the Cells routes live in `nora_store/stores_api.py` over the service's loaded state).
 
 **Public surface**
 - `OverlayStore` — `runtime_checkable` Protocol at entry-dict granularity. Reads: `get_overlay(mno) -> {req_id: entry}`, `get_entry(mno, req_id)`, `list_mnos()`, `version(mno) -> float` (monotonic change marker; 0.0 = no overlay), `accepted_labels()`, `disabled_labels()`, `reason_categories() -> list | None` (None = never set; the caller applies defaults). Writes: `transaction()` (context manager; exclusive across processes on one host; nested use joins; reads inside see the transaction's writes), `put_entry(mno, req_id, entry | None)` (None/{} deletes; always registers the MNO and bumps its version), `set_accepted_labels(set)`, `set_disabled_labels(set)`, `set_reason_categories(list)`. Attribute `read_only`.
@@ -28,6 +28,9 @@ Data stores behind service interfaces (strand corp-db-layer, `store-split-design
 - `errors.py`: `StoreUnavailable`, `SchemaVersionError(code, store, name, found, supported, remedy)` (message `[<code>] <store> DB <name> has schema_version '<found>'; this reader supports <n> — <remedy>`).
 - Overlay edit ops (`overlay_ops.py`, stdlib): `EDIT_OPS`, `STORE_OPS` (`edit`, `set_label_merged`, `set_label_disabled`, `delete_label`, `add_reason_category`), `DEFAULT_REASON_CATEGORIES`; `apply_edit(entry, op, *, words, pairs, label, reason, by, origin_release, fingerprint, at)` (pure fold of one record op); `run_edit(backend, mno, req_id, op, **kw)`, `run_set_label_merged`, `run_set_label_disabled`, `run_delete_label`, `run_add_reason_category` (one backend transaction each), `run_op(backend, name, payload)` (JSON dispatcher the edit route uses); the label-view projection `allowed_labels(accepted, label)` / `filter_overlay(overlay, allowed)` and `view_digest(filtered_overlay)` — the one digest formula nora-store applies and the web compares against (`nora_store.enrich_overlay` re-exports the projection); `reason_categories_or_default(backend)`.
 - Store routes (`api.py`): `trees_router(store)`, `history_router(store)`, `overlay_router(store, writable)` — `APIRouter`s under `/stores/<store>/v1` serving every protocol method as JSON (`store` and `writable` may be zero-argument callables for hosts that open lazily; a None store answers 404). Route list — trees: `/cells`, `/docs`, `/tree`, `/plans`, `/find`, `/reqs`, `/node`, `/children`, `/subtree`, `/ancestors`, `/fingerprint`; history: `/mnos`, `/releases`, `/req`, `/plan`, `/req/last-changed`, `/plan/last-changed`, `/diff`, `/latest`; overlay reads: `/mnos`, `/overlay/{mno}`, `/overlay/{mno}/entry?req_id=`, `/overlay/{mno}/version`, `/overlay/{mno}/digest?label=`, `/labels/accepted`, `/labels/disabled`, `/reasons`; overlay writes (409 unless `writable`): `PUT /overlay/{mno}/entry`, `PUT /labels/accepted`, `PUT /labels/disabled`, `PUT /reasons`, `POST /edit` (`{"op": <store op>, "args": {...}}`, run inside the backend transaction). `StoreUnavailable` → 503, `ValueError` → 400, `OverlayReadOnlyError` → 409. `is_overlay_authority(store)` = a local backend opened read-write. No `nora_store` import.
+- Publish registry (`registry.py`, stdlib): `Registry(path, read_only=True, busy_timeout_ms)` over `<serve-root>/registry.db` (`registry_path(root)`, `REGISTRY_NAME`); tables `meta`, `store_version(store, unit, version, fingerprint, file, sha256, bytes, schema_version, staged_at, staged_by, removed_at; PK(store, unit, version))`, `release_set(label PK, created_at, created_by, note, code_version, prompt_scheme)`, `release_set_member(label, store, unit, version)`, `gate_run(id, label, kind, run_ref, verdict, recorded_at, recorded_by, note)`, `active(store, unit PK, version, label, since)`, `flip(id, label, kind, from_label, at, by, mode, note)`. Writers: `ensure()`, `begin_write()` / `commit_write` / `rollback_write` (one `BEGIN IMMEDIATE` held across staging), `record_release_set(con, label, new_units: [NewUnit], reused: [StoreVersion], versions=, created_by=, note=, code_version=, prompt_scheme=)`, `record_gate(label, kind, verdict, run_ref=, by=, note=)`, `flip(label, kind="flip"|"rollback", mode, by, note)` (`active` := the set's members + one `flip` row, one transaction; returns `{from_label, changed, removed}`), `mark_removed`. Reads: `find_version(store, unit, fingerprint, schema_version="" | None)`, `get_version`, `versions`, `release_set`, `release_sets`, `members(label)`, `gates`, `gate_verdict(label) -> (ok, {kind: latest verdict})` (ok = at least one kind pass/waived and no kind's latest run failed), `active`, `active_label` ('' when mixed), `flips`, `served_before`, `resolve(label="") -> {(store, unit): StoreVersion}` (active, or a named set), `resolve_paths`, `serving_label`, `protected_labels(keep)`, `gc_plan(keep)`. Constants `STORES`, `GATE_KINDS`, `VERDICTS`, `FLIP_KINDS`, `FLIP_MODES`, `REGISTRY_ENV`, `RELEASE_SET_ENV`; helpers `unit_name(mno, release)` / `split_unit` (`<mno>__<release>`, History `<mno>`), `history_fingerprint({release: trees_fp})`, `now_iso`, `open_registry(path=None, read_only=True)`, `registry_store_paths(store, registry=None, label=None)` (the served set's files of one store — explicit list, never a directory scan). `RegistryError(code, detail)` codes `REG-E001` (registry missing, read-only open) … `REG-E008` (bad kind / verdict / mode).
+- Publish CLI `python -m core.src.stores.publish <publish | gate | flip | rollback | gc | status> --serve-root <root> …` (`publish.py`): `publish --label L [--cells-src DIR] [--trees-src DIR] [--env-dir DIR] [--sira-root DIR [--enrich-run NAME]] [--cells U,…] [--base L | none] [--note] [--prompt-scheme] [--work-dir] [--dry-run]` — takes converter / `trees_build` output or builds it (`--env-dir` → Trees; `--sira-root` → Cells via the converter, bm25x needed), identifies each unit from its file's `meta` (`unit_source`, `scan_units`, `read_unit_meta`), reuses a live version with the same `source_fingerprint` + `schema_version` (History: a hash of the set's Trees fingerprints, any schema), inherits untouched units from the base set (default the active set), rebuilds History for MNOs whose Trees members changed (`build_history_units`), then stages new files through a `Transfer` (`exists`, `put(src, rel) -> (sha256, bytes)`, `remove`; `LocalTransfer(root)` = copy to `<root>/<store>/.staging/`, fsync, sha256 verified, rename) and records the set — all under one registry write lock, rolled back with the staged files removed on any failure. `gate --label L --kind golden-stage1|golden-stage2|manual --verdict pass|fail|waived [--run-ref] [--note]`. `flip --label L [--mode staged|expedited|override] [--force --reason TEXT] [--store-url URL]` — refuses without `gate_verdict` ok and a present file per member; `--force` records a waived manual gate and flips in `override` mode; `--store-url` runs `verify_serving` (`POST /registry/reload`, then `GET /healthz` must report `registry_label` = L and `registry_versions` = the set). `rollback --to L [--force]` = a `kind=rollback`, `expedited` flip to a set that served before. `gc --keep N [--dry-run]` removes files of versions outside `protected_labels` (rows stay, `removed_at` set) and reports orphan files. `status [--label L]`. Python API: `publish()`, `gate()`, `flip()`, `rollback()`, `gc()`, `status()`, `verify_serving()`, `plan_release_set()` (`Plan`, `PlannedUnit`), `sha256_file`, `code_version`. Output is JSON of counts and identities. Error codes `PUB-E001` (label exists), `PUB-E002` (unit source unusable), `PUB-E003` (nothing to publish), `PUB-E004` (flip refused: no passing gate), `PUB-E005` (member file missing), `PUB-E006` (unknown release set), `PUB-E007` (staging failed), `PUB-E008` (serving verification failed), `PUB-E009` (rollback target never served), `PUB-E010` (registry unusable).
+- Registry-mode serving (4b, B6): `open_tree_store` / `open_history_store` fall back to the registry's served set when their root is unset and `NORA_STORE_REGISTRY` is set (`NORA_STORE_RELEASE_SET` names a staged set instead of `active`); `serve.py` reports `registry_label` on `/healthz`. nora-store resolves its cell DBs the same way, adds `POST /registry/reload` (swaps only the units whose file changed) and reports `registry`, `registry_label`, `registry_release_set`, `registry_versions` on `/healthz` (`nora_store/service.py`).
 - Standalone host (`serve.py`): `python -m core.src.stores.serve --stores trees,history,overlay --port PORT [--host]` — any subset; `build_app(stores, overlay_writable=None) -> FastAPI` (names opened from the env, or `{name: store}`), `open_stores(names, env=None)`. Env: `NORA_ENV_DIR` / `NORA_TREES_ROOT` → Trees; `NORA_HISTORY_ROOT` → History; `NORA_STORE_CORRECTIONS_ROOT` / `NORA_OVERLAY_DB` → Overlay opened read-write (the authority) unless `NORA_OVERLAY_URL` names a peer (reads proxied, writes 409). `GET /healthz` → `{ok, hosted, stores: {name: kind}, overlay_authority?}`. No Cells: they stay with the query service. **To split a store out of nora-store, run `core.src.stores.serve --stores <name>` and set `NORA_<STORE>_URL` on every consumer; no code change.**
 
 **Invariants**
@@ -47,6 +50,7 @@ Data stores behind service interfaces (strand corp-db-layer, `store-split-design
 - History DBs are write-once; `--force` replaces by rename.
 - Backends and `overlay_ops` are stdlib only (the stdlib fold in `nora_store/enrich_overlay.py` imports `JsonOverlayStore` and the projection); `clients.py` needs httpx, `api.py` / `serve.py` FastAPI, both imported lazily by the factories.
 - No requirement text, words or reasons in error messages or CLI output (Trees and History builders: cell / MNO names and counts only).
+- Registry: store files are write-once and versioned (`-v<N>`); a unit's content identity decides reuse, `N` is only a counter; a release set is complete (every unit the serving stack needs) and immutable; `active` always equals one set's members after a flip; flip and rollback are one transaction each; nora-store only reads the registry; GC removes files, never rows.
 
 **Key choices**
 - Backends are entry-dict granularity, not op granularity: edit semantics (ops, labels as branches, reaffirm/discard, remove-wins) live in `overlay_ops`, shared by the web's local path and the authority's `/edit` route, so a backend swap cannot change them (D-DRAFT-24).
@@ -61,6 +65,11 @@ Data stores behind service interfaces (strand corp-db-layer, `store-split-design
 - History child entries fold in key and location (not only the children's `subtree_fp` as design §6a sketches): otherwise a section renumbering, a rename with identical content or a section-number move under the same parent leaves every ancestor's `subtree_fp` equal and the descent would miss it.
 - `likely_renamed` is an annotation on an added + removed pair, not a replacement for them, so a renumbered section reads "removed + added (likely renamed)".
 - `NORA_HISTORY_ROOT` unset → None: History is optional; `NORA_HISTORY_URL` set → the HTTP client (`/stores/history/v1`).
+- Registry reuse keys on `source_fingerprint` **and** `schema_version` (the design names the fingerprint alone): the same source converted by a newer schema must serve as new content. History keys on a hash of its Trees inputs so the reuse decision is made before any build.
+- A partial publish (`--cells`, one store) inherits the rest of the set from the base set rather than producing a partial set, so `active` can be replaced wholesale by every flip and a rollback is the previous set, nothing else.
+- The gate rule is "latest run per kind decides; all kinds must pass or be waived": a rerun supersedes a failure, a failure in one kind blocks even when another passed; `--force --reason` records the waiver as a `manual` gate rather than bypassing the log.
+- The publisher holds the registry write lock while staging so the version numbers it assigns (and names files by) stay its own; readers are not blocked (rollback journal, `mode=ro`).
+- Serving resolves the registry once per load / reload and every store (Cells, Trees, History, healthz) reads that one resolution, so a flip in progress never shows a mixed set.
 
 **Non-goals**
 - No fold logic (when an edit applies to a release): that is `nora_store.enrich_overlay`, which needs the cells' token sets and fingerprints. Edit ops, label views and the view digest are here (`overlay_ops`).
@@ -69,6 +78,7 @@ Data stores behind service interfaces (strand corp-db-layer, `store-split-design
 - No Cells client or standalone Cells host: separating Cells needs an index-blob endpoint (later step).
 - Trees: no SQLite build of the legacy flat layout; no release lineage (History store).
 - History: no LLM summaries (a paragraph may be written over the deterministic summary by a caller); no mapping of display names to `plan_id` (query layer).
+- Registry: no remote transfer yet (`LocalTransfer` only; rsync / upload implement `Transfer`), no Postgres backend, no running of the golden gate itself (`publish gate` records a run the golden runner made), no GC of orphan files (reported only).
 
 <!-- BEGIN:STRUCTURE -->
 _Alphabetical, regenerated by regen-map._
@@ -310,6 +320,103 @@ _Alphabetical, regenerated by regen-map._
 - `run_set_label_merged` — function — pub — Merge a label into main (or un-merge it) — the admin's
 - `view_digest` — function — pub — Canonical content digest of one label VIEW of an MNO overlay (the
 
+`publish.py`
+- `LocalTransfer` — class — pub — Same-filesystem copy: ``<root>/<store>/.staging/<name>`` → fsync →
+  - `__init__` — constructor — internal
+  - `exists` — method — pub
+  - `put` — method — pub
+  - `remove` — method — pub
+- `Plan` — dataclass — pub
+  - `members_by_key` — method — pub
+  - `summary` — method — pub
+- `PlannedUnit` — dataclass — pub
+- `Transfer` — class — pub — How a staged file reaches the serving root (design §4.2).
+  - `exists` — method — pub
+  - `put` — method — pub — Copy ``src`` to ``rel`` under the root atomically; returns
+  - `remove` — method — pub
+- `UnitSource` — dataclass — pub — A built unit file the publisher may stage.
+- `_CHUNK` — constant — internal
+- `_PREFIX` — constant — internal
+- `_add_root` — function — internal
+- `_check_files` — function — internal
+- `_http_json` — function — internal
+- `_rel_file` — function — internal
+- `_trees_fps` — function — internal — ``{mno: {release: trees source_fingerprint}}`` over the set's Trees.
+- `_trees_path` — function — internal
+- `_user` — function — internal
+- `build_history_units` — function — pub — Rebuild History for ``mnos`` from the set's Trees members (reused
+- `code_version` — function — pub
+- `convert_cells` — function — pub — Build Cells from flat SIRA cells with the converter (needs the
+- `flip` — function — pub — Step 4 (+5 with ``store_url``): refuse without a passing gate unless
+- `gate` — function — pub
+- `gc` — function — pub — Step 6: remove the files of versions outside the retention set
+- `main` — function — pub
+- `plan_release_set` — function — pub — Decide new vs reused per unit, inherit the rest from the base set,
+- `publish` — function — pub — Steps 1–2 of the pipeline: build or take the units, plan the set,
+- `read_unit_meta` — function — pub — The ``meta`` table of a store file (every store has one).
+- `rollback` — function — pub
+- `scan_units` — function — pub — Every ``<prefix>-*.db`` under ``src_dir`` as unit sources (sorted by
+- `sha256_file` — function — pub
+- `status` — function — pub
+- `unit_source` — function — pub — Identify one file by its ``meta`` (never by its name).
+- `verify_serving` — function — pub — Reload the serving store from the registry and compare its healthz
+
+`registry.py`
+- `FLIP_KINDS` — constant — pub
+- `FLIP_MODES` — constant — pub
+- `GATE_KINDS` — constant — pub
+- `NewUnit` — dataclass — pub — A unit the publisher stages: its identity and the staged file.
+- `REGISTRY_ENV` — constant — pub
+- `REGISTRY_NAME` — constant — pub
+- `RELEASE_SET_ENV` — constant — pub
+- `Registry` — class — pub — Reader and (for the publish CLI) writer of one ``registry.db``.
+  - `__init__` — constructor — internal
+  - `_connect` — method — internal
+  - `_sv` — staticmethod — internal
+  - `active` — method — pub
+  - `active_label` — method — pub — The label every active row came from; '' when none or mixed.
+  - `begin_write` — method — pub — An open connection holding the write lock (``BEGIN IMMEDIATE``).
+  - `commit_write` — staticmethod — pub
+  - `ensure` — method — pub — Create the schema (writer only; idempotent).
+  - `exists` — method — pub
+  - `find_version` — method — pub — The newest live (not removed) version of a unit with this content
+  - `flip` — method — pub — Make ``active`` equal to the set's members and log the flip —
+  - `flips` — method — pub — Flip log, newest first.
+  - `gate_verdict` — method — pub — ``(ok, {kind: latest verdict})``. The latest run per kind decides
+  - `gates` — method — pub
+  - `gc_plan` — method — pub — Live versions that are neither active nor members of a protected
+  - `get_version` — method — pub
+  - `mark_removed` — method — pub
+  - `members` — method — pub
+  - `next_version` — method — pub
+  - `protected_labels` — method — pub — Labels whose files GC must keep: the active set(s), the last
+  - `record_gate` — method — pub
+  - `record_release_set` — method — pub — Inside an open write (``begin_write``): insert the new
+  - `release_set` — method — pub
+  - `release_sets` — method — pub — Every release set, newest first.
+  - `resolve` — method — pub — ``{(store, unit): StoreVersion}`` for the set to serve: the
+  - `resolve_paths` — method — pub — ``{store: {unit: absolute file path}}`` for the set to serve.
+  - `rollback_write` — staticmethod — pub
+  - `root` — property — pub — The serving root: the directory holding the registry file.
+  - `served_before` — method — pub
+  - `serving_label` — method — pub
+  - `versions` — method — pub
+- `RegistryError` — class — pub — A registry operation that cannot proceed (coded, content-free).
+  - `__init__` — constructor — internal
+- `SCHEMA_VERSION` — constant — pub
+- `STORES` — constant — pub
+- `StoreVersion` — dataclass — pub
+  - `key` — property — pub
+- `VERDICTS` — constant — pub
+- `_SCHEMA` — constant — internal
+- `history_fingerprint` — function — pub — Identity of a History unit: a hash over its input Trees versions
+- `now_iso` — function — pub
+- `open_registry` — function — pub — ``Registry`` over ``path`` (None → ``$NORA_STORE_REGISTRY``); None
+- `registry_path` — function — pub
+- `registry_store_paths` — function — pub — The files of one store in the served set — ``active``, or the set
+- `split_unit` — function — pub
+- `unit_name` — function — pub — Cells / Trees units are ``<mno>__<release>``; History units ``<mno>``.
+
 `serve.py`
 - `build_app` — function — pub — An ASGI app mounting only the requested routers. `stores` is a
 - `main` — function — pub
@@ -409,7 +516,7 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[pipeline](../pipeline/MODULE.md) (`error_codes.PipelineError` / `CODES` — import and build CLIs only; the schema codes `OVL-E005` / `TRS-E007` / `HIS-E006` are registered there), [models](../models/MODULE.md) (`fingerprint.text_fp`, `node_fp`, `subtree_fp`, `child_set_fp`, `FINGERPRINT_VERSION`), [extraction](../extraction/MODULE.md) (`release_key.release_order_key`, lazy).
+[pipeline](../pipeline/MODULE.md) (`error_codes.PipelineError` / `CODES` — import and build CLIs only; the schema codes `OVL-E005` / `TRS-E007` / `HIS-E006` and the publish codes `PUB-E001`..`PUB-E010` are registered there), [models](../models/MODULE.md) (`fingerprint.text_fp`, `node_fp`, `subtree_fp`, `child_set_fp`, `FINGERPRINT_VERSION`), [extraction](../extraction/MODULE.md) (`release_key.release_order_key`, lazy).
 
 **Depended on by**
-[web](../web/MODULE.md) (`EnrichOverlayStore` runs `overlay_ops` over an `open_overlay_store` backend — the HTTP client in deployments; `req_tree` delegates to `open_tree_store`; `/api/health` reports `store_backend_kind` per store). **nora-store service** (`nora_store/service.py` opens the Overlay read-write as the authority — or via `HttpOverlayStore` for a peer — composes with `view_digest`, and mounts `api.trees_router` / `history_router` / `overlay_router` through `nora_store/stores_api.py`; `enrich_overlay` re-exports the label-view projection) and the cell-DB converter (`sandbox/cell_db_convert.py`, identity-gate fold).
+[web](../web/MODULE.md) (`EnrichOverlayStore` runs `overlay_ops` over an `open_overlay_store` backend — the HTTP client in deployments; `req_tree` delegates to `open_tree_store`; `/api/health` reports `store_backend_kind` per store). **nora-store service** (`nora_store/service.py` opens the Overlay read-write as the authority — or via `HttpOverlayStore` for a peer — composes with `view_digest`, and mounts `api.trees_router` / `history_router` / `overlay_router` through `nora_store/stores_api.py`; `enrich_overlay` re-exports the label-view projection; in registry mode it resolves its cell DBs through `Registry.resolve` and serves `POST /registry/reload`) and the cell-DB converter (`sandbox/cell_db_convert.py`, identity-gate fold).

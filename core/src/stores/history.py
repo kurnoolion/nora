@@ -769,11 +769,18 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
 def open_history_store(root_dir: "str | Path" = "",
                        url: "str | None" = None) -> "HistoryStore | None":
     """``url`` (None → ``$NORA_HISTORY_URL``) → HTTP client on nora-store;
-    else ``root_dir`` (else ``$NORA_HISTORY_ROOT``) → SQLite; else None
-    (history disabled). Pass ``url=""`` to ignore the env var."""
+    else ``root_dir`` (else ``$NORA_HISTORY_ROOT``) → SQLite; else
+    ``$NORA_STORE_REGISTRY`` → the registry's served History versions;
+    else None (history disabled). Pass ``url=""`` to ignore the URL env
+    var."""
     base = (os.getenv(HISTORY_URL_ENV, "") if url is None else url).strip()
     if base:
         from core.src.stores.clients import HttpHistoryStore
         return HttpHistoryStore(base)
     root = str(root_dir or os.getenv(HISTORY_ROOT_ENV, "")).strip()
-    return SqliteHistoryStore(root) if root else None
+    if root:
+        return SqliteHistoryStore(root)
+    from core.src.stores.registry import REGISTRY_ENV, registry_store_paths
+    if os.getenv(REGISTRY_ENV, "").strip():
+        return SqliteHistoryStore(db_paths=registry_store_paths("history"))
+    return None

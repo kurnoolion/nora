@@ -11,7 +11,9 @@ Cells stay with the query service: separating them needs an index-blob
 endpoint, out of scope here.
 
 Env: `NORA_ENV_DIR` (parse trees) / `NORA_TREES_ROOT` (SQLite cell DBs)
-→ Trees; `NORA_HISTORY_ROOT` → History; `NORA_STORE_CORRECTIONS_ROOT`
+→ Trees; `NORA_HISTORY_ROOT` → History; `NORA_STORE_REGISTRY` (publish
+registry, 4b) resolves both from the served release set when their roots
+are unset; `NORA_STORE_CORRECTIONS_ROOT`
 (JSON) / `NORA_OVERLAY_DB` (SQLite) → Overlay, opened read-write — this
 host is the Overlay authority — unless `NORA_OVERLAY_URL` names a peer
 (then reads proxy and writes answer 409). `/healthz` lists the hosted
@@ -30,6 +32,7 @@ from core.src.stores import api
 from core.src.stores.clients import store_backend_kind
 from core.src.stores.history import open_history_store
 from core.src.stores.overlay import open_overlay_store
+from core.src.stores.registry import REGISTRY_ENV, RELEASE_SET_ENV, open_registry
 from core.src.stores.trees import open_tree_store
 
 
@@ -44,7 +47,7 @@ def open_stores(names: "list[str]", env: "dict[str, str] | None" = None
         if name == "trees":
             env_dir, root = get("NORA_ENV_DIR"), get("NORA_TREES_ROOT")
             out[name] = (open_tree_store(env_dir, root, url="")
-                         if (env_dir or root) else None)
+                         if (env_dir or root or get(REGISTRY_ENV)) else None)
         elif name == "history":
             out[name] = open_history_store(get("NORA_HISTORY_ROOT"), url="")
         elif name == "overlay":
@@ -90,6 +93,14 @@ def build_app(stores: "list[str] | dict[str, Any]",
             body["overlay_authority"] = bool(
                 api.is_overlay_authority(opened["overlay"])
                 if overlay_writable is None else overlay_writable)
+        reg = open_registry()
+        if reg is not None:
+            try:
+                body["registry_label"] = reg.serving_label(
+                    os.getenv(RELEASE_SET_ENV, "").strip())
+            except Exception as exc:  # registry unreadable: say so, stay up
+                body["registry_label"] = ""
+                body["registry_error"] = type(exc).__name__
         return body
 
     return app

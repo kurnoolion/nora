@@ -860,8 +860,9 @@ def open_tree_store(env_dir: "str | Path", root_dir: "str | Path" = "",
                     url: "str | None" = None) -> TreeStore:
     """``url`` (None → ``$NORA_TREES_URL``) → HTTP client on nora-store;
     else ``root_dir`` (else ``$NORA_TREES_ROOT``) → SQLite cell DBs; else
-    the file backend over ``env_dir``. Pass ``url=""`` to ignore the env
-    var."""
+    ``$NORA_STORE_REGISTRY`` → the registry's served Trees versions; else
+    the file backend over ``env_dir``. Pass ``url=""`` to ignore the URL
+    env var."""
     base = (os.getenv(TREES_URL_ENV, "") if url is None else url).strip()
     if base:
         from core.src.stores.clients import HttpTreeStore
@@ -869,4 +870,9 @@ def open_tree_store(env_dir: "str | Path", root_dir: "str | Path" = "",
     root = str(root_dir or os.getenv(TREES_ROOT_ENV, "")).strip()
     if root:
         return SqliteTreeStore(root)
+    from core.src.stores.registry import REGISTRY_ENV, registry_store_paths
+    if os.getenv(REGISTRY_ENV, "").strip():
+        # publish registry (4b): the served set's Trees files, by explicit
+        # list — a serving root holds several versions of one cell.
+        return SqliteTreeStore(db_paths=registry_store_paths("trees"))
     return FileTreeStore(env_dir)

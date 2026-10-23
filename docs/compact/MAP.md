@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-10-22 by regen-map. Do not hand-edit.
+Generated 2026-10-23 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -310,6 +310,8 @@ nora/
 │   │   │   ├── overlay.py                               # Overlay store — review edits to SIRA enrichments (store-split-design §2,
 │   │   │   ├── overlay_import.py                        # One-time import of the JSON Overlay into SQLite (strand corp-db-layer S3).
 │   │   │   ├── overlay_ops.py                           # Overlay edit semantics — the one implementation both writers run
+│   │   │   ├── publish.py                               # Publish pipeline (strand corp-db-layer phase 4b; publish-design.md §4).
+│   │   │   ├── registry.py                              # Publish registry (strand corp-db-layer phase 4b; publish-design.md §3).
 │   │   │   ├── serve.py                                 # Standalone store host (strand corp-db-layer S6; store-split-design §5):
 │   │   │   ├── trees.py                                 # Trees store — parsed requirement trees per (MNO, release) cell
 │   │   │   └── trees_build.py                           # Build the Trees store: one SQLite DB per cell (strand corp-db-layer S4).
@@ -551,6 +553,7 @@ nora/
 │       ├── test_stores_history.py                       # Tests for core/src/stores/history.py + history_build.py (strand
 │       ├── test_stores_http.py                          # Tests for the store HTTP clients + nora-store's store routes (strand
 │       ├── test_stores_overlay.py                       # Tests for core/src/stores/overlay.py + overlay_import.py (strand
+│       ├── test_stores_publish.py                       # Tests for core/src/stores/registry.py + publish.py (strand corp-db-layer
 │       ├── test_stores_schema.py                        # Schema-evolution tests for the SQLite stores (strand corp-db-layer S6;
 │       ├── test_stores_trees.py                         # Tests for core/src/stores/trees.py + trees_build.py (strand corp-db-layer
 │       ├── test_strike_runs.py                          # Tests for the unified strike model [D-060].
@@ -788,7 +791,9 @@ nora/
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── journal.md
 │   │   │   │   ├── phase-4-plan.md
+│   │   │   │   ├── publish-design.md
 │   │   │   │   ├── storage-design.md
+│   │   │   │   ├── store-schema.md
 │   │   │   │   └── store-split-design.md
 │   │   │   ├── golden-eval/
 │   │   │   │   ├── STRAND.md
@@ -861,6 +866,7 @@ nora/
 │   ├── test_llm_fallback.py                             # Permanent-refusal fallback in the service's _llm_call choke point.
 │   ├── test_no_autosave.py                              # Regression tests: loading + enriching an index must never mutate it on disk.
 │   ├── test_package_paths.py                            # Paths the service derives from its own location must survive the package
+│   ├── test_registry_mode.py                            # nora-store serving from the publish registry (strand corp-db-layer 4b,
 │   ├── test_scope.py                                    # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
 │   ├── test_service_identity.py                         # Serving-identity tests (strand golden-eval).
 │   ├── test_service_multi_cell.py                       # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).

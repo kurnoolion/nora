@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import time
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,17 @@ _OVERLAY_URL = os.getenv("NORA_OVERLAY_URL", "").strip()
 _ENV_DIR = os.getenv("NORA_ENV_DIR", "").strip()
 _TREES_ROOT = os.getenv("NORA_TREES_ROOT", "").strip()
 _HISTORY_ROOT = os.getenv("NORA_HISTORY_ROOT", "").strip()
+# Publish registry (strand corp-db-layer 4b, publish-design §5): when set,
+# the cell DBs, Trees and History files come from the registry's served
+# set — `active`, or the release set NORA_STORE_RELEASE_SET names (a
+# staged set under gate). NORA_STORE_ROOT and NORA_ENV_DIR are then unused
+# for those stores (an explicit NORA_TREES_ROOT / NORA_HISTORY_ROOT still
+# wins for its store, as in the open_* factories). Registry files are
+# cell DBs, so registry mode implies cell-db. nora-store never writes it.
+_REGISTRY = os.getenv("NORA_STORE_REGISTRY", "").strip()
+_RELEASE_SET = os.getenv("NORA_STORE_RELEASE_SET", "").strip()
+if _REGISTRY and _INDEX_MODE == "flat":
+    _INDEX_MODE = "cell-db"
 # adapter sidecar of per-req content fingerprints in a flat cell's raw/
 # (sandbox.adapter.nora_to_beir.FINGERPRINTS_NAME; not imported — the
 # adapter pulls in the parser stack)
@@ -467,8 +479,9 @@ from nora_store.enrich_overlay import (  # noqa: E402
 )
 from core.src.stores.overlay import open_overlay_store  # noqa: E402
 from core.src.stores.overlay_ops import view_digest  # noqa: E402
-from core.src.stores.history import open_history_store  # noqa: E402
-from core.src.stores.trees import open_tree_store  # noqa: E402
+from core.src.stores.history import SqliteHistoryStore, open_history_store  # noqa: E402
+from core.src.stores.registry import split_unit  # noqa: E402
+from core.src.stores.trees import SqliteTreeStore, open_tree_store  # noqa: E402
 from nora_store import stores_api  # noqa: E402
 
 from core.src.query.analyzer import (  # noqa: E402
@@ -886,20 +899,79 @@ def _overlay_store():
 
 
 _STORES: dict[str, Any] = {}      # lazily opened Trees / History stores
+_STORES_PATHS: dict[str, dict[str, Path]] = {}   # registry mode: unit → file per store
+
+# Registry snapshot for /healthz — what is SERVED, taken at load and at
+# /registry/reload, not re-read per healthz call (a flip in progress must
+# not show before the units are swapped in).
+_registry_label: str = ""
+_registry_versions: dict[str, dict[str, dict[str, Any]]] = {}
+_registry_units: "dict[str, dict[str, Any]] | None" = None   # the resolved set, as served
+_registry_lock = threading.Lock()
+
+
+def _registry_resolve(refresh: bool = False) -> dict[str, dict[str, Any]]:
+    """`{store: {unit: StoreVersion}}` of the registry's served set. Read
+    from the registry at cell load and on /registry/reload (`refresh`);
+    the lazy Trees / History opens and /healthz use the same resolution,
+    so every store serves ONE set until the next reload."""
+    global _registry_label, _registry_versions, _registry_units
+    if _registry_units is not None and not refresh:
+        return _registry_units
+    from core.src.stores.registry import STORES, Registry
+    reg = Registry(_REGISTRY, read_only=True)
+    out: dict[str, dict[str, Any]] = {st: {} for st in STORES}
+    for (store, unit), sv in reg.resolve(_RELEASE_SET).items():
+        out.setdefault(store, {})[unit] = sv
+    _registry_label = reg.serving_label(_RELEASE_SET)
+    _registry_versions = {
+        st: {u: {"version": sv.version, "fingerprint": sv.fingerprint, "file": sv.file}
+             for u, sv in sorted(units.items())}
+        for st, units in out.items()}
+    _registry_units = out
+    return out
+
+
+def _registry_paths(store: str, refresh: bool = False) -> dict[str, Path]:
+    """`{unit: file}` of one store in the served set (sorted by unit)."""
+    root = Path(_REGISTRY).parent
+    return {u: root / sv.file
+            for u, sv in sorted(_registry_resolve(refresh)[store].items())}
 
 
 def _tree_store():
-    """Trees over NORA_TREES_ROOT (SQLite cell DBs), else the parse trees
-    under NORA_ENV_DIR; None when neither is set."""
+    """Trees over NORA_TREES_ROOT (SQLite cell DBs), else the registry's
+    served Trees versions, else the parse trees under NORA_ENV_DIR; None
+    when none is set."""
     if "trees" not in _STORES:
-        _STORES["trees"] = (open_tree_store(_ENV_DIR, _TREES_ROOT, url="")
-                            if (_ENV_DIR or _TREES_ROOT) else None)
+        if _TREES_ROOT:
+            _STORES["trees"] = open_tree_store(_ENV_DIR, _TREES_ROOT, url="")
+        elif _REGISTRY:
+            try:
+                paths = _registry_paths("trees")
+            except Exception as exc:
+                logger.warning("Trees: registry unreadable: %s", type(exc).__name__)
+                paths = {}
+            _STORES_PATHS["trees"] = paths
+            _STORES["trees"] = SqliteTreeStore(db_paths=list(paths.values()))
+        else:
+            _STORES["trees"] = (open_tree_store(_ENV_DIR, "", url="")
+                                if _ENV_DIR else None)
     return _STORES["trees"]
 
 
 def _history_store():
     if "history" not in _STORES:
-        _STORES["history"] = open_history_store(_HISTORY_ROOT, url="")
+        if _HISTORY_ROOT or not _REGISTRY:
+            _STORES["history"] = open_history_store(_HISTORY_ROOT, url="")
+        else:
+            try:
+                paths = _registry_paths("history")
+            except Exception as exc:
+                logger.warning("History: registry unreadable: %s", type(exc).__name__)
+                paths = {}
+            _STORES_PATHS["history"] = paths
+            _STORES["history"] = SqliteHistoryStore(db_paths=list(paths.values()))
     return _STORES["history"]
 
 
@@ -1076,9 +1148,9 @@ def _load_cells() -> None:
     global _cells_load_error
     if _cells:
         return
-    if not _DB_ROOT:
+    if not _DB_ROOT and not _REGISTRY:
         return
-    db_root = Path(_DB_ROOT)
+    db_root = Path(_DB_ROOT) if _DB_ROOT else Path(_REGISTRY).parent
     errors: list[str] = []
 
     if _INDEX_MODE == "cell-db":
@@ -1088,7 +1160,17 @@ def _load_cells() -> None:
                 "fts5 (the DB's blobs ARE the engine state; a rebuild-from-"
                 "rows engine would need build params the index does not expose)")
             return
-        for db_path in sorted(db_root.glob("cell-*.db")):
+        if _REGISTRY:
+            # the served set's cell files, by explicit list (publish-design §5)
+            try:
+                paths = list(_registry_paths("cells", refresh=True).values())
+            except Exception as exc:
+                _cells_load_error = f"registry {_REGISTRY}: {exc}"
+                _compute_identity()
+                return
+        else:
+            paths = sorted(db_root.glob("cell-*.db"))
+        for db_path in paths:
             try:
                 cstate = _load_one_cell_db(db_path)
                 _cells[cstate.cell] = cstate
@@ -1108,7 +1190,10 @@ def _load_cells() -> None:
                 ", ".join(cell_dirname(c) for c in sorted(_cells)),
             )
         elif not _cells_load_error:
-            _cells_load_error = f"no cell-*.db files under {db_root}"
+            _cells_load_error = (
+                f"registry {_REGISTRY}: the served set has no cells"
+                f"{' (release set ' + _RELEASE_SET + ')' if _RELEASE_SET else ''}"
+                if _REGISTRY else f"no cell-*.db files under {db_root}")
         _compute_identity()
         return
 
@@ -1539,7 +1624,6 @@ _CELL_STATS_CACHE: dict[CellKey, dict[str, Any]] = {}
 # stop stampedes, and in-flight queries finish on the old CellState.
 
 import re as _plan_re_mod  # noqa: E402
-import threading  # noqa: E402
 
 _PLAN_LINE_RE = _plan_re_mod.compile(r"^\*\*plan\*\*: *(.+?) *$", _plan_re_mod.MULTILINE)
 _reload_locks: dict[CellKey, threading.Lock] = {}
@@ -1734,6 +1818,68 @@ def cell_reload(cell_name: str, label: str = "") -> dict[str, Any]:
             "requirements": len(fresh.doc_ids)}
 
 
+@app.post("/registry/reload")
+def registry_reload() -> dict[str, Any]:
+    """Re-read the publish registry's served set and swap in the units
+    whose file changed — the serving side of `publish flip` / `rollback`
+    (publish-design §5). Cells whose file is unchanged keep their loaded
+    state; changed and added cells load, then recompose the Overlay (the
+    per-cell swap Apply uses); cells no longer in the set are dropped.
+    Trees and History reopen only when their file list changed."""
+    if not _REGISTRY:
+        raise HTTPException(status_code=404, detail="NORA_STORE_REGISTRY is not set")
+    with _registry_lock:
+        try:
+            units = _registry_resolve(refresh=True)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"registry unreadable: {type(exc).__name__}") from exc
+        root = Path(_REGISTRY).parent
+        want: dict[CellKey, Path] = {}
+        for unit, sv in units["cells"].items():
+            mno, rel = split_unit(unit)
+            want[(mno, rel)] = root / sv.file
+        fresh: dict[CellKey, CellState] = {}
+        errors: list[str] = []
+        for ck, path in want.items():
+            cur = _cells.get(ck)
+            if cur is not None and cur.db_path == str(path):
+                continue
+            try:
+                fresh[ck] = _load_one_cell_db(path)
+            except Exception as exc:
+                errors.append(f"{cell_dirname(ck)}: {exc}")
+        removed = sorted(ck for ck in _cells if ck not in want)
+        for ck in removed:
+            _cells.pop(ck, None)
+        for ck, st in fresh.items():
+            _cells[ck] = st             # peers present before any recompose
+        for ck in list(fresh) + removed:
+            _CELL_STATS_CACHE.pop(ck, None)
+            for key in [k for k in _label_cells if k[0] == ck]:
+                _label_cells.pop(key, None)
+        for ck, st in fresh.items():
+            if st.composed:
+                _apply_overlay_and_enrich(st)
+        changed: dict[str, list[str]] = {"cells": sorted(cell_dirname(c) for c in fresh)}
+        for store in ("trees", "history"):
+            paths = {u: root / sv.file for u, sv in sorted(units[store].items())}
+            prev = _STORES_PATHS.get(store, {})
+            if store in _STORES and paths == prev:
+                changed[store] = []
+                continue
+            _STORES.pop(store, None)          # reopened lazily over the new list
+            changed[store] = sorted(set(paths) ^ set(prev)
+                                    | {u for u in paths if u in prev and paths[u] != prev[u]})
+        _compute_identity()
+    return {"registry_label": _registry_label,
+            "release_set": _RELEASE_SET,
+            "changed": changed,
+            "removed": [cell_dirname(c) for c in removed],
+            "errors": errors,
+            "cells": [cell_dirname(c) for c in sorted(_cells)]}
+
+
 def _short_sha(text: str) -> str:
     """12-hex sha256 of a prompt's content; "" when not loaded."""
     if not text:
@@ -1854,7 +2000,15 @@ def healthz() -> dict[str, Any]:
         "serve_label": str(
             _serve_manifest.get("label")
             or os.getenv("NORA_SERVE_LABEL", "")
+            or _registry_label
         ),
+        # Publish registry (corp-db-layer 4b): the served release set and
+        # the version + fingerprint of every unit, as loaded. `publish
+        # flip --store-url` compares these with the registry.
+        "registry": _REGISTRY,
+        "registry_label": _registry_label,
+        "registry_release_set": _RELEASE_SET,
+        "registry_versions": _registry_versions,
         "data_fingerprint": _data_fingerprint,
         "data_fingerprint_cells": _data_fingerprint_cells,
         "code_version": _code_version(),

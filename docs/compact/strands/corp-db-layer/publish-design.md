@@ -1,8 +1,11 @@
-# Publish pipeline — phase 4b (v1.0, 2026-10-23)
+# Publish pipeline — phase 4b (v1.1, 2026-10-23)
 
 Strand `corp-db-layer`. Replaces `storage-design.md` §5a and refines
 `store-split-design.md` §7 for the four-store layout. Reviewed and
-agreed 2026-10-23 (§8 questions 1–3 as drafted); nothing built yet.
+agreed 2026-10-23 (§8 questions 1–3 as drafted). v1.1: B1–B7 built
+(`core/src/stores/registry.py`, `publish.py`; nora-store registry mode);
+§9 records where the build refined the design. B8 (trial end-to-end)
+pending.
 
 ## 1. What 4b is for
 
@@ -221,3 +224,37 @@ then the local stacks may adopt it (optional).
    expansion-on run (quality).
 4. The runtime DBs (jobs, metrics, config, feedback) and golden samples
    stay out of 4b (storage-design §8.2).
+
+## 9. Refinements made while building (v1.1)
+
+1. **Reuse keys on fingerprint + schema version** (§2): the same source
+   converted by a newer cell-DB schema is new content for serving. History
+   keys on a hash of its Trees members' fingerprints (any schema), so the
+   reuse decision precedes the build.
+2. **A release set is always complete** (§2): a publish that rebuilds a
+   subset (`--cells`, one store) inherits every other unit from a base set
+   (`--base`, default the active set). A flip then replaces `active`
+   wholesale, and a rollback is exactly the previous set.
+3. **Gate rule** (§4.3): the latest run per kind decides that kind; a set
+   may flip when at least one kind passed or was waived and no kind's
+   latest run failed. `--force --reason` records a `manual / waived` run
+   and flips in `override` mode; it never bypasses the log.
+4. **Registry write lock across staging** (§4.2): the publisher assigns
+   version numbers (and file names) inside one `BEGIN IMMEDIATE`, stages,
+   then commits; a failure rolls back and removes the staged files.
+   Readers (`mode=ro`) are never blocked.
+5. **`store_version.removed_at`** (§3): GC marks a version's file removed;
+   rows stay. `gc --keep N` protects the active set, the last N sets and
+   the targets of the last N flips (a rollback target stays restorable);
+   files no row knows are reported, not deleted.
+6. **Serving resolves once** (§5): nora-store reads the registry at cell
+   load and on `POST /registry/reload`; Cells, Trees, History and healthz
+   all use that one resolution, so a flip in progress never shows a mixed
+   set. `NORA_TREES_ROOT` / `NORA_HISTORY_ROOT`, when set, still win for
+   their store (same precedence as the `open_*` factories).
+7. **Verify step is part of flip** (§4.5): `publish flip --store-url`
+   posts the reload, then requires healthz `registry_label` and
+   `registry_versions` to equal the set; a mismatch exits non-zero with
+   the rollback command (the registry already points at the set).
+8. **Transport**: `publish gate` records a run; running the golden eval
+   against the staging stack stays the runner's job (unchanged over HTTP).

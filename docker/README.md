@@ -756,6 +756,43 @@ Known limit: per-MNO **query/relevance** prompts are generated but the
 query-time service still loads a single pair — per-cell selection there is
 a deferred change (strand journal 2026-07-24).
 
+**Registry publish (strand corp-db-layer 4b; `publish-design.md`).** The
+label-directory path above stays for dev/test stacks. The registry path
+replaces the unit (a store version per cell or MNO instead of a whole
+label), the pointer (`active` rows in `<serve-root>/registry.db` instead
+of env-file paths) and the log (`flip` table instead of `PROMOTE_LOG`),
+and keeps the gate and the one-command rollback:
+
+```bash
+# 1–2 publish + stage: Cells from the converter's output (or --sira-root
+#     to run it), Trees from the build's parse output; History is rebuilt
+#     per MNO whose Trees changed; unchanged units are reused (no copy).
+python -m core.src.stores.publish publish --serve-root <serve-root> --label <YYYY-MM-DD-a> \
+    --cells-src <cell-dbs> --env-dir <nora-build> [--dry-run]
+# 3 gate: point a staging nora-store at the staged set (SERVE_RELEASE_SET=<label>
+#     in its wiring .env), run the golden eval against it, record the verdicts
+python -m core.src.stores.publish gate --serve-root <serve-root> --label <YYYY-MM-DD-a> \
+    --kind golden-stage1 --verdict pass --run-ref <run id>
+# 4–5 flip (one transaction), reload the serving store and verify its healthz
+python -m core.src.stores.publish flip --serve-root <serve-root> --label <YYYY-MM-DD-a> \
+    --store-url http://127.0.0.1:${STORE_PORT}
+# rollback = the previous label (the flip prints the command)
+python -m core.src.stores.publish rollback --serve-root <serve-root> --to <previous> \
+    --store-url http://127.0.0.1:${STORE_PORT}
+python -m core.src.stores.publish gc --serve-root <serve-root> --keep 3     # files only; rows stay
+python -m core.src.stores.publish status --serve-root <serve-root>
+```
+
+The stack reads the registry when the wiring `.env` sets
+`SERVE_REGISTRY_ROOT=<serve-root>` (mounted read-only at `/data/serve`;
+`STORE_ROOT` / `TREES_ROOT` / `HISTORY_ROOT` are then unused by
+nora-store). A flip without a passing gate is refused; `--force --reason
+"<why>"` records the waiver as a manual gate run and flips in `override`
+mode. `GET /healthz` on nora-store reports `registry_label` and
+`registry_versions` (version + fingerprint per unit), and
+`POST /registry/reload` swaps only the units whose file changed — no
+recreate. Registry files are write-once; a label never changes meaning.
+
 ## Variant lineages — comparing ideas, not code
 
 To evaluate a pipeline idea (per-MNO derived prompts, taxonomy-context
@@ -959,9 +996,9 @@ D-DRAFT-28) as JSON routes under `/stores/<store>/v1`:
 
 | store | routes | backed by | writes |
 |---|---|---|---|
-| cells | `/stores/cells/v1` — list, meta, corpus rows, raw SIRA phrases, composed effective sets | the cells loaded at startup (`/data/db`) | — (publish) |
-| trees | `/stores/trees/v1` — every `TreeStore` method | `NORA_TREES_ROOT` (SQLite cell DBs) else the parse trees under `NORA_ENV_DIR` | — (publish) |
-| history | `/stores/history/v1` — every `HistoryStore` method | `NORA_HISTORY_ROOT`; 404 when unset | — (publish) |
+| cells | `/stores/cells/v1` — list, meta, corpus rows, raw SIRA phrases, composed effective sets | the cells loaded at startup (`/data/db`, or the registry's active set) | — (publish) |
+| trees | `/stores/trees/v1` — every `TreeStore` method | `NORA_TREES_ROOT` (SQLite cell DBs), else the registry's active set, else the parse trees under `NORA_ENV_DIR` | — (publish) |
+| history | `/stores/history/v1` — every `HistoryStore` method | `NORA_HISTORY_ROOT`, else the registry's active set; 404 when neither | — (publish) |
 | overlay | `/stores/overlay/v1` — reads, raw writes, `POST /edit` | `NORA_OVERLAY_DB` else the JSON files under the corrections mount | nora-store, **the Overlay authority** |
 
 nora-web picks the HTTP client for a store whenever `NORA_<STORE>_URL`
