@@ -258,3 +258,13 @@ then the local stacks may adopt it (optional).
    the rollback command (the registry already points at the set).
 8. **Transport**: `publish gate` records a run; running the golden eval
    against the staging stack stays the runner's job (unchanged over HTTP).
+9. **Pre-flip start** (B8 field finding): a store started in registry
+   mode with no active set is multi-cell with 0 cells — it loads its
+   prompts at start and never takes the legacy single-dataset path; the
+   first `/registry/reload` loads the prompts if an older image skipped
+   them and clears the startup error fields. `code_version` on a release
+   set comes from `NORA_CODE_VERSION` (image-baked) before git.
+10. **B8 on trial, 2026-10-23: passed.** 13 units published, gate and
+    flipped store both 0 of 39 differ against the 4a run, rollback drill
+    2 sets / 3 flips, GC dry-run 0 removed; the label directory was
+    never written.

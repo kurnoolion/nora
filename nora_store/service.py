@@ -1537,6 +1537,21 @@ class _SiraQueryRequest(BaseModel):
     text_chars: int | None = None
 
 
+def _load_cell_prompts() -> None:
+    """Multi-cell prompt load. Flat cells: the first cell's runs/ (prompt
+    content is identical across cells). Cell-db / registry mode: the DB
+    carries no prompt files — NORA_SIRA_PROMPTS_FROM names a flat cell dir
+    (the label the DBs were converted from) so A/B stacks serve
+    byte-identical prompts; unset falls back to the clone's canonical
+    prompts."""
+    prompts_from = os.getenv("NORA_SIRA_PROMPTS_FROM", "").strip()
+    if _INDEX_MODE == "cell-db" or not _cells:
+        _load_prompts(Path(prompts_from) if prompts_from else Path(_DB_ROOT or "."))
+    else:
+        first = sorted(_cells)[0]
+        _load_prompts(Path(_DB_ROOT) / cell_dirname(first))
+
+
 @app.on_event("startup")
 def _startup() -> None:
     # Multi-cell first: when <db_root> holds <mno>__<MMMYYYY> cells, load them
@@ -1546,21 +1561,14 @@ def _startup() -> None:
     # ok:false even though the cell-dict is healthy.
     try:
         _load_cells()
-        if _cells:
+        if _cells or _REGISTRY:
             # Service-level prompts aren't loaded by _load_cells (which is
-            # skipped → no _load_state in multi-cell mode). Load them from the
-            # first cell's runs/ (prompt content is identical across cells).
-            # Cell-db mode: the DB carries no prompt files — point
-            # NORA_SIRA_PROMPTS_FROM at a flat cell dir (the label the DBs
-            # were converted from) so both A/B stacks serve byte-identical
-            # prompts; unset falls back to the clone's canonical prompts.
-            prompts_from = os.getenv("NORA_SIRA_PROMPTS_FROM", "").strip()
-            if _INDEX_MODE == "cell-db":
-                _load_prompts(Path(prompts_from) if prompts_from
-                              else Path(_DB_ROOT))
-            else:
-                first = sorted(_cells)[0]
-                _load_prompts(Path(_DB_ROOT) / cell_dirname(first))
+            # skipped → no _load_state in multi-cell mode). Registry mode
+            # is multi-cell by definition, even before the first flip (0
+            # cells): the legacy single-dataset path would only record a
+            # misleading corpus error, and the prompts must be in place
+            # for the cells /registry/reload brings in.
+            _load_cell_prompts()
         else:
             _load_state()
     except Exception as exc:  # pragma: no cover — defensive
@@ -1826,6 +1834,7 @@ def registry_reload() -> dict[str, Any]:
     state; changed and added cells load, then recompose the Overlay (the
     per-cell swap Apply uses); cells no longer in the set are dropped.
     Trees and History reopen only when their file list changed."""
+    global _load_error, _cells_load_error
     if not _REGISTRY:
         raise HTTPException(status_code=404, detail="NORA_STORE_REGISTRY is not set")
     with _registry_lock:
@@ -1861,6 +1870,16 @@ def registry_reload() -> dict[str, Any]:
         for ck, st in fresh.items():
             if st.composed:
                 _apply_overlay_and_enrich(st)
+        # A store started before its first flip had no cells: load the
+        # service-level prompts now and clear the startup error fields, so
+        # the first reload brings it up whole (field-found on the one-time
+        # move to the registry — expansion silently off until a recreate).
+        if _cells and not (_query_prompt_template or _rerank_prompt_template):
+            _load_cell_prompts()
+        if _cells:
+            _load_error = None
+        _cells_load_error = "; ".join(errors) if errors else (
+            None if _cells else _cells_load_error)
         changed: dict[str, list[str]] = {"cells": sorted(cell_dirname(c) for c in fresh)}
         for store in ("trees", "history"):
             paths = {u: root / sv.file for u, sv in sorted(units[store].items())}
@@ -1877,7 +1896,9 @@ def registry_reload() -> dict[str, Any]:
             "changed": changed,
             "removed": [cell_dirname(c) for c in removed],
             "errors": errors,
-            "cells": [cell_dirname(c) for c in sorted(_cells)]}
+            "cells": [cell_dirname(c) for c in sorted(_cells)],
+            "prompts_loaded": bool(_query_prompt_template or _rerank_prompt_template),
+            "missing_prompts": _missing_prompts()}
 
 
 def _short_sha(text: str) -> str:

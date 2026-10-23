@@ -218,6 +218,52 @@ def test_registry_errors_are_reported_not_fatal(world, monkeypatch):
     assert "no cells" in (svc._cells_load_error or "")
 
 
+def test_store_started_before_first_flip_comes_up_whole_on_reload(world, monkeypatch):
+    """Field-found on the one-time move to the registry: a store started
+    with no active set must still load its prompts and must not report
+    the legacy corpus error; the first reload brings the cells in and
+    leaves healthz whole."""
+    loads: list[str] = []
+
+    def fake_load_prompts(base):
+        loads.append(str(base))
+        svc._query_prompt_template = "Q {query}"
+        svc._rerank_prompt_template = "R {query} {document}"
+    monkeypatch.setattr(svc, "_load_prompts", fake_load_prompts)
+    monkeypatch.setattr(svc, "_query_prompt_template", "")
+    monkeypatch.setattr(svc, "_rerank_prompt_template", "")
+    monkeypatch.setattr(svc, "_load_error", None)
+    monkeypatch.setattr(svc, "_QUERY_ENRICH_ENABLED", True)
+    monkeypatch.setattr(svc, "_RERANK_ENABLED", True)
+    monkeypatch.setattr(svc, "_RERANK_BACKEND", "shim")
+    monkeypatch.setenv("NORA_SIRA_PROMPTS_FROM", str(world["work"]))
+    _publish(world, "set-1", base="none")                  # staged, nothing active
+
+    svc._startup()
+    assert svc._cells == {} and loads == [str(world["work"])]   # prompts loaded anyway
+    assert svc._load_error is None                              # no legacy corpus error
+    hz = world["client"].get("/healthz").json()
+    assert hz["missing_prompts"] == [] and hz["query_prompt_loaded"] is True
+    assert hz["ok"] is False and "no cells" in hz["cells_load_error"]
+
+    # the same situation when prompts were NOT loaded at startup (older
+    # image): the first reload repairs it
+    monkeypatch.setattr(svc, "_query_prompt_template", "")
+    monkeypatch.setattr(svc, "_rerank_prompt_template", "")
+    monkeypatch.setattr(svc, "_load_error", "corpus.jsonl not found")
+    _flip(world, "set-1")
+    body = world["client"].post("/registry/reload").json()
+    assert len(body["changed"]["cells"]) == 3
+    assert body["prompts_loaded"] is True and body["missing_prompts"] == []
+    assert len(loads) == 2
+    hz = world["client"].get("/healthz").json()
+    assert hz["ok"] is True and hz["load_error"] is None and hz["cells_load_error"] is None
+    assert hz["registry_label"] == "set-1" and len(hz["cells"]) == 3
+    # a later reload does not reload prompts
+    world["client"].post("/registry/reload")
+    assert len(loads) == 2
+
+
 def test_explicit_trees_root_wins_over_registry(world, monkeypatch, tmp_path):
     _publish(world, "set-1", base="none")
     _flip(world, "set-1")

@@ -22,7 +22,8 @@ store; golden Stage-1 equal to the current trial; review Apply works.
 Status 2026-10-23: B1–B7 built and unit/integration tested
 (`core/src/stores/registry.py`, `publish.py`; nora-store registry mode;
 `core/tests/test_stores_publish.py`, `nora_store/test_registry_mode.py`).
-B8 pending (trial).
+B8 passed on trial 2026-10-23 (publish-design §9.10). The three
+rollback sets retire after the next review.
 
 | # | Change |
 |---|---|

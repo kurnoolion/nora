@@ -365,6 +365,11 @@ def plan_release_set(reg: Registry, label: str, *, cells: list[UnitSource],
 # publish
 
 def code_version() -> str:
+    """The build's code version: the image-baked NORA_CODE_VERSION, else
+    git for source runs, else '' (a container without .git)."""
+    env = os.getenv("NORA_CODE_VERSION", "").strip()
+    if env:
+        return env
     try:
         repo = Path(__file__).resolve().parents[3]
         out = subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
