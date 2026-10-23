@@ -483,13 +483,13 @@ section.
 
 **Decision:** SQLite for Cells, Trees, History; Overlay and registry SQLite in dev/test, SQLite or Postgres in corp by deployment facts (design §9.4); tree nodes carry `parent_id` and an indexed ordinal `path`; schemas stay Postgres-portable.
 **Why:** Small, write-once, read-mostly hierarchies; path gives subtree/ancestor reads, `WITH RECURSIVE` the rest. Rejected: a graph DB — hierarchies, not graphs (the knowledge graph is separate).
-**Consequences:** Postgres maps `path` to `ltree` if corp provides it.
+**Consequences:** Postgres maps `path` to `ltree` if corp provides it. Trees carry a casefolded id column (`req_id_cf`, Python `casefold` semantics — SQLite NOCASE folds ASCII only) and 6-digit path segments (flat documents exceed 9999 root nodes).
 
 ## D-DRAFT-27 — Three requirement hashes; History as a Merkle tree with version intervals
 
 **Decision:** `text_fp` (canonical v2 title + body; the shared join key), `node_fp` (+ priority, applicability) and `subtree_fp` (+ children in document order); History stores version intervals and content-addressed text, one SQLite DB per MNO (design §3, §6a).
 **Why:** Any level compares by one hash and diffs descend only into changed branches; SIRA and review edits depend on text only, History on fields too. Rejected: one hash for all uses — a priority change would stale enrichment; per-release flags only — no texts, full scans.
-**Consequences:** S1's `req_fingerprint` is replaced by `text_fp` (values versioned `v2:`); reorders show as changed, labelled "reordered".
+**Consequences:** S1's `req_fingerprint` is replaced by `text_fp` (values versioned `v2:`); reorders show as changed, labelled "reordered". A child enters its parent's `subtree_fp` as (key, location, hash), not the bare hash — otherwise a renumbered section or a same-content rename leaves every ancestor unchanged and the diff never descends to it.
 
 ## D-DRAFT-28 — nora-store hosts every persistent corpus store; nora-web is a web layer
 

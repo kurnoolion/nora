@@ -416,3 +416,38 @@
 ### Next
 - A new Stage-1 baseline per stack after the switch (repeat runs: query
   expansion is run-to-run noisy).
+
+## 2026-10-23 — 4a checkpoint settled deterministically; 4b designed
+
+### Done this session
+- With query expansion off, the 4a store and the pre-4a store retrieve
+  identically on the frozen golden set: 0 of 39 samples differ, recall /
+  r@5 / r@10 equal to four decimals; stamps differ only in code version.
+  The earlier Stage-1 spread was expansion noise. The expansion-off
+  Stage-1 becomes the publish gate's deterministic component.
+- Trial serves phase 4a from a host-only merge of main (`7505ebb`+) with
+  the company main; nora-web is a pure client (all three stores `http`);
+  Trees 468 docs / 50293 nodes, History built for 3 MNOs.
+- Field fixes on main: converter stamps `fingerprint_version` and warns
+  when the adapter sidecar is absent; History change rows carry `req_id`
+  and `/req/last-changed` takes `key=`; conditional Trees/History mounts
+  in compose; `nora-store-test` build target.
+- Phase 4b publish design agreed (`publish-design.md`, D-DRAFT-30).
+
+- Stack-B migrated to 4a (flat → cell-db/bm25x) and is the Overlay
+  authority; expansion-off Stage-1 before/after: 0 of 39 differ. The
+  company main carries the install-both prompt commit and is synced with
+  origin; a pinned old-tooling worktree serves stack-A until it moves.
+  `nora-store-test`: 189 passed, first real run of the bm25x suites.
+
+### In progress
+- Stack-A migration to 4a; its store reads the Overlay from stack-B via
+  the host gateway.
+
+### Next
+- 4b implementation B1–B8 after the A/B round.
+
+### Flags
+- Labels adapted before the fingerprint sidecar carry no `v2:`
+  per-requirement fingerprints until their next SIRA build; review edits
+  there stay Jaccard-guarded.
