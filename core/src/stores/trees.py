@@ -28,12 +28,17 @@ Backends:
   per-cell and legacy flat layouts, with an mtime+size tree cache.
 - ``SqliteTreeStore(root_dir)`` — one write-once ``trees-<mno>-<release>.db``
   per cell (built by ``trees_build``), opened ``mode=ro&immutable=1``.
-  Per-cell only: the legacy flat layout is not supported.
+  Per-cell only: the legacy flat layout is not supported. A file whose
+  ``schema_version`` this reader does not know is refused (``TRS-E007``);
+  unknown columns are ignored (design §9).
+- ``HttpTreeStore(base_url)`` (``clients.py``) — the same protocol over
+  nora-store's ``/stores/trees/v1`` routes.
 
-``open_tree_store`` picks the backend: ``root_dir`` (or ``$NORA_TREES_ROOT``)
-→ SQLite; else the file backend over ``env_dir``.
+``open_tree_store`` picks the backend: ``url`` (or ``$NORA_TREES_URL``) →
+HTTP client; else ``root_dir`` (or ``$NORA_TREES_ROOT``) → SQLite; else
+the file backend over ``env_dir``.
 
-Stdlib only.
+Stdlib only (the HTTP client is imported lazily).
 """
 
 from __future__ import annotations
@@ -54,6 +59,7 @@ from core.src.models.fingerprint import FINGERPRINT_VERSION, text_fp
 logger = logging.getLogger(__name__)
 
 TREES_ROOT_ENV = "NORA_TREES_ROOT"
+TREES_URL_ENV = "NORA_TREES_URL"
 SQLITE_SCHEMA_VERSION = 1
 DB_PREFIX = "trees-"
 DB_SUFFIX = ".db"
@@ -593,6 +599,18 @@ def _connect_ro(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(uri, uri=True)
 
 
+def _check_schema(name: str, meta: dict) -> None:
+    """Refuse a cell DB written for another schema (design §9: the
+    rebuild is the migration)."""
+    found = str(meta.get("schema_version", "") or "")
+    if found != str(SQLITE_SCHEMA_VERSION):
+        from core.src.stores.errors import SchemaVersionError
+        raise SchemaVersionError(
+            "TRS-E007", "Trees", name, found, str(SQLITE_SCHEMA_VERSION),
+            "rebuild the cell with core.src.stores.trees_build or run a "
+            "newer build")
+
+
 class SqliteTreeStore:
     """Every ``trees-<mno>-<release>.db`` under ``root_dir`` (one per cell,
     write-once). The cell comes from each file's ``meta``, not its name.
@@ -635,6 +653,7 @@ class SqliteTreeStore:
                 logger.warning("Skipping unreadable trees DB %s: %s", p.name,
                                type(exc).__name__)
                 continue
+            _check_schema(p.name, meta)
             if int(meta.get("n_docs", "0") or 0) == 0:
                 continue
             key = (meta.get("mno", ""), meta.get("release", ""))
@@ -837,9 +856,16 @@ def source_fingerprint(files: Iterable[Path]) -> str:
     return h.hexdigest()
 
 
-def open_tree_store(env_dir: "str | Path", root_dir: "str | Path" = "") -> TreeStore:
-    """``root_dir`` (else ``$NORA_TREES_ROOT``) → SQLite cell DBs; else the
-    file backend over ``env_dir``."""
+def open_tree_store(env_dir: "str | Path", root_dir: "str | Path" = "",
+                    url: "str | None" = None) -> TreeStore:
+    """``url`` (None → ``$NORA_TREES_URL``) → HTTP client on nora-store;
+    else ``root_dir`` (else ``$NORA_TREES_ROOT``) → SQLite cell DBs; else
+    the file backend over ``env_dir``. Pass ``url=""`` to ignore the env
+    var."""
+    base = (os.getenv(TREES_URL_ENV, "") if url is None else url).strip()
+    if base:
+        from core.src.stores.clients import HttpTreeStore
+        return HttpTreeStore(base)
     root = str(root_dir or os.getenv(TREES_ROOT_ENV, "")).strip()
     if root:
         return SqliteTreeStore(root)

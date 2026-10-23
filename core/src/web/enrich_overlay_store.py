@@ -1,63 +1,44 @@
-"""Enrichment-corrections overlay store — the WEB side's writer
+"""Enrichment-corrections overlay store — the WEB side's edit surface
 (strand sira-enrichment-review, D-DRAFT-1/2; storage moved behind
-`core.src.stores.overlay` in strand corp-db-layer S3, D-DRAFT-24).
+`core.src.stores.overlay` in strand corp-db-layer S3, D-DRAFT-24; edits
+run on the Overlay authority since S6, D-DRAFT-28).
 
-Owns the edit semantics (ops, labels as branches, the label-view digest)
-on top of an `OverlayStore` backend:
+Reads and the edit semantics (ops, labels as branches, the label-view
+digest) over an `OverlayStore` backend from `open_overlay_store`:
 
-- JSON (default): `<corrections_root>/sira-enrich/` — `<MNO>.json`
-  ({req_id: entry}), `accepted-labels.json` (merge log), `labels.json`
-  (disabled; legacy report annotation), `reason-categories.json`.
-- SQLite: `$NORA_OVERLAY_DB` (one file per deployment; wins over the
-  corrections root).
+- HTTP (`$NORA_OVERLAY_URL`, wins): nora-store's `/stores/overlay/v1`.
+  Every mutation is ONE request to the server's `edit` route, which runs
+  the op inside its backend transaction (`core.src.stores.overlay_ops`),
+  so the web never does a read-modify-write over the wire.
+- SQLite (`$NORA_OVERLAY_DB`) or JSON (`<corrections_root>/sira-enrich/`):
+  the dev fallback when no URL is set — the same `overlay_ops` run here,
+  in one local backend transaction (JSON: a flock'd lock file; SQLite:
+  BEGIN IMMEDIATE); last-writer-wins per record. Writes are atomic.
 
-The web app is the SOLE writer (nora-store reads the same backend
-read-only and applies the overlay at cell load). Concurrency: every
-mutation runs in one backend transaction (JSON: a flock'd lock file;
-SQLite: BEGIN IMMEDIATE); last-writer-wins per record. Writes are atomic.
-
-Record shape (word-level granularity):
-    {"word": w, "label": l, "reason": {"category": c, "note": n},
-     "by": user, "at": iso8601, "origin": {"release": rel},
-     "fingerprint": fp}      # fingerprint only when the caller knew it
-One active record per (word, direction): re-editing a word replaces its
-record. `suppress_all` is an entry-level record with the same stamp fields
-plus {"value": true}. `fingerprint` is the requirement's content
-fingerprint at edit time (store-split-design §3) — the fold applies a
-record without the Jaccard guard while the req still carries it.
+The op logic itself lives in `overlay_ops` so both paths are identical
+code; this class only chooses where it runs. Record shape: see that
+module.
 """
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.src.stores import overlay_ops
 from core.src.stores.overlay import OverlayStore, open_overlay_store
-# stdlib-only by design so the web side can share the exact label-view
-# projection the service applies (see its module docstring)
-from nora_store.enrich_overlay import allowed_labels, filter_overlay
-
-DEFAULT_REASON_CATEGORIES = [
-    "misleading-enrichment",
-    "too-generic",
-    "wrong-context",
-    "hallucinated-concept",
-    "duplicate-of-req-text",
-    "missing-synonym",
-    "missing-acronym",
-    "domain-term-missed",
-]
-
-EDIT_OPS = ("remove", "unremove", "add", "unadd", "suppress", "unsuppress",
-            "reaffirm", "discard")
+from core.src.stores.overlay_ops import (  # noqa: F401  (re-exports)
+    DEFAULT_REASON_CATEGORIES,
+    EDIT_OPS,
+    allowed_labels,
+    filter_overlay,
+)
 
 
 class EnrichOverlayStore:
     """Edit semantics over an `OverlayStore` bound to a corrections root
-    ("" and no $NORA_OVERLAY_DB = disabled). `backend` overrides the
-    factory (tests, the import CLI)."""
+    ("" and no $NORA_OVERLAY_DB / $NORA_OVERLAY_URL = disabled). `backend`
+    overrides the factory (tests, the import CLI)."""
 
     def __init__(self, corrections_root: str | Path,
                  backend: "OverlayStore | None" = None):
@@ -69,6 +50,11 @@ class EnrichOverlayStore:
     @property
     def enabled(self) -> bool:
         return self.backend is not None
+
+    @property
+    def remote(self) -> bool:
+        """True when edits run on the Overlay authority over HTTP."""
+        return hasattr(self.backend, "run_op")
 
     def _require(self) -> OverlayStore:
         if self.backend is None:
@@ -94,20 +80,15 @@ class EnrichOverlayStore:
 
     def overlay_digest(self, mno: str, label: str = "") -> str:
         """Canonical content digest of the `label` VIEW of the MNO overlay
-        (main = accepted + unlabeled, plus `label`'s own records). The
-        filtered records fully determine what the view serves — the merge
-        log itself stays OUT of the formula, so a merge/un-merge flags
-        only the MNOs the label actually touches. Pending detection
-        compares this against the digest nora-store reports for its
-        APPLIED view — edits that are fully undone digest back to the
-        served state, so no false 'pending'. Formula must match
-        nora-store's `_overlay_digest`."""
-        import hashlib
+        (main = accepted + unlabeled, plus `label`'s own records) —
+        `overlay_ops.view_digest`, the formula nora-store applies to its
+        APPLIED view, so pending detection compares like with like. Over
+        HTTP the authority computes it (one round trip)."""
+        if self.remote:
+            return self.backend.digest(mno, label)
         filtered = filter_overlay(self.get_overlay(mno),
                                   allowed_labels(self.accepted_labels(), label))
-        payload = json.dumps({"overlay": filtered},
-                             sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode()).hexdigest()
+        return overlay_ops.view_digest(filtered)
 
     def accepted_labels(self) -> set[str]:
         """Labels merged into main (the default view) — the merge log."""
@@ -148,10 +129,17 @@ class EnrichOverlayStore:
         return {label: len(rids) for label, rids in reqs.items()}
 
     def reason_categories(self) -> list[str]:
-        cats = self.backend.reason_categories() if self.enabled else None
-        return cats if isinstance(cats, list) and cats else list(DEFAULT_REASON_CATEGORIES)
+        return overlay_ops.reason_categories_or_default(self.backend)
 
     # ── mutations (one backend transaction each) ──────────────────
+
+    def _run(self, name: str, local, **payload: Any) -> Any:
+        """Run one store op where the lock is: on the authority over HTTP
+        (`run_op`), else in the local backend's transaction."""
+        backend = self._require()
+        if self.remote:
+            return backend.run_op(name, payload)
+        return local(backend, **payload)
 
     def edit(self, mno: str, req_id: str, op: str, *,
              words: "list[str] | None" = None,
@@ -162,150 +150,33 @@ class EnrichOverlayStore:
              origin_release: str = "",
              fingerprint: str = "") -> "dict[str, Any] | None":
         """Apply one edit op; returns the req's updated entry (None when the
-        entry emptied away). `words` drives remove/unremove/add/unadd;
-        `pairs` [{direction, word}] drives reaffirm/discard (held-record
-        refs from the service); suppress/unsuppress need neither.
-        `origin_release` = the release the reviewer is VIEWING (stamped as
-        the record's origin; for reaffirm it is the NEW origin).
-        `fingerprint` = the req's content fingerprint in that release
-        (stamped on every record written; "" = unknown, legacy shape)."""
+        entry emptied away). Arguments as `overlay_ops.apply_edit`."""
         if op not in EDIT_OPS:
             raise ValueError(f"unknown op: {op}")
-        backend = self._require()
-
-        stamp = {"label": label or "",
-                 "reason": {"category": (reason or {}).get("category", ""),
-                            "note": (reason or {}).get("note", "")},
-                 "by": by or "",
-                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                 "origin": {"release": origin_release or ""}}
-        if fingerprint:
-            stamp["fingerprint"] = fingerprint
-
-        def _restamp(rec: dict) -> None:
-            # reaffirm: the record now speaks for the viewed release's
-            # content — a stale fingerprint must not outlive its origin
-            rec["origin"] = {"release": origin_release}
-            rec["by"], rec["at"] = stamp["by"], stamp["at"]
-            if fingerprint:
-                rec["fingerprint"] = fingerprint
-            else:
-                rec.pop("fingerprint", None)
-
-        with backend.transaction():
-            entry = backend.get_entry(mno, req_id) or {}
-            entry.setdefault("remove", [])
-            entry.setdefault("add", [])
-
-            def _replace(direction: str, word: str) -> None:
-                entry[direction] = [r for r in entry[direction]
-                                    if r.get("word") != word]
-                entry[direction].append({"word": word, **stamp})
-
-            def _drop(direction: str, word: str) -> None:
-                entry[direction] = [r for r in entry[direction]
-                                    if r.get("word") != word]
-
-            if op in ("remove", "add"):
-                for w in dict.fromkeys(words or []):   # dedupe, keep order
-                    if w:
-                        _replace(op, w)
-            elif op in ("unremove", "unadd"):
-                for w in (words or []):
-                    _drop("remove" if op == "unremove" else "add", w)
-            elif op == "suppress":
-                entry["suppress_all"] = {"value": True, "word": "", **stamp}
-            elif op == "unsuppress":
-                entry.pop("suppress_all", None)
-            elif op in ("reaffirm", "discard"):
-                for p in (pairs or []):
-                    d, w = p.get("direction"), p.get("word", "")
-                    if d == "suppress_all":
-                        sup = entry.get("suppress_all")
-                        if isinstance(sup, dict):
-                            if op == "discard":
-                                entry.pop("suppress_all", None)
-                            else:
-                                _restamp(sup)
-                    elif d in ("remove", "add"):
-                        if op == "discard":
-                            _drop(d, w)
-                        else:
-                            for r in entry[d]:
-                                if r.get("word") == w:
-                                    _restamp(r)
-
-            # prune empties
-            if not entry["remove"]:
-                entry.pop("remove")
-            if not entry["add"]:
-                entry.pop("add")
-            result = entry or None
-            backend.put_entry(mno, req_id, result)
-        return result
+        return self._run(
+            "edit", lambda b, **kw: overlay_ops.run_edit(
+                b, kw.pop("mno"), kw.pop("req_id"), kw.pop("op"), **kw),
+            mno=mno, req_id=req_id, op=op, words=words, pairs=pairs,
+            label=label, reason=reason, by=by, origin_release=origin_release,
+            fingerprint=fingerprint)
 
     def set_label_merged(self, label: str, merged: bool) -> set[str]:
         """Merge a label into main (or un-merge it) — the admin's
         branch-landing action. Only mutates the merge log; records keep
         their label, so provenance survives and un-merge is exact."""
-        backend = self._require()
-        with backend.transaction():
-            cur = backend.accepted_labels()
-            (cur.add if merged else cur.discard)(label)
-            backend.set_accepted_labels(cur)
-        return cur
+        return set(self._run("set_label_merged", overlay_ops.run_set_label_merged,
+                             label=label, merged=merged))
 
     def set_label_disabled(self, label: str, disabled: bool) -> set[str]:
-        backend = self._require()
-        with backend.transaction():
-            cur = backend.disabled_labels()
-            (cur.add if disabled else cur.discard)(label)
-            backend.set_disabled_labels(cur)
-        return cur
+        return set(self._run("set_label_disabled", overlay_ops.run_set_label_disabled,
+                             label=label, disabled=disabled))
 
     def delete_label(self, label: str) -> int:
         """Strip every record carrying `label` from every MNO (the
         prompt-fix cleanup, D-DRAFT-5). Returns records removed."""
-        backend = self._require()
-        removed = 0
-        with backend.transaction():
-            for mno in backend.list_mnos():
-                overlay = backend.get_overlay(mno)
-                for rid in list(overlay):
-                    entry = overlay[rid]
-                    changed = False
-                    for d in ("remove", "add"):
-                        recs = entry.get(d) or []
-                        kept = [r for r in recs if (r.get("label") or "") != label]
-                        removed += len(recs) - len(kept)
-                        if len(kept) != len(recs):
-                            changed = True
-                            if kept:
-                                entry[d] = kept
-                            else:
-                                entry.pop(d, None)
-                    sup = entry.get("suppress_all")
-                    if isinstance(sup, dict) and (sup.get("label") or "") == label:
-                        entry.pop("suppress_all")
-                        removed += 1
-                        changed = True
-                    if changed:
-                        backend.put_entry(mno, rid, entry or None)
-            # a deleted label needn't linger in the disabled/accepted lists
-            disabled = backend.disabled_labels()
-            if label in disabled:
-                backend.set_disabled_labels(disabled - {label})
-            accepted = backend.accepted_labels()
-            if label in accepted:
-                backend.set_accepted_labels(accepted - {label})
-        return removed
+        return int(self._run("delete_label", overlay_ops.run_delete_label,
+                             label=label))
 
     def add_reason_category(self, category: str) -> list[str]:
-        backend = self._require()
-        category = category.strip()
-        with backend.transaction():
-            cats = self.reason_categories()
-            if category and category not in cats:
-                cats.append(category)
-                backend.set_reason_categories(cats)
-        return cats
+        return list(self._run("add_reason_category", overlay_ops.run_add_reason_category,
+                              category=category))

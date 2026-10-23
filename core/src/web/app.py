@@ -297,6 +297,20 @@ async def admin_unlock(request: Request, token: str = ""):
 
 # -- API endpoints ------------------------------------------------------------
 
+def _store_backends() -> dict[str, str]:
+    """`local` | `http` | `off` per store, resolved the way the routes
+    resolve them (the factories read the NORA_<STORE>_URL vars)."""
+    from core.src.stores import open_history_store, open_overlay_store
+    from core.src.stores.clients import store_backend_kind
+    from core.src.web.req_tree import tree_store
+
+    return {
+        "overlay": store_backend_kind(open_overlay_store(config.corrections_root)),
+        "trees": store_backend_kind(tree_store(config.env_dir_path())),
+        "history": store_backend_kind(open_history_store()),
+    }
+
+
 @app.get("/api/health")
 async def health_check():
     uptime = time.time() - _start_time if _start_time else 0.0
@@ -325,6 +339,10 @@ async def health_check():
         "status": "ok",
         "ollama": ollama_ok,
         "uptime_seconds": round(uptime, 1),
+        # Which backend each store runs on (strand corp-db-layer S6):
+        # `http` = nora-store's /stores routes (NORA_<STORE>_URL set),
+        # `local` = this container's files, `off` = not configured.
+        "stores": _store_backends(),
         "llm_config_source": llm_source,
         "llm_config_file": llm_file,
         "roster_size": len(roster),

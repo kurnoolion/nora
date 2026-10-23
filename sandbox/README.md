@@ -532,8 +532,17 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   `NORA_SIRA_MAX_DF_RATIO` (0.05), `NORA_SIRA_EXPANSION_WEIGHT` (0.5),
   `NORA_SIRA_QUERY_ENRICH_ENABLED` (true).
 
+- Hosted stores (strand corp-db-layer S6; `/stores/<store>/v1`):
+  `NORA_ENV_DIR` (parse trees → Trees store), `NORA_TREES_ROOT` /
+  `NORA_HISTORY_ROOT` (pre-built SQLite stores), `NORA_OVERLAY_DB` (the
+  Overlay file; else the JSON files under `NORA_STORE_CORRECTIONS_ROOT`,
+  opened read-write — this service is the Overlay authority),
+  `NORA_OVERLAY_URL` (peer read: another nora-store is the authority;
+  writes here answer 409). `/healthz` key `stores` reports each backend.
+
 Web-side: `NORA_STORE_URL` (default `http://127.0.0.1:8040`),
-`NORA_STORE_TIMEOUT` (1200s).
+`NORA_STORE_TIMEOUT` (1200s); `NORA_OVERLAY_URL` / `NORA_TREES_URL` /
+`NORA_HISTORY_URL` select the HTTP store clients (unset = local backends).
 
 ### `run_stack.sh` args (D-120)
 

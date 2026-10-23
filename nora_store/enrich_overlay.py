@@ -51,6 +51,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from core.src.stores.overlay import JsonOverlayStore
+# The label-view projection moved to overlay_ops (S6: the store routes need
+# it without importing this package); re-exported so importers of the fold
+# keep one source for it.
+from core.src.stores.overlay_ops import allowed_labels, filter_overlay  # noqa: F401
 
 JACCARD_THRESHOLD_DEFAULT = 0.85
 
@@ -77,36 +81,6 @@ def load_accepted_labels(corrections_root: Path | str) -> set[str]:
     merge log: adding a label merges it, removing it un-merges. Records
     themselves are never rewritten. JSON layout only (back-compat)."""
     return JsonOverlayStore(corrections_root, read_only=True).accepted_labels()
-
-
-def allowed_labels(accepted: set[str], label: str = "") -> set[str]:
-    """The labels visible in a view: unlabeled legacy records ("") always
-    count as main; `label` is the branch the viewer opted into."""
-    allowed = {""} | set(accepted)
-    if label:
-        allowed.add(label)
-    return allowed
-
-
-def filter_overlay(overlay: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
-    """Project an overlay onto a label view: keep only records whose label
-    is allowed, pruning emptied directions/entries. Canonical basis for
-    view digests — the web store must filter identically (it imports this
-    function) so served-vs-current comparisons are content-exact."""
-    out: dict[str, Any] = {}
-    for rid, entry in overlay.items():
-        kept: dict[str, Any] = {}
-        for direction in ("remove", "add"):
-            recs = [r for r in (entry.get(direction) or [])
-                    if (r.get("label") or "") in allowed]
-            if recs:
-                kept[direction] = recs
-        sup = entry.get("suppress_all")
-        if isinstance(sup, dict) and (sup.get("label") or "") in allowed:
-            kept["suppress_all"] = sup
-        if kept:
-            out[rid] = kept
-    return out
 
 
 def jaccard(a: set[str], b: set[str]) -> float:

@@ -1,8 +1,11 @@
 """Data stores behind service interfaces (strand corp-db-layer,
 store-split-design). One protocol per store; this package holds the
-local backends. S3 ships the Overlay store (review edits); S4 the Trees
-store (parsed requirement trees); S5 the History store (release lineage)."""
+local backends and the HTTP clients. S3 ships the Overlay store (review
+edits); S4 the Trees store (parsed requirement trees); S5 the History
+store (release lineage); S6 the HTTP clients (`clients`, chosen by
+`NORA_<STORE>_URL`) and the shared Overlay edit ops (`overlay_ops`)."""
 
+from core.src.stores.errors import SchemaVersionError, StoreUnavailable
 from core.src.stores.history import (
     HistoryStore,
     SqliteHistoryStore,
@@ -26,7 +29,9 @@ __all__ = [
     "HistoryStore",
     "JsonOverlayStore",
     "OverlayStore",
+    "SchemaVersionError",
     "SqliteHistoryStore",
+    "StoreUnavailable",
     "SqliteOverlayStore",
     "SqliteTreeStore",
     "TreeStore",

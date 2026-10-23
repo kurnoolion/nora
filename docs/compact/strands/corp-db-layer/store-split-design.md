@@ -81,15 +81,20 @@ outside the stores.
   `OverlayStore`. Each has a **local** implementation (own backend) and an
   **HTTP client** with the same methods. `NORA_<STORE>_URL` set → client;
   unset → local.
-- A hosting service mounts a store's routes under `/stores/<store>/v1/…`
-  (JSON). Hosts today: nora-store (`cells`), nora-web (`trees`, `history`,
-  `overlay`). Moving a store to its own service = deploy the same routes,
-  set the URL; no consumer change.
+- **nora-store hosts every persistent corpus store** (decided 2026-10-22):
+  it mounts `/stores/{cells,trees,history,overlay}/v1/…` (JSON). nora-web
+  is a web layer only and uses the HTTP clients; its local file backends
+  remain a dev fallback when the URLs are unset. Moving a store to its own
+  service = deploy the same routes, set the URL; no consumer change.
 - **No store reads another store's backend.** Composition (§4) happens in
-  the consumer: nora-store reads Overlay through `OverlayStore`.
-- Overlay has one writer (nora-web). Until it moves to its own service,
-  nora-store reads the same SQLite file read-only (WAL) via the local
-  implementation.
+  the consumer; nora-store composes its own Overlay.
+- Overlay has one writer: the nora-store that hosts it, taking edits over
+  HTTP from nora-web. Stacks that share one correction set name that store
+  as the Overlay authority; their own stores read it through
+  `NORA_OVERLAY_URL` (peer read). Apply stays as today: nora-web asks each
+  configured store to reload.
+- nora-web's runtime DBs (jobs, metrics, config, feedback) and the golden
+  samples move to nora-store in a later step (storage-design §8 point 2).
 - Minimum surface (v1):
   - `CellStore`: list cells, cell meta/identity, corpus rows, vanilla index, SIRA phrases.
   - `TreeStore`: list docs/plans, get node, subtree, ancestors, find req (by id, by fingerprint).
@@ -174,7 +179,27 @@ rollback by flip. Overlay is not published; it lives with the deployment.
 - The `--overlay-root` cycle fix is dropped (nothing is baked).
 - Unchanged: SIRA query-time expansion, golden eval over HTTP, team gate.
 
-## 9. Open questions
+## 9. Schema evolution
+
+- **Payload columns absorb new fields.** Trees keep each requirement's full
+  dict (`req_json`) and the tree's other keys (`tree_json`); Overlay keeps
+  `raw_json`. A new parse-tree field rides along at the next build; readers
+  ignore unknown keys. A field is promoted to a column only when queried or
+  indexed.
+- **Additive changes do not bump `schema_version`** (new column with a
+  default, table, meta key, JSON field, HTTP response field). Readers
+  tolerate absence; a test loads a DB missing the new column and one with
+  an unknown column.
+- **Breaking changes bump `schema_version`.** The reader migrates on read
+  or refuses with a code naming the store to rebuild. Cells, Trees and
+  History are write-once and rebuilt per publish, so a rebuild is the
+  migration. Overlay, the one mutable store, gets a `schema_migrations`
+  table and ordered steps when its schema first changes.
+- **HTTP API versioned in the path** (`/v1`): additive fields within a
+  version; breaking → `/v2`, `v1` kept until unused.
+- Fingerprint values carry their canonical-form version (§3).
+
+## 10. Open questions
 
 1. ~~History keys~~ — decided 2026-10-22 (§6a).
 2. Overlay retention: purge held edits after N releases?

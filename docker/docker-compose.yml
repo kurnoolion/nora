@@ -45,9 +45,19 @@ services:
       - "${STORE_PORT:-8040}:8040"
     volumes:
       - ${STORE_ROOT:?set STORE_ROOT in .env}:/data/db
-      # enrichment-corrections overlay — web writes, this service READS
-      # (applied at cell load; POST /cells/<cell>/reload re-applies)
-      - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections:ro
+      # enrichment-corrections overlay — this service is the Overlay
+      # AUTHORITY (corp-db-layer S6): it WRITES the edits nora-web sends
+      # over /stores/overlay/v1 and applies them at cell load (POST
+      # /cells/<cell>/reload re-applies). Read-write mount, therefore.
+      - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections
+      # parse trees for the Trees store (/stores/trees/v1): the Requirement
+      # Browser, /api/req and the Eval Studio picker read them from here
+      # once nora-web sets NORA_TREES_URL. Read-only: nora-store never
+      # writes under the env dir.
+      - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env:ro
+      # Pre-built SQLite stores (optional; see .env.nora-store):
+      # - ${TREES_ROOT}:/data/trees:ro        # trees-<mno>-<release>.db
+      # - ${HISTORY_ROOT}:/data/history:ro    # history-<mno>.db
     env_file:
       - path: ${STORE_ENV_FILE:-.env.nora-store}
         required: false
@@ -56,6 +66,11 @@ services:
     environment:
       NORA_STORE_ROOT: /data/db
       NORA_STORE_CORRECTIONS_ROOT: /data/corrections
+      NORA_ENV_DIR: /data/env
+      # Uncomment with the mounts above to serve the pre-built stores
+      # instead of the parse trees (Trees) / nothing (History).
+      # NORA_TREES_ROOT: /data/trees
+      # NORA_HISTORY_ROOT: /data/history
       # SERVE_UID has no passwd entry in the image, so HOME would be `/`;
       # libs that write caches need a writable one. Serving never fetches
       # from the HuggingFace hub (embeddings/rerank come from a TEI server).
@@ -90,7 +105,11 @@ services:
       - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env
       - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
-      # enrichment-corrections overlay — this app is the sole WRITER
+      # enrichment-corrections overlay — the dev FALLBACK (local backend).
+      # With NORA_OVERLAY_URL set below (the default) every review edit goes
+      # to nora-store over HTTP and this mount is unused; the same holds for
+      # the parse trees under /data/env once NORA_TREES_URL is set. Kept so
+      # a stack with the URLs unset keeps working as before.
       - ${CORRECTIONS_DIR:?}:/data/corrections
       # golden eval set (FR-38) — pooled across stacks and durable across
       # promote labels: shadows <env>/eval/golden so samples/runs never live
@@ -112,6 +131,16 @@ services:
       NORA_FEEDBACK_DB: /data/feedback/nora_feedback.db
       NORA_CORRECTIONS_ROOT: /data/corrections
       NORA_STORE_URL: http://nora-store:8040
+      # Store clients (corp-db-layer S6): nora-web is a web layer and reads
+      # the Overlay, Trees and History through nora-store's /stores routes.
+      # Interpolated from the wiring .env (not .env.nora-web — compose
+      # `environment:` wins over env files): set one to empty there to fall
+      # back to the local backend, or to another stack's nora-store to
+      # share its Overlay (that store is then the authority; see
+      # env.nora-store.example).
+      NORA_OVERLAY_URL: ${NORA_OVERLAY_URL-http://nora-store:8040}
+      NORA_TREES_URL: ${NORA_TREES_URL-http://nora-store:8040}
+      NORA_HISTORY_URL: ${NORA_HISTORY_URL-http://nora-store:8040}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

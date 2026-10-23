@@ -1,35 +1,43 @@
 # stores
 
 **Purpose**
-Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`). Each store is one Python protocol with local backends; consumers compose stores, and no store reads another store's backend. Step S3 ships the **Overlay** store: the review edits to SIRA enrichments (word-level remove/add records, entry-level `suppress_all`, label merge log, disabled labels, reason categories), the only mutable store. Step S4 ships the **Trees** store: parsed requirement trees per (MNO, release) cell, with traversal by `parent_req_id`. Step S5 ships the **History** store: release lineage per MNO built from Trees (version intervals, content-addressed text, change queries). Implements D-DRAFT-22 (four orthogonal stores) and D-DRAFT-24 (Overlay is a live store keyed by requirement and fingerprint); Cells lands in a later step.
+Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`). Each store is one Python protocol with local backends; consumers compose stores, and no store reads another store's backend. Step S3 ships the **Overlay** store: the review edits to SIRA enrichments (word-level remove/add records, entry-level `suppress_all`, label merge log, disabled labels, reason categories), the only mutable store. Step S4 ships the **Trees** store: parsed requirement trees per (MNO, release) cell, with traversal by `parent_req_id`. Step S5 ships the **History** store: release lineage per MNO built from Trees (version intervals, content-addressed text, change queries). Step S6 ships the **HTTP layer**: one client per store (`clients.py`, chosen by `NORA_<STORE>_URL`), the generic store routers (`api.py`, mounted by nora-store and hostable on their own by `serve.py`), the shared Overlay edit ops (`overlay_ops.py`, run by nora-web locally or by the Overlay authority over HTTP) and schema-tolerance rules (design §9). Implements D-DRAFT-22 (four orthogonal stores), D-DRAFT-24 (Overlay is a live store keyed by requirement and fingerprint), D-DRAFT-25 (local and HTTP implementations per protocol) and D-DRAFT-28 (nora-store hosts every store and is the Overlay writer); a `CellStore` protocol lands in a later step (the Cells routes live in `nora_store/stores_api.py` over the service's loaded state).
 
 **Public surface**
 - `OverlayStore` — `runtime_checkable` Protocol at entry-dict granularity. Reads: `get_overlay(mno) -> {req_id: entry}`, `get_entry(mno, req_id)`, `list_mnos()`, `version(mno) -> float` (monotonic change marker; 0.0 = no overlay), `accepted_labels()`, `disabled_labels()`, `reason_categories() -> list | None` (None = never set; the caller applies defaults). Writes: `transaction()` (context manager; exclusive across processes on one host; nested use joins; reads inside see the transaction's writes), `put_entry(mno, req_id, entry | None)` (None/{} deletes; always registers the MNO and bumps its version), `set_accepted_labels(set)`, `set_disabled_labels(set)`, `set_reason_categories(list)`. Attribute `read_only`.
 - `JsonOverlayStore(corrections_root, read_only=False)` — the original layout under `<root>/sira-enrich/`: `<MNO>.json`, `accepted-labels.json` (`{"accepted": [...]}`), `labels.json` (`{"disabled": [...]}`), `reason-categories.json`. Transaction = flock on `sira-enrich/.lock`; writes buffered per transaction and flushed per file with tmp + rename. `version` = file mtime.
 - `SqliteOverlayStore(db_path, read_only=False, busy_timeout_ms=5000)` — one file per deployment. WAL, `busy_timeout`, `BEGIN IMMEDIATE` transactions, per-call connections. Tables: `record(mno, req_id, direction CHECK IN ('remove','add','suppress_all'), word ('' for suppress_all), seq, label, reason_json, by_user, at, origin_release, fingerprint, raw_json, PK(mno, req_id, direction, word))`, `label(name PK, accepted, disabled)`, `reason_category(pos, name)`, `mno_version(mno PK, version)` (wall-clock epoch forced strictly increasing), `meta(key, value)`. `read_only=True` opens with a `mode=ro` URI; a missing file reads as empty and is never created. `is_empty()`, `clear()` for the import CLI.
-- `open_overlay_store(corrections_root="", db_path="", read_only=False) -> OverlayStore | None` — `db_path`, else `$NORA_OVERLAY_DB` → SQLite; else `corrections_root` → JSON; else None (overlay disabled).
+- `open_overlay_store(corrections_root="", db_path="", read_only=False, url=None) -> OverlayStore | None` — `url` (None → `$NORA_OVERLAY_URL`) → `HttpOverlayStore`; else `db_path`, else `$NORA_OVERLAY_DB` → SQLite; else `corrections_root` → JSON; else None (overlay disabled). `url=""` ignores the env var (a host's own local open). SQLite reads never create or migrate the file (writes do); an additive `record` column missing from an older file reads as its default; a file with an unknown `schema_version` raises `SchemaVersionError` (`OVL-E005`).
 - `OverlayReadOnlyError` — a write on a read-only store.
 - CLI `python -m core.src.stores.overlay_import --corrections-root <dir> --db <path> [--force]` (`overlay_import.py`, `import_overlay()`) — one-time copy of the JSON Overlay into SQLite; verifies `get_overlay(mno)` per MNO, the MNO list, label sets and categories are equal across backends inside the same transaction (mismatch → rollback); prints counts only. Error codes `OVL-E001` (no `sira-enrich/` dir), `OVL-E002` (non-empty target without `--force`), `OVL-E003` (verify mismatch), `OVL-E004` (SQLite failure).
 - `TreeStore` — `runtime_checkable` Protocol (read-only; cells are write-once). `list_cells() -> [{mno, release}]` (by MNO, then chronological release), `list_docs(mno="", release="")` (one cell with both qualifiers, else every cell; sorted, a doc listed once per cell), `load_tree(doc_id, mno="", release="") -> dict` ({} when missing; shared, read-only), `plans_for_mno(mno) -> {plan: [release, ...]}`, `find_req(req_id, mno="", release="", ignore_case=False)` (rows `{req_id, mno, release, plan, plan_name, doc_id, title, section_number, parent_section, text}`; `plan_name` only for the tree's primary plan), `reqs_for_plan(mno, release, plan)` (requirement dict + `doc_id`, by doc then document order). Traversal within one cell (rows = requirement dict + `doc_id`): `get_node`, `children`, `subtree` (node first, document order), `ancestors` (root first, node excluded), each `(mno, release, req_id)`; `find_by_fingerprint(fingerprint, mno="")` (find_req-shaped rows across cells; blank ids excluded).
 - `FileTreeStore(env_dir)` — the JSON trees under `<env_dir>/out/parse/`: per-cell `<mno>/<release>/<doc>_tree.json`, plus the legacy flat layout (unqualified lookups: flat file first, then recursive search; `find_req` and `find_by_fingerprint` fall back to the flat corpus as cell `("", "")` when no per-cell trees exist). Per-instance mtime+size tree cache; traversal indexes and fingerprints derived lazily per cached tree. Module helpers `parse_dir(env_dir)`, `find_tree(env_dir, doc_id, mno, release)`.
 - `SqliteTreeStore(root_dir="", db_paths=None)` — every `trees-<mno>-<release>.db` under `root_dir` (or the explicit `db_paths`), one per cell; the cell is read from each file's `meta`, not its name; a second file for the same cell is ignored with a warning; a missing root reads as empty. Per-call connections opened `mode=ro&immutable=1`; a rebuilt file is picked up by its changed mtime/size. Per-cell only: no flat layout. `cell_meta(mno, release)` returns a cell DB's `meta` ({} when absent; not on the protocol). Schema (Postgres-portable, TEXT / INTEGER): `meta(key, value)` (`schema_version`=1, `mno`, `release`, `cell`=`MNO__REL`, `n_docs`, `n_nodes`, `source_fingerprint`, `fingerprint_version`, `created_at`); `doc(doc_id PK, plan_id, plan_name, req_key_pos, tree_json)` — the tree without its `requirements` list, `req_key_pos` = that key's position in the original key order (-1 = absent); `node(id PK, doc_id, seq, parent_id → node.id, path, depth, req_id, req_id_cf, section_number, title, plan_id (effective), is_requirement, fingerprint (`text_fp`), req_json)`, `UNIQUE(doc_id, seq)`, indexes on `req_id`, `req_id_cf` (casefolded, for `ignore_case`), `fingerprint`, `plan_id`, `(doc_id, path)`, `parent_id`. `path` is a 6-digit zero-padded ordinal path (`000003.000001.000002`): subtree = range scan `[path + '.', path + '/')`, ancestors = path prefixes.
-- `open_tree_store(env_dir, root_dir="") -> TreeStore` — `root_dir`, else `$NORA_TREES_ROOT` → SQLite; else the file backend.
+- `open_tree_store(env_dir, root_dir="", url=None) -> TreeStore` — `url` (None → `$NORA_TREES_URL`) → `HttpTreeStore`; else `root_dir`, else `$NORA_TREES_ROOT` → SQLite; else the file backend. A cell DB with an unknown `schema_version` raises `SchemaVersionError` (`TRS-E007`) on the first read that scans it.
 - Pure helpers: `tree_layout(reqs) -> [(parent_index, path, depth)]` (the one hierarchy rule both backends use), `build_tree_hierarchy`, `latest_match`, `req_plan`, `release_sort_key`, `req_text_fp(req)` (= `models.fingerprint.text_fp(title, text)`), `write_tree_db`, `read_meta`, `db_name`, `source_fingerprint`.
 - CLI `python -m core.src.stores.trees_build --env-dir <dir> --out <dir> [--cells MNO__REL,...] [--force]` (`trees_build.py`, `build_trees()`) — one DB per cell from `out/parse/<mno>/<release>/*_tree.json`, written under a temp name, verified, then renamed. Verify: `SqliteTreeStore` over the new file and `FileTreeStore` must agree on `list_docs`, `load_tree` (equality, every doc), `reqs_for_plan` (every plan) and `find_req` for up to ~50 sampled ids (exact and case-swapped with `ignore_case`); a mismatch removes the temp file. Existing targets are checked before anything is written. `source_fingerprint` = sha256 over the sorted tree files' names and bytes. Prints counts only. Error codes `TRS-E001` (no per-cell parse trees), `TRS-E002` (target exists without `--force`), `TRS-E003` (requested cell has no trees), `TRS-E004` (unreadable or malformed tree), `TRS-E005` (verify mismatch), `TRS-E006` (SQLite write failure).
 
 - `HistoryStore` — `runtime_checkable` Protocol (read-only; one write-once DB per MNO). Release bounds default to oldest → latest; an unknown label raises `ValueError`. `list_mnos()`; `releases(mno)` (oldest first; [] when unknown); `req_history(mno, plan_id, req_id, from_rel="", to_rel="")` → versions overlapping the bounds `{valid_from, valid_to, title, text, priority, applicability, location, node_fp, subtree_fp, change, diff}` (`change` vs the previous version: `added` | `readded` | `changed` | `moved` | `reordered` | `subtree`; `diff` = `{title, text}` word diffs when `text_fp` changed, else None); `plan_history(mno, plan_id, from_rel="", to_rel="")` → `[{from, to, changes}]` per release step whose plan subtree changed (change rows with diffs); `last_changed(mno, plan_id, req_id)` (latest `valid_from` bringing a new `node_fp`; None when unknown); `plan_last_changed(mno, plan_id)` (same on the plan node's `subtree_fp`); `diff_releases(mno, rel_a, rel_b, diffs=False)` → `{mno, from, to, counts, plans: {plan: {counts, sections: {section: counts}}}, most_changed_sections (top 10), changes}`; change rows `{key, node, plan_id, local_id, section, change: [kinds], renamed_from?, diff?}`; `latest_changes(mno, diffs=False)` (last two releases; None with fewer than two).
 - Change kinds: `added`, `removed`, `changed` (`node_fp`), `moved` (location), `reordered` (`node_fp` and `child_set_fp` equal, `subtree_fp` different), `likely_renamed` (an added key whose non-empty `text_fp` equals a removed key's in the same step, same node kind; paired one-to-one in key order, the pair still counts as added + removed). Counts per kind, per plan and per section (a requirement's section location; a section's own number).
 - `SqliteHistoryStore(root_dir="", db_paths=None)` — every `history-<mno>.db` under `root_dir` (or explicit `db_paths`); the MNO is read from `meta`; a second file for one MNO is ignored with a warning; per-call connections `mode=ro&immutable=1`. Schema (Postgres-portable, TEXT / INTEGER): `meta(key, value)` (`schema_version`=1, `fingerprint_version`, `mno`, `releases` (JSON), `source` (JSON release → Trees source fingerprint), `created_at`, counts `n_releases`, `n_nodes`, `n_plans`, `n_sections`, `n_requirements`, `n_versions`, `n_content`); `release(mno, release, ord, PK(mno, release))`; `node(key PK, kind, plan_id, local_id, parent_key)` (latest parent; UNIQUE `(kind, plan_id, local_id)`, index `plan_id`); `version(node_key, valid_from, valid_to, from_ord, to_ord, node_fp, subtree_fp, child_set_fp, text_fp, attrs_json, location_json, PK(node_key, from_ord))` (index `(to_ord, from_ord)`); `content(text_fp PK, title, text)`.
-- `open_history_store(root_dir="") -> HistoryStore | None` — `root_dir`, else `$NORA_HISTORY_ROOT` → SQLite; else None (history disabled; no file backend).
+- `open_history_store(root_dir="", url=None) -> HistoryStore | None` — `url` (None → `$NORA_HISTORY_URL`) → `HttpHistoryStore`; else `root_dir`, else `$NORA_HISTORY_ROOT` → SQLite; else None (history disabled; no file backend). An MNO DB with an unknown `schema_version` raises `SchemaVersionError` (`HIS-E006`).
 - History helpers: `release_nodes(tree_store, mno, release)` (one release's keyed nodes with hashes), `write_history_db`, `read_meta`, `db_name`, `node_key(kind, plan_id, local_id)` (compact JSON list; consumers look nodes up by the triple, never parse keys), `word_diff(a, b) -> [{op: eq|del|add, text}]`.
 - CLI `python -m core.src.stores.history_build --env-dir <dir> [--trees-root <dir>] --out <dir> [--mno MNO,...] [--force]` (`history_build.py`, `build_history()`) — reads Trees through `open_tree_store` (`--trees-root`, else `$NORA_TREES_ROOT`, else the parse trees under `--env-dir`); one DB per MNO written under a temp name, verified, renamed. Verify: release list equals the Trees store's; a self-diff of the latest release is empty; the current requirement count equals the latest release's; for up to ~50 sampled requirements the latest version is current and has the tree's `text_fp`. Existing targets are checked before anything is written. Prints counts only. Error codes `HIS-E001` (Trees store has no cells), `HIS-E002` (target exists without `--force`), `HIS-E003` (requested MNO has no cells), `HIS-E004` (SQLite write failure), `HIS-E005` (verify mismatch).
+
+- HTTP clients (`clients.py`, S6): `HttpOverlayStore(base_url, timeout=10.0, client=None, read_only=False)`, `HttpTreeStore(base_url, timeout=10.0, client=None)`, `HttpHistoryStore(base_url, timeout=10.0, client=None)` — each implements its store's full protocol over the `/stores/<store>/v1` routes (one GET per read method; Overlay writes PUT). `client` injects an `httpx.Client` (tests pass FastAPI's `TestClient`). Errors: `StoreUnavailable` (connection, timeout, 5xx, or a 404 "not configured"), `ValueError` from a 400 (History's unknown release — the same exception the local backend raises), `OverlayReadOnlyError` from a 409 (the host is not the Overlay authority) or from a client opened `read_only`. `HttpOverlayStore.transaction()` is a no-op (every write is one atomic request); `run_op(name, payload)` sends one edit-semantics op to `POST /edit`; `digest(mno, label)` returns the authority's label-view digest. `store_backend_kind(store) -> "local" | "http" | "off"` for health reporting.
+- `errors.py`: `StoreUnavailable`, `SchemaVersionError(code, store, name, found, supported, remedy)` (message `[<code>] <store> DB <name> has schema_version '<found>'; this reader supports <n> — <remedy>`).
+- Overlay edit ops (`overlay_ops.py`, stdlib): `EDIT_OPS`, `STORE_OPS` (`edit`, `set_label_merged`, `set_label_disabled`, `delete_label`, `add_reason_category`), `DEFAULT_REASON_CATEGORIES`; `apply_edit(entry, op, *, words, pairs, label, reason, by, origin_release, fingerprint, at)` (pure fold of one record op); `run_edit(backend, mno, req_id, op, **kw)`, `run_set_label_merged`, `run_set_label_disabled`, `run_delete_label`, `run_add_reason_category` (one backend transaction each), `run_op(backend, name, payload)` (JSON dispatcher the edit route uses); the label-view projection `allowed_labels(accepted, label)` / `filter_overlay(overlay, allowed)` and `view_digest(filtered_overlay)` — the one digest formula nora-store applies and the web compares against (`nora_store.enrich_overlay` re-exports the projection); `reason_categories_or_default(backend)`.
+- Store routes (`api.py`): `trees_router(store)`, `history_router(store)`, `overlay_router(store, writable)` — `APIRouter`s under `/stores/<store>/v1` serving every protocol method as JSON (`store` and `writable` may be zero-argument callables for hosts that open lazily; a None store answers 404). Route list — trees: `/cells`, `/docs`, `/tree`, `/plans`, `/find`, `/reqs`, `/node`, `/children`, `/subtree`, `/ancestors`, `/fingerprint`; history: `/mnos`, `/releases`, `/req`, `/plan`, `/req/last-changed`, `/plan/last-changed`, `/diff`, `/latest`; overlay reads: `/mnos`, `/overlay/{mno}`, `/overlay/{mno}/entry?req_id=`, `/overlay/{mno}/version`, `/overlay/{mno}/digest?label=`, `/labels/accepted`, `/labels/disabled`, `/reasons`; overlay writes (409 unless `writable`): `PUT /overlay/{mno}/entry`, `PUT /labels/accepted`, `PUT /labels/disabled`, `PUT /reasons`, `POST /edit` (`{"op": <store op>, "args": {...}}`, run inside the backend transaction). `StoreUnavailable` → 503, `ValueError` → 400, `OverlayReadOnlyError` → 409. `is_overlay_authority(store)` = a local backend opened read-write. No `nora_store` import.
+- Standalone host (`serve.py`): `python -m core.src.stores.serve --stores trees,history,overlay --port PORT [--host]` — any subset; `build_app(stores, overlay_writable=None) -> FastAPI` (names opened from the env, or `{name: store}`), `open_stores(names, env=None)`. Env: `NORA_ENV_DIR` / `NORA_TREES_ROOT` → Trees; `NORA_HISTORY_ROOT` → History; `NORA_STORE_CORRECTIONS_ROOT` / `NORA_OVERLAY_DB` → Overlay opened read-write (the authority) unless `NORA_OVERLAY_URL` names a peer (reads proxied, writes 409). `GET /healthz` → `{ok, hosted, stores: {name: kind}, overlay_authority?}`. No Cells: they stay with the query service. **To split a store out of nora-store, run `core.src.stores.serve --stores <name>` and set `NORA_<STORE>_URL` on every consumer; no code change.**
 
 **Invariants**
 - Both backends return the same entry shape for the same writes, byte-identical under `json.dumps` (record keys sorted; entry keys `add`/`remove`/`suppress_all`): `{"word", "label", "reason": {...}, "by", "at", "origin": {"release"}}`, plus `fingerprint` only when non-empty, plus `"value": true` on `suppress_all`. So the label-view digest (`EnrichOverlayStore.overlay_digest` = nora-store `_overlay_digest`) is backend-independent.
 - Record order within (MNO, req, direction) is insertion order (`seq`); a re-edited word moves to the end, as in the JSON lists.
 - A record the columns cannot reproduce exactly (legacy or hand-edited shape) is kept verbatim in `raw_json`; nothing is silently normalized.
 - The SQLite schema uses TEXT / INTEGER / REAL and `ON CONFLICT` upserts only (Postgres-portable, D-DRAFT-26).
-- One writer: nora-web. Readers (nora-store, the converter's identity gate) open read-only. A read-only open never creates or migrates the file.
+- One writer: the Overlay authority — the host whose local backend is opened read-write (nora-store by default, or a `serve.py` host). nora-web edits through it over HTTP (`HttpOverlayStore.run_op` → `POST /edit`) or, with no `NORA_OVERLAY_URL`, through the same `overlay_ops` on its local backend (dev fallback). Peers and the converter's identity gate read; a read never creates or migrates the file.
+- Local and HTTP backends return equal results for every protocol method (parity tests per store), and an Overlay edit sent over HTTP leaves the authority's backend equal to the same edit run locally.
+- Schema evolution (design §9): readers select columns by name and tolerate an unknown extra column; a missing additive column reads as its default (Overlay) or is simply unread (Trees `node.is_requirement`, History `node.parent_key`); an unsupported `schema_version` is refused with a coded `SchemaVersionError`, never migrated in place.
 - Trees: both backends return equal results for every `TreeStore` method on per-cell data; `SqliteTreeStore.load_tree` reconstructs a dict equal to the JSON tree, key order and requirement order included (`req_json` is the exact original requirement dict).
 - Trees hierarchy is per document, by `parent_req_id` (`build_tree_hierarchy`'s rule): a node whose parent id is not in the document is a root; for an id repeated in one document the LAST occurrence is the addressable node (earlier copies and blank-id nodes are isolated roots); a parent cycle is cut at its first node in document order. `get_node` picks the first doc (by doc_id) holding the id.
 - Trees cell DBs are write-once: the builder never edits a published file; `--force` replaces it by rename.
@@ -37,38 +45,110 @@ Data stores behind service interfaces (strand corp-db-layer, `store-split-design
 - History hashes (`models.fingerprint`): plans hash `plan_name` as title (the primary tree's), sections their title + text, requirements title + text plus priority and applicability in `node_fp`. Each child enters its parent's `subtree_fp` / `child_set_fp` as a placed hash of (key, location, `subtree_fp`), so equal `subtree_fp` means nothing at or under the node changed except its own location — the diff descends only into nodes whose `subtree_fp` differs, plan by plan.
 - History versions: a row only when `node_fp`, `subtree_fp` or location changes; `valid_to` = the last release held, '' while held in the latest release; absence closes the interval, reappearance opens a new one. Content is stored once per `text_fp`, first-seen display text: a whitespace-only edit keeps the earlier display text.
 - History DBs are write-once; `--force` replaces by rename.
-- Stdlib only (the stdlib fold in `nora_store/enrich_overlay.py` imports `JsonOverlayStore`).
+- Backends and `overlay_ops` are stdlib only (the stdlib fold in `nora_store/enrich_overlay.py` imports `JsonOverlayStore` and the projection); `clients.py` needs httpx, `api.py` / `serve.py` FastAPI, both imported lazily by the factories.
 - No requirement text, words or reasons in error messages or CLI output (Trees and History builders: cell / MNO names and counts only).
 
 **Key choices**
 - Entry-dict granularity, not op granularity: edit semantics (ops, labels as branches, reaffirm/discard, remove-wins) stay in `web.EnrichOverlayStore` and the fold, so a backend swap cannot change them (D-DRAFT-24).
 - Fingerprint is a column on each record, stamped by the caller at edit time; the fold, not the store, decides what a match means (store-split-design §3/§4). Records without one stay Jaccard-guarded.
 - SQLite in dev/test; corp picks SQLite or Postgres by deployment facts (design §9.4, D-DRAFT-26). Same-host only: SQLite locks do not work across hosts or on network shares.
-- Local backends now; an HTTP client with the same protocol (`NORA_OVERLAY_URL`, routes under `/stores/overlay/v1`) arrives with S6 (D-DRAFT-25).
+- Local backend or HTTP client per protocol, chosen by `NORA_<STORE>_URL` (D-DRAFT-25); the routers are generic (`api.py`) so a store moves to its own service by configuration (`serve.py`), and nora-store mounts the same routers beside its Cells routes (D-DRAFT-28).
+- The Overlay edit semantics live in one stdlib module (`overlay_ops`) that both the web's local path and the authority's edit route run, so the write path cannot drift between them; the web never read-modify-writes over HTTP (one request per op, the server holds the lock).
 - Composition (Cells + Overlay → BM25) happens in the consumer, never in the store (D-DRAFT-23).
 - Trees schema keeps the exact requirement dict (`req_json`) beside derived query columns rather than the design's `node` + `req_body` split, so any parser field reaches consumers unchanged and `load_tree` stays exact; `req_id_cf` and `doc.req_key_pos` were added for exact `ignore_case` matching and key-order round-trip.
-- `NORA_TREES_ROOT` unset → the file backend, so existing deployments are unchanged; an HTTP client (`NORA_TREES_URL`, `/stores/trees/v1`) arrives with S6.
+- `NORA_TREES_ROOT` unset → the file backend, so existing deployments are unchanged; `NORA_TREES_URL` set → the HTTP client (`/stores/trees/v1`).
 - History `version` adds `from_ord` / `to_ord` (range queries), `text_fp` (join to `content`) and `attrs_json` (priority, applicability) beyond the design's columns; `content` has no `fields_json` because those fields are not part of `text_fp` and would be ambiguous on a text-keyed row.
 - History child entries fold in key and location (not only the children's `subtree_fp` as design §6a sketches): otherwise a section renumbering, a rename with identical content or a section-number move under the same parent leaves every ancestor's `subtree_fp` equal and the descent would miss it.
 - `likely_renamed` is an annotation on an added + removed pair, not a replacement for them, so a renumbered section reads "removed + added (likely renamed)".
-- `NORA_HISTORY_ROOT` unset → None: History is optional; an HTTP client (`NORA_HISTORY_URL`, `/stores/history/v1`) arrives with S6.
+- `NORA_HISTORY_ROOT` unset → None: History is optional; `NORA_HISTORY_URL` set → the HTTP client (`/stores/history/v1`).
 
 **Non-goals**
 - No edit semantics, label views, digests or fold logic — those live in `web.enrich_overlay_store` and `nora_store.enrich_overlay`.
 - No retention or purge of held records (design §9 question 2).
-- No multi-host writers; no schema migrations beyond create-if-missing.
+- No multi-host writers; no schema migrations beyond create-if-missing (a breaking change is a rebuild for the write-once stores; the Overlay's `schema_migrations` table arrives with its first breaking change).
+- No Cells client or standalone Cells host: separating Cells needs an index-blob endpoint (later step).
 - Trees: no SQLite build of the legacy flat layout; no release lineage (History store).
-- History: no LLM summaries (a paragraph may be written over the deterministic summary by a caller); no mapping of display names to `plan_id` (query layer); no HTTP client yet (S6).
+- History: no LLM summaries (a paragraph may be written over the deterministic summary by a caller); no mapping of display names to `plan_id` (query layer).
 
 <!-- BEGIN:STRUCTURE -->
 _Alphabetical, regenerated by regen-map._
 
+
+`api.py`
+- `PREFIX` — constant — pub
+- `STORE_NAMES` — constant — pub
+- `_EntryBody` — class — internal
+- `_LabelsBody` — class — internal
+- `_ReasonsBody` — class — internal
+- `_guard` — function — internal — Map store errors to HTTP: a peer store that cannot answer is 503,
+- `_require` — function — internal
+- `_resolve` — function — internal
+- `history_router` — function — pub
+- `is_overlay_authority` — function — pub — True when this process writes the Overlay: a local backend opened
+- `overlay_router` — function — pub
+- `trees_router` — function — pub
+
+`clients.py`
+- `DEFAULT_TIMEOUT` — constant — pub
+- `HttpHistoryStore` — class — pub — `HistoryStore` over `/stores/history/v1`.
+  - `diff_releases` — method — pub
+  - `last_changed` — method — pub
+  - `latest_changes` — method — pub
+  - `list_mnos` — method — pub
+  - `plan_history` — method — pub
+  - `plan_last_changed` — method — pub
+  - `releases` — method — pub
+  - `req_history` — method — pub
+- `HttpOverlayStore` — class — pub — `OverlayStore` over `/stores/overlay/v1`. Edits that read-modify-
+  - `__init__` — constructor — internal
+  - `_write` — method — internal
+  - `accepted_labels` — method — pub
+  - `digest` — method — pub — The server's label-view digest (`overlay_ops.view_digest`).
+  - `disabled_labels` — method — pub
+  - `get_entry` — method — pub
+  - `get_overlay` — method — pub
+  - `list_mnos` — method — pub
+  - `put_entry` — method — pub
+  - `reason_categories` — method — pub
+  - `run_op` — method — pub — One edit-semantics op executed on the authority
+  - `set_accepted_labels` — method — pub
+  - `set_disabled_labels` — method — pub
+  - `set_reason_categories` — method — pub
+  - `transaction` — method — pub — No client-side transaction exists over HTTP: every write below
+  - `version` — method — pub
+- `HttpTreeStore` — class — pub — `TreeStore` over `/stores/trees/v1`.
+  - `ancestors` — method — pub
+  - `children` — method — pub
+  - `find_by_fingerprint` — method — pub
+  - `find_req` — method — pub
+  - `get_node` — method — pub
+  - `list_cells` — method — pub
+  - `list_docs` — method — pub
+  - `load_tree` — method — pub
+  - `plans_for_mno` — method — pub
+  - `reqs_for_plan` — method — pub
+  - `subtree` — method — pub
+- `_HttpStore` — class — internal — Shared transport: JSON in, JSON out, errors mapped once.
+  - `__init__` — constructor — internal
+  - `_call` — method — internal
+  - `_detail` — staticmethod — internal
+  - `_get` — method — internal
+  - `_params` — staticmethod — internal — Empty strings travel as-is (a required `req_id` may be "");
+  - `_url` — method — internal
+  - `close` — method — pub
+- `store_backend_kind` — function — pub — ``http`` for a client, ``local`` for a backend, ``off`` for None.
+
+`errors.py`
+- `SchemaVersionError` — class — pub — A store file carries a `schema_version` this reader does not
+  - `__init__` — constructor — internal
+- `StoreUnavailable` — class — pub — An HTTP store client could not get an answer from its service
 
 `history.py`
 - `CHANGE_KINDS` — constant — pub
 - `DB_PREFIX` — constant — pub
 - `DB_SUFFIX` — constant — pub
 - `HISTORY_ROOT_ENV` — constant — pub
+- `HISTORY_URL_ENV` — constant — pub
 - `HistoryStore` — class — pub — Read interface over release lineage (write-once per MNO).
   - `diff_releases` — method — pub
   - `last_changed` — method — pub
@@ -93,7 +173,7 @@ _Alphabetical, regenerated by regen-map._
   - `_state` — staticmethod — internal
   - `_versions` — staticmethod — internal
   - `diff_releases` — method — pub
-  - `last_changed` — method — pub
+  - `last_changed` — method — pub — The release that last brought a new ``node_fp``: a requirement
   - `latest_changes` — method — pub
   - `list_mnos` — method — pub
   - `plan_history` — method — pub
@@ -105,6 +185,7 @@ _Alphabetical, regenerated by regen-map._
 - `_STATE_SQL` — constant — internal
 - `_VERSION_KEYS` — constant — internal
 - `_change_diff` — function — internal
+- `_check_schema` — function — internal — Refuse an MNO DB written for another schema (design §9: the
 - `_connect_ro` — function — internal
 - `_descend` — function — internal
 - `_is_requirement` — function — internal
@@ -116,7 +197,7 @@ _Alphabetical, regenerated by regen-map._
 - `db_name` — function — pub
 - `logger` — constant — pub
 - `node_key` — function — pub — Unambiguous node key (a compact JSON list). Consumers look nodes up
-- `open_history_store` — function — pub — ``root_dir`` (else ``$NORA_HISTORY_ROOT``) → SQLite; else None
+- `open_history_store` — function — pub — ``url`` (None → ``$NORA_HISTORY_URL``) → HTTP client on nora-store;
 - `read_meta` — function — pub
 - `release_nodes` — function — pub — Every keyed node of one cell with its hashes, by key; dict order is
 - `word_diff` — function — pub — Word-level diff of display text: ``[{"op": "eq"|"del"|"add", "text"}]``.
@@ -154,8 +235,9 @@ _Alphabetical, regenerated by regen-map._
   - `transaction` — method — pub
   - `version` — method — pub — File mtime; 0.0 when absent.
 - `OVERLAY_DB_ENV` — constant — pub
+- `OVERLAY_URL_ENV` — constant — pub
 - `OverlayReadOnlyError` — class — pub — A write was attempted on a store opened read-only.
-- `OverlayStore` — class — pub — Storage interface for the Overlay (one writer: nora-web).
+- `OverlayStore` — class — pub — Storage interface for the Overlay (one writer: the nora-store
   - `accepted_labels` — method — pub
   - `disabled_labels` — method — pub
   - `get_entry` — method — pub
@@ -170,10 +252,11 @@ _Alphabetical, regenerated by regen-map._
   - `version` — method — pub — Monotonic change marker; 0.0 when the MNO has no overlay.
 - `SQLITE_SCHEMA_VERSION` — constant — pub
 - `SUPPRESS` — constant — pub
-- `SqliteOverlayStore` — class — pub — One SQLite file per deployment. Single writer (nora-web); readers
+- `SqliteOverlayStore` — class — pub — One SQLite file per deployment. Single writer (the Overlay
   - `__init__` — constructor — internal
   - `_bump` — method — internal
-  - `_connect` — method — internal
+  - `_check_file` — method — internal — Once per instance: refuse an unknown `schema_version`, and build
+  - `_connect` — method — internal — A connection to the file. `create` (writers only) makes the
   - `_ensure_schema` — method — internal — Create the schema once per file. Checks first, so an instance
   - `_label_set` — method — internal
   - `_reader` — method — internal — The open transaction's connection, else a fresh one. Yields
@@ -198,16 +281,39 @@ _Alphabetical, regenerated by regen-map._
 - `_NON_MNO_FILES` — constant — internal
 - `_REASONS_FILE` — constant — internal
 - `_RECORD_COLS` — constant — internal
+- `_RECORD_COL_DEFAULTS` — constant — internal
 - `_SQLITE_DDL` — constant — internal
 - `_record_to_row` — function — internal — Record → column values; falls back to `raw_json` whenever the
 - `_row_to_record` — function — internal — Columns → the record dict the JSON backend returns (sorted keys).
 - `_str` — function — internal
-- `open_overlay_store` — function — pub — `db_path` (else `$NORA_OVERLAY_DB`) → SQLite; else
+- `open_overlay_store` — function — pub — `url` (None → `$NORA_OVERLAY_URL`) → HTTP client on nora-store;
 
 `overlay_import.py`
 - `_verify` — function — internal — Both backends must return the same content for every read.
 - `import_overlay` — function — pub — Copy + verify; returns the counts report. Raises PipelineError.
 - `main` — function — pub
+
+`overlay_ops.py`
+- `DEFAULT_REASON_CATEGORIES` — constant — pub
+- `EDIT_OPS` — constant — pub
+- `STORE_OPS` — constant — pub
+- `allowed_labels` — function — pub — The labels visible in a view: unlabeled legacy records ("") always
+- `apply_edit` — function — pub — Fold one edit op into `entry` (mutated and returned; None when the
+- `filter_overlay` — function — pub — Project an overlay onto a label view: keep only records whose label
+- `now_stamp` — function — pub
+- `reason_categories_or_default` — function — pub
+- `run_add_reason_category` — function — pub
+- `run_delete_label` — function — pub — Strip every record carrying `label` from every MNO (the
+- `run_edit` — function — pub — Apply one edit op to the stored entry; returns the updated entry
+- `run_op` — function — pub — Dispatch one store op by name with a JSON payload (the HTTP edit
+- `run_set_label_disabled` — function — pub
+- `run_set_label_merged` — function — pub — Merge a label into main (or un-merge it) — the admin's
+- `view_digest` — function — pub — Canonical content digest of one label VIEW of an MNO overlay (the
+
+`serve.py`
+- `build_app` — function — pub — An ASGI app mounting only the requested routers. `stores` is a
+- `main` — function — pub
+- `open_stores` — function — pub — The requested stores, opened from `env` (default `os.environ`);
 
 `trees.py`
 - `DB_PREFIX` — constant — pub
@@ -254,6 +360,7 @@ _Alphabetical, regenerated by regen-map._
   - `reqs_for_plan` — method — pub
   - `subtree` — method — pub
 - `TREES_ROOT_ENV` — constant — pub
+- `TREES_URL_ENV` — constant — pub
 - `TreeStore` — class — pub — Read interface over parsed trees (write-once per cell).
   - `ancestors` — method — pub — Root first; excludes the node itself.
   - `children` — method — pub
@@ -272,6 +379,7 @@ _Alphabetical, regenerated by regen-map._
 - `_PATH_WIDTH` — constant — internal
 - `_REQS_KEY` — constant — internal
 - `_SQLITE_DDL` — constant — internal
+- `_check_schema` — function — internal — Refuse a cell DB written for another schema (design §9: the
 - `_connect_ro` — function — internal
 - `_match_row` — function — internal — One ``find_req`` row (primary-plan-only ``plan_name``).
 - `_s` — function — internal
@@ -281,7 +389,7 @@ _Alphabetical, regenerated by regen-map._
 - `find_tree` — function — pub — Resolve a doc's tree file. Cell-qualified path first, flat legacy
 - `latest_match` — function — pub — Pick the newest cell from ``find_req`` results — the match with the
 - `logger` — constant — pub
-- `open_tree_store` — function — pub — ``root_dir`` (else ``$NORA_TREES_ROOT``) → SQLite cell DBs; else the
+- `open_tree_store` — function — pub — ``url`` (None → ``$NORA_TREES_URL``) → HTTP client on nora-store;
 - `parse_dir` — function — pub
 - `read_meta` — function — pub
 - `release_sort_key` — function — pub — Chronological MMMYYYY order; non-conforming labels sort first.
@@ -301,7 +409,7 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[pipeline](../pipeline/MODULE.md) (`error_codes.PipelineError` / `CODES` — import and build CLIs only), [models](../models/MODULE.md) (`fingerprint.text_fp`, `node_fp`, `subtree_fp`, `child_set_fp`, `FINGERPRINT_VERSION`), [extraction](../extraction/MODULE.md) (`release_key.release_order_key`, lazy).
+[pipeline](../pipeline/MODULE.md) (`error_codes.PipelineError` / `CODES` — import and build CLIs only; the schema codes `OVL-E005` / `TRS-E007` / `HIS-E006` are registered there), [models](../models/MODULE.md) (`fingerprint.text_fp`, `node_fp`, `subtree_fp`, `child_set_fp`, `FINGERPRINT_VERSION`), [extraction](../extraction/MODULE.md) (`release_key.release_order_key`, lazy).
 
 **Depended on by**
-[web](../web/MODULE.md) (`EnrichOverlayStore` backend; `req_tree` delegates to `open_tree_store`). **nora-store service** (`nora_store/service.py` reads read-only via `open_overlay_store`; `enrich_overlay.load_overlay` / `load_accepted_labels` wrap `JsonOverlayStore`) and the cell-DB converter (`sandbox/cell_db_convert.py`, identity-gate fold).
+[web](../web/MODULE.md) (`EnrichOverlayStore` runs `overlay_ops` over an `open_overlay_store` backend — the HTTP client in deployments; `req_tree` delegates to `open_tree_store`; `/api/health` reports `store_backend_kind` per store). **nora-store service** (`nora_store/service.py` opens the Overlay read-write as the authority — or via `HttpOverlayStore` for a peer — composes with `view_digest`, and mounts `api.trees_router` / `history_router` / `overlay_router` through `nora_store/stores_api.py`; `enrich_overlay` re-exports the label-view projection) and the cell-DB converter (`sandbox/cell_db_convert.py`, identity-gate fold).

@@ -2,11 +2,11 @@
 §6; strand corp-db-layer D-DRAFT-24).
 
 Storage-level interface at entry-dict granularity. Edit semantics (ops,
-labels as branches, the label-view digest) live in the caller
-(`core.src.web.enrich_overlay_store.EnrichOverlayStore`, the sole writer)
-and in the stdlib fold (`nora_store.enrich_overlay`). A backend
-only stores and returns per-MNO `{req_id: entry}` maps plus the label and
-reason-category lists.
+labels as branches, the label-view digest) live in `overlay_ops` (run by
+`core.src.web.enrich_overlay_store.EnrichOverlayStore` on a local backend
+and by the nora-store edit route) and in the stdlib fold
+(`nora_store.enrich_overlay`). A backend only stores and returns per-MNO
+`{req_id: entry}` maps plus the label and reason-category lists.
 
 Entry shape (identical across backends):
 
@@ -23,12 +23,20 @@ Backends:
 - `SqliteOverlayStore(db_path)` — one file per deployment, WAL,
   `busy_timeout`, `BEGIN IMMEDIATE` transactions. Schema stays
   Postgres-portable (no SQLite-only types). Readers on the same host open
-  it with `read_only=True` (`mode=ro` URI) while the web writes.
+  it with `read_only=True` (`mode=ro` URI) while the authority writes.
+  A read never creates or migrates the file (writes do); a file whose
+  `schema_version` this reader does not know is refused (`OVL-E005`);
+  an additive record column missing from an older file reads as its
+  default (design §9).
+- `HttpOverlayStore(base_url)` (`clients.py`) — the same protocol over
+  nora-store's `/stores/overlay/v1` routes; edits go to the server's
+  `edit` route in one round trip (`run_op`).
 
-`open_overlay_store` picks the backend: `db_path` (or `$NORA_OVERLAY_DB`)
-→ SQLite; else `corrections_root` → JSON; else None (overlay disabled).
+`open_overlay_store` picks the backend: `url` (or `$NORA_OVERLAY_URL`)
+→ HTTP client; else `db_path` (or `$NORA_OVERLAY_DB`) → SQLite; else
+`corrections_root` → JSON; else None (overlay disabled).
 
-Stdlib only.
+Stdlib only (the HTTP client is imported lazily).
 """
 
 from __future__ import annotations
@@ -47,6 +55,7 @@ from typing import Any, Iterator, Protocol, runtime_checkable
 from urllib.parse import quote
 
 OVERLAY_DB_ENV = "NORA_OVERLAY_DB"
+OVERLAY_URL_ENV = "NORA_OVERLAY_URL"
 
 DIRECTIONS = ("remove", "add")          # word-record lists of an entry
 SUPPRESS = "suppress_all"               # entry-level record
@@ -60,7 +69,8 @@ _NON_MNO_FILES = (_DISABLED_FILE, _ACCEPTED_FILE, _REASONS_FILE)
 
 @runtime_checkable
 class OverlayStore(Protocol):
-    """Storage interface for the Overlay (one writer: nora-web)."""
+    """Storage interface for the Overlay (one writer: the nora-store
+    that hosts it — the Overlay authority; nora-web edits through it)."""
 
     read_only: bool
 
@@ -293,6 +303,12 @@ CREATE TABLE IF NOT EXISTS mno_version(
 
 _RECORD_COLS = ("word", "label", "reason_json", "by_user", "at",
                 "origin_release", "fingerprint", "raw_json")
+# Defaults substituted for a record column an older file lacks (design
+# §9: additive columns do not bump the schema version; readers tolerate
+# absence). `word` is part of the key and never optional.
+_RECORD_COL_DEFAULTS = {"label": "''", "reason_json": "'{}'", "by_user": "''",
+                        "at": "''", "origin_release": "''", "fingerprint": "''",
+                        "raw_json": "''"}
 
 
 def _str(v: Any) -> str:
@@ -336,9 +352,9 @@ def _record_to_row(direction: str, rec: Any) -> tuple:
 
 
 class SqliteOverlayStore:
-    """One SQLite file per deployment. Single writer (nora-web); readers
-    open `read_only=True`. Connections are per call / per transaction, so
-    one instance is safe to share between threads."""
+    """One SQLite file per deployment. Single writer (the Overlay
+    authority); readers open `read_only=True`. Connections are per call /
+    per transaction, so one instance is safe to share between threads."""
 
     def __init__(self, db_path: "str | Path", read_only: bool = False,
                  busy_timeout_ms: int = 5000):
@@ -347,23 +363,52 @@ class SqliteOverlayStore:
         self.busy_timeout_ms = int(busy_timeout_ms)
         self._tls = threading.local()
         self._schema_ready = False
+        self._record_select = ""        # column list tolerant of older files
 
     # ── connections ─────────────────────────────────────────────────
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self, create: bool = False) -> sqlite3.Connection:
+        """A connection to the file. `create` (writers only) makes the
+        file and its schema; a read never does."""
         timeout = self.busy_timeout_ms / 1000.0
-        if self.read_only:
-            uri = f"file:{quote(str(self.db_path.resolve()))}?mode=ro"
-            con = sqlite3.connect(uri, uri=True, timeout=timeout,
-                                  isolation_level=None)
-        else:
+        if create and not self.read_only:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             con = sqlite3.connect(str(self.db_path), timeout=timeout,
                                   isolation_level=None)
+        else:
+            # `rw` for the writer's own reads (it may need to create the
+            # WAL -shm file); `ro` for everyone else
+            mode = "ro" if self.read_only else "rw"
+            uri = f"file:{quote(str(self.db_path.resolve()))}?mode={mode}"
+            con = sqlite3.connect(uri, uri=True, timeout=timeout,
+                                  isolation_level=None)
         con.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
-        if not self.read_only and not self._schema_ready:
+        if create and not self._schema_ready:
             self._ensure_schema(con)
+        if not self._record_select:
+            self._check_file(con)
         return con
+
+    def _check_file(self, con: sqlite3.Connection) -> None:
+        """Once per instance: refuse an unknown `schema_version`, and build
+        the record column list from the columns the file actually has."""
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                       "AND name='meta'").fetchone() is None:
+            return                      # not initialised: reads see empty
+        row = con.execute("SELECT value FROM meta WHERE key = 'schema_version'"
+                          ).fetchone()
+        found = row[0] if row else ""
+        if found and found != SQLITE_SCHEMA_VERSION:
+            from core.src.stores.errors import SchemaVersionError
+            raise SchemaVersionError(
+                "OVL-E005", "Overlay", self.db_path.name, found,
+                SQLITE_SCHEMA_VERSION,
+                "re-import the overlay (core.src.stores.overlay_import) "
+                "or run a newer build")
+        present = {r[1] for r in con.execute("PRAGMA table_info(record)")}
+        self._record_select = ", ".join(
+            c if c in present else f"{_RECORD_COL_DEFAULTS[c]} AS {c}"
+            for c in _RECORD_COLS)
 
     def _ensure_schema(self, con: sqlite3.Connection) -> None:
         """Create the schema once per file. Checks first, so an instance
@@ -392,18 +437,18 @@ class SqliteOverlayStore:
     @contextmanager
     def _reader(self) -> Iterator["sqlite3.Connection | None"]:
         """The open transaction's connection, else a fresh one. Yields
-        None when a read-only store's file is absent or not initialised
-        (reads then return empty)."""
+        None when the file is absent or not initialised (reads then
+        return empty; a read never creates the file)."""
         con = self._tx_con()
         if con is not None:
             yield con
             return
-        if self.read_only and not self.db_path.is_file():
+        if not self.db_path.is_file():
             yield None
             return
         con = self._connect()
         try:
-            if self.read_only and con.execute(
+            if con.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' "
                     "AND name='mno_version'").fetchone() is None:
                 yield None
@@ -419,7 +464,7 @@ class SqliteOverlayStore:
             return
         if self.read_only:
             raise OverlayReadOnlyError("overlay store opened read-only")
-        con = self._connect()
+        con = self._connect(create=True)
         try:
             con.execute("BEGIN IMMEDIATE")
             self._tls.con = con
@@ -440,7 +485,7 @@ class SqliteOverlayStore:
             if con is None:
                 return {}
             rows = con.execute(
-                f"SELECT req_id, direction, {', '.join(_RECORD_COLS)} "
+                f"SELECT req_id, direction, {self._record_select} "
                 "FROM record WHERE mno = ? ORDER BY req_id, direction, seq",
                 (mno,)).fetchall()
         overlay: dict[str, Any] = {}
@@ -459,7 +504,7 @@ class SqliteOverlayStore:
             if con is None:
                 return None
             rows = con.execute(
-                f"SELECT direction, {', '.join(_RECORD_COLS)} FROM record "
+                f"SELECT direction, {self._record_select} FROM record "
                 "WHERE mno = ? AND req_id = ? ORDER BY direction, seq",
                 (mno, req_id)).fetchall()
         if not rows:
@@ -588,9 +633,16 @@ class SqliteOverlayStore:
 
 def open_overlay_store(corrections_root: "str | Path" = "",
                        db_path: "str | Path" = "",
-                       read_only: bool = False) -> "OverlayStore | None":
-    """`db_path` (else `$NORA_OVERLAY_DB`) → SQLite; else
-    `corrections_root` → JSON files; else None (overlay disabled)."""
+                       read_only: bool = False,
+                       url: "str | None" = None) -> "OverlayStore | None":
+    """`url` (None → `$NORA_OVERLAY_URL`) → HTTP client on nora-store;
+    else `db_path` (else `$NORA_OVERLAY_DB`) → SQLite; else
+    `corrections_root` → JSON files; else None (overlay disabled). Pass
+    `url=""` to ignore the env var."""
+    base = (os.getenv(OVERLAY_URL_ENV, "") if url is None else url).strip()
+    if base:
+        from core.src.stores.clients import HttpOverlayStore
+        return HttpOverlayStore(base, read_only=read_only)
     db = str(db_path or os.getenv(OVERLAY_DB_ENV, "")).strip()
     if db:
         return SqliteOverlayStore(db, read_only=read_only)

@@ -8,10 +8,12 @@ would drift apart (D-DRAFT-5).
 
 A thin wrapper over the Trees store (``core.src.stores.trees``): every
 function keeps its signature (env dir first) and delegates to
-``open_tree_store(env_dir)`` — the SQLite cell DBs when
+``open_tree_store(env_dir)`` — nora-store's ``/stores/trees/v1`` when
+``$NORA_TREES_URL`` is set (S6), else the SQLite cell DBs when
 ``$NORA_TREES_ROOT`` is set, else the JSON trees under ``out/parse/``. One
-store is kept per (env dir, root), so the file backend's tree cache lives
-across calls. ``parse_dir`` / ``find_tree`` are file-layout helpers only.
+store is kept per (env dir, root, url), so the file backend's tree cache
+lives across calls. ``parse_dir`` / ``find_tree`` are file-layout helpers
+only.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from pathlib import Path
 
 from core.src.stores.trees import (  # noqa: F401  (re-exports)
     TREES_ROOT_ENV,
+    TREES_URL_ENV,
     TreeStore,
     build_tree_hierarchy,
     find_tree,
@@ -29,16 +32,18 @@ from core.src.stores.trees import (  # noqa: F401  (re-exports)
     parse_dir,
 )
 
-_STORES: dict[tuple[str, str], TreeStore] = {}
+_STORES: dict[tuple[str, str, str], TreeStore] = {}
 
 
 def tree_store(env_dir_path: Path) -> TreeStore:
-    """The cached store for this env dir and the current ``$NORA_TREES_ROOT``."""
+    """The cached store for this env dir and the current
+    ``$NORA_TREES_URL`` / ``$NORA_TREES_ROOT``."""
     root = os.getenv(TREES_ROOT_ENV, "").strip()
-    key = (str(env_dir_path), root)
+    url = os.getenv(TREES_URL_ENV, "").strip()
+    key = (str(env_dir_path), root, url)
     store = _STORES.get(key)
     if store is None:
-        store = _STORES[key] = open_tree_store(env_dir_path, root)
+        store = _STORES[key] = open_tree_store(env_dir_path, root, url)
     return store
 
 

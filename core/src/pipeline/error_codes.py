@@ -135,6 +135,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("OVL-E002", "Target overlay DB is not empty: {path}", "Pass --force to replace its contents, or choose a new file"),
     ErrorDef("OVL-E003", "Import verification failed — {what}: {count} mismatch(es)", "Nothing was written; check the JSON files for hand-edited or duplicate records"),
     ErrorDef("OVL-E004", "Overlay DB write failed: {reason}", "Check the target path, permissions and free space; a busy DB means another writer holds it"),
+    ErrorDef("OVL-E005", "Overlay DB {name} has unsupported schema_version {found}", "Re-import the overlay with core.src.stores.overlay_import, or run a newer build"),
 
     # --- Trees store (TRS) — core.src.stores.trees_build (strand corp-db-layer S4) ---
     ErrorDef("TRS-E001", "No per-cell parse trees under {path}", "Point --env-dir at an env dir whose out/parse/<mno>/<release>/ holds *_tree.json; the legacy flat layout is not built"),
@@ -143,6 +144,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("TRS-E004", "Unreadable or malformed tree in cell {cell}: {reason}", "Re-run the parse stage for that cell"),
     ErrorDef("TRS-E005", "Trees DB verification failed for cell {cell} — {what}: {count} mismatch(es)", "Nothing was replaced; check the cell for nested or oddly named tree files"),
     ErrorDef("TRS-E006", "Trees DB write failed: {reason}", "Check the --out path, permissions and free space"),
+    ErrorDef("TRS-E007", "Trees DB {name} has unsupported schema_version {found}", "Rebuild the cell with core.src.stores.trees_build, or run a newer build"),
 
     # --- History store (HIS) — core.src.stores.history_build (strand corp-db-layer S5) ---
     ErrorDef("HIS-E001", "Trees store has no cells ({source})", "Build the Trees store first, or point --env-dir / --trees-root at one with parse trees"),
@@ -150,6 +152,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("HIS-E003", "Requested MNO has no cells in the Trees store: {mno}", "Name MNOs as they appear in the Trees store's cells"),
     ErrorDef("HIS-E004", "History DB write failed: {reason}", "Check the --out path, permissions and free space"),
     ErrorDef("HIS-E005", "History DB verification failed for {mno} — {what}: {count} mismatch(es)", "Nothing was replaced; rebuild the Trees store for that MNO and retry"),
+    ErrorDef("HIS-E006", "History DB {name} has unsupported schema_version {found}", "Rebuild the MNO with core.src.stores.history_build, or run a newer build"),
 
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),

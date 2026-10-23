@@ -9,6 +9,15 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_store_urls(monkeypatch):
+    """Clear the `NORA_<STORE>_URL` vars (strand corp-db-layer S6): the
+    store factories pick the HTTP client whenever one is set, which would
+    point every local-backend test at a developer's running nora-store."""
+    for var in ("NORA_OVERLAY_URL", "NORA_TREES_URL", "NORA_HISTORY_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_llm_config_env(monkeypatch):
     """Clear `NORA_LLM_CONFIG` for every test.
 

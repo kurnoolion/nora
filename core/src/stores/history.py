@@ -34,11 +34,15 @@ Change kinds between two releases: ``added``, ``removed``, ``changed``
 key whose non-empty ``text_fp`` equals a key removed in the same step, same
 node kind; the pair is also counted as added and removed).
 
-Backend: ``SqliteHistoryStore(root_dir)`` — every ``history-<mno>.db`` under
-``root_dir``, opened ``mode=ro&immutable=1``. ``open_history_store`` returns
-it for ``root_dir`` (else ``$NORA_HISTORY_ROOT``), else None.
+Backends: ``SqliteHistoryStore(root_dir)`` — every ``history-<mno>.db``
+under ``root_dir``, opened ``mode=ro&immutable=1`` (a file with an unknown
+``schema_version`` is refused, ``HIS-E006``; unknown columns are ignored);
+``HttpHistoryStore(base_url)`` (``clients.py``) — the same protocol over
+nora-store's ``/stores/history/v1`` routes. ``open_history_store`` returns
+the client for ``url`` (else ``$NORA_HISTORY_URL``), else SQLite for
+``root_dir`` (else ``$NORA_HISTORY_ROOT``), else None.
 
-Stdlib only.
+Stdlib only (the HTTP client is imported lazily).
 """
 
 from __future__ import annotations
@@ -66,6 +70,7 @@ from core.src.stores.trees import TreeStore, req_plan, tree_layout
 logger = logging.getLogger(__name__)
 
 HISTORY_ROOT_ENV = "NORA_HISTORY_ROOT"
+HISTORY_URL_ENV = "NORA_HISTORY_URL"
 SQLITE_SCHEMA_VERSION = 1
 DB_PREFIX = "history-"
 DB_SUFFIX = ".db"
@@ -356,6 +361,18 @@ def _connect_ro(path: Path) -> sqlite3.Connection:
     return con
 
 
+def _check_schema(name: str, meta: dict) -> None:
+    """Refuse an MNO DB written for another schema (design §9: the
+    rebuild is the migration)."""
+    found = str(meta.get("schema_version", "") or "")
+    if found != str(SQLITE_SCHEMA_VERSION):
+        from core.src.stores.errors import SchemaVersionError
+        raise SchemaVersionError(
+            "HIS-E006", "History", name, found, str(SQLITE_SCHEMA_VERSION),
+            "rebuild the MNO with core.src.stores.history_build or run a "
+            "newer build")
+
+
 # ─── Protocol ────────────────────────────────────────────────────────
 
 
@@ -435,6 +452,7 @@ class SqliteHistoryStore:
                 logger.warning("Skipping unreadable history DB %s: %s", p.name,
                                type(exc).__name__)
                 continue
+            _check_schema(p.name, hit[2])
             mno = hit[2].get("mno", "")
             if mno in found:
                 logger.warning("Duplicate history DB for one MNO; keeping %s, "
@@ -746,8 +764,14 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
     }
 
 
-def open_history_store(root_dir: "str | Path" = "") -> "HistoryStore | None":
-    """``root_dir`` (else ``$NORA_HISTORY_ROOT``) → SQLite; else None
-    (history disabled)."""
+def open_history_store(root_dir: "str | Path" = "",
+                       url: "str | None" = None) -> "HistoryStore | None":
+    """``url`` (None → ``$NORA_HISTORY_URL``) → HTTP client on nora-store;
+    else ``root_dir`` (else ``$NORA_HISTORY_ROOT``) → SQLite; else None
+    (history disabled). Pass ``url=""`` to ignore the env var."""
+    base = (os.getenv(HISTORY_URL_ENV, "") if url is None else url).strip()
+    if base:
+        from core.src.stores.clients import HttpHistoryStore
+        return HttpHistoryStore(base)
     root = str(root_dir or os.getenv(HISTORY_ROOT_ENV, "")).strip()
     return SqliteHistoryStore(root) if root else None

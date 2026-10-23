@@ -67,9 +67,19 @@ _ENGINE = os.getenv("NORA_STORE_ENGINE", "bm25x").strip().lower()
 # mounted ro in containers; unset = overlay machinery inert (vanilla behavior).
 _CORR_ROOT = os.getenv("NORA_STORE_CORRECTIONS_ROOT", "")
 # Overlay store as a SQLite file (strand corp-db-layer S3): when set it wins
-# over the corrections root for overlay reads. nora-web is the only writer;
-# this service opens the same file read-only (WAL, same host).
+# over the corrections root for overlay reads.
 _OVERLAY_DB = os.getenv("NORA_OVERLAY_DB", "").strip()
+# Store hosting (strand corp-db-layer S6, D-DRAFT-28): this service is the
+# Overlay AUTHORITY — it opens the backend above read-write and takes
+# nora-web's edits over /stores/overlay/v1 — unless NORA_OVERLAY_URL names
+# a peer store, in which case the overlay is read through the HTTP client
+# (peer read; this service's write routes then answer 409). Trees and
+# History are served from NORA_ENV_DIR (parse trees) / NORA_TREES_ROOT and
+# NORA_HISTORY_ROOT over /stores/{trees,history}/v1.
+_OVERLAY_URL = os.getenv("NORA_OVERLAY_URL", "").strip()
+_ENV_DIR = os.getenv("NORA_ENV_DIR", "").strip()
+_TREES_ROOT = os.getenv("NORA_TREES_ROOT", "").strip()
+_HISTORY_ROOT = os.getenv("NORA_HISTORY_ROOT", "").strip()
 # adapter sidecar of per-req content fingerprints in a flat cell's raw/
 # (sandbox.adapter.nora_to_beir.FINGERPRINTS_NAME; not imported — the
 # adapter pulls in the parser stack)
@@ -456,6 +466,10 @@ from nora_store.enrich_overlay import (  # noqa: E402
     make_verdict_fn,
 )
 from core.src.stores.overlay import open_overlay_store  # noqa: E402
+from core.src.stores.overlay_ops import view_digest  # noqa: E402
+from core.src.stores.history import open_history_store  # noqa: E402
+from core.src.stores.trees import open_tree_store  # noqa: E402
+from nora_store import stores_api  # noqa: E402
 
 from core.src.query.analyzer import (  # noqa: E402
     MockQueryAnalyzer,
@@ -861,9 +875,44 @@ def _read_fingerprints(path: Path) -> dict[str, str]:
 
 
 def _overlay_store():
-    """Read-only Overlay store for this process: $NORA_OVERLAY_DB (SQLite)
-    wins over the corrections root (JSON); None = overlay inert."""
-    return open_overlay_store(_CORR_ROOT, db_path=_OVERLAY_DB, read_only=True)
+    """The Overlay store for this process. NORA_OVERLAY_URL → the peer
+    store's HTTP client (read-only here); else the local backend opened
+    read-write — this service is the authority that takes nora-web's
+    edits: $NORA_OVERLAY_DB (SQLite) wins over the corrections root
+    (JSON); None = overlay inert. A read never creates the file."""
+    if _OVERLAY_URL:
+        return open_overlay_store(url=_OVERLAY_URL, read_only=True)
+    return open_overlay_store(_CORR_ROOT, db_path=_OVERLAY_DB, url="")
+
+
+_STORES: dict[str, Any] = {}      # lazily opened Trees / History stores
+
+
+def _tree_store():
+    """Trees over NORA_TREES_ROOT (SQLite cell DBs), else the parse trees
+    under NORA_ENV_DIR; None when neither is set."""
+    if "trees" not in _STORES:
+        _STORES["trees"] = (open_tree_store(_ENV_DIR, _TREES_ROOT, url="")
+                            if (_ENV_DIR or _TREES_ROOT) else None)
+    return _STORES["trees"]
+
+
+def _history_store():
+    if "history" not in _STORES:
+        _STORES["history"] = open_history_store(_HISTORY_ROOT, url="")
+    return _STORES["history"]
+
+
+def _stores_health() -> dict[str, Any]:
+    """Which backend each hosted store runs on, for /healthz."""
+    from core.src.stores.clients import store_backend_kind
+    ovl = _overlay_store()
+    return {
+        "overlay": store_backend_kind(ovl),
+        "overlay_authority": stores_api.is_overlay_authority(ovl),
+        "trees": store_backend_kind(_tree_store()),
+        "history": store_backend_kind(_history_store()),
+    }
 
 
 def _read_view_overlay(mno: str, label: str) -> tuple[dict, set]:
@@ -894,12 +943,8 @@ def _overlay_digest(filtered_overlay: dict) -> str:
     change, even MNOs the (un)merged label never touched. The review UI
     compares this against the web store's current digest for pending
     detection (fully-undone edits digest back to this value).
-    Formula must match EnrichOverlayStore.overlay_digest."""
-    import hashlib
-    import json as _json
-    payload = _json.dumps({"overlay": filtered_overlay},
-                          sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode()).hexdigest()
+    One formula, shared with EnrichOverlayStore.overlay_digest."""
+    return view_digest(filtered_overlay)
 
 
 def _apply_overlay_and_enrich(cstate: CellState) -> None:
@@ -1738,6 +1783,9 @@ def healthz() -> dict[str, Any]:
         "cell_db_schema_version": first_meta.get("schema_version", ""),
         "cells": [cell_dirname(c) for c in sorted(_cells)] if multi else [],
         "cells_load_error": _cells_load_error,
+        # Hosted stores (corp-db-layer S6): backend per store (local | http
+        # | off) and whether this service is the Overlay writer.
+        "stores": _stores_health(),
         "load_error": _load_error,
         "db_root": _DB_ROOT,
         "dataset": "(multi-cell)" if multi else _DATASET,
@@ -2390,3 +2438,20 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         "rerank_call_stats": rerank_call_stats,
         "notes": notes,
     }
+
+
+# ── Hosted stores (strand corp-db-layer S6) ─────────────────────────
+#
+# /stores/{cells,trees,history,overlay}/v1 — the routes nora-web's HTTP
+# store clients consume (core.src.stores.clients). Cells are served from
+# the loaded state above; the Overlay routes write through this process's
+# backend (the authority) unless NORA_OVERLAY_URL points at a peer.
+
+stores_api.mount(
+    app,
+    overlay=_overlay_store,
+    trees=_tree_store,
+    history=_history_store,
+    cells=lambda: _cells,
+    variant=_get_variant,
+)

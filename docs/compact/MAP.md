@@ -302,10 +302,15 @@ nora/
 │   │   ├── stores/                                      # Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`).
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py                              # Data stores behind service interfaces (strand corp-db-layer,
+│   │   │   ├── api.py                                   # Store routes — one `APIRouter` per store, hostable by any service
+│   │   │   ├── clients.py                               # HTTP clients for the stores nora-store hosts (strand corp-db-layer S6;
+│   │   │   ├── errors.py                                # Exceptions shared by the store backends and their HTTP clients
 │   │   │   ├── history.py                               # History store — release lineage of an MNO's plans, sections and
 │   │   │   ├── history_build.py                         # Build the History store: one SQLite DB per MNO (strand corp-db-layer S5).
 │   │   │   ├── overlay.py                               # Overlay store — review edits to SIRA enrichments (store-split-design §2,
 │   │   │   ├── overlay_import.py                        # One-time import of the JSON Overlay into SQLite (strand corp-db-layer S3).
+│   │   │   ├── overlay_ops.py                           # Overlay edit semantics — the one implementation both writers run
+│   │   │   ├── serve.py                                 # Standalone store host (strand corp-db-layer S6; store-split-design §5):
 │   │   │   ├── trees.py                                 # Trees store — parsed requirement trees per (MNO, release) cell
 │   │   │   └── trees_build.py                           # Build the Trees store: one SQLite DB per cell (strand corp-db-layer S4).
 │   │   ├── taxonomy/                                    # Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7).
@@ -340,7 +345,7 @@ nora/
 │   │       ├── config.py                                # Web UI configuration.
 │   │       ├── config_db.py                             # SQLite-backed config store for the web Config page.
 │   │       ├── config_schema.py                         # Schema describing the Config page's editable knobs.
-│   │       ├── enrich_overlay_store.py                  # Enrichment-corrections overlay store — the WEB side's writer
+│   │       ├── enrich_overlay_store.py                  # Enrichment-corrections overlay store — the WEB side's edit surface
 │   │       ├── enrich_report.py                         # Enrichment-review exports: the label × category pivot report and the
 │   │       ├── feedback_db.py                           # Test-page feedback store — async SQLite log of question / answer /
 │   │       ├── jobs.py                                  # Job queue for NORA pipeline execution tracking.
@@ -544,7 +549,9 @@ nora/
 │       ├── test_stages_per_cell.py                      # Per-cell stage routing tests (D-DRAFT-6/7/10).
 │       ├── test_standards.py                            # Tests for the standards ingestion pipeline (Step 7).
 │       ├── test_stores_history.py                       # Tests for core/src/stores/history.py + history_build.py (strand
+│       ├── test_stores_http.py                          # Tests for the store HTTP clients + nora-store's store routes (strand
 │       ├── test_stores_overlay.py                       # Tests for core/src/stores/overlay.py + overlay_import.py (strand
+│       ├── test_stores_schema.py                        # Schema-evolution tests for the SQLite stores (strand corp-db-layer S6;
 │       ├── test_stores_trees.py                         # Tests for core/src/stores/trees.py + trees_build.py (strand corp-db-layer
 │       ├── test_strike_runs.py                          # Tests for the unified strike model [D-060].
 │       ├── test_structural_parser_announced_id.py       # Announced-requirement path (strand req-recall).
@@ -847,6 +854,7 @@ nora/
 │   ├── scope.py                                         # Query-scope resolution for multi-MNO SIRA (multi-mno-sira D-DRAFT-9/10).
 │   ├── service.py                                       # SIRA per-query inference service — for NORA's Test page SIRA tab.
 │   ├── sira_debug.py                                    # SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
+│   ├── stores_api.py                                    # Store routes hosted by nora-store (strand corp-db-layer S6;
 │   ├── test_cell_db_loader.py                           # Tests for the cell-db serving mode (corp-db-layer phase 2).
 │   ├── test_fusion.py                                   # Tests for cross-cell fusion (multi-mno-sira D-DRAFT-10).
 │   ├── test_health_prompts.py                           # A configured-but-missing prompt fails health, and prompt presence is part
@@ -855,7 +863,8 @@ nora/
 │   ├── test_package_paths.py                            # Paths the service derives from its own location must survive the package
 │   ├── test_scope.py                                    # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
 │   ├── test_service_identity.py                         # Serving-identity tests (strand golden-eval).
-│   └── test_service_multi_cell.py                       # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
+│   ├── test_service_multi_cell.py                       # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
+│   └── test_stores_api.py                               # The store routes mounted on the service app (strand corp-db-layer S6):
 ├── presentations/
 │   ├── create.py                                        # Generate NORA leadership presentation.
 │   └── update.py                                        # Add Human Filter philosophy to NORA presentation.

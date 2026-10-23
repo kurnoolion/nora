@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-import core.src.web.enrich_overlay_store as eos
+import core.src.stores.overlay_ops as ops
 from core.src.pipeline.error_codes import CODES
 from core.src.stores import overlay_import
 from core.src.stores.overlay import (
@@ -36,7 +36,7 @@ class _FixedClock:
 
 @pytest.fixture()
 def frozen(monkeypatch):
-    monkeypatch.setattr(eos, "datetime", _FixedClock)
+    monkeypatch.setattr(ops, "datetime", _FixedClock)   # the stamp clock lives in overlay_ops
 
 
 @pytest.fixture()
@@ -156,11 +156,11 @@ class TestBackendParity:
         monkeypatch.delenv("NORA_OVERLAY_DB", raising=False)
         st = EnrichOverlayStore("")
         assert not st.enabled and st.get_overlay("GP") == {}
-        assert st.reason_categories() == eos.DEFAULT_REASON_CATEGORIES
+        assert st.reason_categories() == ops.DEFAULT_REASON_CATEGORIES
         with pytest.raises(RuntimeError):
             st.edit("GP", "R1", "remove", words=["a"])
         sq = EnrichOverlayStore("", backend=SqliteOverlayStore(tmp_path / "o.db"))
-        assert sq.reason_categories() == eos.DEFAULT_REASON_CATEGORIES
+        assert sq.reason_categories() == ops.DEFAULT_REASON_CATEGORIES
         assert sq.overlay_mtime("GP") == 0.0
 
     def test_env_db_wins(self, tmp_path, monkeypatch):

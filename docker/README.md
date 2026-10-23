@@ -11,7 +11,7 @@ live); images ship as Release-asset tarballs on the internal GitHub
 | Image | Profile | Runs | Purpose | Reads (mounts) | Writes (mounts) |
 |---|---|---|---|---|---|
 | **nora-web** | serve | uvicorn `:8000`, long-lived | Web UI + API: query, compare, compliance views; jobs/metrics/config; feedback capture | `/data/env` (promoted nora label: vectorstore, graph, taxonomy) | `/data/web-state` (per stack), `/data/feedback` + `/data/corrections` (pooled) |
-| **nora-store** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells), `/data/corrections` (ro — overlay applied at cell load) | — |
+| **nora-store** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank; hosts the Overlay / Trees / History stores under `/stores/<store>/v1` (see "Stores") | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells), `/data/env` (ro — parse trees for the Trees store) | `/data/corrections` (the Overlay authority: nora-web's review edits land here over HTTP) |
 | **nora-batch** | ingest | `run --rm` jobs | Batch lanes over the corpus: **ingestion** lane (extract → parse → resolve → standards) and **nora** lane (taxonomy → graph → vectorstore → eval); Docling layout for opt-in corpora | `/data/requirements` (ro, the corpus), `/data/models` | `/data/env` (a nora-BUILD dir: `out/`, images incl.) |
 | **sira-batch** | ingest | `run --rm` jobs | SIRA lane: NORA→BEIR adapter, per-cell index build, batch doc-enrichment, incremental retries | `/data/env` outputs via adapter | `/data/db` (a sira-BUILD dir: cells) |
 
@@ -70,7 +70,8 @@ paths (`$HOME` does not expand there).
     ├── web-state-b/                   #   (stack identity = directory, not filename)
     ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)
     ├── corrections/                   # ONE pooled dir: enrichment-review overlay
-    │                                  #   (web writes, nora-store reads at load)
+    │                                  #   (nora-store writes — the Overlay
+    │                                  #   authority — and applies it at load)
     └── models/
         └── docling/                   # DOCLING_ARTIFACTS -> /data/models/docling
 
@@ -950,6 +951,49 @@ under `CORRECTIONS_DIR` (never inside builds or serve labels; they survive
 re-enrichment and re-promotion). With both a/b stacks live, set
 `NORA_STORE_URLS` in `.env.nora-web.<x>` so one Apply reloads both
 (see env.nora-web.example). Team-mode gate admits the page.
+
+## Stores (nora-web is a client)
+
+nora-store hosts every persistent corpus store (strand corp-db-layer S6,
+D-DRAFT-28) as JSON routes under `/stores/<store>/v1`:
+
+| store | routes | backed by | writes |
+|---|---|---|---|
+| cells | `/stores/cells/v1` — list, meta, corpus rows, raw SIRA phrases, composed effective sets | the cells loaded at startup (`/data/db`) | — (publish) |
+| trees | `/stores/trees/v1` — every `TreeStore` method | `NORA_TREES_ROOT` (SQLite cell DBs) else the parse trees under `NORA_ENV_DIR` | — (publish) |
+| history | `/stores/history/v1` — every `HistoryStore` method | `NORA_HISTORY_ROOT`; 404 when unset | — (publish) |
+| overlay | `/stores/overlay/v1` — reads, raw writes, `POST /edit` | `NORA_OVERLAY_DB` else the JSON files under the corrections mount | nora-store, **the Overlay authority** |
+
+nora-web picks the HTTP client for a store whenever `NORA_<STORE>_URL`
+is set (compose defaults all three to `http://nora-store:8040`) and the
+local file backend otherwise (the dev fallback — its corrections and
+`/data/env` mounts are unused while the URLs are set). `GET /api/health`
+on nora-web lists the backend per store (`local` | `http` | `off`);
+`GET /healthz` on nora-store reports the same plus `overlay_authority`.
+
+Every review edit is one `POST /stores/overlay/v1/edit`, run inside the
+store's backend transaction — there is no shared mutable file between
+the two containers any more, which is why the corrections mount on
+nora-store is now read-write. Apply is unchanged: nora-web asks each
+`NORA_STORE_URLS` entry to reload.
+
+**Peer read (A/B pair sharing one correction set).** Name ONE stack's
+nora-store as the authority: the other stack's nora-store sets
+`NORA_OVERLAY_URL` to it (in `.env.nora-store`) and reads the overlay
+through the client, both for composition at load and for its own
+`/stores/overlay` reads; its write routes answer 409. Both stacks'
+nora-web set `NORA_OVERLAY_URL` to the authority as well (wiring `.env`,
+since compose `environment:` wins over `.env.nora-web`).
+
+**Splitting a store out.** The Trees, History and Overlay routers are
+generic (`core/src/stores/api.py`); to run one as its own service, start
+`python -m core.src.stores.serve --stores <name>[,<name>] --port PORT`
+(same env vars as nora-store: `NORA_ENV_DIR` / `NORA_TREES_ROOT`,
+`NORA_HISTORY_ROOT`, `NORA_STORE_CORRECTIONS_ROOT` / `NORA_OVERLAY_DB`)
+and set `NORA_<STORE>_URL` on every consumer — nora-web, and nora-store
+itself for an Overlay it no longer hosts. No code change. Its `/healthz`
+lists the hosted stores. Cells stay with nora-store (separating them
+needs an index-blob endpoint).
 
 ## Build + distribute
 

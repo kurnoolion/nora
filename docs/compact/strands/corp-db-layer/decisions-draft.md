@@ -490,3 +490,15 @@ section.
 **Decision:** `text_fp` (canonical v2 title + body; the shared join key), `node_fp` (+ priority, applicability) and `subtree_fp` (+ children in document order); History stores version intervals and content-addressed text, one SQLite DB per MNO (design §3, §6a).
 **Why:** Any level compares by one hash and diffs descend only into changed branches; SIRA and review edits depend on text only, History on fields too. Rejected: one hash for all uses — a priority change would stale enrichment; per-release flags only — no texts, full scans.
 **Consequences:** S1's `req_fingerprint` is replaced by `text_fp` (values versioned `v2:`); reorders show as changed, labelled "reordered".
+
+## D-DRAFT-28 — nora-store hosts every persistent corpus store; nora-web is a web layer
+
+**Decision:** nora-store serves Cells, Trees, History and Overlay over `/stores/<store>/v1`; it is the Overlay's writer, taking edits from nora-web over HTTP; peer stores read a shared Overlay via `NORA_OVERLAY_URL`. Web runtime DBs follow later.
+**Why:** One data service: no shared mutable file between containers, no store-waits-for-web startup, only nora-store mounts data in corp. Rejected: Overlay on nora-web — a SQLite file written by one container and read by another.
+**Consequences:** nora-web needs no corrections or parse mounts once the URLs are set; an A/B pair names one store as Overlay authority.
+
+## D-DRAFT-29 — Schema evolution: payload JSON absorbs new fields; versions bump only on breaking change
+
+**Decision:** Design §9: readers ignore unknown keys and tolerate missing additive columns; `schema_version` bumps only for breaking changes, with migrate-on-read or a refuse-and-rebuild code; Overlay alone gets in-place migrations; HTTP `/v1` → `/v2` on break.
+**Why:** Parse trees will grow fields; rebuilding every store for each is not acceptable. Rejected: strict schemas with a bump per field — every addition would force rebuilds.
+**Consequences:** Tolerance tests per store; a column is promoted only when queried.
