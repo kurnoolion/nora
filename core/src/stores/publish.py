@@ -233,7 +233,14 @@ class Plan:
             per[p.source.store]["new"] += 1
         for r in self.reused:
             per[r.store]["reused"] += 1
+        keys = set(self.members_by_key())
+        cells = {u for st, u in keys if st == "cells"}
+        trees = {u for st, u in keys if st == "trees"}
+        warnings = ([f"trees/{u}: no cells unit in the set (parse output without a SIRA cell)"
+                     for u in sorted(trees - cells)]
+                    + [f"cells/{u}: no trees unit in the set" for u in sorted(cells - trees)])
         return {"label": self.label, "base": self.base_label, "stores": per,
+                "warnings": warnings,
                 "history_rebuilt": list(self.history_built),
                 "new_units": [f"{p.source.store}/{p.source.unit}@v{p.version}" for p in self.new],
                 "reused_units": [f"{r.store}/{r.unit}@v{r.version}" for r in self.reused]}

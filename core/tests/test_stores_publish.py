@@ -118,6 +118,7 @@ def test_first_publish_stages_every_unit_and_builds_history(world):
                              "trees": {"new": 3, "reused": 0},
                              "history": {"new": 2, "reused": 0}}
     assert out["history_rebuilt"] == [MNO_A, MNO_B]
+    assert out["warnings"] == []
     assert files(root, "cells") == [f"cell-{MNO_A}-{R2}-v1.db", f"cell-{MNO_A}-{R1}-v1.db",
                                     f"cell-{MNO_B}-{R1}-v1.db"]
     assert files(root, "trees") == [f"trees-{MNO_A}-{R2}-v1.db", f"trees-{MNO_A}-{R1}-v1.db",
@@ -226,6 +227,23 @@ def test_duplicate_label_and_unknown_base_are_refused(world):
     with pytest.raises(PipelineError) as ei:
         do_publish(world, "set-2", base="nope")
     assert ei.value.code == "PUB-E006"
+
+
+def test_unpaired_units_are_warned_not_refused(world):
+    # parse output for a release that has no SIRA cell (and vice versa)
+    write_parse(world["env"], MNO_B, R2, "docB", [_req("REQ_B_9", section="1")])
+    (world["cells"] / f"cell-{MNO_B}-{R1}.db").unlink()
+    out = do_publish(world, "set-1", base="none")
+    assert out["warnings"] == [
+        f"trees/{MNO_B}__{R2}: no cells unit in the set (parse output without a SIRA cell)",
+        f"trees/{MNO_B}__{R1}: no cells unit in the set (parse output without a SIRA cell)"]
+    assert out["stores"]["cells"] == {"new": 2, "reused": 0}
+    assert out["stores"]["trees"] == {"new": 4, "reused": 0}
+    make_cell_db(world["cells"] / f"cell-{MNO_B}-{R1}.db", MNO_B, R1, "fp-b1")
+    out = do_publish(world, "set-2", base="none", env_dir="")
+    assert out["warnings"] == [f"cells/{MNO_A}__{R2}: no trees unit in the set",
+                               f"cells/{MNO_A}__{R1}: no trees unit in the set",
+                               f"cells/{MNO_B}__{R1}: no trees unit in the set"]
 
 
 def test_nothing_to_publish(world):
