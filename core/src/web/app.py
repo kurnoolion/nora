@@ -304,10 +304,16 @@ def _store_backends() -> dict[str, str]:
     from core.src.stores.clients import store_backend_kind
     from core.src.web.req_tree import tree_store
 
+    def kind(store, owned: bool) -> str:
+        k = store_backend_kind(store)
+        if owned and hasattr(store, "close"):   # per-call HTTP client
+            store.close()
+        return k
+
     return {
-        "overlay": store_backend_kind(open_overlay_store(config.corrections_root)),
-        "trees": store_backend_kind(tree_store(config.env_dir_path())),
-        "history": store_backend_kind(open_history_store()),
+        "overlay": kind(open_overlay_store(config.corrections_root), True),
+        "trees": kind(tree_store(config.env_dir_path()), False),  # cached
+        "history": kind(open_history_store(), True),
     }
 
 

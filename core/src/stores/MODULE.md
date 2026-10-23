@@ -49,7 +49,7 @@ Data stores behind service interfaces (strand corp-db-layer, `store-split-design
 - No requirement text, words or reasons in error messages or CLI output (Trees and History builders: cell / MNO names and counts only).
 
 **Key choices**
-- Entry-dict granularity, not op granularity: edit semantics (ops, labels as branches, reaffirm/discard, remove-wins) stay in `web.EnrichOverlayStore` and the fold, so a backend swap cannot change them (D-DRAFT-24).
+- Backends are entry-dict granularity, not op granularity: edit semantics (ops, labels as branches, reaffirm/discard, remove-wins) live in `overlay_ops`, shared by the web's local path and the authority's `/edit` route, so a backend swap cannot change them (D-DRAFT-24).
 - Fingerprint is a column on each record, stamped by the caller at edit time; the fold, not the store, decides what a match means (store-split-design §3/§4). Records without one stay Jaccard-guarded.
 - SQLite in dev/test; corp picks SQLite or Postgres by deployment facts (design §9.4, D-DRAFT-26). Same-host only: SQLite locks do not work across hosts or on network shares.
 - Local backend or HTTP client per protocol, chosen by `NORA_<STORE>_URL` (D-DRAFT-25); the routers are generic (`api.py`) so a store moves to its own service by configuration (`serve.py`), and nora-store mounts the same routers beside its Cells routes (D-DRAFT-28).
@@ -63,7 +63,7 @@ Data stores behind service interfaces (strand corp-db-layer, `store-split-design
 - `NORA_HISTORY_ROOT` unset → None: History is optional; `NORA_HISTORY_URL` set → the HTTP client (`/stores/history/v1`).
 
 **Non-goals**
-- No edit semantics, label views, digests or fold logic — those live in `web.enrich_overlay_store` and `nora_store.enrich_overlay`.
+- No fold logic (when an edit applies to a release): that is `nora_store.enrich_overlay`, which needs the cells' token sets and fingerprints. Edit ops, label views and the view digest are here (`overlay_ops`).
 - No retention or purge of held records (design §9 question 2).
 - No multi-host writers; no schema migrations beyond create-if-missing (a breaking change is a rebuild for the write-once stores; the Overlay's `schema_migrations` table arrives with its first breaking change).
 - No Cells client or standalone Cells host: separating Cells needs an index-blob endpoint (later step).

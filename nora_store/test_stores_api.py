@@ -84,8 +84,8 @@ def test_cells_routes_mirror_state(client):
 
 def test_healthz_reports_store_backends(client):
     body = client.get("/healthz").json()
-    assert body["stores"] == {"overlay": "local", "overlay_authority": True,
-                              "trees": "off", "history": "off"}
+    assert body["stores"] == {"overlay": "local", "trees": "off", "history": "off"}
+    assert body["overlay_authority"] is True
     assert client.get("/stores/trees/v1/cells").status_code == 404
     assert client.get("/stores/history/v1/mnos").status_code == 404
 
@@ -115,7 +115,7 @@ def test_edit_route_runs_the_op(client, tmp_path, monkeypatch):
         {"req:a": local.get_entry("GP", "req:a")})
     # peer mode: this service is not the authority → 409
     monkeypatch.setattr(svc, "_OVERLAY_URL", "http://example.test:8040")
-    assert client.get("/healthz").json()["stores"]["overlay_authority"] is False
+    assert client.get("/healthz").json()["overlay_authority"] is False
     r = client.put("/stores/overlay/v1/labels/accepted", json={"labels": ["c1"]})
     assert r.status_code == 409 and "authority" in r.json()["detail"]
     r = client.post("/stores/overlay/v1/edit", json={"op": "delete_label", "label": "c1"})

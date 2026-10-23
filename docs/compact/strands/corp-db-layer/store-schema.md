@@ -372,7 +372,9 @@ and set that store's URL on every consumer. Cells stays with `POST /query`
 ## 9. Versioning and change
 
 - Every DB carries `schema_version` in `meta`; readers refuse an unsupported
-  version with a code (CNV / TRS-E007 / HIS-E006 / OVL-E005).
+  version: TRS-E007 / HIS-E006 / OVL-E005 (`SchemaVersionError`); the Cells
+  reader raises `CellDbError` naming the schema (the CNV- codes belong to
+  the converter).
 - Additive changes (new column with a default, table, meta key, JSON or
   response field) do not bump the version; readers tolerate absence.
 - Cells, Trees and History are rebuilt per publish, so a rebuild is the

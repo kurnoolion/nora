@@ -906,10 +906,8 @@ def _history_store():
 def _stores_health() -> dict[str, Any]:
     """Which backend each hosted store runs on, for /healthz."""
     from core.src.stores.clients import store_backend_kind
-    ovl = _overlay_store()
     return {
-        "overlay": store_backend_kind(ovl),
-        "overlay_authority": stores_api.is_overlay_authority(ovl),
+        "overlay": store_backend_kind(_overlay_store()),
         "trees": store_backend_kind(_tree_store()),
         "history": store_backend_kind(_history_store()),
     }
@@ -1784,8 +1782,10 @@ def healthz() -> dict[str, Any]:
         "cells": [cell_dirname(c) for c in sorted(_cells)] if multi else [],
         "cells_load_error": _cells_load_error,
         # Hosted stores (corp-db-layer S6): backend per store (local | http
-        # | off) and whether this service is the Overlay writer.
+        # | off); `overlay_authority` sits beside it, the same shape as the
+        # standalone host (core.src.stores.serve).
         "stores": _stores_health(),
+        "overlay_authority": stores_api.is_overlay_authority(_overlay_store()),
         "load_error": _load_error,
         "db_root": _DB_ROOT,
         "dataset": "(multi-cell)" if multi else _DATASET,

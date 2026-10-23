@@ -969,7 +969,7 @@ is set (compose defaults all three to `http://nora-store:8040`) and the
 local file backend otherwise (the dev fallback — its corrections and
 `/data/env` mounts are unused while the URLs are set). `GET /api/health`
 on nora-web lists the backend per store (`local` | `http` | `off`);
-`GET /healthz` on nora-store reports the same plus `overlay_authority`.
+`GET /healthz` on nora-store reports `stores` (backend per store) and, beside it, `overlay_authority` — the same shape as the standalone host.
 
 Every review edit is one `POST /stores/overlay/v1/edit`, run inside the
 store's backend transaction — there is no shared mutable file between
