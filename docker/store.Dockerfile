@@ -139,3 +139,26 @@ FROM sira-base AS sira-batch
 #   python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db ...
 #   python -m sandbox.sira_incremental retry-failed --dataset /data/db/<cell> ...
 CMD ["bash"]
+
+# ---------------------------------------------------------- nora-store-test --
+# Optional: the serving image plus pytest, so the bm25x-gated suites (the
+# converter, the cell-db loader, service identity) run somewhere — they skip
+# on hosts without bm25x. Built only on request:
+#   docker build -f docker/store.Dockerfile --target nora-store-test \
+#       -t local/nora-store-test:dev .
+#   docker run --rm local/nora-store-test:dev          # the default suites
+#   docker run --rm local/nora-store-test:dev pytest -q nora_store   # any
+# Never deployed; no healthcheck.
+FROM nora-store AS nora-store-test
+ARG OFFLINE=0
+RUN --mount=type=bind,from=vendor,target=/vendor \
+    if [ "$OFFLINE" = "1" ]; then \
+        pip install --no-index --find-links=/vendor/wheels pytest; \
+    else \
+        pip install --no-cache-dir pytest; \
+    fi
+HEALTHCHECK NONE
+ENTRYPOINT []
+CMD ["pytest", "-q", "nora_store", "sandbox/test_cell_db_convert.py", \
+     "sandbox/test_cell_db_convert_fold.py", "sandbox/test_enrich_overlay.py", \
+     "sandbox/test_sira_query_review.py", "sandbox/test_sira_cells.py"]

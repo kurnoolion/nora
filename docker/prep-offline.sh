@@ -46,6 +46,7 @@ $PY -m pip wheel -w "$WHEELS" \
     huggingface_hub fastapi uvicorn httpx pydantic \
     pytrec_eval numpy requests
 $PY -m pip wheel -w "$WHEELS" --no-deps beir
+$PY -m pip wheel -w "$WHEELS" pytest          # nora-store-test target only
 
 echo "== [3/4] sira clone @ ${SIRA_REF:0:9} + configs/patches (host git) =="
 rm -rf "$VENDOR/sira"
