@@ -508,3 +508,27 @@ section.
 **Decision:** `publish-design.md`: content-fingerprinted store versions per cell/MNO, reused when unchanged; a release set named by the build label; stage (temp + sha256 + rename, pluggable transfer) → recorded golden gate (expansion-off deterministic + expansion-on quality) → flip of `active` rows in one transaction; rollback = flip back; nora-store reads `active` via `NORA_STORE_REGISTRY`.
 **Why:** Keeps promote/flip's properties (identity, explicit go, one-command rollback) while pushing only changed units and making "what served when" a table. Rejected: whole-label snapshots in corp — every release re-ships every cell; date ids — break continuity with eval stamps.
 **Consequences:** Dev stacks keep promote.sh/serve-flip until B8 passes on trial; the registry is the second mutable store and follows the Overlay's backend rule.
+
+## D-DRAFT-31 — Store-version reuse keys on content fingerprint and schema version
+
+**Decision:** A published unit is reused when a live version has the same `source_fingerprint` **and** `schema_version` (amends D-DRAFT-30, which named the fingerprint alone). History's identity is a hash of its Trees members' fingerprints, so its reuse is decided before any build.
+**Why:** The same source converted by a newer cell-DB schema is new content for serving; keying on the fingerprint alone would serve the old file. Rejected: encoding the schema in the fingerprint — the design's column keeps its meaning (content identity) and the schema stays a separate, queryable fact.
+**Consequences:** A schema bump republishes every unit once; `find_version` takes the schema (None = any, used for History).
+
+## D-DRAFT-32 — A release set is always complete
+
+**Decision:** A publish that rebuilds a subset (one store, a `--cells` filter) inherits every other unit from a base set (`--base`, default the active set). A flip replaces `active` wholesale with the set's members; a rollback is exactly the previous set.
+**Why:** Partial sets would leave `active` a mix of labels, and "0 changed" or "rollback" would have no single meaning. Rejected: per-unit flips — the gate is run against a set, so the unit of activation must be the set.
+**Consequences:** `active` always carries one label after a flip (`registry_label`); dropping a cell means publishing a set from `--base none`.
+
+## D-DRAFT-33 — Gate rule: latest run per kind decides; waivers are recorded, never bypassed
+
+**Decision:** A set may flip when at least one gate kind's latest run passed or was waived and no kind's latest run failed. `flip --force --reason` records a `manual / waived` gate run and flips in `override` mode; `rollback` needs no gate but only to a set that served before.
+**Why:** Reruns must supersede failures, a failure in one kind must block even when another passed, and an expedited flip must leave a row, not a gap. Rejected: "any pass" (a later failure would be ignored) and "all runs pass" (a rerun could never clear a failure).
+**Consequences:** Two gate kinds today (`golden-stage1` deterministic, `golden-stage2` quality) plus `manual`; `publish status` shows `gate_ok` per set.
+
+## D-DRAFT-34 — The Overlay authority runs the SQLite backend in deployment
+
+**Decision:** The stack that is the Overlay authority opens `overlay.db` (`NORA_OVERLAY_DB`), filled once by `overlay_import`; peers read it over HTTP; the JSON files remain only as the import-time backup. Closes the S3 question of which backend deployments run.
+**Why:** The design's live store is the SQLite file (transactions, per-record provenance, the registry's backend rule); the JSON layout was the migration source. Proven on two stacks: digests equal through the switch, edits from every web landing in the file, JSON untouched.
+**Consequences:** Edits made after the switch exist only in `overlay.db`; a rollback to JSON loses them. The import runs in a throwaway batch container with the corrections dir mounted.

@@ -451,3 +451,49 @@
 - Labels adapted before the fingerprint sidecar carry no `v2:`
   per-requirement fingerprints until their next SIRA build; review edits
   there stay Jaccard-guarded.
+
+## 2026-10-23 — 4b built and proven; every stack serves the store design
+
+### Done this session
+- Phase 4b implemented and tested: `registry.db` (store versions,
+  release sets, gate runs, active, flips), the publish CLI (publish /
+  gate / flip / rollback / gc / status, pluggable transfer),
+  registry-mode serving in nora-store (`NORA_STORE_REGISTRY`,
+  `NORA_STORE_RELEASE_SET`, `POST /registry/reload`, healthz
+  `registry_*`), registry fallback in the Trees/History factories and
+  the standalone host; compose `SERVE_REGISTRY_ROOT`. 2873 tests pass.
+- End-to-end on trial: 13 units published into a stand-in serving root,
+  gate and flipped store both 0 of 39 differ against the 4a run,
+  rollback drill (2 sets, 3 flips), GC dry run clean; the label
+  directory never written.
+- Field fixes from the rounds: publish warns on Trees units without a
+  Cells unit; a store started with no active set loads its prompts and
+  the first reload repairs an older image; an unopened store reports no
+  change on reload; the batch image bakes `NORA_CODE_VERSION`.
+- All three stacks moved onto their own registries with retrieval
+  provably unchanged (0 of 39 differ, 0 knob values changed on each);
+  the Overlay authority and trial moved onto the SQLite Overlay with
+  digests equal and edits from every web landing in `overlay.db`. The
+  strand's goal — every nora stack serving the new store design live —
+  is met.
+- Docs: `publish-design.md` v1.1 (§9 refinements), docker README with
+  the registry as the serve path and the Overlay import runbook, env
+  examples, stores MODULE.md.
+
+### In progress
+- Host retirement of the flat path: stale label pointers out of the
+  wiring envs (one recreate per stack), then after a soak the env
+  backups, the 4a image sets and the label directories; flat cell
+  inputs stay until the next build cycle.
+
+### Next
+- Land the strand. Corp transfer (remote `Transfer`, first corp publish,
+  backend choice) is a later strand by the architect's call.
+- Rebuild the two nora-web images that predate 4b at the next
+  convenient build (no behaviour change; keeps images on one commit).
+
+### Flags
+- Labels adapted before the fingerprint sidecar still carry no `v2:`
+  per-requirement fingerprints; review edits there stay Jaccard-guarded.
+- Query expansion is non-reproducible run to run (golden-eval strand);
+  the expansion-off Stage-1 is the only deterministic gate.
