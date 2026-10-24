@@ -28,9 +28,9 @@ How they connect (build → promote → serve, and the query path):
         │   (also nora lane:                     │
         │    taxonomy/graph/vectorstore)         │
         └────────────┬───────────────────────────┘
-                     ▼  promote.sh (hardlink snapshot, immutable label)
-              serve/<label>/{nora,sira}
-                     │ mounted ro-by-convention
+                     ▼  publish (versioned store files + registry.db;
+              <serve-root>/{registry.db,cells,trees,history}   gated flip)
+                     │ mounted ro            [dev/test: promote.sh label dirs]
         ┌────────────┴────────────┐
         ▼                         ▼
     [nora-web :8000] ───────► [nora-store :8040]
@@ -60,12 +60,15 @@ paths (`$HOME` does not expand there).
     │                                  #   variant lineage — see "Variant lineages")
     ├── sira-builds/<build>/           # SIRA db_roots (cells) — NEVER inside the repo
     │                                  #   tree (git clean would wipe the enrichment cache)
-    ├── serve/<label>/                 # promoted hardlink snapshots (promote.sh):
-    │   ├── MANIFEST.json              #   nora/out/{vectorstore,graph,taxonomy,parse}
-    │   ├── nora/out/...               #   + sira/<cells>. Stacks mount THESE — builds
-    │   └── sira/...                   #   can be rebuilt/wiped without touching serving.
-    │                                  #   (parse feeds the tree-backed web surfaces:
-    │                                  #   Eval Studio picker, req-browser)
+    ├── serve-<stack>/                 # the stack's serving root (core.src.stores.publish):
+    │   ├── registry.db                #   store versions, release sets, gate runs, active, flips
+    │   ├── cells/cell-<mno>-<rel>-vN.db   # write-once, versioned; several versions coexist
+    │   ├── trees/trees-<mno>-<rel>-vN.db  # Stacks mount THIS (ro) — builds and labels can
+    │   └── history/history-<mno>-vN.db    #   be rebuilt or wiped without touching serving
+    ├── serve/<label>/                 # dev/test only: promoted hardlink snapshots
+    │   ├── MANIFEST.json              #   (promote.sh) — nora/out/{...,parse} + sira/<cells>;
+    │   ├── nora/out/...               #   also the converter's input when a cell is
+    │   └── sira/...                   #   reconverted from flat files
     ├── web-state-a/                   # per stack: nora_jobs/metrics/config.db
     ├── web-state-b/                   #   (stack identity = directory, not filename)
     ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)
@@ -128,8 +131,9 @@ cannot list models, only the default is offered.
 In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
-    NORA_ENV_DIR=/home/<you>/nora-data/serve/<label>/nora     # or a nora-build while iterating
-    STORE_ROOT=/home/<you>/nora-data/serve/<label>/sira     # or a sira-build while iterating
+    SERVE_REGISTRY_ROOT=/home/<you>/nora-data/serve-a       # served stacks: the registry root (publish)
+    NORA_ENV_DIR=/home/<you>/nora-data/nora-builds/<build>   # ingest jobs' build dir (unused by a registry-mode store)
+    #STORE_ROOT=/home/<you>/nora-data/serve/<label>/sira    # dev/test only: flat label pointer instead of the registry
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
     CORRECTIONS_DIR=/home/<you>/nora-data/corrections
@@ -756,12 +760,19 @@ Known limit: per-MNO **query/relevance** prompts are generated but the
 query-time service still loads a single pair — per-cell selection there is
 a deferred change (strand journal 2026-07-24).
 
-**Registry publish (strand corp-db-layer 4b; `publish-design.md`).** The
-label-directory path above stays for dev/test stacks. The registry path
-replaces the unit (a store version per cell or MNO instead of a whole
-label), the pointer (`active` rows in `<serve-root>/registry.db` instead
-of env-file paths) and the log (`flip` table instead of `PROMOTE_LOG`),
-and keeps the gate and the one-command rollback:
+**Registry publish — the serve path for every served stack (strand
+corp-db-layer 4b; `publish-design.md`).** All three served stacks run
+it since 2026-10-23; the label-directory path above (`promote.sh`,
+`serve-flip.sh`, `PROMOTE_LOG`) is for dev/test stacks and as the
+converter's flat input. The registry path replaces the unit (a store
+version per cell or MNO instead of a whole label), the pointer (`active`
+rows in `<serve-root>/registry.db` instead of env-file paths) and the
+log (`flip` table instead of `PROMOTE_LOG`), and keeps the gate and the
+one-command rollback. The CLI runs in a `nora-batch` container of the
+stack's project (images built at or after the 4b commit; the batch
+image carries the publish module and bakes `NORA_CODE_VERSION`), with
+`--store-url` naming the store by its service name — a container cannot
+reach its own stack's published port through the host gateway:
 
 ```bash
 # 1–2 publish + stage: Cells from the converter's output (or --sira-root
@@ -792,6 +803,25 @@ mode. `GET /healthz` on nora-store reports `registry_label` and
 `registry_versions` (version + fingerprint per unit), and
 `POST /registry/reload` swaps only the units whose file changed — no
 recreate. Registry files are write-once; a label never changes meaning.
+
+**Moving a running stack onto the registry** (done once per stack):
+publish its current label into a new serving root, gate it from a
+staging nora-store (own compose project, spare port,
+`SERVE_RELEASE_SET=<label>`, Overlay read from the live authority), set
+`SERVE_REGISTRY_ROOT` in the wiring `.env`, recreate the store (it
+starts with 0 cells and its prompts loaded), then `publish flip
+--store-url …`. Keep the previous wiring `.env` as the rollback.
+
+**Overlay onto SQLite** (the authority stack, once): run
+`python -m core.src.stores.overlay_import --corrections-root /data/corrections --db /data/corrections/overlay.db`
+in a throwaway `nora-batch` container with the corrections dir mounted
+at `/data/corrections` as the host user (the batch service has no
+corrections mount), then set `NORA_OVERLAY_DB=/data/corrections/overlay.db`
+in `.env.nora-store` and recreate the store. The import verifies both
+backends read equal; the JSON files stay as the backup of the
+import-time state — edits made after the switch live only in
+`overlay.db`. Per-MNO and per-label digests must be equal before and
+after.
 
 ## Variant lineages — comparing ideas, not code
 
