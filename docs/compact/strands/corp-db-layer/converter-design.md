@@ -2,6 +2,13 @@
 
 Strand: `corp-db-layer` · Draft v0.4, 2026-10-10 · Status: implemented (converter + loader)
 Companion: `storage-design.md` (§4 engines, §5 phases)
+
+> **2026-10-24 — read with §10.** The schema-1 file described here (baked
+> enriched index, `enrichment` table, FTS5) is superseded by **schema 2**
+> (vanilla index + raw `sira_phrases` + `corpus.fingerprint`; the
+> Overlay composed at load; `store-schema.md` §3, store-split S2). The
+> converter is still the Cells builder and its output is what `publish
+> --cells-src` stages into a serving root. §10 lists what changed.
 (v0.2, post-review: single engine per process in §6; loader lazy-open
 note. v0.3, at implementation: schema amended to blob-primary after
 grounding in the real bm25x — see §9 findings. The index ships as the
@@ -253,3 +260,29 @@ pin them.
    inside the storage-design estimates. One real-data schema correction
    was needed first: duplicate doc/section `_id` rows (§3, UNIQUE
    dropped).
+
+## 10. Status 2026-10-24 — what changed since v0.4
+
+- **Schema 2 (store-split S2, 2026-10-22):** the cell DB carries the
+  **vanilla** index blob, SIRA's **raw** phrases per run
+  (`sira_phrases`) and `corpus.fingerprint` (`text_fp` from the adapter
+  sidecar `raw/fingerprints.jsonl`). No effective set, no baked overlay,
+  no FTS5 (`CNV-010` refuses `--fts5`). nora-store composes the Overlay
+  in at load (`store-schema.md` §7), so Apply and label views work in
+  cell-db mode; the "reload returns 409" rule of §6 holds for schema-1
+  files only. `--overlay-root` / `--overlay-db` feed the **identity
+  gate** only (the composed index must equal the baked one on the same
+  inputs); nothing from the Overlay is stored.
+- **Meta additions:** `fingerprint_version`, `fingerprinted_docs` (0 =
+  the label predates the sidecar; re-run the adapter); `CNV-011` names a
+  dangling `best.jsonl` (pin the run with `--enrich-run`).
+- **Engine:** `bm25x` only in practice; `fts5` cannot serve a composed
+  cell (the loader refuses) and stays a schema-1 option.
+- **Where the output goes:** a converted-cells directory outside the
+  serve root; `publish --cells-src <dir>` identifies each file from its
+  `meta` and stages it, versioned, into a stack's serving root
+  (`publish-design.md`). `--sira-root` runs the converter inside
+  publish for a one-step path. Identity for reuse is
+  `meta.source_fingerprint` + `schema_version` (D-DRAFT-31).
+- **Where it runs:** the sandbox venv (bm25x) — the `nora-batch` image
+  carries it; the serving stacks only read its output.

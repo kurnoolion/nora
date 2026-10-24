@@ -1,7 +1,14 @@
 # Store split — four orthogonal stores behind service interfaces
 
-Strand `corp-db-layer` · v1.0 · 2026-10-21 · supersedes `storage-design.md`
-§2.1 (baked enriched cell DB) and §5a step 1; replaces `phase-4-plan.md` v0.
+Strand `corp-db-layer` · v1.1 · 2026-10-21, as-built notes 2026-10-24 ·
+supersedes `storage-design.md` §2.1 (baked enriched cell DB) and §5a
+step 1; replaces `phase-4-plan.md` v0.
+
+> **As built (2026-10-24).** All four stores are implemented
+> (`core/src/stores/`, `nora_store/`), published by the registry
+> pipeline (`publish-design.md`) and served live by every nora stack.
+> Where the implementation refined this design, the note says so in
+> place; `store-schema.md` is the authority for the DDL as built.
 
 ## 1. Why
 
@@ -94,7 +101,9 @@ outside the stores.
   `NORA_OVERLAY_URL` (peer read). Apply stays as today: nora-web asks each
   configured store to reload.
 - nora-web's runtime DBs (jobs, metrics, config, feedback) and the golden
-  samples move to nora-store in a later step (storage-design §8 point 2).
+  samples stay nora-web's own files for now; moving them behind
+  nora-store is a separate strand (storage-design §8 point 2; scoped
+  out of this strand 2026-10-24).
 - Minimum surface (v1):
   - `CellStore`: list cells, cell meta/identity, corpus rows, vanilla index, SIRA phrases.
   - `TreeStore`: list docs/plans, get node, subtree, ancestors, find req (by id, by fingerprint).
@@ -109,15 +118,22 @@ registry are SQLite in dev/test; in corp, SQLite or Postgres, decided by
 in Cells stays optional).
 
 - **Cells:** `meta`, `corpus`, `index_blob` (**vanilla**), `sira_phrases(req_id, run_id, phrases)`.
-  The `enrichment` (effective) table is removed.
+  The `enrichment` (effective) table is removed. (As built: `store-schema.md` §3.)
 - **Trees:** `doc`, `node(id, doc, parent_id, path, kind, req_id, section_number, title, depth)`,
   `req_body(req_id, text, tables_json, fingerprint)`. `path` is a
   zero-padded ordinal path, indexed: subtree = range scan, ancestors =
   prefixes; `WITH RECURSIVE` for the rest (Postgres: `ltree`).
-- **History:** one DB per MNO (§6a).
+  *As built:* no `req_body` table — the full requirement dict rides in
+  `node.req_json` beside the query columns (`store-schema.md` §4), so
+  `load_tree` is exact and new parse fields need no schema change (§9).
+- **History:** one DB per MNO (§6a). (As built: `store-schema.md` §5.)
 - **Overlay:** `edit(id, mno, req_id, fingerprint, op, word, label, reason_json, by, at, origin_release)`,
   `suppress(mno, req_id, …)`, `accepted_label(label)`. Records are never
-  rewritten (provenance), as today.
+  rewritten (provenance), as today. *As built:* one `record` table keyed
+  `(mno, req_id, direction, word)` with `suppress_all` as a direction,
+  plus `label`, `reason_category`, `mno_version` (`store-schema.md` §6);
+  the JSON layout stays a second backend, byte-identical entries. In
+  deployment the authority runs SQLite (D-DRAFT-34).
 
 ## 6a. History — structure and queries
 
@@ -165,17 +181,21 @@ such as a plan's display name to a `plan_id` belongs to the query layer.
 ## 7. Publish (replaces storage-design §5a step 1)
 
 A release publishes Cells and Trees per cell, rebuilds History per MNO,
-and records all three in `registry.db` (`store_versions(store, unit,
-version, fingerprint, file, sha256, gate_ref)`, `active(store, unit,
-version)`). Stage → golden gate → flip (one transaction per release) →
-rollback by flip. Overlay is not published; it lives with the deployment.
+and records all three in `registry.db`. Stage → golden gate → flip (one
+transaction per release) → rollback by flip. Overlay is not published;
+it lives with the deployment. *Built as `publish-design.md`* (registry
+tables `store_version`, `release_set`, `release_set_member`, `gate_run`,
+`active`, `flip`; the CLI `core.src.stores.publish`; nora-store registry
+mode); D-DRAFT-30..33.
 
 ## 8. What carries over, what changes
 
 - Flat build files stay as dev/test build inputs (converter, verify gate,
   tools). Corp serves only stores.
 - Local stacks can move to store-backed serving once Overlay is a store
-  (Apply works).
+  (Apply works). *Done 2026-10-23:* all three served stacks run from
+  their registries; `promote.sh` / `serve-flip.sh` remain for dev/test
+  stacks only.
 - The `--overlay-root` cycle fix is dropped (nothing is baked).
 - Unchanged: SIRA query-time expansion, golden eval over HTTP, team gate.
 
@@ -202,10 +222,14 @@ rollback by flip. Overlay is not published; it lives with the deployment.
 ## 10. Open questions
 
 1. ~~History keys~~ — decided 2026-10-22 (§6a).
-2. Overlay retention: purge held edits after N releases?
-3. Corp metrics/config DBs and transfer (storage-design §8 points 2, 3).
+2. Overlay retention: purge held edits after N releases? — open, no
+   pressure yet (held records are few).
+3. Corp metrics/config DBs and transfer (storage-design §8 points 2, 3)
+   — carried to later strands (runtime DBs; 4c corp transfer), 2026-10-24.
 4. Corp backend for the mutable stores (Overlay, registry): Postgres if
    corp runs more than one writing host, keeps mutable files on a network
    share, or provides a managed Postgres; otherwise SQLite (WAL,
    `busy_timeout`). SQLite allows one writer per file and coordinates by
    OS file locks, which do not work across hosts or reliably on NFS/SMB.
+   *Dev/test deployments decided:* SQLite for both (D-DRAFT-34); corp
+   open, decided with 4c.

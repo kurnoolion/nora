@@ -1,9 +1,17 @@
 # Phase 4 plan — store split, then publish
 
-Strand `corp-db-layer` · v1 · 2026-10-21 · design: `store-split-design.md`.
-Scope: 4a + 4b now; 4c (corp deployment) waits on storage-design §8 points 2 and 3.
+Strand `corp-db-layer` · v1.1 · 2026-10-21, status 2026-10-24 · design:
+`store-split-design.md`, `publish-design.md`.
+Scope: 4a + 4b (both **done**); 4c (corp deployment) is a later strand.
 
-## 4a — store split (local)
+**Outcome 2026-10-23:** every nora stack serves the four-store design
+live from its own registry, with the Overlay authority on SQLite;
+retrieval provably unchanged on each (expansion-off Stage-1, 0 of 39
+differ, 0 knob values changed). The strand's goal — nora's corp data
+layer ready and in use on every stack — is met; what remains is host
+retirement of the flat path after a soak, and landing the strand.
+
+## 4a — store split (local) — done 2026-10-22
 
 | # | Change |
 |---|---|
@@ -19,11 +27,15 @@ store; golden Stage-1 equal to the current trial; review Apply works.
 
 ## 4b — publish (against a stand-in corp volume) — design: `publish-design.md`
 
-Status 2026-10-23: B1–B7 built and unit/integration tested
-(`core/src/stores/registry.py`, `publish.py`; nora-store registry mode;
-`core/tests/test_stores_publish.py`, `nora_store/test_registry_mode.py`).
-B8 passed on trial 2026-10-23 (publish-design §9.10). The three
-rollback sets retire after the next review.
+Status 2026-10-23: B1–B8 done (`core/src/stores/registry.py`,
+`publish.py`; nora-store registry mode; `core/tests/test_stores_publish.py`,
+`nora_store/test_registry_mode.py`; B8 on trial, publish-design §9.10).
+Roll-out the same day: trial, then both A/B stacks, each publish → gate
+→ flip at 0 of 39 differ; the Overlay authority and trial onto the
+SQLite Overlay (publish-design §9.11). Stale label pointers retired from
+the wiring envs. Still on the host, after a soak: the env backups, the
+three pre-4a image sets, the label directories (flat cell inputs stay
+until the next build cycle).
 
 | # | Change |
 |---|---|
@@ -36,7 +48,12 @@ rollback sets retire after the next review.
 | B7 | GC: keep active + N previous. |
 | B8 | Local end-to-end on trial: publish → stage → gate → flip → rollback. |
 
-## Out of scope
+## Out of scope (carried to later strands)
 
-Corp transfer, staging and first publish (4c); corp metrics/config DBs;
-retiring flat build files.
+- **4c corp:** the remote `Transfer`, the first publish into the corp
+  volume, the corp backend for the registry and Overlay (SQLite vs
+  Postgres), corp metrics/config DBs.
+- **Runtime DBs and golden set** (jobs, metrics, config, feedback,
+  samples and runs) behind nora-store; today nora-web's own files.
+- **Retiring flat build files:** the pipeline keeps writing the env-dir
+  layout; the flat SIRA cells remain the converter's input.

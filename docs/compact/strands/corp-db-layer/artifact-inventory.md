@@ -1,6 +1,8 @@
 # Artifact inventory — what the DB layer must re-home
 
-Strand: `corp-db-layer` · Analysis date: 2026-10-08 · Status: draft for review
+Strand: `corp-db-layer` · Analysis date: 2026-10-08 · Status: analysis
+complete; **disposition as built 2026-10-24 in the last section** (the
+sections A–I are the original inventory and are kept as written).
 
 **Method.** Enumerated from code, not from memory: `env.config.ENV_DIR_DIRS` +
 `pipeline.stage_output` (build side), `web/config.py` + compose mounts
@@ -230,3 +232,50 @@ session, before schema drafting):
    write rows directly (bigger change, kills the file layer)?
 5. Corrections durability: pooled-across-stacks and label-independent today;
    the DB must keep them out of the label-scoped immutability rule.
+
+---
+
+## Disposition as built (2026-10-24)
+
+Answers to the five questions above, then the bucket-by-bucket outcome.
+Every nora stack (trial and the A/B pair) serves from this layout since
+2026-10-23.
+
+1. **Embeddings / Chroma:** out of serving. The Ask page is SIRA-only
+   (D-254); Chroma is a dev experiment artifact.
+2. **BM25:** the index ships as the **vanilla** bm25x blob inside the
+   cell DB, enriched at load with SIRA's raw phrases plus the live
+   Overlay (1.4 s for 40k rows, D-DRAFT-23). Neither rebuild-from-rows
+   (build params not recorded) nor a baked blob (ties corrections to a
+   republish).
+3. **One DB or two:** neither — four write-once store files per unit
+   plus two small mutable SQLite files (Overlay, registry); the web's
+   runtime DBs stay separate (bucket 1 below).
+4. **Build side:** files, then publish. The pipeline still writes the
+   env-dir layout; `core.src.stores.publish` turns verified build output
+   into versioned store files and a release set.
+5. **Corrections:** the Overlay is a live store outside the registry
+   (never published, never label-scoped); edits reach serving through
+   Apply, as before.
+
+| Bucket (Synthesis table) | As built |
+|---|---|
+| 1. Already relational — jobs, metrics, config, feedback (C) | **Unchanged.** nora-web's own SQLite files under `WEB_STATE_DIR` (per stack) and `FEEDBACK_DIR` (pooled). Scoped out of this strand; a separate strand moves them behind nora-store. |
+| 2a. Parse trees (B2) | **Trees store** — `trees/trees-<mno>-<rel>-vN.db` per cell in the stack's serving root; one row per node with the exact requirement dict; indexed `find_req`; served over `/stores/trees/v1`; nora-web reads it over HTTP (Requirement Browser, `/api/req`, Eval Studio picker). |
+| 2b. SIRA corpus + phrases (G) | **Cells store** — `cells/cell-<mno>-<rel>-vN.db`, schema 2: corpus rows with `text_fp`, raw SIRA phrases per run, the vanilla index blob. Composed at load. |
+| 2c. Release lineage (new, from B2) | **History store** — `history/history-<mno>-vN.db`, derived from Trees at publish: node identity across releases, version intervals, content-addressed text, change kinds; served over `/stores/history/v1`. |
+| 2d. Overlay records + labels (D) | **Overlay store** — `overlay.db` on the authority nora-store (SQLite, D-DRAFT-34), one writer, edits over `POST /stores/overlay/v1/edit`; peers read via `NORA_OVERLAY_URL`; the JSON files are the import-time backup. Pipeline corrections and annotations stay build-side files. |
+| 2e. Golden samples + runs (E) | **Unchanged.** JSON files under `GOLDEN_DIR` (pooled), read by nora-web and nora-batch. Same separate strand as bucket 1. |
+| 2f. Taxonomy, resolve, graph, standards (B) | Build-side files; not served. |
+| 3. Binary / index blobs | bm25x index: vanilla blob in the cell DB (above). Chroma: not served. Images, standards cache: build side. |
+| 4. Build-side ephemera | Unchanged, build machine only. |
+| 5. Semantics (H) | **registry.db** per serving root: `store_version` (write-once, versioned, reused by fingerprint + schema), `release_set` + members (complete sets named by build label), `gate_run`, `active` (the flip pointer), `flip` (the log). Label immutability → write-once files; rollback → `publish rollback`; attribution → `release_set` and `flip` columns; complete-or-absent → stage under the registry write lock with sha256 and rename. `promote.sh` / `serve-flip.sh` / `PROMOTE_LOG` remain for dev/test-only stacks; the label directories remain the converter's flat input. |
+
+**Host mounts a served stack still needs:** the serving root (ro) and
+the corrections directory holding `overlay.db` on nora-store; the web
+state, feedback and golden directories on nora-web. `NORA_ENV_DIR` is
+still mounted by compose but unread by a registry-mode store.
+
+**Deferred to later strands:** the corp transfer (a remote `Transfer`
+behind `publish`), the registry's and Overlay's corp backend (SQLite vs
+Postgres), and the runtime DBs + golden set behind nora-store.

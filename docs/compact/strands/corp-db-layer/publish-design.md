@@ -1,11 +1,12 @@
-# Publish pipeline — phase 4b (v1.1, 2026-10-23)
+# Publish pipeline — phase 4b (v1.2, 2026-10-24)
 
 Strand `corp-db-layer`. Replaces `storage-design.md` §5a and refines
 `store-split-design.md` §7 for the four-store layout. Reviewed and
 agreed 2026-10-23 (§8 questions 1–3 as drafted). v1.1: B1–B7 built
 (`core/src/stores/registry.py`, `publish.py`; nora-store registry mode);
-§9 records where the build refined the design. B8 (trial end-to-end)
-pending.
+§9 records where the build refined the design, B8 (trial end-to-end)
+passed, and the roll-out: since 2026-10-23 every nora stack serves from
+its own registry (§9.11).
 
 ## 1. What 4b is for
 
@@ -22,8 +23,10 @@ per MNO (History), and the pointer becomes a row in a registry rather
 than a path in an env file. A release then pushes only the units that
 changed, serving can be flipped and rolled back per release in one
 transaction, and the history of what served when is a table rather than
-`PROMOTE_LOG` lines. Dev/test stacks keep `promote.sh` / `serve-flip.sh`
-until the registry path has proven out on trial.
+`PROMOTE_LOG` lines. The registry path is the serve path for every nora
+stack since 2026-10-23; `promote.sh` / `serve-flip.sh` remain for
+dev/test-only stacks and the label directories remain the converter's
+flat input.
 
 ## 2. Units, versions, identity
 
@@ -197,8 +200,8 @@ go.
 | rollback = flip to the previous label | `publish rollback --to <label>` |
 | `serve-push.sh` | the transfer step |
 
-Dev/test keeps the old path until the registry path passes B8 on trial;
-then the local stacks may adopt it (optional).
+All three served stacks adopted the registry path on 2026-10-23 (§9.11).
+The old path remains for dev/test-only stacks.
 
 ## 7. Test plan
 
@@ -268,3 +271,19 @@ then the local stacks may adopt it (optional).
     flipped store both 0 of 39 differ against the 4a run, rollback drill
     2 sets / 3 flips, GC dry-run 0 removed; the label directory was
     never written.
+11. **Roll-out, 2026-10-23.** Each stack got its own serving root and
+    registry (one `active` per registry, so one root per stack): the
+    A/B pair followed trial with the same publish → gate → flip round,
+    each at 0 of 39 differ and 0 knob values changed. The Overlay
+    authority and trial moved onto the SQLite Overlay in the same
+    rounds (`overlay_import` in a throwaway batch container, then
+    `NORA_OVERLAY_DB`; D-DRAFT-34). Two field findings fixed on the way:
+    a store started before its first flip now loads its prompts and the
+    reload repairs an older image; an unopened Trees/History store
+    reports no change on reload. Stale label pointers were retired from
+    the wiring envs with 0 healthz keys changed. Retirement of the env
+    backups, the pre-4a image sets and the label directories waits for
+    a soak; the flat cell inputs stay until the next build cycle.
+12. **Not in this strand:** the remote `Transfer` and the first corp
+    publish (4c), and the registry's corp backend. The runtime DBs and
+    golden samples stay nora-web's files (a separate strand).

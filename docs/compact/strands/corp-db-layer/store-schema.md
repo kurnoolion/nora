@@ -1,8 +1,10 @@
-# Store schemas — the four persistent corpus stores
+# Store schemas — the four persistent corpus stores and the registry
 
-Strand `corp-db-layer` · 2026-10-22 · taken from the DDL in the code (branch
-`store-split`). Design rationale lives in `store-split-design.md`; this file
-is the reference for *what is stored where*, with diagrams.
+Strand `corp-db-layer` · 2026-10-22, updated 2026-10-24 · taken from the
+DDL in the code (`core/src/stores/`, `sandbox/cell_db_convert.py`). Design
+rationale lives in `store-split-design.md` and `publish-design.md`; this
+file is the reference for *what is stored where*, with diagrams. As of
+2026-10-23 every nora stack serves from this layout.
 
 ## 1. The picture
 
@@ -13,28 +15,34 @@ flowchart LR
     adapter["SIRA adapter<br/>corpus.jsonl + fingerprints.jsonl"]
     sira["SIRA lane<br/>vanilla bm25x index + phrases"]
     conv["cell_db_convert"]
-    tb["trees_build"]
-    hb["history_build"]
-    parse --> adapter --> sira --> conv
-    parse --> tb --> hb
+    pub["publish<br/>(trees_build + history_build inside;<br/>stage, gate, flip, gc)"]
+    parse --> adapter --> sira --> conv --> pub
+    parse --> pub
+  end
+
+  subgraph root["serving root (one per stack, mounted ro)"]
+    reg[("registry.db<br/>store_version, release_set,<br/>gate_run, active, flip")]
+    cells[("Cells<br/>cells/cell-&lt;mno&gt;-&lt;rel&gt;-vN.db")]
+    trees[("Trees<br/>trees/trees-&lt;mno&gt;-&lt;rel&gt;-vN.db")]
+    hist[("History<br/>history/history-&lt;mno&gt;-vN.db")]
   end
 
   subgraph store["nora-store (one process)"]
-    cells[("Cells<br/>cell-&lt;mno&gt;-&lt;rel&gt;.db")]
-    trees[("Trees<br/>trees-&lt;mno&gt;-&lt;rel&gt;.db")]
-    hist[("History<br/>history-&lt;mno&gt;.db")]
-    ovl[("Overlay<br/>overlay.db or JSON")]
+    ovl[("Overlay<br/>overlay.db (corrections dir)")]
     compose["compose at load:<br/>vanilla + SIRA + Overlay → BM25"]
     query["POST /query"]
     api["/stores/&lt;store&gt;/v1"]
-    cells --> compose --> query
+    reload["POST /registry/reload"]
+    compose --> query
     ovl --> compose
-    cells & trees & hist & ovl --> api
+    ovl --> api
   end
 
-  conv -->|write-once| cells
-  tb -->|write-once| trees
-  hb -->|write-once| hist
+  pub -->|write-once, versioned| cells & trees & hist
+  pub -->|release set, flip| reg
+  reg -->|active set| reload --> compose
+  cells --> compose
+  trees & hist --> api
 
   subgraph web["nora-web (web layer only)"]
     ask["Ask page"]
@@ -47,11 +55,14 @@ flowchart LR
   peer["peer nora-store<br/>(A/B stack)"] -->|"NORA_OVERLAY_URL (read)"| api
 ```
 
-- **Write-once:** Cells, Trees, History. A new version is a new file; a
-  rebuild is the migration.
-- **Mutable:** Overlay only. One writer: the nora-store that hosts it (the
-  *authority*). nora-web sends edits over HTTP; a peer store reads it over
-  HTTP.
+- **Write-once:** Cells, Trees, History. A new version is a new file
+  (`-vN`); several versions of one unit coexist in the serving root; a
+  rebuild is the migration. The registry's `active` rows say which
+  version each stack serves (§10).
+- **Mutable:** Overlay (one writer: the nora-store that hosts it, the
+  *authority*; nora-web sends edits over HTTP; a peer store reads it over
+  HTTP) and the registry (written only by the publish CLI; nora-store
+  reads it).
 - nora-web keeps no corpus data. Its file backends exist only as a dev
   fallback when the `NORA_<STORE>_URL` variables are unset.
 
@@ -74,9 +85,12 @@ row).
 
 ## 3. Cells — retrieval
 
-One SQLite file per (MNO, release): `cell-<mno>-<release>.db`, schema 2.
-Built by `sandbox/cell_db_convert.py` from the SIRA flat build. Read by
-nora-store at start; the index is composed in memory (§7).
+One SQLite file per (MNO, release) version: `cell-<mno>-<release>.db` as
+the converter writes it, `cells/cell-<mno>-<release>-vN.db` once
+`publish` has staged it in a serving root. Schema 2. Built by
+`sandbox/cell_db_convert.py` from the SIRA flat build. Read by nora-store
+at start (the registry's active set, or `NORA_STORE_ROOT` in dev); the
+index is composed in memory (§7).
 
 ```mermaid
 erDiagram
@@ -119,10 +133,13 @@ erDiagram
 
 ## 4. Trees — parsed requirement trees
 
-One SQLite file per (MNO, release): `trees-<mno>-<release>.db`, schema 1.
-Built by `core.src.stores.trees_build` from `out/parse/<mno>/<release>/*_tree.json`.
-The file backend over `out/parse` is the default; `NORA_TREES_ROOT` selects
-SQLite.
+One SQLite file per (MNO, release) version: `trees-<mno>-<release>.db`
+from the builder, `trees/trees-<mno>-<release>-vN.db` in a serving root.
+Schema 1. Built by `core.src.stores.trees_build` from
+`out/parse/<mno>/<release>/*_tree.json` (`publish` runs it). Backend
+precedence: `NORA_TREES_ROOT` (a directory of files) → the registry's
+active set (`NORA_STORE_REGISTRY`) → the file backend over `out/parse`
+(dev fallback).
 
 ```mermaid
 erDiagram
@@ -181,10 +198,12 @@ flowchart TD
 
 ## 5. History — release lineage per MNO
 
-One SQLite file per MNO: `history-<mno>.db`, schema 1. Built by
+One SQLite file per MNO version: `history-<mno>.db` from the builder,
+`history/history-<mno>-vN.db` in a serving root. Schema 1. Built by
 `core.src.stores.history_build` from the Trees store across the MNO's
-releases, in release order. Derived data: rebuilt, never edited.
-`NORA_HISTORY_ROOT` selects it.
+releases, in release order (`publish` runs it whenever an MNO's Trees
+changed). Derived data: rebuilt, never edited. Backend precedence:
+`NORA_HISTORY_ROOT` → the registry's active set → not served.
 
 ```mermaid
 erDiagram
@@ -276,12 +295,16 @@ flowchart TD
 
 ## 6. Overlay — review edits (the only mutable store)
 
-Per deployment. Backends: the JSON file layout (today's default,
-`<corrections>/sira-enrich/{<MNO>.json, accepted-labels.json, labels.json,
-reason-categories.json}`) or SQLite (`NORA_OVERLAY_DB`). Both return
-byte-identical entries, so digests do not depend on the backend. Written
-only by the authority nora-store, through `POST /stores/overlay/v1/edit`;
-read by nora-store for composition (§7) and by nora-web for the review UI.
+Per deployment. Backends: SQLite (`NORA_OVERLAY_DB`, the deployment
+backend since 2026-10-23, D-DRAFT-34: `<corrections>/overlay.db`) or the
+JSON file layout (`<corrections>/sira-enrich/{<MNO>.json,
+accepted-labels.json, labels.json, reason-categories.json}` — the
+migration source and dev fallback; `overlay_import` copies it once).
+Both return byte-identical entries, so digests do not depend on the
+backend. Written only by the authority nora-store, through
+`POST /stores/overlay/v1/edit`; read by nora-store for composition (§7)
+and by nora-web for the review UI. Not published: it lives with the
+deployment, outside the registry.
 
 ```mermaid
 erDiagram
@@ -346,7 +369,7 @@ sequenceDiagram
   participant Q as POST /query
   S->>C: load vanilla index + sira_phrases + fingerprints
   S->>O: get_overlay(mno), accepted labels
-  S->>S: per req: effective = suppress_all ? adds : (SIRA − removes) + adds<br/>(fingerprint / same-release / Jaccard guard; else held)
+  S->>S: per req: effective = suppress_all ? adds : (SIRA − removes) + adds<br/>(fingerprint / same-release / Jaccard guard, otherwise held)
   S->>S: enrich_batch(effective) → serving index (memory)
   Q->>S: question
   S-->>Q: scope → BM25 per cell → merge → rank
@@ -359,10 +382,12 @@ Measured 2026-10-22: 1.4 s to compose 5 cells (40k rows); no cache (D-DRAFT-23).
 
 | Variable | On | Meaning |
 |---|---|---|
-| `NORA_STORE_ROOT`, `NORA_STORE_INDEX=cell-db`, `NORA_STORE_ENGINE=bm25x` | nora-store | where the cell DBs are; serving mode |
-| `NORA_STORE_CORRECTIONS_ROOT` / `NORA_OVERLAY_DB` | nora-store (authority) | Overlay backend: JSON root or SQLite file |
+| `NORA_STORE_REGISTRY` (compose: `SERVE_REGISTRY_ROOT` → `/data/serve/registry.db`) | nora-store | **served stacks:** cells, Trees and History from the registry's `active` set; implies cell-db mode |
+| `NORA_STORE_RELEASE_SET` (compose: `SERVE_RELEASE_SET`) | nora-store | serve a staged release set instead of `active` (the gate's staging store) |
+| `NORA_OVERLAY_DB` | nora-store (authority) | the Overlay SQLite file (deployment backend); `NORA_STORE_CORRECTIONS_ROOT` alone = the JSON layout (dev) |
 | `NORA_OVERLAY_URL` | peer nora-store | read a shared Overlay from the authority; writes refused |
-| `NORA_ENV_DIR`, `NORA_TREES_ROOT`, `NORA_HISTORY_ROOT` | nora-store | Trees (file or SQLite) and History roots |
+| `NORA_STORE_ROOT`, `NORA_STORE_INDEX=cell-db`, `NORA_STORE_ENGINE=bm25x` | nora-store (dev/test without a registry) | a directory of cell DBs; serving mode and engine |
+| `NORA_TREES_ROOT`, `NORA_HISTORY_ROOT`, `NORA_ENV_DIR` | nora-store (dev/test) | explicit Trees / History directories (win over the registry); the parse trees as the Trees file fallback |
 | `NORA_OVERLAY_URL`, `NORA_TREES_URL`, `NORA_HISTORY_URL` | nora-web | use the store over HTTP (default `http://nora-store:8040`); unset = local file fallback |
 | `NORA_STORE_URL(S)` | nora-web | retrieval and Apply targets |
 
@@ -382,4 +407,98 @@ and set that store's URL on every consumer. Cells stays with `POST /query`
   migration. Overlay gets in-place migrations when its schema first changes.
 - HTTP routes are versioned in the path (`/v1`).
 - Error-code families: `CNV-` (converter), `TRS-` (Trees), `HIS-` (History),
-  `OVL-` (Overlay).
+  `OVL-` (Overlay), `PUB-` (publish CLI), `REG-` (registry file).
+- The registry has its own `schema_version` in `meta` (1); an unsupported
+  one is refused (`REG-E003`), never migrated in place.
+
+## 10. Registry — what each stack serves (`registry.db`)
+
+One SQLite file at the top of each stack's serving root, written only by
+`python -m core.src.stores.publish`, read by nora-store at start and on
+`POST /registry/reload`. Design and pipeline: `publish-design.md`.
+
+```mermaid
+erDiagram
+  store_version ||--o{ release_set_member : "in"
+  release_set ||--o{ release_set_member : "has"
+  release_set ||--o{ gate_run : "gated by"
+  release_set ||--o{ flip : "target of"
+  store_version {
+    TEXT store PK "cells | trees | history"
+    TEXT unit PK "mno__release, or mno for history"
+    INTEGER version PK "per-unit counter"
+    TEXT fingerprint "content identity (source_fingerprint; history: hash of its Trees inputs)"
+    TEXT file "relative path under the serving root"
+    TEXT sha256 "of the file as staged"
+    INTEGER bytes
+    TEXT schema_version "reuse keys on fingerprint + schema"
+    TEXT staged_at
+    TEXT staged_by
+    TEXT removed_at "set by gc; the row stays"
+  }
+  release_set {
+    TEXT label PK "the build label"
+    TEXT created_at
+    TEXT created_by
+    TEXT note
+    TEXT code_version "NORA_CODE_VERSION of the publishing image"
+    TEXT prompt_scheme
+  }
+  release_set_member {
+    TEXT label PK,FK
+    TEXT store PK,FK
+    TEXT unit PK,FK
+    INTEGER version FK
+  }
+  gate_run {
+    INTEGER id PK
+    TEXT label FK
+    TEXT kind "golden-stage1 | golden-stage2 | manual"
+    TEXT run_ref "eval run id"
+    TEXT verdict "pass | fail | waived"
+    TEXT recorded_at
+    TEXT recorded_by
+    TEXT note
+  }
+  active {
+    TEXT store PK
+    TEXT unit PK
+    INTEGER version
+    TEXT label "the set that set it"
+    TEXT since
+  }
+  flip {
+    INTEGER id PK
+    TEXT label "target set"
+    TEXT kind "flip | rollback"
+    TEXT from_label
+    TEXT at
+    TEXT by
+    TEXT mode "staged | expedited | override"
+    TEXT note
+  }
+```
+
+- `active` is the only row set serving reads; everything else is
+  provenance. After a flip it equals exactly one set's members
+  (D-DRAFT-32), so healthz `registry_label` is that label.
+- A release set is complete (every unit the stack serves); units a
+  publish did not rebuild are inherited from the base set.
+- A flip needs a passing gate — the latest run per kind decides, all
+  kinds pass or are waived (D-DRAFT-33); `--force --reason` records a
+  waived manual run. Flip and rollback are one transaction each.
+- `gc --keep N` removes the files of versions outside the active set, the
+  last N sets and the last N flip targets; rows stay with `removed_at`.
+- Postgres-portable (TEXT / INTEGER, no autoincrement); SQLite in dev/test
+  deployments, the corp backend open (store-split §10.4).
+
+```mermaid
+flowchart LR
+  B["verified build"] --> P["publish: identify units from meta,<br/>reuse by fingerprint + schema,<br/>rebuild History where Trees changed"]
+  P --> S["stage: copy, sha256, rename<br/>under the registry write lock"]
+  S --> G["gate: staging store serves the set<br/>(NORA_STORE_RELEASE_SET); golden run recorded"]
+  G --> F["flip: active := set, one transaction"]
+  F --> V["verify: POST /registry/reload,<br/>healthz registry_label + registry_versions"]
+  F -. rollback = flip to the previous label .-> F
+  V --> GC["gc --keep N"]
+```

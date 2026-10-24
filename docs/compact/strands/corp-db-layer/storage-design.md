@@ -1,6 +1,19 @@
 # Storage design — dev/test and corp-prod deployment
 
 > **2026-10-21:** §2.1 (baked enriched cell DB) and §5a step 1 are superseded by `store-split-design.md` (four stores, composed index).
+>
+> **2026-10-24 — as built.** This document is the phase-1–3 design and
+> the corp framing; it is kept for the reasoning. What stands today:
+> the four stores (`store-split-design.md`, `store-schema.md`) and the
+> registry publish path (`publish-design.md`) serve **every** nora stack,
+> dev/test included — not corp only, as §1 assumed. The `CorpusStore`
+> seam of §3 became one protocol per store (store-split §5); the
+> registry of §2.2 became `publish-design.md` §3; the publish pipeline
+> of §5a became `publish-design.md` §4; §6 is amended in place below.
+> Still open and deferred to later strands: the corp transfer and the
+> corp backend question (§8 points 3 and 7) and the runtime DBs (§2.3,
+> §8 point 2). Phase 4 of §5 is complete locally (4a + 4b); 4c (corp) is
+> not started.
 
 Strand: `corp-db-layer` · Draft v0.9, 2026-10-11 · Status: approved in review
 (v0.2: engine-agnostic cell schema, registry tiers + scale analysis,
@@ -324,7 +337,11 @@ flat files.
 **Phase 4 — full migration + corp.** All cells converted, cell DB
 becomes the default build output, the DB-backed stack becomes the
 official NORA, and that stack migrates to corp with the publish
-pipeline below.
+pipeline below. *Status 2026-10-24:* the local half is done — 4a (store
+split, `phase-4-plan.md`) and 4b (registry publish) are built, and all
+three served stacks run from their registries with the Overlay on
+SQLite; the corp half (4c: transfer, first corp publish, backend) is a
+later strand.
 
 ## 5a. Publish pipeline (phase 4 — replaces promote.sh + serve-push.sh for corp)
 
@@ -354,20 +371,26 @@ serving may adopt the same cell-DB path (optional, later).
 
 ## 6. Artifact disposition (complete mapping from artifact-inventory.md)
 
-| Artifact today | Corp-prod | Dev/test |
+Amended 2026-10-24 to the as-built state. "Served stacks" = every nora
+stack today (trial and the A/B pair); "build side" = the dev/test build
+machine, unchanged.
+
+| Artifact today | Served stacks (as built) | Build side |
 |---|---|---|
-| `out/parse` trees | `requirements` table in cell DBs | unchanged files |
-| SIRA `corpus.jsonl` + enrichments | same cell DBs (`requirements` + `enrichment`) | unchanged |
-| SIRA `index/best/` | not shipped (rebuild at load; FTS5 optional later) | unchanged |
-| `out/taxonomy/taxonomy.json` | not deployed — ingestion/build artifact; its only serve-time consumer is the taxonomy-corrections surface, which is dev-only per the scope ruling. Rides labels today solely for dev-serve surfaces | unchanged flat build file |
-| Chroma vectorstore | dropped | optional, experiments only |
-| Knowledge graph | dropped (tables reserved, later) | unchanged (stage off) |
-| `serve/<label>` + MANIFEST + flip | registry.db (`cell_versions` + `active`) | unchanged locally |
-| Jobs / metrics / config / feedback SQLite | feedback required; config/metrics optional; jobs absent | unchanged |
-| Enrichment overlay, pipeline corrections, annotations | not deployed (dev-only surface; a future MNO onboarding runs them in dev, outputs flow into the next publish) | unchanged |
-| Golden samples + runs | not deployed; golden runner targets corp staging over HTTP | unchanged |
-| Eval workbooks, reports, parse logs | not deployed | unchanged |
-| Roster, config/*.json, profiles, mappings, prompts | git/image, as today | unchanged |
+| `out/parse` trees | **Trees store**: `trees-<mno>-<rel>-vN.db` per cell in the stack's serving root, built by `publish`; served over `/stores/trees/v1` | unchanged files (the builder's input) |
+| SIRA `corpus.jsonl` + enrichments | **Cells store** (schema 2): corpus rows + raw SIRA phrases + the **vanilla** index blob, `cell-<mno>-<rel>-vN.db`; the Overlay is composed at load | unchanged flat cells (the converter's input) |
+| SIRA `index/best/` | shipped as the vanilla index blob inside the cell DB (`bm25x` engine; byte-exact parity) | unchanged |
+| Release lineage (new) | **History store**: `history-<mno>-vN.db` derived from Trees at publish; served over `/stores/history/v1` | — |
+| `out/taxonomy/taxonomy.json` | not served — build artifact (feeds SIRA enrichment prompts); the taxonomy-corrections surface is dev-only | unchanged |
+| Chroma vectorstore | dropped from serving | optional, experiments only |
+| Knowledge graph | dropped (stage off) | unchanged |
+| `serve/<label>` + MANIFEST + flip | **registry.db** per serving root (store versions, release sets, gate runs, `active`, flips); `publish flip` / `rollback`; healthz `registry_label` | `promote.sh` / `serve-flip.sh` remain for dev/test-only stacks; label dirs are the converter's flat input |
+| Jobs / metrics / config / feedback SQLite | unchanged: nora-web's own files under `WEB_STATE_DIR` (per stack) and `FEEDBACK_DIR` (pooled). Moving them behind nora-store is a separate strand | unchanged |
+| Enrichment overlay | **Overlay store**, live: `overlay.db` on the authority nora-store (SQLite, D-DRAFT-34); nora-web edits over HTTP; peers read via `NORA_OVERLAY_URL`; the JSON files are the import-time backup | — |
+| Pipeline corrections, annotations | dev-side pipeline inputs, unchanged | unchanged |
+| Golden samples + runs | unchanged: JSON files under `GOLDEN_DIR` (pooled), read by nora-web and nora-batch; separate strand | unchanged |
+| Eval workbooks, reports, parse logs | not served | unchanged |
+| Roster, config/*.json, profiles, mappings, prompts | git/image, as today (prompts load from the image's SIRA clone) | unchanged |
 
 ## 7. Invariants carried over (and where they now live)
 
@@ -401,10 +424,14 @@ serving may adopt the same cell-DB path (optional, later).
 
 1. ~~BM25 engine choice~~ — superseded: engine-agnostic file + three
    engines, phase-2 eval adjudicates (§4, 2026-10-09).
-2. Corp metrics/config DBs: ship or omit at first deployment? (phase 4)
+2. Corp metrics/config DBs: ship or omit at first deployment? — open;
+   with the runtime DBs still nora-web's own files, this belongs to the
+   runtime-DB strand (2026-10-24).
 3. Transfer mechanism dev → corp volume (rsync/scp vs an upload
    endpoint on a corp-side admin service): depends what corp network
-   allows between the dev PCs and corp storage. (phase 4)
+   allows between the dev PCs and corp storage. — open; `publish`'s
+   `Transfer` is the seam (`LocalTransfer` built), the remote
+   implementation is the 4c strand's first item (2026-10-24).
 4. ~~`NORA_SURFACE=ask|full`~~ — resolved 2026-10-21: the team-mode gate
    (FR-41) replaces it; no separate surface knob (D-DRAFT-20).
 5. ~~The §7 overlay-semantics change~~ — superseded 2026-10-21: Overlay
@@ -423,5 +450,11 @@ serving may adopt the same cell-DB path (optional, later).
    `cell_versions` is the natural home if dedup ever earns its
    complexity. Converter output lives outside the serve root
    (`<data-root>/cell-dbs/<label>/<stack>/`); labels and promote.sh
-   untouched in phases 1–3.
-7. Corp backend for the mutable stores — see `store-split-design.md` §9.4.
+   untouched in phases 1–3. *As built (2026-10-24):* one serving root
+   and registry per stack; within a root the registry reuses a unit by
+   fingerprint + schema version (D-DRAFT-31), so republishing unchanged
+   content copies nothing; across roots nothing is shared (the stacks'
+   labels differ anyway).
+7. Corp backend for the mutable stores — see `store-split-design.md`
+   §9.4. *Dev/test deployments:* SQLite for both the Overlay
+   (D-DRAFT-34) and the registry; corp still open.
