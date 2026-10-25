@@ -73,8 +73,9 @@ paths (`$HOME` does not expand there).
     ├── web-state-b/                   #   (stack identity = directory, not filename)
     ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)
     ├── corrections/                   # ONE pooled dir: enrichment-review overlay
-    │                                  #   (nora-store writes — the Overlay
-    │                                  #   authority — and applies it at load)
+    │   ├── overlay.db                 #   the Overlay store (nora-store writes — the
+    │   └── sira-enrich/*.json         #   authority — and applies it at load); JSON =
+    │                                  #   the import-time backup, dev fallback
     └── models/
         └── docling/                   # DOCLING_ARTIFACTS -> /data/models/docling
 
@@ -104,8 +105,8 @@ Optional: the Ask page can offer a **named roster** of endpoints instead of the
 single `NORA_LLM_*` pair. Point `NORA_LLM_CONFIG` (in `.env.nora-web`) at a JSON
 roster file. The path resolves inside the container, so keep the file under
 `WEB_STATE_DIR` and reference it as `/data/web-state/llm.json` — that mount is
-per-stack and, unlike `/data/env`, is untouched by `promote.sh`, so the roster
-survives a promote. A missing or unreadable path warns and falls back to no
+per-stack and, unlike `/data/env`, is untouched by a promote or a publish
+and flip, so the roster survives both. A missing or unreadable path warns and falls back to no
 roster at all.
 
 Deployments built from the internal repo use the committed roster instead
@@ -695,7 +696,80 @@ a full rebuild re-enriches everything anyway.
 
 (Full scenario matrix: `sandbox/README.md` §2 — same commands, containerized.)
 
-### Phase 6 — promote + serve
+### Phase 6 — publish + serve
+
+**Registry publish — the serve path for every served stack (strand
+corp-db-layer 4b; flows in `docs/architecture.md` §21).** Every served
+stack runs it since 2026-10-23; the label-directory path below
+(`promote.sh`, `serve-flip.sh`, `PROMOTE_LOG`) is for dev/test stacks
+and produces the converter's flat input. The registry path replaces the unit (a store
+version per cell or MNO instead of a whole label), the pointer (`active`
+rows in `<serve-root>/registry.db` instead of env-file paths) and the
+log (`flip` table instead of `PROMOTE_LOG`), and keeps the gate and the
+one-command rollback. The CLI runs in a `nora-batch` container of the
+stack's project (images built at or after the 4b commit; the batch
+image carries the publish module and bakes `NORA_CODE_VERSION`), with
+`--store-url` naming the store by its service name — a container cannot
+reach its own stack's published port through the host gateway:
+
+```bash
+# 0 convert the label's SIRA cells (sira-batch image; identity gate on)
+python -m sandbox.cell_db_convert --label <serve>/<label> --out <work>/cells --verify 25
+# 1–2 publish + stage: Cells from the converter's output (or --sira-root
+#     to run it), Trees from the build's parse output; History is rebuilt
+#     per MNO whose Trees changed; unchanged units are reused (no copy).
+#     --prompt-scheme is recorded on the release set and reported by healthz.
+python -m core.src.stores.publish publish --serve-root <serve-root> --label <YYYY-MM-DD-a> \
+    --cells-src <work>/cells --env-dir <serve>/<label>/nora --prompt-scheme <scheme> [--dry-run]
+# 3 gate: point a staging nora-store at the staged set (SERVE_RELEASE_SET=<label>
+#     in its wiring .env), run the golden eval against it, record the verdicts
+python -m core.src.stores.publish gate --serve-root <serve-root> --label <YYYY-MM-DD-a> \
+    --kind golden-stage1 --verdict pass --run-ref <run id>
+# 4–5 flip (one transaction), reload the serving store and verify its healthz
+python -m core.src.stores.publish flip --serve-root <serve-root> --label <YYYY-MM-DD-a> \
+    --store-url http://nora-store:8040
+# rollback = the previous label (the flip prints the command)
+python -m core.src.stores.publish rollback --serve-root <serve-root> --to <previous> \
+    --store-url http://nora-store:8040
+python -m core.src.stores.publish gc --serve-root <serve-root> --keep 3     # files only; rows stay
+python -m core.src.stores.publish status --serve-root <serve-root>
+```
+
+The stack reads the registry when the wiring `.env` sets
+`SERVE_REGISTRY_ROOT=<serve-root>` (mounted read-only at `/data/serve`;
+`STORE_ROOT` / `TREES_ROOT` / `HISTORY_ROOT` are then unused by
+nora-store). A flip without a passing gate is refused; `--force --reason
+"<why>"` records the waiver as a manual gate run and flips in `override`
+mode. `GET /healthz` on nora-store reports `registry_label` and
+`registry_versions` (version + fingerprint per unit), and
+`POST /registry/reload` swaps only the units whose file changed — no
+recreate. Registry files are write-once; a label never changes meaning.
+
+**Moving a running stack onto the registry** (done once per stack):
+publish its current label into a new serving root, gate it from a
+staging nora-store (own compose project, spare port,
+`SERVE_RELEASE_SET=<label>`, Overlay read from the live authority), set
+`SERVE_REGISTRY_ROOT` in the wiring `.env`, recreate the store (it
+starts with 0 cells and its prompts loaded), then `publish flip
+--store-url …`. Keep the previous wiring `.env` as the rollback.
+
+**Overlay onto SQLite** (the authority stack, once): run
+`python -m core.src.stores.overlay_import --corrections-root /data/corrections --db /data/corrections/overlay.db`
+in a throwaway `nora-batch` container with the corrections dir mounted
+at `/data/corrections` as the host user (the batch service has no
+corrections mount), then set `NORA_OVERLAY_DB=/data/corrections/overlay.db`
+in `.env.nora-store` and recreate the store. The import verifies both
+backends read equal; the JSON files stay as the backup of the
+import-time state — edits made after the switch live only in
+`overlay.db`. Per-MNO and per-label digests must be equal before and
+after.
+
+#### Dev/test path — label directories (`promote.sh`, `serve-flip.sh`)
+
+A dev/test stack may mount a flat label directly instead of a serving
+root. The same scripts produce the flat label that the registry path
+converts and publishes, so Phase 6 on the build machine always starts
+here; only the serving half differs.
 
 ```bash
 # SIRA-only path: promote the sira build alone (out/ has no vectorstore/
@@ -705,7 +779,7 @@ a full rebuild re-enriches everything anyway.
 ./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
     --sira-build /home/<you>/nora-data/sira-builds/<build>
 
-# stack .env: NORA_ENV_DIR/STORE_ROOT -> serve/<label>/{nora,sira}, then
+# dev/test stack .env: NORA_ENV_DIR/STORE_ROOT -> serve/<label>/{nora,sira}, then
 # RECREATE (a plain `restart` does NOT re-read .env or the env_files —
 # recreate does):
 docker compose --env-file <stack .env> --profile serve up -d
@@ -759,69 +833,6 @@ Rollback levers, most→least granular:
 Known limit: per-MNO **query/relevance** prompts are generated but the
 query-time service still loads a single pair — per-cell selection there is
 a deferred change (strand journal 2026-07-24).
-
-**Registry publish — the serve path for every served stack (strand
-corp-db-layer 4b; `publish-design.md`).** All three served stacks run
-it since 2026-10-23; the label-directory path above (`promote.sh`,
-`serve-flip.sh`, `PROMOTE_LOG`) is for dev/test stacks and as the
-converter's flat input. The registry path replaces the unit (a store
-version per cell or MNO instead of a whole label), the pointer (`active`
-rows in `<serve-root>/registry.db` instead of env-file paths) and the
-log (`flip` table instead of `PROMOTE_LOG`), and keeps the gate and the
-one-command rollback. The CLI runs in a `nora-batch` container of the
-stack's project (images built at or after the 4b commit; the batch
-image carries the publish module and bakes `NORA_CODE_VERSION`), with
-`--store-url` naming the store by its service name — a container cannot
-reach its own stack's published port through the host gateway:
-
-```bash
-# 1–2 publish + stage: Cells from the converter's output (or --sira-root
-#     to run it), Trees from the build's parse output; History is rebuilt
-#     per MNO whose Trees changed; unchanged units are reused (no copy).
-python -m core.src.stores.publish publish --serve-root <serve-root> --label <YYYY-MM-DD-a> \
-    --cells-src <cell-dbs> --env-dir <nora-build> [--dry-run]
-# 3 gate: point a staging nora-store at the staged set (SERVE_RELEASE_SET=<label>
-#     in its wiring .env), run the golden eval against it, record the verdicts
-python -m core.src.stores.publish gate --serve-root <serve-root> --label <YYYY-MM-DD-a> \
-    --kind golden-stage1 --verdict pass --run-ref <run id>
-# 4–5 flip (one transaction), reload the serving store and verify its healthz
-python -m core.src.stores.publish flip --serve-root <serve-root> --label <YYYY-MM-DD-a> \
-    --store-url http://127.0.0.1:${STORE_PORT}
-# rollback = the previous label (the flip prints the command)
-python -m core.src.stores.publish rollback --serve-root <serve-root> --to <previous> \
-    --store-url http://127.0.0.1:${STORE_PORT}
-python -m core.src.stores.publish gc --serve-root <serve-root> --keep 3     # files only; rows stay
-python -m core.src.stores.publish status --serve-root <serve-root>
-```
-
-The stack reads the registry when the wiring `.env` sets
-`SERVE_REGISTRY_ROOT=<serve-root>` (mounted read-only at `/data/serve`;
-`STORE_ROOT` / `TREES_ROOT` / `HISTORY_ROOT` are then unused by
-nora-store). A flip without a passing gate is refused; `--force --reason
-"<why>"` records the waiver as a manual gate run and flips in `override`
-mode. `GET /healthz` on nora-store reports `registry_label` and
-`registry_versions` (version + fingerprint per unit), and
-`POST /registry/reload` swaps only the units whose file changed — no
-recreate. Registry files are write-once; a label never changes meaning.
-
-**Moving a running stack onto the registry** (done once per stack):
-publish its current label into a new serving root, gate it from a
-staging nora-store (own compose project, spare port,
-`SERVE_RELEASE_SET=<label>`, Overlay read from the live authority), set
-`SERVE_REGISTRY_ROOT` in the wiring `.env`, recreate the store (it
-starts with 0 cells and its prompts loaded), then `publish flip
---store-url …`. Keep the previous wiring `.env` as the rollback.
-
-**Overlay onto SQLite** (the authority stack, once): run
-`python -m core.src.stores.overlay_import --corrections-root /data/corrections --db /data/corrections/overlay.db`
-in a throwaway `nora-batch` container with the corrections dir mounted
-at `/data/corrections` as the host user (the batch service has no
-corrections mount), then set `NORA_OVERLAY_DB=/data/corrections/overlay.db`
-in `.env.nora-store` and recreate the store. The import verifies both
-backends read equal; the JSON files stay as the backup of the
-import-time state — edits made after the switch live only in
-`overlay.db`. Per-MNO and per-label digests must be equal before and
-after.
 
 ## Variant lineages — comparing ideas, not code
 
@@ -887,11 +898,12 @@ reverse proxy (Caddy)" below.
    `--build-arg CODE_VERSION="$(git rev-parse --short HEAD)"` on
    `nora-web` and `nora-store` builds (surfaces as `code_version` on
    `/healthz`).
-3. **Promote with `--scheme <sira-prompt-scheme>`** so the label
-   MANIFEST records which enrichment-prompt scheme produced the served
-   data; the serving healthz (and through it every eval run) then
+3. **Record the scheme**: `publish --prompt-scheme <sira-prompt-scheme>`
+   on registry stacks (healthz reads it from the served release set), or
+   `promote.sh --scheme` on a dev/test stack (the label MANIFEST records
+   it); either way the serving healthz, and through it every eval run,
    attributes automatically. `SIRA_PROMPT_SCHEME` in the stack env
-   overrides for already-promoted labels.
+   overrides both.
 4. **`--stack-url` must point at the QUERY SERVICE, not the web app.**
    The web app answers `/healthz` with its HTML catch-all (HTTP 200),
    so a run against it reports "healthz snapshot unavailable", scores
@@ -909,10 +921,14 @@ reverse proxy (Caddy)" below.
 The two-variant instance of the lineage pattern above (with the LLM as
 the recipe delta). Same images; each stack gets its own wiring env + its
 own service runtime files. Per stack: STACK_NAME, ports, its `web-state-<x>/` directory, and the
-LLM-bearing runtime files. Shared (same values in both wiring envs):
-NORA_ENV_DIR, STORE_ROOT (one ingest serves both) and FEEDBACK_DIR (the
-pooled feedback DB → attributable A/B, D-120). To A/B *ingestions* instead of
-LLMs, point each stack's STORE_ROOT at a different `sira/<build>`.
+LLM-bearing runtime files, and its own serving root (`SERVE_REGISTRY_ROOT`;
+the same label published into each). Shared (same values in both wiring
+envs): NORA_ENV_DIR, CORRECTIONS_DIR with one stack's nora-store as the
+Overlay authority and the other reading it over `NORA_OVERLAY_URL` (see
+§Stores), and FEEDBACK_DIR (the pooled feedback DB → attributable A/B,
+D-120). To A/B *ingestions* instead of LLMs, flip each stack's registry to
+a different release set. (`STORE_ROOT` shared between stacks is the
+dev/test flat path.)
 
     # stack A
     cp env.example .env.stack-a            # STACK_NAME=stack-a, ports 8000/8040,
@@ -936,9 +952,11 @@ STACK_NAME in each env file names the compose project — no `-p` flag needed.
 All stack env files live in this same `docker/` directory (gitignored; only
 the `*.example` templates are committed). The pipeline/batch runtime files
 usually need no per-stack variants — ingest is stack-independent; run jobs
-with either wiring env. After ingesting a new cell (shared db_root), restart
-BOTH stacks' nora-store — a plain `restart` suffices here (data reload, same
-config); only env-file/.env CHANGES need an `up -d` recreate.
+with either wiring env. After ingesting a new cell, publish and flip it
+into EACH stack's serving root (`publish flip --store-url …` reloads the
+store; no restart). On a dev/test stack mounting a flat label, a plain
+`restart` of nora-store reloads the data; only env-file/.env CHANGES need
+an `up -d` recreate.
 
 ## Serving behind a reverse proxy (Caddy)
 
@@ -1013,9 +1031,12 @@ prefix.
 per-requirement enrichment keywords (MNO → Release → Plan), delete/add
 words (with campaign labels + reasons), and hit **Apply** — which reloads
 the affected cell on the serving nora-store so they can immediately
-re-test queries on the Test page. Corrections live as a delta overlay
-under `CORRECTIONS_DIR` (never inside builds or serve labels; they survive
-re-enrichment and re-promotion). With both a/b stacks live, set
+re-test queries on the Test page. Corrections live in the Overlay store,
+`overlay.db` under `CORRECTIONS_DIR` (`NORA_OVERLAY_DB`; the JSON files
+beside it are the import-time backup) — never inside builds, labels or
+serving roots, so they survive re-enrichment and every publish. Each edit
+is stamped with the requirement's content fingerprint and follows it into
+the next release when the text is unchanged. With both a/b stacks live, set
 `NORA_STORE_URLS` in `.env.nora-web.<x>` so one Apply reloads both
 (see env.nora-web.example). Team-mode gate admits the page.
 

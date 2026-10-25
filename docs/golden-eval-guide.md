@@ -307,7 +307,9 @@ Line by line:
   - `fp=` — served-data fingerprint (12-hex prefix); `cells=` — number
     of per-cell fingerprints behind it.
   - `code=` — serving code version (e.g. git sha).
-  - `scheme=` / `aprompt=` / `llm=` — SIRA enrichment prompt scheme,
+  - `scheme=` / `aprompt=` / `llm=` — SIRA enrichment prompt scheme
+    (from `publish --prompt-scheme` on registry stacks, the label
+    MANIFEST on dev/test stacks, or the `SIRA_PROMPT_SCHEME` override),
     Stage-2 answer-prompt version, LLM identity.
   - `knobs=N@digest` — count + 8-hex digest of the stack's retrieval
     knob tuple. Same digest = same knob settings; the full dict is in
@@ -515,10 +517,10 @@ set digest), the grid, who launched, when. It is paste-safe by
 construction (digests and counts only) and it is the document the
 results are read against.
 
-Campaigns and promotes never overlap: a running campaign holds the
+Campaigns and flips never overlap: a running campaign holds the
 serving host the way an open cycle holds the build machine. A flip
-under a campaign changes `fp=` mid-grid and orphans every cell after
-it.
+(`publish flip`, or a dev/test `serve-flip.sh`) under a campaign changes
+`fp=` mid-grid and orphans every cell after it.
 
 ### 5. Verify each cell as it lands, flip arms deliberately
 
@@ -562,8 +564,8 @@ experiment.
 When a campaign establishes what a stack currently serves — the
 accepted floor for its label — record it as the stack's **baseline** at
 `<nora-data>/eval-baselines/<stack>.txt`, where `<stack>` is the compose
-stack name as passed to `serve-flip.sh` (`$NORA_EVAL_BASELINES` overrides
-the directory; `serve-flip.sh` names the file in its hand-off).
+stack name (`STACK_NAME`; `$NORA_EVAL_BASELINES` overrides the
+directory).
 It lives outside the golden sets and the serve labels on purpose: a
 frozen set must stay frozen and a label is immutable. Keep the old file
 as `<stack>.txt.prev` on every refresh.
@@ -580,9 +582,12 @@ three `--stage 1` repeats on the same stamp. The file holds:
 - Stage 2 from the judged run, marked as a single run until there are
   repeats.
 
-That file is what a staged promote's eval is compared against
-(`docs/ingestion-guide.md` §6f), so it must always describe the label
-the stack serves *now*: refresh it from the first accepted series after
+That file is what the publish gate's eval is compared against: the
+candidate release set is served from a staging store
+(`SERVE_RELEASE_SET=<label>`), scored, and the verdict recorded with
+`publish gate --kind golden-stage1 --verdict … --run-ref <run id>`
+(`docs/ingestion-guide.md` §6g). So it must always describe the release
+set the stack serves *now*: refresh it from the first accepted series after
 every production flip, never from a `--mno`-filtered or
 snapshot-of-another-campaign run. A code change on the stack that keeps
 the label (a rebuilt query service) moves the stamp; append a note with

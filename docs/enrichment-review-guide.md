@@ -44,8 +44,8 @@ you do is visible to others until an admin merges it — so edit freely.
    - **Suppress all** wipes every enrichment on that requirement.
    - Set a **reason** (and optional note) per row — this is the
      evidence the prompt fix is built from. Don't skip it.
-4. **Edits save instantly** to disk. There is no save button; closing
-   the browser loses nothing.
+4. **Edits save instantly** to the Overlay store. There is no save
+   button; closing the browser loses nothing.
 5. **Preview** (optional): press the yellow *"corrections pending —
    Apply"* button. This loads *your branch* into the search service —
    only queries made with your label see it. Run your test queries,
@@ -62,13 +62,13 @@ you do is visible to others until an admin merges it — so edit freely.
    correction records) — click through the label's rows in the table
    to review before merging.
 2. **merge into main** — the label's corrections become part of
-   everyone's default view *on disk*.
+   everyone's default view *in the Overlay store*.
 3. Press **Apply all pending (N releases)** — it appears at the
    bottom of the Labels drawer whenever at least one release lags,
    and disappears once everything is in sync (hover it to see which
    releases it covers). This reloads every affected release so live
    queries actually serve the merged corrections. Until this press,
-   the merge exists only on disk.
+   the merge exists only in the store.
 4. **un-merge** retracts a label from main the same way (again followed
    by Apply all). **delete all** permanently deletes the label's
    records — the sanctioned cleanup *after* a prompt fix is confirmed
@@ -91,9 +91,13 @@ you do is visible to others until an admin merges it — so edit freely.
 ## Under the hood
 
 **Your edits never touch the LLM's output.** Corrections are stored as
-a *delta overlay*: one small JSON record per edited word — the word,
-direction (remove/add), your label, reason, name, timestamp, and the
-release you were viewing. The LLM's enrichment files are read-only.
+a *delta overlay*: one small record per edited word — the word,
+direction (remove/add), your label, reason, name, timestamp, the
+release you were viewing, and a fingerprint of the requirement's text
+as it was when you edited. The records live in the Overlay store (a
+small database owned by the search service, `nora-store`); the LLM's
+own phrases live in the published cell files and are read-only. Each
+edit is one request to the search service, applied in one transaction.
 Undo simply deletes the record. This is why nothing is ever lost and
 why the whole history can be exported as evidence.
 
@@ -112,21 +116,28 @@ merge/un-merge are instant and fully reversible.
 
 **"Pending" is a content comparison, not a guess.** The service
 remembers a digest of the corrections it applied at load time. The UI
-compares that against a digest of what's on disk for your view. Any
+compares that against a digest of the Overlay's current content for
+your view. Any
 difference — a new edit, a merge, an un-merge — shows as pending; an
 edit you fully undo goes back to "in sync" by itself.
 
-**Apply = reload, nothing more.** Pressing Apply tells the search
-service to re-read one release from disk and swap it in atomically.
-No index rebuild, no downtime, no operator. That's also why it's safe
-for anyone to press: it can only sync serving to what's already on
-disk — it can never publish an unmerged label into main.
+**Apply = recompose, nothing more.** Pressing Apply tells every
+configured search service to rebuild one release from its published
+cell file plus the Overlay's current records and swap it in atomically.
+No index rebuild from scratch, no downtime, no administrator. That's
+also why it's safe for anyone to press: it can only sync serving to
+what's already in the Overlay — it can never publish an unmerged label
+into main.
 
 **Corrections travel across releases.** They're stored per MNO, so a
 correction made in one release applies to every loaded release of that
-MNO — *if* the requirement's text is still similar enough (compared in
-index-word space). If the text changed too much, the correction is
-**held** instead, and you decide: Re-affirm (apply here too) or
+MNO. The check, in order: the requirement's text fingerprint in the
+other release equals the one stamped on your record (the text is
+identical) — applies; the record was made on that very release —
+applies; otherwise the requirement's index words are still similar
+enough to the release you edited (a fixed similarity threshold) —
+applies. If none holds, the correction is **held** instead, and you
+decide: Re-affirm (apply here too, which re-stamps the fingerprint) or
 Discard. This is also why an Apply-all after one edit can count more
 releases than you edited.
 
