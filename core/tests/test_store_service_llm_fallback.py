@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-import nora_store.service as svc
+import core.src.store_service.service as svc
 
 
 class _Resp:
@@ -100,7 +100,7 @@ def test_fallback_gets_its_own_reasoning_fields(monkeypatch):
 
 
 def test_fallback_reasoning_fields_rules():
-    from sandbox.llm_refusal import fallback_reasoning_fields as f
+    from core.src.llm.refusal import fallback_reasoning_fields as f
 
     core = {"NORA_LLM_FALLBACK_REASONING": "none",
             "NORA_LLM_FALLBACK_REASONING_CONTROL": "chat_template_kwargs"}

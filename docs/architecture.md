@@ -160,9 +160,9 @@ NORA ships as five container images from two Dockerfiles.
 
 | Image | Dockerfile stage | Plane | Runs as | Contains |
 |---|---|---|---|---|
-| `nora-batch` | `docker/nora.Dockerfile` → `nora-batch` | build, publish | one-shot job | `core/`, `customizations/`, `config/`, `sandbox/`, `nora_store/`; document extraction (docling, headless opencv); `NORA_CODE_VERSION` baked. CMD `bash`. |
+| `nora-batch` | `docker/nora.Dockerfile` → `nora-batch` | build, publish | one-shot job | `core/`, `customizations/`, `config/`, `sandbox/`; document extraction (docling, headless opencv); `NORA_CODE_VERSION` baked. CMD `bash`. |
 | `sira-batch` | `docker/store.Dockerfile` → `sira-batch` | build, publish | one-shot job | the repo plus the patched SIRA clone at `sandbox/sira`, the `bm25x` wheel, the three SIRA prompts. CMD `bash`. |
-| `nora-store` | `docker/store.Dockerfile` → `nora-store` | serve | long-lived service | same base as sira-batch; `uvicorn nora_store.service:app`. |
+| `nora-store` | `docker/store.Dockerfile` → `nora-store` | serve | long-lived service | same base as sira-batch; `uvicorn core.src.store_service.service:app`. |
 | `nora-web` | `docker/nora.Dockerfile` → `nora-web` | serve | long-lived service | same base as nora-batch without the batch extras; `uvicorn core.src.web.app:app`; LLM roster baked from the internal repo. |
 | `nora-store-test` | `docker/store.Dockerfile` → `nora-store-test` | test | one-shot | nora-store plus pytest; runs the store and converter suites. |
 
@@ -257,7 +257,7 @@ jobs. §9 closes with the full matrix of who talks to whom.
 flowchart TB
   subgraph nd["docker/nora.Dockerfile"]
     pyA["python:3.12-slim"] --> nbase["nora-base<br/>classical-TLS OpenSSL config,<br/>torch (CPU), requirements.txt"]
-    nbase --> nweb["nora-web<br/>+ core/ customizations/ config/ sandbox/ nora_store/<br/>CMD uvicorn core.src.web.app:app"]
+    nbase --> nweb["nora-web<br/>+ core/ customizations/ config/ sandbox/<br/>CMD uvicorn core.src.web.app:app"]
     nbase --> nbatch["nora-batch<br/>+ build-essential, docling, headless opencv<br/>import canary at build · CMD bash"]
   end
   subgraph sd["docker/store.Dockerfile"]
@@ -267,9 +267,9 @@ flowchart TB
     src0 & src1 -.->|"OFFLINE=0 / 1"| ssrc["sira-src"]
     pyc --> sbase["sira-base<br/>trimmed deps (no torch),<br/>repo + clone at sandbox/sira,<br/>install_configs.sh: nora.yaml configs + 3 prompts,<br/>build fails if query/rerank prompts missing"]
     ssrc --> sbase
-    sbase --> nstore["nora-store<br/>CMD uvicorn nora_store.service:app"]
+    sbase --> nstore["nora-store<br/>CMD uvicorn core.src.store_service.service:app"]
     sbase --> sbatch["sira-batch<br/>CMD bash"]
-    nstore --> ntest["nora-store-test<br/>+ pytest · ENTRYPOINT [] ·<br/>CMD pytest nora_store + converter suites"]
+    nstore --> ntest["nora-store-test<br/>+ pytest · ENTRYPOINT [] ·<br/>CMD pytest store_service + converter suites"]
   end
 ```
 
@@ -1150,7 +1150,7 @@ Merging a label sets `accepted` and rewrites nothing, so provenance
 survives. The disabled flag is stored and reported but not applied by the
 fold.
 
-**The fold** (`nora_store/enrich_overlay.py`), per requirement at cell
+**The fold** (`core/src/store_service/enrich_overlay.py`), per requirement at cell
 load and reload:
 
 1. Verdict per record, first match wins: record `fingerprint` equals the
@@ -1655,7 +1655,7 @@ itself does not vary by type; scope and synthesis do.
 | standards comparison, traceability | `standards_comparison`, `traceability` | as single_doc | same | broad; standards context only when the standards stage ran |
 | anything else | `general` | all MNOs at latest when none is named | same | narrow |
 
-Scope rules (`nora_store/scope.py`): named MNOs → those; none → all
+Scope rules (`core/src/store_service/scope.py`): named MNOs → those; none → all
 ingested MNOs. No release → each MNO's own latest; `latest` → the same.
 A named MNO with no cells, an unparseable release phrase, or a cell not
 ingested goes into `unresolved`, which the page shows rather than
@@ -1857,7 +1857,7 @@ it.
 | I11 | Edit semantics cannot drift between the web's local path and the authority's route. | both run `core/src/stores/overlay_ops`; parity tests per store (local vs HTTP) |
 | I12 | Both Overlay backends return byte-identical entries, so digests are backend-independent. | `overlay_import` verifies equality per MNO inside one transaction (`OVL-E003`); backend parity tests |
 | I13 | Cell files are a function of the build alone; the Overlay is never baked in (schema 2). | the converter stores vanilla blobs and raw phrases; the identity gate proves composed == baked; reload of a schema-1 cell answers 409 |
-| I14 | Local and HTTP backends return equal results for every store protocol method. | parity tests in `core/tests/test_stores_*` and `nora_store/test_stores_api.py` |
+| I14 | Local and HTTP backends return equal results for every store protocol method. | parity tests in `core/tests/test_stores_*` and `core/src/store_service/test_stores_api.py` |
 | I15 | An unsupported `schema_version` is refused, never migrated in place. | `SchemaVersionError` (`OVL-E005`, `TRS-E007`, `HIS-E006`), `REG-E003`; readers select columns by name and tolerate additive change |
 | I16 | Trees `load_tree` reproduces the JSON tree exactly, key order and requirement order included. | `req_json` verbatim, `req_key_pos`; `trees_build` verify step compares against the file backend |
 | I17 | History: a `version` row exists only when `node_fp`, `subtree_fp` or location changed; equal `subtree_fp` means nothing changed at or below the node except its own location. | `write_history_db`; `history_build` verify (self-diff of the latest release is empty) |
@@ -1929,8 +1929,6 @@ the opposite from the design.
 - **The query analyzer's `llm` arm reports as `rules`** in served paths
   because no served caller passes a provider; the `decision` arm is the
   one that makes a network call.
-- **`nora_store` has no MODULE.md.** Its contract is spread over
-  `core/src/stores/MODULE.md` and the service's docstrings.
 
 ### Documents
 

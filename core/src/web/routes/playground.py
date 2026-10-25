@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# URL of the SIRA per-query probe service (nora_store/service.py).
+# URL of the SIRA per-query probe service (core/src/store_service/service.py).
 # Defaults assume the service is started locally on port 8040; in
 # production deployments this typically points at a same-host service
 # the operator started alongside NORA's web app. See sandbox/SETUP.md

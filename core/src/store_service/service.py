@@ -20,7 +20,7 @@ Run (from the sandbox/sira/.venv):
 
     source ~/work/nora/sandbox/activate.sh
     export NORA_STORE_ROOT=$HOME/work/nora/sandbox/adapter/out
-    uvicorn nora_store.service:app --port 8040
+    uvicorn core.src.store_service.service:app --port 8040
 
 NORA's Test page (`/test`) gets a SIRA tab that posts to this service.
 See sandbox/SETUP.md "Per-query SIRA probe" for the full setup.
@@ -41,7 +41,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from sandbox.llm_refusal import (
+from core.src.llm.refusal import (
     fallback_reasoning_fields,
     is_permanent_refusal,
     parse_markers,
@@ -228,7 +228,7 @@ _FANOUT_PER_HIT = int(os.getenv("NORA_SIRA_FANOUT_PER_HIT", "50"))
 # package so it holds in the image (/app) and in a checkout alike.
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
-    str(Path(__file__).resolve().parents[1] / "sandbox" / "sira"),
+    str(Path(__file__).resolve().parents[3] / "sandbox" / "sira"),
 ))
 _QUERY_PROMPT_PATH = os.getenv(
     "NORA_QUERY_PROMPT",
@@ -406,7 +406,7 @@ def _code_version() -> str:
         return env
     try:
         import subprocess
-        repo = Path(__file__).resolve().parents[1]
+        repo = Path(__file__).resolve().parents[3]
         out = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5,
@@ -473,7 +473,7 @@ def _compute_identity() -> None:
 
 from dataclasses import dataclass, field  # noqa: E402
 
-from nora_store.enrich_overlay import (  # noqa: E402
+from core.src.store_service.enrich_overlay import (  # noqa: E402
     allowed_labels,
     apply_overlay_to_req,
     filter_overlay,
@@ -484,16 +484,16 @@ from core.src.stores.overlay_ops import view_digest  # noqa: E402
 from core.src.stores.history import SqliteHistoryStore, open_history_store  # noqa: E402
 from core.src.stores.registry import split_unit  # noqa: E402
 from core.src.stores.trees import SqliteTreeStore, open_tree_store  # noqa: E402
-from nora_store import stores_api  # noqa: E402
+from core.src.store_service import stores_api  # noqa: E402
 
 from core.src.query.analyzer import (  # noqa: E402
     MockQueryAnalyzer,
     make_query_analyzer_from_knob,
     query_analyzer_arm,
 )
-from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
-from nora_store.fusion import merge_candidates, rank_candidates  # noqa: E402
-from nora_store.scope import resolve_cells  # noqa: E402
+from core.src.stores.cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
+from core.src.store_service.fusion import merge_candidates, rank_candidates  # noqa: E402
+from core.src.store_service.scope import resolve_cells  # noqa: E402
 
 
 @dataclass
@@ -1089,7 +1089,7 @@ def _load_one_cell_db(db_path: Path) -> CellState:
     `_apply_overlay_and_enrich`, exactly as for a flat cell, so Apply and
     label views work. Mirrors the flat loader's id semantics (every row
     keeps its slot; id lookups are last-wins)."""
-    from nora_store.cell_db_store import load_cell_db
+    from core.src.store_service.cell_db_store import load_cell_db
 
     data = load_cell_db(db_path, keep_connection=(_ENGINE == "fts5"))
     if _ENGINE == "fts5" and data.composed:
@@ -1245,7 +1245,7 @@ def _build_retrieve_fn(query: str, raw_phrases: list[str], label: str = ""):
             # the scorer is the only A/B variable); scoring runs inside
             # SQLite via two MATCH passes combined per
             # search_with_expansion semantics.
-            from nora_store.cell_db_store import fts5_search
+            from core.src.store_service.cell_db_store import fts5_search
             hits = fts5_search(
                 cstate.db_con, cstate.bm25.tokenize(query), stems,
                 k, _EXPANSION_WEIGHT,
@@ -1647,7 +1647,7 @@ _reload_locks_guard = threading.Lock()
 
 
 def _parse_cell_or_404(cell_name: str) -> CellKey:
-    from sandbox.sira_cells import parse_cell_dirname
+    from core.src.stores.cells import parse_cell_dirname
     ck = parse_cell_dirname(cell_name)
     if ck is None or ck not in _cells:
         raise HTTPException(status_code=404, detail=f"unknown cell: {cell_name}")

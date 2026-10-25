@@ -13,8 +13,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-import nora_store.service as svc
-from nora_store.service import CellState
+import core.src.store_service.service as svc
+from core.src.store_service.service import CellState
 
 
 class _FakeBM25:
@@ -222,7 +222,7 @@ def test_explicit_base_url_keeps_own_key(monkeypatch):
 
 def test_rerank_bulk_tei(monkeypatch):
     import asyncio
-    from nora_store.fusion import Candidate
+    from core.src.store_service.fusion import Candidate
     monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, [
         ("req:a", "A", "x"), ("req:b", "B", "y")])})
     monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://tei:8080")
@@ -238,7 +238,7 @@ def test_rerank_bulk_tei(monkeypatch):
 
 def test_rerank_bulk_openai_dedicated(monkeypatch):
     import asyncio
-    from nora_store.fusion import Candidate
+    from core.src.store_service.fusion import Candidate
     monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, [("req:a", "A", "x")])})
     monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://dgx:8000")
     monkeypatch.setattr(svc, "_RERANK_LLM_MODEL", "bge-reranker")
@@ -266,7 +266,7 @@ def test_parse_rerank_response_shapes():
 
 def test_rerank_bulk_no_url_scores_zero(monkeypatch):
     import asyncio
-    from nora_store.fusion import Candidate
+    from core.src.store_service.fusion import Candidate
     monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, [("req:a", "A", "x")])})
     monkeypatch.setattr(svc, "_RERANK_LLM_URL", "")
     cands = [Candidate(VZW_F, "req:a", 1.0)]
@@ -291,7 +291,7 @@ def test_rerank_bulk_chunks_pool_under_batch_size(monkeypatch):
     # so no single /rerank request exceeds the endpoint's cap. Every candidate
     # is still scored (no all-zero collapse).
     import asyncio
-    from nora_store.fusion import Candidate
+    from core.src.store_service.fusion import Candidate
     docs = [(f"req:{i}", f"T{i}", f"x{i}") for i in range(5)]
     monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, docs)})
     monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://tei:8080")
@@ -321,7 +321,7 @@ def test_rerank_bulk_batch_failure_isolated(monkeypatch):
     # A failed sub-batch scores ONLY its own candidates 0 — it must not poison
     # sibling batches (unlike the old atomic whole-pool zero).
     import asyncio
-    from nora_store.fusion import Candidate
+    from core.src.store_service.fusion import Candidate
     docs = [(f"req:{i}", f"T{i}", f"x{i}") for i in range(4)]
     monkeypatch.setattr(svc, "_cells", {VZW_F: _cell(VZW_F, docs)})
     monkeypatch.setattr(svc, "_RERANK_LLM_URL", "http://tei:8080")

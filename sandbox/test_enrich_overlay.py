@@ -1,4 +1,4 @@
-"""Tests for nora_store/enrich_overlay.py (sira-enrichment-review
+"""Tests for core/src/store_service/enrich_overlay.py (sira-enrichment-review
 D-DRAFT-1/2/3 semantics: word records, label-branch allowlist, remove-wins,
 cross-release guard with held-not-applied)."""
 
@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from nora_store.enrich_overlay import (
+from core.src.store_service.enrich_overlay import (
     JACCARD_THRESHOLD_DEFAULT,
     allowed_labels,
     apply_overlay_to_req,

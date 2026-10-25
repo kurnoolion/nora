@@ -5,7 +5,7 @@ Storage-level interface at entry-dict granularity. Edit semantics (ops,
 labels as branches, the label-view digest) live in `overlay_ops` (run by
 `core.src.web.enrich_overlay_store.EnrichOverlayStore` on a local backend
 and by the nora-store edit route) and in the stdlib fold
-(`nora_store.enrich_overlay`). A backend only stores and returns per-MNO
+(`core.src.store_service.enrich_overlay`). A backend only stores and returns per-MNO
 `{req_id: entry}` maps plus the label and reason-category lists.
 
 Entry shape (identical across backends):

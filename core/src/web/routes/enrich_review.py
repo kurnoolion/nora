@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from core.src.web.enrich_overlay_store import EDIT_OPS, EnrichOverlayStore
 from core.src.web.team_mode import is_admin
-from nora_store.enrich_overlay import allowed_labels
+from core.src.stores.overlay_ops import allowed_labels
 
 # edit ops that CREATE records — these must carry a label (branch); undo
 # ops only delete records and stay label-free

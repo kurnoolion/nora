@@ -83,7 +83,7 @@ def filter_overlay(overlay: dict[str, Any], allowed: set[str]) -> dict[str, Any]
     """Project an overlay onto a label view: keep only records whose label
     is allowed, pruning emptied directions/entries. Canonical basis for
     view digests — the web store must filter identically (it imports this
-    function, as does the fold in ``nora_store.enrich_overlay``) so served-vs-current comparisons are content-exact."""
+    function, as does the fold in ``core.src.store_service.enrich_overlay``) so served-vs-current comparisons are content-exact."""
     out: dict[str, Any] = {}
     for rid, entry in overlay.items():
         kept: dict[str, Any] = {}

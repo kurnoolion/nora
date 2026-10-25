@@ -2,7 +2,7 @@
 store-split-design §5, D-DRAFT-25/28).
 
 One client per store, each implementing the store's protocol over the
-`/stores/<store>/v1` JSON routes (`nora_store/stores_api.py`), so a
+`/stores/<store>/v1` JSON routes (`core/src/store_service/stores_api.py`), so a
 consumer built on the protocol does not know which backend it has:
 
 - `HttpOverlayStore(base_url)` — reads, raw writes (`put_entry`,

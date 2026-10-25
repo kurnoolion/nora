@@ -222,7 +222,7 @@ Host/port resolve CLI flag > `config/web.json`; `env_dir` resolves
 proxy.
 
 **SIRA lane in the web app** — the Ask page retrieves through nora-store
-(`nora_store.service`). Point `NORA_STORE_URL` at it (default
+(`core.src.store_service.service`). Point `NORA_STORE_URL` at it (default
 `http://127.0.0.1:8040`); `NORA_STORE_TIMEOUT` (seconds, default 1200)
 bounds the call. The web reads the Overlay, Trees and History stores
 through the same service when `NORA_OVERLAY_URL` / `NORA_TREES_URL` /

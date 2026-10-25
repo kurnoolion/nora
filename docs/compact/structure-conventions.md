@@ -19,7 +19,6 @@ Populated during `project-init --retrofit` from the tech-stack answer in `projec
 │   ├── llm/                           # Proprietary-LLM provider boilerplate
 │   │   └── tests/                     # Co-located tests
 │   └── (other surfaces as identified)
-├── nora_store/                        # The store and query service (nora-store image): cells, /stores routers, registry mode
 ├── sandbox/                           # SIRA integration: adapter, lane, converter, patches, prompts; the SIRA clone (gitignored)
 ├── docker/                            # Images, compose, env examples, cycle / publish runbooks
 ├── config/                            # Per-module settings (D-021)

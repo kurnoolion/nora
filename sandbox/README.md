@@ -20,7 +20,7 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_patches/test/probe_per_stage_endpoints.py` | Stdlib sanity probe — POSTs a tiny chat-completion to each configured endpoint and reports compact `SPK` lines. Use before running the pipeline to confirm reachability + response shape. | ✅ |
 | `adapter/nora_to_beir.py` | Converts NORA parse output (`<env_dir>/out/parse/**/*_tree.json` — recursive, covers the per-cell `<mno>/<rel>/` layout, NORA D-DRAFT-12) + the 18-Q eval set into BEIR-format `corpus.jsonl` + `queries.jsonl` + `qrels/test.tsv`. `--multi-cell` emits one dataset per `(mno, release)` cell. | ✅ |
 | `sira_multi.py` | Multi-MNO batch orchestrator — enumerates the `(mno, release)` cells under a db_root and runs SIRA's `run_pipeline.py` once per cell (writes each cell's `configs/data/<cell>.yaml` from the `nora.yaml` template first); `--verify` sweeps the same cells with read-only verify-run reports instead of building. See "Running — multi-MNO" below. | ✅ |
-| `nora_store/service.py` | Cell-aware FastAPI query and store service: `/query`, `/healthz`, `/cells*` (inventory, review rows, per-cell reload), `/registry/reload`, and the hosted stores under `/stores/{cells,trees,history,overlay}/v1`. Loads every cell at startup from flat cell dirs, from cell DBs (`NORA_STORE_INDEX=cell-db`), or — served stacks — from the publish registry's active set (`NORA_STORE_REGISTRY`); resolves query scope → retrieve per cell → merge → rerank. It is the Overlay authority. Query-time config in the multi-mno-sira runbook; the design in `docs/architecture.md` §7. | ✅ |
+| `core/src/store_service/service.py` | Cell-aware FastAPI query and store service: `/query`, `/healthz`, `/cells*` (inventory, review rows, per-cell reload), `/registry/reload`, and the hosted stores under `/stores/{cells,trees,history,overlay}/v1`. Loads every cell at startup from flat cell dirs, from cell DBs (`NORA_STORE_INDEX=cell-db`), or — served stacks — from the publish registry's active set (`NORA_STORE_REGISTRY`); resolves query scope → retrieve per cell → merge → rerank. It is the Overlay authority. Query-time config in the multi-mno-sira runbook; the design in `docs/architecture.md` §7. | ✅ |
 | `cell_db_convert.py` | Converter: one flat SIRA cell (`raw/`, `index/best`, a pinned enrichment run) → `cell-<mno>-<rel>.db`, schema 2 (vanilla index blobs + raw phrases; the Overlay is composed at load, not stored). `--verify N` is the identity gate: composed-from-DB ranking must equal the in-memory one. Input to `core.src.stores.publish`. | ✅ |
 | `sira_cells.py` | Cell-identity helpers (`cell_dirname`, `parse_cell_dirname`, `enumerate_cells`); release ordering re-exported from `core.extraction.release_key`. | ✅ |
 | `llm_refusal.py` | Permanent-refusal detection shared by the batch enrich lane and the query service: a marker-prefixed, JSON-free response means the endpoint will refuse that input on every retry — route the call to a configured fallback LLM instead (or fail fast as `llm_refused`). Markers/fallback endpoints are env-local (`NORA_LLM_REFUSAL_MARKERS`, `NORA_SIRA_ENRICH_FALLBACK_LLM_*`, `NORA_SIRA_QUERY_FALLBACK_LLM_*`). `fallback_reasoning_fields(env, prefix)` gives the fallback call its own reasoning fields (`<prefix>REASONING(_CONTROL)`, else `NORA_LLM_FALLBACK_REASONING(_CONTROL)`; same wire rule as core's provider). Copied flat into the SIRA clone by `install_configs.sh`. | ✅ |
@@ -333,7 +333,7 @@ processed (see `SETUP.md` §"Verifying enrichment completeness").
     source sandbox/activate.sh              # SIRA venv (bm25x) + NO_PROXY + HF-offline
     export NORA_STORE_ROOT="$DB"
     export NORA_SIRA_DOC_ENRICH_RUN="$RUN"  # must match the ingest --run-name
-    uvicorn nora_store.service:app --port 8040
+    uvicorn core.src.store_service.service:app --port 8040
     curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 
 In this flat dev mode the service loads **every** cell under `$DB` at
@@ -516,7 +516,7 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
   breaks); `--strict` also fails on WARN (quality signals) for CI-style
   gating. Run after every build; run before trusting a heal/retry pass.
 
-### Query-service env vars (`nora_store/service.py`)
+### Query-service env vars (`core/src/store_service/service.py`)
 
 - `NORA_STORE_ROOT` — the cell db_root: flat `<mno>__<rel>/` dirs, or
   `cell-*.db` files with `NORA_STORE_INDEX=cell-db`. Unused when

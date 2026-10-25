@@ -232,7 +232,7 @@ ${service_activate:+source $service_activate; }add_localhost_noproxy
 NORA_STORE_ROOT=$db_root NORA_SIRA_DOC_ENRICH_RUN=$enrich_run \\
 NORA_SIRA_RERANK_ENABLED=false \\
 NORA_LLM_SHIM_URL=$llm_base NORA_LLM_MODEL=$llm_model \\
-  $service_python -m uvicorn nora_store.service:app --port $svc_port
+  $service_python -m uvicorn core.src.store_service.service:app --port $svc_port
 
 # NORA web  → $web_log
 ${web_activate:+source $web_activate; }add_localhost_noproxy
@@ -303,7 +303,7 @@ cd "$REPO_ROOT"
     [[ -n "$api_key" ]] && export NORA_LLM_SHIM_API_KEY="$api_key"
     [[ -n "$api_key" ]] && export NORA_SIRA_RERANK_LLM_API_KEY="$api_key"
     write_header service "$svc_log" "$service_python" "$service_activate"
-    nohup "$service_python" -m uvicorn nora_store.service:app --port "$svc_port" \
+    nohup "$service_python" -m uvicorn core.src.store_service.service:app --port "$svc_port" \
         >> "$svc_log" 2>&1 &
     echo $! > "$sdir/service.pid"
 )

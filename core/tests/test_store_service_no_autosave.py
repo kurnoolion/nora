@@ -17,7 +17,7 @@ the constructor form cannot quietly start mutating labels. These tests pin
 both semantics and the service-level invariant.
 
 Run from the repo root inside the sandbox venv:
-    pytest nora_store/test_no_autosave.py
+    pytest core/src/store_service/test_no_autosave.py
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def _service(monkeypatch, db_root: Path):
     monkeypatch.delenv("NORA_STORE_CORRECTIONS_ROOT", raising=False)
     monkeypatch.delenv("NORA_SIRA_USE_LATEST_RUNS", raising=False)
     import importlib
-    import nora_store.service as service
+    import core.src.store_service.service as service
     return importlib.reload(service)
 
 

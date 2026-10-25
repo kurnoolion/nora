@@ -10,7 +10,7 @@ schema-2 cells, and the fts5 engine refusing a composed cell.
 Synthetic data only. Requires bm25x + fastapi (sandbox venv); skips
 cleanly where unavailable.
 
-Run from the repo root:  pytest nora_store/test_cell_db_loader.py
+Run from the repo root:  pytest core/src/store_service/test_cell_db_loader.py
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def load_service(monkeypatch, db_root: Path, *, index="flat", engine="bm25x",
     else:
         monkeypatch.delenv("NORA_STORE_CORRECTIONS_ROOT", raising=False)
     monkeypatch.delenv("NORA_SIRA_USE_LATEST_RUNS", raising=False)
-    import nora_store.service as service
+    import core.src.store_service.service as service
     service = importlib.reload(service)
     service._load_cells()
     if expect_cells:
@@ -181,7 +181,7 @@ def test_flat_default_untouched_and_bad_engine_loud(monkeypatch, converted):
     monkeypatch.setenv("NORA_STORE_ROOT", str(flat))
     monkeypatch.delenv("NORA_STORE_INDEX", raising=False)
     monkeypatch.delenv("NORA_STORE_ENGINE", raising=False)
-    import nora_store.service as service
+    import core.src.store_service.service as service
     service = importlib.reload(service)
     assert service._INDEX_MODE == "flat"
     service._load_cells()

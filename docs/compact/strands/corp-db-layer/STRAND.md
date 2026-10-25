@@ -4,7 +4,7 @@
 **Opened:** 2026-10-08
 **Landed:**
 **Assignees:** kurnoolion
-**Target modules:** stores, models, web, pipeline, env (nora_store service, docker)
+**Target modules:** stores, store_service, models, web, pipeline, env, llm (docker)
 **Active phase:** architecture
 
 ## Summary

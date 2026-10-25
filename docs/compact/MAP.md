@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-10-23 by regen-map. Do not hand-edit.
+Generated 2026-10-25 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -21,6 +21,7 @@ Generated 2026-10-23 by regen-map. Do not hand-edit.
 | [query](../../core/src/query/MODULE.md) | Online query pipeline (TDD §7). |
 | [resolver](../../core/src/resolver/MODULE.md) | Deterministic cross-reference resolver (TDD §5.5, Methods 1 & 2). |
 | [standards](../../core/src/standards/MODULE.md) | 3GPP standards ingestion — generic, release-aware, LLM-free (TDD §5.6, D-004). |
+| [store_service](../../core/src/store_service/MODULE.md) | The `nora-store` process: the one service in a serving stack that holds corpus data. |
 | [stores](../../core/src/stores/MODULE.md) | Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`). |
 | [taxonomy](../../core/src/taxonomy/MODULE.md) | Bottom-up, LLM-derived feature taxonomy for the corpus (TDD §5.7). |
 | [vectorstore](../../core/src/vectorstore/MODULE.md) | Unified vector-store construction and configuration. |
@@ -45,6 +46,7 @@ flowchart TD
     m_query[query]
     m_resolver[resolver]
     m_standards[standards]
+    m_store_service[store_service]
     m_stores[stores]
     m_taxonomy[taxonomy]
     m_vectorstore[vectorstore]
@@ -97,6 +99,10 @@ flowchart TD
     m_resolver --> m_parser
     m_standards --> m_parser
     m_standards --> m_resolver
+    m_store_service --> m_extraction
+    m_store_service --> m_llm
+    m_store_service --> m_query
+    m_store_service --> m_stores
     m_stores --> m_extraction
     m_stores --> m_models
     m_stores --> m_pipeline
@@ -299,10 +305,21 @@ nora/
 │   │   │   ├── spec_parser.py                           # 3GPP specification document parser (DOC/DOCX to section tree).
 │   │   │   ├── spec_resolver.py                         # 3GPP spec version resolver and URL builder.
 │   │   │   └── standards_cli.py                         # CLI entry point for standards ingestion pipeline.
+│   │   ├── store_service/                               # The `nora-store` process: the one service in a serving stack that holds corpus data.
+│   │   │   ├── MODULE.md
+│   │   │   ├── __init__.py
+│   │   │   ├── cell_db_store.py                         # Cell-DB read side for the SIRA query service (corp-db-layer phase 2).
+│   │   │   ├── enrich_overlay.py                        # Enrichment-corrections overlay — load, filter, apply (sira-enrichment-review).
+│   │   │   ├── fusion.py                                # Cross-cell fusion for multi-MNO SIRA (multi-mno-sira D-DRAFT-10).
+│   │   │   ├── scope.py                                 # Query-scope resolution for multi-MNO SIRA (multi-mno-sira D-DRAFT-9/10).
+│   │   │   ├── service.py                               # SIRA per-query inference service — for NORA's Test page SIRA tab.
+│   │   │   ├── sira_debug.py                            # SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
+│   │   │   └── stores_api.py                            # Store routes hosted by nora-store (strand corp-db-layer S6;
 │   │   ├── stores/                                      # Data stores behind service interfaces (strand corp-db-layer, `store-split-design.md`).
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py                              # Data stores behind service interfaces (strand corp-db-layer,
 │   │   │   ├── api.py                                   # Store routes — one `APIRouter` per store, hostable by any service
+│   │   │   ├── cells.py                                 # Cell identity for the SIRA-side data: `(mno, release)` keys, the
 │   │   │   ├── clients.py                               # HTTP clients for the stores nora-store hosts (strand corp-db-layer S6;
 │   │   │   ├── errors.py                                # Exceptions shared by the store backends and their HTTP clients
 │   │   │   ├── history.py                               # History store — release lineage of an MNO's plans, sections and
@@ -550,6 +567,16 @@ nora/
 │       ├── test_revhist_scoring.py                      # Tests for the signal-based revhist scorer (RevhistDetection).
 │       ├── test_stages_per_cell.py                      # Per-cell stage routing tests (D-DRAFT-6/7/10).
 │       ├── test_standards.py                            # Tests for the standards ingestion pipeline (Step 7).
+│       ├── test_store_service_fusion.py                 # Tests for cross-cell fusion (multi-mno-sira D-DRAFT-10).
+│       ├── test_store_service_health_prompts.py         # A configured-but-missing prompt fails health, and prompt presence is part
+│       ├── test_store_service_llm_fallback.py           # Permanent-refusal fallback in the service's _llm_call choke point.
+│       ├── test_store_service_no_autosave.py            # Regression tests: loading + enriching an index must never mutate it on disk.
+│       ├── test_store_service_package_paths.py          # Paths the service derives from its own location must survive the package
+│       ├── test_store_service_registry_mode.py          # nora-store serving from the publish registry (strand corp-db-layer 4b,
+│       ├── test_store_service_scope.py                  # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
+│       ├── test_store_service_service_identity.py       # Serving-identity tests (strand golden-eval).
+│       ├── test_store_service_service_multi_cell.py     # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
+│       ├── test_store_service_stores_api.py             # The store routes mounted on the service app (strand corp-db-layer S6):
 │       ├── test_stores_history.py                       # Tests for core/src/stores/history.py + history_build.py (strand
 │       ├── test_stores_http.py                          # Tests for the store HTTP clients + nora-store's store routes (strand
 │       ├── test_stores_overlay.py                       # Tests for core/src/stores/overlay.py + overlay_import.py (strand
@@ -624,6 +651,7 @@ nora/
 │   ├── skopeo-pull-bases.sh                             # skopeo-pull-bases.sh — fetch the BASE images the docker/*.Dockerfile builds
 │   └── store.Dockerfile
 ├── docs/
+│   ├── architecture.md
 │   ├── compact/
 │   │   ├── DECISIONS.md
 │   │   ├── MAP.md
@@ -851,26 +879,6 @@ nora/
 │       ├── requirements-paddle.txt
 │       ├── run_bakeoff.py                               # Run ONE layout provider over one or more PDFs and write normalized outputs.
 │       └── summarize.py                                 # Combine all `*.json` bake-off outputs in a dir into one comparison report.
-├── nora_store/
-│   ├── __init__.py
-│   ├── cell_db_store.py                                 # Cell-DB read side for the SIRA query service (corp-db-layer phase 2).
-│   ├── enrich_overlay.py                                # Enrichment-corrections overlay — load, filter, apply (sira-enrichment-review).
-│   ├── fusion.py                                        # Cross-cell fusion for multi-MNO SIRA (multi-mno-sira D-DRAFT-10).
-│   ├── scope.py                                         # Query-scope resolution for multi-MNO SIRA (multi-mno-sira D-DRAFT-9/10).
-│   ├── service.py                                       # SIRA per-query inference service — for NORA's Test page SIRA tab.
-│   ├── sira_debug.py                                    # SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
-│   ├── stores_api.py                                    # Store routes hosted by nora-store (strand corp-db-layer S6;
-│   ├── test_cell_db_loader.py                           # Tests for the cell-db serving mode (corp-db-layer phase 2).
-│   ├── test_fusion.py                                   # Tests for cross-cell fusion (multi-mno-sira D-DRAFT-10).
-│   ├── test_health_prompts.py                           # A configured-but-missing prompt fails health, and prompt presence is part
-│   ├── test_llm_fallback.py                             # Permanent-refusal fallback in the service's _llm_call choke point.
-│   ├── test_no_autosave.py                              # Regression tests: loading + enriching an index must never mutate it on disk.
-│   ├── test_package_paths.py                            # Paths the service derives from its own location must survive the package
-│   ├── test_registry_mode.py                            # nora-store serving from the publish registry (strand corp-db-layer 4b,
-│   ├── test_scope.py                                    # Tests for query-scope resolution (multi-mno-sira D-DRAFT-9/10).
-│   ├── test_service_identity.py                         # Serving-identity tests (strand golden-eval).
-│   ├── test_service_multi_cell.py                       # End-to-end test of the multi-cell query path (multi-mno-sira D-DRAFT-7/10).
-│   └── test_stores_api.py                               # The store routes mounted on the service app (strand corp-db-layer S6):
 ├── presentations/
 │   ├── create.py                                        # Generate NORA leadership presentation.
 │   └── update.py                                        # Add Human Filter philosophy to NORA presentation.
@@ -897,7 +905,7 @@ nora/
 │   ├── shim/
 │   │   ├── __init__.py
 │   │   └── openai_shim.py                               # Local shim that accepts SIRA's hardcoded
-│   ├── sira_cells.py                                    # Shared (MNO, release) cell primitives for multi-MNO SIRA.
+│   ├── sira_cells.py                                    # Shared (MNO, release) cell primitives for multi-MNO SIRA — now a
 │   ├── sira_configs/
 │   │   ├── data/
 │   │   │   └── nora.yaml
@@ -922,8 +930,9 @@ nora/
 │   ├── sira_preflight.py                                # Input-layout pre-flight for multi-MNO SIRA (multi-mno-sira D-DRAFT-5).
 │   ├── test_cell_db_convert.py                          # Tests for sandbox/cell_db_convert.py — label flat files -> cell DBs.
 │   ├── test_cell_db_convert_fold.py                     # Pure-Python tests for the converter's overlay fold (no bm25x needed):
+│   ├── test_cell_db_loader.py                           # Tests for the cell-db serving mode (corp-db-layer phase 2).
 │   ├── test_enrich_batching.py                          # Tests for the batched doc-enrichment logic (strand sira-enrichment-pe):
-│   ├── test_enrich_overlay.py                           # Tests for nora_store/enrich_overlay.py (sira-enrichment-review
+│   ├── test_enrich_overlay.py                           # Tests for core/src/store_service/enrich_overlay.py (sira-enrichment-review
 │   ├── test_llm_refusal.py                              # Permanent-refusal detection (sandbox/llm_refusal.py). Markers here
 │   ├── test_sira_cells.py                               # Tests for the shared (MNO, release) cell primitives (multi-mno-sira).
 │   ├── test_sira_enrich_inspect.py                      # Tests for the SIRA doc-enrichment inspector CLI.

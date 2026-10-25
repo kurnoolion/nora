@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from sandbox.sira_cells import CellKey
+from core.src.stores.cells import CellKey
 
 # A cell-local BM25 hit: (doc_id, bm25_score). doc_ids are cell-local.
 Hit = tuple[str, float]

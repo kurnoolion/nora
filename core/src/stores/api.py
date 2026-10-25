@@ -5,7 +5,7 @@
 writable)` serve a store's full protocol as JSON under
 `/stores/<store>/v1`; the HTTP clients in `clients.py` are their
 consumers. nora-store mounts them beside its Cells routes
-(`nora_store/stores_api.py`); `serve.py` hosts any subset on its own,
+(`core/src/store_service/stores_api.py`); `serve.py` hosts any subset on its own,
 so splitting a store out of nora-store is a deployment choice: run the
 host, set `NORA_<STORE>_URL` on every consumer, no code change.
 
@@ -19,7 +19,7 @@ so nora-web never does a read-modify-write over the wire.
 
 Versioned in the path: additive fields within `v1`; a breaking change
 mounts `v2` beside it (design §9). Routes return data and log nothing.
-No `nora_store` import: this module depends on the stores package only.
+No `store_service` import: this module depends on the stores package only.
 """
 
 from __future__ import annotations

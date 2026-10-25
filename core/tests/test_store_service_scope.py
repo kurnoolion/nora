@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from nora_store.scope import normalize_release, resolve_cells
+from core.src.store_service.scope import normalize_release, resolve_cells
 
 
 def _intent(mnos=None, releases=None):

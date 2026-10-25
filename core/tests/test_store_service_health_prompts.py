@@ -16,7 +16,7 @@ def svc(monkeypatch):
     for v in ("NORA_SIRA_QUERY_ENRICH_ENABLED", "NORA_SIRA_RERANK_ENABLED",
               "NORA_SIRA_RERANK_BACKEND"):
         monkeypatch.delenv(v, raising=False)
-    import nora_store.service as service
+    import core.src.store_service.service as service
     return importlib.reload(service)
 
 

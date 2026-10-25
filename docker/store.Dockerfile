@@ -102,7 +102,6 @@ COPY core/ core/
 COPY customizations/ customizations/
 COPY config/ config/
 COPY sandbox/ sandbox/
-COPY nora_store/ nora_store/
 # The baked clone is READ-ONLY at run time: per-cell data configs are
 # generated under <db_root>/.hydra-configs and read via SIRA_EXTRA_CONFIG_DIR
 # (extra-config-dir.patch); SIRA's own hydra outputs are already disabled
@@ -131,7 +130,7 @@ ENV NORA_STORE_ROOT=/data/db
 EXPOSE 8040
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8040/healthz', timeout=4)"
-CMD ["uvicorn", "nora_store.service:app", "--host", "0.0.0.0", "--port", "8040"]
+CMD ["uvicorn", "core.src.store_service.service:app", "--host", "0.0.0.0", "--port", "8040"]
 
 # --------------------------------------------------------------- sira-batch --
 FROM sira-base AS sira-batch
@@ -147,7 +146,7 @@ CMD ["bash"]
 #   docker build -f docker/store.Dockerfile --target nora-store-test \
 #       -t local/nora-store-test:dev .
 #   docker run --rm local/nora-store-test:dev          # the default suites
-#   docker run --rm local/nora-store-test:dev pytest -q nora_store   # any
+#   docker run --rm local/nora-store-test:dev pytest -q -k store_service core/tests   # any
 # Never deployed; no healthcheck.
 FROM nora-store AS nora-store-test
 ARG OFFLINE=0
@@ -159,6 +158,7 @@ RUN --mount=type=bind,from=vendor,target=/vendor \
     fi
 HEALTHCHECK NONE
 ENTRYPOINT []
-CMD ["pytest", "-q", "nora_store", "sandbox/test_cell_db_convert.py", \
-     "sandbox/test_cell_db_convert_fold.py", "sandbox/test_enrich_overlay.py", \
-     "sandbox/test_sira_query_review.py", "sandbox/test_sira_cells.py"]
+CMD ["pytest", "-q", "-k", "store_service", "core/tests", "sandbox/test_cell_db_convert.py", \
+     "sandbox/test_cell_db_convert_fold.py", "sandbox/test_cell_db_loader.py", \
+     "sandbox/test_enrich_overlay.py", "sandbox/test_sira_query_review.py", \
+     "sandbox/test_sira_cells.py"]

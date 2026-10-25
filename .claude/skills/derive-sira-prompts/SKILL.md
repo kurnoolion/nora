@@ -357,7 +357,7 @@ Next steps:
   bash sandbox/install_configs.sh
   # then re-run SIRA pipeline (see sandbox/SETUP.md)
   # then validate via:
-  python -m nora_store.sira_debug phrases --filter <SUBDOMAIN>
+  python -m core.src.store_service.sira_debug phrases --filter <SUBDOMAIN>
 ```
 
 ## Validation hooks

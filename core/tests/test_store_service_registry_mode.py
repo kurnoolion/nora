@@ -5,7 +5,7 @@ units whose file changed; /healthz reports registry_label and the per-unit
 versions. bm25x is faked (the cell loader is replaced); the Trees and
 History files are real builder output over synthetic trees.
 
-Run from the repo root:  pytest nora_store/test_registry_mode.py
+Run from the repo root:  pytest core/src/store_service/test_registry_mode.py
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-import nora_store.service as svc
+import core.src.store_service.service as svc
 from core.src.stores import publish as pub
 from core.src.stores.registry import registry_path
 from core.src.stores.trees import db_name as trees_db_name
@@ -30,8 +30,8 @@ from core.tests.test_stores_publish import (
     make_env,
     write_parse,
 )
-from nora_store.service import CellState
-from nora_store.test_service_multi_cell import _FakeBM25
+from core.src.store_service.service import CellState
+from core.tests.test_store_service_service_multi_cell import _FakeBM25
 
 A1, A2, B1 = (MNO_A, R1), (MNO_A, R2), (MNO_B, R1)
 

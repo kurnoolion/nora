@@ -108,7 +108,7 @@ If your corpus is single-domain (e.g., only LTE), constrain coverage accordingly
 
 This is **manual SME work** — there's no automated path that produces trustworthy qrels. Steps:
 
-1. **Identify candidate reqs.** Open the parsed `_tree.json` for the relevant plan(s) and read sections matching the query topic. Or run `python -m nora_store.sira_debug corpus --filter <KEYWORD>` to surface req_id candidates.
+1. **Identify candidate reqs.** Open the parsed `_tree.json` for the relevant plan(s) and read sections matching the query topic. Or run `python -m core.src.store_service.sira_debug corpus --filter <KEYWORD>` to surface req_id candidates.
 2. **For each candidate, read its body.** A req qualifies as `expected_req_id` if any sentence in its body contains or implies the answer to the query (per the relevance rubric in `relevance_requirement_v01.txt`: 61+ on the 0-100 scale).
 3. **Include the section heading req** if it anchors the topic (it'll score 41-60 on the rubric — still relevant for breadth queries).
 4. **Exclude struck reqs.** The parser drops reqs marked struck (D-031). If a struck req shows up in your draft list, replace it with a live sibling — the eval would fail otherwise.
@@ -121,7 +121,7 @@ Before locking the eval set:
 
 1. **Confirm each `expected_req_id` exists in the corpus:**
    ```bash
-   python -m nora_store.sira_debug req <req_id>
+   python -m core.src.store_service.sira_debug req <req_id>
    ```
    Should print the req text. If it 404s, the parser dropped it (struck? schema change?). Replace with a sibling.
 
@@ -129,7 +129,7 @@ Before locking the eval set:
 
 3. **Run a quick retrieval-quality sanity check.** For each query, run:
    ```bash
-   python -m nora_store.sira_debug query "<question>" --top-n 50 --watch <one_expected_req_id>
+   python -m core.src.store_service.sira_debug query "<question>" --top-n 50 --watch <one_expected_req_id>
    ```
    The watched req should appear in the top-50 BM25 candidate set. If it's outside top-50, the eval question may be genuinely hard for this corpus + retriever — that's fine but flag it so a 0% recall isn't a surprise later.
 

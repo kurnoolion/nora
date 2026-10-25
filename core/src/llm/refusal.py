@@ -15,11 +15,12 @@ Marker values are deployment-specific and live ONLY in local
 (gitignored) env files (``NORA_LLM_REFUSAL_MARKERS``, ``||``-separated)
 — never in committed code, tests, or docs.
 
-Twin note: the detection functions are a deliberate copy of
-``sandbox/llm_refusal.py`` (same rules, same env var). Core must not
-import sandbox (D-111 boundary) and the sandbox copy must stay
-flat-copyable into the SIRA clone, so the two files are kept in sync by
-hand — change one, change both.
+Twin note: the detection functions and ``fallback_reasoning_fields`` are
+a deliberate copy of ``sandbox/llm_refusal.py`` (same rules, same env
+vars). Core must not import sandbox (D-111 boundary) and the sandbox
+copy must stay flat-copyable into the SIRA clone, so the two files are
+kept in sync by hand — change one, change both. The store service
+(``core/src/store_service``) imports this module, never the sandbox one.
 
 Config (env vars, wiring-level like the sandbox lanes' fallbacks):
   NORA_LLM_REFUSAL_MARKERS      ||-separated refusal-notice prefixes
@@ -260,3 +261,34 @@ def build_fallback_provider(
             or os.getenv("NORA_LLM_FALLBACK_REASONING_CONTROL", "").strip()
         ),
     )
+
+
+def fallback_reasoning_fields(env, prefix: str = "") -> dict:
+    """Chat-completion payload fields that hold a FALLBACK endpoint to a
+    reasoning level (field-found: a fallback model that thinks by default
+    spent the whole token budget on reasoning and returned empty content).
+
+    Reads ``<prefix>REASONING`` / ``<prefix>REASONING_CONTROL`` (the
+    caller's own fallback env names, e.g. ``NORA_SIRA_QUERY_FALLBACK_LLM_``),
+    falling back to the core ``NORA_LLM_FALLBACK_REASONING`` /
+    ``NORA_LLM_FALLBACK_REASONING_CONTROL``. Same wire rule as core's
+    ``OpenAICompatibleProvider`` (hand-synced across the D-111 boundary):
+    ``chat_template_kwargs`` is only ever sent to SUPPRESS thinking
+    (level ``none``); ``reasoning_effort`` sends the level as given; no
+    level -> no fields, the endpoint's own default.
+    """
+    def get(name: str) -> str:
+        return str(env.get(name, "") or "").strip()
+
+    level = (get(prefix + "REASONING") if prefix else "") or get(
+        "NORA_LLM_FALLBACK_REASONING")
+    control = ((get(prefix + "REASONING_CONTROL") if prefix else "")
+               or get("NORA_LLM_FALLBACK_REASONING_CONTROL")
+               or "reasoning_effort").lower()
+    level = level.lower()
+    if not level:
+        return {}
+    if control == "chat_template_kwargs":
+        return ({"chat_template_kwargs": {"enable_thinking": False}}
+                if level == "none" else {})
+    return {"reasoning_effort": level}

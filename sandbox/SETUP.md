@@ -470,7 +470,7 @@ export NORA_STORE_ROOT=$(realpath sandbox/adapter/out)
 # export NORA_SIRA_RERANK_TOP_N=20       # candidates fed to LLM reranker
 # export NORA_SIRA_MAX_DF_RATIO=0.05     # DF-filter cap for query expansion
 # export NORA_SIRA_EXPANSION_WEIGHT=0.5  # BM25 expansion weight
-uvicorn nora_store.service:app --port 8040
+uvicorn core.src.store_service.service:app --port 8040
 
 # Verify the SIRA service loaded its state:
 curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
@@ -825,14 +825,14 @@ python -m sandbox.sira_multi --db-root <db_root> --sira-clone sandbox/sira
 
 # 5. Launch the query service pointed at the cell db_root.
 export NORA_STORE_ROOT=<db_root>
-uvicorn nora_store.service:app --port 8040
+uvicorn core.src.store_service.service:app --port 8040
 #    On first query the service enumerates <mno>__<MMMYYYY>/ cells and
 #    routes through the multi-cell path. /healthz / startup logs show
 #    "Multi-cell mode: loaded N cell(s): ...".
 #    Optional, closer to serving: convert the cells to cell DBs and load
 #    those instead —
 #      python -m sandbox.cell_db_convert --db-root <db_root> --out <cell-dbs> --verify 25
-#      NORA_STORE_ROOT=<cell-dbs> NORA_STORE_INDEX=cell-db uvicorn nora_store.service:app --port 8040
+#      NORA_STORE_ROOT=<cell-dbs> NORA_STORE_INDEX=cell-db uvicorn core.src.store_service.service:app --port 8040
 #    Served stacks go one step further and read a publish registry
 #    (NORA_STORE_REGISTRY; docker/README.md "Registry publish").
 

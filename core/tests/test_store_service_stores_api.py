@@ -8,9 +8,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import nora_store.service as svc
-from nora_store.service import CellState
-from nora_store.test_service_multi_cell import _FakeBM25
+import core.src.store_service.service as svc
+from core.src.store_service.service import CellState
+from core.tests.test_store_service_service_multi_cell import _FakeBM25
 
 GP_J = ("GP", "Jan2031")
 GP_A = ("GP", "Apr2031")

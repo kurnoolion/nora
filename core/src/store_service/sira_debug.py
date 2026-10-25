@@ -1,6 +1,6 @@
 """SIRA debug CLI — diagnostic probe for the SIRA per-query stack.
 
-Mirrors `nora_store/service.py`'s loaders so it runs against the
+Mirrors `core/src/store_service/service.py`'s loaders so it runs against the
 same on-disk artifacts. No FastAPI; no server. Just a CLI that surfaces
 what the service "sees" and how a query flows through expansion + BM25
 + optional rerank.
@@ -25,10 +25,10 @@ Run from the same venv as the service:
 
     source ~/work/nora/sandbox/activate.sh
     export NORA_STORE_ROOT=$HOME/work/nora/sandbox/adapter/out
-    python -m nora_store.sira_debug env
-    python -m nora_store.sira_debug corpus --filter VOWIFI
-    python -m nora_store.sira_debug phrases --filter VOWIFI
-    python -m nora_store.sira_debug query "Summarize WiFi Calling requirements" --rerank --top-n 50
+    python -m core.src.store_service.sira_debug env
+    python -m core.src.store_service.sira_debug corpus --filter VOWIFI
+    python -m core.src.store_service.sira_debug phrases --filter VOWIFI
+    python -m core.src.store_service.sira_debug query "Summarize WiFi Calling requirements" --rerank --top-n 50
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ _SERVICE_URL = os.getenv("NORA_STORE_URL", "http://127.0.0.1:8040").rstrip("/")
 
 _SIRA_CLONE_ROOT = Path(os.getenv(
     "NORA_SIRA_CLONE_ROOT",
-    str(Path(__file__).resolve().parents[1] / "sandbox" / "sira"),
+    str(Path(__file__).resolve().parents[3] / "sandbox" / "sira"),
 ))
 _QUERY_PROMPT_PATH = os.getenv(
     "NORA_QUERY_PROMPT",

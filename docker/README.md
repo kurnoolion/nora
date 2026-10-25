@@ -1093,7 +1093,7 @@ The serving images carry no test runner. `nora-store-test` is the
     docker build -f docker/store.Dockerfile --target nora-store-test \
         --build-arg OFFLINE=$OFFLINE -t local/nora-store-test:dev .
     docker run --rm local/nora-store-test:dev            # bm25x-gated suites
-    docker run --rm local/nora-store-test:dev pytest -q nora_store
+    docker run --rm local/nora-store-test:dev pytest -q -k store_service core/tests
 
 Those suites skip on a host without bm25x; this is where they run for real.
 (`prep-offline.sh` vendors the pytest wheel for `OFFLINE=1` builds.)

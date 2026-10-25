@@ -165,9 +165,9 @@ class TestMergeLog:
         assert store.overlay_digest("XX") == other
 
     def test_digest_formula_matches_service_side(self, store):
-        from nora_store.enrich_overlay import (allowed_labels,
+        from core.src.store_service.enrich_overlay import (allowed_labels,
                                                        filter_overlay)
-        from nora_store.service import _overlay_digest
+        from core.src.store_service.service import _overlay_digest
         _edit(store, "remove", ["a"])
         store.set_label_merged("camp1", True)
         filtered = filter_overlay(store.get_overlay("GP"),
@@ -179,7 +179,7 @@ class TestServiceCompatibility:
     """The store's output must be consumable by the service-side fold."""
 
     def test_round_trip_through_apply_overlay(self, store):
-        from nora_store.enrich_overlay import apply_overlay_to_req
+        from core.src.store_service.enrich_overlay import apply_overlay_to_req
         _edit(store, "remove", ["handover"])
         _edit(store, "add", ["t3402"])
         entry = store.get_entry("GP", "R1")

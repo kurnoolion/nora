@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import Iterable, Protocol
 
-from sandbox.sira_cells import CellKey, is_valid_release, latest_release
+from core.src.stores.cells import CellKey, is_valid_release, latest_release
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
