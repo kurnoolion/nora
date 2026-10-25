@@ -532,3 +532,9 @@ section.
 **Decision:** The stack that is the Overlay authority opens `overlay.db` (`NORA_OVERLAY_DB`), filled once by `overlay_import`; peers read it over HTTP; the JSON files remain only as the import-time backup. Closes the S3 question of which backend deployments run.
 **Why:** The design's live store is the SQLite file (transactions, per-record provenance, the registry's backend rule); the JSON layout was the migration source. Proven on two stacks: digests equal through the switch, edits from every web landing in the file, JSON untouched.
 **Consequences:** Edits made after the switch exist only in `overlay.db`; a rollback to JSON loses them. The import runs in a throwaway batch container with the corrections dir mounted.
+
+### D-DRAFT-35 — The store service is a core module; sandbox is build-side SIRA integration only
+
+**Decision:** `nora-store` runs from `core/src/store_service`, a core module under the structure rule (MODULE.md, tests in `core/tests`). `sandbox/` keeps the SIRA build-side integration (adapter, lane, batching, converter, patches, prompts, the clone). Core never imports sandbox; shared pieces move into core and sandbox re-exports them (`stores.cells`, `llm.refusal`).
+**Why:** The service is the serving process of every stack, not research code; leaving it at the top level after the rename broke the "every core package under core/src" rule without a decision. Rejected: a "service tier" above core (a second module class for one package); moving it back under sandbox (its dependencies pointed there, its role does not).
+**Consequences:** Two tolerated exceptions, both named in code: the refusal twin stays a hand-synced copy in sandbox because the SIRA clone needs a flat file; `publish --sira-root` calls the sandbox converter lazily as a build tool. Image CMD and test paths changed; images rebuild at the next build. A `CellStore` protocol (TODO) would move the cell reader and the fold from the service into `stores`.

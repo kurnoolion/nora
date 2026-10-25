@@ -166,7 +166,7 @@ mode cannot recur on the decision path.
 **CORRECTED v0.8 — the defect is latent, not live (D-DRAFT-15).**
 `LLMQueryAnalyzer` is never constructed in any live path:
 `core/src/query/pipeline.py:271` is `self._analyzer = analyzer or
-MockQueryAnalyzer()`, and `nora_store/service.py:1199` is
+MockQueryAnalyzer()`, and `core/src/store_service/service.py:1199` is
 `make_query_analyzer(None)` with a comment recording that wiring an
 `LLMProvider` for it is a deliberate follow-up. Classification in the serving
 path is **100% rule-based today**, `MockQueryAnalyzer` emits both classes, and
@@ -242,7 +242,7 @@ rather than a hypothetical. And it finally permits the comparison that
 D-DRAFT-17 shows **has never been run at this seam**: rules vs LLM vs decision
 model, same input, same harness. Cost is a few lines in the factory for the
 `nora` lane, plus a thin adapter in the `sira` lane, where
-`nora_store/service.py:1193` records that wrapping the service's httpx
+`core/src/store_service/service.py:1193` records that wrapping the service's httpx
 LLM in an `LLMProvider` is an outstanding follow-up. Small, not free.
 
 One implementation detail, read rather than assumed: `make_query_analyzer()`

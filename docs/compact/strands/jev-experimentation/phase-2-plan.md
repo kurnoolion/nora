@@ -82,7 +82,7 @@ v1.1 — §2 the `QueryIntent` partition, §3 the seam and the knob, §5 phase 2
 | `core/src/env/config.py` (modify) | `QUERY_ANALYZERS`, `resolve_query_analyzer`, `DECISION_PROVIDERS`, `resolve_decision_*`. |
 | `core/src/query/analyzer.py` (modify, `make_query_analyzer`) | `decision_provider` argument + `make_query_analyzer_from_knob`. |
 | `core/src/query/pipeline.py` (modify, `:271`) | Knob-aware default analyzer. |
-| `nora_store/service.py` (modify, `:1199`) | Knob-aware default analyzer on the live lane. |
+| `core/src/store_service/service.py` (modify, `:1199`) | Knob-aware default analyzer on the live lane. |
 | `core/tests/test_decision.py` (create) | Protocol, mock provider, hybrid analyzer. |
 | `core/tests/test_query_analyzer_knob.py` (create) | Knob resolution + the identity gate. |
 
@@ -355,7 +355,7 @@ be **function-local** inside the factory — the same technique
 **Files:**
 - Modify: `core/src/query/analyzer.py` (`make_query_analyzer`, + new factory)
 - Modify: `core/src/query/pipeline.py:271`
-- Modify: `nora_store/service.py:1199`
+- Modify: `core/src/store_service/service.py:1199`
 - Create: `core/src/decision/MODULE.md`
 - Modify: `core/src/query/MODULE.md`, `docs/compact/MAP.md`
 - Test: `core/tests/test_query_analyzer_knob.py` (append)
@@ -403,7 +403,7 @@ and extend that module's import of `MockQueryAnalyzer` to include
 `make_query_analyzer_from_knob`. Leave `MockQueryAnalyzer` imported — other
 references in the module use it.
 
-In `nora_store/service.py`, change both `make_query_analyzer(None)`
+In `core/src/store_service/service.py`, change both `make_query_analyzer(None)`
 call sites (`:1193`'s comment context and `:1199`) to
 `make_query_analyzer_from_knob()`, and update the import. Keep the existing
 comment recording that wiring an `LLMProvider` here is an outstanding

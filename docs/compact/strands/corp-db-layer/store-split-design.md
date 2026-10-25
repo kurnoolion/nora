@@ -5,7 +5,7 @@ supersedes `storage-design.md` §2.1 (baked enriched cell DB) and §5a
 step 1; replaces `phase-4-plan.md` v0.
 
 > **As built (2026-10-24).** All four stores are implemented
-> (`core/src/stores/`, `nora_store/`), published by the registry
+> (`core/src/stores/`, `core/src/store_service/`), published by the registry
 > pipeline (`publish-design.md`) and served live by every nora stack.
 > Where the implementation refined this design, the note says so in
 > place; `store-schema.md` is the authority for the DDL as built.

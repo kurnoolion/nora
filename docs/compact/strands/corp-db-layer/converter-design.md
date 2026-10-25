@@ -28,7 +28,7 @@ in both phase-2 stacks (isolates the experiment variable). Parse-tree
 fields for nora-web (`find_req` etc.) enter the schema in a later
 revision, when the web side migrates.
 
-## 2. Inputs (verified against `nora_store/service.py`)
+## 2. Inputs (verified against `core/src/store_service/service.py`)
 
 Per cell dir `<label>/sira/<mno>__<release>/`:
 
@@ -222,7 +222,7 @@ nora-store gains two knobs, both read at startup:
 ## 9. Implementation findings (2026-10-09, grounded in the real bm25x)
 
 Facts discovered at build time that amended v0.2's assumptions; tests in
-`sandbox/test_cell_db_convert.py` + `nora_store/test_no_autosave.py`
+`sandbox/test_cell_db_convert.py` + `core/src/store_service/test_no_autosave.py`
 pin them.
 
 1. **bm25x is a Rust engine with a multi-gram tier and hashed feature

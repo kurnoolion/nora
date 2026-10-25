@@ -7,7 +7,7 @@ sections A–I are the original inventory and are kept as written).
 **Method.** Enumerated from code, not from memory: `env.config.ENV_DIR_DIRS` +
 `pipeline.stage_output` (build side), `web/config.py` + compose mounts
 (serve side), `promote.sh` / `serve-push.sh` / `serve-flip.sh` (labels),
-`nora_store/service.py` (SIRA cell datasets). Sizes measured on the
+`core/src/store_service/service.py` (SIRA cell datasets). Sizes measured on the
 OA dev environment (single MNO, one release) — order-of-magnitude only; the
 production corpus is larger but the same shape.
 

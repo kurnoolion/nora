@@ -1913,6 +1913,11 @@ the opposite from the design.
   answered by retrieval over two cells. Validation of the change
   classification against real releases, and a consumer surface, are a
   separate strand.
+- **No `CellStore` protocol (TODO).** Cells is the one store without a
+  protocol, local backend, HTTP client and router; the service's
+  `/cells*` routes and `cell_db_store.py` stand in. Retrieval does not
+  need it; the package boundary and nora-web's corpus reads would be
+  cleaner with it (`core/src/stores/MODULE.md` → Deferred).
 - **Expansion is not reproducible.** Stage-1 recall moves by about ±0.02
   between runs because the expansion phrases come from a language model;
   an expansion-off or replay mode for evaluation is not implemented.

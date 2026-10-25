@@ -547,3 +547,28 @@
 - `nora_store` has no MODULE.md.
 - `README.md` and `sandbox/SETUP.md` carry MNO codes and release labels
   on lines predating this strand.
+
+## 2026-10-25 (later) — store service into core/src
+
+### Done this session
+- `nora_store/` (top level since the 2026-10-21 rename from
+  `sandbox/sira_query`) is now `core/src/store_service`, a core module
+  with its own MODULE.md: tests under `core/tests/test_store_service_*`,
+  the loader test under `sandbox/`, cell-name helpers lifted to
+  `core/src/stores/cells.py` (sandbox re-exports), the refusal reasoning
+  helper lifted into `core/src/llm/refusal.py`. The service imports only
+  core. Dockerfiles, map, docs, playbook, skill and the strand notes of
+  three strands repointed. Full suite 2875 passed. D-DRAFT-35.
+- `CellStore` protocol recorded as a TODO (stores MODULE.md → Deferred;
+  architecture §27).
+
+### Next
+- Rebuild the nora-store, nora-batch and sira-batch images from `71b7636`
+  at the next build; the image CMD changed.
+- Land the strand; then requirements.md with the canonical IDs.
+- `CellStore` protocol as its own strand, when convenient.
+
+### Flags
+- `core/src/stores/publish.py` still imports the converter from sandbox
+  lazily (`--sira-root`); tolerated as a build-tool call, not a service
+  dependency.

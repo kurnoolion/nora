@@ -53,7 +53,7 @@ of the branch deliverable.
   warning in Task 2, step 1. This is the single constraint that decides whether
   phase 1 produces a measurement or a tautology.
 - **Legacy behaviour is untouched.** Phase 1 adds no flag, no roster and no
-  wiring. `core/src/query/pipeline.py` and `nora_store/service.py` are
+  wiring. `core/src/query/pipeline.py` and `core/src/store_service/service.py` are
   not modified. The `NORA_QUERY_ANALYZER` knob (D-DRAFT-14) is phase 2.
 - **Python invocation:** no `pyproject.toml` in this repo. Run modules as
   `python -m core.src.<module>.<module>_cli` from the repo root, and tests as

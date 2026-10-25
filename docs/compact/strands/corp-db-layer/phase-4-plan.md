@@ -29,7 +29,7 @@ store; golden Stage-1 equal to the current trial; review Apply works.
 
 Status 2026-10-23: B1–B8 done (`core/src/stores/registry.py`,
 `publish.py`; nora-store registry mode; `core/tests/test_stores_publish.py`,
-`nora_store/test_registry_mode.py`; B8 on trial, publish-design §9.10).
+`core/src/store_service/test_registry_mode.py`; B8 on trial, publish-design §9.10).
 Roll-out the same day: trial, then both A/B stacks, each publish → gate
 → flip at 0 of 39 differ; the Overlay authority and trial onto the
 SQLite Overlay (publish-design §9.11). Stale label pointers retired from
