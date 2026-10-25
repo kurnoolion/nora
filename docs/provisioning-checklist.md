@@ -13,17 +13,19 @@ Layout both machines converge on (`NORA_ROOT=/srv/nora`):
 ├── requirements/     # NAS mount (build machine)         — source docs, read-only for jobs
 ├── archive/          # NAS mount (both)                  — retired builds / labels / images
 ├── builds/{nora,sira}/<build-id>/   # build machine      — local disk (SQLite inside)
-├── serve/<label>/    # both (push target on the serving host)
+├── serve/<label>/    # both (push target on the serving host) — flat labels: the converter's input
+├── serve-<stack>/    # serving host                      — the serving root: registry.db + cells/ trees/ history/ (what the stack serves)
 ├── eval/golden/      # serving host                      — pooled golden set + runs
-├── web-state-<stack>/ feedback/ corrections/ models/     # serving host, per README layout
+├── web-state-<stack>/ feedback/ corrections/ models/     # serving host, per README layout; corrections/ holds overlay.db (the Overlay authority's store) + the JSON import backup
 └── env/              # both — wiring + runtime env files, 0640 root:nora-ops, NEVER on the share
 ```
 
 Rule of thumb from the design: file-shaped, cold, or exchanged data may
 live on the NAS; anything database-shaped or hot (builds, cells,
-vector stores, web-state, serve labels) stays on local disk —
-SQLite over NFS is a corruption hazard, and hardlink promotion needs
-one local filesystem.
+vector stores, web-state, serve labels, and on the serving host the
+serving roots — `registry.db` and the cell, trees and history DBs — and
+`overlay.db`) stays on local disk — SQLite over NFS is a corruption
+hazard, and hardlink promotion needs one local filesystem.
 
 ## A. Build machine (greenfield)
 
@@ -220,8 +222,10 @@ for p in <query-port-a> <query-port-b>; do curl -s 127.0.0.1:$p/healthz > ~/pre-
    `docker compose --env-file /srv/nora/env/.env.<stack> --profile
    serve up -d`.
 9. **Verify identity**: for each stack, `curl -s 127.0.0.1:<port>/healthz`
-   vs the captured file — `serve_label`, `data_fingerprint`,
-   `code_version`, `sira_prompt_scheme`, cell count must be identical
+   vs the captured file — `serve_label`, `registry_label`,
+   `registry_release_set`, `registry_versions`, `stores`,
+   `overlay_authority`, `data_fingerprint`, `code_version`,
+   `sira_prompt_scheme`, cell count must be identical
    (`diff <(python3 -m json.tool ~/pre-…json) <(curl -s … | python3
    -m json.tool)` should show only timestamps/uptime, if anything).
 10. **Golden smoke**: a Stage-1 golden run against each stack per
@@ -234,11 +238,51 @@ for p in <query-port-a> <query-port-b>; do curl -s 127.0.0.1:$p/healthz > ~/pre-
     entry, a stale `docker/.env`) breaks visibly instead of silently
     splitting state. Remove `docker/.env*` from the checkout after a
     week of quiet.
-12. **PROMOTE_LOG + baselines**: `touch /srv/nora/serve/PROMOTE_LOG`
-    (group-writable) and place the accepted baselines at
-    `/srv/nora/eval-baselines/<stack>.txt` (beside the serve root —
-    `serve-flip.sh` names this path; `NORA_EVAL_BASELINES` overrides it)
-    so the first staged promote has something to compare against.
+12. **Baselines**: place the accepted baselines at
+    `/srv/nora/eval-baselines/<stack>.txt` (beside the serve root;
+    `NORA_EVAL_BASELINES` overrides the path) so the first gated publish
+    has something to compare against. Served stacks keep their flip
+    history in `<serve-root>/registry.db`; `serve/PROMOTE_LOG` is only
+    for a dev/test stack that still flips flat labels.
+
+### B2. Onto the registry and the Overlay store (per stack, once)
+
+Served stacks read their data from a serving root, not from a flat
+label. The procedure is in `docker/README.md` §"Moving a running stack
+onto the registry" and §"Overlay onto SQLite"; the flows are in
+`docs/architecture.md` §21 and §25. Checklist:
+
+1. **Serving root**: `mkdir /srv/nora/serve-<stack>` per A3 modes
+   (group-writable: the publish CLI writes it as the host user; the
+   store mounts it read-only). Publish the stack's current label into
+   it (convert, `publish publish`), gate it from a staging nora-store
+   (own compose project, spare port, `SERVE_RELEASE_SET=<label>`), set
+   `SERVE_REGISTRY_ROOT=/srv/nora/serve-<stack>` in
+   `/srv/nora/env/.env.<stack>`, recreate the store, `publish flip
+   --store-url http://nora-store:PORT`. Keep the previous wiring env as
+   the rollback. Probe: healthz `registry_label` = the label,
+   `registry_versions` lists every cell, 0 of the retrieval metrics
+   differ from the pre-migration run.
+2. **Retire the flat pointers** in that wiring env: comment out
+   `STORE_ROOT`, `TREES_ROOT`, `HISTORY_ROOT` and any serve-label
+   override in `.env.nora-store`; recreate; probe that no healthz key
+   changed.
+3. **Overlay authority** (ONE stack): run `overlay_import` from the
+   corrections dir's JSON into `/srv/nora/corrections/overlay.db` in a
+   throwaway `nora-batch` container as the host user, then set
+   `NORA_OVERLAY_DB=/data/corrections/overlay.db` in that stack's
+   `.env.nora-store` and recreate. Probe: per-MNO and per-label digests
+   equal before and after; `overlay_authority: true` on its healthz.
+4. **Peer stack(s)**: set `NORA_OVERLAY_URL` to the authority's
+   nora-store (host gateway + its published port) in the peer's
+   `.env.nora-store` and in the wiring env (for nora-web); recreate.
+   Probe: peer healthz `stores.overlay: http`, `overlay_authority:
+   false`; a review edit made on the peer's web appears on the
+   authority's `/stores/overlay/v1/overlay/<MNO>`.
+5. **Backups**: keep the pre-registry and pre-Overlay wiring and store
+   envs, and the pre-migration image set, until the stacks have soaked;
+   the flat label directories stay until the next build cycle (they are
+   the converter's input).
 
 Rollback of the migration itself (before step 11): recreate the stacks
 from the old `docker/.env*` files — the old tree is still in place
@@ -250,4 +294,5 @@ No urgency. Adopt the `/srv/nora` layout when convenient so the guides
 read true locally; until then `NORA_ROOT` / `NORA_ENV_ROOT` /
 `NORA_SERVE_ROOT` environment variables point the scripts at the
 existing per-user tree, and `serve-flip.sh` / `cycle.sh` fall back to
-`docker/.env.*` when no `/srv/nora/env` exists.
+`docker/.env.*` when no `/srv/nora/env` exists (the dev/test flat-label
+path; a dev stack may also run on a serving root the same way as B2).
