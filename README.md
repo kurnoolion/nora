@@ -196,11 +196,17 @@ Stages (name or number with `--start`/`--end`): 1 extract · 2 profile ·
   The web UI's **Parse Review** page reads the consolidated
   `reports/parse_summary.json`.
 
-**8. Hand off parse output to SIRA**
+**8. Hand off parse output to SIRA and the stores**
 - SIRA ingests NORA's parse trees (`out/parse/<mno>/<rel>/*_tree.json`).
   Preconditions, ingestion commands, and multi-cell handling are in
   `sandbox/README.md` (scenario matrix) and `sandbox/SETUP.md` →
   "Multi-MNO / multi-release (multi-cell) runbook".
+- The same parse trees feed the Trees and History stores
+  (`core.src.stores.trees_build`, `history_build`), and the SIRA cells
+  become the Cells store through `sandbox.cell_db_convert`. Served stacks
+  receive all three as versioned files through the publish registry
+  (`core.src.stores.publish`; `docker/README.md` → "Registry publish").
+  The end-to-end design is `docs/architecture.md`.
 
 ### 3. Running services
 
@@ -215,13 +221,18 @@ Host/port resolve CLI flag > `config/web.json`; `env_dir` resolves
 `<env_dir>/state/`. Set `root_path` in `config/web.json` when behind a reverse
 proxy.
 
-**SIRA lane in the web app** — the playground can pin SIRA-ranked chunks by
-calling the SIRA per-query probe service. Point `NORA_STORE_URL` at it
-(default `http://127.0.0.1:8040`); `NORA_STORE_TIMEOUT` (seconds,
-default 1200) bounds the call.
+**SIRA lane in the web app** — the Ask page retrieves through nora-store
+(`nora_store.service`). Point `NORA_STORE_URL` at it (default
+`http://127.0.0.1:8040`); `NORA_STORE_TIMEOUT` (seconds, default 1200)
+bounds the call. The web reads the Overlay, Trees and History stores
+through the same service when `NORA_OVERLAY_URL` / `NORA_TREES_URL` /
+`NORA_HISTORY_URL` are set (the compose default); unset, it falls back to
+local files (dev).
 
 **SIRA query service + enrichment stacks** — started and operated per
-`sandbox/README.md` §3 (Running services).
+`sandbox/README.md` §3 (Running services). Served deployments (images,
+compose stacks, the publish registry, the Overlay store) are in
+`docker/README.md`.
 
 ### 4. Command reference
 
@@ -349,7 +360,7 @@ NORA_RAG_ONLY=1 ENV_DIR=/home/me/work/env_vzw \
 
 ## Corrections UI
 
-Requirement engineers can correct generated artifacts directly in the browser. Each environment gets its own `corrections/` directory that the pipeline auto-detects as an override on the next run.
+Requirement engineers can correct generated artifacts directly in the browser. Each environment gets its own `corrections/` directory that the pipeline auto-detects as an override on the next run. This covers profile and taxonomy corrections; enrichment-review corrections are a different store (the Overlay, owned by nora-store — `docs/enrichment-review-guide.md`).
 
 **Workflow:**
 

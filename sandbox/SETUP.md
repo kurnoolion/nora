@@ -829,6 +829,12 @@ uvicorn nora_store.service:app --port 8040
 #    On first query the service enumerates <mno>__<MMMYYYY>/ cells and
 #    routes through the multi-cell path. /healthz / startup logs show
 #    "Multi-cell mode: loaded N cell(s): ...".
+#    Optional, closer to serving: convert the cells to cell DBs and load
+#    those instead —
+#      python -m sandbox.cell_db_convert --db-root <db_root> --out <cell-dbs> --verify 25
+#      NORA_STORE_ROOT=<cell-dbs> NORA_STORE_INDEX=cell-db uvicorn nora_store.service:app --port 8040
+#    Served stacks go one step further and read a publish registry
+#    (NORA_STORE_REGISTRY; docker/README.md "Registry publish").
 
 # 6. Query via NORA's /test SIRA lane (NORA web app, separate terminal).
 #    Cross-MNO: "compare VoWiFi of VZW and TMO"
@@ -846,7 +852,7 @@ uvicorn nora_store.service:app --port 8040
 | `sira_multi`: `ModuleNotFoundError: bm25x` (or hydra) in the subprocess | `sira_multi` run under the wrong Python | activate the SIRA venv first (the gotcha above) |
 | `run_pipeline.py`: `Could not override 'data.name'` | SIRA's Hydra config doesn't accept the `data.name` override (D-DRAFT-6 assumption) | the one unverified spot — likely a small config-syntax tweak in `scripts/configs/data/nora.yaml` (or pass `+data.name=`); inspect the `--dry-run` command |
 | bm25 stage: `index/best` FileNotFoundError | eval+pick-best produced no best index | confirmed-mitigated: the adapter emits a dummy index-build query/qrel; if it recurs, check the cell's `raw/queries-test.jsonl` has the `_idxbuild_0` row |
-| service `/healthz` shows no cells / legacy mode | `NORA_STORE_ROOT` not pointed at the cell db_root, or cells lack `raw/metadata.json` | confirm `<db_root>/<mno>__<release>/raw/metadata.json` exists; re-run the adapter |
+| service `/healthz` shows no cells / legacy mode | `NORA_STORE_ROOT` not pointed at the cell db_root, or cells lack `raw/metadata.json`; in registry mode (`NORA_STORE_REGISTRY` set) the registry has no active set yet | confirm `<db_root>/<mno>__<release>/raw/metadata.json` exists; re-run the adapter. Registry mode: `publish status`, then flip a set and `POST /registry/reload` |
 | service `ModuleNotFoundError: bm25x` at query time | service launched under the wrong Python | launch uvicorn under the SIRA venv |
 
 ### Notes

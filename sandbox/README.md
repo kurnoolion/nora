@@ -20,7 +20,8 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_patches/test/probe_per_stage_endpoints.py` | Stdlib sanity probe — POSTs a tiny chat-completion to each configured endpoint and reports compact `SPK` lines. Use before running the pipeline to confirm reachability + response shape. | ✅ |
 | `adapter/nora_to_beir.py` | Converts NORA parse output (`<env_dir>/out/parse/**/*_tree.json` — recursive, covers the per-cell `<mno>/<rel>/` layout, NORA D-DRAFT-12) + the 18-Q eval set into BEIR-format `corpus.jsonl` + `queries.jsonl` + `qrels/test.tsv`. `--multi-cell` emits one dataset per `(mno, release)` cell. | ✅ |
 | `sira_multi.py` | Multi-MNO batch orchestrator — enumerates the `(mno, release)` cells under a db_root and runs SIRA's `run_pipeline.py` once per cell (writes each cell's `configs/data/<cell>.yaml` from the `nora.yaml` template first); `--verify` sweeps the same cells with read-only verify-run reports instead of building. See "Running — multi-MNO" below. | ✅ |
-| `nora_store/service.py` | Cell-aware FastAPI per-query service (`/query`, `/healthz`) — loads every cell at startup; resolves query scope → retrieve per cell → merge → rerank. Query-time config in the multi-mno-sira runbook. | ✅ |
+| `nora_store/service.py` | Cell-aware FastAPI query and store service: `/query`, `/healthz`, `/cells*` (inventory, review rows, per-cell reload), `/registry/reload`, and the hosted stores under `/stores/{cells,trees,history,overlay}/v1`. Loads every cell at startup from flat cell dirs, from cell DBs (`NORA_STORE_INDEX=cell-db`), or — served stacks — from the publish registry's active set (`NORA_STORE_REGISTRY`); resolves query scope → retrieve per cell → merge → rerank. It is the Overlay authority. Query-time config in the multi-mno-sira runbook; the design in `docs/architecture.md` §7. | ✅ |
+| `cell_db_convert.py` | Converter: one flat SIRA cell (`raw/`, `index/best`, a pinned enrichment run) → `cell-<mno>-<rel>.db`, schema 2 (vanilla index blobs + raw phrases; the Overlay is composed at load, not stored). `--verify N` is the identity gate: composed-from-DB ranking must equal the in-memory one. Input to `core.src.stores.publish`. | ✅ |
 | `sira_cells.py` | Cell-identity helpers (`cell_dirname`, `parse_cell_dirname`, `enumerate_cells`); release ordering re-exported from `core.extraction.release_key`. | ✅ |
 | `llm_refusal.py` | Permanent-refusal detection shared by the batch enrich lane and the query service: a marker-prefixed, JSON-free response means the endpoint will refuse that input on every retry — route the call to a configured fallback LLM instead (or fail fast as `llm_refused`). Markers/fallback endpoints are env-local (`NORA_LLM_REFUSAL_MARKERS`, `NORA_SIRA_ENRICH_FALLBACK_LLM_*`, `NORA_SIRA_QUERY_FALLBACK_LLM_*`). `fallback_reasoning_fields(env, prefix)` gives the fallback call its own reasoning fields (`<prefix>REASONING(_CONTROL)`, else `NORA_LLM_FALLBACK_REASONING(_CONTROL)`; same wire rule as core's provider). Copied flat into the SIRA clone by `install_configs.sh`. | ✅ |
 | `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`; `--failed` inverts it into a triage listing (failed reqs per cell grouped status → plan; local-only, ids redacted before sharing). | ✅ |
@@ -335,10 +336,15 @@ processed (see `SETUP.md` §"Verifying enrichment completeness").
     uvicorn nora_store.service:app --port 8040
     curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 
-The service loads **every** cell under `$DB` at startup (RAM grows with
-cell count) and never re-scans — **any added / removed / re-ingested cell
-requires a service restart**. `/healthz` is the truth: expect
-`"mode": "multi-cell"`, the full `cells` list, `cells_load_error: null`.
+In this flat dev mode the service loads **every** cell under `$DB` at
+startup (RAM grows with cell count) and never re-scans — an added or
+removed cell needs a restart; a re-ingested one can be swapped with
+`POST /cells/<cell>/reload`. Served stacks run in registry mode instead
+(`NORA_STORE_REGISTRY`): the set of cells comes from the registry's
+active release set and `POST /registry/reload` swaps changed units
+without a restart (`docker/README.md` §"Registry publish"). `/healthz`
+is the truth: expect `"mode": "multi-cell"`, the full `cells` list,
+`cells_load_error: null`.
 Per query: resolve scope → retrieve per cell → merge → rerank the pooled
 candidates (D-105, D-110), balanced fusion (D-118) with the top_k cut
 scaled per cell (D-121); an MNO-only query hits that MNO's latest release
@@ -512,7 +518,17 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
 
 ### Query-service env vars (`nora_store/service.py`)
 
-- `NORA_STORE_ROOT` — the cell db_root (required for multi-cell mode).
+- `NORA_STORE_ROOT` — the cell db_root: flat `<mno>__<rel>/` dirs, or
+  `cell-*.db` files with `NORA_STORE_INDEX=cell-db`. Unused when
+  `NORA_STORE_REGISTRY` is set.
+- `NORA_STORE_REGISTRY` / `NORA_STORE_RELEASE_SET` — registry mode
+  (served stacks): the path of `registry.db`; the files come from its
+  `active` set, or from the named staged set (a gate's staging store).
+  Implies cell-db mode.
+- `NORA_STORE_INDEX` (`flat` | `cell-db`), `NORA_STORE_ENGINE` (`bm25x` |
+  `fts5`) — load mode without a registry; the search engine.
+- `NORA_CODE_VERSION` — baked into the images at build; reported on
+  `/healthz` and recorded by `publish` on each release set.
 - `NORA_SIRA_DOC_ENRICH_RUN` — pinned doc-enrich run to load phrases from.
 - `NORA_LLM_SHIM_URL` / `NORA_LLM_MODEL` / `NORA_LLM_SHIM_API_KEY` (falls
   back to `NORA_LLM_API_KEY`) — query-enrichment endpoint, base **without**
@@ -534,7 +550,8 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
 
 - Hosted stores (strand corp-db-layer S6; `/stores/<store>/v1`):
   `NORA_ENV_DIR` (parse trees → Trees store), `NORA_TREES_ROOT` /
-  `NORA_HISTORY_ROOT` (pre-built SQLite stores), `NORA_OVERLAY_DB` (the
+  `NORA_HISTORY_ROOT` (pre-built SQLite stores; else the registry's
+  active set; Trees falls back to the parse trees), `NORA_OVERLAY_DB` (the
   Overlay file; else the JSON files under `NORA_STORE_CORRECTIONS_ROOT`,
   opened read-write — this service is the Overlay authority),
   `NORA_OVERLAY_URL` (peer read: another nora-store is the authority;

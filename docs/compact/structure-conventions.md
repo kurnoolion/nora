@@ -19,6 +19,9 @@ Populated during `project-init --retrofit` from the tech-stack answer in `projec
 │   ├── llm/                           # Proprietary-LLM provider boilerplate
 │   │   └── tests/                     # Co-located tests
 │   └── (other surfaces as identified)
+├── nora_store/                        # The store and query service (nora-store image): cells, /stores routers, registry mode
+├── sandbox/                           # SIRA integration: adapter, lane, converter, patches, prompts; the SIRA clone (gitignored)
+├── docker/                            # Images, compose, env examples, cycle / publish runbooks
 ├── config/                            # Per-module settings (D-021)
 │   ├── llm.json                       # Default LLM provider, model, timeouts
 │   ├── vectorstore.json               # Embedding model, distance metric, backend
@@ -43,13 +46,32 @@ A single `<env_dir>` per environment contains all runtime artifacts, partitioned
 ├── input/                             # Source documents (D-023)
 │   └── <MNO>/<release>/*.pdf|*.docx|*.xlsx
 ├── out/                               # Pipeline outputs (replaces top-level data/)
-│   └── extracted/  parsed/  resolved/  taxonomy/  standards/  graph/  vectorstore/
+│   └── extract/  profile/  parse/  resolve/  standards/  taxonomy/  graph/  vectorstore/  eval/
+│       (per-cell stages under <MNO>/<release>/; global stages flat)
 ├── state/                             # Runtime SQLite DBs
 │   ├── nora.db                        # Web UI job queue
 │   └── nora_metrics.db                # Metrics
-├── corrections/                       # Human profile / taxonomy overrides
+├── corrections/                       # Human profile / taxonomy overrides (enrichment corrections are NOT here: Overlay store below)
 ├── reports/                           # Compact RPT / MET / FIX / QC outputs
-└── eval/                              # User-supplied A/B Q&A xlsx
+└── eval/                              # User-supplied A/B Q&A xlsx; eval/golden/ (pooled GOLDEN_DIR mount in served stacks)
+```
+
+## Serving store layout (outside the env_dir)
+
+Served stacks read corpus data from a per-stack serving root written only
+by `core.src.stores.publish`, and keep the one mutable corpus store, the
+Overlay, with the deployment (strand corp-db-layer; `docs/architecture.md`
+§3, §13–§17).
+
+```
+<serve-root>/                          # one per stack; mounted read-only by nora-store
+├── registry.db                        # store versions, release sets, gate runs, active set, flips
+├── cells/cell-<mno>-<rel>-vN.db       # Cells store, schema 2 (write-once)
+├── trees/trees-<mno>-<rel>-vN.db      # Trees store (write-once)
+└── history/history-<mno>-vN.db        # History store (write-once)
+<corrections>/                         # CORRECTIONS_DIR; read-write only on the Overlay authority's nora-store
+├── overlay.db                         # the Overlay store (NORA_OVERLAY_DB)
+└── sira-enrich/*.json                 # import-time backup / dev fallback
 ```
 
 `environments/<name>.json` resolves an env name to its `env_dir`. The legacy `document_root` field is renamed `env_dir` for clarity.
