@@ -2,10 +2,11 @@
 
 How to take a new requirements release from source documents to a
 serving stack: one build cycle, end to end, run by one operator on the
-build machine with the flip done on the serving host. This is the
-operator runbook; `docker/README.md` §"Ingest a new release" is the
-reference the driver wraps — go there when you need to run a phase by
-hand or understand a flag.
+build machine, with the publish, gate and flip done on the serving
+host. This is the operator runbook; `docker/README.md` §"Ingest a new
+release" and §"Registry publish" are the reference the driver wraps —
+go there when you need to run a phase by hand or understand a flag.
+`docs/architecture.md` §20–§21 gives the flows this guide implements.
 
 Companion guides: `docs/golden-eval-guide.md` (the eval you run before
 flipping production), `docs/enrichment-review-guide.md` (what domain
@@ -15,7 +16,7 @@ experts do with the served result).
 
 | Role | Machine | Does |
 |---|---|---|
-| Ingestion operator (you) | build machine + serving host | runs the cycle, pushes the label, flips stacks, records the log |
+| Ingestion operator (you) | build machine + serving host | runs the cycle, pushes the label, publishes it into the stack's serving root, records the gate, flips |
 | Eval operator | serving host | golden evals; keeps `<nora-data>/eval-baselines/<stack>.txt` current |
 | Architect | both (sudo) | image rebakes, profile-binding commits, migrations |
 | Domain experts | web only | enrichment review, Eval Studio |
@@ -54,7 +55,8 @@ Layout you will see on the build machine (`NORA_ROOT=/srv/nora`):
 ├── builds/nora/<build-id>/         # env dir: out/, prompts/, reports/, CYCLE.json
 ├── builds/sira/<build-id>/         # SIRA cells: <MNO>__<MMMYYYY>/
 ├── builds/ACTIVE                   # the baton: name of the cycle in flight
-├── serve/<label>/                  # promoted snapshots (also on the serving host)
+├── serve/<label>/                  # flat labels: the converter's input (also on the serving host)
+├── serve-<stack>/                  # serving host only: registry.db + cells/ trees/ history/ (what a stack serves)
 └── env/                            # wiring + runtime env files (never on the share)
 ```
 
@@ -72,7 +74,9 @@ All commands below run from the checkout's `docker/` directory.
 | 5 | enrich | `./cycle.sh enrich` | — | `status` shows `enrich ok` |
 | 5v | verify | `./cycle.sh verify-enrich` | **yes** | verify PASS, CYC block `verify_rc=0` |
 | 6 | promote + push | `./cycle.sh promote --label <label> --host <serving-host> --scheme <scheme>` | — | `pushed -> <host>:.../serve/<label>`; baton free |
-| 6f | flip | on the serving host: `./serve-flip.sh <stack> <label>` | **yes** | healthz `label=<label>`; PROMOTE_LOG line |
+| 6p | publish | on the serving host: convert, then `publish publish --label <label>` into the stack's serving root | — | JSON plan: new units staged, unchanged units reused; `status` shows the set |
+| 6g | gate | staging nora-store on `SERVE_RELEASE_SET=<label>`; golden eval; `publish gate --verdict pass --run-ref <run-id>` | **yes** | a `gate_run` row for the label |
+| 6f | flip | `publish flip --label <label> --store-url http://nora-store:PORT` | — | healthz `registry_label=<label>`, `registry_versions` = the set; flip row in `registry.db` |
 
 Long phases (1, 4, 5) return immediately and run detached. `./cycle.sh
 status` is how you find out they finished — re-run it; a phase is `ok`
@@ -249,39 +253,90 @@ they already exist, on either host — pick a new one.
 NORA lanes were not run); the web app's NORA lanes then serve empty on
 this label, which is the expected state today.
 
-### 6f. Flip (serving host)
+The pushed label is not what a stack serves. It is the input to phase
+6p: the converter reads its SIRA cells, `publish` reads its parse trees.
 
-The default protocol is **staged**: the secondary stack first, an eval
-against the standing baseline, then production.
+### 6p. Publish (serving host)
+
+Every served stack reads its data from a **serving root**
+(`serve-<stack>/`): write-once, versioned store files plus
+`registry.db`, which says which version of each unit the stack serves.
+Publishing turns the pushed label into those files. Commands run in
+one-shot containers of the stack's compose project; the exact
+invocations with mounts are in `docker/README.md` §"Registry publish".
 
 ```bash
-# on the serving host, docker/ of the checkout
-./serve-flip.sh <secondary-stack> <label>              # shows MANIFEST current vs new; type yes
-# golden eval against the secondary stack (docs/golden-eval-guide.md);
-# compare its GEV block with <nora-data>/eval-baselines/<production-stack>.txt
-./serve-flip.sh <production-stack> <label> --eval-run <run-id>
+# convert the label's SIRA cells into cell DBs (sira-batch image; identity gate on)
+python -m sandbox.cell_db_convert --label <serve>/<label> --out <work>/cells --verify 25
+# publish: Cells from the converter, Trees from the label's parse trees,
+# History rebuilt per MNO whose Trees changed; unchanged units are reused
+python -m core.src.stores.publish publish --serve-root <serve-root> --label <label> \
+    --cells-src <work>/cells --env-dir <serve>/<label>/nora --prompt-scheme <scheme> [--dry-run]
+python -m core.src.stores.publish status --serve-root <serve-root> --label <label>
 ```
 
-Alternatives, both recorded in `serve/PROMOTE_LOG`, neither blocked:
+`--dry-run` prints the plan without staging: which units are new, which
+are reused, and any warning (a Trees unit without a Cells unit or the
+reverse). A label that already exists in the registry is refused
+(`PUB-E001`); pick a new one. After this step the set exists on disk
+and in the registry and nothing serves it.
 
-- `--mode expedited` — direct production flip, no staging (hotfix-shaped
-  changes, or a rollback).
-- `--mode override --note "<why>"` — the eval regressed and you are
-  promoting anyway, reason stated.
+### 6g. Gate (serving host)
 
-The flip verifies the query service's `/healthz` reports the new
-label and prints an identity line (`label= fp= code= scheme= cells=`)
-— that line is what you paste as the promote report. It also prints
-the rollback one-liner; keep it in your terminal until the stack has
-been observed healthy.
+The gate is the golden eval against the staged set, recorded in the
+registry. A staging nora-store serves the staged set from the same root
+when its wiring env sets `SERVE_RELEASE_SET=<label>` (own compose
+project, spare port; `docker/README.md` §"Moving a running stack onto
+the registry" shows the setup).
 
-**Rollback** is the same command with the previous label:
-`./serve-flip.sh <stack> <previous-label> --mode expedited --yes`.
-Old labels stay on disk; nothing is deleted by a flip.
+```bash
+# golden eval against the staging store (docs/golden-eval-guide.md);
+# compare its GEV block with <nora-data>/eval-baselines/<production-stack>.txt
+python -m core.src.stores.publish gate --serve-root <serve-root> --label <label> \
+    --kind golden-stage1 --verdict pass --run-ref <run-id>
+```
 
-After production is on the new label, the eval operator refreshes the
-baseline file from the next accepted golden run on that stack (the
-flip prints the reminder).
+`--verdict fail` is recorded too; a later rerun with `pass` supersedes
+it (the latest run per kind decides). Without a passing or waived
+verdict the flip refuses (`PUB-E004`).
+
+### 6f. Flip (serving host)
+
+```bash
+python -m core.src.stores.publish flip --serve-root <serve-root> --label <label> \
+    --store-url http://nora-store:PORT
+```
+
+One transaction sets the stack's `active` rows to the set and records a
+`flip` row (label, previous label, mode, who). With `--store-url` the
+command then asks the serving store to reload (`POST /registry/reload`,
+only the units whose file changed; no recreate) and reads its
+`/healthz`: `registry_label` must be the label and `registry_versions`
+must match the set, else `PUB-E008` and the rollback command is printed.
+Name the store by its compose service name; a container cannot reach its
+own stack's published port through the host gateway.
+
+Modes, all recorded in the `flip` table of `registry.db`:
+
+- default `staged` — the gate above was run against a staging store.
+- `--mode expedited` — a hotfix-shaped change, or a rollback.
+- `--force --reason "<why>"` — the eval regressed and you are flipping
+  anyway: records a waived `manual` gate run with the reason and flips
+  in `override` mode.
+
+**Rollback** is a flip to a set that served before:
+`python -m core.src.stores.publish rollback --serve-root <serve-root> --to <previous-label> --store-url http://nora-store:PORT`.
+Old versions stay on disk; nothing is deleted by a flip. Disk is
+reclaimed later with `publish gc --serve-root <serve-root> --keep 3`
+(files only; the registry rows stay as history), once the new set has
+soaked.
+
+After production is on the new set, the eval operator refreshes the
+baseline file from the next accepted golden run on that stack.
+
+The label-directory path (`serve-flip.sh`, env-file repoint,
+`PROMOTE_LOG`) remains for dev/test stacks that mount a flat label
+directly; it is not used for served stacks.
 
 ## Multiple operators
 
@@ -315,7 +370,8 @@ profile debug, a what-if rebuild — anything that shouldn't wait for the
 baton — runs against a private tree (own `--env-dir` /
 `NORA_BUILDS_ROOT`, own copy of the wiring env) and is **never
 promoted**. Promotion goes only through the baton'd cycle;
-`promote.sh` refusing existing labels is the backstop, not the rule.
+`promote.sh` refusing existing labels is the backstop, not the rule,
+and the registry refuses a reused release-set label the same way.
 The shared `.env.builds` wiring is repointed only by `cycle.sh start`
 on the team tree.
 
@@ -323,8 +379,9 @@ on the team tree.
 label is pushed and the flip is verified: the operator who ran
 `promote` archives the build if the team keeps archives (include
 `CYCLE.json` — it is the who-did-what record) and then GCs
-`builds/{nora,sira}/<build-id>`. `serve/PROMOTE_LOG` on the serving
-host is the durable history either way.
+`builds/{nora,sira}/<build-id>`. `<serve-root>/registry.db` on the
+serving host (its `release_set`, `gate_run` and `flip` tables) is the
+durable history either way.
 
 ## Reporting
 
@@ -337,8 +394,8 @@ CYC build=2026-09-a phase=verify-enrich op=<user> ts=2026-09-04T18:02:11Z status
 run_name=2026-09-a verify_rc=0 warn_lines=3 gate=confirmed_by:<user>
 ```
 
-Plus the verify sweep output (paste-safe) and the flip's healthz
-identity line. `./cycle.sh status` output is paste-safe too.
+Plus the verify sweep output (paste-safe), the publish plan JSON
+(counts and identities) and the flip's healthz check. `./cycle.sh status` output is paste-safe too.
 
 **Never paste**: lane/stage logs, `sira_enrich_inspect` output, anything
 under `reports/tax_debug/`, or file listings of `requirements/` — these
@@ -360,7 +417,11 @@ with the same HTTP status") and keep the ids on the machine.
 | `CYC-E070 verify reports FAIL` | structural break in a cell | triage locally, `enrich --cell X --retry-failed`, verify again |
 | `SPUSH-E012 remote label already exists` | label name reused | promote again under a new label (`abandon` is NOT needed — the cycle is still open until push succeeds) |
 | `SPUSH-E020 checksum verify found differences` | transfer incomplete | re-run the same `promote` command — the push resumes |
-| `SFLIP-E020 healthz does not report serve_label` | stack came up on the wrong data or not at all | the printed rollback one-liner; then `docker compose --env-file <stack env> logs nora-store` |
+| `PUB-E001 label exists` | release-set label reused | publish under a new label |
+| `PUB-E004 flip refused: no passing gate` | no `pass` / `waived` verdict for the label, or a kind's latest run failed | run the eval, record the gate; `--force --reason` only with a stated reason |
+| `PUB-E005 member file missing` | a staged file is gone (gc, or a wrong root) | re-publish the label's units under a new label |
+| `PUB-E008 serving verification failed` | the store did not come up on the set | the printed rollback command; then `docker compose logs nora-store` of that stack |
+| `SFLIP-E020 healthz does not report serve_label` (dev/test flat path only) | stack came up on the wrong data or not at all | the printed rollback one-liner; then `docker compose --env-file <stack env> logs nora-store` |
 | `CYC-E004 wiring env does not point at build` | `.env.builds` was edited by hand mid-cycle | restore the two path lines to the active build dirs |
 
 Every error prints a `fix:` line; that line is the first thing to try.
@@ -376,6 +437,8 @@ build dirs on disk for inspection.
 - Phase 2 prompt derivation — AI-assisted, per new MNO.
 - NORA-native retrieval lanes (`./ingest.sh -l nora <MNO> <MMMYYYY>`)
   — not part of the default cycle while serving is SIRA-only.
-- The flip — a separate act on the serving host, with its own log.
-- Garbage collection — old builds and labels are moved to the archive
-  share by hand, never by the tooling.
+- The gate verdict and the flip — separate acts on the serving host,
+  recorded in the registry.
+- Garbage collection of builds and flat labels — moved to the archive
+  share by hand. Store versions in a serving root are reclaimed with
+  `publish gc`, which deletes files and keeps the registry rows.
