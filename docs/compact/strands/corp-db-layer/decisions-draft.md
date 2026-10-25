@@ -366,7 +366,7 @@ different enrichment than the lane just produced.
 retention is an ops concern; phase 4's publisher consumes these files
 as its input contract.
 
-## D-DRAFT-16 — No built-in HuggingFace embedder or reranker; unconfigured means a clear failure or passthrough
+### D-DRAFT-16 — No built-in HuggingFace embedder or reranker; unconfigured means a clear failure or passthrough
 
 **Context:** With no vector store config, the web route built a default
 config whose sentence-transformers embedder downloaded from the
@@ -395,7 +395,7 @@ must name `NORA_EMBEDDING_PROVIDER` (or config/llm.json must). The
 sentence-transformers and huggingface backends still exist, but run only
 when named.
 
-## D-DRAFT-17 — promote.sh copies the NORA vectorstore instead of hardlinking it
+### D-DRAFT-17 — promote.sh copies the NORA vectorstore instead of hardlinking it
 
 **Context:** Labels are hardlink snapshots, on the premise that a
 rebuild never mutates a promoted label. Opening a chroma index updates
@@ -414,7 +414,7 @@ Labels promoted before the change must be re-copied by hand. Any other
 serve-set file opened read-write (SIRA cells are unchecked) would need
 the same treatment.
 
-## D-DRAFT-18 — The team gate refuses legacy sections instead of forcing them to SIRA
+### D-DRAFT-18 — The team gate refuses legacy sections instead of forcing them to SIRA
 
 **Context:** The SIRA-only override sat inside the `section == "merged"`
 branch of `/api/test/ask`. A gated POST without `section` defaulted to
@@ -434,20 +434,20 @@ page never sends a legacy section, so refusing costs nothing.
 `section=merged`. Gate-on tests cover a missing section and each legacy
 section.
 
-## D-DRAFT-19 — Web refusal fallback restored for the Ask page (reverses 2026-10-18)
+### D-DRAFT-19 — Web refusal fallback restored for the Ask page (reverses 2026-10-18)
 
 **Context:** Switching models by hand after a refusal proved inconvenient.
 **Decision:** Ask reroutes a permanent refusal once to the roster's `fallback_provider`, on all stacks; `NORA_LLM_REFUSAL_MARKERS` is the switch. Curation chat stays without a fallback.
 **Why:** Automatic, disclosed reroute (D-220). Rejected: manual switch — puts recovery on every asker; curation-chat fallback — not needed for authoring.
 **Consequences:** Each web env file needs the markers and the roster a distinct `fallback_provider`; removing `NORA_LLM_FALLBACK_*` alone doesn't disable it.
 
-## D-DRAFT-20 — The team-mode gate replaces the planned `NORA_SURFACE` knob
+### D-DRAFT-20 — The team-mode gate replaces the planned `NORA_SURFACE` knob
 
 **Decision:** No `NORA_SURFACE=ask|full`; corp deployments restrict the UI with the team-mode gate (FR-41).
 **Why:** The gate already limits non-admins to an allowlist and the SIRA lane. Rejected: both — two switches for one concern.
 **Consequences:** Corp exposure is set by `NORA_WEB_TEAM_MODE` and the allowlist.
 
-## D-DRAFT-21 — In corp, corrections reach serving only with the next publish
+### D-DRAFT-21 — In corp, corrections reach serving only with the next publish
 
 **Withdrawn 2026-10-21** — superseded by D-DRAFT-24 (Overlay is a live store).
 
@@ -455,79 +455,79 @@ section.
 **Why:** The corrections surface is dev-only (scope ruling); cell DBs stay write-once. Rejected: a corp-side corrections path — new mutable state for a dev-only surface.
 **Consequences:** A correction's latency to corp is one publish cycle.
 
-## D-DRAFT-22 — Four orthogonal stores: Cells, Trees, History, Overlay
+### D-DRAFT-22 — Four orthogonal stores: Cells, Trees, History, Overlay
 
 **Decision:** Split corpus data by kind into four stores, each behind its own interface (`store-split-design.md`).
 **Why:** One baked cell DB lost raw SIRA output and broke review in cell-db mode. Rejected: extending the baked DB — every new use would widen one file.
 **Consequences:** Phase 4 starts with the split; publish ships Cells, Trees and History.
 
-## D-DRAFT-23 — The index is composed at load from separate layers; no cache
+### D-DRAFT-23 — The index is composed at load from separate layers; no cache
 
 **Decision:** Cells store the vanilla index and raw SIRA phrases; nora-store folds Overlay in and enriches at load. No composed-index cache.
 **Why:** Keeps layers editable and inspectable. Rejected: baking — freezes corrections; a cache — measured load 1.4 s for 40k rows (flat path 1.7 s), so it would save about 1 s per start.
 **Consequences:** Cell DB schema_version 2; an identity gate proves v2 == baked on equal inputs. Revisit the cache if load passes about 30 s.
 
-## D-DRAFT-24 — Overlay is a live store keyed by (req_id, fingerprint), similarity-guarded
+### D-DRAFT-24 — Overlay is a live store keyed by (req_id, fingerprint), similarity-guarded
 
 **Decision:** Review edits live in a mutable Overlay store, not in published cells; an edit applies on fingerprint match, else at Jaccard ≥ 0.85 against its origin, else is held.
 **Why:** Corrections go live without republish; the guard keeps edits through trivial text changes. Rejected: exact fingerprint only — a typo fix would hold every edit.
 **Consequences:** Overlay is deployment state (backed up, not published).
 
-## D-DRAFT-25 — Store interfaces with local and HTTP implementations
+### D-DRAFT-25 — Store interfaces with local and HTTP implementations
 
 **Decision:** One protocol per store; local backend or HTTP client chosen by `NORA_<STORE>_URL`; routes under `/stores/<store>/v1`; no store reads another's backend.
 **Why:** Stores can move to their own services by config. Rejected: four services now — deployment cost without a consumer that needs it.
 **Consequences:** Composition lives in consumers; each store has a parity test (local == HTTP).
 
-## D-DRAFT-26 — SQLite for the published stores; trees as parent id + materialized path
+### D-DRAFT-26 — SQLite for the published stores; trees as parent id + materialized path
 
 **Decision:** SQLite for Cells, Trees, History; Overlay and registry SQLite in dev/test, SQLite or Postgres in corp by deployment facts (design §9.4); tree nodes carry `parent_id` and an indexed ordinal `path`; schemas stay Postgres-portable.
 **Why:** Small, write-once, read-mostly hierarchies; path gives subtree/ancestor reads, `WITH RECURSIVE` the rest. Rejected: a graph DB — hierarchies, not graphs (the knowledge graph is separate).
 **Consequences:** Postgres maps `path` to `ltree` if corp provides it. Trees carry a casefolded id column (`req_id_cf`, Python `casefold` semantics — SQLite NOCASE folds ASCII only) and 6-digit path segments (flat documents exceed 9999 root nodes).
 
-## D-DRAFT-27 — Three requirement hashes; History as a Merkle tree with version intervals
+### D-DRAFT-27 — Three requirement hashes; History as a Merkle tree with version intervals
 
 **Decision:** `text_fp` (canonical v2 title + body; the shared join key), `node_fp` (+ priority, applicability) and `subtree_fp` (+ children in document order); History stores version intervals and content-addressed text, one SQLite DB per MNO (design §3, §6a).
 **Why:** Any level compares by one hash and diffs descend only into changed branches; SIRA and review edits depend on text only, History on fields too. Rejected: one hash for all uses — a priority change would stale enrichment; per-release flags only — no texts, full scans.
 **Consequences:** S1's `req_fingerprint` is replaced by `text_fp` (values versioned `v2:`); reorders show as changed, labelled "reordered". A child enters its parent's `subtree_fp` as (key, location, hash), not the bare hash — otherwise a renumbered section or a same-content rename leaves every ancestor unchanged and the diff never descends to it.
 
-## D-DRAFT-28 — nora-store hosts every persistent corpus store; nora-web is a web layer
+### D-DRAFT-28 — nora-store hosts every persistent corpus store; nora-web is a web layer
 
 **Decision:** nora-store serves Cells, Trees, History and Overlay over `/stores/<store>/v1`; it is the Overlay's writer, taking edits from nora-web over HTTP; peer stores read a shared Overlay via `NORA_OVERLAY_URL`. Web runtime DBs follow later.
 **Why:** One data service: no shared mutable file between containers, no store-waits-for-web startup, only nora-store mounts data in corp. Rejected: Overlay on nora-web — a SQLite file written by one container and read by another.
 **Consequences:** nora-web needs no corrections or parse mounts once the URLs are set; an A/B pair names one store as Overlay authority.
 
-## D-DRAFT-29 — Schema evolution: payload JSON absorbs new fields; versions bump only on breaking change
+### D-DRAFT-29 — Schema evolution: payload JSON absorbs new fields; versions bump only on breaking change
 
 **Decision:** Design §9: readers ignore unknown keys and tolerate missing additive columns; `schema_version` bumps only for breaking changes, with migrate-on-read or a refuse-and-rebuild code; Overlay alone gets in-place migrations; HTTP `/v1` → `/v2` on break.
 **Why:** Parse trees will grow fields; rebuilding every store for each is not acceptable. Rejected: strict schemas with a bump per field — every addition would force rebuilds.
 **Consequences:** Tolerance tests per store; a column is promoted only when queried.
 
-## D-DRAFT-30 — Publish by registry: store versions per unit, release sets by label, gated flips
+### D-DRAFT-30 — Publish by registry: store versions per unit, release sets by label, gated flips
 
 **Decision:** `publish-design.md`: content-fingerprinted store versions per cell/MNO, reused when unchanged; a release set named by the build label; stage (temp + sha256 + rename, pluggable transfer) → recorded golden gate (expansion-off deterministic + expansion-on quality) → flip of `active` rows in one transaction; rollback = flip back; nora-store reads `active` via `NORA_STORE_REGISTRY`.
 **Why:** Keeps promote/flip's properties (identity, explicit go, one-command rollback) while pushing only changed units and making "what served when" a table. Rejected: whole-label snapshots in corp — every release re-ships every cell; date ids — break continuity with eval stamps.
 **Consequences:** Dev stacks keep promote.sh/serve-flip until B8 passes on trial; the registry is the second mutable store and follows the Overlay's backend rule.
 
-## D-DRAFT-31 — Store-version reuse keys on content fingerprint and schema version
+### D-DRAFT-31 — Store-version reuse keys on content fingerprint and schema version
 
 **Decision:** A published unit is reused when a live version has the same `source_fingerprint` **and** `schema_version` (amends D-DRAFT-30, which named the fingerprint alone). History's identity is a hash of its Trees members' fingerprints, so its reuse is decided before any build.
 **Why:** The same source converted by a newer cell-DB schema is new content for serving; keying on the fingerprint alone would serve the old file. Rejected: encoding the schema in the fingerprint — the design's column keeps its meaning (content identity) and the schema stays a separate, queryable fact.
 **Consequences:** A schema bump republishes every unit once; `find_version` takes the schema (None = any, used for History).
 
-## D-DRAFT-32 — A release set is always complete
+### D-DRAFT-32 — A release set is always complete
 
 **Decision:** A publish that rebuilds a subset (one store, a `--cells` filter) inherits every other unit from a base set (`--base`, default the active set). A flip replaces `active` wholesale with the set's members; a rollback is exactly the previous set.
 **Why:** Partial sets would leave `active` a mix of labels, and "0 changed" or "rollback" would have no single meaning. Rejected: per-unit flips — the gate is run against a set, so the unit of activation must be the set.
 **Consequences:** `active` always carries one label after a flip (`registry_label`); dropping a cell means publishing a set from `--base none`.
 
-## D-DRAFT-33 — Gate rule: latest run per kind decides; waivers are recorded, never bypassed
+### D-DRAFT-33 — Gate rule: latest run per kind decides; waivers are recorded, never bypassed
 
 **Decision:** A set may flip when at least one gate kind's latest run passed or was waived and no kind's latest run failed. `flip --force --reason` records a `manual / waived` gate run and flips in `override` mode; `rollback` needs no gate but only to a set that served before.
 **Why:** Reruns must supersede failures, a failure in one kind must block even when another passed, and an expedited flip must leave a row, not a gap. Rejected: "any pass" (a later failure would be ignored) and "all runs pass" (a rerun could never clear a failure).
 **Consequences:** Two gate kinds today (`golden-stage1` deterministic, `golden-stage2` quality) plus `manual`; `publish status` shows `gate_ok` per set.
 
-## D-DRAFT-34 — The Overlay authority runs the SQLite backend in deployment
+### D-DRAFT-34 — The Overlay authority runs the SQLite backend in deployment
 
 **Decision:** The stack that is the Overlay authority opens `overlay.db` (`NORA_OVERLAY_DB`), filled once by `overlay_import`; peers read it over HTTP; the JSON files remain only as the import-time backup. Closes the S3 question of which backend deployments run.
 **Why:** The design's live store is the SQLite file (transactions, per-record provenance, the registry's backend rule); the JSON layout was the migration source. Proven on two stacks: digests equal through the switch, edits from every web landing in the file, JSON untouched.

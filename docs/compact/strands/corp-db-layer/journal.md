@@ -497,3 +497,53 @@
   per-requirement fingerprints; review edits there stay Jaccard-guarded.
 - Query expansion is non-reproducible run to run (golden-eval strand);
   the expansion-off Stage-1 is the only deterministic gate.
+
+## 2026-10-25 — Architecture document; docs brought to the as-built state
+
+### Done this session
+- `/drift-check dev-module stores`: 2 drifts, both Public surface under-
+  declared after 4b (Registry `exists`/`root`/`next_version`, `flip`
+  return; publish CLI `--note`, rollback `--store-url`); MODULE.md
+  updated to the code.
+- nora-store: healthz `sira_prompt_scheme` now reads the served release
+  set's `prompt_scheme` after the env override (publish --prompt-scheme
+  reaches the eval stamp); the two comments calling nora-web the
+  Overlay's sole writer rewritten to the authority model; test added.
+- `docs/architecture.md`: the software and data architecture in five
+  parts — planes and images, per-process interfaces, identity and every
+  store schema, six end-to-end flows (ingest, publish, serving per query
+  pattern, review, golden eval, two stacks), 22 enforced invariants,
+  known gaps, glossary. Supersedes this strand's storage, store-split,
+  store-schema, publish and converter notes as the reference.
+- Docs moved to the registry path and the Overlay store: ingestion guide
+  (6p publish, 6g gate, 6f flip), provisioning checklist (serving roots,
+  B2 per-stack steps), docker README (registry leads Phase 6; flat path
+  as dev/test; --store-url by service name), review and golden guides,
+  sandbox README and SETUP, README step 8, structure-conventions (serving
+  store layout; stage dir names), web and env MODULE.md. System Design
+  Document updated to 1.2 draft outside the repo (figures still 1.1).
+
+### In progress
+- Host retirement of the flat path after the soak (unchanged).
+
+### Next
+- Land the strand; then `requirements.md` with the canonical IDs
+  (FR-29, FR-36, FR-40, FR-43 rewording; new FRs for the Trees and
+  History stores, the single-writer Overlay, write-once store files).
+- Redraw the five System Design Document figures that still show the
+  snapshot model; TDD appendix rows; PROJECT.md contributor row.
+
+### Flags
+- Build is not incremental across cycles: a new build dir re-parses and
+  re-enriches every cell; only publish reuses by fingerprint. The
+  ingestion guide's "only that cell" claim holds within one build.
+- `standards` runs unless `--skip-standards`; not off by configuration.
+- FR-40 names select-synth as the serving path; the code default with
+  `NORA_SIRA_SYNTH_MODE` unset is rerank-pin (needs the vector store).
+- History has no consumer in nora-web; release-diff questions are
+  answered by retrieval over two cells (release-history strand).
+- Golden: no target values in code; `run_ref` is free text; Stage-1
+  expansion non-reproducible (carried from before).
+- `nora_store` has no MODULE.md.
+- `README.md` and `sandbox/SETUP.md` carry MNO codes and release labels
+  on lines predating this strand.
