@@ -1,12 +1,12 @@
 """Enrichment-review edit API (strand sira-enrichment-review, slice 2).
 
-The web app is the overlay's sole WRITER (D-DRAFT-4): these endpoints
-mutate the Overlay store via `EnrichOverlayStore` (JSON files under
-`<corrections_root>/sira-enrich/`, or the `$NORA_OVERLAY_DB` SQLite file
-when set). Reads of
-cell data (req text, LLM words, held verdicts) are proxied from nora-store
-and land with the page route in a later slice; this module is the
-persistence surface only.
+These endpoints mutate the Overlay store via `EnrichOverlayStore`: in
+deployments one HTTP op per edit to the Overlay authority (nora-store,
+`$NORA_OVERLAY_URL`, `POST /stores/overlay/v1/edit`); without that URL
+the web runs the same `overlay_ops` on a local backend (`$NORA_OVERLAY_DB`
+SQLite, else JSON files under `<corrections_root>/sira-enrich/`) as a dev
+fallback. Reads of cell data (req text, LLM words, held verdicts) are
+proxied from nora-store; this module is the edit surface only.
 
 All endpoints return JSON. A missing `corrections_root` config surfaces as
 HTTP 503 with a pointed message — a misconfigured volume must be loud, not

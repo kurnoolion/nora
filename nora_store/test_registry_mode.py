@@ -73,6 +73,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_STORES_PATHS", {})
     monkeypatch.setattr(svc, "_cells_load_error", None)
     monkeypatch.setattr(svc, "_registry_label", "")
+    monkeypatch.setattr(svc, "_registry_prompt_scheme", "")
     monkeypatch.setattr(svc, "_registry_versions", {})
     monkeypatch.setattr(svc, "_registry_units", None)
     monkeypatch.setattr(svc, "_QUERY_ENRICH_ENABLED", False)   # no prompts in the test env
@@ -299,3 +300,19 @@ def test_explicit_trees_root_wins_over_registry(world, monkeypatch, tmp_path):
     assert world["client"].get("/stores/trees/v1/cells").json() == []
     assert trees_db_name(MNO_A, R1) not in [p.name for p in other.iterdir()]
     assert world["client"].get("/stores/history/v1/mnos").json() == [MNO_A, MNO_B]
+
+
+def test_prompt_scheme_comes_from_the_served_release_set(world, monkeypatch):
+    monkeypatch.delenv("SIRA_PROMPT_SCHEME", raising=False)
+    _publish(world, "set-1", base="none", prompt_scheme="scheme-one")
+    _flip(world, "set-1")
+    svc._load_cells()
+    hz = world["client"].get("/healthz").json()
+    assert hz["sira_prompt_scheme"] == "scheme-one"
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1-2")
+    _publish(world, "set-2", prompt_scheme="scheme-two")
+    _flip(world, "set-2")
+    world["client"].post("/registry/reload")
+    assert world["client"].get("/healthz").json()["sira_prompt_scheme"] == "scheme-two"
+    monkeypatch.setenv("SIRA_PROMPT_SCHEME", "env-wins")      # env override stays first
+    assert world["client"].get("/healthz").json()["sira_prompt_scheme"] == "env-wins"

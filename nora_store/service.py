@@ -356,7 +356,9 @@ _rerank_prompt_source: str | None = None
 #   * code_version — NORA_CODE_VERSION env (image-baked at build), git
 #     fallback for source-tree runs.
 #   * sira_prompt_scheme — SIRA_PROMPT_SCHEME env override first, then
-#     the manifest (promote.sh --scheme records it with the label).
+#     the served release set's `prompt_scheme` (registry mode; `publish
+#     --prompt-scheme` records it), then the manifest (promote.sh
+#     --scheme records it with the label).
 
 _data_fingerprint: str = ""
 _data_fingerprint_cells: dict[str, str] = {}
@@ -905,6 +907,7 @@ _STORES_PATHS: dict[str, dict[str, Path]] = {}   # registry mode: unit → file 
 # /registry/reload, not re-read per healthz call (a flip in progress must
 # not show before the units are swapped in).
 _registry_label: str = ""
+_registry_prompt_scheme: str = ""
 _registry_versions: dict[str, dict[str, dict[str, Any]]] = {}
 _registry_units: "dict[str, dict[str, Any]] | None" = None   # the resolved set, as served
 _registry_lock = threading.Lock()
@@ -915,7 +918,7 @@ def _registry_resolve(refresh: bool = False) -> dict[str, dict[str, Any]]:
     from the registry at cell load and on /registry/reload (`refresh`);
     the lazy Trees / History opens and /healthz use the same resolution,
     so every store serves ONE set until the next reload."""
-    global _registry_label, _registry_versions, _registry_units
+    global _registry_label, _registry_prompt_scheme, _registry_versions, _registry_units
     if _registry_units is not None and not refresh:
         return _registry_units
     from core.src.stores.registry import STORES, Registry
@@ -924,6 +927,8 @@ def _registry_resolve(refresh: bool = False) -> dict[str, dict[str, Any]]:
     for (store, unit), sv in reg.resolve(_RELEASE_SET).items():
         out.setdefault(store, {})[unit] = sv
     _registry_label = reg.serving_label(_RELEASE_SET)
+    rs = reg.release_set(_registry_label) if _registry_label else None
+    _registry_prompt_scheme = str((rs or {}).get("prompt_scheme") or "")
     _registry_versions = {
         st: {u: {"version": sv.version, "fingerprint": sv.fingerprint, "file": sv.file}
              for u, sv in sorted(units.items())}
@@ -1626,10 +1631,13 @@ _CELL_STATS_CACHE: dict[CellKey, dict[str, Any]] = {}
 # ── Enrichment review (strand sira-enrichment-review) ───────────────
 #
 # Read surface + per-cell hot reload for the /enrichment-review web UI.
-# The overlay itself is written by nora-web (sole writer); this service
-# only reads it (NORA_OVERLAY_DB read-only, else NORA_STORE_CORRECTIONS_ROOT
-# mounted ro) and applies it at cell load. Reload is idempotent re-read-from-disk; per-cell locks
-# stop stampedes, and in-flight queries finish on the old CellState.
+# The Overlay is written through this service when it is the Overlay
+# authority (its backend opened read-write; nora-web sends each edit to
+# /stores/overlay/v1/edit) and read over HTTP from the authority
+# otherwise (NORA_OVERLAY_URL); either way it is applied at cell load.
+# Reload recomposes the cell from its source and the live Overlay;
+# per-cell locks stop stampedes, and in-flight queries finish on the old
+# CellState.
 
 import re as _plan_re_mod  # noqa: E402
 
@@ -2042,6 +2050,7 @@ def healthz() -> dict[str, Any]:
         "code_version": _code_version(),
         "sira_prompt_scheme": (
             os.getenv("SIRA_PROMPT_SCHEME", "").strip()
+            or _registry_prompt_scheme
             or str(_serve_manifest.get("sira_prompt_scheme") or "")
         ),
         "serve_manifest": {
