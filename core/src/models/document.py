@@ -7,6 +7,8 @@ the DocumentProfiler and structural parsers.
 
 from __future__ import annotations
 
+from core.src.models.fingerprint import strip_format_chars
+
 import json
 import os
 from dataclasses import dataclass, field, asdict
@@ -66,6 +68,9 @@ class TextRun:
     """
     text: str
     struck: bool = False
+
+    def __post_init__(self) -> None:
+        self.text = strip_format_chars(self.text)
 
 
 @dataclass
@@ -221,6 +226,19 @@ class ContentBlock:
         if not self.runs:
             return ""
         return self.runs[-1].text
+
+    def __post_init__(self) -> None:
+        # Unicode format characters (BOM, zero-width, soft hyphen,
+        # directional marks) carry no content and arrive unevenly from
+        # extraction; strip them once here so every consumer, fingerprint
+        # and store sees clean text (canonical form v3).
+        self.text = strip_format_chars(self.text)
+        if self.lines:
+            self.lines = [strip_format_chars(x) for x in self.lines]
+        if self.headers:
+            self.headers = [strip_format_chars(x) for x in self.headers]
+        if self.rows:
+            self.rows = [[strip_format_chars(x) for x in row] for row in self.rows]
 
 
 def _cells_all_struck(cells: list[list[TextRun]]) -> bool:

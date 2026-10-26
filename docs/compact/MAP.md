@@ -327,6 +327,7 @@ nora/
 │   │   │   ├── overlay.py                               # Overlay store — review edits to SIRA enrichments (store-split-design §2,
 │   │   │   ├── overlay_import.py                        # One-time import of the JSON Overlay into SQLite (strand corp-db-layer S3).
 │   │   │   ├── overlay_ops.py                           # Overlay edit semantics — the one implementation both writers run
+│   │   │   ├── overlay_restamp.py                       # Restamp Overlay record fingerprints after a canonical-form change
 │   │   │   ├── publish.py                               # Publish pipeline (strand corp-db-layer phase 4b; publish-design.md §4).
 │   │   │   ├── registry.py                              # Publish registry (strand corp-db-layer phase 4b; publish-design.md §3).
 │   │   │   ├── serve.py                                 # Standalone store host (strand corp-db-layer S6; store-split-design §5):
@@ -580,6 +581,7 @@ nora/
 │       ├── test_stores_history.py                       # Tests for core/src/stores/history.py + history_build.py (strand
 │       ├── test_stores_http.py                          # Tests for the store HTTP clients + nora-store's store routes (strand
 │       ├── test_stores_overlay.py                       # Tests for core/src/stores/overlay.py + overlay_import.py (strand
+│       ├── test_stores_overlay_restamp.py               # Overlay restamp after a canonical-form change (strand rel-history):
 │       ├── test_stores_publish.py                       # Tests for core/src/stores/registry.py + publish.py (strand corp-db-layer
 │       ├── test_stores_schema.py                        # Schema-evolution tests for the SQLite stores (strand corp-db-layer S6;
 │       ├── test_stores_trees.py                         # Tests for core/src/stores/trees.py + trees_build.py (strand corp-db-layer
@@ -688,6 +690,17 @@ nora/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
+│   │   │   │   ├── corp-db-layer/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── artifact-inventory.md
+│   │   │   │   │   ├── converter-design.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── journal.md
+│   │   │   │   │   ├── phase-4-plan.md
+│   │   │   │   │   ├── publish-design.md
+│   │   │   │   │   ├── storage-design.md
+│   │   │   │   │   ├── store-schema.md
+│   │   │   │   │   └── store-split-design.md
 │   │   │   │   ├── docker-distro/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
@@ -812,17 +825,6 @@ nora/
 │   │   │   │       ├── STRAND.md
 │   │   │   │       ├── decisions-draft.md
 │   │   │   │       └── journal.md
-│   │   │   ├── corp-db-layer/
-│   │   │   │   ├── STRAND.md
-│   │   │   │   ├── artifact-inventory.md
-│   │   │   │   ├── converter-design.md
-│   │   │   │   ├── decisions-draft.md
-│   │   │   │   ├── journal.md
-│   │   │   │   ├── phase-4-plan.md
-│   │   │   │   ├── publish-design.md
-│   │   │   │   ├── storage-design.md
-│   │   │   │   ├── store-schema.md
-│   │   │   │   └── store-split-design.md
 │   │   │   ├── golden-eval/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
@@ -851,6 +853,11 @@ nora/
 │   │   │   ├── nora-retrieval-quality/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
+│   │   │   │   └── journal.md
+│   │   │   ├── rel-history/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   ├── design.md
 │   │   │   │   └── journal.md
 │   │   │   └── team-operations/
 │   │   │       ├── STRAND.md

@@ -124,7 +124,7 @@ def test_step_jan_apr_changed_moved_removed_and_no_ops(built):
     assert _kinds(s) == {"R1": ["changed"], "R2": ["changed"],
                          "R4": ["moved"], "R6": ["removed"]}
     assert s["counts"] == {"added": 0, "removed": 1, "changed": 2, "moved": 1,
-                           "reordered": 0, "likely_renamed": 0}
+                           "renumbered": 0, "reordered": 0, "likely_renamed": 0}
     assert list(s["plans"]) == ["PLANA"]            # PLANB never descended
     secs = s["plans"]["PLANA"]["sections"]        # keyed by containing section
     assert secs["1"]["changed"] == 2 and secs["1"]["moved"] == 1 and secs["1"]["rows"] == 3
@@ -137,16 +137,17 @@ def test_step_apr_jul_renumber_rename_and_readd(built):
     k = _kinds(s)
     assert k["2"] == ["removed"] and k["3"] == ["added", "likely_renamed"]
     assert k["R3"] == ["removed"] and k["R3X"] == ["added", "likely_renamed"]
-    assert k["R5"] == ["moved"] and k["R6"] == ["added"]
+    assert k["R5"] == ["renumbered"] and k["R6"] == ["added"]
     assert len(k) == 6
     by_id = {c["local_id"]: c for c in s["changes"]}
     assert by_id["3"]["renamed_from"] == node_key("section", "PLANA", "2")
     assert by_id["R3X"]["renamed_from"] == node_key("requirement", "PLANA", "R3")
     assert s["counts"]["added"] == 3 and s["counts"]["removed"] == 2
     assert s["counts"]["likely_renamed"] == 2
-    # an added node's diff is its whole content; a moved one has none
+    # an added node's diff is its whole content; a renumbered one has none
     assert {o["op"] for o in by_id["R3X"]["diff"]["text"]} == {"add"}
     assert by_id["R5"]["diff"] is None
+    assert by_id["R5"]["renumber"] == "parent" and by_id["R5"]["renumbered_from"] == "2.2"
 
 
 def test_step_jul_oct_reorder_and_latest_changes(built):
@@ -160,7 +161,7 @@ def test_step_jul_oct_reorder_and_latest_changes(built):
 def test_diff_non_adjacent_and_self(built):
     h, _, _ = built
     k = _kinds(h.diff_releases(MNO, "Jan2031", "Oct2031"))
-    assert k["R1"] == ["changed"] and k["R4"] == ["moved"] and k["R6"] == ["moved"]
+    assert k["R1"] == ["changed"] and k["R4"] == ["moved"] and k["R6"] == ["renumbered"]
     assert "1" not in k                              # children set changed too
     assert h.diff_releases(MNO, "Apr2031", "Apr2031")["changes"] == []
     assert h.diff_releases(MNO, "", "")["from"] == "Jan2031"
@@ -190,6 +191,41 @@ def test_summary_ranks_containing_sections_by_rows(built):
     j = h.diff_releases(MNO, "Apr2031", "Jul2031")
     assert j["renamed_pairs"] == 2
     assert j["counts"]["added"] >= j["renamed_pairs"]
+
+
+def test_moved_needs_a_new_parent_renumbered_keeps_it(built):
+    """Jan→Apr: R4 left SEC_2 for SEC_1 (moved, parent changed). Apr→Jul:
+    R5 kept SEC_2 as parent while its number went 2.2 → 3.2 (renumbered,
+    chapter). Jan→Oct: R6 is back under SEC_2 at 3.3 (renumbered, not
+    moved)."""
+    h, _, _ = built
+    d = h.diff_releases(MNO, "Jan2031", "Apr2031")
+    by_id = {c["local_id"]: c for c in d["changes"]}
+    assert by_id["R4"]["change"] == ["moved"]
+    assert by_id["R4"]["moved_from"] == "2.1" and "renumber" not in by_id["R4"]
+    o = {c["local_id"]: c for c in h.diff_releases(MNO, "Jan2031", "Oct2031")["changes"]}
+    assert o["R6"]["change"] == ["renumbered"] and o["R6"]["renumber"] == "parent"
+    # req_history sees one node's intervals only, so a parent-key change
+    # stays "moved" there; the diff has both releases and resolves it.
+    assert [x["change"] for x in h.req_history(MNO, "PLANA", "R5")][1:] == [["moved"]]
+
+
+def test_summary_separates_absent_plans():
+    from core.src.stores.history import _summary, node_key
+    rows = [
+        {"key": node_key("plan", "PLANX"), "node": "plan", "plan_id": "PLANX", "local_id": "PLANX",
+         "req_id": "", "section": "", "parent_section": "", "change": ["removed"]},
+        {"key": node_key("requirement", "PLANX", "RX"), "node": "requirement", "plan_id": "PLANX",
+         "local_id": "RX", "req_id": "RX", "section": "1.1", "parent_section": "1", "change": ["removed"]},
+        {"key": node_key("requirement", "PLANA", "R1"), "node": "requirement", "plan_id": "PLANA",
+         "local_id": "R1", "req_id": "R1", "section": "1.1", "parent_section": "1", "change": ["changed"]},
+    ]
+    s = _summary("mno-h", "Jan2031", "Apr2031", rows)
+    assert s["absent_plans"] == {"PLANX": {"absent_in": "Apr2031", "rows": 2}}
+    assert s["counts"]["removed"] == 2 and s["edits"]["removed"] == 0
+    assert s["edits"]["changed"] == 1 and s["rows"] == 3
+    assert s["plans"]["PLANX"]["present"] == {"from": True, "to": False}
+    assert s["plans"]["PLANA"]["present"] == {"from": True, "to": True}
 
 
 def test_req_history_text_change_with_word_diff(built):
@@ -283,7 +319,7 @@ def test_content_dedup_and_version_rows(built):
 def test_meta_and_counts(built):
     _, _, out = built
     meta = read_meta(out / f"history-{MNO}.db")
-    assert meta["schema_version"] == "1" and meta["fingerprint_version"] == "v2"
+    assert meta["schema_version"] == "1" and meta["fingerprint_version"] == "v3"
     assert meta["mno"] == MNO and json.loads(meta["releases"]) == RELS
     assert meta["n_plans"] == "2" and meta["n_sections"] == "4"
     assert meta["n_requirements"] == "8"

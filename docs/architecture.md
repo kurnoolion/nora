@@ -718,14 +718,18 @@ most common design error, so they come first.
 | Identity | Names | Example | Stable across |
 |---|---|---|---|
 | **Position** | MNO, release, plan, document, `req_id`, section number | `MNO-A`, `<rel>`, `REQ-A-0001` | a release: the same `req_id` may carry different text in the next release |
-| **Content** | `text_fp`, `node_fp`, `subtree_fp`, `child_set_fp`, `source_fingerprint` | `v2:<sha256>` | releases, builds, hosts: equal bytes give equal hashes anywhere |
+| **Content** | `text_fp`, `node_fp`, `subtree_fp`, `child_set_fp`, `source_fingerprint` | `v3:<sha256>` | releases, builds, hosts: equal bytes give equal hashes anywhere |
 | **Version** | `-vN` file suffix, `store_version.version`, release-set label | `cell-mno-a-<rel>-v3.db` | one serving root: a counter, never compared across roots |
 
 ### 10.1 Content fingerprints (`core/src/models/fingerprint.py`)
 
-All values are `v2:<sha256 hex>`; the prefix is the canonical-form
+All values are `v3:<sha256 hex>`; the prefix is the canonical-form
 version, so a change to the canonical form is visible in every stored
-value and never silently matched against old ones.
+value and never silently matched against old ones. v3 (2026-10-25)
+strips Unicode format characters first; v2 counted a byte-order mark as
+an edit, which made 60% of one release pair's "changed" rows noise.
+After a version bump the Overlay's stored fingerprints are recomputed by
+`core.src.stores.overlay_restamp` from the current trees.
 
 | Hash | Over | Stored in | Used for |
 |---|---|---|---|
@@ -735,8 +739,10 @@ value and never silently matched against old ones.
 | `child_set_fp` | the same child entries, sorted | History | equal `child_set_fp` with different `subtree_fp` = reordered |
 | `source_fingerprint` | Cells: sha256 over `corpus.jsonl` + the phrase file; Trees: sha256 over the tree files' names and bytes; History: hash of its Trees inputs' fingerprints | each DB's `meta`; `store_version.fingerprint` | publish reuse: same source and same schema = same unit, no copy |
 
-Canonical form v2: Unicode NFKC, quotes, dashes and bullets unified, case
-folded, whitespace collapsed. Location is excluded, so a move is a
+Canonical form v3: Unicode format characters removed, NFKC, quotes,
+dashes and bullets unified, case folded, whitespace collapsed. The same
+strip runs on every IR text block at extraction, so new trees never carry
+the characters. Location is excluded, so a move is a
 location change, not a content change. `text_fp` says the requirement's
 own content is unchanged; it says nothing about the SIRA phrases, which
 come from the corpus row in context.
@@ -1025,9 +1031,14 @@ erDiagram
   closes the interval; reappearance opens a new one. Text is stored once
   per `text_fp`; a whitespace-only edit keeps the earlier display text.
 - Change kinds between two releases: `added`, `removed`, `changed`
-  (`node_fp`), `moved` (location), `reordered` (`child_set_fp` equal,
-  `subtree_fp` different), `likely_renamed` (annotation on an added and
-  removed pair; both still count).
+  (`node_fp`), `moved` (a different parent), `renumbered` (same parent
+  and a changed outline number, or a parent that was itself renumbered;
+  detail `chapter`, `sibling`, `parent` or `other`), `reordered`
+  (`child_set_fp` equal, `subtree_fp` different), `likely_renamed`
+  (annotation on an added and removed pair; both still count). A plan
+  node added or removed means the plan is absent from one release; the
+  summary lists it under `absent_plans` and keeps its rows out of
+  `edits`.
 - The six query kinds: `req_history`, `plan_history`, `last_changed`,
   `plan_last_changed`, `diff_releases` (kind tallies and row counts per
   plan and per containing section, the ten most changed sections by rows,

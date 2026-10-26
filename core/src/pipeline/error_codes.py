@@ -136,6 +136,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("OVL-E003", "Import verification failed — {what}: {count} mismatch(es)", "Nothing was written; check the JSON files for hand-edited or duplicate records"),
     ErrorDef("OVL-E004", "Overlay DB write failed: {reason}", "Check the target path, permissions and free space; a busy DB means another writer holds it"),
     ErrorDef("OVL-E005", "Overlay DB {name} has unsupported schema_version {found}", "Re-import the overlay with core.src.stores.overlay_import, or run a newer build"),
+    ErrorDef("OVL-E006", "Overlay restamp has no Trees source", "Pass --trees-root (SQLite trees) or --env-dir (parse trees) so record fingerprints can be recomputed"),
 
     # --- Trees store (TRS) — core.src.stores.trees_build (strand corp-db-layer S4) ---
     ErrorDef("TRS-E001", "No per-cell parse trees under {path}", "Point --env-dir at an env dir whose out/parse/<mno>/<release>/ holds *_tree.json; the legacy flat layout is not built"),

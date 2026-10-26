@@ -6,6 +6,7 @@ import pytest
 
 from core.src.models.fingerprint import (
     FINGERPRINT_VERSION,
+    strip_format_chars,
     canonical_text,
     child_set_fp,
     node_fp,
@@ -53,14 +54,19 @@ def test_canonical_text_rules():
     assert canonical_text("  A \t B ") == "a b"
     assert canonical_text("\u2018x\u2019 \u201cy\u201d \u2013\u2014\u2212 \u2022\u25aa\u2023\u25e6") == \
         "'x' \"y\" --- ****"
+    # v3: format characters (BOM, zero-width space/joiner, soft hyphen,
+    # directional marks) are removed before anything else
+    assert canonical_text("\ufeffThe\u200b device\u00ad shall\u200d retry\u200e") == "the device shall retry"
+    assert text_fp("t", "\ufeffx") == text_fp("t", "x")
+    assert strip_format_chars("a\ufeffb\u200bc") == "abc" and strip_format_chars(None) == ""
 
 
 def test_values_carry_the_version_prefix():
-    assert FINGERPRINT_VERSION == "v2"
-    for fp in (text_fp("t", "x"), node_fp("v2:x"), subtree_fp("v2:x", []),
+    assert FINGERPRINT_VERSION == "v3"
+    for fp in (text_fp("t", "x"), node_fp("v3:x"), subtree_fp("v3:x", []),
                child_set_fp([])):
         prefix, _, digest = fp.partition(":")
-        assert prefix == "v2"
+        assert prefix == "v3"
         assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
 
 
@@ -75,7 +81,7 @@ def test_node_fp_covers_priority_and_applicability():
 
 
 def test_subtree_fp_is_order_sensitive_child_set_fp_is_not():
-    n, a, b = "v2:n", "v2:a", "v2:b"
+    n, a, b = "v3:n", "v3:a", "v3:b"
     assert subtree_fp(n, [a, b]) != subtree_fp(n, [b, a])
     assert child_set_fp([a, b]) == child_set_fp([b, a])
-    assert subtree_fp(n, [a]) != subtree_fp("v2:m", [a])
+    assert subtree_fp(n, [a]) != subtree_fp("v3:m", [a])

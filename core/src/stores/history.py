@@ -29,10 +29,15 @@ descent sound: equal ``subtree_fp`` means nothing at or under the node
 changed except, possibly, the node's own location.
 
 Change kinds between two releases: ``added``, ``removed``, ``changed``
-(``node_fp``), ``moved`` (location), ``reordered`` (same ``node_fp`` and
-``child_set_fp``, different ``subtree_fp``) and ``likely_renamed`` (an added
-key whose non-empty ``text_fp`` equals a key removed in the same step, same
-node kind; the pair is also counted as added and removed).
+(``node_fp``), ``moved`` (a different parent), ``renumbered`` (same parent,
+the requirement's own outline number changed — a chapter inserted shifts
+every later number; ``renumber`` says ``chapter`` | ``sibling`` | ``other``),
+``reordered`` (same ``node_fp`` and ``child_set_fp``, different
+``subtree_fp``) and ``likely_renamed`` (an added key whose non-empty
+``text_fp`` equals a key removed in the same step, same node kind; the pair
+is also counted as added and removed). A plan node added or removed means
+the plan is absent from one release; the summary lists it under
+``absent_plans`` and keeps its rows out of ``edits``.
 
 Backends: ``SqliteHistoryStore(root_dir)`` — every ``history-<mno>.db``
 under ``root_dir``, opened ``mode=ro&immutable=1`` (a file with an unknown
@@ -76,8 +81,8 @@ DB_PREFIX = "history-"
 DB_SUFFIX = ".db"
 
 PLAN, SECTION, REQUIREMENT = "plan", "section", "requirement"
-CHANGE_KINDS = ("added", "removed", "changed", "moved", "reordered",
-                "likely_renamed")
+CHANGE_KINDS = ("added", "removed", "changed", "moved", "renumbered",
+                "reordered", "likely_renamed")
 _EMPTY_TEXT_FP = text_fp("", "")
 
 
@@ -648,6 +653,40 @@ class SqliteHistoryStore:
         return changes
 
 
+def _location_kinds(loc_a: str, loc_b: str, sa: "dict | None" = None,
+                    sb: "dict | None" = None) -> tuple[list[str], str, str]:
+    """Kinds for a location change. A different parent is ``moved`` —
+    unless the old parent vanished and the new one appeared with the same
+    content (a renumbered parent section), which is ``renumbered`` with
+    detail ``parent``; that check needs both releases' node states
+    (``sa``/``sb``) and is skipped without them. The same parent with a
+    different outline number is ``renumbered`` with detail ``chapter``
+    (first component changed), ``sibling`` (last) or ``other``. Returns
+    (kinds, renumber detail, old section)."""
+    if loc_a == loc_b:
+        return [], "", ""
+    a, b = json.loads(loc_a), json.loads(loc_b)
+    pa, pb = a.get("parent"), b.get("parent")
+    if pa != pb:
+        if sa is not None and sb is not None:
+            x, y = sa.get(pa), sb.get(pb)
+            if (x and y and pa not in sb and pb not in sa and x["kind"] == y["kind"]
+                    and x["text_fp"] == y["text_fp"] and x["text_fp"] != _EMPTY_TEXT_FP):
+                return ["renumbered"], "parent", a.get("section", "")
+        return ["moved"], "", a.get("section", "")
+    sa, sb = str(a.get("section", "")), str(b.get("section", ""))
+    if sa == sb:
+        return [], "", ""
+    pa, pb = sa.split("."), sb.split(".")
+    if len(pa) == len(pb) and pa[1:] == pb[1:]:
+        detail = "chapter"
+    elif len(pa) == len(pb) and pa[:-1] == pb[:-1]:
+        detail = "sibling"
+    else:
+        detail = "other"
+    return ["renumbered"], detail, sa
+
+
 def _version_change(prev: "dict | None", v: dict) -> list[str]:
     if prev is None:
         return ["added"]
@@ -656,8 +695,7 @@ def _version_change(prev: "dict | None", v: dict) -> list[str]:
         kinds.append("readded")
     if prev["node_fp"] != v["node_fp"]:
         kinds.append("changed")
-    if prev["location_json"] != v["location_json"]:
-        kinds.append("moved")
+    kinds.extend(_location_kinds(prev["location_json"], v["location_json"])[0])
     if prev["node_fp"] == v["node_fp"] and prev["subtree_fp"] != v["subtree_fp"]:
         # the node itself held; something under it changed
         same_set = prev["child_set_fp"] == v["child_set_fp"]
@@ -683,6 +721,7 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
         seen.add(key)
         x, y = sa.get(key), sb.get(key)
         kinds: list[str] = []
+        renumber, old_section = "", ""
         if x is None:
             kinds.append("added")
         elif y is None:
@@ -690,8 +729,8 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
         else:
             if x["node_fp"] != y["node_fp"]:
                 kinds.append("changed")
-            if x["location_json"] != y["location_json"]:
-                kinds.append("moved")
+            lk, renumber, old_section = _location_kinds(x["location_json"], y["location_json"], sa, sb)
+            kinds.extend(lk)
             if (x["node_fp"] == y["node_fp"] and x["subtree_fp"] != y["subtree_fp"]
                     and x["child_set_fp"] == y["child_set_fp"]):
                 kinds.append("reordered")
@@ -713,6 +752,9 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
                                                  if pnode and pnode["kind"] == SECTION
                                                  else "")),
                         "change": kinds,
+                        **({"renumber": renumber, "renumbered_from": old_section}
+                           if "renumbered" in kinds else {}),
+                        **({"moved_from": old_section} if "moved" in kinds else {}),
                         "_fa": x["text_fp"] if x else "",
                         "_fb": y["text_fp"] if y else ""})
         if x is None or y is None or x["subtree_fp"] != y["subtree_fp"]:
@@ -751,8 +793,10 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
     """Deterministic counts per kind, per plan and per containing section.
 
     Kinds overlap on a row (a renamed pair is also added + removed; a row
-    can be changed and moved), so ``counts`` are kind tallies, ``rows``
-    is the number of change rows and ``renamed_pairs`` the number of
+    can be changed and renumbered), so ``counts`` are kind tallies over
+    every row, ``edits`` the same tallies without the rows of plans absent
+    from one release (``absent_plans``: a plan node added or removed),
+    ``rows`` the number of change rows and ``renamed_pairs`` the number of
     rename annotations. Sections aggregate by the row's containing
     section (``parent_section``) and are ranked by rows, so a plan with
     one requirement per numbered section still ranks its sections."""
@@ -760,10 +804,23 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
         return {k: 0 for k in CHANGE_KINDS}
 
     counts = zero()
+    edits = zero()
+    absent: dict[str, dict] = {}
+    for c in changes:
+        if c["node"] == PLAN and ("removed" in c["change"] or "added" in c["change"]):
+            absent[c["plan_id"]] = {"absent_in": rel_b if "removed" in c["change"] else rel_a,
+                                    "rows": 0}
     plans: dict[str, dict] = {}
     for c in changes:
-        p = plans.setdefault(c["plan_id"], {"counts": zero(), "rows": 0, "sections": {}})
+        p = plans.setdefault(c["plan_id"], {"counts": zero(), "rows": 0, "sections": {},
+                                            "present": {"from": True, "to": True}})
         p["rows"] += 1
+        if c["plan_id"] in absent:
+            absent[c["plan_id"]]["rows"] += 1
+            p["present"]["to" if absent[c["plan_id"]]["absent_in"] == rel_b else "from"] = False
+        else:
+            for k in c["change"]:
+                edits[k] += 1
         sec = p["sections"].setdefault(c.get("parent_section", c["section"]),
                                        {"rows": 0, **zero()})
         sec["rows"] += 1
@@ -777,6 +834,8 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
     return {
         "mno": mno, "from": rel_a, "to": rel_b,
         "counts": counts,
+        "edits": edits,
+        "absent_plans": {k: absent[k] for k in sorted(absent)},
         "rows": len(changes),
         "renamed_pairs": sum(1 for c in changes if "likely_renamed" in c["change"]),
         "plans": {k: plans[k] for k in sorted(plans)},

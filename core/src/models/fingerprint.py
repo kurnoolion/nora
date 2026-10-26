@@ -15,10 +15,17 @@ Every value carries its canonical-form version (``v2:<sha256 hex>``), so
 values from different versions never compare equal. Callers treat the
 values as opaque strings.
 
-Canonical form v2: Unicode NFKC, typographic quotes/dashes/bullets unified
-to ASCII, case fold, whitespace runs collapsed to one space, stripped.
-Display text is never altered. Numbers, units, modal verbs and negations
-stay significant.
+Canonical form v3: Unicode format characters (category Cf — byte-order
+marks, zero-width characters, soft hyphens, directional marks) removed,
+then NFKC, typographic quotes/dashes/bullets unified to ASCII, case fold,
+whitespace runs collapsed to one space, stripped. Display text is never
+altered. Numbers, units, modal verbs and negations stay significant.
+
+v2 → v3 (2026-10-25): format characters stripped. Two releases of one
+corpus differed only by byte-order marks in 194 of 326 "changed"
+requirements; v2 counted every one as an edit. Values stamped `v2:` never
+equal `v3:` values; the Overlay restamp (`core.src.stores.overlay_restamp`)
+recomputes stored record fingerprints from the current trees.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ import re
 import unicodedata
 from typing import Iterable
 
-FINGERPRINT_VERSION = "v2"
+FINGERPRINT_VERSION = "v3"
 _PREFIX = FINGERPRINT_VERSION + ":"
 
 _WS = re.compile(r"\s+")
@@ -51,11 +58,21 @@ _TYPO = str.maketrans({
 })
 
 
-def canonical_text(s: "str | None") -> str:
-    """Canonical form v2 of one string (module docstring)."""
+def strip_format_chars(s: "str | None") -> str:
+    """Remove Unicode format characters (category Cf: byte-order marks,
+    zero-width space/joiner/non-joiner, soft hyphen, directional marks).
+    They carry no content and arrive unevenly from extraction, so they
+    are stripped from the IR at extraction and from the canonical form."""
     if not s:
         return ""
-    s = unicodedata.normalize("NFKC", s).translate(_TYPO).casefold()
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Cf")
+
+
+def canonical_text(s: "str | None") -> str:
+    """Canonical form v3 of one string (module docstring)."""
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", strip_format_chars(s)).translate(_TYPO).casefold()
     return _WS.sub(" ", s).strip()
 
 
