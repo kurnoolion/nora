@@ -57,6 +57,11 @@ def two_release_cells(tmp_path, monkeypatch):
                                         ("GP", "Nov2025"): nov})
     monkeypatch.setattr(svc, "_label_cells", {})
     monkeypatch.setattr(svc, "_CELL_STATS_CACHE", {})
+    # flat cells: a registry or cell-db env in the test runner's
+    # environment (the store image under a stack's compose project sets
+    # NORA_STORE_REGISTRY) would make reload answer 409 for these fakes
+    monkeypatch.setattr(svc, "_INDEX_MODE", "flat")
+    monkeypatch.setattr(svc, "_REGISTRY", "")
 
     d = tmp_path / "sira-enrich"
     d.mkdir()

@@ -713,7 +713,9 @@ image carries the publish module and bakes `NORA_CODE_VERSION`), with
 reach its own stack's published port through the host gateway:
 
 ```bash
-# 0 convert the label's SIRA cells (sira-batch image; identity gate on)
+# 0 convert the label's SIRA cells (sira-batch image; identity gate on). The
+#   gate reads the Overlay: give it a COPY of overlay.db or a read-write mount —
+#   SQLite in WAL mode cannot open a live file through a read-only mount (CNV-008).
 python -m sandbox.cell_db_convert --label <serve>/<label> --out <work>/cells --verify 25
 # 1–2 publish + stage: Cells from the converter's output (or --sira-root
 #     to run it), Trees from the build's parse output; History is rebuilt
@@ -1093,7 +1095,7 @@ The serving images carry no test runner. `nora-store-test` is the
     docker build -f docker/store.Dockerfile --target nora-store-test \
         --build-arg OFFLINE=$OFFLINE -t local/nora-store-test:dev .
     docker run --rm local/nora-store-test:dev            # bm25x-gated suites
-    docker run --rm local/nora-store-test:dev pytest -q -k store_service core/tests
+    docker run --rm local/nora-store-test:dev pytest -q core/tests/test_stores_history.py  # one file by path
 
 Those suites skip on a host without bm25x; this is where they run for real.
 (`prep-offline.sh` vendors the pytest wheel for `OFFLINE=1` builds.)

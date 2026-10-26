@@ -210,6 +210,17 @@ def test_moved_needs_a_new_parent_renumbered_keeps_it(built):
     assert [x["change"] for x in h.req_history(MNO, "PLANA", "R5")][1:] == [["moved"]]
 
 
+def test_containing_section_prefers_tree_parent_then_outline_prefix():
+    from core.src.stores.history import containing_section
+    assert containing_section("section", "4.2", "", "") == "4.2"
+    assert containing_section("plan", "P", "", "") == ""
+    assert containing_section("requirement", "R1", "2.2.62", "2.2") == "2.2"   # tree parent is a section
+    assert containing_section("requirement", "R1", "2.2.62", "") == "2.2"      # parent is a requirement / plan root
+    assert containing_section("requirement", "R1", "5.1.39", "") == "5.1"
+    assert containing_section("requirement", "R1", "2", "") == ""              # top-level number: plan level
+    assert containing_section("requirement", "R1", "", "") == ""
+
+
 def test_summary_separates_absent_plans():
     from core.src.stores.history import _summary, node_key
     rows = [

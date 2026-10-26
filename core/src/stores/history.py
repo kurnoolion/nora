@@ -653,6 +653,23 @@ class SqliteHistoryStore:
         return changes
 
 
+def containing_section(kind: str, local_id: str, section: str, parent_section: str = "") -> str:
+    """The section a change row is counted under. A section node is its
+    own; a requirement's is its parent section node when the tree gives
+    one, else the outline prefix of its own number (`2.2.62` → `2.2`):
+    most corpora hang requirements under requirements or the plan root,
+    never under a section node, so the tree parent is usually no help.
+    `""` = plan level."""
+    if kind == SECTION:
+        return local_id
+    if kind != REQUIREMENT:
+        return ""
+    if parent_section:
+        return parent_section
+    parts = [p for p in str(section or "").split(".") if p]
+    return ".".join(parts[:-1]) if len(parts) > 1 else ""
+
+
 def _location_kinds(loc_a: str, loc_b: str, sa: "dict | None" = None,
                     sb: "dict | None" = None) -> tuple[list[str], str, str]:
     """Kinds for a location change. A different parent is ``moved`` —
@@ -745,12 +762,9 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
                         "req_id": n["local_id"] if n["kind"] == REQUIREMENT else "",
                         "section": (n["local_id"] if n["kind"] == SECTION
                                     else loc.get("section", "")),
-                        # the containing section: a section is its own;
-                        # a requirement's is its parent section ("" = plan level)
-                        "parent_section": (n["local_id"] if n["kind"] == SECTION
-                                           else (pnode["local_id"]
-                                                 if pnode and pnode["kind"] == SECTION
-                                                 else "")),
+                        "parent_section": containing_section(
+                            n["kind"], n["local_id"], loc.get("section", ""),
+                            pnode["local_id"] if pnode and pnode["kind"] == SECTION else ""),
                         "change": kinds,
                         **({"renumber": renumber, "renumbered_from": old_section}
                            if "renumbered" in kinds else {}),

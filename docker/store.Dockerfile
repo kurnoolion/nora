@@ -146,7 +146,7 @@ CMD ["bash"]
 #   docker build -f docker/store.Dockerfile --target nora-store-test \
 #       -t local/nora-store-test:dev .
 #   docker run --rm local/nora-store-test:dev          # the default suites
-#   docker run --rm local/nora-store-test:dev pytest -q -k store_service core/tests   # any
+#   docker run --rm local/nora-store-test:dev pytest -q core/tests/test_stores_history.py   # any
 # Never deployed; no healthcheck.
 FROM nora-store AS nora-store-test
 ARG OFFLINE=0
@@ -158,7 +158,17 @@ RUN --mount=type=bind,from=vendor,target=/vendor \
     fi
 HEALTHCHECK NONE
 ENTRYPOINT []
-CMD ["pytest", "-q", "-k", "store_service", "core/tests", "sandbox/test_cell_db_convert.py", \
-     "sandbox/test_cell_db_convert_fold.py", "sandbox/test_cell_db_loader.py", \
-     "sandbox/test_enrich_overlay.py", "sandbox/test_sira_query_review.py", \
-     "sandbox/test_sira_cells.py"]
+# Files by path: collecting all of core/tests imports modules whose
+# dependencies the store image does not carry (networkx, docx, aiosqlite).
+CMD ["pytest", "-q", \
+     "core/tests/test_store_service_fusion.py", "core/tests/test_store_service_health_prompts.py", \
+     "core/tests/test_store_service_llm_fallback.py", "core/tests/test_store_service_no_autosave.py", \
+     "core/tests/test_store_service_package_paths.py", "core/tests/test_store_service_registry_mode.py", \
+     "core/tests/test_store_service_scope.py", "core/tests/test_store_service_service_identity.py", \
+     "core/tests/test_store_service_service_multi_cell.py", "core/tests/test_store_service_stores_api.py", \
+     "core/tests/test_stores_history.py", "core/tests/test_stores_http.py", "core/tests/test_stores_overlay.py", \
+     "core/tests/test_stores_overlay_restamp.py", "core/tests/test_stores_publish.py", \
+     "core/tests/test_stores_schema.py", "core/tests/test_stores_trees.py", \
+     "sandbox/test_cell_db_convert.py", "sandbox/test_cell_db_convert_fold.py", \
+     "sandbox/test_cell_db_loader.py", "sandbox/test_enrich_overlay.py", \
+     "sandbox/test_sira_query_review.py", "sandbox/test_sira_cells.py"]
