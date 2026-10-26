@@ -144,6 +144,11 @@ CMD ["uvicorn", "core.src.store_service.service:app", "--host", "0.0.0.0", "--po
 
 # --------------------------------------------------------------- sira-batch --
 FROM sira-base AS sira-batch
+# Code identity for the job's compact reports and the serve-set publish path
+# (NORA_CODE_VERSION; the image has no git). Pass --build-arg CODE_VERSION as
+# for nora-store — field-found: the batch image reported an empty version.
+ARG CODE_VERSION=""
+ENV NORA_CODE_VERSION=$CODE_VERSION
 # Jobs pass their own command, e.g.
 #   python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db ...
 #   python -m sandbox.sira_incremental retry-failed --dataset /data/db/<cell> ...

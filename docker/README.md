@@ -1119,6 +1119,9 @@ different TLS stack) — `./skopeo-pull-bases.sh` covers that:
 
     # one-time per base-image bump (host process):
     ./skopeo-pull-bases.sh
+    # a newer build of the SAME base tag (security re-spin — stands in for
+    # `docker build --pull`, which the daemon cannot get through the proxy):
+    REFRESH=1 ./skopeo-pull-bases.sh
 
 `OFFLINE=1` remains supported — for hosts where container egress is truly
 unavailable, or as a deterministic fully-vendored build:
