@@ -25,18 +25,20 @@
     {# Fixed lane order — NORA on the left, SIRA on the right.
        lanes_html may contain one or both; column width adapts. #}
     {% set col_size = 6 if lanes_html|length == 2 else 12 %}
-    {% for lane in ['nora', 'sira'] %}
+    {% for lane in ['nora', 'sira', 'history'] %}
       {% if lane in lanes_html %}
         <div class="col-md-{{ col_size }}">
           <div class="d-flex align-items-center gap-2 mb-2">
             <h5 class="mb-0">
               {% if lane == 'nora' %}
                 <span class="badge bg-success">NORA</span>
+              {% elif lane == 'history' %}
+                <span class="badge bg-info text-dark">HISTORY</span>
               {% else %}
                 <span class="badge bg-primary">SIRA</span>
               {% endif %}
             </h5>
-            <span class="text-muted small">retrieval lane</span>
+            <span class="text-muted small">{% if lane == 'history' %}release-change lane{% else %}retrieval lane{% endif %}</span>
           </div>
           {{ lanes_html[lane]|safe }}
         </div>

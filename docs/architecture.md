@@ -593,7 +593,7 @@ wrap every request: metrics, then the team-mode gate outermost.
 | Router | Paths | Purpose | Tier |
 |---|---|---|---|
 | app | `/`, `/admin-unlock?token=`, `/api/health` | dashboard; admin cookie; health with store kinds, LLM roster provenance, key presence | team: health and unlock |
-| playground | `/test`, `/api/test/ask`, `/api/test/ask-stream` (SSE), `/api/test/synthesize-group`, `/api/test/feedback`, `/api/test/ingested`, `/api/test/providers/{id}/models`, `/ask/s/{row}`, `/api/ask/s/{row}`, `/ask/history`, `/api/req/{req_id}` | the Ask page and its lanes; shared answers; requirement bubble | team (merged section, SIRA lane only) |
+| playground | `/test`, `/api/test/ask`, `/api/test/ask-stream` (SSE), `/api/test/ask-cancel`, `/api/test/synthesize-group`, `/api/test/feedback`, `/api/test/ingested`, `/api/test/providers/{id}/models`, `/ask/s/{row}`, `/api/ask/s/{row}`, `/ask/history`, `/api/req/{req_id}` | the Ask page and its lanes; shared answers; requirement bubble | team (merged section, SIRA lane only) |
 | query | `/query`, `/api/query/ask`, `/api/query/{job}/result` | legacy query page as a background job | admin |
 | enrich_review | `/enrichment-review`, `/api/enrich-review/*` | review page, edits, Apply, labels, reasons, reports | team; merge and delete admin-only |
 | golden_eval | `/eval-studio`, `/api/eval-studio/*` | sample authoring, ground-truth picker, preview, curation chat, release-move review | team; delete-promoted admin-only |
@@ -1645,6 +1645,24 @@ sequenceDiagram
   A-->>W: answer, citation audit
 ```
 
+### 22.2a The history lane: release-change questions
+
+When the question classifies as `release_diff`, the lane is enabled
+(`NORA_HISTORY_DIFF_ENABLED`, on by default when `NORA_HISTORY_URL` is
+set) and the stack serves History, the stream runs the history lane in
+the SIRA lane's slot. nora-web resolves the MNO and the release pair,
+reads `changed_pairs` from the History store over HTTP, packs the
+changed requirements pair-wise under the byte budget per plan and kind,
+runs the batches in parallel against the question's provider, streams
+each batch's synthesis to the page as a `partial` event grouped by plan,
+and renders the answer per plan with the store-derived notes
+(renumbered, renamed, moved) and one line per absent plan. The `lanes`
+event carries a run id; the Cancel button posts it to
+`/api/test/ask-cancel`, new batches stop, in-flight ones finish and are
+shown. Deleted and added requirements are summarized per plan, not
+paired. Retrieval is not involved; the feedback row records lane
+`history` and the `RHD` compact block.
+
 ### 22.3 The NORA lane (admin, dev stacks)
 
 Runs entirely inside nora-web over the env dir: analyze → resolve scope
@@ -1669,7 +1687,7 @@ itself does not vary by type; scope and synthesis do.
 | lookup in one plan | `single_doc` | the named MNO, its latest release unless one is named | BM25 per cell, identical for every type | narrow bucket (10); per-type prompt |
 | list everything about a feature | `cross_doc`, `feature_level` | as above | same | broad bucket (25) |
 | compare two MNOs | `cross_mno_comparison` | every named MNO at its own latest; balanced fusion keeps cells represented | per cell, then round-robin or scored merge | broad; context grouped by OPERATOR |
-| what changed between releases | `release_diff` | the named releases of one MNO, two cells; a `<rel>` phrase is normalized to `MMMYYYY` | per cell; same `req_id` in two releases stays distinct (composite id) | broad; context grouped by RELEASE. (The History store answers this exactly; the Ask page does not read it yet, §27.) |
+| what changed between releases | `release_diff` | the named releases of one MNO, two cells; a `<rel>` phrase is normalized to `MMMYYYY` | per cell; same `req_id` in two releases stays distinct (composite id) | the history lane (§22.2a) answers from the History store when it is served and enabled; otherwise broad, context grouped by RELEASE |
 | a specific value or threshold | `fact` | as single_doc | same | narrow; distance threshold 0.4 in the NORA lane |
 | explain or summarize | `summarize` | as single_doc | same | broad; grouping always skipped; threshold 0.7 in the NORA lane |
 | standards comparison, traceability | `standards_comparison`, `traceability` | as single_doc | same | broad; standards context only when the standards stage ran |
@@ -1928,11 +1946,9 @@ the opposite from the design.
 - **Serving mode default.** FR-40 names select-synth as the serving path;
   the code default with `NORA_SIRA_SYNTH_MODE` unset is rerank-pin, which
   needs the vector store. One of the two should move.
-- **History has no consumer.** The store is published and served on
-  every stack; nothing in nora-web reads it; release-diff questions are
-  answered by retrieval over two cells. Validation of the change
-  classification against real releases, and a consumer surface, are a
-  separate strand.
+- **History's only consumer is the Ask page's release-change lane**
+  (§22.2a). A History page (plan timeline, last-changed, diff between
+  any two releases) is a later option.
 - **No `CellStore` protocol (TODO).** Cells is the one store without a
   protocol, local backend, HTTP client and router; the service's
   `/cells*` routes and `cell_db_store.py` stand in. Retrieval does not

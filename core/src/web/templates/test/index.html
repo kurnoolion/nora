@@ -244,6 +244,18 @@
               <span class="badge bg-primary">SIRA</span>
               <span id="progress-text-sira" class="small text-muted">waiting…</span>
             </div>
+            {# Release-change lane (strand rel-history): takes the SIRA row's
+               place when the question is a release diff and History is
+               served. Partial syntheses land under it, per plan, as they
+               arrive; Cancel posts the run id back. #}
+            <div id="progress-row-history" class="d-flex align-items-center gap-2" style="display:none;">
+              <div class="spinner-border spinner-border-sm text-info" role="status"></div>
+              <span class="badge bg-info text-dark">HISTORY</span>
+              <span id="progress-text-history" class="small text-muted">waiting…</span>
+              <button type="button" id="ask-cancel" class="btn btn-outline-secondary btn-sm ms-auto"
+                      data-cancel-url="{{ root_path }}/api/test/ask-cancel" style="display:none;">Cancel</button>
+            </div>
+            <div id="history-partials" class="mt-2" style="display:none;"></div>
           </div>
         </div>
       </div>
@@ -285,7 +297,49 @@
   const progressRowSira = document.getElementById("progress-row-sira");
   const progressTextNora = document.getElementById("progress-text-nora");
   const progressTextSira = document.getElementById("progress-text-sira");
+  const progressRowHistory = document.getElementById("progress-row-history");
+  const progressTextHistory = document.getElementById("progress-text-history");
+  const cancelBtn = document.getElementById("ask-cancel");
+  const partialsEl = document.getElementById("history-partials");
   const answerEl = document.getElementById("test-answer");
+  let currentRunId = "";
+  function resetPartials() {
+    partialsEl.innerHTML = "";
+    partialsEl.style.display = "none";
+  }
+  // One block per plan, created on the first partial for that plan, so the
+  // page fills in plan by plan while later batches are still running.
+  function applyPartialEvent(data) {
+    partialsEl.style.display = "block";
+    const planKey = "history-plan-" + (data.plan || "").replace(/[^A-Za-z0-9_-]/g, "_");
+    let block = document.getElementById(planKey);
+    if (!block) {
+      block = document.createElement("div");
+      block.id = planKey;
+      block.className = "border rounded p-2 mb-2 bg-white small";
+      block.innerHTML = '<div class="fw-semibold mb-1">' + (data.plan || "") + '</div>';
+      partialsEl.appendChild(block);
+    }
+    const part = document.createElement("div");
+    part.className = "mb-1" + (data.status === "error" ? " text-danger" : "");
+    part.innerHTML = data.status === "error"
+      ? '<em>' + (data.kind || "") + ': synthesis failed</em>'
+      : (data.html || "");
+    block.appendChild(part);
+    progressTextHistory.textContent = "synthesized " + data.done + " of " + data.total + " batches";
+  }
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", async () => {
+      if (!currentRunId) return;
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = "Cancelling…";
+      try {
+        const fd = new FormData();
+        fd.append("run_id", currentRunId);
+        await fetch(cancelBtn.dataset.cancelUrl, { method: "POST", body: fd });
+      } catch (err) { /* the stream's done event still arrives */ }
+    });
+  }
 
   function setBusy(busy) {
     submitBtn.disabled = busy;
@@ -293,21 +347,32 @@
     submitBusy.style.display  = busy ? "" : "none";
   }
 
-  function showProgressFor(lanes) {
+  function showProgressFor(lanes, runId) {
     progressDisplay.style.display = "block";
     progressRowNora.style.display = lanes.includes("nora") ? "flex" : "none";
     progressRowSira.style.display = lanes.includes("sira") ? "flex" : "none";
+    progressRowHistory.style.display = lanes.includes("history") ? "flex" : "none";
     if (lanes.includes("nora")) progressTextNora.textContent = "waiting…";
     if (lanes.includes("sira")) progressTextSira.textContent = "waiting…";
+    if (lanes.includes("history")) progressTextHistory.textContent = "waiting…";
+    currentRunId = runId || "";
+    if (cancelBtn) {
+      cancelBtn.style.display = (lanes.includes("history") && currentRunId) ? "" : "none";
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "Cancel";
+    }
   }
 
   function hideProgress() {
     progressDisplay.style.display = "none";
+    resetPartials();
+    currentRunId = "";
   }
 
   function applyProgressEvent(data) {
     if (data.lane === "nora") progressTextNora.textContent = data.message;
     if (data.lane === "sira") progressTextSira.textContent = data.message;
+    if (data.lane === "history") progressTextHistory.textContent = data.message;
   }
 
   // Parse one SSE event block (lines until blank line) into {event, data}.
@@ -363,7 +428,8 @@
 
     setBusy(true);
     answerEl.innerHTML = "";
-    showProgressFor(lanes);
+    resetPartials();
+    showProgressFor(lanes, "");
 
     let response;
     try {
@@ -411,9 +477,11 @@
             // Authoritative: re-render the rows for the lanes the SERVER is
             // actually running (team-mode may have forced SIRA-only), so a
             // form-submitted lane the server dropped doesn't spin forever.
-            showProgressFor(parsed.data.lanes || []);
+            showProgressFor(parsed.data.lanes || [], parsed.data.run_id || "");
           } else if (parsed.event === "progress") {
             applyProgressEvent(parsed.data);
+          } else if (parsed.event === "partial") {
+            applyPartialEvent(parsed.data);
           } else if (parsed.event === "done") {
             answerEl.innerHTML = parsed.data.html || "";
             // htmx only wires elements it swapped itself. This partial is

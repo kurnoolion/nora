@@ -33,6 +33,8 @@ from core.src.llm.openai_provider import (
     REASONING_SENTINEL_ENABLED as _REASONING_SENTINEL_ENABLED,
 )
 from core.src.web.feedback_db import CATEGORIES
+from core.src.web.markdown_render import render_markdown
+from core.src.web.routes import history_lane
 from core.src.web.team_mode import team_restricted
 from core.src.web.timeline import build_timeline
 
@@ -628,6 +630,15 @@ async def _build_merged_response_html(
                 "candidate_count": 0,
             })
 
+        if lane == history_lane.LANE:
+            h = out.get("history") or {}
+            ctx.update({
+                "history": h,
+                "history_compact": h.get("compact", ""),
+                "history_cancelled": bool(h.get("cancelled")),
+                "history_absent": h.get("absent_plans") or [],
+                "history_run": h.get("run") or {},
+            })
         lanes_html[lane] = _render_template_to_string(
             request, "test/_answer.html", ctx,
         )
@@ -1626,6 +1637,21 @@ async def playground_ask_stream(request: Request):
             )
         return _emit
 
+    # Release-change questions answer from the History store when the
+    # stack serves it (strand rel-history): the history lane takes the
+    # SIRA lane's slot, since both answer the same question one way.
+    run_id = ""
+    history_intent = None
+    if "sira" in lanes_checked:
+        history_intent = history_lane.history_diff_applies(question)
+    if history_intent is not None:
+        lanes_checked = [l for l in lanes_checked if l != "sira"] + [history_lane.LANE]
+        run_id = history_lane.new_run_id()
+
+    async def _emit_partial(p: dict) -> None:
+        await progress_q.put({"type": "partial", "lane": history_lane.LANE, **p,
+                              "html": str(render_markdown(p.get("text") or ""))})
+
     runners: dict[str, Any] = {}
     if "nora" in lanes_checked:
         runners["nora"] = _run_nora_lane_for_merged(
@@ -1638,6 +1664,13 @@ async def playground_ask_stream(request: Request):
             emit_progress=_make_emitter("sira"),
             provider_id=provider_id, mode=mode, model=model,
         )
+    if history_intent is not None:
+        runners[history_lane.LANE] = history_lane.run_history_lane(
+            question, history_intent,
+            provider=_history_provider(provider_id, mode, model),
+            run_id=run_id, emit_progress=_make_emitter(history_lane.LANE),
+            emit_partial=_emit_partial,
+        )
 
     async def event_stream():
         # Authoritative lane list FIRST: tell the client which lanes are actually
@@ -1645,7 +1678,8 @@ async def playground_ask_stream(request: Request):
         # server, not the submitted form. Without this, a form that still carries
         # 'nora' (e.g. team-mode bypass / stale page) leaves a NORA row spinning
         # at "waiting…" forever because the server never runs or emits for it.
-        yield f"event: lanes\ndata: {json.dumps({'lanes': lanes_checked})}\n\n"
+        # `run_id` (history lane only) is what the Cancel button posts back.
+        yield f"event: lanes\ndata: {json.dumps({'lanes': lanes_checked, 'run_id': run_id})}\n\n"
         tasks = {
             lane: asyncio.create_task(coro)
             for lane, coro in runners.items()
@@ -1655,18 +1689,21 @@ async def playground_ask_stream(request: Request):
         # at the queue's get-timeout keep proxies from closing the
         # connection during quiet stretches (NORA's blocking call can
         # last seconds without emitting anything).
+        def _event(msg: dict) -> str:
+            name = "partial" if msg.get("type") == "partial" else "progress"
+            return f"event: {name}\ndata: {json.dumps(msg)}\n\n"
+
         while not all(t.done() for t in tasks.values()):
             try:
                 msg = await asyncio.wait_for(progress_q.get(), timeout=2.0)
-                yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+                yield _event(msg)
             except asyncio.TimeoutError:
                 yield ": heartbeat\n\n"
 
         # Drain any final progress events that may have been pushed
         # between the last loop iteration and task completion.
         while not progress_q.empty():
-            msg = progress_q.get_nowait()
-            yield f"event: progress\ndata: {json.dumps(msg)}\n\n"
+            yield _event(progress_q.get_nowait())
 
         # All tasks done — collect results, build final HTML, emit done.
         outputs = {lane: t.result() for lane, t in tasks.items()}
@@ -1692,6 +1729,38 @@ async def playground_ask_stream(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _history_provider(provider_id: str, mode: str, model: str):
+    """One provider per question for the history lane (reasoning effort
+    is a construction-time choice; the same roster path as the lanes)."""
+    from core.src.web.routes.query import _build_llm_from_env_or_default
+    return _build_llm_from_env_or_default(provider_id=provider_id or None,
+                                          mode=mode or None, model=model or None)
+
+
+@router.post("/api/test/ask-cancel")
+async def playground_ask_cancel(request: Request):
+    """Cancel a running release-change synthesis (strand rel-history).
+    Form or JSON `run_id` from the stream's `lanes` event. Batches in
+    flight finish and are shown; no new batch starts. Team-tier: the
+    asker cancels their own run."""
+    run_id = ""
+    try:
+        form = await request.form()
+        run_id = (form.get("run_id") or "").strip()
+    except Exception:                                   # noqa: BLE001 — not a form
+        pass
+    if not run_id:
+        try:
+            run_id = str((await request.json()).get("run_id") or "").strip()
+        except Exception:                               # noqa: BLE001
+            run_id = ""
+    if not run_id:
+        return JSONResponse({"error": "run_id is required"}, status_code=400)
+    if not history_lane.cancel_run(run_id):
+        return JSONResponse({"error": "unknown or finished run"}, status_code=404)
+    return JSONResponse({"cancelled": True, "run_id": run_id})
 
 
 @router.post("/api/test/synthesize-group", response_class=HTMLResponse)

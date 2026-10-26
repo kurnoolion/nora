@@ -389,6 +389,7 @@ nora/
 │   │       │   ├── environments.py                      # Environments page and API routes.
 │   │       │   ├── files.py                             # File browser page and routes.
 │   │       │   ├── golden_eval.py                       # Eval Studio — expert one-stop-shop for golden eval samples
+│   │       │   ├── history_lane.py                      # The release-change lane of the Ask page (strand rel-history).
 │   │       │   ├── jobs.py                              # Jobs routes -- listing, detail, SSE log streaming, cancel.
 │   │       │   ├── metrics_route.py                     # Metrics page and API routes.
 │   │       │   ├── parse_review.py                      # Parse routes — Summary landing + per-doc Review.
@@ -609,6 +610,7 @@ nora/
 │       ├── test_web_config.py                           # Tests for `core/src/web/config.py` — env_dir + DB-path resolution.
 │       ├── test_web_config_db.py                        # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_eval_studio.py                      # Eval Studio route tests (FR-39): sample CRUD, ground-truth add flows,
+│       ├── test_web_history_lane.py                     # The Ask page's release-change lane (core/src/web/routes/history_lane.py
 │       ├── test_web_jobs.py                             # Tests for the NORA web job queue.
 │       ├── test_web_markdown_bubbles.py                 # Tests for req-ID bubbles in the web markdown renderer (strand req-id-bubbles).
 │       ├── test_web_markdown_render.py                  # Tests for the web markdown renderer.

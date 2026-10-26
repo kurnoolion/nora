@@ -102,6 +102,14 @@
       {% endif %}
     {% endif %}
 
+    {% if history is defined and history %}
+      {% if history_cancelled %}
+        <div class="alert alert-warning py-2 small mb-2">Cancelled: {{ history_run.done }} of {{ history_run.batches }} batches synthesized; the plans below are what finished.</div>
+      {% endif %}
+      {% if history_run.failed %}
+        <div class="alert alert-warning py-2 small mb-2">{{ history_run.failed }} batch(es) failed after the fallback (RHD-E004); their requirement ids are listed in place.</div>
+      {% endif %}
+    {% endif %}
     <div class="answer-body" style="line-height: 1.5;">{{ answer | md_bubbles(bubble_req_ids, root_path) }}</div>
 
     {# Where the time went. Above the engineering-details fold on
@@ -194,6 +202,9 @@
        see whether the right features matched and how broad the
        candidate set was. Both panels are click-to-expand to keep the
        page compact when not needed. #}
+    {% if history_compact is defined and history_compact %}
+      <div class="small mt-2"><span class="text-muted">Release-change run:</span> <code>{{ history_compact }}</code></div>
+    {% endif %}
     {% if query_intent or graph_candidates %}
       <hr>
       <div class="small">
