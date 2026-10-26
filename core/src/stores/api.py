@@ -185,6 +185,11 @@ def history_router(store: "HistoryStore | Callable[[], HistoryStore | None] | No
     def latest(mno: str, diffs: bool = False) -> "dict | None":
         return _guard(lambda: st().latest_changes(mno, diffs))
 
+    @r.get("/pairs")
+    def pairs(mno: str, rel_a: str = "", rel_b: str = "") -> dict:
+        """Release-change payload for synthesis (carries requirement text)."""
+        return _guard(lambda: st().changed_pairs(mno, rel_a, rel_b))
+
     return r
 
 

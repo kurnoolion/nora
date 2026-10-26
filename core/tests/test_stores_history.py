@@ -246,6 +246,37 @@ def test_summary_separates_absent_plans():
     assert [t["plan_id"] for t in s["most_changed_sections"]] == ["PLANA"]   # edit rows only
 
 
+def test_changed_pairs_payload(built):
+    """Jan→Apr: R1 text and R2 priority changed (pairs), R4 moved to sec 1,
+    R6 removed; a whitespace-only edit (R3) is no pair. Apr→Jul: R3→R3X
+    and SEC_2→3 are rename pairs, R5 renumbered under its renamed parent,
+    R6 added."""
+    h, _, _ = built
+    d = h.changed_pairs(MNO, "Jan2031", "Apr2031")
+    assert (d["from"], d["to"]) == ("Jan2031", "Apr2031") and list(d["plans"]) == ["PLANA"]
+    p = d["plans"]["PLANA"]
+    assert p["plan_name"] == "Plan A" and p["present"] == {"from": True, "to": True}
+    assert [c["req_id"] for c in p["changed"]] == ["R1", "R2"]
+    r1, r2 = p["changed"]
+    assert r1["old"]["text"] == T1 and r1["new"]["text"] == T1B and r1["kinds"] == []
+    assert r2["old"]["priority"] == "Mandatory" and r2["new"]["priority"] == "Optional"
+    assert r2["old"]["text"] == r2["new"]["text"] == T2
+    assert [m["req_id"] for m in p["moved"]] == ["R4"] and p["moved"][0]["from"] == "2.1"
+    assert [r["req_id"] for r in p["removed"]] == ["R6"] and p["removed"][0]["text"] == T6
+    assert p["added"] == [] and p["renamed"] == [] and p["renumbered"] == []
+    assert d["counts"] == {"changed": 2, "added": 0, "removed": 1, "renamed": 0,
+                           "renumbered": 0, "moved": 1, "plans": 1, "absent_plans": 0}
+    j = h.changed_pairs(MNO, "Apr2031", "Jul2031")["plans"]["PLANA"]
+    assert sorted((r["kind"], r["old_id"], r["new_id"]) for r in j["renamed"]) == \
+        [("requirement", "R3", "R3X"), ("section", "2", "3")]
+    assert [r["req_id"] for r in j["renumbered"]] == ["R5"] and j["renumbered"][0]["detail"] == "parent"
+    assert [r["req_id"] for r in j["added"]] == ["R6"]
+    assert j["removed"] == [] and j["changed"] == []           # R3 is the removed half of a rename
+    with pytest.raises(ValueError):
+        h.changed_pairs(MNO, "Jan2031", "Dec2099")
+    assert h.changed_pairs(MNO, "Apr2031", "Apr2031")["counts"]["plans"] == 0
+
+
 def test_req_history_text_change_with_word_diff(built):
     h, _, _ = built
     vs = h.req_history(MNO, "PLANA", "R1")

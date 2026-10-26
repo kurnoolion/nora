@@ -116,36 +116,37 @@ sequenceDiagram
 | release-diff prompt and grouping | `query/release_diff.py` | the query layer owns prompts and intent handling; it builds the batches' prompts and reassembles per plan |
 | Ask route and SSE events | `web/routes/playground.py` | the page already streams lanes over SSE |
 
-### 3.3 `HistoryStore.changed_pairs`
+### 3.3 `HistoryStore.changed_pairs` (as built)
 
 ```
 changed_pairs(mno, rel_a, rel_b) -> {
   "mno": str, "from": rel_a, "to": rel_b,
   "plans": {
     plan_id: {
-      "plan_name": str,
-      "changed": [ {req_id, section, old: {title, text}, new: {title, text}, kinds: [..]} ],
-      "added":   [ {req_id, section, title, text} ],
-      "removed": [ {req_id, section, title, text} ],
-      "renamed": [ {old_req_id, new_req_id} ]      # likely_renamed pairs, listed, not paired for the LLM
+      "plan_name": str, "present": {"from": bool, "to": bool},
+      "changed":    [ {req_id, section, old: {title, text, priority, applicability}, new: {...}, kinds: [..]} ],
+      "added":      [ {req_id, section, title, text, priority, applicability} ],
+      "removed":    [ ... same shape ... ],
+      "renamed":    [ {kind: requirement | section, old_id, new_id, section} ],
+      "renumbered": [ {req_id, section, from, detail} ],
+      "moved":      [ {req_id, section, from} ]
     }
   },
-  "counts": {changed, added, removed, renamed, plans}
+  "absent_plans": {plan_id: {absent_in: rel}},
+  "counts": {changed, added, removed, renamed, renumbered, moved, plans, absent_plans}
 }
 ```
 
-- `changed` = requirement nodes whose `node_fp` differs between the two
-  releases (text, priority or applicability). A pure `moved` or
-  `reordered` requirement is not a pair; it is listed under a separate
-  `moved` key with old and new section only, and the prompt mentions
-  them in one line per plan.
-- Texts come from `content` by `text_fp`; `old` is the version row
-  valid at `rel_a`, `new` the one valid at `rel_b`.
-- Deterministic order: plans by `plan_id`, rows by document order of the
-  newer release (`seq` through the Trees-derived `location`), so the
-  same question yields the same batches.
-- Over HTTP this is one GET; the payload carries requirement text and is
-  served to nora-web only, like `/req/history` today.
+- `changed` = requirement rows whose `node_fp` differs (text, priority or
+  applicability); `kinds` lists any location kind that came with it. A
+  pure `renumbered` or `moved` requirement is not a pair.
+- The removed half of a rename pair appears only under `renamed`.
+- Texts come from `content` by `text_fp`; `old` is the node state at
+  `rel_a`, `new` at `rel_b`; attributes from the version's `attrs_json`.
+- Deterministic order: plans by `plan_id`, rows by outline position
+  (numeric components compare as numbers), then id.
+- Over HTTP: `GET /stores/history/v1/pairs?mno&rel_a&rel_b`, one call;
+  the payload carries requirement text and is for the web layer.
 
 ### 3.4 Pair packer (`llm/batching.py`)
 

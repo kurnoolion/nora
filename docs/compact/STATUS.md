@@ -2,8 +2,8 @@
 
 > **Strands active from 2026-05-16.** Mid-session journal entries land in `docs/compact/strands/<name>/journal.md`. Content below this line is historical and is no longer updated by `close-session` when a strand is bound. Architect-only writes (project-wide status, decisions promoted via `/land-strand`) continue to land here.
 
-**Active phase**: architecture
-**Last updated**: 2026-10-25
+**Active phase**: development
+**Last updated**: 2026-10-26
 **Last drift-check**: 2026-10-25 — mode: dev-module stores — 2 drifts resolved (Public surface updated to code: Registry `exists`/`root`/`next_version` and `flip` return; publish CLI `--note` on flip, `--note`/`--store-url` on rollback), 0 deferred surfaced; previous: 2026-10-18 — mode: design — 21 drifts resolved, 1 no change (NFR-1: only acceptable LLMs are configured) (requirements describe current serving: D-254 SIRA over NORA's taxonomy, KG-dependent FR-5/7/8/11/12/13/21 + NFR-14 deferred, FR-37 reworded; new FR-40 serving path, FR-41 team gate, FR-42 LLM roster + refusal fallback, FR-43 promotion; FR-19 Ask-page features; 12 stale FR/NFR rewordings incl. NFR-15/16 → golden eval with per-release targets; TOC default 0.7 in from_dict; carrier-name sweep), 1 deferred (FR-38 release handling — lands with golden-eval strand); same day: dev-full — 16 drifts resolved
 
 ## Done

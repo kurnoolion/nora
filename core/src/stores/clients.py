@@ -259,3 +259,6 @@ class HttpHistoryStore(_HttpStore):
 
     def latest_changes(self, mno: str, diffs: bool = False) -> "dict | None":
         return self._get("/latest", mno=mno, diffs=diffs)
+
+    def changed_pairs(self, mno: str, rel_a: str, rel_b: str) -> dict:
+        return self._get("/pairs", mno=mno, rel_a=rel_a, rel_b=rel_b)

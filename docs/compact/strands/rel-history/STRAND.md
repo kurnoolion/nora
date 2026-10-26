@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** stores, store_service, llm, query, web
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 

@@ -141,6 +141,7 @@ def test_history_parity_every_method(history):
     for a, b in (("Jan2031", "Oct2031"), ("", ""), ("Jul2031", "Jul2031")):
         for diffs in (False, True):
             assert s.diff_releases(H_MNO, a, b, diffs) == h.diff_releases(H_MNO, a, b, diffs)
+        assert s.changed_pairs(H_MNO, a, b) == h.changed_pairs(H_MNO, a, b)
 
 
 def test_history_errors_cross_the_wire(history):

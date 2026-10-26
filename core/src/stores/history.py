@@ -412,6 +412,14 @@ class HistoryStore(Protocol):
     def latest_changes(self, mno: str, diffs: bool = False) -> "dict | None":
         """``diff_releases`` of the last two releases; None with fewer."""
         ...
+    def changed_pairs(self, mno: str, rel_a: str, rel_b: str) -> dict:
+        """What a release-change synthesis needs, per plan: ``changed``
+        requirement pairs (old and new title, text, priority,
+        applicability), ``added`` and ``removed`` requirements with their
+        text, ``renamed`` pairs, ``renumbered`` and ``moved`` lists
+        (locations only), plus ``absent_plans`` and ``counts``. Carries
+        requirement text: for the web layer, not for logs."""
+        ...
 
 
 # ─── SQLite backend ──────────────────────────────────────────────────
@@ -597,6 +605,26 @@ class SqliteHistoryStore:
         finally:
             con.close()
         return _summary(mno, rels[a], rels[b], changes)
+
+    def changed_pairs(self, mno: str, rel_a: str, rel_b: str) -> dict:
+        con = self._con(mno)
+        if con is None:
+            raise ValueError(f"unknown MNO: {mno}")
+        try:
+            rels = self._releases(con)
+            a, b = self._bounds(rels, rel_a or rels[0], rel_b or rels[-1])
+            changes = self._diff(con, a, b, None, False)
+            plans = sorted({c["plan_id"] for c in changes})
+            states: dict[str, tuple[dict, dict]] = {}
+            for plan in plans:
+                states[plan] = (self._state(con, a, " AND n.plan_id = ?", (plan,)),
+                                self._state(con, b, " AND n.plan_id = ?", (plan,)))
+            fps = {n["text_fp"] for sa, sb in states.values() for s in (sa, sb)
+                   for n in s.values()}
+            texts = self._content(con, fps)
+        finally:
+            con.close()
+        return _pairs(mno, rels[a], rels[b], changes, states, texts)
 
     def latest_changes(self, mno: str, diffs: bool = False) -> "dict | None":
         rels = self.releases(mno)
@@ -876,6 +904,90 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
             for n, p, s, v in ranked[:10]],
         "changes": sorted(changes, key=lambda c: (c["plan_id"], c["key"])),
     }
+
+
+def _section_key(section: str) -> tuple:
+    """Outline order: numeric components compare as numbers."""
+    out: list = []
+    for p in str(section or "").split("."):
+        out.append((0, int(p)) if p.isdigit() else (1, p))
+    return tuple(out)
+
+
+def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
+           states: dict[str, tuple[dict, dict]], texts: dict[str, tuple]) -> dict:
+    """The release-change payload (protocol ``changed_pairs``) from the
+    diff rows and both releases' node states. Deterministic: plans by id,
+    rows by outline position then id."""
+    def body(n: "dict | None") -> dict:
+        if not n:
+            return {}
+        title, text = texts.get(n["text_fp"], ("", ""))
+        attrs = json.loads(n.get("attrs_json") or "{}")
+        return {"title": title, "text": text,
+                "priority": attrs.get("priority", ""),
+                "applicability": attrs.get("applicability", [])}
+
+    def section_of(n: "dict | None") -> str:
+        if not n:
+            return ""
+        if n["kind"] == SECTION:
+            return n["local_id"]
+        return json.loads(n["location_json"]).get("section", "")
+
+    absent: dict[str, dict] = {}
+    for c in changes:
+        if c["node"] == PLAN and ("removed" in c["change"] or "added" in c["change"]):
+            absent[c["plan_id"]] = {"absent_in": rel_b if "removed" in c["change"] else rel_a}
+    renamed_from = {c["renamed_from"] for c in changes if c.get("renamed_from")}
+    plans: dict[str, dict] = {}
+    for c in changes:
+        plan = c["plan_id"]
+        sa, sb = states[plan]
+        x, y = sa.get(c["key"]), sb.get(c["key"])
+        n = y or x
+        pkey = node_key(PLAN, plan)
+        pnode = sb.get(pkey) or sa.get(pkey)
+        p = plans.setdefault(plan, {
+            "plan_name": texts.get(pnode["text_fp"], ("", ""))[0] if pnode else "",
+            "present": {"from": plan not in absent or absent[plan]["absent_in"] != rel_a,
+                        "to": plan not in absent or absent[plan]["absent_in"] != rel_b},
+            "changed": [], "added": [], "removed": [], "renamed": [],
+            "renumbered": [], "moved": []})
+        kinds = c["change"]
+        if "likely_renamed" in kinds:
+            p["renamed"].append({"kind": c["node"], "old_id": json.loads(c["renamed_from"])[2],
+                                 "new_id": c["local_id"], "section": section_of(n)})
+            continue
+        if c["key"] in renamed_from:
+            continue                                    # the removed half of a rename
+        if c["node"] != REQUIREMENT:
+            continue                                    # plan / section rows: absent_plans, renamed
+        row = {"req_id": c["local_id"], "section": section_of(n)}
+        if "added" in kinds:
+            p["added"].append({**row, **body(y)})
+        elif "removed" in kinds:
+            p["removed"].append({**row, **body(x)})
+        elif "changed" in kinds:
+            p["changed"].append({**row, "old": body(x), "new": body(y),
+                                 "kinds": [k for k in kinds if k != "changed"] or []})
+        elif "renumbered" in kinds:
+            p["renumbered"].append({**row, "from": c.get("renumbered_from", ""),
+                                    "detail": c.get("renumber", "")})
+        elif "moved" in kinds:
+            p["moved"].append({**row, "from": c.get("moved_from", "")})
+    for p in plans.values():
+        for key in ("changed", "added", "removed", "renumbered", "moved"):
+            p[key].sort(key=lambda r: (_section_key(r["section"]), r["req_id"]))
+        p["renamed"].sort(key=lambda r: (_section_key(r["section"]), r["new_id"]))
+    counts = {k: sum(len(p[k]) for p in plans.values())
+              for k in ("changed", "added", "removed", "renamed", "renumbered", "moved")}
+    counts["plans"] = len(plans)
+    counts["absent_plans"] = len(absent)
+    return {"mno": mno, "from": rel_a, "to": rel_b,
+            "plans": {k: plans[k] for k in sorted(plans)},
+            "absent_plans": {k: absent[k] for k in sorted(absent)},
+            "counts": counts}
 
 
 def open_history_store(root_dir: "str | Path" = "",

@@ -544,7 +544,7 @@ is never visible as a mixed set.
 | `GET /healthz` | Identity, mode, knobs, prompt provenance, store kinds (§7.3). | everyone |
 | `/stores/cells/v1/*` | `GET cells`, `/{mno}/{rel}/meta`, `/rows`, `/phrases`, `/effective` over the loaded state. | tools, tests |
 | `/stores/trees/v1/*` | `cells, docs, tree, plans, find, reqs, node, children, subtree, ancestors, fingerprint`. | nora-web requirement browser, `/api/req`, Eval Studio picker |
-| `/stores/history/v1/*` | `mnos, releases, req, plan, req/last-changed, plan/last-changed, diff, latest`. | (no web consumer yet) |
+| `/stores/history/v1/*` | `mnos, releases, req, plan, req/last-changed, plan/last-changed, diff, latest, pairs`. | the release-change answer (rel-history); `pairs` carries requirement text |
 | `/stores/overlay/v1/*` | reads: `mnos`, `overlay/{mno}`, `/entry`, `/version`, `/digest?label`, `labels/accepted`, `labels/disabled`, `reasons`; writes (409 unless authority): `PUT` entry and label and reason sets, `POST /edit` (one op in one transaction). | nora-web review edits; peer store reads |
 
 The four `/stores/*` routers are generic (`core/src/stores/api.py`) and
@@ -1039,7 +1039,10 @@ erDiagram
   node added or removed means the plan is absent from one release; the
   summary lists it under `absent_plans` and keeps its rows out of
   `edits`.
-- The six query kinds: `req_history`, `plan_history`, `last_changed`,
+- The query kinds: `changed_pairs` (the release-change payload for
+  synthesis: per plan the changed requirement pairs with old and new
+  text, added, removed, renamed, renumbered and moved lists, absent
+  plans), `req_history`, `plan_history`, `last_changed`,
   `plan_last_changed`, `diff_releases` (kind tallies and row counts per
   plan and per containing section — the nearest real section node, else a
   two-level outline prefix — the ten most changed sections by edit rows,
