@@ -95,6 +95,7 @@ flowchart TD
     m_query --> m_env
     m_query --> m_graph
     m_query --> m_llm
+    m_query --> m_pipeline
     m_query --> m_vectorstore
     m_resolver --> m_parser
     m_standards --> m_parser
@@ -283,6 +284,7 @@ nora/
 │   │   │   ├── pipeline.py                              # Query pipeline orchestrator (TDD 7).
 │   │   │   ├── query_cli.py                             # CLI for the query pipeline (PoC Step 10).
 │   │   │   ├── rag_retriever.py                         # Targeted vector RAG retriever (TDD 7.4).
+│   │   │   ├── release_diff.py                          # Release-change answers from the History store (strand rel-history).
 │   │   │   ├── reranker.py                              # Cross-encoder reranker — final-pass relevance scoring on the
 │   │   │   ├── resolver.py                              # MNO and release resolver (TDD 7.2).
 │   │   │   ├── retrieval_debug.py                       # Retrieval debug — pinpoint why retrieval behaves differently across
@@ -562,6 +564,7 @@ nora/
 │       ├── test_query_grouping.py                       # Tests for hierarchy-based chunk grouping (Stage 4.7).
 │       ├── test_query_grouping_pipeline.py              # Tests for Stage 4.7 (hierarchy grouping) pipeline integration.
 │       ├── test_query_intent.py                         # Tests for Step 4 — FACT and SUMMARIZE intent classification + routing.
+│       ├── test_query_release_diff.py                   # Release-change synthesis (core/src/query/release_diff.py, strand
 │       ├── test_query_reranker.py                       # Tests for `core/src/query/reranker.py` — cross-encoder reranker
 │       ├── test_query_rewriter.py                       # Tests for `core/src/query/rewriter.py` — pre-retrieval query expansion.
 │       ├── test_query_threshold.py                      # Tests for the relevance threshold filter in QueryPipeline (Stage 4.5).
