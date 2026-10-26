@@ -23,6 +23,7 @@ method to it. Stdlib only.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -30,6 +31,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from core.src.llm.batching import Batch
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,6 +71,16 @@ class RunResult:
 
     def ordered(self) -> list[BatchOutcome]:
         return [self.outcomes[i] for i in sorted(self.outcomes)]
+
+    def latency_ms(self) -> dict[str, int]:
+        """Per-batch wall-clock summary of the finished batches: p50, p95,
+        max. Separates a slow model from a slow runner at a glance."""
+        xs = sorted(o.elapsed_ms for o in self.outcomes.values())
+        if not xs:
+            return {"p50": 0, "p95": 0, "max": 0}
+        def pct(q: float) -> int:
+            return xs[min(len(xs) - 1, int(round(q * (len(xs) - 1))))]
+        return {"p50": pct(0.5), "p95": pct(0.95), "max": xs[-1]}
 
 
 def run(batches: list[Batch], call: Callable[[Batch], str], *, parallel: int = 4,
@@ -109,6 +122,9 @@ def run(batches: list[Batch], call: Callable[[Batch], str], *, parallel: int = 4
                     outcome.text = fut.result()
                 except Exception as exc:            # noqa: BLE001 — recorded per batch
                     outcome.error = f"{type(exc).__name__}: {exc}"[:300]
+                    logger.warning("parallel batch %d (group %r) failed after %d ms: %s",
+                                   batch.index, batch.group, outcome.elapsed_ms,
+                                   outcome.error)
                 if stats_of is not None:
                     try:
                         outcome.call_stats = dict(stats_of() or {})

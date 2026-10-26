@@ -88,3 +88,20 @@ def test_empty_and_validation():
     assert r.total == 0 and r.done == 0 and not r.cancelled
     with pytest.raises(ValueError):
         run([], lambda b: "x", parallel=0)
+
+
+def test_latency_summary_and_failure_log(caplog):
+    import logging
+
+    def call(b: Batch) -> str:
+        time.sleep(0.01 * (b.index + 1))
+        if b.index == 2:
+            raise ValueError("boom")
+        return "x"
+
+    with caplog.at_level(logging.WARNING, logger="core.src.llm.parallel"):
+        r = run(_batches(3), call, parallel=3)
+    lat = r.latency_ms()
+    assert set(lat) == {"p50", "p95", "max"} and lat["max"] >= lat["p95"] >= lat["p50"] >= 0
+    assert any("batch 2" in m and "ValueError: boom" in m for m in caplog.messages)
+    assert RunResult().latency_ms() == {"p50": 0, "p95": 0, "max": 0}

@@ -246,6 +246,44 @@ def prompt_for(batch: Batch, payload: "dict | None" = None) -> tuple[str, str]:
     return system_prompt(), head + _PROMPTS[kind] + body
 
 
+# ── working-text fallback ─────────────────────────────────────────────
+
+_WORKING_RE = re.compile(
+    r"^\s*(okay|ok|alright|let me|let's|first,? i|i need to|i'll|i will|the user (wants|asks|is asking)|"
+    r"looking at|we need to|so,? the|now,? let)", re.I)
+
+
+def looks_like_working_text(text: str) -> bool:
+    """A reply that opens with the model's own working (the marker was
+    left out, so nothing was stripped)."""
+    return bool(_WORKING_RE.match(text or ""))
+
+
+def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
+    """Drop the leading working paragraphs: cut at the last paragraph
+    boundary before the first line that names a requirement id, or at the
+    last blank line when no id line exists. Returns the text unchanged
+    when it does not look like working text."""
+    if not looks_like_working_text(text):
+        return text
+    lines = text.split("\n")
+    idset = [i for i in ids if i]
+    first_id_line = None
+    for n, line in enumerate(lines):
+        if any(i in line for i in idset):
+            first_id_line = n
+            break
+    if first_id_line is None or first_id_line == 0:
+        # no id line: keep the last paragraph only
+        paras = [p for p in text.split("\n\n") if p.strip()]
+        return paras[-1].strip() if len(paras) > 1 else text
+    # back up to the paragraph that holds the first id line
+    start = first_id_line
+    while start > 0 and lines[start - 1].strip():
+        start -= 1
+    return "\n".join(lines[start:]).strip()
+
+
 # ── reassembly ────────────────────────────────────────────────────────
 
 def _plan_notes(p: dict) -> list[str]:
@@ -324,8 +362,17 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
 
     def call(batch: Batch) -> str:
         system, prompt = prompt_for(batch, payload)
-        return provider.complete(prompt, system=system, temperature=cfg.temperature,
+        text = provider.complete(prompt, system=system, temperature=cfg.temperature,
                                  max_tokens=cfg.max_tokens)
+        if looks_like_working_text(text):
+            # the marker was left out: one retry with a blunter instruction,
+            # then a heuristic cut, so the page never shows the working
+            retry = provider.complete(
+                prompt + "\n\nOutput only the final answer, nothing before it.",
+                system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens)
+            text = retry if not looks_like_working_text(retry) else strip_working_text(
+                retry, [i for it in batch.items for i in it["ids"]])
+        return text
 
     done_count = [0]
 
@@ -344,7 +391,9 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
     out["run"] = {"batches": total, "done": rr.done, "failed": rr.failed,
                   "skipped": rr.skipped, "parallel": cfg.parallel,
                   "max_batch_bytes": cfg.max_batch_bytes, "elapsed_ms": rr.elapsed_ms,
-                  "oversized": sum(1 for b in batches if b.oversized)}
+                  "oversized": sum(1 for b in batches if b.oversized),
+                  "batch_ms": rr.latency_ms(),
+                  "errors": sorted({o.error.split(":")[0] for o in rr.outcomes.values() if o.error})}
     out["compact"] = compact_block(out)
     return out
 
@@ -356,10 +405,14 @@ def compact_block(result: dict) -> str:
     return ("RHD mno={mno} from={a} to={b} plans={plans} absent={absent} pairs={pairs} "
             "added={added} removed={removed} renumbered={renum} batches={batches} "
             "parallel={par} bytes_max={bm} done={done} failed={failed} cancelled={canc} "
-            "elapsed_ms={ms}").format(
+            "elapsed_ms={ms} batch_ms_p50={p50} batch_ms_p95={p95} batch_ms_max={mx}"
+            "{errs}").format(
         mno=result.get("mno", ""), a=result.get("from", ""), b=result.get("to", ""),
         plans=c.get("plans", 0), absent=c.get("absent_plans", 0), pairs=c.get("changed", 0),
         added=c.get("added", 0), removed=c.get("removed", 0), renum=c.get("renumbered", 0),
         batches=r.get("batches", 0), par=r.get("parallel", 0), bm=r.get("max_batch_bytes", 0),
         done=r.get("done", 0), failed=r.get("failed", 0),
-        canc=1 if result.get("cancelled") else 0, ms=r.get("elapsed_ms", 0))
+        canc=1 if result.get("cancelled") else 0, ms=r.get("elapsed_ms", 0),
+        p50=r.get("batch_ms", {}).get("p50", 0), p95=r.get("batch_ms", {}).get("p95", 0),
+        mx=r.get("batch_ms", {}).get("max", 0),
+        errs=(" errors=" + ",".join(r["errors"])) if r.get("errors") else "")

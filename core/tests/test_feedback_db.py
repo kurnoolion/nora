@@ -32,7 +32,17 @@ def store(tmp_path: Path) -> FeedbackStore:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Not get_event_loop(): a suite that ran asyncio.run() earlier in the
+    # same process leaves no current loop, and the helper would raise.
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 def test_initialize_creates_schema(store):

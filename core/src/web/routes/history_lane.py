@@ -226,7 +226,9 @@ async def run_history_lane(
         "result": {
             "answer": answer,
             "citations": [],
-            "llm_citations": cited,
+            # bubbles anchor on rag_chunks; the "Cited by LLM" list stays
+            # empty — hundreds of ids made the page's bulk in the field
+            "llm_citations": [],
             "rag_chunks": [{"req_id": i} for i in sorted(known)],
             "rag_chunk_count": len(known),
             "llm_model": lane_config["llm_model"],

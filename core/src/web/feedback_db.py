@@ -79,6 +79,10 @@ _MERGED_TAB_COLUMNS: list[tuple[str, str]] = [
 ]
 
 
+# Answer lanes a row may carry: the two retrieval lanes and the release-change
+# lane (strand rel-history), which answers from the History store.
+LANES = ("nora", "sira", "history")
+
 # Feedback category keys + human-readable labels surfaced on the merged tab.
 # Frozen for the pilot — adding a key here also requires UI work to expose
 # the new checkbox, so don't change without a coordinated change.
@@ -148,9 +152,9 @@ class FeedbackStore:
         merged-tab feedback fields start NULL so unvoted/unrated rows
         are still captured for audit.
         """
-        if lane is not None and lane not in ("nora", "sira"):
+        if lane is not None and lane not in LANES:
             raise ValueError(
-                f"lane must be 'nora' or 'sira' or None, got {lane!r}"
+                f"lane must be one of {LANES} or None, got {lane!r}"
             )
         ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
         async with aiosqlite.connect(self._db_path) as db:

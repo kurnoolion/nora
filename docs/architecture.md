@@ -1663,8 +1663,13 @@ event carries a run id; the Cancel button posts it to
 shown. Deleted and added requirements are summarized per plan, not
 paired; a plan absent from one release is one line, never a list of
 removals. Thinking models get the same final-answer marker as the other
-paths. Retrieval is not involved; the feedback row records lane
-`history` and the `RHD` compact block.
+paths; a reply that still opens with working text is retried once and
+then stripped to the first paragraph carrying a requirement id.
+Retrieval is not involved; the feedback row records lane `history` and
+the `RHD` compact block, which carries the per-batch latency summary
+(p50, p95, max) and the exception class of any failed batch beside the
+counts; the failure itself is logged with batch index and elapsed time,
+never prompt text.
 
 ### 22.3 The NORA lane (admin, dev stacks)
 

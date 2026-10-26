@@ -217,3 +217,45 @@ def test_reassemble_without_outcomes_marks_everything_cancelled():
     out = reassemble(pl, b, {}, cancelled=True)
     assert all(s["status"] == "cancelled" for p in out["plans"] for s in p["sections"])
     assert "RHD" in compact_block({**out, "run": {}})
+
+
+def test_working_text_detection_and_strip():
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    clean = "[R1] The retry timer moved from 30 s to 31 s."
+    assert not looks_like_working_text(clean) and strip_working_text(clean, ["R1"]) == clean
+    working = ("Okay, let me tackle this. First, I'll go through each requirement.\n"
+               "I need to make sure I cite the ids.\n\n"
+               "Summary of changes:\n[R1] The retry timer moved from 30 s to 31 s.\n[R2] Priority changed.")
+    assert looks_like_working_text(working)
+    out = strip_working_text(working, ["R1", "R2"])
+    assert out.startswith("Summary of changes:") and "[R2] Priority changed." in out
+    assert "Okay" not in out
+    no_ids = "The user wants a summary.\n\nHere is the summary.\n\nNothing changed in this plan."
+    assert strip_working_text(no_ids, []) == "Nothing changed in this plan."
+
+
+def test_working_text_reply_is_retried_then_stripped():
+    pl = payload()
+
+    class Thinking(EchoProvider):
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            self.calls.append((system, prompt))
+            ids = re.findall(r"\[([A-Z]+\d+)\]", prompt)
+            if "Output only the final answer" in prompt:
+                return "Okay, let me redo this.\n\nFinal: [" + "] [".join(dict.fromkeys(ids)) + "]"
+            return "Okay, let me tackle this.\n\n[" + "] [".join(dict.fromkeys(ids)) + "]"
+
+    prov = Thinking()
+    out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
+    texts = [s["text"] for p in out["plans"] for s in p["sections"]]
+    assert texts and all(not t.startswith("Okay") for t in texts)
+    assert all(t.startswith("Final:") for t in texts)
+    assert len(prov.calls) == 8                                 # 4 batches, each retried once
+    assert "batch_ms_p50=" in out["compact"] and "errors=" not in out["compact"]
+    assert set(out["run"]["batch_ms"]) == {"p50", "p95", "max"}
+
+
+def test_failed_batch_error_class_in_compact_block():
+    out = synthesize_release_diff(payload(), EchoProvider(fail_on="R6"),
+                                  config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
+    assert out["run"]["errors"] == ["RuntimeError"] and "errors=RuntimeError" in out["compact"]
