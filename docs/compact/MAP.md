@@ -217,11 +217,13 @@ nora/
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py                              # LLM providers.
 │   │   │   ├── base.py                                  # LLM provider abstraction layer.
+│   │   │   ├── batching.py                              # Size-bounded batching of prompt items (strand rel-history).
 │   │   │   ├── llm_debug.py                             # LLM debug — verify the active LLM provider and probe arbitrary endpoints.
 │   │   │   ├── mock_provider.py                         # Mock LLM provider for testing without API keys.
 │   │   │   ├── model_picker.py                          # Hardware detection and LLM model selection.
 │   │   │   ├── ollama_provider.py                       # Ollama LLM provider for local model inference.
 │   │   │   ├── openai_provider.py                       # OpenAI-compatible LLM provider for cloud APIs.
+│   │   │   ├── parallel.py                              # Parallel execution of batched language-model calls (strand rel-history).
 │   │   │   └── refusal.py                               # Permanent-refusal detection + fallback provider for core LLM lanes.
 │   │   ├── models/                                      # Shared document intermediate representation.
 │   │   │   ├── MODULE.md
@@ -526,6 +528,8 @@ nora/
 │       ├── test_last_run_req_id.py                      # Tests for ``RequirementIdPattern.anchor`` extraction modes.
 │       ├── test_layout_fusion.py                        # Extractor fusion of a LayoutProvider's tables/figures into the pymupdf text
 │       ├── test_layout_provider_foundation.py           # Phase-1 foundation for the Docling/LayoutProvider integration (mno-c-ingestion).
+│       ├── test_llm_batching.py                         # Size-bounded batching (core/src/llm/batching.py, strand rel-history):
+│       ├── test_llm_parallel.py                         # Parallel runner (core/src/llm/parallel.py, strand rel-history): N in
 │       ├── test_llm_refusal.py                          # Refusal detection + fallback provider (core twin of the sandbox
 │       ├── test_model_discovery.py                      # Model discovery cache for the Ask page (strand llm-model-discovery).
 │       ├── test_models_fingerprint.py                   # Fingerprints — text_fp (the cross-store join key) and the History
