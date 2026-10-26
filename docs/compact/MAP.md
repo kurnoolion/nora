@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-10-25 by regen-map. Do not hand-edit.
+Generated 2026-10-26 by regen-map. Do not hand-edit.
 
 ## Modules
 
