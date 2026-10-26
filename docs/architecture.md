@@ -1041,7 +1041,8 @@ erDiagram
   `edits`.
 - The six query kinds: `req_history`, `plan_history`, `last_changed`,
   `plan_last_changed`, `diff_releases` (kind tallies and row counts per
-  plan and per containing section, the ten most changed sections by rows,
+  plan and per containing section — the nearest real section node, else a
+  two-level outline prefix — the ten most changed sections by edit rows,
   change rows with optional word diffs; kinds can overlap on one row, so
   `rows` and `renamed_pairs` are reported beside the tallies),
   `latest_changes`. Release bounds default to oldest → latest; an

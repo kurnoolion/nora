@@ -653,12 +653,16 @@ class SqliteHistoryStore:
         return changes
 
 
-def containing_section(kind: str, local_id: str, section: str, parent_section: str = "") -> str:
+def containing_section(kind: str, local_id: str, section: str, parent_section: str = "",
+                       section_numbers: "Iterable[str]" = ()) -> str:
     """The section a change row is counted under. A section node is its
-    own; a requirement's is its parent section node when the tree gives
-    one, else the outline prefix of its own number (`2.2.62` → `2.2`):
-    most corpora hang requirements under requirements or the plan root,
-    never under a section node, so the tree parent is usually no help.
+    own. A requirement's is, in order: its parent section node when the
+    tree gives one; else the nearest real section node whose number is a
+    prefix of its own (`5.1.39.4` under sections `5`, `5.1` → `5.1`);
+    else its own number without the last component, capped at two levels
+    (`2.2.62` → `2.2`, `1.11` → `1`). Most corpora hang requirements
+    under requirements or the plan root, never under a section node, and
+    nested requirements run four or more levels deep, hence the roll-up.
     `""` = plan level."""
     if kind == SECTION:
         return local_id
@@ -667,7 +671,15 @@ def containing_section(kind: str, local_id: str, section: str, parent_section: s
     if parent_section:
         return parent_section
     parts = [p for p in str(section or "").split(".") if p]
-    return ".".join(parts[:-1]) if len(parts) > 1 else ""
+    if len(parts) < 2:
+        return ""
+    best = ""
+    for num in section_numbers:
+        nparts = [p for p in str(num).split(".") if p]
+        if nparts and len(nparts) < len(parts) and parts[:len(nparts)] == nparts \
+                and len(nparts) > len(best.split(".")) - (0 if best else 1):
+            best = ".".join(nparts)
+    return best or ".".join(parts[:-1][:2])
 
 
 def _location_kinds(loc_a: str, loc_b: str, sa: "dict | None" = None,
@@ -728,6 +740,8 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
             parent = json.loads(s[k]["location_json"]).get("parent")
             if parent:
                 kids.setdefault(parent, []).append(k)
+    section_numbers = sorted({n["local_id"] for s in (sa, sb) for n in s.values()
+                              if n["kind"] == SECTION})
     out: list[dict] = []
     seen: set[str] = set()
     stack = [root]
@@ -764,7 +778,8 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
                                     else loc.get("section", "")),
                         "parent_section": containing_section(
                             n["kind"], n["local_id"], loc.get("section", ""),
-                            pnode["local_id"] if pnode and pnode["kind"] == SECTION else ""),
+                            pnode["local_id"] if pnode and pnode["kind"] == SECTION else "",
+                            section_numbers),
                         "change": kinds,
                         **({"renumber": renumber, "renumbered_from": old_section}
                            if "renumbered" in kinds else {}),
@@ -812,8 +827,9 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
     from one release (``absent_plans``: a plan node added or removed),
     ``rows`` the number of change rows and ``renamed_pairs`` the number of
     rename annotations. Sections aggregate by the row's containing
-    section (``parent_section``) and are ranked by rows, so a plan with
-    one requirement per numbered section still ranks its sections."""
+    section (``parent_section``) and are ranked by rows over the edit
+    rows (absent plans excluded), so a plan with one requirement per
+    numbered section still ranks its sections."""
     def zero() -> dict[str, int]:
         return {k: 0 for k in CHANGE_KINDS}
 
@@ -843,8 +859,9 @@ def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
             p["counts"][k] += 1
             sec[k] += 1
     ranked = sorted(((v["rows"], plan, sec, v)
-                     for plan, p in plans.items() for sec, v in p["sections"].items()),
-                    key=lambda t: (-t[0], t[1], t[2]))
+                     for plan, p in plans.items() if plan not in absent
+                     for sec, v in p["sections"].items()),
+                    key=lambda t: (-t[0], t[1], t[2]))      # edit rows only
     return {
         "mno": mno, "from": rel_a, "to": rel_b,
         "counts": counts,

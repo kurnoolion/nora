@@ -219,6 +219,12 @@ def test_containing_section_prefers_tree_parent_then_outline_prefix():
     assert containing_section("requirement", "R1", "5.1.39", "") == "5.1"
     assert containing_section("requirement", "R1", "2", "") == ""              # top-level number: plan level
     assert containing_section("requirement", "R1", "", "") == ""
+    # nested requirements roll up: nearest real section node, else two levels
+    secs = ["5", "5.1", "2", "2.2", "2.2.52"]
+    assert containing_section("requirement", "R1", "5.1.39.4", "", secs) == "5.1"
+    assert containing_section("requirement", "R1", "2.2.52.3", "", secs) == "2.2.52"
+    assert containing_section("requirement", "R1", "1.15.16.2", "", secs) == "1.15"
+    assert containing_section("requirement", "R1", "1.11", "", secs) == "1"
 
 
 def test_summary_separates_absent_plans():
@@ -237,6 +243,7 @@ def test_summary_separates_absent_plans():
     assert s["edits"]["changed"] == 1 and s["rows"] == 3
     assert s["plans"]["PLANX"]["present"] == {"from": True, "to": False}
     assert s["plans"]["PLANA"]["present"] == {"from": True, "to": True}
+    assert [t["plan_id"] for t in s["most_changed_sections"]] == ["PLANA"]   # edit rows only
 
 
 def test_req_history_text_change_with_word_diff(built):
