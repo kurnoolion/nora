@@ -698,12 +698,20 @@ def _descend(root: str, sa: dict[str, dict], sb: dict[str, dict]) -> list[dict]:
         if kinds:
             n = y or x
             loc = json.loads(n["location_json"])
+            parent = loc.get("parent") or ""
+            pnode = sb.get(parent) or sa.get(parent)
             out.append({"key": key, "node": n["kind"], "plan_id": n["plan_id"],
                         "local_id": n["local_id"],
                         # what /req/last-changed and req_history take
                         "req_id": n["local_id"] if n["kind"] == REQUIREMENT else "",
                         "section": (n["local_id"] if n["kind"] == SECTION
                                     else loc.get("section", "")),
+                        # the containing section: a section is its own;
+                        # a requirement's is its parent section ("" = plan level)
+                        "parent_section": (n["local_id"] if n["kind"] == SECTION
+                                           else (pnode["local_id"]
+                                                 if pnode and pnode["kind"] == SECTION
+                                                 else "")),
                         "change": kinds,
                         "_fa": x["text_fp"] if x else "",
                         "_fb": y["text_fp"] if y else ""})
@@ -740,28 +748,42 @@ def _change_diff(c: dict, texts: dict[str, tuple]) -> "dict | None":
 
 
 def _summary(mno: str, rel_a: str, rel_b: str, changes: list[dict]) -> dict:
-    """Deterministic counts per kind, per plan and per section."""
+    """Deterministic counts per kind, per plan and per containing section.
+
+    Kinds overlap on a row (a renamed pair is also added + removed; a row
+    can be changed and moved), so ``counts`` are kind tallies, ``rows``
+    is the number of change rows and ``renamed_pairs`` the number of
+    rename annotations. Sections aggregate by the row's containing
+    section (``parent_section``) and are ranked by rows, so a plan with
+    one requirement per numbered section still ranks its sections."""
     def zero() -> dict[str, int]:
         return {k: 0 for k in CHANGE_KINDS}
 
     counts = zero()
     plans: dict[str, dict] = {}
     for c in changes:
-        p = plans.setdefault(c["plan_id"], {"counts": zero(), "sections": {}})
-        sec = p["sections"].setdefault(c["section"], zero())
+        p = plans.setdefault(c["plan_id"], {"counts": zero(), "rows": 0, "sections": {}})
+        p["rows"] += 1
+        sec = p["sections"].setdefault(c.get("parent_section", c["section"]),
+                                       {"rows": 0, **zero()})
+        sec["rows"] += 1
         for k in c["change"]:
             counts[k] += 1
             p["counts"][k] += 1
             sec[k] += 1
-    ranked = sorted(((sum(v.values()), plan, sec)
+    ranked = sorted(((v["rows"], plan, sec, v)
                      for plan, p in plans.items() for sec, v in p["sections"].items()),
                     key=lambda t: (-t[0], t[1], t[2]))
     return {
         "mno": mno, "from": rel_a, "to": rel_b,
         "counts": counts,
+        "rows": len(changes),
+        "renamed_pairs": sum(1 for c in changes if "likely_renamed" in c["change"]),
         "plans": {k: plans[k] for k in sorted(plans)},
-        "most_changed_sections": [{"plan_id": p, "section": s, "changes": n}
-                                  for n, p, s in ranked[:10]],
+        "most_changed_sections": [
+            {"plan_id": p, "section": s, "rows": n,
+             "kinds": {k: v[k] for k in CHANGE_KINDS if v[k]}}
+            for n, p, s, v in ranked[:10]],
         "changes": sorted(changes, key=lambda c: (c["plan_id"], c["key"])),
     }
 

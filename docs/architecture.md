@@ -1029,9 +1029,11 @@ erDiagram
   `subtree_fp` different), `likely_renamed` (annotation on an added and
   removed pair; both still count).
 - The six query kinds: `req_history`, `plan_history`, `last_changed`,
-  `plan_last_changed`, `diff_releases` (counts per kind, per plan and per
-  section, the ten most changed sections, change rows with optional word
-  diffs), `latest_changes`. Release bounds default to oldest → latest; an
+  `plan_last_changed`, `diff_releases` (kind tallies and row counts per
+  plan and per containing section, the ten most changed sections by rows,
+  change rows with optional word diffs; kinds can overlap on one row, so
+  `rows` and `renamed_pairs` are reported beside the tallies),
+  `latest_changes`. Release bounds default to oldest → latest; an
   unknown label raises `ValueError` (400 over HTTP).
 
 How intervals read, for one requirement across four releases:

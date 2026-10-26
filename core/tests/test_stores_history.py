@@ -126,9 +126,9 @@ def test_step_jan_apr_changed_moved_removed_and_no_ops(built):
     assert s["counts"] == {"added": 0, "removed": 1, "changed": 2, "moved": 1,
                            "reordered": 0, "likely_renamed": 0}
     assert list(s["plans"]) == ["PLANA"]            # PLANB never descended
-    secs = s["plans"]["PLANA"]["sections"]
-    assert secs["1.1"]["changed"] == 1 and secs["1.4"]["moved"] == 1
-    assert secs["2.3"]["removed"] == 1
+    secs = s["plans"]["PLANA"]["sections"]        # keyed by containing section
+    assert secs["1"]["changed"] == 2 and secs["1"]["moved"] == 1 and secs["1"]["rows"] == 3
+    assert secs["2"]["removed"] == 1 and secs["2"]["rows"] == 1
 
 
 def test_step_apr_jul_renumber_rename_and_readd(built):
@@ -166,6 +166,30 @@ def test_diff_non_adjacent_and_self(built):
     assert h.diff_releases(MNO, "", "")["from"] == "Jan2031"
     with pytest.raises(ValueError):
         h.diff_releases(MNO, "Jan2031", "Dec2099")
+
+
+def test_summary_ranks_containing_sections_by_rows(built):
+    """Jan→Apr: R1, R2 changed and R4 moved into sec 1; R6 removed from
+    sec 2. Sections aggregate by the row's containing section and rank by
+    rows; kind tallies may overlap a row, so rows and renamed_pairs are
+    reported beside them."""
+    h, _, _ = built
+    d = h.diff_releases(MNO, "Jan2031", "Apr2031")
+    top = d["most_changed_sections"]
+    assert [(t["plan_id"], t["section"], t["rows"]) for t in top[:2]] == \
+        [("PLANA", "1", 3), ("PLANA", "2", 1)]
+    assert top[0]["kinds"] == {"changed": 2, "moved": 1}
+    assert top[1]["kinds"] == {"removed": 1}
+    assert d["rows"] == len(d["changes"]) == 4
+    assert d["renamed_pairs"] == 0
+    assert d["plans"]["PLANA"]["rows"] == 4
+    assert d["plans"]["PLANA"]["sections"]["1"]["rows"] == 3
+    assert all(c["parent_section"] in {"1", "2"} for c in d["changes"])
+    # Apr→Jul: SEC_2 renumbered 2→3 and R3 renamed R3X are two rename pairs,
+    # each also counted as added + removed in the kind tallies
+    j = h.diff_releases(MNO, "Apr2031", "Jul2031")
+    assert j["renamed_pairs"] == 2
+    assert j["counts"]["added"] >= j["renamed_pairs"]
 
 
 def test_req_history_text_change_with_word_diff(built):
