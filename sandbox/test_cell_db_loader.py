@@ -38,6 +38,18 @@ QUERIES = [t for _, t, _ in DOCS] + ["emergency callback mode", "network attach"
 PHRASES = [["cbm"], [], [], ["attach"], [], ["callback service"], ["attach", "registration"]]
 
 
+@pytest.fixture(autouse=True)
+def _restore_service_module():
+    """`load_service` reloads the service module under a patched env.
+    monkeypatch restores the env at teardown but not the module, so
+    without this every later test in the process would see cell-db mode
+    (a labeled reload then answers 409). Teardown order puts monkeypatch
+    first, so the env is back to the runner's by the time this reloads."""
+    yield
+    import core.src.store_service.service as service
+    importlib.reload(service)
+
+
 def make_flat_cells(db_root: Path) -> None:
     for mno, release in (("mnoa", "Apr2098"), ("mnob", "Apr2098")):
         base = db_root / f"{mno}__{release}"
