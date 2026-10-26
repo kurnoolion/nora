@@ -1203,7 +1203,8 @@ erDiagram
     TEXT file "relative path under the serving root"
     TEXT sha256 "of the file as staged"
     INTEGER bytes
-    TEXT schema_version "reuse keys on fingerprint + schema"
+    TEXT schema_version "reuse keys on fingerprint + schema + fingerprint_version"
+    TEXT fingerprint_version "canonical-form version of the file's hashes; additive column"
     TEXT staged_at
     TEXT staged_by
     TEXT removed_at "set by gc; the row stays"
@@ -1253,9 +1254,11 @@ erDiagram
 
 Rules:
 
-- **Reuse:** `find_version(store, unit, fingerprint, schema_version)`
-  returns the newest live version with the same content and schema. The
-  same source converted by a newer schema serves as new content. History
+- **Reuse:** `find_version(store, unit, fingerprint, schema_version,
+  fingerprint_version)` returns the newest live version with the same
+  content, schema and canonical-form version. The same source converted
+  by a newer schema, or hashed under a newer canonical form, serves as
+  new content; after a canonical-form bump every unit republishes once. History
   keys on a hash of its Trees inputs, so the reuse decision is made
   before any build.
 - **Completeness:** a release set names every unit the stack serves.

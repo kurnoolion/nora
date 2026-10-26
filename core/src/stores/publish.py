@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
 
+from core.src.models.fingerprint import FINGERPRINT_VERSION
 from core.src.pipeline.error_codes import PipelineError
 from core.src.stores.registry import (
     FLIP_MODES,
@@ -90,6 +91,7 @@ class UnitSource:
     schema_version: str
     path: Path
     meta: dict = field(default_factory=dict)
+    fingerprint_version: str = ""
 
 
 def read_unit_meta(path: Path) -> dict[str, str]:
@@ -125,7 +127,7 @@ def unit_source(store: str, path: Path) -> UnitSource:
     if not mno or (store != "history" and not rel) or not fp:
         raise PipelineError("PUB-E002", {"path": str(path), "reason": "meta lacks identity"})
     return UnitSource(store, unit_name(mno, rel), fp, meta.get("schema_version", ""),
-                      Path(path), meta)
+                      Path(path), meta, meta.get("fingerprint_version", ""))
 
 
 def scan_units(store: str, src_dir: "str | Path") -> list[UnitSource]:
@@ -317,7 +319,8 @@ def plan_release_set(reg: Registry, label: str, *, cells: list[UnitSource],
     assigned: dict[tuple[str, str], int] = {}
 
     def place(us: UnitSource) -> None:
-        existing = reg.find_version(us.store, us.unit, us.fingerprint, us.schema_version)
+        existing = reg.find_version(us.store, us.unit, us.fingerprint, us.schema_version,
+                                    fingerprint_version=us.fingerprint_version)
         if existing is not None:
             plan.reused.append(existing)
             return
@@ -343,7 +346,8 @@ def plan_release_set(reg: Registry, label: str, *, cells: list[UnitSource],
     to_build: list[str] = []
     for mno in sorted(fps):
         fp = history_fingerprint(fps[mno])
-        existing = reg.find_version("history", mno, fp, schema_version=None)
+        existing = reg.find_version("history", mno, fp, schema_version=None,
+                                    fingerprint_version=FINGERPRINT_VERSION)
         if existing is not None:
             plan.reused.append(existing)
         else:
@@ -456,7 +460,8 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
                 sha, n = transfer.put(p.source.path, p.rel_file)
                 staged.append(p.rel_file)
                 new_units.append(NewUnit(p.source.store, p.source.unit, p.source.fingerprint,
-                                         p.rel_file, sha, n, p.source.schema_version))
+                                         p.rel_file, sha, n, p.source.schema_version,
+                                         p.source.fingerprint_version))
             reg.record_release_set(
                 con, label, new_units, plan.reused,
                 versions={(p.source.store, p.source.unit): p.version for p in plan.new},

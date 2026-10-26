@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS store_version(
   sha256         TEXT    NOT NULL,
   bytes          INTEGER NOT NULL,
   schema_version TEXT    NOT NULL DEFAULT '',
+  fingerprint_version TEXT NOT NULL DEFAULT '',
   staged_at      TEXT    NOT NULL,
   staged_by      TEXT    NOT NULL DEFAULT '',
   removed_at     TEXT    NOT NULL DEFAULT '',
@@ -126,6 +127,7 @@ class StoreVersion:
     staged_at: str = ""
     staged_by: str = ""
     removed_at: str = ""
+    fingerprint_version: str = ""   # canonical-form version of the file's hashes
 
     @property
     def key(self) -> tuple[str, str]:
@@ -142,6 +144,7 @@ class NewUnit:
     sha256: str
     bytes: int
     schema_version: str = ""
+    fingerprint_version: str = ""
 
 
 def now_iso() -> str:
@@ -215,6 +218,11 @@ class Registry:
             for stmt in _SCHEMA.split(";"):      # executescript would commit
                 if stmt.strip():
                     con.execute(stmt)
+            # additive column (D-281: no version bump, readers tolerate absence)
+            cols = {r[1] for r in con.execute("PRAGMA table_info(store_version)")}
+            if "fingerprint_version" not in cols:
+                con.execute("ALTER TABLE store_version ADD COLUMN fingerprint_version "
+                            "TEXT NOT NULL DEFAULT ''")
             found = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if found is None:
                 con.execute("INSERT INTO meta(key, value) VALUES ('schema_version', ?)",
@@ -243,14 +251,18 @@ class Registry:
             fingerprint=row["fingerprint"], file=row["file"], sha256=row["sha256"],
             bytes=int(row["bytes"]), schema_version=row["schema_version"],
             staged_at=row["staged_at"], staged_by=row["staged_by"],
-            removed_at=row["removed_at"])
+            removed_at=row["removed_at"],
+            fingerprint_version=(row["fingerprint_version"]
+                                 if "fingerprint_version" in row.keys() else ""))
 
     def find_version(self, store: str, unit: str, fingerprint: str,
-                     schema_version: "str | None" = "") -> "StoreVersion | None":
+                     schema_version: "str | None" = "",
+                     fingerprint_version: "str | None" = None) -> "StoreVersion | None":
         """The newest live (not removed) version of a unit with this content
         identity, or None. ``schema_version`` must match too (None = any):
         the same source converted by a newer schema is new content for
-        serving."""
+        serving; so is the same source hashed under a newer canonical form
+        (``fingerprint_version``; None = any)."""
         con = self._connect()
         try:
             sql = ("SELECT * FROM store_version WHERE store=? AND unit=? AND fingerprint=? "
@@ -259,6 +271,9 @@ class Registry:
             if schema_version is not None:
                 sql += " AND schema_version=?"
                 args.append(schema_version)
+            if fingerprint_version is not None:
+                sql += " AND fingerprint_version=?"
+                args.append(fingerprint_version)
             row = con.execute(sql + " ORDER BY version DESC LIMIT 1", args).fetchone()
             return self._sv(row) if row else None
         finally:
@@ -344,12 +359,13 @@ class Registry:
             ver = (versions or {}).get((nu.store, nu.unit)) or self.next_version(con, nu.store, nu.unit)
             con.execute(
                 "INSERT INTO store_version(store, unit, version, fingerprint, file, sha256, "
-                "bytes, schema_version, staged_at, staged_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "bytes, schema_version, fingerprint_version, staged_at, staged_by) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (nu.store, nu.unit, ver, nu.fingerprint, nu.file, nu.sha256, nu.bytes,
-                 nu.schema_version, at, created_by))
+                 nu.schema_version, nu.fingerprint_version, at, created_by))
             members.append(StoreVersion(nu.store, nu.unit, ver, nu.fingerprint, nu.file,
                                         nu.sha256, nu.bytes, nu.schema_version, at,
-                                        created_by))
+                                        created_by, fingerprint_version=nu.fingerprint_version))
         members.extend(reused)
         seen: set[tuple[str, str]] = set()
         for m in members:

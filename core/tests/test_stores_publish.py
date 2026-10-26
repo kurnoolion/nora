@@ -59,7 +59,8 @@ def make_env(env: Path) -> None:
     write_parse(env, MNO_B, R1, "docB", [_req("REQ_B_1", section="1")])
 
 
-def make_cell_db(path: Path, mno: str, rel: str, fingerprint: str, schema: str = "2") -> None:
+def make_cell_db(path: Path, mno: str, rel: str, fingerprint: str, schema: str = "2",
+                 fpv: str = "v3") -> None:
     """A meta-only cell DB: all publish reads from a Cells unit."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -68,7 +69,7 @@ def make_cell_db(path: Path, mno: str, rel: str, fingerprint: str, schema: str =
     con.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     con.executemany("INSERT INTO meta VALUES (?,?)", [
         ("schema_version", schema), ("cell_mno", mno), ("cell_release", rel),
-        ("source_fingerprint", fingerprint), ("fingerprint_version", "v2")])
+        ("source_fingerprint", fingerprint), ("fingerprint_version", fpv)])
     con.execute("CREATE TABLE corpus(doc TEXT, req_id TEXT, title TEXT, text TEXT)")
     con.execute("INSERT INTO corpus VALUES ('d', 'r', 't', ?)", (fingerprint,))
     con.commit()
@@ -147,6 +148,44 @@ def test_first_publish_stages_every_unit_and_builds_history(world):
     # nothing active yet; set recorded with code_version attribution
     assert reg.active() == []
     assert reg.release_set("set-1")["created_at"]
+
+
+def test_canonical_form_version_is_part_of_unit_identity(world):
+    """Same source, same schema, hashes under a newer canonical form: a new
+    Cells version, not a reuse (the file's fingerprint columns differ)."""
+    from core.src.stores.registry import Registry, registry_path
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1", fpv="v2")
+    do_publish(world, "set-1", base="none")
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1", fpv="v3")
+    out = do_publish(world, "set-2")
+    assert f"cells/{MNO_A}__{R1}@v2" in out["new_units"]
+    reg = Registry(registry_path(world["root"]))
+    rows = reg.versions("cells", f"{MNO_A}__{R1}")
+    assert [(r.version, r.fingerprint_version) for r in rows] == [(1, "v2"), (2, "v3")]
+    assert reg.find_version("cells", f"{MNO_A}__{R1}", "fp-a1", "2", fingerprint_version="v2").version == 1
+    assert reg.find_version("cells", f"{MNO_A}__{R1}", "fp-a1", "2").version == 2   # any version: newest
+
+
+def test_registry_adds_the_fingerprint_version_column_to_an_older_file(tmp_path):
+    """A registry written before the column exists gains it on ensure();
+    rows read back with the empty default."""
+    import sqlite3
+    from core.src.stores.registry import _SCHEMA, Registry, SCHEMA_VERSION
+    path = tmp_path / "registry.db"
+    con = sqlite3.connect(path)
+    for stmt in _SCHEMA.replace("  fingerprint_version TEXT NOT NULL DEFAULT '',\n", "").split(";"):
+        if stmt.strip():
+            con.execute(stmt)
+    con.execute("INSERT INTO meta VALUES ('schema_version', ?)", (SCHEMA_VERSION,))
+    con.execute("INSERT INTO store_version(store, unit, version, fingerprint, file, sha256, bytes, "
+                "schema_version, staged_at) VALUES ('cells','m__r',1,'fp','cells/x.db','s',1,'2','t')")
+    con.commit(); con.close()
+    assert "fingerprint_version" not in {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(store_version)")}
+    Registry(path, read_only=False).ensure()
+    assert "fingerprint_version" in {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(store_version)")}
+    sv = Registry(path).find_version("cells", "m__r", "fp", "2")
+    assert sv is not None and sv.fingerprint_version == ""
+    assert Registry(path).find_version("cells", "m__r", "fp", "2", fingerprint_version="v3") is None
 
 
 def test_republish_same_sources_reuses_everything(world):
