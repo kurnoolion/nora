@@ -1043,7 +1043,7 @@ the next release when the text is unchanged. With both a/b stacks live, set
 ## Stores (nora-web is a client)
 
 nora-store hosts every persistent corpus store (strand corp-db-layer S6,
-D-DRAFT-28) as JSON routes under `/stores/<store>/v1`:
+D-280) as JSON routes under `/stores/<store>/v1`:
 
 | store | routes | backed by | writes |
 |---|---|---|---|

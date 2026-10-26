@@ -1,8 +1,8 @@
 # corp-db-layer
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-10-08
-**Landed:**
+**Landed:** 2026-10-25
 **Assignees:** kurnoolion
 **Target modules:** stores, store_service, models, web, pipeline, env, llm (docker)
 **Active phase:** architecture
@@ -43,3 +43,5 @@ corp transfer and corp backend (a later 4c strand); the web runtime DBs
 (a separate strand) — the Summary above named them, they stay
 nora-web's own files for now. Host retirement of the flat path (env
 backups, pre-4a image sets, label directories) follows a soak.
+
+Landed on 2026-10-25 with 33 promoted decisions: D-255, D-256, D-257, D-258, D-259, D-260, D-261, D-262, D-263, D-264, D-265, D-266, D-267, D-268, D-269, D-270, D-271, D-272, D-273, D-274, D-275, D-276, D-277, D-278, D-279, D-280, D-281, D-282, D-283, D-284, D-285, D-286, D-287. Deferred, kept here: D-DRAFT-5, D-DRAFT-21.

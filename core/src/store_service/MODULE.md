@@ -1,7 +1,7 @@
 # store_service
 
 **Purpose**
-The `nora-store` process: the one service in a serving stack that holds corpus data. It loads the Cells store (flat SIRA cell directories in dev, cell DBs, or — served stacks — the publish registry's active release set), composes the Overlay onto every cell at load, answers retrieval (`POST /query`: scope resolution, query expansion, per-cell BM25, rerank, fusion), serves the review surface (`/cells*`), hosts the four store routers under `/stores/<store>/v1` (D-DRAFT-28, corp-db-layer) and is the Overlay's single writer. Moved from the top level (`nora_store`) to `core/src` on 2026-10-25 so the structure rule holds: it imports only core. Design and flows: `docs/architecture.md` §7, §22, §23.
+The `nora-store` process: the one service in a serving stack that holds corpus data. It loads the Cells store (flat SIRA cell directories in dev, cell DBs, or — served stacks — the publish registry's active release set), composes the Overlay onto every cell at load, answers retrieval (`POST /query`: scope resolution, query expansion, per-cell BM25, rerank, fusion), serves the review surface (`/cells*`), hosts the four store routers under `/stores/<store>/v1` (D-280, corp-db-layer) and is the Overlay's single writer. Moved from the top level (`nora_store`) to `core/src` on 2026-10-25 so the structure rule holds: it imports only core. Design and flows: `docs/architecture.md` §7, §22, §23.
 
 **Public surface**
 - ASGI app `core.src.store_service.service:app` (the image CMD). Routes: `POST /query` (`{query, top_k?, label?, text_chars?}` → ranked rows with `(mno, release)` provenance, `resolved_cells`, `unresolved`, timings); `GET /cells?label=`; `GET /cells/{cell}/plans?label=`; `GET /cells/{cell}/enrichments?plan&req_id&label`; `POST /cells/{cell}/reload?label=` (409 for a schema-1 cell DB); `POST /registry/reload` (`{release_set, changed, prompts_loaded, missing_prompts}`); `GET /healthz` (identity, health, stores, knobs, prompts — key list in `docs/architecture.md` §7.3); the hosted routers `/stores/cells/v1` (`stores_api.py`: `cells`, `/{mno}/{rel}/meta|rows|phrases|effective`) and `/stores/{trees,history,overlay}/v1` (`core.src.stores.api`, mounted by `stores_api.mount(app)`).
@@ -14,7 +14,7 @@ The `nora-store` process: the one service in a serving stack that holds corpus d
 
 **Invariants**
 - One registry resolution per load / reload (`_registry_resolve`, cached): Cells, Trees, History and `/healthz` report the same set until the next reload; a flip in progress is never visible as a mixed set.
-- The Overlay is composed in memory; the on-disk index and the cell files are never written (`disable_auto_save` after every BM25 load — D-DRAFT-7; cell DBs opened `mode=ro&immutable=1`).
+- The Overlay is composed in memory; the on-disk index and the cell files are never written (`disable_auto_save` after every BM25 load — D-260; cell DBs opened `mode=ro&immutable=1`).
 - When this process is the Overlay authority (local backend opened read-write) every write to `/stores/overlay/v1` runs in one backend transaction; otherwise writes answer 409 and the Overlay is read from `NORA_OVERLAY_URL`.
 - Reload swaps a cell under a per-cell lock; in-flight queries finish on the old state. A labeled reload rebuilds only that label's variant; a default-view reload drops every variant of the cell.
 - `sira_prompt_scheme` on `/healthz`: `SIRA_PROMPT_SCHEME` env, else the served release set's `prompt_scheme`, else the label manifest.
@@ -23,7 +23,7 @@ The `nora-store` process: the one service in a serving stack that holds corpus d
 - No requirement text in logs or error payloads; `/cells/{cell}/enrichments` is the one route that returns requirement text, to the review page.
 
 **Key choices**
-- Composition at load, no cache (D-DRAFT-23); schema-2 cell files hold the vanilla index and raw phrases only, so a file is a function of the build and the Overlay changes without a rebuild.
+- Composition at load, no cache (D-275); schema-2 cell files hold the vanilla index and raw phrases only, so a file is a function of the build and the Overlay changes without a rebuild.
 - Scope extraction uses the same `QueryType` analyzer as the web (`make_query_analyzer_from_knob`); retrieval does not vary by query type, scope and synthesis do.
 - Expansion once per query, DF-filtered per cell against that cell's `max_df`; rerank over the merged pool with each cell's corpus text; balanced fusion keeps every resolved cell represented in a multi-MNO answer.
 - The service derives the SIRA clone root and the repo root from its own file (`parents[3]`); `test_store_service_package_paths` pins that after two package moves.

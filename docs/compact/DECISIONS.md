@@ -8940,3 +8940,300 @@ resumes. The golden eval (FR-38) is the acceptance measure (NFR-15); the
 graph vs pure-RAG A/B (FR-21) waits with the graph. Code for the disabled
 stages stays and keeps its tests, so re-enabling is a configuration change
 plus whatever the graph work adds.
+
+## D-255: One write-once SQLite cell DB per (MNO, release) version
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** One SQLite file per cell version, `cell-<mno>-<release>-v<N>.db`, built then renamed into place, opened read-only and immutable. A small registry is the only mutable corpus-side state.
+**Why.** Incremental push is a file copy, rollback is a pointer move, a bad transfer harms one cell, and BM25 statistics are per cell anyway. Rejected: one big DB (loses all of that); one DB per MNO (gives up write-once).
+**Consequences.** Many files at scale, opened lazily; schema changes are republishes, never in-place ALTERs; serving resolves cell to file through the registry.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-1, 2026-10-09).
+
+## D-256: Engine-agnostic index payload; one engine per stack; eval adjudicates
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** The cell DB carries the serialized `bm25x` engine state as compressed blobs; the service selects one engine per stack (`bm25x` | `fts5`) at startup; the golden eval adjudicates. Adjudicated 2026-10-11: production engine `bm25x`; `fts5` quality-indistinguishable and kept as the alternate, not shipped.
+**Why.** Commits to the file format, not an engine, so an engine change is an eval-gated config flip. Rejected: dumped postings tables (`bm25x` ranking cannot be reproduced from a textbook dump); a rebuild-from-rows engine (build parameters are not recorded); Tantivy, DuckDB FTS, Postgres extensions (new runtimes for corp).
+**Consequences.** Compression is load-bearing (about 500:1 on the hashed slot table); the blob engine is the byte-exact parity control; `NORA_SIRA_ENGINE=memory` fails loudly.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-2, 2026-10-09, amended 2026-10-11).
+
+## D-257: Converter parity by construction, with mandatory self-verify
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** The converter builds the index with `bm25x`'s own calls and stores what it computed; every cell then self-verifies: probe queries through the in-memory index and through the stored payload must rank identically, or the conversion fails.
+**Why.** Parity is structural, not asserted; a dump bug becomes a build-time failure instead of a serving-time ranking drift.
+**Consequences.** The converter imports `bm25x` and lives in `sandbox/`; conversion includes a full index build per cell (about 0.3 s per thousand rows); the `bm25x` version is recorded in `meta`.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-3, 2026-10-09).
+
+## D-258: Corp serves the Ask surface only
+**Status**: Active; the storage seam and the surface knob superseded by D-274, D-277 and D-273 · **Date**: 2026-10-25.
+
+**Decision.** Two deployment profiles, one codebase. Corp runs the two serve containers only and reads published cell data through a store seam; dev/test keeps the whole current world including ingestion. Dropped from corp: the vector store, the knowledge graph (deferred), the jobs DB, parse review, corrections and golden authoring surfaces.
+**Why.** The seam mirrors the proven `LLMProvider` pattern and touches few consumers; keeping ingestion in dev/test means corp needs no pipeline machinery.
+**Consequences.** Corp receives updated corpus incrementally through the publish pipeline; dev-only surfaces stay separable; the corp feature set is a config contract, not an accident of missing files. The single `CorpusStore` seam became the four stores (D-274, D-277); the `NORA_SURFACE` knob became the team-mode gate (D-273).
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-4, 2026-10-09; edited at landing).
+
+## D-259: Corpus rows are position- and byte-faithful; no unique id key
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** The cell DB keeps every corpus row in file order (`doc` = position); `req_id` is indexed but not unique; id lookup is last-wins.
+**Why.** The index scores rows positionally, so dedup at convert time would desynchronize numbering and corrupt retrieval; real cells carry duplicate doc and section rows. Last-wins mirrors the serving loader exactly.
+**Consequences.** Consumers never assume id uniqueness. Duplicates inflate those rows' BM25 statistics in every stack today; parity preserves it, and the cleanup is a pipeline question, not a storage one.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-6, 2026-10-11).
+
+## D-260: `disable_auto_save()` after every BM25 load
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Every `BM25.load` in serving, tooling and the converter is followed by `disable_auto_save()`; tests pin both the constructor-form hazard and the non-mutation of loaded indexes.
+**Why.** `bm25x`'s constructor form auto-saves after every mutation, enrichment included, and enrichment accumulates; a path-bound index enriched at startup would compound into the label across restarts. "Safe by API form" becomes "safe by contract".
+**Consequences.** A future `bm25x` version or API change cannot silently mutate a label; the pinning test says when the guard becomes load-bearing or obsolete.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-7, 2026-10-11).
+
+## D-261: Identity gates run over deterministic paths only; retrieval-shaping knobs are comparability keys
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Identity gates (cell-db stack equals flat stack id-for-id) run with query expansion OFF on both sides, after a within-stack repeat check; quality comparisons run in normal config and are judged against measured run-to-run noise floors. `index_mode` and `engine` ride the healthz `retrieval_knobs` dict so configurations that differ in either never share a stamp.
+**Why.** The expansion endpoint ignores temperature 0, so an identity assertion over it tests the model's dice, not the index. Two stacks differing only in engine had pooled as one.
+**Consequences.** Gate runs need a config flip and a verified restore; every new retrieval-shaping setting joins `retrieval_knobs` or stamps falsely pool; the first Stage-2 noise floor (judge mean ±0.5, median ±1.7) bounds what Stage 2 can claim.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-8, 2026-10-11).
+
+## D-262: Campaign snapshots are frozen read-only copies with recorded digests
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** A campaign snapshot is a copy outside any container mount, write permission removed, sample-set digest recorded beside it; runs use a working dir seeded from it and carry the digest in their stamp. The live golden dir stays the web app's working dir.
+**Why.** The "snapshot" had been a writer's mount point and gained samples after the fact; one directory cannot be both curation target and frozen denominator.
+**Consequences.** A one-time freeze step per campaign; drift is detected mechanically (runs stop pooling).
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-9, 2026-10-11).
+
+## D-263: Batched enrichment is production; overlap judged by word-level Jaccard against the same-mode rerun noise floor
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Batched enrichment stays production. Enrichment comparisons use word-level Jaccard against the same-mode rerun floor; exact-string overlap is retired for any temperature above 0.
+**Why.** A three-arm field experiment put batched exactly at the rerun floor against serving (median 0.38 vs 0.38); single-request gave about twice the phrases at about nine times the call cost, with the least shared vocabulary. Exact overlap was near zero for every pair, including batched against itself.
+**Consequences.** Any future enrichment change must beat batched in the golden eval, not in overlap metrics. Known gap: the prompt's phrase cap is unenforced.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-10, 2026-10-16).
+
+## D-264: Best-link blessing is ours via golden eval; experiment runs use no-best mode
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** The dataset's built-in eval is inert on our corpora, so best-link movement is decided by our golden eval, never by `update_best`; experiment runs set `NORA_SIRA_SKIP_UPDATE_BEST=1`.
+**Why.** An inert scorer plus tie-wins-and-deletes semantics means any rerun would become "best" and delete the previous best's files.
+**Consequences.** Production ingestion still calls `update_best`; experiments must set the knob; pinned per-cell best links remove the residual risk later.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-11, 2026-10-16).
+
+## D-265: The taxonomy ledger is durable and loud
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** A launch line reports "N cached / M to extract" before any LLM call (TAX-I001); a prompt-fingerprint mismatch discards the ledger loudly (TAX-W006) and an all-stale run warns (TAX-W005); the ledger is saved unconditionally after the unit loop; a stamped stage implies a complete ledger.
+**Why.** A silent whole-corpus re-extract, a ledger truncated by a save-on-extraction-only rule, and a stamp over the truncated ledger each cost a full rerun or a repair session before anything announced them.
+**Consequences.** Output-changing parser updates schedule a taxonomy re-extract; a regression test pins the truncation fix.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-12, 2026-10-16).
+
+## D-266: New releases ingest under the legacy build model with enumerated guards
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** A new release lands in the live env dir through lanes scoped `--mno/--release` (additive writes); taxonomy runs corpus-wide by design but ledger-incremental; the corpus-wide rewriters are the only cross-release writes; pre-flight checks hardlink counts, and in-place fixes use copy-then-rename.
+**Why.** The write surface is known exactly, which beat deploying new build machinery mid-strand. A cell filter on taxonomy was rejected: it would break cross-release dedup for a saving the ledger already provides.
+**Consequences.** Serving sees the new release only at the next publish; the guards become structural when the cycle driver is deployed.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-13, 2026-10-16).
+
+## D-267: Enrichment traceability contract
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Every batch trace row carries a run-scoped batch id, the full `req_ids` list and measured `resp_chars`; verify-run warns on a parse-error event only while an affected requirement remains unresolved; `--req-ids FILE` selects targeted re-enrichment.
+**Why.** Diagnosing two failed batches took a full field round trip because rows carried neither ids nor sizes; a verdict that warns on self-healed transients trains people to ignore warnings.
+**Consequences.** Slightly larger rows; legacy rows resolve by coverage proof; a WARN now means work remains.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-14, 2026-10-16).
+
+## D-268: Dual-emit: the cell DB is a post-verify lane product; flat remains the lane default
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** `sira_lane --index cell-db` emits the cell DB after the lane and its verify pass, with the run name pinned and self-verify mandatory, under `<db_root>/cell-dbs/`; `--index flat` stays the default and byte-identical to before.
+**Why.** Emitting after verify means a cell DB exists only for a lane state that passed; pinning binds it to the run just built. Rejected: a post-hoc converter call, which re-resolves run selection.
+**Consequences.** Seconds of converter cost per cell; retention of emitted DBs is an ops concern. The publish pipeline converts from the flat label, so this emit is the dev path.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-15, 2026-10-16).
+
+## D-269: No built-in HuggingFace embedder or reranker; unconfigured means a clear failure or passthrough
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** The embedding provider and model have no default; `make_embedder` raises on an empty provider; readers without a store config fail with "no NORA index"; the reranker has no default provider and runs as passthrough with a warning when enabled without one; compose sets `HF_HUB_OFFLINE=1` on serve services.
+**Why.** A silent default hid misconfiguration as a hang on a download stuck at zero bytes. Keeping the default behind offline mode was rejected: it fails later and less clearly.
+**Consequences.** Every environment that builds or reads a NORA index names `NORA_EMBEDDING_PROVIDER`; the HuggingFace backends run only when named.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-16).
+
+## D-270: `promote.sh` copies the NORA vectorstore instead of hardlinking it
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Promote copies `out/vectorstore`; the rest of the serve set stays hardlinked.
+**Why.** Opening a chroma index writes `chroma.sqlite3` in place, which reached the build workspace and every label sharing the link; no open mode is known to be write-free, and the store is small.
+**Consequences.** More disk and time per promote; labels promoted earlier needed a re-copy; any other serve-set file opened read-write needs the same treatment.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-17).
+
+## D-271: The team gate refuses legacy sections instead of forcing them to SIRA
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** A gated member's `/api/test/ask` runs only `section=merged` with lanes forced to SIRA and refuses every other section; `synthesize-group` is refused outright; the admin cookie keeps the legacy paths.
+**Why.** Silently rewriting the section would return 200 for a request that asked for something else, the misreading that hid the gap.
+**Consequences.** Direct-POST clients under the gate send `section=merged`; gate-on tests cover a missing section and each legacy one.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-18).
+
+## D-272: Web refusal fallback restored for the Ask page
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Ask reroutes a permanent refusal once to the roster's `fallback_provider` on all stacks; `NORA_LLM_REFUSAL_MARKERS` is the switch; curation chat has no fallback.
+**Why.** Switching models by hand after a refusal proved inconvenient; the reroute is automatic and disclosed (D-220). Reverses the 2026-10-18 removal.
+**Consequences.** Each web env needs the markers and a distinct `fallback_provider`; removing `NORA_LLM_FALLBACK_*` alone does not disable it.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-19).
+
+## D-273: The team-mode gate replaces the planned `NORA_SURFACE` knob
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** No `NORA_SURFACE=ask|full`; corp deployments restrict the UI with the team-mode gate (FR-41).
+**Why.** The gate already limits non-admins to an allowlist and the SIRA lane; two switches for one concern were rejected.
+**Consequences.** Corp exposure is set by `NORA_WEB_TEAM_MODE` and the allowlist.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-20).
+
+## D-274: Four orthogonal stores: Cells, Trees, History, Overlay
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Split corpus data by kind into four stores, each behind its own interface (`store-split-design.md`).
+**Why.** One baked cell DB lost raw SIRA output and broke review in cell-db mode. Rejected: extending the baked DB — every new use would widen one file.
+**Consequences.** Phase 4 starts with the split; publish ships Cells, Trees and History.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-22).
+
+## D-275: The index is composed at load from separate layers; no cache
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Cells store the vanilla index and raw SIRA phrases; nora-store folds Overlay in and enriches at load. No composed-index cache.
+**Why.** Keeps layers editable and inspectable. Rejected: baking — freezes corrections; a cache — measured load 1.4 s for 40k rows (flat path 1.7 s), so it would save about 1 s per start.
+**Consequences.** Cell DB schema_version 2; an identity gate proves v2 == baked on equal inputs. Revisit the cache if load passes about 30 s.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-23).
+
+## D-276: Overlay is a live store keyed by (req_id, fingerprint), similarity-guarded
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Review edits live in a mutable Overlay store, not in published cells; an edit applies on fingerprint match, else at Jaccard ≥ 0.85 against its origin, else is held.
+**Why.** Corrections go live without republish; the guard keeps edits through trivial text changes. Rejected: exact fingerprint only — a typo fix would hold every edit.
+**Consequences.** Overlay is deployment state (backed up, not published).
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-24).
+
+## D-277: Store interfaces with local and HTTP implementations
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** One protocol per store; local backend or HTTP client chosen by `NORA_<STORE>_URL`; routes under `/stores/<store>/v1`; no store reads another's backend.
+**Why.** Stores can move to their own services by config. Rejected: four services now — deployment cost without a consumer that needs it.
+**Consequences.** Composition lives in consumers; each store has a parity test (local == HTTP).
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-25).
+
+## D-278: SQLite for the published stores; trees as parent id + materialized path
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** SQLite for Cells, Trees, History; Overlay and registry SQLite in dev/test, SQLite or Postgres in corp by deployment facts (design §9.4); tree nodes carry `parent_id` and an indexed ordinal `path`; schemas stay Postgres-portable.
+**Why.** Small, write-once, read-mostly hierarchies; path gives subtree/ancestor reads, `WITH RECURSIVE` the rest. Rejected: a graph DB — hierarchies, not graphs (the knowledge graph is separate).
+**Consequences.** Postgres maps `path` to `ltree` if corp provides it. Trees carry a casefolded id column (`req_id_cf`, Python `casefold` semantics — SQLite NOCASE folds ASCII only) and 6-digit path segments (flat documents exceed 9999 root nodes).
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-26).
+
+## D-279: Three requirement hashes; History as a Merkle tree with version intervals
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** `text_fp` (canonical v2 title + body; the shared join key), `node_fp` (+ priority, applicability) and `subtree_fp` (+ children in document order); History stores version intervals and content-addressed text, one SQLite DB per MNO (design §3, §6a).
+**Why.** Any level compares by one hash and diffs descend only into changed branches; SIRA and review edits depend on text only, History on fields too. Rejected: one hash for all uses — a priority change would stale enrichment; per-release flags only — no texts, full scans.
+**Consequences.** S1's `req_fingerprint` is replaced by `text_fp` (values versioned `v2:`); reorders show as changed, labelled "reordered". A child enters its parent's `subtree_fp` as (key, location, hash), not the bare hash — otherwise a renumbered section or a same-content rename leaves every ancestor unchanged and the diff never descends to it.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-27).
+
+## D-280: nora-store hosts every persistent corpus store; nora-web is a web layer
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** nora-store serves Cells, Trees, History and Overlay over `/stores/<store>/v1`; it is the Overlay's writer, taking edits from nora-web over HTTP; peer stores read a shared Overlay via `NORA_OVERLAY_URL`. Web runtime DBs follow later.
+**Why.** One data service: no shared mutable file between containers, no store-waits-for-web startup, only nora-store mounts data in corp. Rejected: Overlay on nora-web — a SQLite file written by one container and read by another.
+**Consequences.** nora-web needs no corrections or parse mounts once the URLs are set; an A/B pair names one store as Overlay authority.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-28).
+
+## D-281: Schema evolution: payload JSON absorbs new fields; versions bump only on breaking change
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** Design §9: readers ignore unknown keys and tolerate missing additive columns; `schema_version` bumps only for breaking changes, with migrate-on-read or a refuse-and-rebuild code; Overlay alone gets in-place migrations; HTTP `/v1` → `/v2` on break.
+**Why.** Parse trees will grow fields; rebuilding every store for each is not acceptable. Rejected: strict schemas with a bump per field — every addition would force rebuilds.
+**Consequences.** Tolerance tests per store; a column is promoted only when queried.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-29).
+
+## D-282: Publish by registry: store versions per unit, release sets by label, gated flips
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** `publish-design.md`: content-fingerprinted store versions per cell/MNO, reused when unchanged; a release set named by the build label; stage (temp + sha256 + rename, pluggable transfer) → recorded golden gate (expansion-off deterministic + expansion-on quality) → flip of `active` rows in one transaction; rollback = flip back; nora-store reads `active` via `NORA_STORE_REGISTRY`.
+**Why.** Keeps promote/flip's properties (identity, explicit go, one-command rollback) while pushing only changed units and making "what served when" a table. Rejected: whole-label snapshots in corp — every release re-ships every cell; date ids — break continuity with eval stamps.
+**Consequences.** Dev stacks keep promote.sh/serve-flip until B8 passes on trial, which it did on 2026-10-23; every served stack is on the registry since; the registry is the second mutable store and follows the Overlay's backend rule.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-30).
+
+## D-283: Store-version reuse keys on content fingerprint and schema version
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** A published unit is reused when a live version has the same `source_fingerprint` **and** `schema_version` (amends D-282, which named the fingerprint alone). History's identity is a hash of its Trees members' fingerprints, so its reuse is decided before any build.
+**Why.** The same source converted by a newer cell-DB schema is new content for serving; keying on the fingerprint alone would serve the old file. Rejected: encoding the schema in the fingerprint — the design's column keeps its meaning (content identity) and the schema stays a separate, queryable fact.
+**Consequences.** A schema bump republishes every unit once; `find_version` takes the schema (None = any, used for History).
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-31).
+
+## D-284: A release set is always complete
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** A publish that rebuilds a subset (one store, a `--cells` filter) inherits every other unit from a base set (`--base`, default the active set). A flip replaces `active` wholesale with the set's members; a rollback is exactly the previous set.
+**Why.** Partial sets would leave `active` a mix of labels, and "0 changed" or "rollback" would have no single meaning. Rejected: per-unit flips — the gate is run against a set, so the unit of activation must be the set.
+**Consequences.** `active` always carries one label after a flip (`registry_label`); dropping a cell means publishing a set from `--base none`.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-32).
+
+## D-285: Gate rule: latest run per kind decides; waivers are recorded, never bypassed
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** A set may flip when at least one gate kind's latest run passed or was waived and no kind's latest run failed. `flip --force --reason` records a `manual / waived` gate run and flips in `override` mode; `rollback` needs no gate but only to a set that served before.
+**Why.** Reruns must supersede failures, a failure in one kind must block even when another passed, and an expedited flip must leave a row, not a gap. Rejected: "any pass" (a later failure would be ignored) and "all runs pass" (a rerun could never clear a failure).
+**Consequences.** Two gate kinds today (`golden-stage1` deterministic, `golden-stage2` quality) plus `manual`; `publish status` shows `gate_ok` per set.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-33).
+
+## D-286: The Overlay authority runs the SQLite backend in deployment
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** The stack that is the Overlay authority opens `overlay.db` (`NORA_OVERLAY_DB`), filled once by `overlay_import`; peers read it over HTTP; the JSON files remain only as the import-time backup. Closes the S3 question of which backend deployments run.
+**Why.** The design's live store is the SQLite file (transactions, per-record provenance, the registry's backend rule); the JSON layout was the migration source. Proven on two stacks: digests equal through the switch, edits from every web landing in the file, JSON untouched.
+**Consequences.** Edits made after the switch exist only in `overlay.db`; a rollback to JSON loses them. The import runs in a throwaway batch container with the corrections dir mounted.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-34).
+
+## D-287: The store service is a core module; sandbox is build-side SIRA integration only
+**Status**: Active · **Date**: 2026-10-25.
+
+**Decision.** `nora-store` runs from `core/src/store_service`, a core module under the structure rule (MODULE.md, tests in `core/tests`). `sandbox/` keeps the SIRA build-side integration (adapter, lane, batching, converter, patches, prompts, the clone). Core never imports sandbox; shared pieces move into core and sandbox re-exports them (`stores.cells`, `llm.refusal`).
+**Why.** The service is the serving process of every stack, not research code; leaving it at the top level after the rename broke the "every core package under core/src" rule without a decision. Rejected: a "service tier" above core (a second module class for one package); moving it back under sandbox (its dependencies pointed there, its role does not).
+**Consequences.** Two tolerated exceptions, both named in code: the refusal twin stays a hand-synced copy in sandbox because the SIRA clone needs a flat file; `publish --sira-root` calls the sandbox converter lazily as a build tool. Image CMD and test paths changed; images rebuild at the next build. A `CellStore` protocol (TODO) would move the cell reader and the fold from the service into `stores`.
+
+Promoted from strand: corp-db-layer on 2026-10-25 (draft D-DRAFT-35).
