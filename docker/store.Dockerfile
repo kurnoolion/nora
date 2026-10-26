@@ -5,7 +5,10 @@
 #
 # Source selection (ARG OFFLINE selects the stage):
 #   OFFLINE=0  sira-src-0: clone upstream @ SIRA_REF, rustup, build the bm25x
-#              wheel, apply install_configs in-container (network needed).
+#              wheel, apply install_configs — all inside that throwaway stage
+#              (network needed). git never reaches a shipped layer: its curl
+#              pulls libbrotli1 (CVE-2026-111497), so the patch step that
+#              needs `git apply` runs where git is discarded with the stage.
 #   OFFLINE=1  sira-src-1: take the pre-patched clone + pre-built bm25x wheel
 #              from the vendor context (docker/prep-offline.sh) — zero network,
 #              no apt/rustup/git in any stage (hosts without container egress,
@@ -52,6 +55,13 @@ RUN git clone "$SIRA_REPO" /sira \
  && git -C /sira checkout FETCH_HEAD
 WORKDIR /sira/src/sira/bm25x/python
 RUN maturin build --release -o /wheels
+# Patch the clone here, not in sira-base: install_configs.sh needs `git apply`,
+# and git (through libcurl) is the only thing that brings libbrotli1 into an
+# image. After this step the ONLINE and OFFLINE sources have the same shape —
+# a pre-patched clone plus a wheel — and no shipped stage installs git.
+WORKDIR /
+COPY sandbox/ /nora/sandbox/
+RUN SIRA_CLONE=/sira bash /nora/sandbox/install_configs.sh
 
 # --------------------------------------------- source: OFFLINE (OFFLINE=1) --
 FROM python:3.12-slim AS sira-src-1
@@ -74,8 +84,9 @@ ARG OFFLINE=0
 # backend fetch — not OFFLINE-safe; PYTHONPATH is equivalent and free.
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/sandbox/sira/src
 # Trimmed dependency set (sandbox/SETUP.md §2a) — deliberately NO torch/sglang.
-# ONLINE: git stays in the image (install_configs.sh needs `git apply`); gcc/g++
-# only for pytrec_eval's C extension, purged in-layer.
+# ONLINE: gcc/g++ only for pytrec_eval's C extension, purged in-layer. No git:
+# the clone arrives pre-patched from sira-src, and git's curl would bring
+# libbrotli1 into a shipped layer (CVE-2026-111497 scrub).
 # OFFLINE: no apt at all — pytrec_eval arrives as a vendored wheel and the
 # clone is pre-patched, so neither compiler nor git is needed.
 RUN --mount=type=bind,from=vendor,target=/vendor \
@@ -86,7 +97,7 @@ RUN --mount=type=bind,from=vendor,target=/vendor \
             pytrec_eval numpy requests \
      && pip install --no-index --find-links=/vendor/wheels --no-deps beir; \
     else \
-        apt-get update && apt-get install -y --no-install-recommends git gcc g++ \
+        apt-get update && apt-get install -y --no-install-recommends gcc g++ \
      && pip install \
             aiohttp hydra-core omegaconf 'polars[rtcompat]' \
             huggingface_hub fastapi uvicorn httpx pydantic \
@@ -107,10 +118,9 @@ COPY sandbox/ sandbox/
 # (extra-config-dir.patch); SIRA's own hydra outputs are already disabled
 # (run_pipeline.yaml: output_subdir null, job log -> /dev/null).
 COPY --from=sira-src /sira/ sandbox/sira/
-# ONLINE: apply configs+prompts+patches now. OFFLINE: prep-offline.sh already
-# did this on the host against the vendored clone.
-RUN if [ "$OFFLINE" = "1" ]; then echo "offline: clone pre-patched by prep-offline.sh"; \
-    else bash sandbox/install_configs.sh; fi
+# The clone is already patched (configs, prompts, patches): by sira-src-0 in
+# its build stage, or by prep-offline.sh on the host for the vendored one.
+# Nothing here runs git.
 # Fail the build, not the first query, when the prompts the service loads by
 # default are absent (field-found: an uncached rebuild dropped them and the
 # service served without expansion or rerank).

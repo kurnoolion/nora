@@ -262,10 +262,10 @@ flowchart TB
   end
   subgraph sd["docker/store.Dockerfile"]
     pyB["python:3.12-slim"] --> pyc["py-classical<br/>classical-TLS OpenSSL config"]
-    pyc --> src0["sira-src-0 (online)<br/>clone upstream SIRA at SIRA_REF,<br/>build bm25x wheel (maturin)"]
+    pyc --> src0["sira-src-0 (online)<br/>clone upstream SIRA at SIRA_REF,<br/>build bm25x wheel (maturin),<br/>install_configs.sh: nora.yaml configs + 3 prompts + patches<br/>(git lives and dies here: its curl pulls libbrotli1)"]
     pyB --> src1["sira-src-1 (offline)<br/>vendored clone + wheel"]
     src0 & src1 -.->|"OFFLINE=0 / 1"| ssrc["sira-src"]
-    pyc --> sbase["sira-base<br/>trimmed deps (no torch),<br/>repo + clone at sandbox/sira,<br/>install_configs.sh: nora.yaml configs + 3 prompts,<br/>build fails if query/rerank prompts missing"]
+    pyc --> sbase["sira-base<br/>trimmed deps (no torch), no git,<br/>repo + pre-patched clone at sandbox/sira,<br/>build fails if query/rerank prompts missing"]
     ssrc --> sbase
     sbase --> nstore["nora-store<br/>CMD uvicorn core.src.store_service.service:app"]
     sbase --> sbatch["sira-batch<br/>CMD bash"]
