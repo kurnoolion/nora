@@ -1,6 +1,6 @@
 # Requirements
 
-Last updated: 2026-10-18. Behavioral specs only — project identity and scope live in `PROJECT.md`.
+Last updated: 2026-10-25. Behavioral specs only — project identity and scope live in `PROJECT.md`.
 
 <!--
 How to use this file:
@@ -36,7 +36,7 @@ How to use this file:
 - **FR-9** — Query analysis classifies each query into one of ten types (single-doc / cross-doc / cross-MNO comparison / release diff / standards comparison / traceability / feature-level / fact / summarize / general — D-051) and extracts MNO + release scope from the natural-language input.
 - **FR-10** — MNO / release resolution maps user-supplied names and dates to canonical scope: explicit scope is preserved as-is, "latest" resolves to the newest release in scope, and when no release is named each MNO in scope resolves independently to its own latest release (D-106).
 - **FR-14** — LLM synthesis emits an answer with grounded citations to specific requirement IDs (and to 3GPP spec sections when the standards stage is enabled); when the LLM omits citations, a context-based fallback supplies them from the assembled context.
-- **FR-40** — The serving retrieval path is SIRA select-synth per (MNO, release) cell over the NORA-ingested corpus (extract → profile → parse → resolve → taxonomy), using NORA's feature taxonomy; the Ask page answers from it with requirement-ID citations (D-254).
+- **FR-40** — The serving retrieval path is SIRA select-synth per (MNO, release) cell over the NORA-ingested corpus (extract → profile → parse → resolve → taxonomy), using NORA's feature taxonomy; the Ask page answers from it with requirement-ID citations (D-254); the cells are served from published cell DBs (schema 2) with the Overlay composed onto them at load (D-274, D-275).
 
 ### Corrections and overrides
 
@@ -52,20 +52,26 @@ How to use this file:
 
 - **FR-19** — The Web UI exposes pipeline-job submission, real-time SSE log streaming, an SQLite-backed job queue, shared-folder browsing with Windows↔Linux path mapping, the Ask page (with per-user question history, shareable answer links, requirement-ID links that open the requirement in place, and a per-question timeline — D-208..D-230), environment CRUD, the corrections editor, and the metrics dashboard, all under a configurable reverse-proxy `root_path`.
 - **FR-20** — The Web UI runs without an npm or JS build toolchain (FastAPI + Jinja2 + HTMX + vendored Bootstrap 5) and serves all static assets locally.
-- **FR-36** — The Web UI provides an enrichment-review editor: per-cell review of SIRA doc-enrichment phrases with expert add/remove records folded by merge-log semantics, and an Apply action that reloads every configured nora-store service so corrections take effect across all serving stacks.
+- **FR-36** — The Web UI provides an enrichment-review editor: per-cell review of SIRA doc-enrichment phrases with expert add/remove records folded by merge-log semantics, and an Apply action that reloads every configured nora-store service so corrections take effect across all serving stacks; every edit is one request to the nora-store Overlay authority, applied in one transaction (D-276, D-280).
 - **FR-38** — The system maintains an expert-curated golden eval set (target 50 → 200 samples; per-sample JSON under `<env_dir>/eval/golden/`, never in the repo) scored in two stages against any configured serving stack: Stage 1 — retrieval recall (% of a sample's ground-truth req_ids, optionally cell-qualified, present in the stack's retrieved results); Stage 2 — LLM-judged similarity between a response regenerated from Stage-1 retrieved chunks via the production synthesis path and the expert's golden response. One run per stack URL is the release A/B; judge scores are comparable only within one judge-prompt version.
 - **FR-39** — The Web UI provides an Eval Studio: an expert one-stop-shop for authoring golden samples (query + area tag + ground-truth picker with MNO → Plan → Release cascade over the ingested corpus, direct-entry, and retrieval-assisted seeding) and curating golden responses via free-form LLM chat, with per-sample Stage-1 preview. The batch eval run itself executes outside the UI as a build step (standalone CLI or final pipeline stage).
 - **FR-41** — The Web UI has a team mode (D-159): when enabled, a request without the admin cookie reaches only an allowlisted set of surfaces, and every Ask from such a request runs the SIRA lane only; an admin unlocks full access with a token-backed cookie. Every new route is checked against the allowlist.
 - **FR-42** — The Ask page offers a configured roster of named LLM endpoints and a Fast/Think choice (D-216); when a provider returns a permanent refusal, the question is retried once on the roster's fallback endpoint and the answer discloses the reroute (D-220).
-- **FR-43** — Builds reach serving by promotion to a named label: promotion swaps a stack to the new label in one step, the previous label stays available for rollback, and a later build never changes a promoted label's data (D-132, D-190).
+- **FR-43** — Builds reach serving by publishing write-once, versioned store files into a per-stack registry as a release set named by the build label; a flip requires a recorded passing or waived gate, repoints the active set in one transaction, and is reversed by a rollback to a set that served before; a label never changes meaning (D-282, D-284, D-285; supersedes the label-promotion wording of D-132 and D-190 for served stacks).
 
 ### Evaluation
 
 
+### Corpus stores
+
+- **FR-44** — Corpus data is held in four stores behind protocols with local and HTTP backends, Cells, Trees, History and Overlay, hosted by nora-store under `/stores/<store>/v1`; nora-web reads corpus data only through them (D-274, D-277, D-280).
+- **FR-45** — The Trees store serves the parsed requirement tree per (MNO, release) cell (lookup, traversal, fingerprint search), and the History store serves release lineage per MNO (version intervals, change kinds, diff between two releases), both published as write-once files (D-278, D-279).
+- **FR-46** — The Overlay has one writer, the authority nora-store; peer stacks read it over HTTP; an edit carries the requirement's content fingerprint and applies to a later release on fingerprint match, same-release origin, or token similarity, otherwise it is held for the expert's reaffirm or discard (D-276, D-286).
+
 ### Runtime environment
 
 - **FR-28** — The pipeline accepts a per-environment working directory (`env_dir`) via CLI argument, environment config file, or Web UI input; the system does not assume any hardcoded paths for runtime artifacts, and every storage location outside `env_dir` (FR-29, FR-30) is configured, not assumed.
-- **FR-29** — Pipeline artifacts are written under `<env_dir>`, partitioned by purpose: `out/` for pipeline outputs (extracted IR, parsed trees, cross-reference manifests, taxonomies, and the outputs of any enabled later stage); `state/` for runtime SQLite databases (job queue, metrics); `corrections/` for human overrides; `reports/` for compact RPT / MET / FIX / QC outputs; `eval/` for user-supplied Q&A. Serving deployments keep mutable state out of the promoted, read-only `env_dir` snapshot, in configured locations: web state (job, metrics and config DBs, and the roster file) in a per-stack web-state directory (D-247), enrichment corrections in a corrections volume (D-160), and the pooled feedback DB (D-120).
+- **FR-29** — Pipeline artifacts are written under `<env_dir>`, partitioned by purpose: `out/` for pipeline outputs (extracted IR, parsed trees, cross-reference manifests, taxonomies, and the outputs of any enabled later stage); `state/` for runtime SQLite databases (job queue, metrics); `corrections/` for human overrides; `reports/` for compact RPT / MET / FIX / QC outputs; `eval/` for user-supplied Q&A. Serving deployments read corpus data from a per-stack serving root (the registry plus versioned Cells, Trees and History files; D-255, D-282), not from an `env_dir` snapshot, and keep mutable state in configured locations: web state (job, metrics and config DBs, and the roster file) in a per-stack web-state directory (D-247), enrichment corrections in the Overlay store owned by nora-store (`overlay.db` in the corrections volume; D-276, D-286), and the pooled feedback DB (D-120).
 - **FR-30** — Source documents are read from `<env_dir>/input/<MNO>/<release>/` by default; a deployment may point the documents root at a shared requirements store with the same `<MNO>/<release>/` layout through `requirements_dir` (`--requirements-dir` / `NORA_REQUIREMENTS_DIR`, D-132). The pipeline never reads source documents from the repository root.
 
 ## Non-functional
@@ -100,6 +106,7 @@ How to use this file:
 ### Data integrity
 
 - **NFR-13** — The pipeline is re-runnable and idempotent per stage; partial re-runs auto-pick-up corrections from `<env_dir>/corrections/*.json`.
+- **NFR-17** — Store files are write-once and versioned; a release set is complete and immutable; every store carries a `schema_version`, and a reader refuses an unsupported one rather than migrating in place (D-255, D-281, D-284).
 
 ### Accuracy
 
