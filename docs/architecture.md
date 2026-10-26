@@ -1647,7 +1647,8 @@ sequenceDiagram
 
 ### 22.2a The history lane: release-change questions
 
-When the question classifies as `release_diff`, the lane is enabled
+When the question is a release-change question (`release_diff`, or a
+one-MNO comparison phrased as a change between releases), the lane is enabled
 (`NORA_HISTORY_DIFF_ENABLED`, on by default when `NORA_HISTORY_URL` is
 set) and the stack serves History, the stream runs the history lane in
 the SIRA lane's slot. nora-web resolves the MNO and the release pair,
@@ -1660,7 +1661,9 @@ and renders the answer per plan with the store-derived notes
 event carries a run id; the Cancel button posts it to
 `/api/test/ask-cancel`, new batches stop, in-flight ones finish and are
 shown. Deleted and added requirements are summarized per plan, not
-paired. Retrieval is not involved; the feedback row records lane
+paired; a plan absent from one release is one line, never a list of
+removals. Thinking models get the same final-answer marker as the other
+paths. Retrieval is not involved; the feedback row records lane
 `history` and the `RHD` compact block.
 
 ### 22.3 The NORA lane (admin, dev stacks)

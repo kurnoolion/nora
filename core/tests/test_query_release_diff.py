@@ -79,6 +79,29 @@ class EchoProvider:
         return f"{kind}: " + ", ".join(dict.fromkeys(ids))
 
 
+def test_release_change_question_rule():
+    from core.src.query.release_diff import is_release_change_question
+    from core.src.query.schema import QueryIntent, QueryType
+    rd = QueryIntent(raw_query="", query_type=QueryType.RELEASE_DIFF)
+    assert is_release_change_question("what changed?", rd)
+    one = QueryIntent(raw_query="", mnos=["mno-a"], query_type=QueryType.CROSS_MNO_COMPARISON)
+    assert is_release_change_question(
+        "What changed in the latest release of mno-a compared to the previous one?", one)
+    assert is_release_change_question("What is new in the latest mno-a release?", one)
+    assert not is_release_change_question("Compare mno-a retry timers", one)
+    two = QueryIntent(raw_query="", mnos=["mno-a", "mno-b"], query_type=QueryType.CROSS_MNO_COMPARISON)
+    assert not is_release_change_question("What changed between mno-a and mno-b latest releases?", two)
+    gen = QueryIntent(raw_query="", query_type=QueryType.GENERAL)
+    assert not is_release_change_question("What is the retry timer?", gen)
+
+
+def test_system_prompt_carries_the_reasoning_marker_only_when_enabled():
+    from core.src.query.release_diff import FINAL_ANSWER_MARKER, system_prompt
+    assert FINAL_ANSWER_MARKER not in system_prompt(sentinel=False)
+    assert FINAL_ANSWER_MARKER in system_prompt(sentinel=True)
+    assert "cite every requirement id" in system_prompt(sentinel=True)
+
+
 def test_normalize_release_ref():
     assert normalize_release_ref("April 2031") == "Apr2031"
     assert normalize_release_ref("apr 2031") == "Apr2031"

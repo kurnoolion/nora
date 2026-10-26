@@ -917,8 +917,12 @@ def _section_key(section: str) -> tuple:
 def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
            states: dict[str, tuple[dict, dict]], texts: dict[str, tuple]) -> dict:
     """The release-change payload (protocol ``changed_pairs``) from the
-    diff rows and both releases' node states. Deterministic: plans by id,
-    rows by outline position then id."""
+    diff rows and both releases' node states. Plans absent from one
+    release appear only in ``absent_plans``; their requirements are not
+    removals or additions. ``counts`` are requirement rows of the present
+    plans (section rows excluded), so they differ from ``diff_releases``'s
+    kind tallies by design. Deterministic: plans by id, rows by outline
+    position then id."""
     def body(n: "dict | None") -> dict:
         if not n:
             return {}
@@ -943,6 +947,8 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
     plans: dict[str, dict] = {}
     for c in changes:
         plan = c["plan_id"]
+        if plan in absent:
+            continue                        # a plan missing from one release: one line, no rows
         sa, sb = states[plan]
         x, y = sa.get(c["key"]), sb.get(c["key"])
         n = y or x
@@ -982,6 +988,11 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
         p["renamed"].sort(key=lambda r: (_section_key(r["section"]), r["new_id"]))
     counts = {k: sum(len(p[k]) for p in plans.values())
               for k in ("changed", "added", "removed", "renamed", "renumbered", "moved")}
+    # a changed requirement that also moved or was renumbered counts in both
+    counts["renumbered"] += sum(1 for p in plans.values() for c in p["changed"]
+                                if "renumbered" in c["kinds"])
+    counts["moved"] += sum(1 for p in plans.values() for c in p["changed"]
+                           if "moved" in c["kinds"])
     counts["plans"] = len(plans)
     counts["absent_plans"] = len(absent)
     return {"mno": mno, "from": rel_a, "to": rel_b,

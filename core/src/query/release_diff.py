@@ -37,9 +37,11 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+from core.src.llm import FINAL_ANSWER_MARKER, REASONING_SENTINEL_ENABLED
 from core.src.llm.batching import Batch, pack, utf8_size
 from core.src.llm.parallel import BatchOutcome, RunResult, run
 from core.src.pipeline.error_codes import PipelineError
+from core.src.query.schema import QueryIntent, QueryType
 
 MAX_BATCH_BYTES_ENV = "NORA_HISTORY_DIFF_MAX_BATCH_BYTES"
 PARALLEL_ENV = "NORA_HISTORY_DIFF_PARALLEL"
@@ -74,6 +76,25 @@ class ReleaseDiffConfig:
             max_batch_bytes=max(1024, int(e.get(MAX_BATCH_BYTES_ENV, "32768") or 32768)),
             parallel=max(1, int(e.get(PARALLEL_ENV, "4") or 4)),
             enabled=enabled)
+
+
+# ── which questions this answers ──────────────────────────────────────
+
+_CHANGE_WORDS = re.compile(r"\b(chang\w*|differ\w*|diff|delta|updated|new in|added|removed|dropped)\b")
+_RELEASE_WORDS = re.compile(r"\b(release\w*|latest|previous|prior|newest|current version|version\w*)\b")
+
+
+def is_release_change_question(question: str, intent: QueryIntent) -> bool:
+    """A release-diff intent, or a one-MNO comparison phrased as a change
+    between releases ("… compared to the previous one"), which the rules
+    analyzer files under cross-MNO comparison because of "compare".
+    Two or more MNOs is a comparison, never a release diff."""
+    if intent.query_type == QueryType.RELEASE_DIFF:
+        return True
+    if len(intent.mnos) >= 2:
+        return False
+    q = (question or "").lower()
+    return bool(_CHANGE_WORDS.search(q) and (_RELEASE_WORDS.search(q) or len(intent.releases) >= 1))
 
 
 # ── release resolution ────────────────────────────────────────────────
@@ -183,6 +204,19 @@ def build_batches(payload: dict, max_bytes: int = 32768) -> list[Batch]:
 _SYSTEM = ("You compare two releases of a telecom device requirements document. "
            "Answer in plain prose, cite every requirement id exactly as given in square "
            "brackets, never invent ids, never restate unchanged text.")
+# Thinking models that leak untagged reasoning get the marker instruction the
+# other answer paths use (NORA_LLM_REASONING_SENTINEL); the provider strips
+# everything before the marker. Same two names, so they switch together.
+_SYSTEM_SENTINEL = (
+    "\n\nOUTPUT FORMAT: You may reason first if needed, but you MUST then print a "
+    f"line containing exactly {FINAL_ANSWER_MARKER} and put ONLY your final answer "
+    f"(with the requirement ids in square brackets) after it. Anything before "
+    f"{FINAL_ANSWER_MARKER} is discarded and never shown to the user.")
+
+
+def system_prompt(sentinel: "bool | None" = None) -> str:
+    on = REASONING_SENTINEL_ENABLED if sentinel is None else sentinel
+    return _SYSTEM + (_SYSTEM_SENTINEL if on else "")
 
 _PROMPTS = {
     "pair": ("For each requirement below, the previous and the current release text are "
@@ -209,7 +243,7 @@ def prompt_for(batch: Batch, payload: "dict | None" = None) -> tuple[str, str]:
     head = f"Plan: {plan}" + (f" ({name})" if name else "")
     head += f"\nReleases: {payload.get('from', '')} → {payload.get('to', '')}\n\n" if payload else "\n\n"
     body = "\n".join(it["text"] for it in batch.items)
-    return _SYSTEM, head + _PROMPTS[kind] + body
+    return system_prompt(), head + _PROMPTS[kind] + body
 
 
 # ── reassembly ────────────────────────────────────────────────────────

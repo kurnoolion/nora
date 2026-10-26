@@ -227,6 +227,33 @@ def test_containing_section_prefers_tree_parent_then_outline_prefix():
     assert containing_section("requirement", "R1", "1.11", "", secs) == "1"
 
 
+def test_pairs_keep_absent_plans_out_of_the_rows():
+    from core.src.stores.history import _pairs, node_key, text_fp
+    pk, rk, px, rx = (node_key("plan", "PLANA"), node_key("requirement", "PLANA", "R1"),
+                      node_key("plan", "PLANX"), node_key("requirement", "PLANX", "RX"))
+    fa, fb, fx, fpa, fpx = (text_fp("t", "old"), text_fp("t", "new"), text_fp("t", "gone"),
+                            text_fp("Plan A", ""), text_fp("Plan X", ""))
+    node = lambda key, kind, plan, lid, fp, sec="": {"key": key, "kind": kind, "plan_id": plan, "local_id": lid,
+                                                     "text_fp": fp, "attrs_json": "{}",
+                                                     "location_json": '{"section": "%s"}' % sec}
+    sa = {pk: node(pk, "plan", "PLANA", "PLANA", fpa), rk: node(rk, "requirement", "PLANA", "R1", fa, "1.1"),
+          px: node(px, "plan", "PLANX", "PLANX", fpx), rx: node(rx, "requirement", "PLANX", "RX", fx, "1.1")}
+    sb = {pk: node(pk, "plan", "PLANA", "PLANA", fpa), rk: node(rk, "requirement", "PLANA", "R1", fb, "1.1")}
+    changes = [
+        {"key": rk, "node": "requirement", "plan_id": "PLANA", "local_id": "R1", "change": ["changed", "renumbered"],
+         "renumber": "sibling", "renumbered_from": "1.2"},
+        {"key": px, "node": "plan", "plan_id": "PLANX", "local_id": "PLANX", "change": ["removed"]},
+        {"key": rx, "node": "requirement", "plan_id": "PLANX", "local_id": "RX", "change": ["removed"]},
+    ]
+    texts = {fa: ("t", "old"), fb: ("t", "new"), fx: ("t", "gone"), fpa: ("Plan A", ""), fpx: ("Plan X", "")}
+    out = _pairs("m", "Jan2031", "Apr2031", changes, {"PLANA": (sa, sb), "PLANX": (sa, sb)}, texts)
+    assert list(out["plans"]) == ["PLANA"]                      # PLANX only under absent_plans
+    assert out["absent_plans"] == {"PLANX": {"absent_in": "Apr2031"}}
+    assert out["counts"] == {"changed": 1, "added": 0, "removed": 0, "renamed": 0,
+                             "renumbered": 1, "moved": 0, "plans": 1, "absent_plans": 1}
+    assert out["plans"]["PLANA"]["changed"][0]["kinds"] == ["renumbered"]
+
+
 def test_summary_separates_absent_plans():
     from core.src.stores.history import _summary, node_key
     rows = [

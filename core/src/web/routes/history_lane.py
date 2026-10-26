@@ -26,10 +26,12 @@ from core.src.pipeline.error_codes import CODES, PipelineError
 from core.src.query.analyzer import MockQueryAnalyzer
 from core.src.query.release_diff import (
     ReleaseDiffConfig,
+    build_batches,
+    is_release_change_question,
     resolve_release_pair,
     synthesize_release_diff,
 )
-from core.src.query.schema import QueryIntent, QueryType
+from core.src.query.schema import QueryIntent
 from core.src.stores import open_history_store
 
 logger = logging.getLogger(__name__)
@@ -86,7 +88,7 @@ def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = 
     if not cfg.enabled:
         return None
     intent = classify(question)
-    if intent.query_type != QueryType.RELEASE_DIFF:
+    if not is_release_change_question(question, intent):
         return None
     try:
         store = open_history_store()
@@ -187,9 +189,11 @@ async def run_history_lane(
         return {"error": f"History store call failed: {type(exc).__name__}"}
 
     c = payload.get("counts", {})
-    await say(f"{c.get('plans', 0)} plan(s), {c.get('changed', 0)} changed, "
+    n_batches = len(build_batches(payload, cfg.max_batch_bytes))
+    await say(f"{c.get('plans', 0)} plan(s) with changes, {c.get('changed', 0)} changed, "
               f"{c.get('added', 0)} added, {c.get('removed', 0)} removed, "
-              f"{c.get('absent_plans', 0)} absent; synthesizing {cfg.parallel} batches at a time…")
+              f"{c.get('absent_plans', 0)} plan(s) absent from one release; "
+              f"{n_batches} batches, {cfg.parallel} at a time…")
 
     cancel = cancel_event(run_id) or threading.Event()
 
