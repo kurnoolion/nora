@@ -265,7 +265,8 @@ _PHRASE_RE = re.compile(
     r"the user (wants|asks|asked|is asking|provided|gave|said)|we need to|"
     r"make sure (i|to|that)|wait,|hmm|okay,|avoid restating|the specified format|"
     r"now,? let|putting (it|this) (all )?together|"
-    r"the (answer|output|response) (should|will|must|needs)|in plain prose|"
+    r"the (answer|output|response|summary) (should|will|must|needs)|in plain prose|"
+    r"followed by the (final )?answer|(as per|per) the user|the user's instruction|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block
@@ -326,17 +327,26 @@ def _drop_repeated_draft(tail: str, ids: "Iterable[str]") -> str:
     return "\n\n".join(paras)
 
 
+def _inline_cut(text: str, lo: int, id_pos: int) -> int:
+    """Where the answer resumes on the working line: after the last colon
+    between the phrase and the id ("Putting it all together: The removed
+    ids are [..]"), else at the id itself."""
+    colon = text.rfind(":", lo, id_pos)
+    return colon + 1 if colon >= 0 else id_pos
+
+
 def _strip_once(text: str, ids: list[str]) -> str:
     first_id = _first_id(text, ids)
     before = list(_PHRASE_RE.finditer(text, 0, first_id)) if first_id > 0 else []
     if before:
         # reasoning precedes the answer, however long and spread out: cut
         # after the sentence holding the last working phrase before the
-        # first id, stopping at the id when it shares that sentence
+        # first id, stopping on that line when the id shares the sentence
         end = _SENTENCE_END_RE.search(text, before[-1].end())
-        span_end = end.end() if end is not None and end.start() < first_id else first_id
-        tail = text[span_end:].strip()
-        return _drop_repeated_draft(tail, ids) if span_end == first_id else tail
+        if end is not None and end.start() < first_id:
+            return text[end.end():].strip()
+        tail = text[_inline_cut(text, before[-1].end(), first_id):].strip()
+        return _drop_repeated_draft(tail, ids)
     cluster = _working_cluster(text)
     if cluster is None:
         # an anchored opener with no phrase after it: back up to the
@@ -357,7 +367,7 @@ def _strip_once(text: str, ids: list[str]) -> str:
     inline_id = _first_id(text[last.end():span_end], ids)
     cut_inline = inline_id >= 0
     if cut_inline:
-        span_end = last.end() + inline_id
+        span_end = _inline_cut(text, last.end(), last.end() + inline_id)
     head, tail = text[:span_start].strip(), text[span_end:].strip()
     head_ids, tail_ids = _ids_in(head, ids), _ids_in(tail, ids)
     if tail_ids:

@@ -341,3 +341,19 @@ def test_long_reasoning_before_the_first_id_is_cut_whole():
     # a comma opener counts as a phrase
     assert strip_working_text("Okay, here they are: [R1] x. [R2] y.", ["R1", "R2"]) == "[R1] x. [R2] y."
 
+
+def test_short_block_after_ids_with_meta_phrases_is_cut():
+    """Round-9 shape: an answer with ids, then a 120-character block whose
+    phrases are about the answer's form ("followed by the answer", "the
+    summary should", "as per the user's instruction"), then the answer
+    again. The block and the draft before it go."""
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    reply = ("For [R1], the retry timer is gone. For [R2], the fallback clause is gone. "
+             "For [R3], the audit note is gone. followed by the answer. Also, the summary "
+             "should be one sentence as per the user's instruction. Putting it all together: "
+             "The removed requirement IDs are [R1], [R2], and [R3]; the plan loses its retry "
+             "timer, fallback clause and audit note.")
+    assert looks_like_working_text(reply)
+    out = strip_working_text(reply, ["R1", "R2", "R3"])
+    assert out.startswith("The removed requirement IDs are [R1]") and "followed by" not in out
+
