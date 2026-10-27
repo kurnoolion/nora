@@ -151,6 +151,9 @@ def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world):
     assert hist.calls == [("mno-w", "Apr2031", "Jul2031")] and prov.calls == 3
     assert len(fb.rows) == 1 and fb.rows[0]["lane"] == "history"
     assert fb.rows[0]["lane_config"]["batches"] == 3 and fb.rows[0]["cited_ids"]
+    lc = fb.rows[0]["lane_config"]
+    assert lc["counts"]["plans"] == 2 and lc["counts"]["absent_plans"] == 1
+    assert set(lc["batch_ms"]) == {"p50", "p95", "max"} and lc["errors"] == [] and "elapsed_ms" in lc
     assert "retry after" not in fb.rows[0]["lane_config"].__repr__()
 
 

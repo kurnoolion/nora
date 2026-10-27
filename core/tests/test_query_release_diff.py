@@ -259,3 +259,21 @@ def test_failed_batch_error_class_in_compact_block():
     out = synthesize_release_diff(payload(), EchoProvider(fail_on="R6"),
                                   config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
     assert out["run"]["errors"] == ["RuntimeError"] and "errors=RuntimeError" in out["compact"]
+
+
+
+def test_reasoning_tail_is_detected_and_cut_on_the_same_line():
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    tail = ("line, but the final answer should only include the added ID and the summary. "
+            "I should avoid restating unchanged text and not invent any IDs. The answer needs "
+            "to be in plain prose. Let me structure the final answer accordingly. "
+            "Added requirement: [R9] a new timer for the retry path.")
+    assert looks_like_working_text(tail)
+    out = strip_working_text(tail, ["R9"])
+    assert out == "Added requirement: [R9] a new timer for the retry path."
+    # the same tail with the answer on its own paragraph
+    out2 = strip_working_text(tail.replace(" Added requirement:", "\n\nAdded requirement:"), ["R9"])
+    assert out2.startswith("Added requirement: [R9]")
+    # a genuine answer with one incidental phrase is left alone
+    answer = "For [R1], the timer moved from 30 s to 31 s; the user wants the new value."
+    assert not looks_like_working_text(answer) and strip_working_text(answer, ["R1"]) == answer

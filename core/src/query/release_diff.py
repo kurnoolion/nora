@@ -251,37 +251,55 @@ def prompt_for(batch: Batch, payload: "dict | None" = None) -> tuple[str, str]:
 _WORKING_RE = re.compile(
     r"^\s*(okay|ok|alright|let me|let's|first,? i|i need to|i'll|i will|the user (wants|asks|is asking)|"
     r"looking at|we need to|so,? the|now,? let)", re.I)
+# Phrases of the model talking to itself. Two distinct ones in the opening
+# paragraph mark a reply that begins with the TAIL of a reasoning block (the
+# marker landed inside the reasoning, so the split kept its end): such a
+# reply opens mid-sentence and the anchored openers above never match it.
+_PHRASE_RE = re.compile(
+    r"\b(the final answer|i should|i need to|i'll|i will|i must|let me|let's|"
+    r"the user (wants|asks|asked|is asking)|we need to|make sure (i|to|that)|"
+    r"wait,|hmm|okay,|avoid restating|the specified format|now,? let)\b", re.I)
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
+
+
+def _opening(text: str) -> str:
+    """The first paragraph, capped, where working text lives."""
+    return (text or "").lstrip().split("\n\n", 1)[0][:800]
 
 
 def looks_like_working_text(text: str) -> bool:
-    """A reply that opens with the model's own working (the marker was
-    left out, so nothing was stripped)."""
-    return bool(_WORKING_RE.match(text or ""))
+    """A reply that opens with the model's own working: a known opener at
+    the very start, or two distinct working phrases in the first
+    paragraph (the tail of a reasoning block)."""
+    if _WORKING_RE.match(text or ""):
+        return True
+    phrases = {m.group(1).lower() for m in _PHRASE_RE.finditer(_opening(text))}
+    return len(phrases) >= 2
 
 
 def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
-    """Drop the leading working paragraphs: cut at the last paragraph
-    boundary before the first line that names a requirement id, or at the
-    last blank line when no id line exists. Returns the text unchanged
-    when it does not look like working text."""
+    """Drop the working text: cut after the sentence that holds the last
+    working phrase before the first requirement id, so an answer that
+    resumes on the same line survives; with no id in the reply keep the
+    last paragraph only. Unchanged when it does not look like working
+    text."""
     if not looks_like_working_text(text):
         return text
-    lines = text.split("\n")
-    idset = [i for i in ids if i]
-    first_id_line = None
-    for n, line in enumerate(lines):
-        if any(i in line for i in idset):
-            first_id_line = n
-            break
-    if first_id_line is None or first_id_line == 0:
-        # no id line: keep the last paragraph only
+    idset = [i for i in ids if i and i in text]
+    if not idset:
         paras = [p for p in text.split("\n\n") if p.strip()]
         return paras[-1].strip() if len(paras) > 1 else text
-    # back up to the paragraph that holds the first id line
-    start = first_id_line
-    while start > 0 and lines[start - 1].strip():
-        start -= 1
-    return "\n".join(lines[start:]).strip()
+    first_id = min(text.index(i) for i in idset)
+    head = text[:first_id]
+    matches = list(_PHRASE_RE.finditer(head))
+    if not matches:
+        # an anchored opener with no phrase after it: back up to the
+        # paragraph that holds the first id
+        start = text.rfind("\n\n", 0, first_id)
+        return text[start + 2:].strip() if start >= 0 else text
+    end = _SENTENCE_END_RE.search(text, matches[-1].end())
+    cut = end.end() if end is not None and end.start() < first_id else first_id
+    return text[cut:].strip()
 
 
 # ── reassembly ────────────────────────────────────────────────────────

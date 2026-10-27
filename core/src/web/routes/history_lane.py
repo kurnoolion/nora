@@ -221,6 +221,12 @@ async def run_history_lane(
         "batches": result["run"]["batches"], "done": result["run"]["done"],
         "failed": result["run"]["failed"], "cancelled": result["cancelled"],
         "llm_model": answering_model(provider) or getattr(provider, "model", "") or "",
+        # the rest of the RHD line, so the stored row rebuilds it: the
+        # store's counts and the run's timing
+        "counts": dict(result.get("counts", {})),
+        "elapsed_ms": result["run"]["elapsed_ms"],
+        "batch_ms": dict(result["run"].get("batch_ms", {})),
+        "errors": list(result["run"].get("errors", [])),
     }
     return {
         "result": {
