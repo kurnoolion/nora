@@ -226,6 +226,8 @@ async def run_history_lane(
         "counts": dict(result.get("counts", {})),
         "elapsed_ms": result["run"]["elapsed_ms"],
         "batch_ms": dict(result["run"].get("batch_ms", {})),
+        "retried": result["run"].get("retried", 0),
+        "stripped": result["run"].get("stripped", 0),
         "errors": list(result["run"].get("errors", [])),
     }
     return {

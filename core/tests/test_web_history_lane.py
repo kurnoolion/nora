@@ -154,6 +154,7 @@ def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world):
     lc = fb.rows[0]["lane_config"]
     assert lc["counts"]["plans"] == 2 and lc["counts"]["absent_plans"] == 1
     assert set(lc["batch_ms"]) == {"p50", "p95", "max"} and lc["errors"] == [] and "elapsed_ms" in lc
+    assert lc["retried"] == 0 and lc["stripped"] == 0
     assert "retry after" not in fb.rows[0]["lane_config"].__repr__()
 
 

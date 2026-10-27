@@ -31,6 +31,7 @@ after the fallback (recorded, the run continues); RHD-I001 cancelled.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -38,6 +39,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from core.src.llm import FINAL_ANSWER_MARKER, REASONING_SENTINEL_ENABLED
+
+log = logging.getLogger(__name__)
 from core.src.llm.batching import Batch, pack, utf8_size
 from core.src.llm.parallel import BatchOutcome, RunResult, run
 from core.src.pipeline.error_codes import PipelineError
@@ -251,55 +254,112 @@ def prompt_for(batch: Batch, payload: "dict | None" = None) -> tuple[str, str]:
 _WORKING_RE = re.compile(
     r"^\s*(okay|ok|alright|let me|let's|first,? i|i need to|i'll|i will|the user (wants|asks|is asking)|"
     r"looking at|we need to|so,? the|now,? let)", re.I)
-# Phrases of the model talking to itself. Two distinct ones in the opening
-# paragraph mark a reply that begins with the TAIL of a reasoning block (the
-# marker landed inside the reasoning, so the split kept its end): such a
-# reply opens mid-sentence and the anchored openers above never match it.
+# Phrases of the model talking to itself. Two distinct ones close together
+# mark working text wherever it sits: a reply that begins with the TAIL of a
+# reasoning block (the marker landed inside the reasoning, so the split kept
+# its end), or one that drafts the answer, reasons about it, then answers
+# again. Such a block opens mid-sentence, so the anchored openers above never
+# match it, and it may follow a draft that already holds the ids.
 _PHRASE_RE = re.compile(
     r"\b(the final answer|i should|i need to|i'll|i will|i must|let me|let's|"
-    r"the user (wants|asks|asked|is asking)|we need to|make sure (i|to|that)|"
-    r"wait,|hmm|okay,|avoid restating|the specified format|now,? let)\b", re.I)
+    r"the user (wants|asks|asked|is asking|provided|gave|said)|we need to|"
+    r"make sure (i|to|that)|wait,|hmm|okay,|avoid restating|the specified format|"
+    r"now,? let|putting (it|this) (all )?together|"
+    r"the (answer|output|response) (should|will|must|needs)|in plain prose|"
+    r"as (given|instructed|required))\b", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
+_CLUSTER_GAP = 400     # characters between phrases of one working block
 
 
-def _opening(text: str) -> str:
-    """The first paragraph, capped, where working text lives."""
-    return (text or "").lstrip().split("\n\n", 1)[0][:800]
+def _clusters(text: str) -> list[list["re.Match[str]"]]:
+    """Phrase matches grouped by proximity: a new group starts after a gap
+    of more than `_CLUSTER_GAP` characters."""
+    groups: list[list[re.Match[str]]] = []
+    for m in _PHRASE_RE.finditer(text or ""):
+        if groups and m.start() - groups[-1][-1].end() <= _CLUSTER_GAP:
+            groups[-1].append(m)
+        else:
+            groups.append([m])
+    return groups
+
+
+def _working_cluster(text: str) -> "list[re.Match[str]] | None":
+    """The first group with two distinct phrases; with an anchored opener,
+    a group that starts in the opening sentence counts too."""
+    groups = _clusters(text)
+    for g in groups:
+        if len({m.group(1).lower() for m in g}) >= 2:
+            return g
+    if _WORKING_RE.match(text or "") and groups and groups[0][0].start() < 120:
+        return groups[0]
+    return None
 
 
 def looks_like_working_text(text: str) -> bool:
-    """A reply that opens with the model's own working: a known opener at
-    the very start, or two distinct working phrases in the first
-    paragraph (the tail of a reasoning block)."""
-    if _WORKING_RE.match(text or ""):
-        return True
-    phrases = {m.group(1).lower() for m in _PHRASE_RE.finditer(_opening(text))}
-    return len(phrases) >= 2
+    """A reply that carries the model's own working: a known opener at the
+    very start, or two distinct working phrases close together anywhere
+    (the tail of a reasoning block, or a draft-then-answer reply)."""
+    return bool(_WORKING_RE.match(text or "")) or _working_cluster(text) is not None
+
+
+def _ids_in(text: str, ids: "Iterable[str]") -> set[str]:
+    return {i for i in ids if i and i in text}
 
 
 def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
-    """Drop the working text: cut after the sentence that holds the last
-    working phrase before the first requirement id, so an answer that
-    resumes on the same line survives; with no id in the reply keep the
-    last paragraph only. Unchanged when it does not look like working
-    text."""
+    """Drop the working text wherever it sits. The working span runs from
+    the sentence holding the cluster's first phrase to the end of the
+    sentence holding its last, stopping short of a requirement id inside
+    that sentence so an answer resuming on the same line survives. What
+    follows the span is the answer when it holds ids; a draft before the
+    span whose ids the answer repeats is dropped with it. With no id in
+    the reply keep the last paragraph only. Unchanged when it does not
+    look like working text."""
     if not looks_like_working_text(text):
         return text
-    idset = [i for i in ids if i and i in text]
-    if not idset:
-        paras = [p for p in text.split("\n\n") if p.strip()]
-        return paras[-1].strip() if len(paras) > 1 else text
-    first_id = min(text.index(i) for i in idset)
-    head = text[:first_id]
-    matches = list(_PHRASE_RE.finditer(head))
-    if not matches:
+    ids = [i for i in ids if i]
+    cluster = _working_cluster(text)
+    if cluster is None:
         # an anchored opener with no phrase after it: back up to the
         # paragraph that holds the first id
+        present = _ids_in(text, ids)
+        if not present:
+            paras = [p for p in text.split("\n\n") if p.strip()]
+            return paras[-1].strip() if len(paras) > 1 else text
+        first_id = min(text.index(i) for i in present)
         start = text.rfind("\n\n", 0, first_id)
         return text[start + 2:].strip() if start >= 0 else text
-    end = _SENTENCE_END_RE.search(text, matches[-1].end())
-    cut = end.end() if end is not None and end.start() < first_id else first_id
-    return text[cut:].strip()
+    first, last = cluster[0], cluster[-1]
+    span_start = 0
+    for m in _SENTENCE_END_RE.finditer(text, 0, first.start()):
+        span_start = m.end()
+    end = _SENTENCE_END_RE.search(text, last.end())
+    span_end = end.end() if end is not None else len(text)
+    inline = [text.index(i, last.end()) for i in ids if i in text[last.end():span_end]]
+    cut_inline = bool(inline)
+    if cut_inline:
+        span_end = min(inline)
+        if span_end and text[span_end - 1] == "[":
+            span_end -= 1
+    head, tail = text[:span_start].strip(), text[span_end:].strip()
+    head_ids, tail_ids = _ids_in(head, ids), _ids_in(tail, ids)
+    if tail_ids:
+        if cut_inline:
+            # the answer resumed on the working line and may be a draft
+            # that the next paragraph repeats
+            paras = [p for p in tail.split("\n\n") if p.strip()]
+            while len(paras) > 1 and _ids_in(paras[0], ids) <= _ids_in("\n\n".join(paras[1:]), ids):
+                paras.pop(0)
+            tail = "\n\n".join(paras)
+        if head_ids and not head_ids <= tail_ids:
+            return head + "\n\n" + tail
+        return tail
+    if head_ids:
+        return head
+    if not ids or not _ids_in(text, ids):
+        paras = [p for p in (head + "\n\n" + tail).split("\n\n") if p.strip()]
+        return paras[-1].strip() if paras else text
+    return tail or head or text
 
 
 # ── reassembly ────────────────────────────────────────────────────────
@@ -378,6 +438,9 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
     batches = build_batches(payload, cfg.max_batch_bytes)
     total = len(batches)
 
+    working = {"retried": 0, "stripped": 0}
+    wlock = threading.Lock()
+
     def call(batch: Batch) -> str:
         system, prompt = prompt_for(batch, payload)
         text = provider.complete(prompt, system=system, temperature=cfg.temperature,
@@ -388,8 +451,17 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
             retry = provider.complete(
                 prompt + "\n\nOutput only the final answer, nothing before it.",
                 system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens)
-            text = retry if not looks_like_working_text(retry) else strip_working_text(
-                retry, [i for it in batch.items for i in it["ids"]])
+            stripped = looks_like_working_text(retry)
+            text = strip_working_text(retry, [i for it in batch.items for i in it["ids"]]) \
+                if stripped else retry
+            with wlock:
+                working["retried"] += 1
+                working["stripped"] += int(stripped)
+            # one line per firing, no prompt or reply text: which batch,
+            # what was done, how much the cut removed
+            log.info("RHD working text: batch=%d group=%s retried=1 stripped=%d cut_chars=%d",
+                     batch.index, batch.group.replace("\x00", "/"),
+                     int(stripped), (len(retry) - len(text)) if stripped else 0)
         return text
 
     done_count = [0]
@@ -411,6 +483,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                   "max_batch_bytes": cfg.max_batch_bytes, "elapsed_ms": rr.elapsed_ms,
                   "oversized": sum(1 for b in batches if b.oversized),
                   "batch_ms": rr.latency_ms(),
+                  "retried": working["retried"], "stripped": working["stripped"],
                   "errors": sorted({o.error.split(":")[0] for o in rr.outcomes.values() if o.error})}
     out["compact"] = compact_block(out)
     return out
@@ -423,8 +496,8 @@ def compact_block(result: dict) -> str:
     return ("RHD mno={mno} from={a} to={b} plans={plans} absent={absent} pairs={pairs} "
             "added={added} removed={removed} renumbered={renum} batches={batches} "
             "parallel={par} bytes_max={bm} done={done} failed={failed} cancelled={canc} "
-            "elapsed_ms={ms} batch_ms_p50={p50} batch_ms_p95={p95} batch_ms_max={mx}"
-            "{errs}").format(
+            "elapsed_ms={ms} batch_ms_p50={p50} batch_ms_p95={p95} batch_ms_max={mx} "
+            "retried={ret} stripped={strp}{errs}").format(
         mno=result.get("mno", ""), a=result.get("from", ""), b=result.get("to", ""),
         plans=c.get("plans", 0), absent=c.get("absent_plans", 0), pairs=c.get("changed", 0),
         added=c.get("added", 0), removed=c.get("removed", 0), renum=c.get("renumbered", 0),
@@ -433,4 +506,5 @@ def compact_block(result: dict) -> str:
         canc=1 if result.get("cancelled") else 0, ms=r.get("elapsed_ms", 0),
         p50=r.get("batch_ms", {}).get("p50", 0), p95=r.get("batch_ms", {}).get("p95", 0),
         mx=r.get("batch_ms", {}).get("max", 0),
+        ret=r.get("retried", 0), strp=r.get("stripped", 0),
         errs=(" errors=" + ",".join(r["errors"])) if r.get("errors") else "")

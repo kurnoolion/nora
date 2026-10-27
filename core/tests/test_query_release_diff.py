@@ -251,6 +251,8 @@ def test_working_text_reply_is_retried_then_stripped():
     assert texts and all(not t.startswith("Okay") for t in texts)
     assert all(t.startswith("Final:") for t in texts)
     assert len(prov.calls) == 8                                 # 4 batches, each retried once
+    assert out["run"]["retried"] == 4 and out["run"]["stripped"] == 4
+    assert "retried=4 stripped=4" in out["compact"]
     assert "batch_ms_p50=" in out["compact"] and "errors=" not in out["compact"]
     assert set(out["run"]["batch_ms"]) == {"p50", "p95", "max"}
 
@@ -277,3 +279,38 @@ def test_reasoning_tail_is_detected_and_cut_on_the_same_line():
     # a genuine answer with one incidental phrase is left alone
     answer = "For [R1], the timer moved from 30 s to 31 s; the user wants the new value."
     assert not looks_like_working_text(answer) and strip_working_text(answer, ["R1"]) == answer
+
+
+def test_working_text_after_a_draft_is_cut_and_the_draft_dropped():
+    """The reply drafts the answer (ids and all), reasons about it, then
+    answers again: the working block sits after the first id, and the
+    answer that follows it is kept on its own."""
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    draft_then_answer = (
+        "The added requirement is [R9], which adds a retry timer. I'll give the id, "
+        "followed by the final answer. The final answer should be in plain prose, listing "
+        "the added ID and then the summary. I need to ensure that I don't restate unchanged "
+        "text. Also, I must not invent any IDs. The user provided only one new requirement, "
+        "so the answer should reflect that. Putting it all together: The added requirement "
+        "is [R9] which adds a retry timer.\n\nAdded requirement: [R9] adds a retry timer.")
+    assert looks_like_working_text(draft_then_answer)
+    assert strip_working_text(draft_then_answer, ["R9"]) == "Added requirement: [R9] adds a retry timer."
+    # a long draft, well past the opening paragraph, then the block, then the list
+    long_draft = ("[R1] [R2] [R3] were removed, which drops three behaviours from the plan "
+                  + "and leaves the profile thinner. " * 30
+                  + "Putting it all together, the final answer will have the list of IDs "
+                  "followed by the summary sentence. I need to ensure that the output is in "
+                  "plain prose, with the IDs in square brackets as given.\n\n"
+                  "Removed requirement IDs: [R1] [R2] [R3]. The plan loses three behaviours.")
+    assert looks_like_working_text(long_draft)
+    assert strip_working_text(long_draft, ["R1", "R2", "R3"]).startswith("Removed requirement IDs: [R1]")
+    # working text between two answer parts with different ids: both parts stay
+    middle = ("[R1] x changed. [R2] y changed.\n\nWait, I need to make sure I covered "
+              "everything. Let me check again.\n\n[R3] z changed.")
+    assert strip_working_text(middle, ["R1", "R2", "R3"]) == "[R1] x changed. [R2] y changed.\n\n[R3] z changed."
+    # an inline cut keeps the id's bracket
+    assert strip_working_text("Okay, let me list them: [R1] x. [R2] y.", ["R1", "R2"]) == "[R1] x. [R2] y."
+    # two incidental phrases far apart in a genuine answer do not fire
+    spread = ("[R1] the device must make sure that the timer runs." + " More detail here." * 60
+              + " [R2] the user wants a clear prompt before reset.")
+    assert not looks_like_working_text(spread)
