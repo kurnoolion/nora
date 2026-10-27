@@ -266,7 +266,7 @@ _PHRASE_RE = re.compile(
     r"make sure (i|to|that)|wait,|hmm|okay,|avoid restating|the specified format|"
     r"now,? let|putting (it|this) (all )?together|"
     r"the (answer|output|response) (should|will|must|needs)|in plain prose|"
-    r"as (given|instructed|required))\b", re.I)
+    r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block
 
@@ -306,60 +306,95 @@ def _ids_in(text: str, ids: "Iterable[str]") -> set[str]:
     return {i for i in ids if i and i in text}
 
 
-def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
-    """Drop the working text wherever it sits. The working span runs from
-    the sentence holding the cluster's first phrase to the end of the
-    sentence holding its last, stopping short of a requirement id inside
-    that sentence so an answer resuming on the same line survives. What
-    follows the span is the answer when it holds ids; a draft before the
-    span whose ids the answer repeats is dropped with it. With no id in
-    the reply keep the last paragraph only. Unchanged when it does not
-    look like working text."""
-    if not looks_like_working_text(text):
-        return text
-    ids = [i for i in ids if i]
+def _first_id(text: str, ids: "Iterable[str]") -> int:
+    """Position of the earliest requirement id, bracket included; -1 when
+    none is present."""
+    present = _ids_in(text, ids)
+    if not present:
+        return -1
+    pos = min(text.index(i) for i in present)
+    return pos - 1 if pos and text[pos - 1] == "[" else pos
+
+
+def _drop_repeated_draft(tail: str, ids: "Iterable[str]") -> str:
+    """An answer that resumed on the working line may be a draft that the
+    next paragraph repeats: drop leading paragraphs whose ids the rest
+    carries."""
+    paras = [p for p in tail.split("\n\n") if p.strip()]
+    while len(paras) > 1 and _ids_in(paras[0], ids) <= _ids_in("\n\n".join(paras[1:]), ids):
+        paras.pop(0)
+    return "\n\n".join(paras)
+
+
+def _strip_once(text: str, ids: list[str]) -> str:
+    first_id = _first_id(text, ids)
+    before = list(_PHRASE_RE.finditer(text, 0, first_id)) if first_id > 0 else []
+    if before:
+        # reasoning precedes the answer, however long and spread out: cut
+        # after the sentence holding the last working phrase before the
+        # first id, stopping at the id when it shares that sentence
+        end = _SENTENCE_END_RE.search(text, before[-1].end())
+        span_end = end.end() if end is not None and end.start() < first_id else first_id
+        tail = text[span_end:].strip()
+        return _drop_repeated_draft(tail, ids) if span_end == first_id else tail
     cluster = _working_cluster(text)
     if cluster is None:
         # an anchored opener with no phrase after it: back up to the
-        # paragraph that holds the first id
-        present = _ids_in(text, ids)
-        if not present:
+        # paragraph that holds the first id, or keep the last paragraph
+        if first_id < 0:
             paras = [p for p in text.split("\n\n") if p.strip()]
             return paras[-1].strip() if len(paras) > 1 else text
-        first_id = min(text.index(i) for i in present)
         start = text.rfind("\n\n", 0, first_id)
         return text[start + 2:].strip() if start >= 0 else text
+    # the block sits after a draft that holds the ids (or between answer
+    # parts): drop the cluster's sentences
     first, last = cluster[0], cluster[-1]
     span_start = 0
     for m in _SENTENCE_END_RE.finditer(text, 0, first.start()):
         span_start = m.end()
     end = _SENTENCE_END_RE.search(text, last.end())
     span_end = end.end() if end is not None else len(text)
-    inline = [text.index(i, last.end()) for i in ids if i in text[last.end():span_end]]
-    cut_inline = bool(inline)
+    inline_id = _first_id(text[last.end():span_end], ids)
+    cut_inline = inline_id >= 0
     if cut_inline:
-        span_end = min(inline)
-        if span_end and text[span_end - 1] == "[":
-            span_end -= 1
+        span_end = last.end() + inline_id
     head, tail = text[:span_start].strip(), text[span_end:].strip()
     head_ids, tail_ids = _ids_in(head, ids), _ids_in(tail, ids)
     if tail_ids:
         if cut_inline:
-            # the answer resumed on the working line and may be a draft
-            # that the next paragraph repeats
-            paras = [p for p in tail.split("\n\n") if p.strip()]
-            while len(paras) > 1 and _ids_in(paras[0], ids) <= _ids_in("\n\n".join(paras[1:]), ids):
-                paras.pop(0)
-            tail = "\n\n".join(paras)
+            tail = _drop_repeated_draft(tail, ids)
         if head_ids and not head_ids <= tail_ids:
             return head + "\n\n" + tail
         return tail
     if head_ids:
         return head
-    if not ids or not _ids_in(text, ids):
+    if first_id < 0:
         paras = [p for p in (head + "\n\n" + tail).split("\n\n") if p.strip()]
         return paras[-1].strip() if paras else text
     return tail or head or text
+
+
+def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
+    """Drop the working text wherever it sits. Reasoning before the first
+    requirement id, however long, is cut after the sentence holding its
+    last working phrase (stopping at an id on that line, so an answer
+    resuming there survives; a draft the next paragraph repeats goes
+    too). A block after a draft that holds the ids is cut by its phrase
+    cluster, the draft with it when the answer repeats its ids; a block
+    between answer parts with different ids leaves both parts. With no
+    id in the reply keep the last paragraph only. Up to three passes, so
+    a reply with both shapes comes out clean. Unchanged when it does not
+    look like working text."""
+    if not looks_like_working_text(text):
+        return text
+    ids = [i for i in ids if i]
+    out = text
+    for _ in range(3):
+        nxt = _strip_once(out, ids)
+        if nxt == out or not looks_like_working_text(nxt):
+            return nxt
+        out = nxt
+    return out
 
 
 # ── reassembly ────────────────────────────────────────────────────────

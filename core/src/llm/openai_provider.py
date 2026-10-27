@@ -102,6 +102,35 @@ ENV_MODEL = "NORA_LLM_MODEL"
 ENV_DEBUG_RAW = "NORA_LLM_DEBUG_RAW"
 
 
+_INFRA_RE = re.compile(r"\b(host|port|hostname|server)=[^,)\s]+|https?://\S+", re.I)
+_CAUSES = ("read timed out", "timed out", "timeout", "connection refused", "connection reset",
+           "rate limit", "overloaded", "unavailable", "bad gateway", "too many requests")
+
+
+def error_summary(body: str, limit: int = 200) -> str:
+    """One short line for an HTTP error body, free of infrastructure names:
+    a JSON body's `error.message`; an HTML page reduced to its size and
+    the first known cause word in its text; anything else its first line.
+    `host=`/`port=` values and URLs are replaced in every case."""
+    text = (body or "").strip()
+    if text.startswith("{"):
+        try:
+            err = json.loads(text).get("error")
+            msg = err.get("message") if isinstance(err, dict) else err
+            if isinstance(msg, str) and msg.strip():
+                text = msg.strip()
+        except (ValueError, AttributeError):
+            pass
+    elif text[:1] == "<" or "<html" in text[:200].lower():
+        flat = re.sub(r"<[^>]+>", " ", text)
+        flat = re.sub(r"\s+", " ", flat).strip().lower()
+        cause = next((c for c in _CAUSES if c in flat), "")
+        text = f"HTML error page, {len(body)} chars" + (f": {cause}" if cause else "")
+    line = text.splitlines()[0] if text else "<no body>"
+    return _INFRA_RE.sub(lambda mm: mm.group(0).split("=")[0] + "=<redacted>"
+                         if "=" in mm.group(0) else "<url>", line)[:limit]
+
+
 class OpenAICompatibleProvider:
     """LLM provider for OpenAI-compatible chat completion APIs.
 
@@ -252,15 +281,16 @@ class OpenAICompatibleProvider:
                 data = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             # Surface the API's error body — providers usually return JSON
-            # with a useful "error.message" field.
+            # with a useful "error.message" field. A gateway's HTML error
+            # page is reduced to its cause: its markup names internal
+            # hosts and functions that must not reach the log.
             try:
                 err_body = e.read().decode("utf-8", errors="replace")
             except Exception:
                 err_body = "<no body>"
-            logger.error(f"LLM HTTP {e.code} {e.reason}: {err_body[:400]}")
-            raise RuntimeError(
-                f"LLM HTTP {e.code} {e.reason}: {err_body[:400]}"
-            ) from e
+            summary = error_summary(err_body)
+            logger.error(f"LLM HTTP {e.code} {e.reason}: {summary}")
+            raise RuntimeError(f"LLM HTTP {e.code} {e.reason}: {summary}") from e
         except urllib.error.URLError as e:
             logger.error(f"LLM network error: {e}")
             raise RuntimeError(f"LLM network error: {e}") from e

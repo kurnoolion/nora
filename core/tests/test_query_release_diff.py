@@ -314,3 +314,30 @@ def test_working_text_after_a_draft_is_cut_and_the_draft_dropped():
     spread = ("[R1] the device must make sure that the timer runs." + " More detail here." * 60
               + " [R2] the user wants a clear prompt before reset.")
     assert not looks_like_working_text(spread)
+
+
+def test_long_reasoning_before_the_first_id_is_cut_whole():
+    """Round-8 shape: paragraphs of reasoning with the working phrases
+    spread far apart, no id until a 'Let me structure it as:' draft, then
+    the answer again. Everything before the answer goes, the draft too."""
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    reply = ("It has detailed requirements about the retry path, and the old text says 30 s. "
+             + "The new text adds more detail about the path. " * 20
+             + "I need to make sure to cite the requirement ID exactly as given. "
+             + "The old and new texts differ in the timer value and the added clause. " * 8
+             + "The answer should state the change plainly. "
+             + "There is also a note on the clause ordering. " * 8
+             + "I should avoid restating unchanged text. " + "The difference is small. " * 20
+             + "So, the final answer will name the id and the change.\n\n"
+             "Let me structure it as: The requirement [R4] now sets the timer to 31 s.\n\n"
+             "The requirement [R4] now sets the timer to 31 s and adds a clause on ordering.")
+    assert looks_like_working_text(reply)
+    assert strip_working_text(reply, ["R4"]) == \
+        "The requirement [R4] now sets the timer to 31 s and adds a clause on ordering."
+    # both shapes in one reply: an opener, a draft with the id, a block, the answer
+    mixed = ("I'll begin with the draft. [R1] draft text. Putting it all together, the final "
+             "answer should be plain. I need to be concise.\n\n[R1] final text.")
+    assert strip_working_text(mixed, ["R1"]) == "[R1] final text."
+    # a comma opener counts as a phrase
+    assert strip_working_text("Okay, here they are: [R1] x. [R2] y.", ["R1", "R2"]) == "[R1] x. [R2] y."
+

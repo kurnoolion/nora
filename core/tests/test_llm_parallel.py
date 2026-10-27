@@ -105,3 +105,15 @@ def test_latency_summary_and_failure_log(caplog):
     assert set(lat) == {"p50", "p95", "max"} and lat["max"] >= lat["p95"] >= lat["p50"] >= 0
     assert any("batch 2" in m and "ValueError: boom" in m for m in caplog.messages)
     assert RunResult().latency_ms() == {"p50": 0, "p95": 0, "max": 0}
+
+
+def test_failed_batch_error_keeps_the_first_line_only():
+    from core.src.llm.parallel import Batch, run
+
+    def call(b):
+        raise RuntimeError("LLM HTTP 500: first line\n<html>second line with a page</html>")
+
+    rr = run([Batch(index=0, group="g", items=[], bytes=1)], call, parallel=1)
+    err = rr.outcomes[0].error
+    assert err == "RuntimeError: LLM HTTP 500: first line" and "html" not in err
+

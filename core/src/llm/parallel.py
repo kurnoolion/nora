@@ -121,7 +121,8 @@ def run(batches: list[Batch], call: Callable[[Batch], str], *, parallel: int = 4
                 try:
                     outcome.text = fut.result()
                 except Exception as exc:            # noqa: BLE001 — recorded per batch
-                    outcome.error = f"{type(exc).__name__}: {exc}"[:300]
+                    # first line only: a provider error may carry a page
+                    outcome.error = f"{type(exc).__name__}: {exc}".splitlines()[0][:300]
                     logger.warning("parallel batch %d (group %r) failed after %d ms: %s",
                                    batch.index, batch.group, outcome.elapsed_ms,
                                    outcome.error)

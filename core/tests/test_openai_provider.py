@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import json
 from unittest.mock import patch
 
@@ -425,3 +426,35 @@ class TestListModels:
                    side_effect=http.client.IncompleteRead(b"")):
             with pytest.raises(RuntimeError):
                 list_models("http://llm.invalid/v1")
+
+
+class TestErrorSummary:
+    def test_html_page_reduced_to_cause_without_infrastructure_names(self):
+        from core.src.llm.openai_provider import error_summary
+        page = ("<!doctype html> <title>Exception: error at gw_fn "
+                "HTTPSConnectionPool(host=gw.internal.example, port=8443): Read timed out."
+                "</title><body>trace</body>")
+        out = error_summary(page)
+        assert out.startswith("HTML error page") and "read timed out" in out
+        assert "gw" not in out and "8443" not in out and "<" not in out
+
+    def test_json_error_message_and_plain_text_scrubbed(self):
+        from core.src.llm.openai_provider import error_summary
+        assert error_summary('{"error": {"message": "model overloaded", "type": "x"}}') == "model overloaded"
+        out = error_summary("failed at host=gw.example.test see https://example.test/y\nsecond line")
+        assert out == "failed at host=<redacted> see <url>"
+        assert error_summary("") == "<no body>"
+
+    def test_http_error_raises_short_message(self, caplog):
+        import urllib.error
+        prov = _make_provider()
+        page = b"<html><title>at host=gw.internal.example: Read timed out.</title></html>"
+        err = urllib.error.HTTPError("http://127.0.0.1/v1", 500, "INTERNAL SERVER ERROR", {},
+                                     io.BytesIO(page))
+        with patch("urllib.request.urlopen", side_effect=err), \
+             caplog.at_level(logging.ERROR, logger="core.src.llm.openai_provider"):
+            with pytest.raises(RuntimeError) as ei:
+                prov.complete("q")
+        assert str(ei.value) == "LLM HTTP 500 INTERNAL SERVER ERROR: HTML error page, 72 chars: read timed out"
+        assert all("gw.internal" not in m for m in caplog.messages)
+
