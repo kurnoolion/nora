@@ -296,6 +296,21 @@ def _working_cluster(text: str) -> "list[re.Match[str]] | None":
     return None
 
 
+def working_marks(text: str) -> list[str]:
+    """What the detector matched, as the list's own words (an `opener:`
+    from the anchored openers, then the cluster's distinct phrases): for
+    the log line, so a firing on a genuine answer can be told from a real
+    one without quoting the reply."""
+    marks: list[str] = []
+    m = _WORKING_RE.match(text or "")
+    if m:
+        marks.append("opener:" + re.sub(r"\s+", " ", m.group(1).lower()))
+    cluster = _working_cluster(text)
+    if cluster:
+        marks.extend(sorted({re.sub(r"\s+", " ", c.group(1).lower()) for c in cluster}))
+    return marks
+
+
 def looks_like_working_text(text: str) -> bool:
     """A reply that carries the model's own working: a known opener at the
     very start, or two distinct working phrases close together anywhere
@@ -490,7 +505,8 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
         system, prompt = prompt_for(batch, payload)
         text = provider.complete(prompt, system=system, temperature=cfg.temperature,
                                  max_tokens=cfg.max_tokens)
-        if looks_like_working_text(text):
+        marks = working_marks(text)
+        if marks:
             # the marker was left out: one retry with a blunter instruction,
             # then a heuristic cut, so the page never shows the working
             retry = provider.complete(
@@ -503,9 +519,10 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                 working["retried"] += 1
                 working["stripped"] += int(stripped)
             # one line per firing, no prompt or reply text: which batch,
-            # what was done, how much the cut removed
-            log.info("RHD working text: batch=%d group=%s retried=1 stripped=%d cut_chars=%d",
-                     batch.index, batch.group.replace("\x00", "/"),
+            # what matched (the list's own words), what was done, how much
+            # the cut removed
+            log.info("RHD working text: batch=%d group=%s marks=%s retried=1 stripped=%d cut_chars=%d",
+                     batch.index, batch.group.replace("\x00", "/"), ",".join(marks),
                      int(stripped), (len(retry) - len(text)) if stripped else 0)
         return text
 

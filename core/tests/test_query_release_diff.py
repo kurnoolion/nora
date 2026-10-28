@@ -234,7 +234,8 @@ def test_working_text_detection_and_strip():
     assert strip_working_text(no_ids, []) == "Nothing changed in this plan."
 
 
-def test_working_text_reply_is_retried_then_stripped():
+def test_working_text_reply_is_retried_then_stripped(caplog):
+    import logging
     pl = payload()
 
     class Thinking(EchoProvider):
@@ -246,7 +247,11 @@ def test_working_text_reply_is_retried_then_stripped():
             return "Okay, let me tackle this.\n\n[" + "] [".join(dict.fromkeys(ids)) + "]"
 
     prov = Thinking()
-    out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
+    with caplog.at_level(logging.INFO, logger="core.src.query.release_diff"):
+        out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
+    fired = [m for m in caplog.messages if m.startswith("RHD working text:")]
+    assert len(fired) == 4 and all("marks=opener:okay,let me,okay," in m for m in fired)
+    assert all("tackle" not in m and "redo" not in m for m in fired)      # the list's words only
     texts = [s["text"] for p in out["plans"] for s in p["sections"]]
     assert texts and all(not t.startswith("Okay") for t in texts)
     assert all(t.startswith("Final:") for t in texts)
@@ -356,4 +361,13 @@ def test_short_block_after_ids_with_meta_phrases_is_cut():
     assert looks_like_working_text(reply)
     out = strip_working_text(reply, ["R1", "R2", "R3"])
     assert out.startswith("The removed requirement IDs are [R1]") and "followed by" not in out
+
+
+def test_working_marks_are_list_words_only():
+    from core.src.query.release_diff import working_marks
+    assert working_marks("[R1] the timer moved from 30 s to 31 s.") == []
+    marks = working_marks("line, but the final answer should only list the id. I should keep "
+                          "it short. Added requirement: [R9] a timer.")
+    assert marks == ["i should", "the final answer"]
+    assert working_marks("Looking at the pair, [R1] changed.") == ["opener:looking at"]
 
