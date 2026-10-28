@@ -250,7 +250,7 @@ def test_working_text_reply_is_retried_then_stripped(caplog):
     with caplog.at_level(logging.INFO, logger="core.src.query.release_diff"):
         out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
     fired = [m for m in caplog.messages if m.startswith("RHD working text:")]
-    assert len(fired) == 4 and all("marks=opener:okay,let me,okay," in m for m in fired)
+    assert len(fired) == 4 and all("marks=opener:okay|let me|okay retried=1" in m for m in fired)
     assert all("tackle" not in m and "redo" not in m for m in fired)      # the list's words only
     texts = [s["text"] for p in out["plans"] for s in p["sections"]]
     assert texts and all(not t.startswith("Okay") for t in texts)
@@ -370,4 +370,6 @@ def test_working_marks_are_list_words_only():
                           "it short. Added requirement: [R9] a timer.")
     assert marks == ["i should", "the final answer"]
     assert working_marks("Looking at the pair, [R1] changed.") == ["opener:looking at"]
+    # a key never carries a comma, so the `|`-joined log field parses
+    assert working_marks("Wait, I need to check. Okay, [R1] changed.") == ["i need to", "okay", "wait"]
 

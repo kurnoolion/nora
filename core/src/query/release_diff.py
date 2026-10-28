@@ -301,13 +301,14 @@ def working_marks(text: str) -> list[str]:
     from the anchored openers, then the cluster's distinct phrases): for
     the log line, so a firing on a genuine answer can be told from a real
     one without quoting the reply."""
+    key = lambda w: re.sub(r"\s+", " ", w.lower()).rstrip(",")  # noqa: E731  "okay," -> okay
     marks: list[str] = []
     m = _WORKING_RE.match(text or "")
     if m:
-        marks.append("opener:" + re.sub(r"\s+", " ", m.group(1).lower()))
+        marks.append("opener:" + key(m.group(1)))
     cluster = _working_cluster(text)
     if cluster:
-        marks.extend(sorted({re.sub(r"\s+", " ", c.group(1).lower()) for c in cluster}))
+        marks.extend(sorted({key(c.group(1)) for c in cluster}))
     return marks
 
 
@@ -519,10 +520,10 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                 working["retried"] += 1
                 working["stripped"] += int(stripped)
             # one line per firing, no prompt or reply text: which batch,
-            # what matched (the list's own words), what was done, how much
-            # the cut removed
+            # what matched (the list's own words, `|`-joined: a key may
+            # hold a comma), what was done, how much the cut removed
             log.info("RHD working text: batch=%d group=%s marks=%s retried=1 stripped=%d cut_chars=%d",
-                     batch.index, batch.group.replace("\x00", "/"), ",".join(marks),
+                     batch.index, batch.group.replace("\x00", "/"), "|".join(marks),
                      int(stripped), (len(retry) - len(text)) if stripped else 0)
         return text
 
