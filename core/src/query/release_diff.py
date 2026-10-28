@@ -402,6 +402,25 @@ def _strip_once(text: str, ids: list[str]) -> str:
     return tail or head or text
 
 
+def strip_lone_phrases(text: str) -> str:
+    """Drop a working phrase that stands as a sentence of its own
+    ("followed by the answer." / "Putting it all together:"): the residue
+    a retry can leave, one phrase short of the two-phrase rule. A phrase
+    inside a longer sentence is left alone."""
+    out = text or ""
+    for m in reversed(list(_PHRASE_RE.finditer(out))):
+        start = 0
+        for e in _SENTENCE_END_RE.finditer(out, 0, m.start()):
+            start = e.end()
+        end = _SENTENCE_END_RE.search(out, m.end())
+        stop = end.end() if end is not None else len(out)
+        sentence = out[start:stop]
+        rest = sentence.replace(m.group(0), "", 1).strip(" \t.:;,!?\n")
+        if not rest:
+            out = (out[:start].rstrip() + " " + out[stop:].lstrip()).strip()
+    return out
+
+
 def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
     """Drop the working text wherever it sits. Reasoning before the first
     requirement id, however long, is cut after the sentence holding its
@@ -517,7 +536,8 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                 system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens)
             stripped = looks_like_working_text(retry)
             text = strip_working_text(retry, [i for it in batch.items for i in it["ids"]]) \
-                if stripped else retry
+                if stripped else strip_lone_phrases(retry)
+            stripped = stripped or text != retry
             with wlock:
                 working["retried"] += 1
                 working["stripped"] += int(stripped)

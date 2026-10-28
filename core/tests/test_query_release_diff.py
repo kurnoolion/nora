@@ -388,3 +388,38 @@ def test_structure_the_response_block_after_ids_is_cut():
     out = strip_working_text(reply, ["R1", "R2", "R3"])
     assert "structure" not in out and "[R3]" in out and "[R1]" in out
 
+
+def test_lone_phrase_sentence_in_a_retry_is_cut():
+    """A retry can leave one listed phrase as a sentence of its own, under
+    the two-phrase rule; it goes. The same phrase inside a longer
+    sentence stays."""
+    from core.src.query.release_diff import strip_lone_phrases
+    retry = ("For [R1], the retry timer is gone. For [R2], the fallback clause is gone. "
+             "followed by the answer. Removed requirement IDs: [R1], [R2].")
+    assert strip_lone_phrases(retry) == ("For [R1], the retry timer is gone. For [R2], the "
+                                         "fallback clause is gone. Removed requirement IDs: [R1], [R2].")
+    assert strip_lone_phrases("Putting it all together:\n\nRemoved: [R1].") == "Removed: [R1]."
+    keep = "For [R1], the timer the user wants is 31 s."
+    assert strip_lone_phrases(keep) == keep
+
+
+def test_retry_with_a_lone_phrase_counts_as_stripped(caplog):
+    import logging
+    pl = payload()
+
+    class Residue(EchoProvider):
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            self.calls.append((system, prompt))
+            ids = re.findall(r"\[([A-Z]+\d+)\]", prompt)
+            body = "[" + "] [".join(dict.fromkeys(ids)) + "]"
+            if "Output only the final answer" in prompt:
+                return body + ". followed by the answer."
+            return "Okay, let me tackle this.\n\n" + body
+
+    with caplog.at_level(logging.INFO, logger="core.src.query.release_diff"):
+        out = synthesize_release_diff(pl, Residue(), config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
+    texts = [s["text"] for p in out["plans"] for s in p["sections"]]
+    assert texts and all("followed by" not in t for t in texts)
+    assert out["run"]["retried"] == 4 and out["run"]["stripped"] == 4
+    assert all("stripped=1 cut_chars=24" in m for m in caplog.messages if m.startswith("RHD working text:"))
+
