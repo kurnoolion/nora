@@ -257,9 +257,11 @@ async def _snapshot_sira_lane_config() -> dict[str, Any]:
     if resp.status_code != 200:
         return {"_error": f"healthz status {resp.status_code}"}
     try:
-        return _pick_sira_snapshot(resp.json())
+        snap = _pick_sira_snapshot(resp.json())
     except Exception as exc:
         return {"_error": f"healthz parse failed: {exc}"[:200]}
+    snap["stack"] = os.getenv("NORA_STACK_NAME", "")   # pooled feedback DBs tell stacks apart
+    return snap
 
 
 # Ask-form modes. "fast" skips thinking; "think" sends no reasoning field

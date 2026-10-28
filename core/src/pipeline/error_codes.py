@@ -154,6 +154,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("HIS-E004", "History DB write failed: {reason}", "Check the --out path, permissions and free space"),
     ErrorDef("HIS-E005", "History DB verification failed for {mno} — {what}: {count} mismatch(es)", "Nothing was replaced; rebuild the Trees store for that MNO and retry"),
     ErrorDef("HIS-E006", "History DB {name} has unsupported schema_version {found}", "Rebuild the MNO with core.src.stores.history_build, or run a newer build"),
+    ErrorDef("HIS-E007", "Requested release not in the Trees store for {mno}: {release}", "Name releases as they appear in the Trees store's cells for that MNO (see the build's per-release line)"),
 
     # --- Publish registry (PUB) — core.src.stores.publish (strand corp-db-layer 4b) ---
     ErrorDef("PUB-E001", "Release set {label} already exists", "Release sets are immutable; publish under a new label"),

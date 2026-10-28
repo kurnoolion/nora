@@ -128,7 +128,8 @@ def test_applies_only_to_release_diff_questions_with_history(monkeypatch):
     assert history_lane.history_diff_applies(QUESTION, config=cfg) is None
 
 
-def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world):
+def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world, monkeypatch):
+    monkeypatch.setenv("NORA_STACK_NAME", "stack-t")
     c, hist, prov, fb = world["client"], world["hist"], world["prov"], world["fb"]
     r = c.post("/api/test/ask-stream", data={"question": QUESTION, "lanes": ["sira"],
                                               "section": "merged", "user_name": "u"})
@@ -155,6 +156,7 @@ def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world):
     assert lc["counts"]["plans"] == 2 and lc["counts"]["absent_plans"] == 1
     assert set(lc["batch_ms"]) == {"p50", "p95", "max"} and lc["errors"] == [] and "elapsed_ms" in lc
     assert lc["retried"] == 0 and lc["stripped"] == 0
+    assert lc["stack"] == "stack-t"
     assert "retry after" not in fb.rows[0]["lane_config"].__repr__()
 
 

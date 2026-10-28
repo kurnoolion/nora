@@ -14,6 +14,7 @@ event; the runner stops starting batches and delivers what finished.
 
 from __future__ import annotations
 
+import os
 import asyncio
 import logging
 import re
@@ -216,7 +217,8 @@ async def run_history_lane(
     cited = _ids_in(answer, known)
     from core.src.llm.base import answering_model  # local: keeps this module import-light
     lane_config = {
-        "lane": LANE, "mno": mno, "from": rel_a, "to": rel_b,
+        "lane": LANE, "stack": os.getenv("NORA_STACK_NAME", ""),
+        "mno": mno, "from": rel_a, "to": rel_b,
         "parallel": cfg.parallel, "max_batch_bytes": cfg.max_batch_bytes,
         "batches": result["run"]["batches"], "done": result["run"]["done"],
         "failed": result["run"]["failed"], "cancelled": result["cancelled"],

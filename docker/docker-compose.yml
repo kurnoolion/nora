@@ -132,6 +132,9 @@ services:
         required: false
     environment:
       ENV_DIR: /data/env
+      # The stack's name, stamped on every feedback row's lane_config as
+      # `stack`: stacks that pool one feedback DB are told apart by it.
+      NORA_STACK_NAME: ${STACK_NAME:-nora}
       # See nora-store: a writable HOME for non-root, and no hub fetches.
       HOME: /tmp
       HF_HUB_OFFLINE: "1"

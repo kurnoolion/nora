@@ -474,3 +474,23 @@ def test_change_rows_carry_req_id_and_the_route_takes_a_key(built):
     assert by_id == by_key and by_id
     assert c.get("/stores/history/v1/req/last-changed",
                  params={"mno": MNO, "key": "not json"}).status_code == 422
+
+
+def test_builder_release_filter_and_docs_per_release(tmp_path, built, capsys):
+    """A stray parse directory must not become a release: --exclude drops
+    it, --release keeps an explicit list, and the report shows the
+    documents per release so a two-document stub stands out."""
+    _, env, _ = built
+    out = tmp_path / "h2"
+    assert history_build.main(["--env-dir", str(env), "--out", str(out),
+                               "--exclude", RELS[0]]) == 0
+    printed = capsys.readouterr().out
+    assert SqliteHistoryStore(out).releases(MNO) == RELS[1:]
+    assert f"{RELS[1]} (2 docs)" in printed and f"excluded: {RELS[0]}" in printed
+    assert history_build.main(["--env-dir", str(env), "--out", str(out), "--force",
+                               "--release", f"{RELS[1]},{RELS[2]}"]) == 0
+    assert SqliteHistoryStore(out).releases(MNO) == [RELS[1], RELS[2]]
+    assert history_build.main(["--env-dir", str(env), "--out", str(out), "--force",
+                               "--release", "Nope2031"]) == 1
+    assert "HIS-E007" in capsys.readouterr().err
+

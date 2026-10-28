@@ -265,8 +265,10 @@ _PHRASE_RE = re.compile(
     r"the user (wants|asks|asked|is asking|provided|gave|said)|we need to|"
     r"make sure (i|to|that)|wait,|hmm|okay,|avoid restating|the specified format|"
     r"now,? let|putting (it|this) (all )?together|"
-    r"the (answer|output|response|summary) (should|will|must|needs)|in plain prose|"
+    r"the (answer|output|response|summary) (should|will|must|needs|can be)|in plain prose|"
     r"followed by the (final )?answer|(as per|per) the user|the user's instruction|"
+    r"structure the (response|answer|output)|list the (added|removed|changed) (ids?|requirements?)|"
+    r"referencing the ids?|mentioning the (feature|ids?)|since there('s| is) only|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block

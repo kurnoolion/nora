@@ -950,7 +950,7 @@ dev/test flat path.)
     docker compose --env-file .env.stack-a --profile serve up -d
     docker compose --env-file .env.stack-b --profile serve up -d
 
-STACK_NAME in each env file names the compose project — no `-p` flag needed.
+STACK_NAME in each env file names the compose project — no `-p` flag needed. Compose also hands it to nora-web as `NORA_STACK_NAME`, and every feedback row's `lane_config` carries it as `stack`, so stacks that pool one feedback DB are told apart.
 All stack env files live in this same `docker/` directory (gitignored; only
 the `*.example` templates are committed). The pipeline/batch runtime files
 usually need no per-stack variants — ingest is stack-independent; run jobs

@@ -373,3 +373,18 @@ def test_working_marks_are_list_words_only():
     # a key never carries a comma, so the `|`-joined log field parses
     assert working_marks("Wait, I need to check. Okay, [R1] changed.") == ["i need to", "okay", "wait"]
 
+
+def test_structure_the_response_block_after_ids_is_cut():
+    """A 'line.' tail after an answer with ids, phrased about the response's
+    shape: structure the response, list the added ids, the summary can be,
+    referencing the id."""
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    reply = ("For [R1], the retry timer is gone. For [R2], the fallback clause is gone. "
+             "line. Let me structure the response: first, list the added IDs, then the "
+             "summary. Since there's only one requirement, the summary can be a single "
+             "sentence mentioning the feature and referencing the ID. "
+             "Added requirement id: [R3] a new timer for the retry path.")
+    assert looks_like_working_text(reply)
+    out = strip_working_text(reply, ["R1", "R2", "R3"])
+    assert "structure" not in out and "[R3]" in out and "[R1]" in out
+

@@ -58,9 +58,14 @@ _SAMPLE = 50        # requirements whose latest version is checked per MNO
 
 def build_history(env_dir: "str | Path", out_dir: "str | Path",
                   trees_root: "str | Path" = "", mnos: "list[str] | None" = None,
-                  force: bool = False) -> dict:
+                  force: bool = False, releases: "list[str] | None" = None,
+                  exclude: "list[str] | None" = None) -> dict:
     """Build + verify every selected MNO; returns the counts report.
-    Raises PipelineError."""
+    `releases` keeps only those releases (every one must exist for every
+    selected MNO); `exclude` drops the named ones — a stray parse
+    directory (a test parse under out/parse/<mno>/) would otherwise
+    become a release of the lineage. The report lists the documents per
+    release so such a stub shows up. Raises PipelineError."""
     out_dir = Path(out_dir)
     store = open_tree_store(env_dir, trees_root)
     cells = store.list_cells()
@@ -79,8 +84,20 @@ def build_history(env_dir: "str | Path", out_dir: "str | Path",
     out_dir.mkdir(parents=True, exist_ok=True)
     report = {"mnos": 0, "per_mno": {}}
     for mno in selected:
-        rels = [c["release"] for c in cells if c["mno"] == mno]
-        report["per_mno"][mno] = _build_mno(store, Path(env_dir), out_dir, mno, rels)
+        have = [c["release"] for c in cells if c["mno"] == mno]
+        if releases:
+            missing = [r for r in releases if r not in have]
+            if missing:
+                raise PipelineError("HIS-E007", {"mno": mno, "release": ", ".join(missing)})
+            rels = [r for r in have if r in releases]
+        else:
+            rels = [r for r in have if r not in set(exclude or ())]
+        if not rels:
+            raise PipelineError("HIS-E003", {"mno": mno})
+        counts = _build_mno(store, Path(env_dir), out_dir, mno, rels)
+        counts["releases"] = {r: len(store.list_docs(mno, r)) for r in rels}
+        counts["excluded"] = [r for r in have if r not in rels]
+        report["per_mno"][mno] = counts
         report["mnos"] += 1
     return report
 
@@ -163,12 +180,18 @@ def main(argv: "list[str] | None" = None) -> int:
     ap.add_argument("--out", required=True, help="directory for history-<mno>.db")
     ap.add_argument("--mno", default="",
                     help="comma-separated MNOs (default: every MNO in the Trees store)")
+    ap.add_argument("--release", default="",
+                    help="comma-separated releases to keep, for every selected MNO "
+                         "(default: every release the Trees store holds)")
+    ap.add_argument("--exclude", default="",
+                    help="comma-separated releases to leave out (a stray parse directory)")
     ap.add_argument("--force", action="store_true", help="replace existing DBs")
     args = ap.parse_args(argv)
-    mnos = [m.strip() for m in args.mno.split(",") if m.strip()] or None
+    csv = lambda v: [x.strip() for x in v.split(",") if x.strip()] or None  # noqa: E731
     try:
         report = build_history(args.env_dir, args.out, trees_root=args.trees_root,
-                               mnos=mnos, force=args.force)
+                               mnos=csv(args.mno), force=args.force,
+                               releases=csv(args.release), exclude=csv(args.exclude))
     except PipelineError as exc:
         print(f"FAILED {exc.message}", file=sys.stderr)
         if exc.hint:
@@ -179,6 +202,8 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"  {mno}: {c['n_releases']} releases, {c['n_plans']} plans, "
               f"{c['n_sections']} sections, {c['n_requirements']} requirements, "
               f"{c['n_versions']} versions, {c['n_content']} content rows")
+        print("    releases: " + ", ".join(f"{r} ({n} docs)" for r, n in c["releases"].items())
+              + (f"; excluded: {', '.join(c['excluded'])}" if c.get("excluded") else ""))
     print("verified: release lists, self-diffs and sampled latest texts")
     return 0
 

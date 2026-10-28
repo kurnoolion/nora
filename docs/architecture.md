@@ -380,7 +380,7 @@ previous `out/taxonomy`). §20 spells out the consequence.
 | CLI | Input | Output | Verify |
 |---|---|---|---|
 | `python -m core.src.stores.trees_build --env-dir D --out O [--cells M__R,…] [--force]` | `out/parse/<mno>/<rel>/*_tree.json` | one `trees-<mno>-<rel>.db` per cell, temp name then rename | SQLite store vs file store must agree on `list_docs`, every `load_tree`, every `reqs_for_plan`, ~50 sampled `find_req` |
-| `python -m core.src.stores.history_build --env-dir D [--trees-root T] --out O [--mno M,…] [--force]` | the Trees store (SQLite root, else parse trees) across all of an MNO's releases | one `history-<mno>.db` per MNO | release list equals the Trees store's; self-diff of the latest release empty; requirement counts match; sampled latest versions carry the tree's `text_fp` |
+| `python -m core.src.stores.history_build --env-dir D [--trees-root T] --out O [--mno M,…] [--release R,…] [--exclude R,…] [--force]` | the Trees store (SQLite root, else parse trees) across an MNO's releases: all of them, or `--release`'s list, or all but `--exclude`'s (a stray parse directory is otherwise a release); the report shows documents per release | one `history-<mno>.db` per MNO | release list equals the Trees store's; self-diff of the latest release empty; requirement counts match; sampled latest versions carry the tree's `text_fp` |
 
 Both print counts only, never requirement text, and carry error codes
 `TRS-E001..E006` and `HIS-E001..E005`. The publish CLI calls both; no
