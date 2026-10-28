@@ -614,3 +614,27 @@ def test_cli_round_trip(world, capsys):
     assert pub.main(["status", "--serve-root", str(world["work"])]) == 1
     assert "[REG-E001]" in capsys.readouterr().err
     assert all(not any(c in o for c in ("body of", "title ")) for o in [json.dumps(st), json.dumps(out)])
+
+
+def test_exclude_drops_a_unit_built_or_inherited_and_history_follows(world):
+    """A stray parse directory becomes a Trees unit, is warned about, and is
+    then inherited by every later set. --exclude drops it from the built
+    sources and from the base, and History for that MNO is rebuilt
+    without the release."""
+    write_parse(world["env"], MNO_B, R2, "docB", [_req("REQ_B_9", section="1")])
+    out = do_publish(world, "set-1", base="none")
+    assert f"trees/{MNO_B}__{R2}: no cells unit in the set (parse output without a SIRA cell)" in out["warnings"]
+    assert f"trees/{MNO_B}__{R2}" in members(world["root"], "set-1")
+    # a dry run shows the plan without writing
+    out = do_publish(world, "set-2", base="set-1", exclude=[f"{MNO_B}__{R2}"], dry_run=True)
+    assert out["excluded"] == [f"trees/{MNO_B}__{R2}"] and out["history_rebuilt"] == [MNO_B]
+    out = do_publish(world, "set-2", base="set-1", exclude=[f"{MNO_B}__{R2}"])
+    assert out["warnings"] == [] and out["excluded"] == [f"trees/{MNO_B}__{R2}"]
+    assert out["history_rebuilt"] == [MNO_B]
+    ms = members(world["root"], "set-2")
+    assert f"trees/{MNO_B}__{R2}" not in ms and ms[f"history/{MNO_B}"] == 2
+    from core.src.stores.history import SqliteHistoryStore
+    reg = Registry(registry_path(world["root"]))
+    h = next(m for m in reg.members("set-2") if m.key == ("history", MNO_B))
+    assert SqliteHistoryStore(db_paths=[world["root"] / h.file]).releases(MNO_B) == [R1]
+

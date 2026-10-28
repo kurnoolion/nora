@@ -223,6 +223,7 @@ class Plan:
     new: list[PlannedUnit] = field(default_factory=list)
     reused: list[StoreVersion] = field(default_factory=list)
     history_built: list[str] = field(default_factory=list)   # MNOs rebuilt
+    excluded: list[str] = field(default_factory=list)        # units dropped on request
 
     def members_by_key(self) -> dict[tuple[str, str], object]:
         out: dict[tuple[str, str], object] = {m.key: m for m in self.reused}
@@ -243,6 +244,7 @@ class Plan:
                     + [f"cells/{u}: no trees unit in the set" for u in sorted(cells - trees)])
         return {"label": self.label, "base": self.base_label, "stores": per,
                 "warnings": warnings,
+                "excluded": list(self.excluded),
                 "history_rebuilt": list(self.history_built),
                 "new_units": [f"{p.source.store}/{p.source.unit}@v{p.version}" for p in self.new],
                 "reused_units": [f"{r.store}/{r.unit}@v{r.version}" for r in self.reused]}
@@ -304,17 +306,25 @@ def build_history_units(root: Path, plan_members: dict[tuple[str, str], object],
 def plan_release_set(reg: Registry, label: str, *, cells: list[UnitSource],
                      trees: list[UnitSource], base_label: str, work: Path,
                      con: "sqlite3.Connection | None" = None,
-                     build: bool = True) -> Plan:
+                     build: bool = True, exclude: "set[str] | None" = None) -> Plan:
     """Decide new vs reused per unit, inherit the rest from the base set,
     rebuild History where its Trees inputs changed (``build=False`` only
     lists the MNOs it would rebuild). ``con`` (an open write) makes
-    version numbers authoritative; without it they are a preview."""
+    version numbers authoritative; without it they are a preview.
+    ``exclude`` names cells/trees units (``<mno>__<release>``) that the
+    set must not carry, built or inherited: the way to drop a stray
+    release (a test parse that became a Trees unit) from a lineage, since
+    History follows the set's Trees members."""
     if reg.release_set(label) is not None:
         raise PipelineError("PUB-E001", {"label": label})
     plan = Plan(label=label, base_label=base_label)
     base: dict[tuple[str, str], StoreVersion] = {}
     if base_label:
         base = {m.key: m for m in reg.members(base_label)}
+    if exclude:
+        dropped = sorted(f"{st}/{u}" for st, u in base if st != "history" and u in exclude)
+        base = {k: m for k, m in base.items() if not (k[0] != "history" and k[1] in exclude)}
+        plan.excluded = dropped
 
     assigned: dict[tuple[str, str], int] = {}
 
@@ -407,7 +417,7 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
             enrich_run: str = "", cells_filter: "list[str] | None" = None,
             base: "str | None" = None, note: str = "", prompt_scheme: str = "",
             dry_run: bool = False, transfer: "Transfer | None" = None,
-            work_dir: "str | Path" = "") -> dict:
+            work_dir: "str | Path" = "", exclude: "list[str] | None" = None) -> dict:
     """Steps 1–2 of the pipeline: build or take the units, plan the set,
     stage the new files and record the set. Returns the plan summary
     (counts and identities only)."""
@@ -436,6 +446,10 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
             wanted = set(cells_filter)
             cells = [c for c in cells if c.unit in wanted]
             trees = [t for t in trees if t.unit in wanted]
+        ex = set(exclude or ())
+        if ex:
+            cells = [c for c in cells if c.unit not in ex]
+            trees = [t for t in trees if t.unit not in ex]
         if base is None:
             base_label = reg.active_label()
         else:
@@ -444,14 +458,14 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
             raise PipelineError("PUB-E006", {"label": base_label})
 
         if dry_run:
-            plan = plan_release_set(reg, label, cells=cells, trees=trees,
+            plan = plan_release_set(reg, label, cells=cells, trees=trees, exclude=ex,
                                     base_label=base_label, work=work, build=False)
             return {**plan.summary(), "dry_run": True}
 
         con = reg.begin_write()
         staged: list[str] = []
         try:
-            plan = plan_release_set(reg, label, cells=cells, trees=trees,
+            plan = plan_release_set(reg, label, cells=cells, trees=trees, exclude=ex,
                                     base_label=base_label, work=work, con=con)
             new_units: list[NewUnit] = []
             for p in plan.new:
@@ -654,6 +668,9 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--sira-root", default="", help="build Cells from these flat SIRA cells (needs bm25x)")
     p.add_argument("--enrich-run", default="", help="pinned doc-enrich run for --sira-root")
     p.add_argument("--cells", default="", help="comma-separated <mno>__<release> filter")
+    p.add_argument("--exclude", default="",
+                   help="comma-separated <mno>__<release> units the set must not carry, "
+                        "built or inherited (drops a stray release; History follows)")
     p.add_argument("--base", default=None, help="set to inherit untouched units from (default: active); 'none' = nothing")
     p.add_argument("--note", default="")
     p.add_argument("--prompt-scheme", default="")
@@ -696,13 +713,13 @@ def main(argv: "list[str] | None" = None) -> int:
     args = ap.parse_args(argv)
     try:
         if args.cmd == "publish":
-            cells = [x.strip() for x in args.cells.split(",") if x.strip()] or None
+            csv = lambda v: [x.strip() for x in v.split(",") if x.strip()] or None  # noqa: E731
             out = publish(args.serve_root, args.label, cells_src=args.cells_src,
                           trees_src=args.trees_src, env_dir=args.env_dir,
                           sira_root=args.sira_root, enrich_run=args.enrich_run,
-                          cells_filter=cells, base=args.base, note=args.note,
+                          cells_filter=csv(args.cells), base=args.base, note=args.note,
                           prompt_scheme=args.prompt_scheme, dry_run=args.dry_run,
-                          work_dir=args.work_dir)
+                          work_dir=args.work_dir, exclude=csv(args.exclude))
         elif args.cmd == "gate":
             out = {"gate_id": gate(args.serve_root, args.label, args.kind, args.verdict,
                                    run_ref=args.run_ref, note=args.note)}
