@@ -1,0 +1,46 @@
+{# One requirement in both compared releases, side by side (strand rel-history).
+   Rendered by GET /api/test/history/req/{req_id}; swapped into the bubble's body.
+   Columns are the releases; changed words are marked in each column. #}
+{% macro words(ops, side) -%}
+  {%- for op in ops -%}
+    {%- if op.op == "eq" %}{{ op.text }} {% elif op.op == "del" and side == "old" %}<del class="text-danger-emphasis bg-danger-subtle">{{ op.text }}</del> {% elif op.op == "add" and side == "new" %}<ins class="text-success-emphasis bg-success-subtle text-decoration-none">{{ op.text }}</ins> {% endif -%}
+  {%- endfor -%}
+{%- endmacro %}
+<span class="d-flex justify-content-between gap-2 mb-1">
+  <code class="fw-semibold">{{ d.req_id }}</code>
+  <span class="text-muted">{{ d.plan }} · {{ d.mno }}</span>
+</span>
+<table class="table table-sm table-bordered mb-1 req-versions">
+  <thead>
+    <tr><th class="w-50">{{ from_label }}</th><th class="w-50">{{ to_label }}</th></tr>
+  </thead>
+  <tbody>
+    {% if d.old and d.new %}
+      <tr>
+        <td>
+          {% if d.diff.title %}<span class="d-block fw-semibold mb-1">{{ words(d.diff.title, "old") }}</span>
+          {% elif d.old.title %}<span class="d-block fw-semibold mb-1">{{ d.old.title }}</span>{% endif %}
+          {% if d.diff.text %}<span class="d-block req-body">{{ words(d.diff.text, "old") }}</span>
+          {% else %}<span class="d-block req-body">{{ d.old.text | req_body }}</span>{% endif %}
+        </td>
+        <td>
+          {% if d.diff.title %}<span class="d-block fw-semibold mb-1">{{ words(d.diff.title, "new") }}</span>
+          {% elif d.new.title %}<span class="d-block fw-semibold mb-1">{{ d.new.title }}</span>{% endif %}
+          {% if d.diff.text %}<span class="d-block req-body">{{ words(d.diff.text, "new") }}</span>
+          {% else %}<span class="d-block req-body">{{ d.new.text | req_body }}</span>{% endif %}
+        </td>
+      </tr>
+      {% if d.old.priority != d.new.priority or d.old.applicability != d.new.applicability %}
+      <tr class="text-muted small">
+        <td>{% if d.old.priority %}priority: {{ d.old.priority }}{% endif %}{% if d.old.applicability %} · applies to: {{ d.old.applicability | join(", ") }}{% endif %}</td>
+        <td>{% if d.new.priority %}priority: {{ d.new.priority }}{% endif %}{% if d.new.applicability %} · applies to: {{ d.new.applicability | join(", ") }}{% endif %}</td>
+      </tr>
+      {% endif %}
+    {% else %}
+      <tr>
+        <td>{% if d.old %}{% if d.old.title %}<span class="d-block fw-semibold mb-1">{{ d.old.title }}</span>{% endif %}<span class="d-block req-body">{{ d.old.text | req_body }}</span>{% else %}<span class="text-muted">not present in {{ from_label }}</span>{% endif %}</td>
+        <td>{% if d.new %}{% if d.new.title %}<span class="d-block fw-semibold mb-1">{{ d.new.title }}</span>{% endif %}<span class="d-block req-body">{{ d.new.text | req_body }}</span>{% else %}<span class="text-muted">not present in {{ to_label }}</span>{% endif %}</td>
+      </tr>
+    {% endif %}
+  </tbody>
+</table>

@@ -84,7 +84,7 @@ _SKIP_SPANS_RE = re.compile(r"<(a|pre)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.D
 _TAG_RE = re.compile(r"<[^>]*>")
 
 
-def _bubble_html(req_id: str, nth: int) -> str:
+def _bubble_html(req_id: str, nth: int, url: str = "") -> str:
     """One collapsed badge + the panel its click expands. The panel body is
     loaded from `/api/req/<req_id>` on first open, so an answer with N bubbles
     costs zero requirement lookups until one is actually opened.
@@ -94,6 +94,7 @@ def _bubble_html(req_id: str, nth: int) -> str:
     first panel when the second badge is clicked.
     """
     safe = escape(req_id)
+    href = escape(url) if url else f"REQ_ENDPOINT/{safe}"
     target = f"reqb-{nth}-" + re.sub(r"[^A-Za-z0-9_-]", "-", req_id)
     # The fetch fires on a custom `bubbleopen` event that app.js dispatches
     # from Bootstrap's `show.bs.collapse`, so EVERY open path — hover, click,
@@ -110,7 +111,7 @@ def _bubble_html(req_id: str, nth: int) -> str:
         f'border border-primary-subtle text-decoration-none" '
         f'role="button" tabindex="0" aria-controls="{target}" '
         f'aria-expanded="false" title="Show requirement {safe}" '
-        f'hx-get="REQ_ENDPOINT/{safe}" hx-target="#{target}-body" '
+        f'hx-get="{href}" hx-target="#{target}-body" '
         f'hx-trigger="bubbleopen once" hx-swap="innerHTML">{safe}'
         f'<i class="bi bi-chevron-down req-bubble-caret ms-1"></i></a>'
         f'<span class="collapse" id="{target}">'
@@ -121,17 +122,21 @@ def _bubble_html(req_id: str, nth: int) -> str:
     )
 
 
-def _linkify_req_ids(html: str, req_ids, root_path: str = "") -> str:
+def _linkify_req_ids(html: str, req_ids, root_path: str = "", endpoints=None) -> str:
+    """`endpoints` ({req_id: url}) sends a bubble to another route than the
+    default `/api/req/<id>` — the release-change answer's bubbles show both
+    releases' versions from History."""
     ids = sorted({r for r in (req_ids or []) if r and isinstance(r, str)},
                  key=len, reverse=True)
     if not ids:
         return html
     id_re = re.compile("|".join(re.escape(r) for r in ids))
     counter = itertools.count()
+    endpoints = endpoints or {}
 
     def sub_text(text: str) -> str:
         return id_re.sub(
-            lambda m: _bubble_html(m.group(0), next(counter)).replace(
+            lambda m: _bubble_html(m.group(0), next(counter), endpoints.get(m.group(0), "")).replace(
                 "REQ_ENDPOINT", f"{root_path}/api/req"),
             text,
         )
@@ -149,7 +154,7 @@ def _linkify_req_ids(html: str, req_ids, root_path: str = "") -> str:
     return "".join(out)
 
 
-def render_markdown_bubbles(text: str, req_ids=None, root_path: str = "") -> Markup:
+def render_markdown_bubbles(text: str, req_ids=None, root_path: str = "", endpoints=None) -> Markup:
     """`render_markdown` plus click-to-expand req-ID bubbles.
 
     Degrades to plain `render_markdown` output when `req_ids` is empty, so a
@@ -158,7 +163,7 @@ def render_markdown_bubbles(text: str, req_ids=None, root_path: str = "") -> Mar
     rendered = render_markdown(text)
     if not req_ids:
         return rendered
-    return Markup(_linkify_req_ids(str(rendered), req_ids, root_path))
+    return Markup(_linkify_req_ids(str(rendered), req_ids, root_path, endpoints))
 
 
 # Requirement-body rendering (strand req-bubble-tables). Separate from

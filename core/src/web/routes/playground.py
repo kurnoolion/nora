@@ -581,6 +581,7 @@ async def _build_merged_response_html(
             # Bubble anchors, derived in the block BOTH lanes pass through so
             # the feature cannot work on one lane and fail on the other.
             "bubble_req_ids": _bubble_req_ids(result),
+            "bubble_endpoints": _history_bubble_endpoints(out),
             "candidate_count": result.get("candidate_count"),
             "llm_model": result.get("llm_model"),
             "elapsed_ms": out["elapsed_ms"],
@@ -1308,6 +1309,51 @@ async def req_fragment(request: Request, req_id: str):
     # corpus is mid-rebuild, and freezing that for 5 minutes would be wrong.
     resp.headers["Cache-Control"] = "private, max-age=300"
     return resp
+
+
+@router.get("/api/test/history/req/{req_id:path}", response_class=HTMLResponse)
+async def history_req_fragment(request: Request, req_id: str, mno: str = "", plan: str = ""):
+    """Both versions of a requirement behind a release-change answer's
+    bubble, side by side, the releases as column headers (`from`, `to`
+    query parameters; `plan` names its plan). Read-only, History only
+    (strand rel-history)."""
+    from core.src.web.app import _template_response
+    from core.src.query.release_diff import ReleaseDiffConfig, display_release
+    q = request.query_params
+    rel_a, rel_b = (q.get("from") or "").strip(), (q.get("to") or "").strip()
+    store = history_lane.open_history_store()
+    if store is None or not (mno and plan and rel_a and rel_b):
+        return HTMLResponse('<span class="text-muted">Release history is not available.</span>',
+                            status_code=404)
+    try:
+        data = await asyncio.to_thread(history_lane.versions_at, store, mno, plan, req_id, rel_a, rel_b)
+    except Exception:                                   # noqa: BLE001 — a store fault is a 404 here
+        logger.exception("history bubble lookup failed for %s", req_id)
+        data = None
+    if not data or (data["old"] is None and data["new"] is None):
+        return HTMLResponse('<span class="text-muted">Requirement not found in either release.</span>',
+                            status_code=404)
+    names = ReleaseDiffConfig.from_env().names_for(mno)
+    resp = _template_response(request, "test/_history_req_bubble.html", {
+        "d": data, "from_label": display_release(rel_a, names), "to_label": display_release(rel_b, names)})
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    return resp
+
+
+def _history_bubble_endpoints(out: "dict[str, Any] | None") -> dict[str, str]:
+    """{req_id: url} sending a release-change answer's bubbles to the
+    side-by-side route; {} for every other lane."""
+    from urllib.parse import quote, urlencode
+    from core.src.web.app import config
+    root_path = config.root_path
+    hist = (out or {}).get("history") or {}
+    plans = hist.get("bubble_plans") or {}
+    if not plans:
+        return {}
+    base = {"mno": hist.get("mno", ""), "from": hist.get("from", ""), "to": hist.get("to", "")}
+    return {rid: f"{root_path}/api/test/history/req/{quote(rid, safe='')}?"
+                 + urlencode({**base, "plan": plan})
+            for rid, plan in plans.items()}
 
 
 @router.get("/ask/history", response_class=HTMLResponse)

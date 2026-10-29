@@ -160,3 +160,12 @@ class TestMarkupNotCorrupted:
         text = "See A<B_1 now."
         out = render_markdown_bubbles(text, ["A<B_1"])
         assert "A&lt;B_1" in out
+
+
+def test_bubble_endpoints_override_the_default_route():
+    from core.src.web.markdown_render import render_markdown_bubbles
+    html = str(render_markdown_bubbles("See [R1] and [R2].", ["R1", "R2"], "/x",
+                                       endpoints={"R1": "/x/api/test/history/req/R1?mno=m&plan=p"}))
+    assert 'hx-get="/x/api/test/history/req/R1?mno=m&amp;plan=p"' in html
+    assert 'hx-get="/x/api/req/R2"' in html
+

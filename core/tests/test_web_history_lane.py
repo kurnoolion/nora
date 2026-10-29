@@ -60,6 +60,21 @@ class FakeHistory:
         }
 
 
+    def releases(self, mno):
+        return ["Jan2031", "Apr2031", "Jul2031"]
+
+    def req_history(self, mno, plan_id, req_id, from_rel="", to_rel=""):
+        if req_id == "RA1":
+            return [{"valid_from": "Jan2031", "valid_to": "Apr2031", "title": "t", "text": "retry after 30 s",
+                     "priority": "Mandatory", "applicability": []},
+                    {"valid_from": "Jul2031", "valid_to": None, "title": "t", "text": "retry after 31 s",
+                     "priority": "Mandatory", "applicability": ["Phone"]}]
+        if req_id == "RA9":
+            return [{"valid_from": "Jul2031", "valid_to": None, "title": "n", "text": "new timer",
+                     "priority": "Optional", "applicability": []}]
+        return []
+
+
 class EchoProvider:
     model = "echo-model"
 
@@ -150,6 +165,8 @@ def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world, monkeypa
     assert "renumbered" in html and "PLANX" in html and "not part of" in html
     assert "RHD mno=mno-w from=Apr2031 to=Jul2031" in html
     assert "<strong>mno-w: Apr2031 → Jul2031</strong>" in html       # the compared releases lead
+    # bubbles point at the side-by-side route, with the id's plan
+    assert 'hx-get="/api/test/history/req/RA1?mno=mno-w&amp;from=Apr2031&amp;to=Jul2031&amp;plan=PLANA"' in html
     assert "changed in meaning" in html and "plan(s) with changes" in html
     assert hist.calls == [("mno-w", "Apr2031", "Jul2031")] and prov.calls == 3
     assert len(fb.rows) == 1 and fb.rows[0]["lane"] == "history"
@@ -277,3 +294,30 @@ def test_answer_markdown_orders_by_change_and_caps_id_lists():
     html = str(render_markdown(md))
     assert "<table>" in html and html.count("<details>") == 3                # two plans, one bookkeeping
     assert "<li>3 requirement(s) differ only in the revision record" in html   # markdown inside details
+
+
+def test_side_by_side_bubble_shows_both_releases(world):
+    c = world["client"]
+    r = c.get("/api/test/history/req/RA1", params={"mno": "mno-w", "plan": "PLANA",
+                                                   "from": "Apr2031", "to": "Jul2031"})
+    assert r.status_code == 200
+    html = r.text
+    assert "<th class=\"w-50\">Apr2031</th><th class=\"w-50\">Jul2031</th>" in html
+    assert ">30</del> s" in html and ">31</ins> s" in html
+    assert "applies to: Phone" in html                      # the attribute row, since it differs
+    r = c.get("/api/test/history/req/RA9", params={"mno": "mno-w", "plan": "PLANA",
+                                                   "from": "Apr2031", "to": "Jul2031"})
+    assert r.status_code == 200 and "not present in Apr2031" in r.text and "new timer" in r.text
+    r = c.get("/api/test/history/req/NOPE", params={"mno": "mno-w", "plan": "PLANA",
+                                                    "from": "Apr2031", "to": "Jul2031"})
+    assert r.status_code == 404
+    assert c.get("/api/test/history/req/RA1").status_code == 404      # no releases named
+
+
+def test_versions_at_picks_the_live_version_per_release(world):
+    d = history_lane.versions_at(world["hist"], "mno-w", "PLANA", "RA1", "Jan2031", "Jul2031")
+    assert d["old"]["text"] == "retry after 30 s" and d["new"]["text"] == "retry after 31 s"
+    assert [op["op"] for op in d["diff"]["text"]] == ["eq", "del", "add", "eq"]
+    d = history_lane.versions_at(world["hist"], "mno-w", "PLANA", "RA9", "Jan2031", "Apr2031")
+    assert d["old"] is None and d["new"] is None
+

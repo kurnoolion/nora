@@ -293,6 +293,11 @@ async def run_history_lane(
     names = cfg.names_for(mno)
     result["display"] = {"mno": mno, "from": display_release(rel_a, names),
                          "to": display_release(rel_b, names)}
+    # which plan each id belongs to: the side-by-side bubble asks History
+    # for one requirement's versions by plan
+    result["bubble_plans"] = {i: p["plan_id"] for p in result["plans"]
+                              for i in [*(x for s in p["sections"] for x in s.get("ids", [])),
+                                        *p.get("note_ids", [])]}
     elapsed_ms = int((time.time() - start) * 1000)
     known = {i for p in result["plans"] for s in p["sections"] for i in s.get("ids", [])}
     known |= {i for p in result["plans"] for i in p.get("note_ids", [])}   # triage notes name ids too
@@ -335,3 +340,36 @@ async def run_history_lane(
         "lane_config": lane_config,
         "history": result,
     }
+
+
+# ── the side-by-side bubble ───────────────────────────────────────────
+
+def versions_at(store: Any, mno: str, plan: str, req_id: str, rel_a: str, rel_b: str) -> dict:
+    """Both releases' versions of one requirement from History: the version
+    live at `rel_a` and the one live at `rel_b` (None where the requirement
+    is absent), with word-level diffs of title and text between them."""
+    from core.src.stores.history import word_diff
+    releases = store.releases(mno)
+    order = {r: i for i, r in enumerate(releases)}
+    versions = store.req_history(mno, plan, req_id, rel_a, rel_b)
+
+    def live_at(rel: str) -> "dict | None":
+        i = order.get(rel)
+        if i is None:
+            return None
+        for v in versions:
+            lo = order.get(v.get("valid_from", ""), -1)
+            hi = order.get(v.get("valid_to") or "", len(releases) - 1) if v.get("valid_to") else len(releases) - 1
+            if lo <= i <= hi:
+                return v
+        return None
+
+    old, new = live_at(rel_a), live_at(rel_b)
+    diff = None
+    if old and new:
+        ot, nt = old.get("title", ""), new.get("title", "")
+        ox, nx = old.get("text", ""), new.get("text", "")
+        diff = {"title": word_diff(ot, nt) if ot != nt else None,
+                "text": word_diff(ox, nx) if ox != nx else None}
+    return {"req_id": req_id, "plan": plan, "mno": mno, "from": rel_a, "to": rel_b,
+            "old": old, "new": new, "diff": diff}
