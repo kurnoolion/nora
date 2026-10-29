@@ -1,10 +1,24 @@
 {
-  "_comment": "Release-change lane (query.release_diff). annotation_lines: document bookkeeping the parser leaves inside a requirement's body. scope 'line' (default) matches a whole line, anchored and case-insensitive; scope 'inline' removes the matched fragment from within a line. A pair whose texts are equal once these are removed is one note per plan, not model input; the fragments also leave the text the model sees. model: pin the lane to one model regardless of the Ask page's choice (empty = the page's).",
+  "_comment": "Release-change lane (query.release_diff). annotation_lines: document bookkeeping the parser leaves inside a requirement's body. scope 'line' (default) matches a whole line, anchored and case-insensitive; scope 'inline' removes the matched fragment from within a line. A pair whose texts are equal once these are removed is one note per plan, not model input; the fragments also leave the text the model sees. model: pin the lane to one model regardless of the Ask page's choice (empty = the page's). release_names: per MNO, the carrier's own name for each served release label ({\"<mno>\": {\"Jan2031\": \"Q1 2031\"}}); the answer shows the name with the label in brackets, and a question may name a release by it.",
   "annotation_lines": [
-    {"name": "revision record", "pattern": "^\\s*change\\s+(type|reason)\\s*:.*$"},
-    {"name": "applicability line", "pattern": "^\\s*only\\s+applies\\s+to\\s*:.*$"},
-    {"name": "table wrapper", "pattern": "\\[\\s*table\\s*:[^\\]\\n|]*\\]?", "scope": "inline"},
-    {"name": "section reference", "pattern": "^\\s*(see\\s+)?\\d+(\\.\\d+){1,4}\\s+[^\\n.]{1,80}$"}
+    {
+      "name": "revision record",
+      "pattern": "^\\s*change\\s+(type|reason)\\s*:.*$"
+    },
+    {
+      "name": "applicability line",
+      "pattern": "^\\s*only\\s+applies\\s+to\\s*:.*$"
+    },
+    {
+      "name": "table wrapper",
+      "pattern": "\\[\\s*table\\s*:[^\\]\\n|]*\\]?",
+      "scope": "inline"
+    },
+    {
+      "name": "section reference",
+      "pattern": "^\\s*(see\\s+)?\\d+(\\.\\d+){1,4}\\s+[^\\n.]{1,80}$"
+    }
   ],
-  "model": ""
+  "model": "",
+  "release_names": {}
 }

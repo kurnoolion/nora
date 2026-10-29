@@ -622,9 +622,19 @@ class SqliteHistoryStore:
             fps = {n["text_fp"] for sa, sb in states.values() for s in (sa, sb)
                    for n in s.values()}
             texts = self._content(con, fps)
+            totals = {"from": self._requirement_count(con, a), "to": self._requirement_count(con, b)}
         finally:
             con.close()
-        return _pairs(mno, rels[a], rels[b], changes, states, texts)
+        return _pairs(mno, rels[a], rels[b], changes, states, texts, totals=totals)
+
+    @staticmethod
+    def _requirement_count(con: sqlite3.Connection, ordinal: int) -> int:
+        """Requirement nodes live at one release, every plan."""
+        row = con.execute(
+            "SELECT COUNT(*) FROM version v JOIN node n ON n.key = v.node_key"
+            " WHERE n.kind = ? AND v.from_ord <= ? AND v.to_ord >= ?",
+            (REQUIREMENT, ordinal, ordinal)).fetchone()
+        return int(row[0]) if row else 0
 
     def latest_changes(self, mno: str, diffs: bool = False) -> "dict | None":
         rels = self.releases(mno)
@@ -915,7 +925,8 @@ def _section_key(section: str) -> tuple:
 
 
 def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
-           states: dict[str, tuple[dict, dict]], texts: dict[str, tuple]) -> dict:
+           states: dict[str, tuple[dict, dict]], texts: dict[str, tuple],
+           totals: "dict[str, int] | None" = None) -> dict:
     """The release-change payload (protocol ``changed_pairs``) from the
     diff rows and both releases' node states. Plans absent from one
     release appear only in ``absent_plans``; their requirements are not
@@ -938,6 +949,16 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
         if n["kind"] == SECTION:
             return n["local_id"]
         return json.loads(n["location_json"]).get("section", "")
+
+    def parent_label(n: "dict | None", state: dict) -> str:
+        """The containing section as "number title", for a location when
+        the requirement itself carries no section number."""
+        if not n:
+            return ""
+        pn = state.get(json.loads(n["location_json"]).get("parent") or "")
+        if not pn or pn["kind"] != SECTION:
+            return ""
+        return f"{pn['local_id']} {texts.get(pn['text_fp'], ('', ''))[0]}".strip()
 
     absent: dict[str, dict] = {}
     for c in changes:
@@ -981,7 +1002,8 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
             p["renumbered"].append({**row, "from": c.get("renumbered_from", ""),
                                     "detail": c.get("renumber", "")})
         elif "moved" in kinds:
-            p["moved"].append({**row, "from": c.get("moved_from", "")})
+            p["moved"].append({**row, "from": c.get("moved_from", ""),
+                               "from_parent": parent_label(x, sa), "to_parent": parent_label(y, sb)})
     for p in plans.values():
         for key in ("changed", "added", "removed", "renumbered", "moved"):
             p[key].sort(key=lambda r: (_section_key(r["section"]), r["req_id"]))
@@ -995,6 +1017,9 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
                            if "moved" in c["kinds"])
     counts["plans"] = len(plans)
     counts["absent_plans"] = len(absent)
+    if totals:
+        counts["requirements_from"] = int(totals.get("from", 0))
+        counts["requirements_to"] = int(totals.get("to", 0))
     return {"mno": mno, "from": rel_a, "to": rel_b,
             "plans": {k: plans[k] for k in sorted(plans)},
             "absent_plans": {k: absent[k] for k in sorted(absent)},

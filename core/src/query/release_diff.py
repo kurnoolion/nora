@@ -89,7 +89,8 @@ class ReleaseDiffConfig:
     max_tokens: int = 2048
     temperature: float = 0.0
     model: str = ""                       # pin the lane's model; "" = the page's choice
-    annotation_lines: tuple = DEFAULT_ANNOTATION_LINES   # (name, pattern) pairs
+    annotation_lines: tuple = DEFAULT_ANNOTATION_LINES   # (name, pattern[, scope]) rules
+    release_names: dict = field(default_factory=dict)    # {mno: {label: carrier's own name}}
 
     @classmethod
     def from_env(cls, env: "dict | None" = None) -> "ReleaseDiffConfig":
@@ -107,7 +108,21 @@ class ReleaseDiffConfig:
             parallel=max(1, int(e.get(PARALLEL_ENV, "4") or 4)),
             enabled=enabled,
             model=str(e.get(MODEL_ENV, "") or file_cfg.get("model", "") or "").strip(),
-            annotation_lines=lines if "annotation_lines" in file_cfg else DEFAULT_ANNOTATION_LINES)
+            annotation_lines=lines if "annotation_lines" in file_cfg else DEFAULT_ANNOTATION_LINES,
+            release_names={str(m): {str(k): str(v) for k, v in (names or {}).items()}
+                           for m, names in (file_cfg.get("release_names") or {}).items()
+                           if isinstance(names, dict)})
+
+    def names_for(self, mno: str) -> dict[str, str]:
+        """{label: carrier's name} for one MNO (keys as served, case kept)."""
+        return dict(self.release_names.get(mno, {}))
+
+
+def display_release(label: str, names: "dict[str, str] | None" = None) -> str:
+    """The carrier's own name for a release when configured, with the
+    served label in brackets; else the label."""
+    name = (names or {}).get(label, "")
+    return f"{name} ({label})" if name and name != label else label
 
 
 def _load_config_file(path: str = "") -> dict:
@@ -160,19 +175,36 @@ def normalize_release_ref(raw: str) -> str:
     compact = re.fullmatch(r"([a-z]{3})(20\d{2})", s)
     if compact and compact.group(1) in _MONTHS:
         return f"{_MONTH_NAMES[_MONTHS[compact.group(1)]]}{compact.group(2)}"
+    q = _QUARTER_RE.search(s)
+    if q:
+        quarter, year = (q.group(1), q.group(2)) if q.group(1) else (q.group(4), q.group(3))
+        return f"Q{quarter}-{year}"
     return ""
 
 
-def resolve_release_pair(wanted: Iterable[str], releases: list[str]) -> tuple[str, str]:
+_QUARTER_RE = re.compile(r"\bq([1-4])\s*[-/ ]?\s*(20\d{2})\b|\b(20\d{2})\s*[-/ ]?\s*q([1-4])\b")
+
+
+def _quarter_of(label: str) -> str:
+    m = re.fullmatch(r"([A-Za-z]{3})(20\d{2})", label or "")
+    mi = _MONTHS.get(m.group(1).lower()) if m else None
+    return f"Q{(mi - 1) // 3 + 1}-{m.group(2)}" if mi else ""
+
+
+def resolve_release_pair(wanted: Iterable[str], releases: list[str],
+                         names: "dict[str, str] | None" = None) -> tuple[str, str]:
     """(older, newer) from the question's release phrases and the MNO's
     served releases (oldest first). None named → the last two; one named
-    → it and the one before; two → ordered. RHD-E001 with fewer than two
-    served releases, RHD-E002 for a release not served."""
+    → it and the one before; two → ordered. A phrase may be a served
+    label, a month-year, a quarter ("Q3 2031": the one served release in
+    that quarter) or the carrier's own name from `names`. RHD-E001 with
+    fewer than two served releases, RHD-E002 for a release not served."""
     if len(releases) < 2:
         raise PipelineError("RHD-E001", {"count": str(len(releases))})
+    by_name = {v.strip().casefold(): k for k, v in (names or {}).items() if v}
     refs: list[str] = []
     for w in wanted:
-        n = normalize_release_ref(w)
+        n = by_name.get((w or "").strip().casefold()) or normalize_release_ref(w)
         if n and n not in refs:
             refs.append(n)
     idx: list[int] = []
@@ -183,6 +215,11 @@ def resolve_release_pair(wanted: Iterable[str], releases: list[str]) -> tuple[st
             i = len(releases) - 2
         elif r in releases:
             i = releases.index(r)
+        elif r.startswith("Q"):
+            hits = [k for k, lab in enumerate(releases) if _quarter_of(lab) == r]
+            if len(hits) != 1:
+                raise PipelineError("RHD-E002", {"release": r.replace("-", " ")})
+            i = hits[0]
         else:
             raise PipelineError("RHD-E002", {"release": r})
         if i not in idx:
@@ -363,12 +400,15 @@ def _triage_notes(t: dict) -> list[str]:
         if t.get(key):
             notes.append(f"{len(t[key])} heading-only entr{'y' if len(t[key]) == 1 else 'ies'} {verb}: "
                          + _ids_text(t[key]) + ".")
+    if t.get("model_same"):
+        notes.append(f"{len(t['model_same'])} requirement(s) unchanged in meaning (wording, "
+                     f"formatting or layout only): " + _ids_text(t["model_same"]) + ".")
     return notes
 
 
 def triage_ids(t: dict) -> list[str]:
     """Every id a triage note names (bubbles anchor on them)."""
-    ids: list[str] = []
+    ids: list[str] = list(t.get("model_same", []))
     for g in t.get("annotation", {}).values():
         ids.extend(g["ids"])
     ids.extend(t.get("title_only", []))
@@ -382,6 +422,7 @@ def triage_totals(payload: dict) -> dict:
     ts = [p.get("triage", {}) for p in payload.get("plans", {}).values()]
     return {"sent": sum(t.get("sent", 0) for t in ts),
             "dropped": sum(t.get("dropped", 0) for t in ts),
+            "same": sum(len(t.get("model_same", [])) for t in ts),
             "annotation": sum(len(g["ids"]) for t in ts for g in t.get("annotation", {}).values()),
             "title_only": sum(len(t.get("title_only", [])) for t in ts),
             "attrs_only": sum(len(t.get("attrs_only", [])) for t in ts),
@@ -453,20 +494,80 @@ def system_prompt(sentinel: "bool | None" = None) -> str:
     on = REASONING_SENTINEL_ENABLED if sentinel is None else sentinel
     return _SYSTEM + (_SYSTEM_SENTINEL if on else "")
 
+SAME_MARKER = "~same"
+# `[ID] ~same` lines, tolerant of spacing and a colon; the marker the pair
+# prompt asks for when a requirement's meaning is unchanged
+_SAME_LINE_RE = re.compile(r"^\s*\[?\s*([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*)\s*\]?\s*:?\s*~\s*same\b.*$", re.M | re.I)
+# the earlier closing line, and a stray no-change sentence naming one id
+_WORDING_LINE_RE = re.compile(r"^\s*(wording|layout)[^\n]{0,40}only\s*:\s*(\[[^\n]*\])?[^\n]*$", re.M | re.I)
+_NO_CHANGE_RE = re.compile(
+    r"\b(no (substantive |material |content |semantic )?changes?|unchanged|identical|"
+    r"effectively the same|same meaning|only (formatting|phrasing|wording|layout))\b", re.I)
+_BRACKET_ID_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*)\]")
+# a sentence that goes on to say what DID change is not a no-change sentence
+_CONTRAST_RE = re.compile(r"\b(but|however|except|while|whereas|although|added|new|removed|now|"
+                          r"changed|changes|extends?|introduc\w+|gains?|loses?|drops?)\b", re.I)
+
+
+def take_same_lines(text: str, ids: "Iterable[str]") -> tuple[str, list[str]]:
+    """Remove what the model says about requirements it found unchanged in
+    meaning — `[ID] ~same` lines, an old-style "Wording or layout only:"
+    line, and a stray sentence naming exactly one id with a no-change
+    phrase — and return the text and those ids. The model never decides
+    what the page shows about an unchanged requirement."""
+    idset = {i for i in ids if i}
+    same: list[str] = []
+
+    def keep_id(i: str) -> None:
+        if i in idset and i not in same:
+            same.append(i)
+
+    kept: list[str] = []
+    for line in (text or "").split("\n"):
+        m = _SAME_LINE_RE.match(line)
+        if m:
+            keep_id(m.group(1))
+            continue
+        if _WORDING_LINE_RE.match(line):
+            for i in _BRACKET_ID_RE.findall(line):
+                keep_id(i)
+            continue
+        kept.append(line)
+    out: list[str] = []
+    for line in kept:
+        named = _BRACKET_ID_RE.findall(line)
+        if (len(set(named)) == 1 and _NO_CHANGE_RE.search(line) and len(line) < 240
+                and not _CONTRAST_RE.search(_NO_CHANGE_RE.sub(" ", line))):
+            # one short sentence about one id saying nothing changed
+            sentences = [s for s in _SENTENCE_SPLIT_RE.split(line) if s.strip()]
+            if len(sentences) <= 2:
+                keep_id(named[0])
+                continue
+        out.append(line)
+    text_out = "\n".join(out)
+    text_out = re.sub(r"\n{3,}", "\n\n", text_out).strip()
+    same.sort(key=lambda i: (text or "").find(i))        # in order of appearance
+    return text_out, same
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
 _PROMPTS = {
     "pair": ("For each requirement below, the previous and the current release text are "
              "shown side by side. For each one, state in one or two sentences what changed: "
              "a changed value, condition, scope, wording with a different meaning, or a "
-             "priority or applicability change (name it as such). Omit a requirement whose "
-             "difference is wording or layout only with the same meaning; end with one line "
-             "'Wording or layout only: ' listing those ids, or no such line when there are "
-             "none. Cite the id.\n\n"),
+             "priority or applicability change (name it as such). Cite the id. When several "
+             "requirements share the same change, state it once with all their ids. For a "
+             "requirement whose meaning is unchanged (wording, formatting or layout only), "
+             f"write exactly '[ID] {SAME_MARKER}' on its own line and nothing else about it.\n\n"),
     "removed": ("The requirements below exist in the previous release and are absent from "
-                "the current one. First list the removed ids, then give one short summary of "
-                "what this plan lost as a whole (one sentence for a single requirement).\n\n"),
-    "added": ("The requirements below are new in the current release. First list the added "
-              "ids, then give one short summary of what this plan gained as a whole (one "
-              "sentence for a single requirement).\n\n"),
+                "the current one. Give one short summary of what this plan lost as a whole "
+                "(one sentence for a single requirement). Do not list the ids; they are shown "
+                "separately.\n\n"),
+    "added": ("The requirements below are new in the current release. Give one short summary "
+              "of what this plan gained as a whole (one sentence for a single requirement). "
+              "Do not list the ids; they are shown separately.\n\n"),
 }
 
 
@@ -506,7 +607,8 @@ _PHRASE_RE = re.compile(
     r"referencing the ids?|mentioning the (feature|ids?)|since there('s| is) only|"
     r"now produce( the| a)?( final)? (answer|output|response)|identify (the |actual )?changes|"
     r"so change:|so mention|we need( to)? (list|summari[sz]e|identify|produce|mention|state)|"
-    r"need (to )?list|omit those|"
+    r"need (to )?list|omit those|now output|(content |text |wording )?appears (the )?same|"
+    r"maybe (the )?(title|text|wording|scope|priority) changed|title same|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block
@@ -560,17 +662,42 @@ def looks_like_working_text(text: str) -> bool:
 
 
 def _ids_in(text: str, ids: "Iterable[str]") -> set[str]:
-    return {i for i in ids if i and i in text}
+    """Ids present in `text`: in their bracketed form `[id]` when the text
+    brackets any id (the form the prompt demands for the answer; a model's
+    reasoning names ids bare), else bare."""
+    text = text or ""
+    bracketed = {i for i in ids if i and f"[{i}]" in text}
+    return bracketed if bracketed else {i for i in ids if i and i in text}
 
 
 def _first_id(text: str, ids: "Iterable[str]") -> int:
-    """Position of the earliest requirement id, bracket included; -1 when
-    none is present."""
+    """Position of the earliest requirement id (bracket included); the
+    bracketed form when the text has one; -1 when none is present."""
     present = _ids_in(text, ids)
     if not present:
         return -1
+    if any(f"[{i}]" in text for i in present):
+        return min(text.index(f"[{i}]") for i in present if f"[{i}]" in text)
     pos = min(text.index(i) for i in present)
     return pos - 1 if pos and text[pos - 1] == "[" else pos
+
+
+# "Now produce the final answer." / "Now output." — the model announcing its
+# answer; everything before the last such sentence is working, whatever its
+# wording, when an id follows.
+_ANNOUNCE_RE = re.compile(
+    r"\bnow (produce|output|write|give|list)( the| a| my)?( final)?( answer| output| response|"
+    r" sentences?)?\b[^.\n:]*[.:\n]", re.I)
+
+
+def _cut_at_announcement(text: str, ids: list[str]) -> str:
+    last = None
+    for m in _ANNOUNCE_RE.finditer(text or ""):
+        last = m
+    if last is None:
+        return text
+    tail = text[last.end():].strip()
+    return tail if _ids_in(tail, ids) else text
 
 
 def _drop_repeated_draft(tail: str, ids: "Iterable[str]") -> str:
@@ -680,7 +807,9 @@ def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
     if not looks_like_working_text(text):
         return text
     ids = [i for i in ids if i]
-    out = text
+    out = _cut_at_announcement(text, ids)
+    if out != text and not looks_like_working_text(out):
+        return out
     for _ in range(3):
         nxt = _strip_once(out, ids)
         if nxt == out or not looks_like_working_text(nxt):
@@ -710,8 +839,11 @@ def _plan_notes(p: dict) -> list[str]:
             f"{r['old_id']} → {r['new_id']}" for r in rreq) + ".")
     moved = p.get("moved", [])
     if moved:
+        def loc(section: str, parent: str) -> str:
+            return section or (f"section '{parent}'" if parent else "an unnumbered section")
         notes.append("Moved: " + "; ".join(
-            f"{m['req_id']} from {m.get('from', '?')} to {m.get('section', '?')}" for m in moved) + ".")
+            f"[{m['req_id']}] from {loc(m.get('from', ''), m.get('from_parent', ''))} "
+            f"to {loc(m.get('section', ''), m.get('to_parent', ''))}" for m in moved) + ".")
     return notes
 
 
@@ -727,6 +859,7 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
     for plan_id in sorted(payload.get("plans", {})):
         p = payload["plans"][plan_id]
         sections: list[dict] = []
+        model_same: list[str] = []
         for kind in ("pair", "removed", "added"):
             for b in by_group.get(f"{plan_id}\x00{kind}", []):
                 o = outcomes.get(b.index)
@@ -738,15 +871,25 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
                                      "text": "", "error": "RHD-E004",
                                      "ids": [i for it in b.items for i in it["ids"]]})
                 else:
+                    ids = [i for it in b.items for i in it["ids"]]
+                    text = o.text
+                    if kind == "pair":
+                        text, same = take_same_lines(text, ids)
+                        model_same.extend(i for i in same if i not in model_same)
+                    lead = ("Removed: " if kind == "removed" else "Added: " if kind == "added" else "")
                     sections.append({"kind": kind, "batch": b.index, "status": "ok",
-                                     "text": o.text, "ids": [i for it in b.items for i in it["ids"]]})
-        t = p.get("triage", {})
+                                     "text": text, "ids": ids,
+                                     "lead": (lead + ", ".join(f"[{i}]" for i in ids)) if lead else ""})
+        t = {**p.get("triage", {}), "model_same": model_same}
+        structural, bookkeeping = _plan_notes(p), _triage_notes(t)
         plans_out.append({"plan_id": plan_id, "plan_name": p.get("plan_name", ""),
-                          "sections": sections, "notes": _plan_notes(p) + _triage_notes(t),
+                          "sections": sections, "notes": structural + bookkeeping,
+                          "note_groups": {"structural": structural, "bookkeeping": bookkeeping},
                           "note_ids": triage_ids(t),
                           "counts": {**{k: len(p.get(k, [])) for k in
                                         ("changed", "added", "removed", "renamed", "renumbered", "moved")},
-                                     "dropped": t.get("dropped", 0)}})
+                                     "dropped": t.get("dropped", 0) + len(model_same),
+                                     "same": len(model_same)}})
     absent = [{"plan_id": k, "absent_in": v.get("absent_in", "")}
               for k, v in sorted(payload.get("absent_plans", {}).items())]
     return {"mno": payload.get("mno", ""), "from": payload.get("from", ""),
@@ -819,7 +962,8 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                   "batch_ms": rr.latency_ms(),
                   "retried": working["retried"], "stripped": working["stripped"],
                   "errors": sorted({o.error.split(":")[0] for o in rr.outcomes.values() if o.error})}
-    out["triage"] = triage_totals(payload)
+    out["triage"] = {**triage_totals(payload),
+                     "same": sum(p["counts"].get("same", 0) for p in out["plans"])}
     out["compact"] = compact_block(out)
     return out
 
@@ -829,7 +973,7 @@ def compact_block(result: dict) -> str:
     c = result.get("counts", {})
     r = result.get("run", {})
     return ("RHD mno={mno} from={a} to={b} plans={plans} absent={absent} pairs={pairs} "
-            "added={added} removed={removed} renumbered={renum} sent={sent} dropped={dropped} "
+            "added={added} removed={removed} renumbered={renum} sent={sent} dropped={dropped} same={same} "
             "batches={batches} "
             "parallel={par} bytes_max={bm} done={done} failed={failed} cancelled={canc} "
             "elapsed_ms={ms} batch_ms_p50={p50} batch_ms_p95={p95} batch_ms_max={mx} "
@@ -838,6 +982,7 @@ def compact_block(result: dict) -> str:
         plans=c.get("plans", 0), absent=c.get("absent_plans", 0), pairs=c.get("changed", 0),
         added=c.get("added", 0), removed=c.get("removed", 0), renum=c.get("renumbered", 0),
         sent=result.get("triage", {}).get("sent", 0), dropped=result.get("triage", {}).get("dropped", 0),
+        same=result.get("triage", {}).get("same", 0),
         batches=r.get("batches", 0), par=r.get("parallel", 0), bm=r.get("max_batch_bytes", 0),
         done=r.get("done", 0), failed=r.get("failed", 0),
         canc=1 if result.get("cancelled") else 0, ms=r.get("elapsed_ms", 0),

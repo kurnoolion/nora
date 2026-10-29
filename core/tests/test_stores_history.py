@@ -292,7 +292,9 @@ def test_changed_pairs_payload(built):
     assert [r["req_id"] for r in p["removed"]] == ["R6"] and p["removed"][0]["text"] == T6
     assert p["added"] == [] and p["renamed"] == [] and p["renumbered"] == []
     assert d["counts"] == {"changed": 2, "added": 0, "removed": 1, "renamed": 0,
-                           "renumbered": 0, "moved": 1, "plans": 1, "absent_plans": 0}
+                           "renumbered": 0, "moved": 1, "plans": 1, "absent_plans": 0,
+                           "requirements_from": 7, "requirements_to": 6}
+    assert p["moved"][0]["from_parent"] and p["moved"][0]["to_parent"]   # containing sections named
     j = h.changed_pairs(MNO, "Apr2031", "Jul2031")["plans"]["PLANA"]
     assert sorted((r["kind"], r["old_id"], r["new_id"]) for r in j["renamed"]) == \
         [("requirement", "R3", "R3X"), ("section", "2", "3")]

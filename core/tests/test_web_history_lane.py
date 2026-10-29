@@ -149,6 +149,8 @@ def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world, monkeypa
     assert "HISTORY" in html and "Plan A" in html and "RA1" in html and "RA9" in html
     assert "renumbered" in html and "PLANX" in html and "not part of" in html
     assert "RHD mno=mno-w from=Apr2031 to=Jul2031" in html
+    assert "<strong>mno-w: Apr2031 → Jul2031</strong>" in html       # the compared releases lead
+    assert "changed in meaning" in html and "plan(s) with changes" in html
     assert hist.calls == [("mno-w", "Apr2031", "Jul2031")] and prov.calls == 3
     assert len(fb.rows) == 1 and fb.rows[0]["lane"] == "history"
     assert fb.rows[0]["lane_config"]["batches"] == 3 and fb.rows[0]["cited_ids"]
@@ -224,11 +226,36 @@ def test_answer_markdown_shape():
         "absent_plans": [{"plan_id": "PX", "absent_in": "Jul2031"}]}
     md = history_lane.answer_markdown(result)
     assert md.startswith("_Cancelled") and "<summary>P1 — One · " in md and "changed: R1" in md
-    assert '<details markdown="1">' in md and md.count("</details>") == 1
+    assert '<details markdown="1">' in md and md.count("</details>") == 2     # the plan, its bookkeeping
     assert "| Plan | Changed |" in md and "| P1 — One |" in md
     assert "added: not synthesized (cancelled); ids: R2" in md
     assert "removed: synthesis failed (RHD-E004); ids: R3" in md
     assert "- 2 requirement(s) renumbered" in md and "PX: not part of Jul2031" in md
+    assert "**Structural changes only**" not in md        # a plain `notes` list renders as bookkeeping
+
+
+def test_answer_markdown_summary_leads_and_structural_notes_are_grouped():
+    result = {"cancelled": False, "absent_plans": [], "mno": "mno-q", "from": "Apr2031", "to": "Jul2031",
+              "display": {"mno": "mno-q", "from": "Spring 31 (Apr2031)", "to": "Jul2031"},
+              "counts": {"requirements_from": 120, "requirements_to": 124, "added": 5, "removed": 1,
+                         "renumbered": 2, "moved": 1, "absent_plans": 1},
+              "plans": [{"plan_id": "P1", "plan_name": "One",
+                         "counts": {"changed": 3, "added": 5, "removed": 1, "renumbered": 2, "moved": 1,
+                                    "dropped": 4, "same": 1},
+                         "sections": [{"kind": "pair", "status": "ok", "text": "For [R1], x.", "ids": ["R1"], "lead": ""},
+                                      {"kind": "removed", "status": "ok", "text": "The plan loses a timer.",
+                                       "ids": ["R6"], "lead": "Removed: [R6]"}],
+                         "notes": ["x"], "note_groups": {
+                             "structural": ["2 requirement(s) renumbered (2 sibling); content unchanged."],
+                             "bookkeeping": ["3 requirement(s) differ only in the revision record: [R2], [R3], [R4].",
+                                             "1 requirement(s) unchanged in meaning (wording, formatting or layout only): [R5]."]}}]}
+    md = history_lane.answer_markdown(result)
+    assert md.startswith("**mno-q: Spring 31 (Apr2031) → Jul2031**")
+    assert "120 requirement(s) in Spring 31 (Apr2031), 124 in Jul2031; 3 changed in meaning (another 4 differ in bookkeeping or wording only); 5 added, 1 removed, 2 renumbered, 1 moved; 1 plan(s) with changes, 1 plan(s) present in one release only." in md
+    assert "**Removed: [R6]**" in md and md.index("**Removed: [R6]**") < md.index("The plan loses a timer.")
+    assert "**Structural changes only**" in md and "- 2 requirement(s) renumbered" in md
+    assert "<summary>4 requirement(s) unchanged in meaning (bookkeeping, wording or layout only) · show</summary>" in md
+    assert md.index("Structural changes only") < md.index("unchanged in meaning (bookkeeping")
 
 
 def test_answer_markdown_orders_by_change_and_caps_id_lists():
@@ -248,5 +275,5 @@ def test_answer_markdown_orders_by_change_and_caps_id_lists():
     assert "R10 and 4 more_" in md and "R11" not in md                      # capped status line
     assert "| 1 | 0 | 0 | 0 | 0 | 3 |" in md                                # bookkeeping column
     html = str(render_markdown(md))
-    assert "<table>" in html and html.count("<details>") == 2
+    assert "<table>" in html and html.count("<details>") == 3                # two plans, one bookkeeping
     assert "<li>3 requirement(s) differ only in the revision record" in html   # markdown inside details

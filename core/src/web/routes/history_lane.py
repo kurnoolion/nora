@@ -27,6 +27,7 @@ from core.src.pipeline.error_codes import CODES, PipelineError
 from core.src.query.analyzer import MockQueryAnalyzer
 from core.src.query.release_diff import (
     ReleaseDiffConfig,
+    display_release,
     build_batches,
     is_release_change_question,
     resolve_release_pair,
@@ -113,15 +114,43 @@ def _change_score(p: dict) -> int:
     return c.get("changed", 0) + c.get("added", 0) + c.get("removed", 0)
 
 
+def _summary_lines(result: dict) -> list[str]:
+    """The compared releases and the overall picture, first thing on the
+    page: requirements per release, then changed / added / removed /
+    renumbered / moved counts and the plans."""
+    disp = result.get("display") or {}
+    mno = disp.get("mno") or result.get("mno", "")
+    a, b = disp.get("from") or result.get("from", ""), disp.get("to") or result.get("to", "")
+    c = result.get("counts", {})
+    plans = result.get("plans", [])
+    sent = sum(p.get("counts", {}).get("changed", 0) for p in plans)
+    dropped = sum(p.get("counts", {}).get("dropped", 0) for p in plans)
+    lines = [f"**{mno}: {a} → {b}**", ""] if (mno or a or b) else []
+    bits = []
+    if c.get("requirements_from") is not None and c.get("requirements_to") is not None:
+        bits.append(f"{c['requirements_from']} requirement(s) in {a}, {c['requirements_to']} in {b}")
+    bits.append(f"{sent} changed in meaning" + (f" (another {dropped} differ in bookkeeping or wording only)" if dropped else ""))
+    bits.append(f"{c.get('added', 0)} added, {c.get('removed', 0)} removed, "
+                f"{c.get('renumbered', 0)} renumbered, {c.get('moved', 0)} moved")
+    bits.append(f"{len(plans)} plan(s) with changes"
+                + (f", {c['absent_plans']} plan(s) present in one release only" if c.get("absent_plans") else ""))
+    lines.append("; ".join(bits) + ".")
+    lines.append("")
+    return lines
+
+
 def answer_markdown(result: dict) -> str:
-    """One markdown document from the reassembled plans: a counts table
-    first (plans by real change count, then id), then each plan collapsed
-    with its syntheses in order and the store-derived notes, then the
-    absent plans. Requirement ids stay literal so they become bubbles;
-    id lists in status lines are capped."""
+    """One markdown document from the reassembled plans: the compared
+    releases and a summary line, a counts table (plans by real change
+    count, then id), then each plan collapsed: its syntheses in order
+    (removed and added ids listed by the lane, then the model's summary),
+    "Structural changes only" and the bookkeeping count with its ids
+    collapsed, then the absent plans. Requirement ids stay literal so
+    they become bubbles; id lists in status lines are capped."""
     lines: list[str] = []
     if result.get("cancelled"):
         lines.append("_Cancelled before every plan was synthesized; the plans below are complete._\n")
+    lines.extend(_summary_lines(result))
     plans = sorted(result.get("plans", []), key=lambda p: (-_change_score(p), p["plan_id"]))
     if plans:
         lines.append("| Plan | Changed | Added | Removed | Renumbered | Moved | Bookkeeping only |")
@@ -140,8 +169,12 @@ def answer_markdown(result: dict) -> str:
         lines.append(f"<summary>{title}" + (f" · {brief}" if brief else " · bookkeeping only") + "</summary>")
         lines.append("")
         for s in p.get("sections", []):
-            if s["status"] == "ok" and s.get("text"):
-                lines.append(s["text"].strip())
+            if s["status"] == "ok":
+                if s.get("lead"):
+                    lines.append(f"**{s['lead']}**")
+                    lines.append("")
+                if s.get("text"):
+                    lines.append(s["text"].strip())
             elif s["status"] == "cancelled":
                 lines.append(f"_{s['kind']}: not synthesized (cancelled); "
                              f"ids: {_cap_ids(s.get('ids', []))}_")
@@ -149,15 +182,29 @@ def answer_markdown(result: dict) -> str:
                 lines.append(f"_{s['kind']}: synthesis failed ({s.get('error', 'RHD-E004')}); "
                              f"ids: {_cap_ids(s.get('ids', []))}_")
             lines.append("")
-        for n in p.get("notes", []):
-            lines.append(f"- {n}")
-        if p.get("notes"):
+        groups = p.get("note_groups") or {"structural": [], "bookkeeping": p.get("notes", [])}
+        if groups.get("structural"):
+            lines.append("**Structural changes only**")
+            lines.append("")
+            for n in groups["structural"]:
+                lines.append(f"- {n}")
+            lines.append("")
+        if groups.get("bookkeeping"):
+            n_book = c.get("dropped", 0)
+            lines.append('<details markdown="1">')
+            lines.append(f"<summary>{n_book} requirement(s) unchanged in meaning (bookkeeping, "
+                         f"wording or layout only) · show</summary>")
+            lines.append("")
+            for n in groups["bookkeeping"]:
+                lines.append(f"- {n}")
+            lines.append("")
+            lines.append("</details>")
             lines.append("")
         lines.append("</details>")
         lines.append("")
     absent = result.get("absent_plans") or []
     if absent:
-        lines.append("### Plans not present in one release")
+        lines.append("### Plans present in one release only")
         for a in absent:
             lines.append(f"- {a['plan_id']}: not part of {a['absent_in']}")
         lines.append("")
@@ -212,7 +259,7 @@ async def run_history_lane(
             return {"error": "Name the MNO the release question is about; served: "
                              + ", ".join(mnos), "error_code": ""}
         releases = await asyncio.to_thread(store.releases, mno)
-        rel_a, rel_b = resolve_release_pair(intent.releases, releases)
+        rel_a, rel_b = resolve_release_pair(intent.releases, releases, cfg.names_for(mno))
         await say(f"History: {mno} {rel_a} → {rel_b}; reading changed requirements…")
         payload = await asyncio.to_thread(store.changed_pairs, mno, rel_a, rel_b)
     except PipelineError as exc:
@@ -243,6 +290,9 @@ async def run_history_lane(
         synthesize_release_diff, payload, provider, config=cfg, cancel=cancel,
         on_partial=on_partial)
     forget_run(run_id)
+    names = cfg.names_for(mno)
+    result["display"] = {"mno": mno, "from": display_release(rel_a, names),
+                         "to": display_release(rel_b, names)}
     elapsed_ms = int((time.time() - start) * 1000)
     known = {i for p in result["plans"] for s in p["sections"] for i in s.get("ids", [])}
     known |= {i for p in result["plans"] for i in p.get("note_ids", [])}   # triage notes name ids too
