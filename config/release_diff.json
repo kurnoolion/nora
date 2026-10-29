@@ -1,0 +1,9 @@
+{
+  "_comment": "Release-change lane (query.release_diff). annotation_lines: line-anchored, case-insensitive regexes for document bookkeeping that the parser leaves inside a requirement's body. A pair whose texts are equal once these lines are removed is reported as a one-line note per plan, not sent to the model; the lines are also removed from the text the model sees. model: pin the lane to one model regardless of the Ask page's choice (empty = the page's).",
+  "annotation_lines": [
+    {"name": "revision record", "pattern": "^\\s*change\\s+(type|reason)\\s*:.*$"},
+    {"name": "applicability line", "pattern": "^\\s*only\\s+applies\\s+to\\s*:.*$"},
+    {"name": "table wrapper", "pattern": "^\\s*\\[\\s*table\\s*:.*\\]\\s*$"}
+  ],
+  "model": ""
+}

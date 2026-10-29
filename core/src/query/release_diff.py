@@ -31,14 +31,17 @@ after the fallback (recorded, the run continues); RHD-I001 cancelled.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import threading
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from core.src.llm import FINAL_ANSWER_MARKER, REASONING_SENTINEL_ENABLED
+from core.src.models.fingerprint import canonical_text
 
 log = logging.getLogger(__name__)
 from core.src.llm.batching import Batch, pack, utf8_size
@@ -49,6 +52,19 @@ from core.src.query.schema import QueryIntent, QueryType
 MAX_BATCH_BYTES_ENV = "NORA_HISTORY_DIFF_MAX_BATCH_BYTES"
 PARALLEL_ENV = "NORA_HISTORY_DIFF_PARALLEL"
 ENABLED_ENV = "NORA_HISTORY_DIFF_ENABLED"
+MODEL_ENV = "NORA_HISTORY_DIFF_MODEL"
+CONFIG_ENV = "NORA_HISTORY_DIFF_CONFIG"
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config" / "release_diff.json"
+# Document bookkeeping the parser leaves inside a requirement's body. A pair
+# whose texts are equal without these lines is no content change; they are
+# also removed from the text the model sees. config/release_diff.json
+# overrides the list (name, line-anchored case-insensitive pattern).
+DEFAULT_ANNOTATION_LINES = (
+    ("revision record", r"^\s*change\s+(type|reason)\s*:.*$"),
+    ("applicability line", r"^\s*only\s+applies\s+to\s*:.*$"),
+    ("table wrapper", r"^\s*\[\s*table\s*:.*\]\s*$"),
+)
 
 _MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
@@ -68,6 +84,8 @@ class ReleaseDiffConfig:
     enabled: bool = True
     max_tokens: int = 2048
     temperature: float = 0.0
+    model: str = ""                       # pin the lane's model; "" = the page's choice
+    annotation_lines: tuple = DEFAULT_ANNOTATION_LINES   # (name, pattern) pairs
 
     @classmethod
     def from_env(cls, env: "dict | None" = None) -> "ReleaseDiffConfig":
@@ -75,10 +93,26 @@ class ReleaseDiffConfig:
         enabled_raw = str(e.get(ENABLED_ENV, "")).strip().lower()
         enabled = (enabled_raw in ("1", "true", "yes", "on")) if enabled_raw \
             else bool(str(e.get("NORA_HISTORY_URL", "")).strip())
+        file_cfg = _load_config_file(str(e.get(CONFIG_ENV, "")).strip())
+        lines = tuple((str(a.get("name", "")), str(a.get("pattern", "")))
+                      for a in file_cfg.get("annotation_lines", []) or []
+                      if isinstance(a, dict) and a.get("pattern"))
         return cls(
             max_batch_bytes=max(1024, int(e.get(MAX_BATCH_BYTES_ENV, "32768") or 32768)),
             parallel=max(1, int(e.get(PARALLEL_ENV, "4") or 4)),
-            enabled=enabled)
+            enabled=enabled,
+            model=str(e.get(MODEL_ENV, "") or file_cfg.get("model", "") or "").strip(),
+            annotation_lines=lines if "annotation_lines" in file_cfg else DEFAULT_ANNOTATION_LINES)
+
+
+def _load_config_file(path: str = "") -> dict:
+    """config/release_diff.json (or `path`): {} when absent or unreadable."""
+    p = Path(path) if path else DEFAULT_CONFIG_PATH
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 # ── which questions this answers ──────────────────────────────────────
@@ -157,6 +191,173 @@ def resolve_release_pair(wanted: Iterable[str], releases: list[str]) -> tuple[st
     return releases[idx[0]], releases[idx[1]]
 
 
+# ── triage: what the model need not see ───────────────────────────────
+
+_ID_CAP = 10
+
+
+def _ids_text(ids: "list[str]") -> str:
+    shown = ", ".join(f"[{i}]" for i in ids[:_ID_CAP])
+    return shown + (f" and {len(ids) - _ID_CAP} more" if len(ids) > _ID_CAP else "")
+
+
+def _compile_rules(rules: "Iterable[tuple[str, str]]") -> list[tuple[str, "re.Pattern[str]"]]:
+    out = []
+    for name, pat in rules:
+        try:
+            out.append((name or pat, re.compile(pat, re.I | re.M)))
+        except re.error:
+            continue
+    return out
+
+
+def strip_annotations(text: str, rules: list) -> tuple[str, dict[str, list[str]]]:
+    """The text without its annotation lines, and the lines taken out by
+    rule name."""
+    taken: dict[str, list[str]] = {}
+    kept: list[str] = []
+    for line in (text or "").split("\n"):
+        hit = next((name for name, rx in rules if rx.match(line)), None)
+        if hit is None:
+            kept.append(line)
+        else:
+            taken.setdefault(hit, []).append(line.strip())
+    return "\n".join(kept).strip(), taken
+
+
+_TOKEN_SPLIT = re.compile(r"[,;|:]")
+
+
+def _line_delta(old_lines: list[str], new_lines: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Tokens an annotation line gained and lost, canonical, for the
+    'each gained X' note."""
+    def toks(lines):
+        return {canonical_text(t) for ln in lines for t in _TOKEN_SPLIT.split(ln) if canonical_text(t)}
+    a, b = toks(old_lines), toks(new_lines)
+    return tuple(sorted(b - a)), tuple(sorted(a - b))
+
+
+def triage_pairs(payload: dict, rules: "Iterable[tuple[str, str]]" = DEFAULT_ANNOTATION_LINES) -> dict:
+    """A copy of the payload with what the model need not see taken out of
+    `changed`, `added` and `removed`, and recorded per plan under
+    `triage` for deterministic notes: pairs equal once annotation lines
+    are removed (by rule name, with the lines' token delta), title-only
+    pairs, priority- or applicability-only pairs, layout-only pairs, and
+    heading-only (empty-text) additions and removals. The text the model
+    does see has its annotation lines removed. Store counts are untouched;
+    `triage["sent"]` and `triage["dropped"]` count pairs."""
+    rx = _compile_rules(rules)
+    out = {**payload, "plans": {}}
+    for plan_id, p in payload.get("plans", {}).items():
+        t: dict = {"annotation": {}, "title_only": [], "attrs_only": [], "layout_only": [],
+                   "heading_removed": [], "heading_added": [], "sent": 0, "dropped": 0}
+        changed: list[dict] = []
+        for c in p.get("changed", []):
+            old, new = c.get("old", {}), c.get("new", {})
+            ot, otaken = strip_annotations(old.get("text", ""), rx)
+            nt, ntaken = strip_annotations(new.get("text", ""), rx)
+            if canonical_text(ot) != canonical_text(nt):
+                changed.append({**c, "old": {**old, "text": ot}, "new": {**new, "text": nt}})
+                t["sent"] += 1
+                continue
+            t["dropped"] += 1
+            if canonical_text(old.get("title")) != canonical_text(new.get("title")):
+                t["title_only"].append(c["req_id"])
+                continue
+            oa = sorted({canonical_text(a) for a in old.get("applicability") or []})
+            na = sorted({canonical_text(a) for a in new.get("applicability") or []})
+            if canonical_text(old.get("priority")) != canonical_text(new.get("priority")) or oa != na:
+                t["attrs_only"].append({"req_id": c["req_id"],
+                                        "priority": (old.get("priority", ""), new.get("priority", ""))
+                                        if canonical_text(old.get("priority")) != canonical_text(new.get("priority")) else None,
+                                        "applicability": (tuple(sorted(set(na) - set(oa))), tuple(sorted(set(oa) - set(na))))
+                                        if oa != na else None})
+                continue
+            names = [n for n in dict.fromkeys([*otaken, *ntaken])
+                     if [canonical_text(x) for x in otaken.get(n, [])] != [canonical_text(x) for x in ntaken.get(n, [])]]
+            if not names:
+                t["layout_only"].append(c["req_id"])
+                continue
+            for n in names:
+                g = t["annotation"].setdefault(n, {"ids": [], "deltas": []})
+                g["ids"].append(c["req_id"])
+                # a token delta only when both releases carry the line; a line
+                # that appeared or vanished whole is just "differ only in"
+                g["deltas"].append(_line_delta(otaken[n], ntaken[n])
+                                   if otaken.get(n) and ntaken.get(n) else ((), ()))
+        kept_kind: dict[str, list[dict]] = {}
+        for kind, bucket in (("removed", "heading_removed"), ("added", "heading_added")):
+            kept: list[dict] = []
+            for r in p.get(kind, []):
+                txt, _ = strip_annotations(r.get("text", ""), rx)
+                if not canonical_text(txt):
+                    t[bucket].append(r["req_id"])
+                else:
+                    kept.append({**r, "text": txt})
+            kept_kind[kind] = kept
+        out["plans"][plan_id] = {**p, "changed": changed, "removed": kept_kind["removed"],
+                                 "added": kept_kind["added"], "triage": t}
+    return out
+
+
+def _triage_notes(t: dict) -> list[str]:
+    notes: list[str] = []
+    for name, g in t.get("annotation", {}).items():
+        n = len(g["ids"])
+        line = f"{n} requirement(s) differ only in the {name}"
+        deltas = set(g["deltas"])
+        if len(deltas) == 1:
+            gained, lost = next(iter(deltas))
+            bits = ([f"each gained: {', '.join(gained)}"] if gained else []) + \
+                   ([f"each lost: {', '.join(lost)}"] if lost else [])
+            if bits:
+                line += " (" + "; ".join(bits) + ")"
+        notes.append(line + ": " + _ids_text(g["ids"]) + ".")
+    if t.get("title_only"):
+        notes.append(f"{len(t['title_only'])} requirement(s): title changed, text identical: "
+                     + _ids_text(t["title_only"]) + ".")
+    for a in t.get("attrs_only", []):
+        parts = []
+        if a.get("priority"):
+            parts.append(f"priority {a['priority'][0] or '—'} → {a['priority'][1] or '—'}")
+        if a.get("applicability"):
+            gained, lost = a["applicability"]
+            parts.append("applicability " + "; ".join(
+                ([f"+{', '.join(gained)}"] if gained else []) + ([f"−{', '.join(lost)}"] if lost else [])))
+        notes.append(f"[{a['req_id']}]: " + ", ".join(parts) + "; text unchanged.")
+    if t.get("layout_only"):
+        notes.append(f"{len(t['layout_only'])} requirement(s) differ in layout or markup only: "
+                     + _ids_text(t["layout_only"]) + ".")
+    for key, verb in (("heading_removed", "removed"), ("heading_added", "added")):
+        if t.get(key):
+            notes.append(f"{len(t[key])} heading-only entr{'y' if len(t[key]) == 1 else 'ies'} {verb}: "
+                         + _ids_text(t[key]) + ".")
+    return notes
+
+
+def triage_ids(t: dict) -> list[str]:
+    """Every id a triage note names (bubbles anchor on them)."""
+    ids: list[str] = []
+    for g in t.get("annotation", {}).values():
+        ids.extend(g["ids"])
+    ids.extend(t.get("title_only", []))
+    ids.extend(a["req_id"] for a in t.get("attrs_only", []))
+    for key in ("layout_only", "heading_removed", "heading_added"):
+        ids.extend(t.get(key, []))
+    return sorted(set(ids))
+
+
+def triage_totals(payload: dict) -> dict:
+    ts = [p.get("triage", {}) for p in payload.get("plans", {}).values()]
+    return {"sent": sum(t.get("sent", 0) for t in ts),
+            "dropped": sum(t.get("dropped", 0) for t in ts),
+            "annotation": sum(len(g["ids"]) for t in ts for g in t.get("annotation", {}).values()),
+            "title_only": sum(len(t.get("title_only", [])) for t in ts),
+            "attrs_only": sum(len(t.get("attrs_only", [])) for t in ts),
+            "layout_only": sum(len(t.get("layout_only", [])) for t in ts),
+            "heading_only": sum(len(t.get("heading_removed", [])) + len(t.get("heading_added", [])) for t in ts)}
+
+
 # ── batches and prompts ───────────────────────────────────────────────
 
 def _req_text(r: dict) -> str:
@@ -225,8 +426,10 @@ _PROMPTS = {
     "pair": ("For each requirement below, the previous and the current release text are "
              "shown side by side. For each one, state in one or two sentences what changed: "
              "a changed value, condition, scope, wording with a different meaning, or a "
-             "priority or applicability change (name it as such). Skip pure rewording with "
-             "the same meaning in one short clause. Cite the id.\n\n"),
+             "priority or applicability change (name it as such). Omit a requirement whose "
+             "difference is wording or layout only with the same meaning; end with one line "
+             "'Wording or layout only: ' listing those ids, or no such line when there are "
+             "none. Cite the id.\n\n"),
     "removed": ("The requirements below exist in the previous release and are absent from "
                 "the current one. First list the removed ids, then give one short summary of "
                 "what this plan lost as a whole (one sentence for a single requirement).\n\n"),
@@ -253,7 +456,8 @@ def prompt_for(batch: Batch, payload: "dict | None" = None) -> tuple[str, str]:
 
 _WORKING_RE = re.compile(
     r"^\s*(okay|ok|alright|let me|let's|first,? i|i need to|i'll|i will|the user (wants|asks|is asking)|"
-    r"looking at|we need to|so,? the|now,? let)", re.I)
+    r"looking at|we need|we should|so,? the|now,? (let|produce)|identify (the )?changes|"
+    r"so (change|mention)|summari[sz]e (the )?changes)", re.I)
 # Phrases of the model talking to itself. Two distinct ones close together
 # mark working text wherever it sits: a reply that begins with the TAIL of a
 # reasoning block (the marker landed inside the reasoning, so the split kept
@@ -269,6 +473,7 @@ _PHRASE_RE = re.compile(
     r"followed by the (final )?answer|(as per|per) the user|the user's instruction|"
     r"structure the (response|answer|output)|list the (added|removed|changed) (ids?|requirements?)|"
     r"referencing the ids?|mentioning the (feature|ids?)|since there('s| is) only|"
+    r"now produce (the )?(answer|output)|identify (the )?changes|so change:|so mention|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block
@@ -495,10 +700,13 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
                 else:
                     sections.append({"kind": kind, "batch": b.index, "status": "ok",
                                      "text": o.text, "ids": [i for it in b.items for i in it["ids"]]})
+        t = p.get("triage", {})
         plans_out.append({"plan_id": plan_id, "plan_name": p.get("plan_name", ""),
-                          "sections": sections, "notes": _plan_notes(p),
-                          "counts": {k: len(p.get(k, [])) for k in
-                                     ("changed", "added", "removed", "renamed", "renumbered", "moved")}})
+                          "sections": sections, "notes": _plan_notes(p) + _triage_notes(t),
+                          "note_ids": triage_ids(t),
+                          "counts": {**{k: len(p.get(k, [])) for k in
+                                        ("changed", "added", "removed", "renamed", "renumbered", "moved")},
+                                     "dropped": t.get("dropped", 0)}})
     absent = [{"plan_id": k, "absent_in": v.get("absent_in", "")}
               for k, v in sorted(payload.get("absent_plans", {}).items())]
     return {"mno": payload.get("mno", ""), "from": payload.get("from", ""),
@@ -517,6 +725,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
     stream it. The result carries the reassembled plans, the run numbers
     and the compact block."""
     cfg = config or ReleaseDiffConfig()
+    payload = triage_pairs(payload, cfg.annotation_lines)
     batches = build_batches(payload, cfg.max_batch_bytes)
     total = len(batches)
 
@@ -570,6 +779,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                   "batch_ms": rr.latency_ms(),
                   "retried": working["retried"], "stripped": working["stripped"],
                   "errors": sorted({o.error.split(":")[0] for o in rr.outcomes.values() if o.error})}
+    out["triage"] = triage_totals(payload)
     out["compact"] = compact_block(out)
     return out
 
@@ -579,13 +789,15 @@ def compact_block(result: dict) -> str:
     c = result.get("counts", {})
     r = result.get("run", {})
     return ("RHD mno={mno} from={a} to={b} plans={plans} absent={absent} pairs={pairs} "
-            "added={added} removed={removed} renumbered={renum} batches={batches} "
+            "added={added} removed={removed} renumbered={renum} sent={sent} dropped={dropped} "
+            "batches={batches} "
             "parallel={par} bytes_max={bm} done={done} failed={failed} cancelled={canc} "
             "elapsed_ms={ms} batch_ms_p50={p50} batch_ms_p95={p95} batch_ms_max={mx} "
             "retried={ret} stripped={strp}{errs}").format(
         mno=result.get("mno", ""), a=result.get("from", ""), b=result.get("to", ""),
         plans=c.get("plans", 0), absent=c.get("absent_plans", 0), pairs=c.get("changed", 0),
         added=c.get("added", 0), removed=c.get("removed", 0), renum=c.get("renumbered", 0),
+        sent=result.get("triage", {}).get("sent", 0), dropped=result.get("triage", {}).get("dropped", 0),
         batches=r.get("batches", 0), par=r.get("parallel", 0), bm=r.get("max_batch_bytes", 0),
         done=r.get("done", 0), failed=r.get("failed", 0),
         canc=1 if result.get("cancelled") else 0, ms=r.get("elapsed_ms", 0),

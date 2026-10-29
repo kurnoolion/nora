@@ -165,10 +165,14 @@ def test_synthesize_reassembles_in_plan_order_and_streams_partials():
     assert [p["plan_id"] for p in out["plans"]] == ["PLANA", "PLANB"]
     a = out["plans"][0]
     assert [s["kind"] for s in a["sections"]] == ["pair", "removed", "added"]
-    assert a["sections"][0]["text"] == "changed: R1, R2" and a["sections"][0]["status"] == "ok"
+    # R2's text is identical and only its priority moved: a note, not a model sentence
+    assert a["sections"][0]["text"] == "changed: R1" and a["sections"][0]["status"] == "ok"
+    assert any(n.startswith("[R2]: priority Mandatory → Optional") for n in a["notes"])
+    assert "R2" in a["note_ids"] and a["counts"]["dropped"] == 1
     assert a["sections"][1]["text"] == "removed: R6" and a["sections"][2]["text"] == "added: R9"
     assert a["notes"] == ["1 requirement(s) renumbered (1 parent); content unchanged.",
-                          "Section(s) renumbered: 2 → 3."]
+                          "Section(s) renumbered: 2 → 3.",
+                          "[R2]: priority Mandatory → Optional; text unchanged."]
     assert out["plans"][1]["notes"] == ["Moved: B4 from 2.1 to 4.1."]
     assert out["absent_plans"] == [{"plan_id": "PLANX", "absent_in": "Jul2031"}]
     assert out["run"]["batches"] == 4 and out["run"]["done"] == 4 and out["run"]["failed"] == 0
@@ -422,4 +426,76 @@ def test_retry_with_a_lone_phrase_counts_as_stripped(caplog):
     assert texts and all("followed by" not in t for t in texts)
     assert out["run"]["retried"] == 4 and out["run"]["stripped"] == 4
     assert all("stripped=1 cut_chars=24" in m for m in caplog.messages if m.startswith("RHD working text:"))
+
+
+def test_triage_takes_bookkeeping_out_of_the_model_input():
+    """Pairs that differ only in an annotation line, a title, an attribute
+    or layout become one deterministic note each; heading-only entries
+    become a count; the model sees the rest without the annotation lines."""
+    from core.src.query.release_diff import triage_pairs, triage_totals
+    rev = "Change type: New Requirement\nChange reason: new feature\n"
+    pl = {
+        "mno": "mno-q", "from": "Apr2031", "to": "Jul2031", "absent_plans": {}, "counts": {},
+        "plans": {"PLANC": {
+            "plan_name": "Plan C", "present": {"from": True, "to": True},
+            "changed": [
+                _pair("C1", rev + "the timer shall be 30 s", "the timer shall be 30 s"),
+                _pair("C2", rev + "the fallback shall apply", "the fallback shall apply"),
+                _pair("C3", "Only Applies to: Phone, Tablet\nthe audit note stands",
+                      "Only Applies to: Phone, Tablet, Watch\nthe audit note stands"),
+                _pair("C4", "Only Applies to: Phone\nthe retry shall stop", "Only Applies to: Phone, Watch\nthe retry shall stop"),
+                _pair("C5", "spacing  here", "spacing here"),
+                {**_pair("C6", "same text", "same text"), "new": {"title": "new title", "text": "same text",
+                                                                    "priority": "Mandatory", "applicability": ["Phone"]}},
+                _pair("C7", rev + "the value shall be 5", "the value shall be 6"),
+            ],
+            "removed": [_req("C8", ""), _req("C9", "a real removed requirement")],
+            "added": [_req("C10", "Change type: New Requirement")],
+            "renamed": [], "renumbered": [], "moved": []}},
+    }
+    out = triage_pairs(pl)
+    p = out["plans"]["PLANC"]
+    assert [c["req_id"] for c in p["changed"]] == ["C7"]
+    assert "Change type" not in p["changed"][0]["old"]["text"]        # lines stripped for the model
+    assert [r["req_id"] for r in p["removed"]] == ["C9"] and p["added"] == []
+    t = p["triage"]
+    assert t["sent"] == 1 and t["dropped"] == 6
+    assert t["annotation"]["revision record"]["ids"] == ["C1", "C2"]
+    assert t["annotation"]["applicability line"]["ids"] == ["C3", "C4"]
+    assert set(t["annotation"]["applicability line"]["deltas"]) == {(("watch",), ())}
+    assert t["layout_only"] == ["C5"] and t["title_only"] == ["C6"]
+    assert t["heading_removed"] == ["C8"] and t["heading_added"] == ["C10"]
+    assert triage_totals(out) == {"sent": 1, "dropped": 6, "annotation": 4, "title_only": 1,
+                                  "attrs_only": 0, "layout_only": 1, "heading_only": 2}
+    res = synthesize_release_diff(pl, EchoProvider(), config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
+    notes = res["plans"][0]["notes"]
+    assert "2 requirement(s) differ only in the revision record: [C1], [C2]." in notes
+    assert "2 requirement(s) differ only in the applicability line (each gained: watch): [C3], [C4]." in notes
+    assert "1 requirement(s): title changed, text identical: [C6]." in notes
+    assert "1 requirement(s) differ in layout or markup only: [C5]." in notes
+    assert "1 heading-only entry removed: [C8]." in notes and "1 heading-only entry added: [C10]." in notes
+    assert sorted(res["plans"][0]["note_ids"]) == ["C1", "C10", "C2", "C3", "C4", "C5", "C6", "C8"]
+    assert "sent=1 dropped=6" in res["compact"] and res["triage"]["dropped"] == 6
+    assert len(res["plans"][0]["sections"]) == 2            # one pair batch, one removed batch
+
+
+def test_config_file_rules_and_model_pin(tmp_path, monkeypatch):
+    from core.src.query.release_diff import ReleaseDiffConfig, DEFAULT_ANNOTATION_LINES
+    cfg = ReleaseDiffConfig.from_env({})
+    assert cfg.annotation_lines and cfg.model == ""                 # the shipped file or the defaults
+    f = tmp_path / "rd.json"
+    f.write_text('{"annotation_lines": [{"name": "note", "pattern": "^note:.*$"}], "model": "think-1"}')
+    cfg = ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(f)})
+    assert cfg.annotation_lines == (("note", "^note:.*$"),) and cfg.model == "think-1"
+    cfg = ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(f), "NORA_HISTORY_DIFF_MODEL": "x"})
+    assert cfg.model == "x"
+    assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(tmp_path / "none.json")}).annotation_lines == DEFAULT_ANNOTATION_LINES
+
+
+def test_fast_model_idiom_is_working_text():
+    from core.src.query.release_diff import looks_like_working_text
+    for opening in ("We need summarize changes per requirement. [R1] ...",
+                    "Identify changes: [R1] the timer moved.",
+                    "Now produce answer.\n\n[R1] the timer moved."):
+        assert looks_like_working_text(opening), opening
 

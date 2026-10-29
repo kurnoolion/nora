@@ -213,6 +213,7 @@ async def run_history_lane(
     forget_run(run_id)
     elapsed_ms = int((time.time() - start) * 1000)
     known = {i for p in result["plans"] for s in p["sections"] for i in s.get("ids", [])}
+    known |= {i for p in result["plans"] for i in p.get("note_ids", [])}   # triage notes name ids too
     answer = answer_markdown(result)
     cited = _ids_in(answer, known)
     from core.src.llm.base import answering_model  # local: keeps this module import-light
@@ -228,6 +229,7 @@ async def run_history_lane(
         "counts": dict(result.get("counts", {})),
         "elapsed_ms": result["run"]["elapsed_ms"],
         "batch_ms": dict(result["run"].get("batch_ms", {})),
+        "triage": dict(result.get("triage", {})),
         "retried": result["run"].get("retried", 0),
         "stripped": result["run"].get("stripped", 0),
         "errors": list(result["run"].get("errors", [])),
