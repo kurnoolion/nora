@@ -61,9 +61,13 @@ DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config" / "release_diff.json"
 # also removed from the text the model sees. config/release_diff.json
 # overrides the list (name, line-anchored case-insensitive pattern).
 DEFAULT_ANNOTATION_LINES = (
-    ("revision record", r"^\s*change\s+(type|reason)\s*:.*$"),
-    ("applicability line", r"^\s*only\s+applies\s+to\s*:.*$"),
-    ("table wrapper", r"^\s*\[\s*table\s*:.*\]\s*$"),
+    ("revision record", r"^\s*change\s+(type|reason)\s*:.*$", "line"),
+    ("applicability line", r"^\s*only\s+applies\s+to\s*:.*$", "line"),
+    # the wrapper may share its line with the table's first row: an inline
+    # fragment up to the closing bracket, a pipe or the line's end
+    ("table wrapper", r"\[\s*table\s*:[^\]\n|]*\]?", "inline"),
+    # a line that is only a cross-reference: "n.n.n Section title"
+    ("section reference", r"^\s*(see\s+)?\d+(\.\d+){1,4}\s+[^\n.]{1,80}$", "line"),
 )
 
 _MONTHS = {m: i for i, m in enumerate(
@@ -94,7 +98,8 @@ class ReleaseDiffConfig:
         enabled = (enabled_raw in ("1", "true", "yes", "on")) if enabled_raw \
             else bool(str(e.get("NORA_HISTORY_URL", "")).strip())
         file_cfg = _load_config_file(str(e.get(CONFIG_ENV, "")).strip())
-        lines = tuple((str(a.get("name", "")), str(a.get("pattern", "")))
+        lines = tuple((str(a.get("name", "")), str(a.get("pattern", "")),
+                       "inline" if str(a.get("scope", "")).lower() == "inline" else "line")
                       for a in file_cfg.get("annotation_lines", []) or []
                       if isinstance(a, dict) and a.get("pattern"))
         return cls(
@@ -201,28 +206,49 @@ def _ids_text(ids: "list[str]") -> str:
     return shown + (f" and {len(ids) - _ID_CAP} more" if len(ids) > _ID_CAP else "")
 
 
-def _compile_rules(rules: "Iterable[tuple[str, str]]") -> list[tuple[str, "re.Pattern[str]"]]:
+def _compile_rules(rules: "Iterable[tuple]") -> list[tuple[str, "re.Pattern[str]", str]]:
+    """(name, pattern, scope) with scope `line` (whole line, anchored) or
+    `inline` (a fragment removed from within a line)."""
     out = []
-    for name, pat in rules:
+    for rule in rules:
+        name, pat = rule[0], rule[1]
+        scope = rule[2] if len(rule) > 2 and rule[2] == "inline" else "line"
         try:
-            out.append((name or pat, re.compile(pat, re.I | re.M)))
+            out.append((name or pat, re.compile(pat, re.I | re.M), scope))
         except re.error:
             continue
     return out
 
 
 def strip_annotations(text: str, rules: list) -> tuple[str, dict[str, list[str]]]:
-    """The text without its annotation lines, and the lines taken out by
-    rule name."""
+    """The text without its annotation lines and fragments, and what was
+    taken out, by rule name."""
     taken: dict[str, list[str]] = {}
     kept: list[str] = []
     for line in (text or "").split("\n"):
-        hit = next((name for name, rx in rules if rx.match(line)), None)
-        if hit is None:
-            kept.append(line)
-        else:
+        hit = next((name for name, rx, scope in rules if scope == "line" and rx.match(line)), None)
+        if hit is not None:
             taken.setdefault(hit, []).append(line.strip())
+            continue
+        for name, rx, scope in rules:
+            if scope != "inline":
+                continue
+            frags = [m.group(0).strip() for m in rx.finditer(line)]
+            if frags:
+                taken.setdefault(name, []).extend(frags)
+                line = rx.sub(" ", line)
+        kept.append(line)
     return "\n".join(kept).strip(), taken
+
+
+_NOT_WORD = re.compile(r"[^0-9a-z\u00c0-\uffff]+")
+_TAG = re.compile(r"<[^>\n]{1,40}>")
+
+
+def _layout_key(text: str) -> str:
+    """Canonical text without markup tags, punctuation or spacing: equal
+    keys mean a layout- or markup-only difference."""
+    return _NOT_WORD.sub("", canonical_text(_TAG.sub(" ", text or "")))
 
 
 _TOKEN_SPLIT = re.compile(r"[,;|:]")
@@ -257,6 +283,10 @@ def triage_pairs(payload: dict, rules: "Iterable[tuple[str, str]]" = DEFAULT_ANN
             ot, otaken = strip_annotations(old.get("text", ""), rx)
             nt, ntaken = strip_annotations(new.get("text", ""), rx)
             if canonical_text(ot) != canonical_text(nt):
+                if _layout_key(ot) == _layout_key(nt):
+                    t["dropped"] += 1
+                    t["layout_only"].append(c["req_id"])
+                    continue
                 changed.append({**c, "old": {**old, "text": ot}, "new": {**new, "text": nt}})
                 t["sent"] += 1
                 continue
@@ -303,16 +333,17 @@ def triage_pairs(payload: dict, rules: "Iterable[tuple[str, str]]" = DEFAULT_ANN
 def _triage_notes(t: dict) -> list[str]:
     notes: list[str] = []
     for name, g in t.get("annotation", {}).items():
-        n = len(g["ids"])
-        line = f"{n} requirement(s) differ only in the {name}"
-        deltas = set(g["deltas"])
-        if len(deltas) == 1:
-            gained, lost = next(iter(deltas))
+        # one note per distinct line delta, the largest group first
+        groups: dict[tuple, list[str]] = {}
+        for rid, delta in zip(g["ids"], g["deltas"]):
+            groups.setdefault(delta, []).append(rid)
+        for (gained, lost), ids in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            line = f"{len(ids)} requirement(s) differ only in the {name}"
             bits = ([f"each gained: {', '.join(gained)}"] if gained else []) + \
                    ([f"each lost: {', '.join(lost)}"] if lost else [])
             if bits:
                 line += " (" + "; ".join(bits) + ")"
-        notes.append(line + ": " + _ids_text(g["ids"]) + ".")
+            notes.append(line + ": " + _ids_text(ids) + ".")
     if t.get("title_only"):
         notes.append(f"{len(t['title_only'])} requirement(s): title changed, text identical: "
                      + _ids_text(t["title_only"]) + ".")
@@ -473,7 +504,9 @@ _PHRASE_RE = re.compile(
     r"followed by the (final )?answer|(as per|per) the user|the user's instruction|"
     r"structure the (response|answer|output)|list the (added|removed|changed) (ids?|requirements?)|"
     r"referencing the ids?|mentioning the (feature|ids?)|since there('s| is) only|"
-    r"now produce (the )?(answer|output)|identify (the )?changes|so change:|so mention|"
+    r"now produce( the| a)?( final)? (answer|output|response)|identify (the |actual )?changes|"
+    r"so change:|so mention|we need( to)? (list|summari[sz]e|identify|produce|mention|state)|"
+    r"need (to )?list|omit those|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block
@@ -578,7 +611,14 @@ def _strip_once(text: str, ids: list[str]) -> str:
             paras = [p for p in text.split("\n\n") if p.strip()]
             return paras[-1].strip() if len(paras) > 1 else text
         start = text.rfind("\n\n", 0, first_id)
-        return text[start + 2:].strip() if start >= 0 else text
+        if start >= 0:
+            return text[start + 2:].strip()
+        # the opener and the answer share one paragraph: keep from the
+        # sentence that holds the first id
+        sent_start = 0
+        for e in _SENTENCE_END_RE.finditer(text, 0, first_id):
+            sent_start = e.end()
+        return text[sent_start:].strip()
     # the block sits after a draft that holds the ids (or between answer
     # parts): drop the cluster's sentences
     first, last = cluster[0], cluster[-1]

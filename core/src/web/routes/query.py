@@ -342,7 +342,11 @@ def _build_llm_from_env_or_default(
         timeout = entry.timeout or DEFAULT_LLM_TIMEOUT
         chosen_model = entry.model
         if model and model != entry.model:
-            from core.src.web.model_discovery import allowed_models
+            from core.src.web.model_discovery import allowed_models, models_for, has_entry
+            if model not in allowed_models(entry) and not has_entry(entry):
+                # nothing discovered yet (a fresh process): one fetch now,
+                # so a client that names a model is not silently refused
+                models_for(entry)
             if model in allowed_models(entry):
                 chosen_model = model
             else:

@@ -64,6 +64,11 @@ def models_for(entry) -> tuple[list[str], bool]:
         return _with_default(entry, models), models is not None
 
 
+def has_entry(entry) -> bool:
+    """Whether discovery has run for `entry` in this process (hit or miss)."""
+    return entry.id in _cache
+
+
 def allowed_models(entry) -> list[str]:
     """Models the answer path may use for `entry`. Cache only — never fetches."""
     _, models = _cache.get(entry.id, (None, None))

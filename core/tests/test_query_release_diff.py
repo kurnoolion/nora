@@ -486,7 +486,7 @@ def test_config_file_rules_and_model_pin(tmp_path, monkeypatch):
     f = tmp_path / "rd.json"
     f.write_text('{"annotation_lines": [{"name": "note", "pattern": "^note:.*$"}], "model": "think-1"}')
     cfg = ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(f)})
-    assert cfg.annotation_lines == (("note", "^note:.*$"),) and cfg.model == "think-1"
+    assert cfg.annotation_lines == (("note", "^note:.*$", "line"),) and cfg.model == "think-1"
     cfg = ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(f), "NORA_HISTORY_DIFF_MODEL": "x"})
     assert cfg.model == "x"
     assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(tmp_path / "none.json")}).annotation_lines == DEFAULT_ANNOTATION_LINES
@@ -498,4 +498,44 @@ def test_fast_model_idiom_is_working_text():
                     "Identify changes: [R1] the timer moved.",
                     "Now produce answer.\n\n[R1] the timer moved."):
         assert looks_like_working_text(opening), opening
+
+
+def test_inline_wrapper_section_reference_layout_and_grouped_deltas():
+    from core.src.query.release_diff import (DEFAULT_ANNOTATION_LINES, _compile_rules,
+                                             strip_annotations, triage_pairs)
+    rx = _compile_rules(DEFAULT_ANNOTATION_LINES)
+    text, taken = strip_annotations("[Table: Timer values | col a | col b\nrow 1 | 2\n"
+                                    "3.2.1 Retry handling\nThe timer shall be 30 s.", rx)
+    assert taken == {"table wrapper": ["[Table: Timer values"], "section reference": ["3.2.1 Retry handling"]}
+    assert text.startswith("| col a | col b") and "3.2.1" not in text and "30 s" in text
+    pl = {"mno": "mno-q", "from": "a", "to": "b", "absent_plans": {}, "counts": {}, "plans": {"P": {
+        "plan_name": "P", "present": {"from": True, "to": True},
+        "changed": [
+            _pair("W1", "[Table: Timers v1 | a | b\nrow", "[Table: Timers v2 | a | b\nrow"),   # wrapper only
+            _pair("L1", "the timer; shall-be <td>30</td> s.", "the timer shall be | 30 s"),        # layout only
+            _pair("S1", "the retry shall stop\n3.2.1 Retry handling", "the retry shall stop"),       # reference line
+            _pair("A1", "Only Applies to: Phone\nx", "Only Applies to: Phone, Watch\nx"),
+            _pair("A2", "Only Applies to: Phone\ny", "Only Applies to: Phone, Watch\ny"),
+            _pair("A3", "Only Applies to: Phone\nz", "Only Applies to: Tablet\nz"),
+            _pair("A4", "Only Applies to: Phone\nw", "w"),                                           # line vanished
+        ], "added": [], "removed": [], "renamed": [], "renumbered": [], "moved": []}}}
+    t = triage_pairs(pl)["plans"]["P"]["triage"]
+    assert t["sent"] == 0 and t["dropped"] == 7
+    assert t["annotation"]["table wrapper"]["ids"] == ["W1"] and t["layout_only"] == ["L1"]
+    assert t["annotation"]["section reference"]["ids"] == ["S1"]
+    out = synthesize_release_diff(pl, EchoProvider(), config=ReleaseDiffConfig(parallel=1))
+    notes = out["plans"][0]["notes"]
+    assert "2 requirement(s) differ only in the applicability line (each gained: watch): [A1], [A2]." in notes
+    assert "1 requirement(s) differ only in the applicability line (each gained: tablet; each lost: phone): [A3]." in notes
+    assert "1 requirement(s) differ only in the applicability line: [A4]." in notes
+    assert out["plans"][0]["sections"] == [] and out["plans"][0]["counts"]["changed"] == 0
+
+
+def test_opener_only_reply_in_one_paragraph_is_cut_to_the_answer():
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    t = "We need summarize. For [R1], the timer moved."
+    assert looks_like_working_text(t) and strip_working_text(t, ["R1"]) == "For [R1], the timer moved."
+    t2 = ("We need list changes per requirement and omit those with wording only. Identify actual "
+          "changes. Now produce final answer. For [R1], the timer moved to 31 s. Wording or layout only: [R2].")
+    assert strip_working_text(t2, ["R1", "R2"]) == "For [R1], the timer moved to 31 s. Wording or layout only: [R2]."
 

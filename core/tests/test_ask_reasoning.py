@@ -927,11 +927,27 @@ class TestChosenModel:
             cfg._reset_llm_config_cache(); md._reset_cache()
 
     def test_empty_cache_allows_only_default(self, tmp_path, monkeypatch):
+        # nothing discovered yet and the fetch fails: default only, as before
         from core.src.web.routes.query import _build_llm_from_env_or_default
         cfg, md = self._roster(tmp_path, monkeypatch)
+        monkeypatch.setattr(md, "list_models", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
         try:
             llm = _build_llm_from_env_or_default(provider_id="internal", model="model-x")
             assert self._primary(llm).model == "default-model"
+        finally:
+            cfg._reset_llm_config_cache(); md._reset_cache()
+
+    def test_empty_cache_discovers_once_on_demand(self, tmp_path, monkeypatch):
+        # a fresh process (the page not loaded yet): one fetch, then the model is accepted
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        cfg, md = self._roster(tmp_path, monkeypatch)
+        calls = []
+        monkeypatch.setattr(md, "list_models", lambda *a, **k: (calls.append(1), ["model-x"])[1])
+        try:
+            llm = _build_llm_from_env_or_default(provider_id="internal", model="model-x")
+            assert self._primary(llm).model == "model-x" and len(calls) == 1
+            llm = _build_llm_from_env_or_default(provider_id="internal", model="rogue")
+            assert self._primary(llm).model == "default-model" and len(calls) == 1   # cache, no refetch
         finally:
             cfg._reset_llm_config_cache(); md._reset_cache()
 
