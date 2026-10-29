@@ -32,6 +32,8 @@ _MD_EXTENSIONS = (
     "nl2br",         # single newline → <br> (better fidelity to LLM
                      #   formatting where the model uses bare newlines
                      #   instead of blank-line paragraph breaks)
+    "md_in_html",    # markdown inside a raw block marked markdown="1"
+                     #   (the release-change page's collapsed plans)
 )
 
 

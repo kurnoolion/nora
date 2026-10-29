@@ -100,28 +100,60 @@ def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = 
 
 # ── answer assembly ───────────────────────────────────────────────────
 
+_ID_CAP = 10
+
+
+def _cap_ids(ids: list) -> str:
+    shown = ", ".join(ids[:_ID_CAP])
+    return shown + (f" and {len(ids) - _ID_CAP} more" if len(ids) > _ID_CAP else "")
+
+
+def _change_score(p: dict) -> int:
+    c = p.get("counts", {})
+    return c.get("changed", 0) + c.get("added", 0) + c.get("removed", 0)
+
+
 def answer_markdown(result: dict) -> str:
-    """One markdown document from the reassembled plans: a heading per
-    plan, the syntheses in order, the store-derived notes, then the
-    absent plans. Requirement ids stay literal so they become bubbles."""
+    """One markdown document from the reassembled plans: a counts table
+    first (plans by real change count, then id), then each plan collapsed
+    with its syntheses in order and the store-derived notes, then the
+    absent plans. Requirement ids stay literal so they become bubbles;
+    id lists in status lines are capped."""
     lines: list[str] = []
     if result.get("cancelled"):
         lines.append("_Cancelled before every plan was synthesized; the plans below are complete._\n")
-    for p in result.get("plans", []):
+    plans = sorted(result.get("plans", []), key=lambda p: (-_change_score(p), p["plan_id"]))
+    if plans:
+        lines.append("| Plan | Changed | Added | Removed | Renumbered | Moved | Bookkeeping only |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        for p in plans:
+            c = p.get("counts", {})
+            name = f"{p['plan_id']}" + (f" — {p['plan_name']}" if p.get("plan_name") else "")
+            lines.append(f"| {name} | {c.get('changed', 0)} | {c.get('added', 0)} | {c.get('removed', 0)} "
+                         f"| {c.get('renumbered', 0)} | {c.get('moved', 0)} | {c.get('dropped', 0)} |")
+        lines.append("")
+    for p in plans:
         title = p["plan_id"] + (f" — {p['plan_name']}" if p.get("plan_name") else "")
-        lines.append(f"### {title}")
+        c = p.get("counts", {})
+        brief = ", ".join(f"{c.get(k, 0)} {k}" for k in ("changed", "added", "removed") if c.get(k))
+        lines.append('<details markdown="1">')
+        lines.append(f"<summary>{title}" + (f" · {brief}" if brief else " · bookkeeping only") + "</summary>")
+        lines.append("")
         for s in p.get("sections", []):
             if s["status"] == "ok" and s.get("text"):
                 lines.append(s["text"].strip())
             elif s["status"] == "cancelled":
                 lines.append(f"_{s['kind']}: not synthesized (cancelled); "
-                             f"ids: {', '.join(s.get('ids', []))}_")
+                             f"ids: {_cap_ids(s.get('ids', []))}_")
             elif s["status"] == "error":
                 lines.append(f"_{s['kind']}: synthesis failed ({s.get('error', 'RHD-E004')}); "
-                             f"ids: {', '.join(s.get('ids', []))}_")
+                             f"ids: {_cap_ids(s.get('ids', []))}_")
             lines.append("")
         for n in p.get("notes", []):
             lines.append(f"- {n}")
+        if p.get("notes"):
+            lines.append("")
+        lines.append("</details>")
         lines.append("")
     absent = result.get("absent_plans") or []
     if absent:

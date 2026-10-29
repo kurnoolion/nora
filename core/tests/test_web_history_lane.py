@@ -223,7 +223,30 @@ def test_answer_markdown_shape():
          "notes": ["2 requirement(s) renumbered (2 chapter); content unchanged."]}],
         "absent_plans": [{"plan_id": "PX", "absent_in": "Jul2031"}]}
     md = history_lane.answer_markdown(result)
-    assert md.startswith("_Cancelled") and "### P1 — One" in md and "changed: R1" in md
+    assert md.startswith("_Cancelled") and "<summary>P1 — One · " in md and "changed: R1" in md
+    assert '<details markdown="1">' in md and md.count("</details>") == 1
+    assert "| Plan | Changed |" in md and "| P1 — One |" in md
     assert "added: not synthesized (cancelled); ids: R2" in md
     assert "removed: synthesis failed (RHD-E004); ids: R3" in md
     assert "- 2 requirement(s) renumbered" in md and "PX: not part of Jul2031" in md
+
+
+def test_answer_markdown_orders_by_change_and_caps_id_lists():
+    from core.src.web.markdown_render import render_markdown
+    many = [f"R{i}" for i in range(1, 15)]
+    result = {"cancelled": False, "absent_plans": [], "plans": [
+        {"plan_id": "P1", "plan_name": "Small", "counts": {"changed": 1, "added": 0, "removed": 0,
+                                                            "renumbered": 0, "moved": 0, "dropped": 3},
+         "sections": [{"kind": "pair", "status": "ok", "text": "For [R1], x.", "ids": ["R1"]}],
+         "notes": ["3 requirement(s) differ only in the revision record: [R2], [R3], [R4]."]},
+        {"plan_id": "P2", "plan_name": "Big", "counts": {"changed": 5, "added": 2, "removed": 0,
+                                                          "renumbered": 0, "moved": 0, "dropped": 0},
+         "sections": [{"kind": "pair", "status": "cancelled", "text": "", "ids": many}], "notes": []}]}
+    md = history_lane.answer_markdown(result)
+    assert md.index("| P2 — Big |") < md.index("| P1 — Small |")           # table by change count
+    assert md.index("<summary>P2 — Big · 5 changed, 2 added") < md.index("<summary>P1 — Small · 1 changed")
+    assert "R10 and 4 more_" in md and "R11" not in md                      # capped status line
+    assert "| 1 | 0 | 0 | 0 | 0 | 3 |" in md                                # bookkeeping column
+    html = str(render_markdown(md))
+    assert "<table>" in html and html.count("<details>") == 2
+    assert "<li>3 requirement(s) differ only in the revision record" in html   # markdown inside details
