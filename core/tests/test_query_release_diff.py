@@ -706,3 +706,17 @@ def test_lets_craft_announcements_are_cut_points():
     assert strip_working_text(aside, ["R1", "R2"]) == ("For [R1], the timer gains a 31 s bound.\n\n"
                                                        "For [R2], the fallback clause is new.")
 
+
+def test_prompt_echo_openings_are_cut():
+    """The model restates the pair prompt's instruction before answering."""
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    e1 = ('each line either "[ID] " or sentence with ids sharing same change. We have multiple '
+          "changes each unique, but some share same type. Could group those: For [R1], the timer "
+          "moves to 31 s. For [R2], the fallback clause is new.")
+    assert looks_like_working_text(e1)
+    assert strip_working_text(e1, ["R1", "R2"]) == "For [R1], the timer moves to 31 s. For [R2], the fallback clause is new."
+    e2 = ("Provide answer lines grouping same changes where applicable. Probably each unique change "
+          "separate.\n\nFor [R3], the scope now covers tablets.")
+    assert looks_like_working_text(e2)
+    assert strip_working_text(e2, ["R3"]) == "For [R3], the scope now covers tablets."
+

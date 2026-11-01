@@ -620,7 +620,9 @@ def prompt_for(batch: Batch, payload: "dict | None" = None) -> tuple[str, str]:
 _WORKING_RE = re.compile(
     r"^\s*(okay|ok|alright|let me|let's|first,? i|i need to|i'll|i will|the user (wants|asks|is asking)|"
     r"looking at|we need|we should|so,? the|now,? (let|produce)|identify (the )?changes|"
-    r"so (change|mention)|summari[sz]e (the )?changes)", re.I)
+    r"so (change|mention)|summari[sz]e (the )?changes|"
+    # the prompt's own instruction echoed back as an opening
+    r"provide (the |an )?answer|each line either|list each change|we have multiple)", re.I)
 # Phrases of the model talking to itself. Two distinct ones close together
 # mark working text wherever it sits: a reply that begins with the TAIL of a
 # reasoning block (the marker landed inside the reasoning, so the split kept
@@ -642,6 +644,8 @@ _PHRASE_RE = re.compile(
     r"maybe (the )?(title|text|wording|scope|priority) changed|title same|looks (the )?same|"
     r"appears identical|so ~\s*same|now format|each line either|so maybe|now produce|"
     r"we need note|so we state|thus output|probably each|let's (craft|produce|compose)|"
+    r"provide answer lines|grouping same changes|sharing (the )?same change|could group those|"
+    r"we have multiple changes|each unique change|"
     r"thus (the )?(answer|final|unchanged|no change)|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
