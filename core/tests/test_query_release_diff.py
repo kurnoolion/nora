@@ -647,18 +647,18 @@ def test_gateway_error_as_reply_is_a_failed_batch_not_an_answer(caplog):
     class Gate(EchoProvider):
         def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
             self.calls.append((system, prompt))
-            if "[R6]" in prompt:                       # the removed batch: the gateway answers
-                return "[R6] ~same " + page
+            if "[B1]" in prompt:                       # the three-pair batch: one mark, then the gateway
+                return "[B1] ~same " + page            # B2 and B3 never answered: cut short, not trailing
             return super().complete(prompt, system, temperature, max_tokens)
 
     prov = Gate()
     with caplog.at_level(logging.WARNING, logger="core.src.query.release_diff"):
         out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(parallel=1))
-    removed = next(s for p in out["plans"] for s in p["sections"] if s["kind"] == "removed")
-    assert removed["status"] == "error" and removed["error"] == "RHD-E004" and removed["text"] == ""
+    pairs = next(s for p in out["plans"] if p["plan_id"] == "PLANB" for s in p["sections"] if s["kind"] == "pair")
+    assert pairs["status"] == "error" and pairs["error"] == "RHD-E004" and pairs["text"] == ""
     assert out["run"]["failed"] == 1 and out["run"]["errors"] == ["GatewayReplyError"]
     assert "errors=GatewayReplyError" in out["compact"]
-    assert sum(1 for _, pr in prov.calls if "[R6]" in pr) == 2         # one retry, then failed
+    assert sum(1 for _, pr in prov.calls if "[B1]" in pr) == 2         # one retry, then failed
     assert any("RHD gateway reply: batch=" in m for m in caplog.messages)
     assert all(page[:20] not in s["text"] for p in out["plans"] for s in p["sections"])
 
@@ -756,4 +756,39 @@ def test_full_width_bracket_ids_are_normalised_before_the_strip():
     out = synthesize_release_diff(pl, FullWidth(), config=ReleaseDiffConfig(parallel=1))
     texts = [s["text"] for p in out["plans"] for s in p["sections"]]
     assert texts and all("【" not in t and "Probably" not in t and "[R" in t or "[B" in t for t in texts)
+
+
+def test_gateway_error_trailing_a_valid_answer_is_cut_and_the_answer_kept(caplog):
+    import logging
+    from core.src.query.release_diff import split_gateway_reply
+    page = ('response of security filter service is not ok. {"statusCode":429,"error":"Too Many '
+            'Requests","message":"deadline"} Error occurred from orchestrator. reason: not ok.')
+    good = "For [R6], the timer is gone; the plan also retained prior sections."
+    assert split_gateway_reply(good + " " + page, ["R6"]) == (good, "trailing")
+    assert split_gateway_reply(page, ["R6"])[1] == "error"
+    assert split_gateway_reply(good, ["R6"]) == (good, "")
+    pl = payload()
+
+    class Trail(EchoProvider):
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            out = super().complete(prompt, system, temperature, max_tokens)     # the parent records the call
+            return out + ". " + page if "absent from the current one" in prompt else out   # the removed batch only
+
+    prov = Trail()
+    with caplog.at_level(logging.WARNING, logger="core.src.query.release_diff"):
+        out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(parallel=1))
+    removed = next(s for p in out["plans"] for s in p["sections"] if s["kind"] == "removed")
+    assert removed["status"] == "ok" and removed["text"] == "removed: R6."
+    assert out["run"]["failed"] == 0 and out["run"]["trimmed"] == 1 and " trimmed=1" in out["compact"]
+    assert sum(1 for _, pr in prov.calls if "[R6]" in pr) == 1          # no retry: the answer was there
+    assert any("trailing=1" in m for m in caplog.messages)
+    assert all("statusCode" not in s["text"] for p in out["plans"] for s in p["sections"])
+
+
+def test_so_list_and_we_state_asides_are_cut():
+    from core.src.query.release_diff import strip_working_text
+    t = ("For [R1], the timer gains a 31 s bound.\n\nSo many IDs removed; change: requirement consolidated. "
+         "So list all those IDs as removed? We state change: previous multiple requirements collapsed into one. "
+         "Cite all IDs.\n\nRemoved: [R2], [R3].")
+    assert strip_working_text(t, ["R1", "R2", "R3"]) == "For [R1], the timer gains a 31 s bound.\n\nRemoved: [R2], [R3]."
 

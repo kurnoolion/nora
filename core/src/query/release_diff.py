@@ -651,7 +651,7 @@ _PHRASE_RE = re.compile(
     r"we need note|so we state|thus output|probably each|let's (craft|produce|compose)|"
     r"provide answer lines|grouping same changes|sharing (the )?same change|could group those|"
     r"we have multiple changes|each unique change|share (the )?same change|could group all|"
-    r"probably list each|"
+    r"probably list each|so list\b|we state|cite all (the )?ids|got [a-z ]{0,30}changed\?|so many ids|"
     r"thus (the )?(answer|final|unchanged|no change)|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
@@ -735,7 +735,7 @@ def _first_id(text: str, ids: "Iterable[str]") -> int:
 # answer; everything before the last such sentence is working, whatever its
 # wording, when an id follows.
 _ANNOUNCE_RE = re.compile(
-    r"\b(?:now|let's|let us|thus|so) (produce|output|write|give|list|format|craft|compose)\b[^.\n:]*[.:\n]", re.I)
+    r"\b(?:now|let's|let us|thus|so) (produce|output|write|give|list|format|craft|compose)\b[^.\n:?]*[.:\n]", re.I)
 
 
 # A model may bracket ids in full-width or lenticular forms; every id rule
@@ -758,15 +758,34 @@ class GatewayReplyError(RuntimeError):
 
 _GATEWAY_REPLY_RE = re.compile(
     r"filter service is not ok|\"statusCode\"\s*:\s*\d{3}|\"status_code\"\s*:\s*\d{3}|"
-    r"\bToo Many Requests\b|\"error\"\s*:\s*\{", re.I)
+    r"\bToo Many Requests\b|\"error\"\s*:\s*\{|Error occurred from orchestrator|"
+    r"\"errorCode\"\s*:", re.I)
+
+
+def split_gateway_reply(text: str, ids: "Iterable[str]" = ()) -> tuple[str, str]:
+    """(answer part, verdict) for a reply that may carry a gateway's error
+    text: `""`, nothing found; `"error"`, the reply is the error (or the
+    error comes before any answer); `"trailing"`, a completed answer that
+    names every id of the batch ends where the error begins — the part is
+    kept, the error cut. The signature is looked for anywhere, since a
+    gateway may append its page to a completed answer."""
+    m = _GATEWAY_REPLY_RE.search(text or "")
+    if m is None:
+        return text, ""
+    # the error begins at the start of its sentence or line
+    start = m.start()
+    cut = max((text or "").rfind("\n", 0, start), (text or "").rfind(". ", 0, start) + 1)
+    head = (text or "")[:cut if cut > 0 else start].rstrip()
+    wanted = {i for i in ids if i}
+    if head and wanted and _ids_in(head, wanted) == wanted:    # every id answered: nothing cut short
+        return head, "trailing"
+    return text, "error"
 
 
 def looks_like_gateway_reply(text: str) -> bool:
     """A reply that is a gateway's error page or JSON rather than an
-    answer: an error phrase or a status-code field in the first 600
-    characters, and no requirement sentence before it."""
-    head = (text or "").lstrip()[:600]
-    return bool(_GATEWAY_REPLY_RE.search(head))
+    answer: the error signature with no id-bearing answer before it."""
+    return split_gateway_reply(text, ())[1] == "error"
 
 
 def _cut_at_announcement(text: str, ids: list[str]) -> str:
@@ -1016,7 +1035,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
     batches = build_batches(payload, cfg.max_batch_bytes)
     total = len(batches)
 
-    working = {"retried": 0, "stripped": 0}
+    working = {"retried": 0, "stripped": 0, "trimmed": 0}
     wlock = threading.Lock()
 
     def call(batch: Batch) -> str:
@@ -1024,7 +1043,8 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
         ids = [i for it in batch.items for i in it["ids"]]
         text = normalize_brackets(provider.complete(prompt, system=system, temperature=cfg.temperature,
                                                     max_tokens=cfg.max_tokens))
-        if looks_like_gateway_reply(text):
+        text, verdict = split_gateway_reply(text, ids)
+        if verdict == "error":
             # an error page came back as content with HTTP success: one more
             # try, then a failed batch (logged, shown as synthesis failed),
             # never rendered as an answer
@@ -1032,8 +1052,16 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                         batch.index, batch.group.replace("\x00", "/"))
             text = normalize_brackets(provider.complete(prompt, system=system, temperature=cfg.temperature,
                                                         max_tokens=cfg.max_tokens))
-            if looks_like_gateway_reply(text):
+            text, verdict = split_gateway_reply(text, ids)
+            if verdict == "error":
                 raise GatewayReplyError("the provider returned a gateway error as the reply")
+        if verdict == "trailing":
+            # the gateway appended its page to a completed answer: the answer
+            # part stays, the page never reaches the user
+            with wlock:
+                working["trimmed"] += 1
+            log.warning("RHD gateway reply: batch=%d group=%s trailing=1 kept_chars=%d",
+                        batch.index, batch.group.replace("\x00", "/"), len(text))
         text = _cut_at_announcement(text, ids)          # "Now produce …": cheap, deterministic
         marks = working_marks(text)
         if marks:
@@ -1042,8 +1070,12 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
             retry = normalize_brackets(provider.complete(
                 prompt + "\n\nOutput only the final answer, nothing before it.",
                 system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens))
-            if looks_like_gateway_reply(retry):
+            retry, rv = split_gateway_reply(retry, ids)
+            if rv == "error":
                 raise GatewayReplyError("the provider returned a gateway error as the reply")
+            if rv == "trailing":
+                with wlock:
+                    working["trimmed"] += 1
             stripped = looks_like_working_text(retry)
             text = strip_working_text(retry, ids) if stripped \
                 else strip_lone_phrases(_cut_at_announcement(retry, ids))
@@ -1079,6 +1111,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                   "oversized": sum(1 for b in batches if b.oversized),
                   "batch_ms": rr.latency_ms(),
                   "retried": working["retried"], "stripped": working["stripped"],
+                  "trimmed": working["trimmed"],
                   "errors": sorted({o.error.split(":")[0] for o in rr.outcomes.values() if o.error})}
     out["triage"] = {**triage_totals(payload),
                      "same": sum(p["counts"].get("same", 0) for p in out["plans"])}
@@ -1095,7 +1128,7 @@ def compact_block(result: dict) -> str:
             "batches={batches} "
             "parallel={par} bytes_max={bm} done={done} failed={failed} cancelled={canc} "
             "elapsed_ms={ms} batch_ms_p50={p50} batch_ms_p95={p95} batch_ms_max={mx} "
-            "retried={ret} stripped={strp}{errs}").format(
+            "retried={ret} stripped={strp}{trim}{errs}").format(
         mno=result.get("mno", ""), a=result.get("from", ""), b=result.get("to", ""),
         plans=c.get("plans", 0), absent=c.get("absent_plans", 0), pairs=c.get("changed", 0),
         added=c.get("added", 0), removed=c.get("removed", 0), renum=c.get("renumbered", 0),
@@ -1107,4 +1140,5 @@ def compact_block(result: dict) -> str:
         p50=r.get("batch_ms", {}).get("p50", 0), p95=r.get("batch_ms", {}).get("p95", 0),
         mx=r.get("batch_ms", {}).get("max", 0),
         ret=r.get("retried", 0), strp=r.get("stripped", 0),
+        trim=(f" trimmed={r['trimmed']}" if r.get("trimmed") else ""),
         errs=(" errors=" + ",".join(r["errors"])) if r.get("errors") else "")
