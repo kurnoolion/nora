@@ -693,3 +693,16 @@ def test_now_produce_lines_and_so_maybe_are_cut():
     assert looks_like_working_text(t2)
     assert strip_working_text(t2, ["R2"]) == "For [R2], the fallback clause is new."
 
+
+def test_lets_craft_announcements_are_cut_points():
+    from core.src.query.release_diff import strip_working_text, looks_like_working_text
+    opening = ("list each change with ids grouped if same change. Probably each unique. "
+               "Let's produce lines. For [R1], the timer gains a 31 s bound.")
+    assert strip_working_text(opening, ["R1"]) == "For [R1], the timer gains a 31 s bound."
+    aside = ("For [R1], the timer gains a 31 s bound.\n\nSo for column list? But requirement includes "
+             "whole. We need note changes. So we state changed value. Thus output one sentence and cite "
+             "id. Let's craft:\n\nFor [R2], the fallback clause is new.")
+    assert looks_like_working_text(aside)
+    assert strip_working_text(aside, ["R1", "R2"]) == ("For [R1], the timer gains a 31 s bound.\n\n"
+                                                       "For [R2], the fallback clause is new.")
+

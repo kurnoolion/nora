@@ -641,6 +641,7 @@ _PHRASE_RE = re.compile(
     r"need (to )?list|omit those|now output|(content |text |wording )?appears (the )?same|"
     r"maybe (the )?(title|text|wording|scope|priority) changed|title same|looks (the )?same|"
     r"appears identical|so ~\s*same|now format|each line either|so maybe|now produce|"
+    r"we need note|so we state|thus output|probably each|let's (craft|produce|compose)|"
     r"thus (the )?(answer|final|unchanged|no change)|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
@@ -724,7 +725,7 @@ def _first_id(text: str, ids: "Iterable[str]") -> int:
 # answer; everything before the last such sentence is working, whatever its
 # wording, when an id follows.
 _ANNOUNCE_RE = re.compile(
-    r"\bnow (produce|output|write|give|list|format)\b[^.\n:]*[.:\n]", re.I)
+    r"\b(?:now|let's|let us) (produce|output|write|give|list|format|craft|compose)\b[^.\n:]*[.:\n]", re.I)
 
 
 class GatewayReplyError(RuntimeError):
@@ -746,13 +747,30 @@ def looks_like_gateway_reply(text: str) -> bool:
 
 
 def _cut_at_announcement(text: str, ids: list[str]) -> str:
+    """Cut at the model's last announcement of its answer when an id
+    follows it: the announcement's own paragraph goes, with any id-free
+    paragraphs leading into it; an earlier paragraph that holds ids (an
+    answer part before a mid-answer aside) stays."""
     last = None
     for m in _ANNOUNCE_RE.finditer(text or ""):
         last = m
     if last is None:
         return text
     tail = text[last.end():].strip()
-    return tail if _ids_in(tail, ids) else text
+    if not _ids_in(tail, ids):
+        return text
+    head = text[:last.start()]
+    start = head.rfind("\n\n")
+    start = 0 if start < 0 else start + 2
+    while start > 0:                        # extend back over id-free paragraphs
+        prev_end = start - 2
+        prev_start = head.rfind("\n\n", 0, prev_end)
+        para = head[(0 if prev_start < 0 else prev_start + 2):prev_end]
+        if _BRACKET_ID_RE.search(para):
+            break
+        start = 0 if prev_start < 0 else prev_start + 2
+    kept = head[:start].rstrip()
+    return (kept + "\n\n" + tail) if kept else tail
 
 
 def _drop_repeated_draft(tail: str, ids: "Iterable[str]") -> str:
