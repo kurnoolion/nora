@@ -508,6 +508,11 @@ _SAME_LINE_RE = re.compile(r"^\s*\[?\s*([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*
 # bracketed id, up to a few words of label, the mark, trailing punctuation
 _SAME_INLINE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*)\]\s*:?\s*(?:[^\[\]\n~.;!?,]{0,24}?)\s*~\s*same\b[.:;,]?\s*", re.I)
 _STRAY_SAME_RE = re.compile(r"(?:\b(?:so|looks|is)\s+)?~\s*same\b[.:;,]?", re.I)
+# `So output "[id] ~same".` with the mark taken out leaves `So output "[id] ".`
+# or `So output " ".`: an announcement with nothing but a quoted (empty) id
+_EMPTY_ANNOUNCE_RE = re.compile(
+    r"\b(?:so|now|thus|let's|let us)\s+(?:output|produce|write|list|format|give|state)\s*"
+    r"[\"“”']?\s*(?:\[[^\]\n]*\]\s*)?[\"“”']?\s*[.:;]?\s*", re.I)
 
 
 def drop_stray_marks(text: str) -> str:
@@ -559,7 +564,9 @@ def take_same_lines(text: str, ids: "Iterable[str]") -> tuple[str, list[str]]:
         # inline marks share a line with other items: take each fragment
         for im in _SAME_INLINE_RE.finditer(line):
             keep_id(im.group(1))
-        line = _SAME_INLINE_RE.sub("", line)
+        if _SAME_INLINE_RE.search(line):
+            line = _SAME_INLINE_RE.sub("", line)
+            line = _EMPTY_ANNOUNCE_RE.sub("", line)  # `So output "[id] ".` left around the mark
         line = drop_stray_marks(line)                # a bare "~same" left behind
         if not line.strip(" .:;,"):
             continue
@@ -652,6 +659,7 @@ _PHRASE_RE = re.compile(
     r"provide answer lines|grouping same changes|sharing (the )?same change|could group those|"
     r"we have multiple changes|each unique change|share (the )?same change|could group all|"
     r"probably list each|so list\b|we state|cite all (the )?ids|got [a-z ]{0,30}changed\?|so many ids|"
+    r"others same|for (the )?second id|(also )?wording maybe|consider same|meaning unchanged|"
     r"thus (the )?(answer|final|unchanged|no change)|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")

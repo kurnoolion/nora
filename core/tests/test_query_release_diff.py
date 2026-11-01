@@ -792,3 +792,17 @@ def test_so_list_and_we_state_asides_are_cut():
          "Cite all IDs.\n\nRemoved: [R2], [R3].")
     assert strip_working_text(t, ["R1", "R2", "R3"]) == "For [R1], the timer gains a 31 s bound.\n\nRemoved: [R2], [R3]."
 
+
+def test_announcement_around_a_taken_mark_goes_with_it_and_bare_id_openings_are_cut():
+    from core.src.query.release_diff import take_same_lines, strip_working_text, looks_like_working_text
+    line = ('For [R1], the timer moves to 31 s. It\'s just an added row, but meaning unchanged. So output '
+            '"[R2] ~same". So [R3] – the fallback clause is new.')
+    out, same = take_same_lines(line, ["R1", "R2", "R3"])
+    assert same == ["R2"]
+    assert out == "For [R1], the timer moves to 31 s. It's just an added row, but meaning unchanged. So [R3] – the fallback clause is new."
+    opening = ("for R4 : Req4 added. So mention change with id. Others same -> list each id with For second ID, "
+               "many requirements unchanged except new Req20 added. Also wording maybe minor but seem fine. "
+               "For [R4], a new requirement adds the retry timer.")
+    assert looks_like_working_text(opening)
+    assert strip_working_text(opening, ["R4"]) == "For [R4], a new requirement adds the retry timer."
+
