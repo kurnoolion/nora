@@ -638,3 +638,58 @@ def test_same_marks_inline_labelled_and_stray_are_taken():
     assert not looks_like_working_text("[R1] ~same\n[R2] ~same\nFor [R3], the timer moved.")
     assert looks_like_working_text("Looks same. So ~same. Now format: each line either an id or a sentence. For [R1] x.")
 
+
+def test_gateway_error_as_reply_is_a_failed_batch_not_an_answer(caplog):
+    import logging
+    pl = payload()
+    page = ('{"statusCode": 429, "error": {"message": "response of security filter service is not ok"}}')
+
+    class Gate(EchoProvider):
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            self.calls.append((system, prompt))
+            if "[R6]" in prompt:                       # the removed batch: the gateway answers
+                return "[R6] ~same " + page
+            return super().complete(prompt, system, temperature, max_tokens)
+
+    prov = Gate()
+    with caplog.at_level(logging.WARNING, logger="core.src.query.release_diff"):
+        out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(parallel=1))
+    removed = next(s for p in out["plans"] for s in p["sections"] if s["kind"] == "removed")
+    assert removed["status"] == "error" and removed["error"] == "RHD-E004" and removed["text"] == ""
+    assert out["run"]["failed"] == 1 and out["run"]["errors"] == ["GatewayReplyError"]
+    assert "errors=GatewayReplyError" in out["compact"]
+    assert sum(1 for _, pr in prov.calls if "[R6]" in pr) == 2         # one retry, then failed
+    assert any("RHD gateway reply: batch=" in m for m in caplog.messages)
+    assert all(page[:20] not in s["text"] for p in out["plans"] for s in p["sections"])
+
+
+def test_applicability_rule_takes_the_category_list_only():
+    from core.src.query.release_diff import triage_pairs
+    pl = {"mno": "mno-q", "from": "a", "to": "b", "absent_plans": {}, "counts": {}, "plans": {"P": {
+        "plan_name": "P", "present": {"from": True, "to": True},
+        "changed": [
+            # categories only differ: bookkeeping, with the category delta
+            _pair("A1", "Only applies to: Phone, Tablet. The device shall retry.",
+                  "Only applies to: Phone, Tablet, Watch. The device shall retry."),
+            # the line runs on into requirement text that changed: a real change
+            _pair("A2", "Only applies to: Phone, Tablet. The device shall retry after 30 s.",
+                  "Only applies to: Phone, Tablet, Watch. The device shall retry after 31 s."),
+        ], "added": [], "removed": [], "renamed": [], "renumbered": [], "moved": []}}}
+    p = triage_pairs(pl)["plans"]["P"]
+    assert [c["req_id"] for c in p["changed"]] == ["A2"]
+    assert p["changed"][0]["old"]["text"] == ". The device shall retry after 30 s."
+    t = p["triage"]
+    assert t["annotation"]["applicability line"]["ids"] == ["A1"]
+    assert t["annotation"]["applicability line"]["deltas"] == [(("watch",), ())]
+
+
+def test_now_produce_lines_and_so_maybe_are_cut():
+    from core.src.query.release_diff import looks_like_working_text, strip_working_text
+    t = ("No substantive change. R1 : added extra sentence on the timer. So change. "
+         "Now produce lines. For [R1], the timer gains a 31 s bound.")
+    assert strip_working_text(t, ["R1"]) == "For [R1], the timer gains a 31 s bound."
+    t2 = ("So maybe no change. Also change: the clause moved. previous vs current same? "
+          "So maybe unchanged. Thus unchanged. ~same\n\nFor [R2], the fallback clause is new.")
+    assert looks_like_working_text(t2)
+    assert strip_working_text(t2, ["R2"]) == "For [R2], the fallback clause is new."
+

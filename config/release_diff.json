@@ -7,7 +7,8 @@
     },
     {
       "name": "applicability line",
-      "pattern": "^\\s*only\\s+applies\\s+to\\s*:.*$"
+      "pattern": "only\\s+applies\\s+to\\s*:[^.;\\n]{0,120}",
+      "scope": "inline"
     },
     {
       "name": "table wrapper",

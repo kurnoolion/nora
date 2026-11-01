@@ -62,7 +62,9 @@ DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config" / "release_diff.json"
 # overrides the list (name, line-anchored case-insensitive pattern).
 DEFAULT_ANNOTATION_LINES = (
     ("revision record", r"^\s*change\s+(type|reason)\s*:.*$", "line"),
-    ("applicability line", r"^\s*only\s+applies\s+to\s*:.*$", "line"),
+    # the category list only: the line sometimes runs on into requirement
+    # text, so the fragment stops at a sentence end (or 120 characters)
+    ("applicability line", r"only\s+applies\s+to\s*:[^.;\n]{0,120}", "inline"),
     # the wrapper may share its line with the table's first row: an inline
     # fragment up to the closing bracket, a pipe or the line's end
     ("table wrapper", r"\[\s*table\s*:[^\]\n|]*\]?", "inline"),
@@ -501,7 +503,25 @@ _SAME_LINE_RE = re.compile(r"^\s*\[?\s*([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*
 # the same mark inline — "[ID] ~same [ID2] added …", "[ID] Req 2 ~same" — a
 # bracketed id, up to a few words of label, the mark, trailing punctuation
 _SAME_INLINE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*)\]\s*:?\s*(?:[^\[\]\n~.;!?,]{0,24}?)\s*~\s*same\b[.:;,]?\s*", re.I)
-_STRAY_SAME_RE = re.compile(r"\s*\b(?:so|looks|is)?\s*~\s*same\b[.:;,]?", re.I)
+_STRAY_SAME_RE = re.compile(r"(?:\b(?:so|looks|is)\s+)?~\s*same\b[.:;,]?", re.I)
+
+
+def drop_stray_marks(text: str) -> str:
+    """Remove a bare `~same` that follows no bracketed id (the model's
+    marker idiom leaking into prose or reasoning); a legitimate `[ID]
+    ~same` marker is kept."""
+    out, pos = [], 0
+    keep = [(m.start(), m.end()) for m in _MARKER_RE.finditer(text or "")]
+    for m in _STRAY_SAME_RE.finditer(text or ""):
+        if any(a <= m.start() < b for a, b in keep):
+            continue
+        out.append(text[pos:m.start()])
+        pos = m.end()
+    out.append((text or "")[pos:])
+    cleaned = "".join(out)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 # the earlier closing line, and a stray no-change sentence naming one id
 _WORDING_LINE_RE = re.compile(r"^\s*(wording|layout)[^\n]{0,40}only\s*:\s*(\[[^\n]*\])?[^\n]*$", re.M | re.I)
 _NO_CHANGE_RE = re.compile(
@@ -536,7 +556,7 @@ def take_same_lines(text: str, ids: "Iterable[str]") -> tuple[str, list[str]]:
         for im in _SAME_INLINE_RE.finditer(line):
             keep_id(im.group(1))
         line = _SAME_INLINE_RE.sub("", line)
-        line = _STRAY_SAME_RE.sub("", line)          # a bare "~same" left behind
+        line = drop_stray_marks(line)                # a bare "~same" left behind
         if not line.strip(" .:;,"):
             continue
         if _WORDING_LINE_RE.match(line):
@@ -620,7 +640,8 @@ _PHRASE_RE = re.compile(
     r"so change:|so mention|we need( to)? (list|summari[sz]e|identify|produce|mention|state)|"
     r"need (to )?list|omit those|now output|(content |text |wording )?appears (the )?same|"
     r"maybe (the )?(title|text|wording|scope|priority) changed|title same|looks (the )?same|"
-    r"appears identical|so ~\s*same|now format|each line either|"
+    r"appears identical|so ~\s*same|now format|each line either|so maybe|now produce|"
+    r"thus (the )?(answer|final|unchanged|no change)|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block
@@ -703,8 +724,25 @@ def _first_id(text: str, ids: "Iterable[str]") -> int:
 # answer; everything before the last such sentence is working, whatever its
 # wording, when an id follows.
 _ANNOUNCE_RE = re.compile(
-    r"\bnow (produce|output|write|give|list)( the| a| my)?( final)?( answer| output| response|"
-    r" sentences?)?\b[^.\n:]*[.:\n]", re.I)
+    r"\bnow (produce|output|write|give|list|format)\b[^.\n:]*[.:\n]", re.I)
+
+
+class GatewayReplyError(RuntimeError):
+    """The provider returned a gateway or filter error as the reply's
+    content (HTTP success, no exception): not an answer."""
+
+
+_GATEWAY_REPLY_RE = re.compile(
+    r"filter service is not ok|\"statusCode\"\s*:\s*\d{3}|\"status_code\"\s*:\s*\d{3}|"
+    r"\bToo Many Requests\b|\"error\"\s*:\s*\{", re.I)
+
+
+def looks_like_gateway_reply(text: str) -> bool:
+    """A reply that is a gateway's error page or JSON rather than an
+    answer: an error phrase or a status-code field in the first 600
+    characters, and no requirement sentence before it."""
+    head = (text or "").lstrip()[:600]
+    return bool(_GATEWAY_REPLY_RE.search(head))
 
 
 def _cut_at_announcement(text: str, ids: list[str]) -> str:
@@ -821,18 +859,18 @@ def strip_working_text(text: str, ids: "Iterable[str]" = ()) -> str:
     id in the reply keep the last paragraph only. Up to three passes, so
     a reply with both shapes comes out clean. Unchanged when it does not
     look like working text."""
-    if not looks_like_working_text(text):
-        return text
     ids = [i for i in ids if i]
-    out = _cut_at_announcement(text, ids)
+    out = _cut_at_announcement(text, ids)      # the announcement alone is enough to cut on
     if out != text and not looks_like_working_text(out):
+        return out
+    if not looks_like_working_text(out):
         return out
     for _ in range(3):
         nxt = _strip_once(out, ids)
         if nxt == out or not looks_like_working_text(nxt):
-            return nxt
+            return drop_stray_marks(strip_lone_phrases(nxt))
         out = nxt
-    return out
+    return drop_stray_marks(strip_lone_phrases(out))
 
 
 # ── reassembly ────────────────────────────────────────────────────────
@@ -940,8 +978,20 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
 
     def call(batch: Batch) -> str:
         system, prompt = prompt_for(batch, payload)
+        ids = [i for it in batch.items for i in it["ids"]]
         text = provider.complete(prompt, system=system, temperature=cfg.temperature,
                                  max_tokens=cfg.max_tokens)
+        if looks_like_gateway_reply(text):
+            # an error page came back as content with HTTP success: one more
+            # try, then a failed batch (logged, shown as synthesis failed),
+            # never rendered as an answer
+            log.warning("RHD gateway reply: batch=%d group=%s retried=1",
+                        batch.index, batch.group.replace("\x00", "/"))
+            text = provider.complete(prompt, system=system, temperature=cfg.temperature,
+                                     max_tokens=cfg.max_tokens)
+            if looks_like_gateway_reply(text):
+                raise GatewayReplyError("the provider returned a gateway error as the reply")
+        text = _cut_at_announcement(text, ids)          # "Now produce …": cheap, deterministic
         marks = working_marks(text)
         if marks:
             # the marker was left out: one retry with a blunter instruction,
@@ -949,9 +999,11 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
             retry = provider.complete(
                 prompt + "\n\nOutput only the final answer, nothing before it.",
                 system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens)
+            if looks_like_gateway_reply(retry):
+                raise GatewayReplyError("the provider returned a gateway error as the reply")
             stripped = looks_like_working_text(retry)
-            text = strip_working_text(retry, [i for it in batch.items for i in it["ids"]]) \
-                if stripped else strip_lone_phrases(retry)
+            text = strip_working_text(retry, ids) if stripped \
+                else strip_lone_phrases(_cut_at_announcement(retry, ids))
             stripped = stripped or text != retry
             with wlock:
                 working["retried"] += 1
