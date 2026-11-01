@@ -740,7 +740,15 @@ def _location_kinds(loc_a: str, loc_b: str, sa: "dict | None" = None,
             if (x and y and pa not in sb and pb not in sa and x["kind"] == y["kind"]
                     and x["text_fp"] == y["text_fp"] and x["text_fp"] != _EMPTY_TEXT_FP):
                 return ["renumbered"], "parent", a.get("section", "")
-        return ["moved"], "", a.get("section", "")
+            # the parse found the containing section in one release and not
+            # the other (the parent is the plan node there): a hierarchy gap,
+            # not a move of the requirement
+            if (x and x["kind"] == PLAN) or (y and y["kind"] == PLAN):
+                return [], "", ""
+        sec_a, sec_b = str(a.get("section", "")), str(b.get("section", ""))
+        if sec_a and sec_a == sec_b:
+            return [], "", ""           # same section number at both ends: not a move
+        return ["moved"], "", sec_a
     sa, sb = str(a.get("section", "")), str(b.get("section", ""))
     if sa == sb:
         return [], "", ""

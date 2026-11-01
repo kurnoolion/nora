@@ -111,7 +111,7 @@ def _cap_ids(ids: list) -> str:
 
 def _change_score(p: dict) -> int:
     c = p.get("counts", {})
-    return c.get("changed", 0) + c.get("added", 0) + c.get("removed", 0)
+    return c.get("changed", 0) - c.get("same", 0) + c.get("added", 0) + c.get("removed", 0)
 
 
 def _summary_lines(result: dict) -> list[str]:
@@ -123,8 +123,9 @@ def _summary_lines(result: dict) -> list[str]:
     a, b = disp.get("from") or result.get("from", ""), disp.get("to") or result.get("to", "")
     c = result.get("counts", {})
     plans = result.get("plans", [])
-    sent = sum(p.get("counts", {}).get("changed", 0) for p in plans)
-    dropped = sum(p.get("counts", {}).get("dropped", 0) for p in plans)
+    same = sum(p.get("counts", {}).get("same", 0) for p in plans)
+    sent = sum(p.get("counts", {}).get("changed", 0) for p in plans) - same    # the model's ~same marks are not changes
+    dropped = sum(p.get("counts", {}).get("dropped", 0) for p in plans)        # includes the ~same marks
     lines = [f"**{mno}: {a} → {b}**", ""] if (mno or a or b) else []
     bits = []
     if c.get("requirements_from") is not None and c.get("requirements_to") is not None:
@@ -158,13 +159,14 @@ def answer_markdown(result: dict) -> str:
         for p in plans:
             c = p.get("counts", {})
             name = f"{p['plan_id']}" + (f" — {p['plan_name']}" if p.get("plan_name") else "")
-            lines.append(f"| {name} | {c.get('changed', 0)} | {c.get('added', 0)} | {c.get('removed', 0)} "
-                         f"| {c.get('renumbered', 0)} | {c.get('moved', 0)} | {c.get('dropped', 0)} |")
+            lines.append(f"| {name} | {c.get('changed', 0) - c.get('same', 0)} | {c.get('added', 0)} | {c.get('removed', 0)} "
+                         f"| {c.get('renumbered', 0)} | {c.get('moved', 0)} | {c.get('bookkeeping', c.get('dropped', 0))} |")
         lines.append("")
     for p in plans:
         title = p["plan_id"] + (f" — {p['plan_name']}" if p.get("plan_name") else "")
         c = p.get("counts", {})
-        brief = ", ".join(f"{c.get(k, 0)} {k}" for k in ("changed", "added", "removed") if c.get(k))
+        shown = {**c, "changed": c.get("changed", 0) - c.get("same", 0)}
+        brief = ", ".join(f"{shown.get(k, 0)} {k}" for k in ("changed", "added", "removed") if shown.get(k))
         lines.append('<details markdown="1">')
         lines.append(f"<summary>{title}" + (f" · {brief}" if brief else " · bookkeeping only") + "</summary>")
         lines.append("")
@@ -190,7 +192,7 @@ def answer_markdown(result: dict) -> str:
                 lines.append(f"- {n}")
             lines.append("")
         if groups.get("bookkeeping"):
-            n_book = c.get("dropped", 0)
+            n_book = c.get("bookkeeping", c.get("dropped", 0))
             lines.append('<details markdown="1">')
             lines.append(f"<summary>{n_book} requirement(s) unchanged in meaning (bookkeeping, "
                          f"wording or layout only) · show</summary>")

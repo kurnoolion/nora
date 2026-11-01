@@ -268,10 +268,12 @@ def test_answer_markdown_summary_leads_and_structural_notes_are_grouped():
                                              "1 requirement(s) unchanged in meaning (wording, formatting or layout only): [R5]."]}}]}
     md = history_lane.answer_markdown(result)
     assert md.startswith("**mno-q: Spring 31 (Apr2031) → Jul2031**")
-    assert "120 requirement(s) in Spring 31 (Apr2031), 124 in Jul2031; 3 changed in meaning (another 4 differ in bookkeeping or wording only); 5 added, 1 removed, 2 renumbered, 1 moved; 1 plan(s) with changes, 1 plan(s) present in one release only." in md
+    # changed = sent (3) minus the model's ~same marks (1); "another" = dropped, marks included
+    assert "120 requirement(s) in Spring 31 (Apr2031), 124 in Jul2031; 2 changed in meaning (another 4 differ in bookkeeping or wording only); 5 added, 1 removed, 2 renumbered, 1 moved; 1 plan(s) with changes, 1 plan(s) present in one release only." in md
     assert "**Removed: [R6]**" in md and md.index("**Removed: [R6]**") < md.index("The plan loses a timer.")
     assert "**Structural changes only**" in md and "- 2 requirement(s) renumbered" in md
     assert "<summary>4 requirement(s) unchanged in meaning (bookkeeping, wording or layout only) · show</summary>" in md
+    assert "| P1 — One | 2 | 5 | 1 | 2 | 1 | 4 |" in md and "<summary>P1 — One · 2 changed, 5 added, 1 removed</summary>" in md
     assert md.index("Structural changes only") < md.index("unchanged in meaning (bookkeeping")
 
 

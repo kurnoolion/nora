@@ -498,6 +498,10 @@ SAME_MARKER = "~same"
 # `[ID] ~same` lines, tolerant of spacing and a colon; the marker the pair
 # prompt asks for when a requirement's meaning is unchanged
 _SAME_LINE_RE = re.compile(r"^\s*\[?\s*([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*)\s*\]?\s*:?\s*~\s*same\b.*$", re.M | re.I)
+# the same mark inline — "[ID] ~same [ID2] added …", "[ID] Req 2 ~same" — a
+# bracketed id, up to a few words of label, the mark, trailing punctuation
+_SAME_INLINE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*)\]\s*:?\s*(?:[^\[\]\n~.;!?,]{0,24}?)\s*~\s*same\b[.:;,]?\s*", re.I)
+_STRAY_SAME_RE = re.compile(r"\s*\b(?:so|looks|is)?\s*~\s*same\b[.:;,]?", re.I)
 # the earlier closing line, and a stray no-change sentence naming one id
 _WORDING_LINE_RE = re.compile(r"^\s*(wording|layout)[^\n]{0,40}only\s*:\s*(\[[^\n]*\])?[^\n]*$", re.M | re.I)
 _NO_CHANGE_RE = re.compile(
@@ -525,8 +529,15 @@ def take_same_lines(text: str, ids: "Iterable[str]") -> tuple[str, list[str]]:
     kept: list[str] = []
     for line in (text or "").split("\n"):
         m = _SAME_LINE_RE.match(line)
-        if m:
+        if m and not _SAME_INLINE_RE.sub("", line).strip(" .:;,"):
             keep_id(m.group(1))
+            continue
+        # inline marks share a line with other items: take each fragment
+        for im in _SAME_INLINE_RE.finditer(line):
+            keep_id(im.group(1))
+        line = _SAME_INLINE_RE.sub("", line)
+        line = _STRAY_SAME_RE.sub("", line)          # a bare "~same" left behind
+        if not line.strip(" .:;,"):
             continue
         if _WORDING_LINE_RE.match(line):
             for i in _BRACKET_ID_RE.findall(line):
@@ -608,15 +619,21 @@ _PHRASE_RE = re.compile(
     r"now produce( the| a)?( final)? (answer|output|response)|identify (the |actual )?changes|"
     r"so change:|so mention|we need( to)? (list|summari[sz]e|identify|produce|mention|state)|"
     r"need (to )?list|omit those|now output|(content |text |wording )?appears (the )?same|"
-    r"maybe (the )?(title|text|wording|scope|priority) changed|title same|"
+    r"maybe (the )?(title|text|wording|scope|priority) changed|title same|looks (the )?same|"
+    r"appears identical|so ~\s*same|now format|each line either|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
 _CLUSTER_GAP = 400     # characters between phrases of one working block
 
 
+_MARKER_RE = re.compile(r"\[[A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*\]\s*:?\s*~\s*same\b", re.I)
+
+
 def _clusters(text: str) -> list[list["re.Match[str]"]]:
     """Phrase matches grouped by proximity: a new group starts after a gap
-    of more than `_CLUSTER_GAP` characters."""
+    of more than `_CLUSTER_GAP` characters. A legitimate `[ID] ~same`
+    marker is blanked first so it never reads as working text."""
+    text = _MARKER_RE.sub(lambda m: " " * len(m.group(0)), text or "")
     groups: list[list[re.Match[str]]] = []
     for m in _PHRASE_RE.finditer(text or ""):
         if groups and m.start() - groups[-1][-1].end() <= _CLUSTER_GAP:
@@ -888,8 +905,14 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
                           "note_ids": triage_ids(t),
                           "counts": {**{k: len(p.get(k, [])) for k in
                                         ("changed", "added", "removed", "renamed", "renumbered", "moved")},
+                                     # changed = pairs sent; same = the model found them unchanged;
+                                     # dropped = pairs the lane kept from the model + same;
+                                     # bookkeeping = dropped + heading-only entries (what the
+                                     # collapsed list holds)
                                      "dropped": t.get("dropped", 0) + len(model_same),
-                                     "same": len(model_same)}})
+                                     "same": len(model_same),
+                                     "bookkeeping": t.get("dropped", 0) + len(model_same)
+                                     + len(t.get("heading_removed", [])) + len(t.get("heading_added", []))}})
     absent = [{"plan_id": k, "absent_in": v.get("absent_in", "")}
               for k, v in sorted(payload.get("absent_plans", {}).items())]
     return {"mno": payload.get("mno", ""), "from": payload.get("from", ""),

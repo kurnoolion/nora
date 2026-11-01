@@ -624,3 +624,17 @@ def test_quarter_phrases_and_carrier_names_resolve_and_display():
     cfg = ReleaseDiffConfig(release_names={"mno-q": names})
     assert cfg.names_for("mno-q") == names and cfg.names_for("other") == {}
 
+
+def test_same_marks_inline_labelled_and_stray_are_taken():
+    from core.src.query.release_diff import take_same_lines, looks_like_working_text
+    text = ("[R1] ~same [R2] added a condition on the timer.\n"
+            "[R3] Req 2 ~same [R4] Req 3 ~same\n"
+            "For [R5], the fallback clause is new. So ~same.\n"
+            "[R6]: ~same")
+    out, same = take_same_lines(text, ["R1", "R2", "R3", "R4", "R5", "R6"])
+    assert same == ["R1", "R3", "R4", "R6"]
+    assert out == "[R2] added a condition on the timer.\nFor [R5], the fallback clause is new."
+    # legitimate markers are not working text; the model's marker idiom is
+    assert not looks_like_working_text("[R1] ~same\n[R2] ~same\nFor [R3], the timer moved.")
+    assert looks_like_working_text("Looks same. So ~same. Now format: each line either an id or a sentence. For [R1] x.")
+

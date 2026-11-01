@@ -496,3 +496,22 @@ def test_builder_release_filter_and_docs_per_release(tmp_path, built, capsys):
                                "--release", "Nope2031"]) == 1
     assert "HIS-E007" in capsys.readouterr().err
 
+
+def test_location_kinds_hierarchy_gap_and_same_section_are_not_moves():
+    """A parent that is the plan node on one side (the parse found no
+    containing section there), or a different parent with the same
+    section number at both ends, is a parse-hierarchy difference, not a
+    move. A real move keeps its kind."""
+    import json
+    from core.src.stores.history import _location_kinds, PLAN, SECTION
+    plan = {"kind": PLAN, "text_fp": "p", "local_id": ""}
+    s1 = {"kind": SECTION, "text_fp": "s1", "local_id": "2"}
+    s2 = {"kind": SECTION, "text_fp": "s2", "local_id": "3"}
+    sa, sb = {"P": plan, "S1": s1, "S2": s2}, {"P": plan, "S1": s1, "S2": s2}
+    loc = lambda parent, section: json.dumps({"parent": parent, "section": section})  # noqa: E731
+    assert _location_kinds(loc("P", "2.1"), loc("S1", "2.1"), sa, sb) == ([], "", "")
+    assert _location_kinds(loc("S1", ""), loc("P", ""), sa, sb) == ([], "", "")
+    assert _location_kinds(loc("S1", "2.1"), loc("S2", "2.1"), sa, sb) == ([], "", "")
+    assert _location_kinds(loc("S1", "2.1"), loc("S2", "3.1"), sa, sb) == (["moved"], "", "2.1")
+    assert _location_kinds(loc("S1", ""), loc("S2", ""), sa, sb) == (["moved"], "", "")
+
