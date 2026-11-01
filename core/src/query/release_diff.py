@@ -626,7 +626,8 @@ _WORKING_RE = re.compile(
     r"looking at|we need|we should|so,? the|now,? (let|produce)|identify (the )?changes|"
     r"so (change|mention)|summari[sz]e (the )?changes|"
     # the prompt's own instruction echoed back as an opening
-    r"provide (the |an )?answer|each line either|list each change|we have multiple)", re.I)
+    r"provide (the |an )?answer|each line either|list each change|we have multiple|"
+    r"when several requirements)", re.I)
 # Phrases of the model talking to itself. Two distinct ones close together
 # mark working text wherever it sits: a reply that begins with the TAIL of a
 # reasoning block (the marker landed inside the reasoning, so the split kept
@@ -649,7 +650,8 @@ _PHRASE_RE = re.compile(
     r"appears identical|so ~\s*same|now format|each line either|so maybe|now produce|"
     r"we need note|so we state|thus output|probably each|let's (craft|produce|compose)|"
     r"provide answer lines|grouping same changes|sharing (the )?same change|could group those|"
-    r"we have multiple changes|each unique change|"
+    r"we have multiple changes|each unique change|share (the )?same change|could group all|"
+    r"probably list each|"
     r"thus (the )?(answer|final|unchanged|no change)|"
     r"as (given|instructed|required))(?!\w)", re.I)
 _SENTENCE_END_RE = re.compile(r"[.!?](?=\s)|\n")
@@ -734,6 +736,19 @@ def _first_id(text: str, ids: "Iterable[str]") -> int:
 # wording, when an id follows.
 _ANNOUNCE_RE = re.compile(
     r"\b(?:now|let's|let us|thus|so) (produce|output|write|give|list|format|craft|compose)\b[^.\n:]*[.:\n]", re.I)
+
+
+# A model may bracket ids in full-width or lenticular forms; every id rule
+# here reads `[ ]`, so a reply is normalised first.
+_BRACKET_VARIANTS = str.maketrans({"【": "[", "】": "]", "［": "[", "］": "]", "〔": "[", "〕": "]",
+                                   "〖": "[", "〗": "]", "⟦": "[", "⟧": "]"})
+
+
+def normalize_brackets(text: str) -> str:
+    """Full-width and lenticular brackets around ids become `[ ]`, with the
+    spaces a model pads them with removed: `【 ID 】` → `[ID]`."""
+    out = (text or "").translate(_BRACKET_VARIANTS)
+    return re.sub(r"\[\s+([^\[\]\n]*?)\s+\]", r"[\1]", out)
 
 
 class GatewayReplyError(RuntimeError):
@@ -1007,16 +1022,16 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
     def call(batch: Batch) -> str:
         system, prompt = prompt_for(batch, payload)
         ids = [i for it in batch.items for i in it["ids"]]
-        text = provider.complete(prompt, system=system, temperature=cfg.temperature,
-                                 max_tokens=cfg.max_tokens)
+        text = normalize_brackets(provider.complete(prompt, system=system, temperature=cfg.temperature,
+                                                    max_tokens=cfg.max_tokens))
         if looks_like_gateway_reply(text):
             # an error page came back as content with HTTP success: one more
             # try, then a failed batch (logged, shown as synthesis failed),
             # never rendered as an answer
             log.warning("RHD gateway reply: batch=%d group=%s retried=1",
                         batch.index, batch.group.replace("\x00", "/"))
-            text = provider.complete(prompt, system=system, temperature=cfg.temperature,
-                                     max_tokens=cfg.max_tokens)
+            text = normalize_brackets(provider.complete(prompt, system=system, temperature=cfg.temperature,
+                                                        max_tokens=cfg.max_tokens))
             if looks_like_gateway_reply(text):
                 raise GatewayReplyError("the provider returned a gateway error as the reply")
         text = _cut_at_announcement(text, ids)          # "Now produce …": cheap, deterministic
@@ -1024,9 +1039,9 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
         if marks:
             # the marker was left out: one retry with a blunter instruction,
             # then a heuristic cut, so the page never shows the working
-            retry = provider.complete(
+            retry = normalize_brackets(provider.complete(
                 prompt + "\n\nOutput only the final answer, nothing before it.",
-                system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens)
+                system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens))
             if looks_like_gateway_reply(retry):
                 raise GatewayReplyError("the provider returned a gateway error as the reply")
             stripped = looks_like_working_text(retry)

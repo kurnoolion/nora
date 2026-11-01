@@ -733,3 +733,27 @@ def test_thus_produce_is_an_announcement_and_the_batch_timeout_knob():
     assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": "/nonexistent.json",
                                        "NORA_HISTORY_DIFF_BATCH_TIMEOUT_S": "0"}).batch_timeout_s == 0
 
+
+def test_full_width_bracket_ids_are_normalised_before_the_strip():
+    from core.src.query.release_diff import normalize_brackets, strip_working_text, looks_like_working_text
+    assert normalize_brackets("【 R1 】 and ［R2］ and 〔 R3 〕") == "[R1] and [R2] and [R3]"
+    reply = ("When several requirements share same change, state it once with all their ids. Could group "
+             "all wording changes together. Probably list each distinct type. Could group those ids: 1, 2. "
+             "For 【 R1 】, the timer gains a 31 s bound. For 【 R2 】, the fallback clause is new.")
+    text = normalize_brackets(reply)
+    assert looks_like_working_text(text)
+    assert strip_working_text(text, ["R1", "R2"]) == ("For [R1], the timer gains a 31 s bound. "
+                                                      "For [R2], the fallback clause is new.")
+    # the lane normalises every reply, so the echo-then-answer block comes out clean end to end
+    pl = payload()
+
+    class FullWidth(EchoProvider):
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            self.calls.append((system, prompt))
+            ids = re.findall(r"\[([A-Z]+\d+)\]", prompt)
+            return "Probably list each distinct type. Let's craft: " + " ".join(f"For 【 {i} 】, changed." for i in dict.fromkeys(ids))
+
+    out = synthesize_release_diff(pl, FullWidth(), config=ReleaseDiffConfig(parallel=1))
+    texts = [s["text"] for p in out["plans"] for s in p["sections"]]
+    assert texts and all("【" not in t and "Probably" not in t and "[R" in t or "[B" in t for t in texts)
+
