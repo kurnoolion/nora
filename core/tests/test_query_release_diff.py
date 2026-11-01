@@ -720,3 +720,16 @@ def test_prompt_echo_openings_are_cut():
     assert looks_like_working_text(e2)
     assert strip_working_text(e2, ["R3"]) == "For [R3], the scope now covers tablets."
 
+
+def test_thus_produce_is_an_announcement_and_the_batch_timeout_knob():
+    from core.src.query.release_diff import strip_working_text, DEFAULT_BATCH_TIMEOUT_S
+    t = ("For [R1], the timer gains a 31 s bound.\n\nSo change: behavior and conditions. Thus produce "
+         "lines.\n\n[R2] Req 4 – the fallback clause is new.")
+    assert strip_working_text(t, ["R1", "R2"]) == ("For [R1], the timer gains a 31 s bound.\n\n"
+                                                   "[R2] Req 4 – the fallback clause is new.")
+    assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": "/nonexistent.json"}).batch_timeout_s == DEFAULT_BATCH_TIMEOUT_S
+    assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": "/nonexistent.json",
+                                       "NORA_HISTORY_DIFF_BATCH_TIMEOUT_S": "120"}).batch_timeout_s == 120
+    assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": "/nonexistent.json",
+                                       "NORA_HISTORY_DIFF_BATCH_TIMEOUT_S": "0"}).batch_timeout_s == 0
+

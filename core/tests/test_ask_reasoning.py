@@ -937,6 +937,20 @@ class TestChosenModel:
         finally:
             cfg._reset_llm_config_cache(); md._reset_cache()
 
+    def test_timeout_cap_lowers_the_entry_timeout_only(self, tmp_path, monkeypatch):
+        from core.src.web.routes.query import _build_llm_from_env_or_default
+        from core.src.env.config import DEFAULT_LLM_TIMEOUT
+        cfg, md = self._roster(tmp_path, monkeypatch, cached=["model-x"])
+        try:
+            llm = _build_llm_from_env_or_default(provider_id="internal")
+            assert self._primary(llm)._timeout == DEFAULT_LLM_TIMEOUT
+            llm = _build_llm_from_env_or_default(provider_id="internal", timeout_cap=120)
+            assert self._primary(llm)._timeout == 120
+            llm = _build_llm_from_env_or_default(provider_id="internal", timeout_cap=DEFAULT_LLM_TIMEOUT + 1000)
+            assert self._primary(llm)._timeout == DEFAULT_LLM_TIMEOUT        # a cap never raises it
+        finally:
+            cfg._reset_llm_config_cache(); md._reset_cache()
+
     def test_empty_cache_discovers_once_on_demand(self, tmp_path, monkeypatch):
         # a fresh process (the page not loaded yet): one fetch, then the model is accepted
         from core.src.web.routes.query import _build_llm_from_env_or_default

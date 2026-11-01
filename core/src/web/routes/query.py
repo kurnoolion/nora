@@ -256,6 +256,7 @@ def _build_llm_from_env_or_default(
     model: str | None = None,
     *,
     use_roster: bool = True,
+    timeout_cap: int | None = None,
 ):
     """Construct the LLM provider for /query and /test.
 
@@ -340,6 +341,8 @@ def _build_llm_from_env_or_default(
         # Entry-owned, NOT resolve_llm_timeout(): a selected roster entry is
         # independent of the Config-page DB, so nothing here consults it.
         timeout = entry.timeout or DEFAULT_LLM_TIMEOUT
+        if timeout_cap:
+            timeout = min(timeout, timeout_cap)      # a caller's per-call ceiling (the release-change lane)
         chosen_model = entry.model
         if model and model != entry.model:
             from core.src.web.model_discovery import allowed_models, models_for, has_entry
@@ -384,7 +387,8 @@ def _build_llm_from_env_or_default(
                 model=fb_entry.model,
                 base_url=fb_entry.base_url,
                 api_key=fb_entry.api_key or None,
-                timeout=fb_entry.timeout or DEFAULT_LLM_TIMEOUT,
+                timeout=min(fb_entry.timeout or DEFAULT_LLM_TIMEOUT, timeout_cap) if timeout_cap
+                else (fb_entry.timeout or DEFAULT_LLM_TIMEOUT),
                 reasoning=_reasoning_for(fb_entry, mode),
                 reasoning_control=fb_entry.reasoning_mechanism,
             )
@@ -423,6 +427,8 @@ def _build_llm_from_env_or_default(
         config_store_value=_config_store_get("llm", "llm_timeout"),
         env_config_value=env_cfg.model_timeout if env_cfg else None,
     )
+    if timeout_cap:
+        timeout = min(timeout, timeout_cap)
     base_url = resolve_llm_base_url(
         config_store_value=_config_store_get("llm", "llm_base_url"),
     )

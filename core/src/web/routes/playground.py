@@ -1784,9 +1784,11 @@ def _history_provider(provider_id: str, mode: str, model: str):
     is a construction-time choice; the same roster path as the lanes)."""
     from core.src.web.routes.query import _build_llm_from_env_or_default
     from core.src.query.release_diff import ReleaseDiffConfig
-    pinned = ReleaseDiffConfig.from_env().model      # NORA_HISTORY_DIFF_MODEL / config file
+    cfg = ReleaseDiffConfig.from_env()
+    pinned = cfg.model                               # NORA_HISTORY_DIFF_MODEL / config file
     return _build_llm_from_env_or_default(provider_id=provider_id or None,
-                                          mode=mode or None, model=pinned or model or None)
+                                          mode=mode or None, model=pinned or model or None,
+                                          timeout_cap=cfg.batch_timeout_s or None)
 
 
 @router.post("/api/test/ask-cancel")

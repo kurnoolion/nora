@@ -53,6 +53,8 @@ MAX_BATCH_BYTES_ENV = "NORA_HISTORY_DIFF_MAX_BATCH_BYTES"
 PARALLEL_ENV = "NORA_HISTORY_DIFF_PARALLEL"
 ENABLED_ENV = "NORA_HISTORY_DIFF_ENABLED"
 MODEL_ENV = "NORA_HISTORY_DIFF_MODEL"
+BATCH_TIMEOUT_ENV = "NORA_HISTORY_DIFF_BATCH_TIMEOUT_S"
+DEFAULT_BATCH_TIMEOUT_S = 300          # a stuck call fails its batch, not the whole answer
 CONFIG_ENV = "NORA_HISTORY_DIFF_CONFIG"
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config" / "release_diff.json"
@@ -91,6 +93,7 @@ class ReleaseDiffConfig:
     max_tokens: int = 2048
     temperature: float = 0.0
     model: str = ""                       # pin the lane's model; "" = the page's choice
+    batch_timeout_s: int = DEFAULT_BATCH_TIMEOUT_S   # per-call cap under the roster's timeout; 0 = none
     annotation_lines: tuple = DEFAULT_ANNOTATION_LINES   # (name, pattern[, scope]) rules
     release_names: dict = field(default_factory=dict)    # {mno: {label: carrier's own name}}
 
@@ -110,6 +113,7 @@ class ReleaseDiffConfig:
             parallel=max(1, int(e.get(PARALLEL_ENV, "4") or 4)),
             enabled=enabled,
             model=str(e.get(MODEL_ENV, "") or file_cfg.get("model", "") or "").strip(),
+            batch_timeout_s=max(0, int(e.get(BATCH_TIMEOUT_ENV, "") or file_cfg.get("batch_timeout_s", DEFAULT_BATCH_TIMEOUT_S) or 0)),
             annotation_lines=lines if "annotation_lines" in file_cfg else DEFAULT_ANNOTATION_LINES,
             release_names={str(m): {str(k): str(v) for k, v in (names or {}).items()}
                            for m, names in (file_cfg.get("release_names") or {}).items()
@@ -729,7 +733,7 @@ def _first_id(text: str, ids: "Iterable[str]") -> int:
 # answer; everything before the last such sentence is working, whatever its
 # wording, when an id follows.
 _ANNOUNCE_RE = re.compile(
-    r"\b(?:now|let's|let us) (produce|output|write|give|list|format|craft|compose)\b[^.\n:]*[.:\n]", re.I)
+    r"\b(?:now|let's|let us|thus|so) (produce|output|write|give|list|format|craft|compose)\b[^.\n:]*[.:\n]", re.I)
 
 
 class GatewayReplyError(RuntimeError):
