@@ -167,7 +167,7 @@ def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world, monkeypa
     assert "<strong>mno-w: Apr2031 → Jul2031</strong>" in html       # the compared releases lead
     # bubbles point at the side-by-side route, with the id's plan
     assert 'hx-get="/api/test/history/req/RA1?mno=mno-w&amp;from=Apr2031&amp;to=Jul2031&amp;plan=PLANA"' in html
-    assert "changed in meaning" in html and "plan(s) with changes" in html
+    assert "changed in text" in html and "plan(s) with changes" in html
     assert hist.calls == [("mno-w", "Apr2031", "Jul2031")] and prov.calls == 3
     assert len(fb.rows) == 1 and fb.rows[0]["lane"] == "history"
     assert fb.rows[0]["lane_config"]["batches"] == 3 and fb.rows[0]["cited_ids"]
@@ -258,7 +258,7 @@ def test_answer_markdown_summary_leads_and_structural_notes_are_grouped():
                          "renumbered": 2, "moved": 1, "absent_plans": 1},
               "plans": [{"plan_id": "P1", "plan_name": "One",
                          "counts": {"changed": 3, "added": 5, "removed": 1, "renumbered": 2, "moved": 1,
-                                    "dropped": 4, "same": 1},
+                                    "dropped": 4, "same": 1, "bookkeeping": 4},
                          "sections": [{"kind": "pair", "status": "ok", "text": "For [R1], x.", "ids": ["R1"], "lead": ""},
                                       {"kind": "removed", "status": "ok", "text": "The plan loses a timer.",
                                        "ids": ["R6"], "lead": "Removed: [R6]"}],
@@ -268,13 +268,14 @@ def test_answer_markdown_summary_leads_and_structural_notes_are_grouped():
                                              "1 requirement(s) unchanged in meaning (wording, formatting or layout only): [R5]."]}}]}
     md = history_lane.answer_markdown(result)
     assert md.startswith("**mno-q: Spring 31 (Apr2031) → Jul2031**")
-    # changed = sent (3) minus the model's ~same marks (1); "another" = dropped, marks included
-    assert "120 requirement(s) in Spring 31 (Apr2031), 124 in Jul2031; 2 changed in meaning (another 4 differ in bookkeeping or wording only); 5 added, 1 removed, 2 renumbered, 1 moved; 1 plan(s) with changes, 1 plan(s) present in one release only." in md
+    # headline numbers are store-derived: changed = pairs sent (3); the model's marks (1) stated beside;
+    # "another" = bookkeeping dropped by the lane (4 − 1)
+    assert "120 requirement(s) in Spring 31 (Apr2031), 124 in Jul2031; 3 changed in text (the model judged 1 of them unchanged in meaning on this run); another 3 differ in bookkeeping only; 5 added, 1 removed, 2 renumbered, 1 moved; 1 plan(s) with changes, 1 plan(s) present in one release only." in md
     assert "**Removed: [R6]**" in md and md.index("**Removed: [R6]**") < md.index("The plan loses a timer.")
     assert "**Structural changes only**" in md and "- 2 requirement(s) renumbered" in md
-    assert "<summary>4 requirement(s) unchanged in meaning (bookkeeping, wording or layout only) · show</summary>" in md
-    assert "| P1 — One | 2 | 5 | 1 | 2 | 1 | 4 |" in md and "<summary>P1 — One · 2 changed, 5 added, 1 removed</summary>" in md
-    assert md.index("Structural changes only") < md.index("unchanged in meaning (bookkeeping")
+    assert "<summary>5 requirement(s) with no change in meaning (bookkeeping only, and 1 the model judged unchanged on this run) · show</summary>" in md
+    assert "| P1 — One | 3 | 5 | 1 | 2 | 1 | 4 |" in md and "<summary>P1 — One · 3 changed, 5 added, 1 removed</summary>" in md
+    assert md.index("Structural changes only") < md.index("no change in meaning (bookkeeping only")
 
 
 def test_answer_markdown_orders_by_change_and_caps_id_lists():

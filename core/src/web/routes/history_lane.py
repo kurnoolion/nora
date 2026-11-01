@@ -111,7 +111,7 @@ def _cap_ids(ids: list) -> str:
 
 def _change_score(p: dict) -> int:
     c = p.get("counts", {})
-    return c.get("changed", 0) - c.get("same", 0) + c.get("added", 0) + c.get("removed", 0)
+    return c.get("changed", 0) + c.get("added", 0) + c.get("removed", 0)
 
 
 def _summary_lines(result: dict) -> list[str]:
@@ -123,14 +123,19 @@ def _summary_lines(result: dict) -> list[str]:
     a, b = disp.get("from") or result.get("from", ""), disp.get("to") or result.get("to", "")
     c = result.get("counts", {})
     plans = result.get("plans", [])
+    # headline numbers are store-derived and the same on every run; the
+    # model's own "unchanged in meaning" verdicts vary between runs, so
+    # they are stated beside the stable count, never in its place
     same = sum(p.get("counts", {}).get("same", 0) for p in plans)
-    sent = sum(p.get("counts", {}).get("changed", 0) for p in plans) - same    # the model's ~same marks are not changes
-    dropped = sum(p.get("counts", {}).get("dropped", 0) for p in plans)        # includes the ~same marks
+    sent = sum(p.get("counts", {}).get("changed", 0) for p in plans)
+    dropped = sum(p.get("counts", {}).get("dropped", 0) for p in plans) - same
     lines = [f"**{mno}: {a} → {b}**", ""] if (mno or a or b) else []
     bits = []
     if c.get("requirements_from") is not None and c.get("requirements_to") is not None:
         bits.append(f"{c['requirements_from']} requirement(s) in {a}, {c['requirements_to']} in {b}")
-    bits.append(f"{sent} changed in meaning" + (f" (another {dropped} differ in bookkeeping or wording only)" if dropped else ""))
+    bits.append(f"{sent} changed in text"
+                + (f" (the model judged {same} of them unchanged in meaning on this run)" if same else "")
+                + (f"; another {dropped} differ in bookkeeping only" if dropped else ""))
     bits.append(f"{c.get('added', 0)} added, {c.get('removed', 0)} removed, "
                 f"{c.get('renumbered', 0)} renumbered, {c.get('moved', 0)} moved")
     bits.append(f"{len(plans)} plan(s) with changes"
@@ -159,14 +164,13 @@ def answer_markdown(result: dict) -> str:
         for p in plans:
             c = p.get("counts", {})
             name = f"{p['plan_id']}" + (f" — {p['plan_name']}" if p.get("plan_name") else "")
-            lines.append(f"| {name} | {c.get('changed', 0) - c.get('same', 0)} | {c.get('added', 0)} | {c.get('removed', 0)} "
+            lines.append(f"| {name} | {c.get('changed', 0)} | {c.get('added', 0)} | {c.get('removed', 0)} "
                          f"| {c.get('renumbered', 0)} | {c.get('moved', 0)} | {c.get('bookkeeping', c.get('dropped', 0))} |")
         lines.append("")
     for p in plans:
         title = p["plan_id"] + (f" — {p['plan_name']}" if p.get("plan_name") else "")
         c = p.get("counts", {})
-        shown = {**c, "changed": c.get("changed", 0) - c.get("same", 0)}
-        brief = ", ".join(f"{shown.get(k, 0)} {k}" for k in ("changed", "added", "removed") if shown.get(k))
+        brief = ", ".join(f"{c.get(k, 0)} {k}" for k in ("changed", "added", "removed") if c.get(k))
         lines.append('<details markdown="1">')
         lines.append(f"<summary>{title}" + (f" · {brief}" if brief else " · bookkeeping only") + "</summary>")
         lines.append("")
@@ -192,10 +196,11 @@ def answer_markdown(result: dict) -> str:
                 lines.append(f"- {n}")
             lines.append("")
         if groups.get("bookkeeping"):
-            n_book = c.get("bookkeeping", c.get("dropped", 0))
+            n_book = c.get("bookkeeping", c.get("dropped", 0)) + c.get("same", 0)   # what the list holds
             lines.append('<details markdown="1">')
-            lines.append(f"<summary>{n_book} requirement(s) unchanged in meaning (bookkeeping, "
-                         f"wording or layout only) · show</summary>")
+            lines.append(f"<summary>{n_book} requirement(s) with no change in meaning (bookkeeping only"
+                         + (f", and {c['same']} the model judged unchanged on this run" if c.get("same") else "")
+                         + ") · show</summary>")
             lines.append("")
             for n in groups["bookkeeping"]:
                 lines.append(f"- {n}")

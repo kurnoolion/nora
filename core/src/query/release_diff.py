@@ -967,7 +967,9 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
                                      # collapsed list holds)
                                      "dropped": t.get("dropped", 0) + len(model_same),
                                      "same": len(model_same),
-                                     "bookkeeping": t.get("dropped", 0) + len(model_same)
+                                     # store-derived, run-independent: the triage's pairs and the
+                                     # heading-only entries; the model's marks are not in it
+                                     "bookkeeping": t.get("dropped", 0)
                                      + len(t.get("heading_removed", [])) + len(t.get("heading_added", []))}})
     absent = [{"plan_id": k, "absent_in": v.get("absent_in", "")}
               for k, v in sorted(payload.get("absent_plans", {}).items())]
