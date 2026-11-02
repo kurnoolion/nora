@@ -324,6 +324,9 @@ async def run_history_lane(
         "elapsed_ms": result["run"]["elapsed_ms"],
         "batch_ms": dict(result["run"].get("batch_ms", {})),
         "triage": dict(result.get("triage", {})),
+        # which plan each id belongs to: a stored answer rebuilds its
+        # side-by-side bubble endpoints from this map
+        "bubble_plans": dict(result.get("bubble_plans", {})),
         "retried": result["run"].get("retried", 0),
         "stripped": result["run"].get("stripped", 0),
         "errors": list(result["run"].get("errors", [])),

@@ -1242,6 +1242,9 @@ async def _render_stored_ask(request: Request, row_id: int, template: str):
         "cited_ids": cited_ids,
         # Same union as the live path, via its persisted carriers.
         "bubble_req_ids": sorted(set(cited_ids) | set(retrieved_ids)),
+        # A release-change answer keeps its side-by-side bubbles when
+        # re-rendered from the row (the shared page, the History page).
+        "bubble_endpoints": _stored_bubble_endpoints(row),
     })
 
 
@@ -1340,20 +1343,36 @@ async def history_req_fragment(request: Request, req_id: str, mno: str = "", pla
     return resp
 
 
-def _history_bubble_endpoints(out: "dict[str, Any] | None") -> dict[str, str]:
+def _history_endpoints_for(mno: str, rel_a: str, rel_b: str, plans: "dict[str, str] | None") -> dict[str, str]:
     """{req_id: url} sending a release-change answer's bubbles to the
-    side-by-side route; {} for every other lane."""
+    side-by-side route; {} without a plan map."""
     from urllib.parse import quote, urlencode
     from core.src.web.app import config
-    root_path = config.root_path
-    hist = (out or {}).get("history") or {}
-    plans = hist.get("bubble_plans") or {}
-    if not plans:
+    if not plans or not (mno and rel_a and rel_b):
         return {}
-    base = {"mno": hist.get("mno", ""), "from": hist.get("from", ""), "to": hist.get("to", "")}
-    return {rid: f"{root_path}/api/test/history/req/{quote(rid, safe='')}?"
+    base = {"mno": mno, "from": rel_a, "to": rel_b}
+    return {rid: f"{config.root_path}/api/test/history/req/{quote(rid, safe='')}?"
                  + urlencode({**base, "plan": plan})
             for rid, plan in plans.items()}
+
+
+def _history_bubble_endpoints(out: "dict[str, Any] | None") -> dict[str, str]:
+    """The live answer's endpoints, from the lane's reassembled result;
+    {} for every other lane."""
+    hist = (out or {}).get("history") or {}
+    return _history_endpoints_for(hist.get("mno", ""), hist.get("from", ""), hist.get("to", ""),
+                                  hist.get("bubble_plans") or {})
+
+
+def _stored_bubble_endpoints(row: dict[str, Any]) -> dict[str, str]:
+    """A stored release-change answer's endpoints, from the feedback row's
+    `lane_config` (mno, from, to, bubble_plans); {} for every other lane,
+    so its bubbles keep the default route."""
+    lc = _decode_json_column(row.get("lane_config"), {})
+    if not isinstance(lc, dict) or lc.get("lane") != history_lane.LANE:
+        return {}
+    return _history_endpoints_for(str(lc.get("mno", "")), str(lc.get("from", "")), str(lc.get("to", "")),
+                                  lc.get("bubble_plans") or {})
 
 
 @router.get("/ask/history", response_class=HTMLResponse)

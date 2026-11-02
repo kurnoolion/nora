@@ -146,6 +146,25 @@ def test_shared_answer_renders_stored_row():
     assert cap["ctx"]["cited_ids"] == ["REQ_A_1"]
 
 
+def test_shared_release_change_answer_keeps_side_by_side_bubbles():
+    """A stored release-change answer re-renders with the lane's bubble
+    endpoints, rebuilt from the row's lane_config; other lanes get none."""
+    row = {
+        "id": 7, "question": "what changed?", "answer": "For [RA1], the timer moved.",
+        "lane": "history", "user_name": "x", "timestamp": "2026-10-31T10:00:00+00:00",
+        "citations_json": "[]", "cited_ids": '["RA1"]', "retrieved_ids": '["RA1", "RA9"]',
+        "lane_config": '{"lane": "history", "mno": "mno-w", "from": "Apr2031", "to": "Jul2031",'
+                       ' "bubble_plans": {"RA1": "PLANA", "RA9": "PLANA"}}',
+    }
+    resp, cap = _shared(row)
+    assert resp.status_code == 200
+    eps = cap["ctx"]["bubble_endpoints"]
+    assert eps["RA1"].endswith("/api/test/history/req/RA1?mno=mno-w&from=Apr2031&to=Jul2031&plan=PLANA")
+    assert set(eps) == {"RA1", "RA9"}
+    row_sira = {**row, "lane": "sira", "lane_config": '{"lane": "sira"}'}
+    assert _shared(row_sira)[1]["ctx"]["bubble_endpoints"] == {}
+
+
 def test_shared_answer_unknown_id_is_404():
     resp, cap = _shared({"id": 7}, row_id=7)
     # same store, but ask for an id it doesn't have
