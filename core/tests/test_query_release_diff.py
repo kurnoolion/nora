@@ -833,3 +833,33 @@ def test_empty_reply_is_retried_once_then_counted(caplog):
     texts = [s["text"] for p in out["plans"] for s in p["sections"] if s["status"] == "ok"]
     assert len(texts) == 4 and sum(1 for t in texts if t) == 1        # ok sections, three with no text
     assert all("model_same" in p for p in out["plans"])
+
+
+def test_trailing_gateway_page_on_a_retry_is_counted_and_logged(caplog):
+    """A retry's reply can carry the trailing page too: both retry paths
+    (working text, blank completion) count it and log it like a first reply."""
+    import logging
+    page = ('response of security filter service is not ok. {"statusCode":429,"error":"Too Many '
+            'Requests","message":"deadline"} Error occurred from orchestrator. reason: not ok.')
+    pl = payload()
+
+    class RetryTrail(EchoProvider):
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            out = super().complete(prompt, system, temperature, max_tokens)
+            removed, added = "absent from the current one" in prompt, "new in the current release" in prompt
+            if "Output only the final answer" in prompt:
+                return out + ". " + page if (removed or added) else out      # the retry trails the page
+            if removed:
+                return "Okay, let me tackle this.\n\n" + out                 # working text: retried
+            if added:
+                return ""                                                     # blank: retried
+            return out
+
+    prov = RetryTrail()
+    with caplog.at_level(logging.WARNING, logger="core.src.query.release_diff"):
+        out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(parallel=1))
+    assert out["run"]["failed"] == 0 and out["run"]["trimmed"] == 2 and " trimmed=2" in out["compact"]
+    assert out["run"]["retried"] == 2 and out["run"]["empty"] == 0
+    fired = [m for m in caplog.messages if "RHD gateway reply:" in m and "retried=1 trailing=1" in m]
+    assert len(fired) == 2 and all("kept_chars=" in m for m in fired)
+    assert all("statusCode" not in s["text"] for p in out["plans"] for s in p["sections"])

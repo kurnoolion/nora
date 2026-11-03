@@ -1083,8 +1083,11 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
             if rv == "error":
                 raise GatewayReplyError("the provider returned a gateway error as the reply")
             if rv == "trailing":
+                # the same cut on the retry's reply: counted and logged like the first
                 with wlock:
                     working["trimmed"] += 1
+                log.warning("RHD gateway reply: batch=%d group=%s retried=1 trailing=1 kept_chars=%d",
+                            batch.index, batch.group.replace("\x00", "/"), len(retry))
             stripped = looks_like_working_text(retry)
             text = strip_working_text(retry, ids) if stripped \
                 else strip_lone_phrases(_cut_at_announcement(retry, ids))
@@ -1109,6 +1112,11 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
             retry, rv = split_gateway_reply(retry, ids)
             if rv == "error":
                 raise GatewayReplyError("the provider returned a gateway error as the reply")
+            if rv == "trailing":
+                with wlock:
+                    working["trimmed"] += 1
+                log.warning("RHD gateway reply: batch=%d group=%s retried=1 trailing=1 kept_chars=%d",
+                            batch.index, batch.group.replace("\x00", "/"), len(retry))
             retry = _cut_at_announcement(retry, ids)
             text = strip_lone_phrases(strip_working_text(retry, ids) if looks_like_working_text(retry) else retry)
             with wlock:
