@@ -1,8 +1,8 @@
 # rel-history
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-10-25
-**Landed:**
+**Landed:** 2026-11-03
 **Assignees:** kurnoolion
 **Target modules:** stores, store_service, llm, query, web
 **Active phase:** development
@@ -27,3 +27,4 @@ so summaries and cross-MNO comparisons can use them later.
 
 ## Notes
 
+Landed on 2026-11-03 with 16 promoted decisions: D-288, D-289, D-290, D-291, D-292, D-293, D-294, D-295, D-296, D-297, D-298, D-299, D-300, D-301, D-302, D-303
