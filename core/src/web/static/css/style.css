@@ -191,6 +191,84 @@ body {
     contain-intrinsic-size: auto 3rem;
 }
 
+/* Release-change answers (strand rel-history). The answer is one
+   `.rel-change` block: a head, a `.rc-counts` table, the plans as
+   `details.rc-plan` (one `.rc-sec` per kind: a bold title, its entries in a
+   `.rc-body` drawn as a thread) and the absent plans. static/js/
+   release_change.js adds the toolbar (Table / Tree / Tree, expanded views,
+   the Export menu) and the tabbed panel rows under the table; without it
+   the tree view stands alone. Colours come from Bootstrap's tokens. */
+.rc-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+    padding-bottom: 8px; margin-bottom: 10px; border-bottom: 1px solid var(--bs-border-color); }
+.rc-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--bs-secondary-color); margin-right: 6px; }
+.rc-seg { display: inline-flex; border: 1px solid var(--bs-border-color); border-radius: 6px; overflow: hidden; vertical-align: middle; }
+.rc-seg .rc-view { background: var(--bs-body-bg); color: var(--bs-secondary-color); border: 0; padding: 3px 10px; font-size: .85rem; cursor: pointer; }
+.rc-seg .rc-view + .rc-view { border-left: 1px solid var(--bs-border-color); }
+.rc-seg .rc-view:hover { color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
+.rc-seg .rc-view[aria-pressed="true"] { background: var(--bs-primary); color: #fff; }
+.rc-menu { position: relative; }
+.rc-export { background: var(--bs-body-bg); color: var(--bs-body-color); border: 1px solid var(--bs-border-color);
+    border-radius: 6px; padding: 3px 10px; font-size: .85rem; cursor: pointer; }
+.rc-export:hover { background: var(--bs-tertiary-bg); }
+.rc-menu-list { position: absolute; right: 0; top: calc(100% + 4px); min-width: 270px; margin: 0; padding: 4px 0; list-style: none;
+    background: var(--bs-body-bg); border: 1px solid var(--bs-border-color); border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .15); z-index: 20; }
+.rc-menu-item { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 6px 12px; cursor: pointer; color: var(--bs-body-color); }
+.rc-menu-item:hover { background: var(--bs-tertiary-bg); }
+.rc-menu-item small { display: block; color: var(--bs-secondary-color); font-size: .78rem; }
+
+/* the counts table: every non-zero count is a control (hover = summary, click = tab) */
+.rel-change table.rc-counts { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; margin-bottom: 12px; }
+.rel-change .rc-counts th, .rel-change .rc-counts td { padding: 5px 8px; border-bottom: 1px solid var(--bs-border-color); text-align: right; white-space: nowrap; }
+.rel-change .rc-counts th:first-child, .rel-change .rc-counts td:first-child { text-align: left; white-space: normal; }
+.rel-change .rc-counts th { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--bs-secondary-color); font-weight: 600; }
+.rel-change td.rc-plan-name { font-weight: 600; }
+.rel-change tr.rc-row.open td { background: var(--bs-tertiary-bg); border-bottom-color: transparent; }
+.rc-count { display: inline-block; min-width: 2.2em; padding: 1px 6px; border-radius: 6px; border: 1px solid transparent;
+    background: none; color: var(--bs-body-color); cursor: pointer; }
+.rc-count:hover, .rc-count:focus-visible { border-color: var(--bs-primary); background: var(--bs-primary-bg-subtle); outline: none; }
+.rc-count.active { background: var(--bs-primary); color: #fff; border-color: var(--bs-primary); }
+.rc-zero { color: var(--bs-secondary-color); padding: 1px 6px; }
+.rc-plan-toggle { background: none; border: 0; padding: 0; font-weight: 600; color: var(--bs-body-color); cursor: pointer; text-align: left; }
+.rc-plan-toggle::before { content: "\25B8 "; color: var(--bs-secondary-color); font-size: .85em; }
+tr.rc-row.open .rc-plan-toggle::before { content: "\25BE "; }
+.rel-change tr.rc-panel td { padding: 0 8px 12px; text-align: left; white-space: normal; background: var(--bs-tertiary-bg); }
+.rc-panel-box { border: 1px solid var(--bs-border-color); border-radius: 8px; background: var(--bs-body-bg); }
+.rc-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--bs-border-color); align-items: flex-end; }
+.rc-tab { background: none; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; padding: 5px 12px;
+    font-size: .9rem; color: var(--bs-secondary-color); cursor: pointer; }
+.rc-tab:hover { color: var(--bs-body-color); }
+.rc-tab[aria-selected="true"] { color: var(--bs-body-color); background: var(--bs-body-bg); border-color: var(--bs-border-color); margin-bottom: -1px; font-weight: 600; }
+.rc-tab .rc-n { display: inline-block; min-width: 1.4em; margin-left: 4px; padding: 0 5px; border-radius: 9px; background: var(--bs-tertiary-bg); font-size: .78rem; text-align: center; }
+.rc-tab[aria-selected="true"] .rc-n { background: var(--bs-primary); color: #fff; }
+.rc-close { margin-left: auto; align-self: center; background: none; border: 0; color: var(--bs-secondary-color); font-size: .85rem; cursor: pointer; padding: 4px 8px; }
+.rc-close:hover { color: var(--bs-body-color); }
+.rc-pane { padding: 12px 16px 4px; }
+
+/* sections: a bold title, its entries under a thread rule */
+.rc-sec > p:first-child { margin-bottom: 4px; }
+.rc-body { margin: 0 0 14px 6px; padding-left: 16px; border-left: 2px solid var(--bs-border-color); }
+.rc-body > :last-child { margin-bottom: 0; }
+
+/* tree views: every plan a <details> drawn as a thread; its sections indent under it */
+.rc-tree details.rc-plan { position: relative; padding-left: 1.5rem; margin-bottom: 4px; }
+.rc-tree details.rc-plan > summary { cursor: pointer; margin-left: -1.5rem; font-weight: 600; }
+.rc-tree details.rc-plan[open]::before { content: ""; position: absolute; left: .4rem; top: 1.7rem; bottom: .25rem; border-left: 2px solid var(--bs-border-color); }
+.rc-tree details.rc-plan > .rc-sec:first-of-type { margin-top: 8px; }
+details.rc-ids { margin: 2px 0 6px; }
+details.rc-ids > summary { cursor: pointer; color: var(--bs-secondary-color); font-size: .9em; }
+details.rc-ids > ul { margin: 6px 0 0 6px; padding-left: 20px; border-left: 2px solid var(--bs-border-color); }
+
+/* the export sheet */
+.rc-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 1060; }
+.rc-sheet { background: var(--bs-body-bg); color: var(--bs-body-color); border: 1px solid var(--bs-border-color); border-radius: 10px; width: min(540px, 100%); padding: 16px 18px; }
+.rc-sheet h3 { font-size: 1rem; margin: 0 0 6px; }
+.rc-sheet-note { color: var(--bs-secondary-color); font-size: .85rem; margin: 0 0 10px; }
+.rc-sheet-msg { color: var(--bs-danger); font-size: .85rem; margin: 0 0 10px; }
+.rc-picks { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: .9rem; margin-bottom: 14px; }
+.rc-picks label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; margin: 0; }
+.rc-sheet-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
 /* Req-ID bubbles in an answer (strand req-id-bubbles). The badge sits inline
    in running prose, so it has to read as a control rather than as emphasised
    text — tinted fill + border + a caret that flips when its panel opens. */

@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
+import html
 import re
 import threading
 import time
@@ -145,76 +146,139 @@ def _summary_lines(result: dict) -> list[str]:
     return lines
 
 
+_COLUMNS = ("changed", "added", "removed", "renumbered", "moved", "bookkeeping")
+_COLUMN_HEADS = ("Changed", "Added", "Removed", "Renumbered", "Moved", "Bookkeeping only")
+
+
+def _attr(value) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _note_head(note: str) -> str:
+    """A triage note without its id list: "3 requirement(s) differ only in
+    the revision record: [R2], [R3]." -> "3 requirement(s) differ only in
+    the revision record"."""
+    return re.split(r":\s*\[", note, 1)[0].rstrip(". ")
+
+
+def _cell_tips(p: dict, a: str, b: str) -> dict:
+    """Hover text per counts column, from the store's numbers and the
+    triage notes; the same wording the summary line uses."""
+    c = p.get("counts", {})
+    groups = p.get("note_groups") or {"structural": [], "bookkeeping": p.get("notes", [])}
+    ids = {k: [i for s in p.get("sections", []) if s["kind"] == k for i in s.get("ids", [])]
+           for k in ("added", "removed")}
+    tips = {"changed": f"{c.get('changed', 0)} requirement(s) changed in text"
+                       + (f"; the model judged {c['same']} of them unchanged in meaning on this run."
+                          if c.get("same") else ".")}
+    tips["added"] = (f"Added in {b}: {_cap_ids(ids['added'])}." if ids["added"]
+                     else f"{c.get('added', 0)} requirement(s) added in {b}.")
+    tips["removed"] = (f"Removed after {a}: {_cap_ids(ids['removed'])}." if ids["removed"]
+                       else f"{c.get('removed', 0)} requirement(s) removed after {a}.")
+    renum = [n for n in groups.get("structural", []) if "renumbered (" in n]
+    tips["renumbered"] = renum[0] if renum else f"{c.get('renumbered', 0)} requirement(s) renumbered; content unchanged."
+    tips["moved"] = f"{c.get('moved', 0)} requirement(s) moved to another section; content unchanged."
+    heads = [_note_head(n).replace("requirement(s) ", "", 1) for n in groups.get("bookkeeping", [])]
+    n_book = c.get("bookkeeping", c.get("dropped", 0))
+    tips["bookkeeping"] = (f"{n_book} with no change in meaning: " + "; ".join(heads) + "." if heads
+                           else f"{n_book} requirement(s) with no change in meaning.")
+    return tips
+
+
+def _section_block(kind: str, lead: str, body: list[str]) -> list[str]:
+    """One plan section: a bold title, then its entries in a body block the
+    stylesheet draws as a thread under the title."""
+    return ([f'<div class="rc-sec" data-kind="{kind}" markdown="1">', "", f"**{lead}**", "",
+             '<div class="rc-body" markdown="1">', ""] + body + ["", "</div>", "", "</div>", ""])
+
+
 def answer_markdown(result: dict) -> str:
-    """One markdown document from the reassembled plans: the compared
-    releases and a summary line, a counts table (plans by real change
-    count, then id), then each plan collapsed: its syntheses in order
-    (removed and added ids listed by the lane, then the model's summary),
-    "Structural changes only" and the bookkeeping count with its ids
-    collapsed, then the absent plans. Requirement ids stay literal so
-    they become bubbles; id lists in status lines are capped."""
-    lines: list[str] = []
+    """One markdown document from the reassembled plans, as one
+    `.rel-change` block the page script can re-shape (`static/js/
+    release_change.js`: table / tree / expanded views and the export
+    menu); without the script it reads as a tree. In order: the compared
+    releases and a summary line (`.rc-head`), a counts table (`.rc-counts`,
+    plans by change count then id, each non-zero count a button with the
+    column's summary as its hover text), then each plan collapsed
+    (`details.rc-plan`) holding one `.rc-sec` per kind: "Changed" with the
+    pairs' syntheses, "Removed" and "Added" with the ids listed by the lane
+    before the model's summary, "Structural changes only", and
+    "Bookkeeping only" whose ids stay collapsed; then the absent plans.
+    Requirement ids stay literal so they become bubbles; id lists in
+    status lines are capped."""
+    disp = result.get("display") or {}
+    a, b = disp.get("from") or result.get("from", ""), disp.get("to") or result.get("to", "")
+    mno = disp.get("mno") or result.get("mno", "")
+    lines: list[str] = [f'<div class="rel-change" data-mno="{_attr(mno)}" data-from="{_attr(a)}" '
+                        f'data-to="{_attr(b)}" markdown="1">', "", '<div class="rc-head" markdown="1">', ""]
     if result.get("cancelled"):
         lines.append("_Cancelled before every plan was synthesized; the plans below are complete._\n")
     lines.extend(_summary_lines(result))
+    lines += ["</div>", ""]
     plans = sorted(result.get("plans", []), key=lambda p: (-_change_score(p), p["plan_id"]))
     if plans:
-        lines.append("| Plan | Changed | Added | Removed | Renumbered | Moved | Bookkeeping only |")
-        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        lines += ['<table class="rc-counts">', "<thead><tr>"
+                  + "".join(f"<th>{h}</th>" for h in ("Plan",) + _COLUMN_HEADS) + "</tr></thead>", "<tbody>"]
         for p in plans:
-            c = p.get("counts", {})
+            c, tips = p.get("counts", {}), _cell_tips(p, a, b)
             name = f"{p['plan_id']}" + (f" — {p['plan_name']}" if p.get("plan_name") else "")
-            lines.append(f"| {name} | {c.get('changed', 0)} | {c.get('added', 0)} | {c.get('removed', 0)} "
-                         f"| {c.get('renumbered', 0)} | {c.get('moved', 0)} | {c.get('bookkeeping', c.get('dropped', 0))} |")
-        lines.append("")
+            cells = []
+            for k in _COLUMNS:
+                n = c.get(k, c.get("dropped", 0)) if k == "bookkeeping" else c.get(k, 0)
+                tab = "structural" if k in ("renumbered", "moved") else k
+                cells.append(f'<td><button type="button" class="rc-count" data-tab="{tab}" '
+                             f'title="{_attr(tips[k])}">{n}</button></td>' if n
+                             else '<td><span class="rc-zero">0</span></td>')
+            lines.append(f'<tr class="rc-row" data-plan="{_attr(p["plan_id"])}">'
+                         f'<td class="rc-plan-name">{html.escape(name)}</td>' + "".join(cells) + "</tr>")
+        lines += ["</tbody>", "</table>", ""]
+    lines += ['<div class="rc-tree" markdown="1">', ""]
     for p in plans:
         title = p["plan_id"] + (f" — {p['plan_name']}" if p.get("plan_name") else "")
         c = p.get("counts", {})
         brief = ", ".join(f"{c.get(k, 0)} {k}" for k in ("changed", "added", "removed") if c.get(k))
-        lines.append('<details markdown="1">')
+        lines.append(f'<details class="rc-plan" data-plan="{_attr(p["plan_id"])}" markdown="1">')
         lines.append(f"<summary>{title}" + (f" · {brief}" if brief else " · bookkeeping only") + "</summary>")
         lines.append("")
+        by_kind: dict[str, list[str]] = {"changed": [], "added": [], "removed": []}
+        leads: dict[str, str] = {"changed": f"Changed: {c.get('changed', 0)} requirement(s)"}
         for s in p.get("sections", []):
+            kind = s["kind"] if s["kind"] in by_kind else "changed"
+            body = by_kind[kind]
             if s["status"] == "ok":
-                if s.get("lead"):
-                    lines.append(f"**{s['lead']}**")
-                    lines.append("")
+                if s.get("lead") and kind not in leads:
+                    # the lane's own "Removed: [ids]" / "Added: [ids]" line is the section title
+                    leads[kind] = s["lead"]
+                elif s.get("lead"):
+                    body += [f"**{s['lead']}**", ""]      # a further batch of the same kind
                 if s.get("text"):
-                    lines.append(s["text"].strip())
+                    body += [s["text"].strip(), ""]
             elif s["status"] == "cancelled":
-                lines.append(f"_{s['kind']}: not synthesized (cancelled); "
-                             f"ids: {_cap_ids(s.get('ids', []))}_")
+                body += [f"_{s['kind']}: not synthesized (cancelled); ids: {_cap_ids(s.get('ids', []))}_", ""]
             elif s["status"] == "error":
-                lines.append(f"_{s['kind']}: synthesis failed ({s.get('error', 'RHD-E004')}); "
-                             f"ids: {_cap_ids(s.get('ids', []))}_")
-            lines.append("")
+                body += [f"_{s['kind']}: synthesis failed ({s.get('error', 'RHD-E004')}); "
+                         f"ids: {_cap_ids(s.get('ids', []))}_", ""]
+        for kind in ("changed", "added", "removed"):
+            if by_kind[kind]:
+                lines += _section_block(kind, leads.get(kind, kind.capitalize()), by_kind[kind])
         groups = p.get("note_groups") or {"structural": [], "bookkeeping": p.get("notes", [])}
         if groups.get("structural"):
-            lines.append("**Structural changes only**")
-            lines.append("")
-            for n in groups["structural"]:
-                lines.append(f"- {n}")
-            lines.append("")
+            lines += _section_block("structural", "Structural changes only", [f"- {n}" for n in groups["structural"]])
         if groups.get("bookkeeping"):
+            # the title is visible once the plan is open; the id list stays collapsed until asked for
             n_book = c.get("bookkeeping", c.get("dropped", 0)) + c.get("same", 0)   # what the list holds
-            lines.append('<details markdown="1">')
-            lines.append(f"<summary>{n_book} requirement(s) with no change in meaning (bookkeeping only"
-                         + (f", and {c['same']} the model judged unchanged on this run" if c.get("same") else "")
-                         + ") · show</summary>")
-            lines.append("")
-            for n in groups["bookkeeping"]:
-                lines.append(f"- {n}")
-            lines.append("")
-            lines.append("</details>")
-            lines.append("")
-        lines.append("</details>")
-        lines.append("")
+            body = ['<details class="rc-ids" markdown="1">',
+                    f"<summary>{n_book} requirement(s) with no change in meaning (bookkeeping only"
+                    + (f", and {c['same']} the model judged unchanged on this run" if c.get("same") else "")
+                    + ") · show</summary>", ""] + [f"- {n}" for n in groups["bookkeeping"]] + ["", "</details>"]
+            lines += _section_block("bookkeeping", "Bookkeeping only", body)
+        lines += ["</details>", ""]
+    lines += ["</div>", ""]
     absent = result.get("absent_plans") or []
     if absent:
-        lines.append("### Plans present in one release only")
-        for a in absent:
-            lines.append(f"- {a['plan_id']}: not part of {a['absent_in']}")
-        lines.append("")
+        lines += _section_block("absent", "Plans present in one release only",
+                                [f"- {x['plan_id']}: not part of {x['absent_in']}" for x in absent])
+    lines += ["</div>", ""]
     return "\n".join(lines).strip() + "\n"
 
 

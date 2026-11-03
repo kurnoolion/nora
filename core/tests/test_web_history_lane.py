@@ -243,9 +243,11 @@ def test_answer_markdown_shape():
          "notes": ["2 requirement(s) renumbered (2 chapter); content unchanged."]}],
         "absent_plans": [{"plan_id": "PX", "absent_in": "Jul2031"}]}
     md = history_lane.answer_markdown(result)
-    assert md.startswith("_Cancelled") and "<summary>P1 — One · " in md and "changed: R1" in md
-    assert '<details markdown="1">' in md and md.count("</details>") == 2     # the plan, its bookkeeping
-    assert "| Plan | Changed |" in md and "| P1 — One |" in md
+    assert '<div class="rc-head" markdown="1">\n\n_Cancelled' in md and "<summary>P1 — One · " in md and "changed: R1" in md
+    assert '<details class="rc-plan" data-plan="P1" markdown="1">' in md and md.count("</details>") == 2   # the plan, its ids
+    assert md.startswith('<div class="rel-change" data-mno="" data-from="" data-to="" markdown="1">')
+    assert "<th>Plan</th><th>Changed</th>" in md and '<td class="rc-plan-name">P1 — One</td>' in md
+    assert '<div class="rc-sec" data-kind="changed" markdown="1">' in md and "**Changed: 0 requirement(s)**" in md
     assert "added: not synthesized (cancelled); ids: R2" in md
     assert "removed: synthesis failed (RHD-E004); ids: R3" in md
     assert "- 2 requirement(s) renumbered" in md and "PX: not part of Jul2031" in md
@@ -268,15 +270,27 @@ def test_answer_markdown_summary_leads_and_structural_notes_are_grouped():
                              "bookkeeping": ["3 requirement(s) differ only in the revision record: [R2], [R3], [R4].",
                                              "1 requirement(s) unchanged in meaning (wording, formatting or layout only): [R5]."]}}]}
     md = history_lane.answer_markdown(result)
-    assert md.startswith("**mno-q: Spring 31 (Apr2031) → Jul2031**")
+    assert '<div class="rc-head" markdown="1">\n\n**mno-q: Spring 31 (Apr2031) → Jul2031**' in md
     # headline numbers are store-derived: changed = pairs sent (3); the model's marks (1) stated beside;
     # "another" = bookkeeping dropped by the lane (4 − 1)
     assert "120 requirement(s) in Spring 31 (Apr2031), 124 in Jul2031; 3 changed in text (the model judged 1 of them unchanged in meaning on this run); another 3 differ in bookkeeping only; 5 added, 1 removed, 2 renumbered, 1 moved; 1 plan(s) with changes, 1 plan(s) present in one release only." in md
     assert "**Removed: [R6]**" in md and md.index("**Removed: [R6]**") < md.index("The plan loses a timer.")
+    assert md.index('<div class="rc-sec" data-kind="removed" markdown="1">') < md.index("**Removed: [R6]**")   # the lead is the section title
+    assert md.count("**Changed: 3 requirement(s)**") == 1 and md.index("**Changed: 3") < md.index("For [R1], x.")
     assert "**Structural changes only**" in md and "- 2 requirement(s) renumbered" in md
     assert "<summary>5 requirement(s) with no change in meaning (bookkeeping only, and 1 the model judged unchanged on this run) · show</summary>" in md
-    assert "| P1 — One | 3 | 5 | 1 | 2 | 1 | 4 |" in md and "<summary>P1 — One · 3 changed, 5 added, 1 removed</summary>" in md
-    assert md.index("Structural changes only") < md.index("no change in meaning (bookkeeping only")
+    assert "<summary>P1 — One · 3 changed, 5 added, 1 removed</summary>" in md
+    # counts are buttons with the column's summary as hover text; zero is plain
+    assert ('<button type="button" class="rc-count" data-tab="changed" title="3 requirement(s) changed in text; '
+            'the model judged 1 of them unchanged in meaning on this run.">3</button>') in md
+    assert 'data-tab="removed" title="Removed after Spring 31 (Apr2031): R6.">1</button>' in md
+    assert 'data-tab="structural" title="2 requirement(s) renumbered (2 sibling); content unchanged.">2</button>' in md
+    assert ('data-tab="bookkeeping" title="4 with no change in meaning: 3 differ only in the revision record; '
+            '1 unchanged in meaning (wording, formatting or layout only).">4</button>') in md
+    assert md.startswith('<div class="rel-change" data-mno="mno-q" data-from="Spring 31 (Apr2031)" data-to="Jul2031" markdown="1">')
+    assert md.index("Structural changes only") < md.index("**Bookkeeping only**") < md.index("no change in meaning (bookkeeping only")
+    # the title is visible once the plan is open; the id list is the nested block, still collapsed
+    assert md.index("**Bookkeeping only**") < md.index('<details class="rc-ids" markdown="1">', md.index("**Bookkeeping only**"))
 
 
 def test_answer_markdown_orders_by_change_and_caps_id_lists():
@@ -291,12 +305,18 @@ def test_answer_markdown_orders_by_change_and_caps_id_lists():
                                                           "renumbered": 0, "moved": 0, "dropped": 0},
          "sections": [{"kind": "pair", "status": "cancelled", "text": "", "ids": many}], "notes": []}]}
     md = history_lane.answer_markdown(result)
-    assert md.index("| P2 — Big |") < md.index("| P1 — Small |")           # table by change count
+    assert md.index('data-plan="P2"') < md.index('data-plan="P1"')         # table by change count
     assert md.index("<summary>P2 — Big · 5 changed, 2 added") < md.index("<summary>P1 — Small · 1 changed")
     assert "R10 and 4 more_" in md and "R11" not in md                      # capped status line
-    assert "| 1 | 0 | 0 | 0 | 0 | 3 |" in md                                # bookkeeping column
+    assert md.count("**Changed: ") == 2                                     # one title per plan, before a cancelled pair too
+    assert md.count('<span class="rc-zero">0</span>') == 8                  # four zero cells in each plan's row
+    assert 'data-tab="bookkeeping" title="3 with no change in meaning: 3 differ only in the revision record.">3</button>' in md
     html = str(render_markdown(md))
-    assert "<table>" in html and html.count("<details>") == 3                # two plans, one bookkeeping
+    assert '<table class="rc-counts">' in html and html.count("<details") == 3   # two plans, one id list
+    plan_open, title = html.index('<details class="rc-plan" data-plan="P1">'), html.index("<strong>Bookkeeping only</strong>")
+    assert plan_open < title and "</details>" not in html[plan_open:title]   # title and its block sit inside the plan
+    assert '<div class="rc-sec" data-kind="bookkeeping">' in html and '<div class="rc-body">' in html   # nested blocks rendered
+    assert 'title="' in html and html.count('class="rc-count"') == 4         # 1+1 (P1), 2 (P2) non-zero counts
     assert "<li>3 requirement(s) differ only in the revision record" in html   # markdown inside details
 
 
