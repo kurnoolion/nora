@@ -345,3 +345,26 @@ def test_versions_at_picks_the_live_version_per_release(world):
     d = history_lane.versions_at(world["hist"], "mno-w", "PLANA", "RA9", "Jan2031", "Apr2031")
     assert d["old"] is None and d["new"] is None
 
+
+
+def test_answer_markdown_names_pairs_without_synthesis_text():
+    def result(text, same):
+        return {"cancelled": False, "absent_plans": [], "plans": [
+            {"plan_id": "P1", "plan_name": "One", "model_same": same,
+             "counts": {"changed": 3, "added": 0, "removed": 0, "renumbered": 0, "moved": 0,
+                        "dropped": len(same), "same": len(same), "bookkeeping": len(same)},
+             "sections": [{"kind": "pair", "status": "ok", "text": text, "ids": ["R1", "R2", "R3"], "lead": ""}],
+             "notes": [], "note_groups": {"structural": [], "bookkeeping": []}}]}
+    # an empty reply: the Changed section stays, naming the pairs it has no text for
+    md = history_lane.answer_markdown(result("", []))
+    assert '<div class="rc-sec" data-kind="changed" markdown="1">' in md and "**Changed: 3 requirement(s)**" in md
+    assert "_changed: no synthesis text came back for 3 pair(s); ids: R1, R2, R3_" in md
+    # all pairs marked unchanged: the section says so instead
+    md = history_lane.answer_markdown(result("", ["R1", "R2", "R3"]))
+    assert "_the model judged all 3 changed pair(s) unchanged in meaning on this run_" in md
+    assert "no synthesis text" not in md
+    # one marked unchanged, the rest without text
+    md = history_lane.answer_markdown(result("", ["R2"]))
+    assert "no synthesis text came back for 2 pair(s); ids: R1, R3_" in md
+    # text present: no status line
+    assert "no synthesis text" not in history_lane.answer_markdown(result("For [R1], x.", []))

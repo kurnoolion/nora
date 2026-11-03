@@ -806,3 +806,30 @@ def test_announcement_around_a_taken_mark_goes_with_it_and_bare_id_openings_are_
     assert looks_like_working_text(opening)
     assert strip_working_text(opening, ["R4"]) == "For [R4], a new requirement adds the retry timer."
 
+
+
+def test_empty_reply_is_retried_once_then_counted(caplog):
+    import logging
+    pl = payload()
+
+    class Blank(EchoProvider):
+        """Blank on the first call of every batch; on the retry, text for the
+        first batch and blank again for the rest."""
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            self.calls.append((system, prompt))
+            if "Output only the final answer" not in prompt:
+                return ""
+            ids = re.findall(r"\[([A-Z]+\d+)\]", prompt)
+            return ("[" + "] [".join(dict.fromkeys(ids)) + "]") if len(self.calls) <= 2 else ""
+
+    prov = Blank()
+    with caplog.at_level(logging.WARNING, logger="core.src.query.release_diff"):
+        out = synthesize_release_diff(pl, prov, config=ReleaseDiffConfig(max_batch_bytes=4096, parallel=1))
+    fired = [m for m in caplog.messages if m.startswith("RHD empty reply:")]
+    assert len(fired) == 4 and "raw_chars=0 retried=1 retry_chars=" in fired[0] and fired[0].endswith(" empty=0")
+    assert all(m.endswith("empty=1") for m in fired[1:])
+    assert len(prov.calls) == 8 and out["run"]["retried"] == 4 and out["run"]["empty"] == 3
+    assert "retried=4 stripped=0 empty=3" in out["compact"]
+    texts = [s["text"] for p in out["plans"] for s in p["sections"] if s["status"] == "ok"]
+    assert len(texts) == 4 and sum(1 for t in texts if t) == 1        # ok sections, three with no text
+    assert all("model_same" in p for p in out["plans"])

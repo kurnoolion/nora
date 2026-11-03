@@ -145,7 +145,7 @@
         var self = this;
         list(root.querySelectorAll(".rc-tree > details.rc-plan")).forEach(function (d) {
             self.plans.push({
-                id: d.dataset.plan, details: d, row: null, panel: null, panes: {}, tab: null,
+                id: d.dataset.plan, details: d, row: null, panel: null, panes: {}, tab: null, synced: d.open,
                 secs: list(d.children).filter(function (c) { return c.classList.contains("rc-sec"); })
             });
         });
@@ -270,6 +270,7 @@
                 p.secs.forEach(function (s) { p.details.appendChild(s); });
                 if (p.panel) p.panel.hidden = true;
                 p.details.open = v === "expanded" || !!p.tab;
+                p.synced = p.details.open;      // a programmatic open is not the user's: see the toggle listener
                 list(p.details.querySelectorAll("details.rc-ids")).forEach(function (d) { d.open = v === "expanded"; });
             }
         });
@@ -313,7 +314,10 @@
                 if (t.classList.contains("rc-count")) {
                     var tip = window.bootstrap && window.bootstrap.Tooltip && window.bootstrap.Tooltip.getInstance(t);
                     if (tip) tip.hide();
-                    self.showTab(p, p.tab === t.dataset.tab ? null : t.dataset.tab);
+                    // a count whose kind has no pane lands on the first tab, and the
+                    // same count closes it again
+                    var tab = p.panes[t.dataset.tab] ? t.dataset.tab : self.firstTab(p);
+                    self.showTab(p, p.tab === tab ? null : tab);
                 } else if (t.classList.contains("rc-plan-toggle")) {
                     self.showTab(p, p.tab ? null : self.firstTab(p));
                 }
@@ -328,11 +332,14 @@
             if (!self.menuList.hidden && !e.target.closest(".rc-menu")) self.closeMenu();
         });
         // `toggle` does not bubble; a capturing listener on the root still sees it.
+        // It fires for setView's own opens too (asynchronously), so only a change
+        // away from the state setView last wrote counts as the user's.
         this.root.addEventListener("toggle", function (e) {
             var d = e.target;
             if (!d.classList || !d.classList.contains("rc-plan")) return;
             var p = self.plan(d.dataset.plan);
-            if (!p) return;
+            if (!p || d.open === p.synced) return;
+            p.synced = d.open;
             if (d.open) { if (!p.tab) p.tab = self.firstTab(p); } else { p.tab = null; }
         }, true);
     };

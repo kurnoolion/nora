@@ -258,6 +258,15 @@ def answer_markdown(result: dict) -> str:
             elif s["status"] == "error":
                 body += [f"_{s['kind']}: synthesis failed ({s.get('error', 'RHD-E004')}); "
                          f"ids: {_cap_ids(s.get('ids', []))}_", ""]
+        if c.get("changed") and not by_kind["changed"]:
+            # the pairs exist but no synthesis text does: say so in place,
+            # so the table's count and the plan's sections agree
+            pair_ids = [i for s in p.get("sections", []) if s["kind"] == "pair" for i in s.get("ids", [])]
+            missing = [i for i in pair_ids if i not in set(p.get("model_same") or [])]
+            by_kind["changed"] = ([f"_changed: no synthesis text came back for {len(missing)} pair(s); "
+                                   f"ids: {_cap_ids(missing)}_"] if missing
+                                  else [f"_the model judged all {c['changed']} changed pair(s) unchanged "
+                                        f"in meaning on this run_"])
         for kind in ("changed", "added", "removed"):
             if by_kind[kind]:
                 lines += _section_block(kind, leads.get(kind, kind.capitalize()), by_kind[kind])
@@ -393,6 +402,7 @@ async def run_history_lane(
         "bubble_plans": dict(result.get("bubble_plans", {})),
         "retried": result["run"].get("retried", 0),
         "stripped": result["run"].get("stripped", 0),
+        "empty": result["run"].get("empty", 0),
         "errors": list(result["run"].get("errors", [])),
     }
     return {

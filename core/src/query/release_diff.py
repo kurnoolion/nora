@@ -1008,7 +1008,7 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
         plans_out.append({"plan_id": plan_id, "plan_name": p.get("plan_name", ""),
                           "sections": sections, "notes": structural + bookkeeping,
                           "note_groups": {"structural": structural, "bookkeeping": bookkeeping},
-                          "note_ids": triage_ids(t),
+                          "note_ids": triage_ids(t), "model_same": model_same,
                           "counts": {**{k: len(p.get(k, [])) for k in
                                         ("changed", "added", "removed", "renamed", "renumbered", "moved")},
                                      # changed = pairs sent; same = the model found them unchanged;
@@ -1043,7 +1043,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
     batches = build_batches(payload, cfg.max_batch_bytes)
     total = len(batches)
 
-    working = {"retried": 0, "stripped": 0, "trimmed": 0}
+    working = {"retried": 0, "stripped": 0, "trimmed": 0, "empty": 0}
     wlock = threading.Lock()
 
     def call(batch: Batch) -> str:
@@ -1051,6 +1051,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
         ids = [i for it in batch.items for i in it["ids"]]
         text = normalize_brackets(provider.complete(prompt, system=system, temperature=cfg.temperature,
                                                     max_tokens=cfg.max_tokens))
+        raw_chars = len(text)
         text, verdict = split_gateway_reply(text, ids)
         if verdict == "error":
             # an error page came back as content with HTTP success: one more
@@ -1097,6 +1098,26 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
             log.info("RHD working text: batch=%d group=%s marks=%s retried=1 stripped=%d cut_chars=%d",
                      batch.index, batch.group.replace("\x00", "/"), "|".join(marks),
                      int(stripped), (len(retry) - len(text)) if stripped else 0)
+        if not text.strip() and ids:
+            # nothing to show for the batch (a blank completion, or a reply
+            # the cuts emptied): one more try, then an empty section the
+            # page names, never a plan whose changes silently vanish
+            retry = normalize_brackets(provider.complete(
+                prompt + "\n\nOutput only the final answer, nothing before it.",
+                system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens))
+            retry_chars = len(retry)
+            retry, rv = split_gateway_reply(retry, ids)
+            if rv == "error":
+                raise GatewayReplyError("the provider returned a gateway error as the reply")
+            retry = _cut_at_announcement(retry, ids)
+            text = strip_lone_phrases(strip_working_text(retry, ids) if looks_like_working_text(retry) else retry)
+            with wlock:
+                working["retried"] += 1
+                if not text.strip():
+                    working["empty"] += 1
+            log.warning("RHD empty reply: batch=%d group=%s raw_chars=%d retried=1 retry_chars=%d empty=%d",
+                        batch.index, batch.group.replace("\x00", "/"), raw_chars, retry_chars,
+                        int(not text.strip()))
         return text
 
     done_count = [0]
@@ -1119,7 +1140,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                   "oversized": sum(1 for b in batches if b.oversized),
                   "batch_ms": rr.latency_ms(),
                   "retried": working["retried"], "stripped": working["stripped"],
-                  "trimmed": working["trimmed"],
+                  "trimmed": working["trimmed"], "empty": working["empty"],
                   "errors": sorted({o.error.split(":")[0] for o in rr.outcomes.values() if o.error})}
     out["triage"] = {**triage_totals(payload),
                      "same": sum(p["counts"].get("same", 0) for p in out["plans"])}
@@ -1136,7 +1157,7 @@ def compact_block(result: dict) -> str:
             "batches={batches} "
             "parallel={par} bytes_max={bm} done={done} failed={failed} cancelled={canc} "
             "elapsed_ms={ms} batch_ms_p50={p50} batch_ms_p95={p95} batch_ms_max={mx} "
-            "retried={ret} stripped={strp}{trim}{errs}").format(
+            "retried={ret} stripped={strp}{trim}{empty}{errs}").format(
         mno=result.get("mno", ""), a=result.get("from", ""), b=result.get("to", ""),
         plans=c.get("plans", 0), absent=c.get("absent_plans", 0), pairs=c.get("changed", 0),
         added=c.get("added", 0), removed=c.get("removed", 0), renum=c.get("renumbered", 0),
@@ -1149,4 +1170,5 @@ def compact_block(result: dict) -> str:
         mx=r.get("batch_ms", {}).get("max", 0),
         ret=r.get("retried", 0), strp=r.get("stripped", 0),
         trim=(f" trimmed={r['trimmed']}" if r.get("trimmed") else ""),
+        empty=(f" empty={r['empty']}" if r.get("empty") else ""),
         errs=(" errors=" + ",".join(r["errors"])) if r.get("errors") else "")

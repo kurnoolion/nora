@@ -35,7 +35,8 @@ RESULT = {
                    "structural": ["2 requirement(s) renumbered (2 sibling); content unchanged."],
                    "bookkeeping": ["3 requirement(s) differ only in the revision record: [R2], [R3], [R4]."]}},
               {"plan_id": "P2", "plan_name": "Two",
-               "counts": {"changed": 2, "added": 0, "removed": 0, "renumbered": 0, "moved": 0,
+               # an Added count with no added section (the lane's fixture shape for a lost batch)
+               "counts": {"changed": 2, "added": 1, "removed": 0, "renumbered": 0, "moved": 0,
                           "dropped": 0, "same": 0, "bookkeeping": 0},
                "sections": [{"kind": "pair", "status": "ok", "text": "For [R7], y. For [R8], z.",
                              "ids": ["R7", "R8"], "lead": ""}],
@@ -125,6 +126,15 @@ def test_table_view_panel_and_view_switch(page):
     assert page.locator('details.rc-plan[data-plan="P2"]').evaluate("d => d.open")
     assert page.locator("details.rc-ids").evaluate("d => d.open")
     assert page.locator('.rc-tree details.rc-plan[data-plan="P1"]').inner_text().count("R2") == 1
+    # back to Table: only the plan the user opened has its panel open (expanded's opens were not the user's)
+    page.click('.rc-view[data-view="table"]')
+    assert page.locator('tr.rc-panel[data-plan="P1"]').is_visible() and not page.locator('tr.rc-panel[data-plan="P2"]').is_visible()
+    # a count whose kind has no pane lands on the first tab, and the same count closes it
+    page.click('tr.rc-row[data-plan="P2"] .rc-count[data-tab="added"]')
+    panel2 = page.locator('tr.rc-panel[data-plan="P2"]')
+    assert panel2.is_visible() and panel2.locator('.rc-tab[aria-selected="true"]').inner_text().startswith("Changed")
+    page.click('tr.rc-row[data-plan="P2"] .rc-count[data-tab="added"]')
+    assert not panel2.is_visible()
     assert page.errors == []
 
 
@@ -133,6 +143,7 @@ def test_exports_follow_the_view_and_the_include_choice(page):
     raw = _download(page, "raw", untick="bookkeeping")
     assert raw.startswith("# Release changes: mno-q, Apr2031 → Jul2031\n")
     assert "## Summary" in raw and "| Plan | Changed |" in raw and "| P1 — One | 1 | 0 | 1 | 2 | 0 | 3 |" in raw
+    assert "| P2 — Two | 2 | 1 | 0 | 0 | 0 | 0 |" in raw
     assert "## P1 — One" in raw and "### Changed: 1 requirement(s)" in raw and "For [R1], x." in raw
     assert "### Removed: [R6]" in raw and "### Structural changes only" in raw and "- 2 requirement(s) renumbered" in raw
     assert "### Bookkeeping only" not in raw and "[R2]" not in raw      # the column header stays
