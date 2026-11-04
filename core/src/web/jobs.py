@@ -77,6 +77,7 @@ class Ingest:
     flipped_at: str | None = None
     rolled_back_at: str | None = None
     error: str | None = None
+    callback_url: str | None = None
 
 
 def _now_iso() -> str:
@@ -296,23 +297,23 @@ class JobQueue:
 
     async def create_ingest(
         self, *, mno: str, release: str, source: str, submitted_by: str,
-        note: str = "", job_id: str | None = None,
+        note: str = "", job_id: str | None = None, callback_url: str | None = None,
     ) -> Ingest:
         now = _now_iso()
         ing = Ingest(
             id=str(uuid.uuid4()), job_id=job_id, mno=mno, release=release,
             source=source, note=note, submitted_by=submitted_by,
-            created_at=now, updated_at=now,
+            created_at=now, updated_at=now, callback_url=callback_url or None,
         )
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """INSERT INTO ingests
                    (id, job_id, mno, release, source, note, submitted_by,
-                    created_at, updated_at, state)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    created_at, updated_at, state, callback_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (ing.id, ing.job_id, ing.mno, ing.release, ing.source,
                  ing.note, ing.submitted_by, ing.created_at, ing.updated_at,
-                 ing.state),
+                 ing.state, ing.callback_url),
             )
             await db.commit()
         return ing
@@ -354,6 +355,14 @@ class JobQueue:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(f"UPDATE ingests SET {', '.join(sets)} WHERE id = ?", params)
             await db.commit()
+
+    async def list_runners(self) -> list[dict]:
+        """Every runner that ever polled: name, seen_at, job_id."""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT name, seen_at, job_id FROM runners ORDER BY seen_at DESC")
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
 
     async def cleanup_old(self, days: int = 30) -> int:
         cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime(

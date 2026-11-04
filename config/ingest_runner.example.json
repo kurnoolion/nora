@@ -29,5 +29,10 @@
   "eval_tolerance": 0.03,
   "verify_n": 25,
   "poll_seconds": 5,
-  "heartbeat_seconds": 15
+  "heartbeat_seconds": 15,
+  "webhook_secret": "",
+  "webhook_hosts": [
+    "hooks.example.test",
+    ".corp.example.test"
+  ]
 }

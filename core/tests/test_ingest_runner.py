@@ -512,3 +512,96 @@ def test_share_map_from_wiring_env(host, tmp_path):
     # a quoted value in the env file
     wiring.write_text('NORA_SHARE_MAP="\\\\SERVER\\Q=/mnt/q"\n')
     assert RunnerConfig.load(cfgp).resolve_source("\\\\SERVER\\Q\\x") == Path("/mnt/q/x")
+
+
+# -- webhooks ------------------------------------------------------------------------------------
+
+class FakePost:
+    def __init__(self, statuses=(200,)):
+        self.statuses = list(statuses)
+        self.calls: list[tuple[str, dict, dict[str, str]]] = []
+
+    def __call__(self, url, body, headers, timeout):
+        self.calls.append((url, json.loads(body), dict(headers)))
+        return self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+
+
+def test_webhook_signature_and_retries(monkeypatch):
+    from core.src.ingest_runner import webhook
+    post = FakePost([500, 200])
+    ok, note = webhook.deliver("http://hooks.example.test/x", {"event": "ingest.staged", "a": 1},
+                               secret="s3", post=post, sleep=lambda s: None)
+    assert ok and "attempt 2" in note and len(post.calls) == 2
+    url, body, headers = post.calls[-1]
+    assert body == {"event": "ingest.staged", "a": 1}
+    raw = json.dumps(body, sort_keys=True).encode()
+    assert headers["X-NORA-Signature"] == webhook.sign("s3", raw) and headers["X-NORA-Event"] == "ingest.staged"
+    post = FakePost([404])
+    ok, note = webhook.deliver("http://hooks.example.test/x", {"event": "e"}, post=post, sleep=lambda s: None)
+    assert not ok and "not retried" in note and len(post.calls) == 1
+    post = FakePost([0])
+    ok, note = webhook.deliver("http://hooks.example.test/x", {"event": "e"}, post=post, sleep=lambda s: None)
+    assert not ok and "3 attempts" in note and len(post.calls) == 3
+
+
+def test_webhook_host_allowlist():
+    from core.src.ingest_runner.config import webhook_host_allowed
+    allowed = ["hooks.example.test", ".corp.example.test"]
+    assert webhook_host_allowed("https://hooks.example.test/a", allowed)
+    assert webhook_host_allowed("http://HOOKS.example.test:8080/a", allowed)
+    assert webhook_host_allowed("https://chat.corp.example.test/x", allowed)
+    assert webhook_host_allowed("https://corp.example.test/x", allowed)
+    assert not webhook_host_allowed("https://evil.example.test/a", allowed)
+    assert not webhook_host_allowed("ftp://hooks.example.test/a", allowed)
+    assert not webhook_host_allowed("https://hooks.example.test/a", [])
+
+
+def test_ingest_posts_webhooks_on_state_changes(host):
+    host["cfg"].webhook_hosts = ["hooks.example.test"]
+    host["cfg"].webhook_secret = "sek"
+    q = host["q"]
+    ing = _run(q.create_ingest(mno="MNO-A", release="Apr2031", source="\\\\SERVER\\OADocs\\Rel",
+                               submitted_by="t", callback_url="https://hooks.example.test/nora"))
+    job = _run(q.submit("ingest", "t", params={"ingest_id": ing.id}))
+    post = FakePost([200])
+    sim = Sim(host["root"])
+    r = Runner(host["cfg"], db=RunnerDB(host["cfg"].jobs_db), ex=sim, sleep=lambda s: None,
+               healthz=lambda u: True, post=post)
+    assert r.run_once() == "completed"
+    events = [b["event"] for _, b, _ in post.calls]
+    assert events == ["ingest.running", "ingest.staged"]
+    staged = post.calls[-1][1]
+    assert staged["verdict"] == "pass" and staged["label"].startswith("Apr2031-MNO-A-") and staged["mno"] == "MNO-A"
+    assert "X-NORA-Signature" in post.calls[-1][2]
+    assert any("webhook: ingest.staged" in l and "delivered" in l for l in _run(q.get_logs(job.id)))
+    # flip → served
+    flip = _run(q.submit("ingest-flip", "t", params={"ingest_id": ing.id}))
+    assert r.run_once() == "completed"
+    assert [b["event"] for _, b, _ in post.calls][-1] == "ingest.served"
+    assert post.calls[-1][1]["previous_label"] == "old-label"
+
+
+def test_ingest_webhook_failure_and_unlisted_host(host):
+    q = host["q"]
+    # a failed ingest posts ingest.failed with the error
+    host["cfg"].webhook_hosts = ["hooks.example.test"]
+    ing = _run(q.create_ingest(mno="MNO-A", release="Apr2031", source="\\\\SERVER\\OADocs\\Rel",
+                               submitted_by="t", callback_url="https://hooks.example.test/nora"))
+    job = _run(q.submit("ingest", "t", params={"ingest_id": ing.id}))
+    post = FakePost([200])
+    sim = Sim(host["root"], fail_phase="parse")
+    r = Runner(host["cfg"], db=RunnerDB(host["cfg"].jobs_db), ex=sim, sleep=lambda s: None,
+               healthz=lambda u: True, post=post)
+    assert r.run_once() == "failed"
+    assert [b["event"] for _, b, _ in post.calls] == ["ingest.running", "ingest.failed"]
+    assert "parse failed" in post.calls[-1][1]["error"]
+    # an unlisted host is never posted to, and the job is unaffected
+    ing2 = _run(q.create_ingest(mno="MNO-A", release="Jul2031", source="\\\\SERVER\\OADocs\\Rel",
+                                submitted_by="t", callback_url="https://other.example.test/x"))
+    job2 = _run(q.submit("ingest", "t", params={"ingest_id": ing2.id}))
+    post.calls.clear()
+    sim.fail_phase = ""
+    (host["root"] / "builds/ACTIVE").unlink()
+    assert r.run_once() == "completed"
+    assert post.calls == []
+    assert any("not an allowed host" in l for l in _run(q.get_logs(job2.id)))

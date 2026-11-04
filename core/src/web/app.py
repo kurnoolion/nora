@@ -39,6 +39,7 @@ from core.src.web.routes.enrich_review import router as enrich_review_router
 from core.src.web.routes.golden_eval import router as golden_eval_router
 from core.src.web.routes.playground import router as playground_router
 from core.src.web.routes.config_route import router as config_router
+from core.src.web.routes.ingest import router as ingest_router
 
 # Configure logging at module-import time (not just inside the
 # `if __name__ == "__main__":` launcher block). With `uvicorn.run(...,
@@ -236,6 +237,7 @@ app.include_router(playground_router)
 app.include_router(enrich_review_router)
 app.include_router(golden_eval_router)
 app.include_router(config_router)
+app.include_router(ingest_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["duration"] = _duration_filter
@@ -243,6 +245,14 @@ templates.env.globals["duration"] = _duration_filter
 # (name differs from the routes' `team_restricted` bool context var)
 from core.src.web.team_mode import team_restricted as _team_restricted  # noqa: E402
 templates.env.globals["is_team_restricted"] = _team_restricted
+
+
+def _ingest_user(request: Request) -> bool:
+    from core.src.web import team_mode as tm
+    return tm.is_ingest_user(request)
+
+
+templates.env.globals["is_ingest_user"] = _ingest_user
 # Markdown-rendering filter for LLM answer text — converts the
 # model's markdown (headers, bullets, tables, fenced code, **bold**,
 # *italic*) to HTML. Returns Jinja-safe Markup so the template can
@@ -293,6 +303,22 @@ async def admin_unlock(request: Request, token: str = ""):
         )
         return resp
     return RedirectResponse(f"{root}/test", status_code=302)  # wrong/no token → eval page
+
+
+@app.get("/ingest-unlock")
+async def ingest_unlock(request: Request, token: str = ""):
+    """Self-serve ingestion unlock: a correct ?token sets the ingest cookie
+    (HttpOnly) and opens the Ingest page; otherwise the page shows locked.
+    Works with team mode on or off (the ingest surface is always gated)."""
+    from core.src.web import team_mode as tm
+    root = request.scope.get("root_path", "")
+    resp = RedirectResponse(f"{root}/ingest", status_code=302)
+    if tm.INGEST_TOKEN and token == tm.INGEST_TOKEN:
+        resp.set_cookie(
+            tm.INGEST_COOKIE, tm.INGEST_TOKEN,
+            httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30,
+        )
+    return resp
 
 
 # -- API endpoints ------------------------------------------------------------

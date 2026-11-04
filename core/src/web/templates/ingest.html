@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Ingest{% endblock %}
+{% block nav_ingest %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="mb-1">Ingest a release</h4>
+        <small class="text-muted">A new release of an MNO that is already served: documents in, a served set out.</small>
+    </div>
+</div>
+
+{% if locked %}
+<div class="alert alert-warning">
+    <i class="bi bi-lock me-2"></i>This page needs the ingest token. Open the link your administrator gave you
+    (<code>{{ root_path }}/ingest-unlock?token=…</code>) once in this browser; it stays unlocked for 30 days.
+</div>
+{% else %}
+
+{% if error %}
+<div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-2"></i>{{ error }}</div>
+{% endif %}
+
+<div class="row g-4 mb-4">
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-box-arrow-in-down me-2"></i>New ingest</div>
+            <div class="card-body">
+                {% if not store_reachable %}
+                <div class="alert alert-warning py-2">The serving store cannot be asked which MNOs it serves right now; submissions are refused until it answers.</div>
+                {% endif %}
+                <form method="post" action="{{ root_path }}/api/ingest">
+                    <div class="mb-3">
+                        <label class="form-label">Shared folder with the release's documents</label>
+                        <input type="text" class="form-control font-monospace" name="source" required
+                               placeholder="\\SERVER\Share\MNO\Release" autocomplete="off">
+                        <div class="form-text">The folder's path as you see it in Windows. Every .pdf, .docx and .xlsx in it is taken.</div>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label">MNO</label>
+                            <select class="form-select" name="mno" required>
+                                {% for m in mnos %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+                            </select>
+                            <div class="form-text">Only MNOs already served.</div>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label">Release</label>
+                            <input type="text" class="form-control" name="release" required
+                                   pattern="[A-Za-z]{3}[0-9]{4}" placeholder="Apr2031" autocomplete="off">
+                            <div class="form-text">MMMYYYY.</div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Your name</label>
+                        <input type="text" class="form-control" name="submitted_by" placeholder="who is ingesting" autocomplete="off">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Note (optional)</label>
+                        <input type="text" class="form-control" name="note" maxlength="500" autocomplete="off">
+                    </div>
+                    <button type="submit" class="btn btn-primary" {% if not store_reachable or not mnos %}disabled{% endif %}>
+                        <i class="bi bi-play-fill me-1"></i>Start
+                    </button>
+                </form>
+            </div>
+        </div>
+        <div class="card mt-3">
+            <div class="card-header"><i class="bi bi-cpu me-2"></i>Runner</div>
+            <div class="card-body">
+                {% if runner.state == 'stale' or runner.state == 'never' %}
+                <span class="badge bg-warning text-dark me-2">{{ runner.state }}</span>
+                {% else %}
+                <span class="badge bg-success me-2">{{ runner.state }}</span>
+                {% endif %}
+                {{ runner.text }}
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-clock-history me-2"></i>Ingests</div>
+            <div class="card-body p-0">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr><th>State</th><th>MNO</th><th>Release</th><th>Gate</th><th>Label</th><th>By</th><th>Created</th></tr>
+                    </thead>
+                    <tbody>
+                    {% for i in ingests %}
+                        <tr style="cursor: pointer;" onclick="window.location='{{ root_path }}/ingest/{{ i.id }}'">
+                            <td>{% include "partials/ingest_state.html" %}</td>
+                            <td>{{ i.mno }}</td>
+                            <td>{{ i.release }}</td>
+                            <td>{% if i.verdict == 'pass' %}<span class="badge bg-success">pass</span>{% elif i.verdict == 'fail' %}<span class="badge bg-danger">fail</span>{% else %}-{% endif %}</td>
+                            <td class="font-monospace small">{{ i.label or '-' }}</td>
+                            <td>{{ i.submitted_by }}</td>
+                            <td class="small">{{ i.created_at[:16] | replace('T', ' ') }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="7" class="text-center text-muted py-4">No ingests yet.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

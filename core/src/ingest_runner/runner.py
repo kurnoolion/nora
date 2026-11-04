@@ -27,12 +27,14 @@ DISPATCH = {
 class Runner:
     def __init__(self, cfg: RunnerConfig, db: RunnerDB | None = None, ex: Exec | None = None,
                  sleep: Callable[[float], None] = time.sleep,
-                 healthz: Callable[[str], bool] | None = None) -> None:
+                 healthz: Callable[[str], bool] | None = None,
+                 post: Callable | None = None) -> None:
         self.cfg = cfg
         self.db = db or RunnerDB(cfg.jobs_db)
         self.ex = ex or Exec()
         self.sleep = sleep
         self.healthz = healthz
+        self.post = post
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -65,6 +67,8 @@ class Runner:
         hb.start()
         ctx = plan.Ctx(cfg=self.cfg, db=self.db, ex=self.ex, job=job, ingest=ingest,
                        sleep=self.sleep, healthz=self.healthz)
+        if self.post is not None:
+            ctx.post = self.post
         ctx.log(f"{job['job_type']} claimed by {self.cfg.runner_name}")
         status = "completed"
         try:
@@ -73,13 +77,13 @@ class Runner:
         except plan.Cancelled as exc:
             status = "cancelled"
             ctx.log(f"cancelled: {exc}")
-            self.db.update_ingest(ingest["id"], state="cancelled", error=str(exc))
+            ctx.set_state("cancelled", error=str(exc))
             self.db.finish_job(job_id, "cancelled", error=str(exc))
         except (plan.StageError, CommandError) as exc:
             status = "failed"
             ctx.log(f"FAILED: {exc}")
             if job["job_type"] == "ingest":
-                self.db.update_ingest(ingest["id"], state="failed", error=str(exc))
+                ctx.set_state("failed", error=str(exc))
             else:
                 self.db.update_ingest(ingest["id"], error=str(exc))
             self.db.finish_job(job_id, "failed", error=str(exc))
@@ -88,7 +92,7 @@ class Runner:
             logger.exception("job %s crashed", job_id)
             ctx.log("FATAL: " + traceback.format_exc().rstrip())
             if job["job_type"] == "ingest":
-                self.db.update_ingest(ingest["id"], state="failed", error=f"runner error: {exc}")
+                ctx.set_state("failed", error=f"runner error: {exc}")
             self.db.finish_job(job_id, "failed", error=f"runner error: {exc}")
         finally:
             hb_stop.set()
@@ -100,10 +104,14 @@ class Runner:
     def run_once(self) -> str | None:
         """Claim and run one job; None when the queue holds none."""
         job = self.db.claim_next(self.cfg.runner_name)
+        self.db.seen(self.cfg.runner_name, job["id"] if job else None)
         if job is None:
             return None
         logger.info("claimed %s %s", job["job_type"], job["id"])
-        return self.run_job(job)
+        try:
+            return self.run_job(job)
+        finally:
+            self.db.seen(self.cfg.runner_name, None)
 
     def run_forever(self) -> None:
         logger.info("ingest runner %s polling %s every %.0fs", self.cfg.runner_name,

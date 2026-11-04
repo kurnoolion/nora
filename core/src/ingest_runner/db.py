@@ -121,6 +121,17 @@ class RunnerDB:
         finally:
             con.close()
 
+    def seen(self, runner: str, job_id: str | None = None) -> None:
+        """Record that this runner polled now (and what it runs)."""
+        con = self._connect()
+        try:
+            con.execute("INSERT INTO runners (name, seen_at, job_id) VALUES (?, ?, ?) "
+                        "ON CONFLICT(name) DO UPDATE SET seen_at = excluded.seen_at, job_id = excluded.job_id",
+                        (runner, now_iso(), job_id))
+            con.commit()
+        finally:
+            con.close()
+
     # -- ingests ----------------------------------------------------------------
 
     def get_ingest(self, ingest_id: str) -> dict | None:

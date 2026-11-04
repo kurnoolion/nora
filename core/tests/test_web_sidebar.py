@@ -49,8 +49,8 @@ def _assert_labels_wrapped(team: bool) -> int:
 
 
 def test_admin_sidebar_labels_are_wrapped():
-    """Full nav: all 15 links, both <ul> groups."""
-    assert _assert_labels_wrapped(team=False) == 15
+    """Full nav: all 16 links, both <ul> groups."""
+    assert _assert_labels_wrapped(team=False) == 16
 
 
 def test_team_sidebar_labels_are_wrapped():

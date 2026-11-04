@@ -23,16 +23,11 @@ from core.src.ingest_runner import verdict as V
 from core.src.ingest_runner.config import (
     CTR_CORRECTIONS, CTR_ENV, CTR_LABELS, CTR_SERVE, CTR_WORK, ConfigError, RunnerConfig,
 )
+from core.src.ingest_runner import webhook
+from core.src.ingest_runner.config import webhook_host_allowed
 from core.src.ingest_runner.db import RunnerDB, now_iso
 from core.src.ingest_runner.execute import CommandError, Exec, Result
-
-STAGES = (
-    "documents", "start", "parse", "prompts", "taxonomy", "enrich",
-    "verify", "promote", "convert", "publish", "eval", "gate",
-)
-
-# A failed stage is retried from this stage (the web offers the button).
-RETRY_FROM = {**{s: s for s in STAGES}, "verify": "enrich"}
+from core.src.web.jobs_schema import INGEST_STAGES as STAGES, NOTIFY_STATES, RETRY_FROM  # noqa: F401
 
 _CELL_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{0,30}$")
 _REL_RE = re.compile(r"^[A-Z][a-z]{2}\d{4}$")
@@ -55,6 +50,7 @@ class Ctx:
     ingest: dict
     sleep: Callable[[float], None] = time.sleep
     healthz: Callable[[str], bool] | None = None   # None: HTTP GET, 200 = healthy
+    post: webhook.Poster = webhook.http_post       # webhook delivery (tests replace it)
     build: str = ""
     label: str = ""
     run_ref: str = ""
@@ -102,6 +98,31 @@ class Ctx:
             vols += ["-v", f"{host}:{ctr}"]
         return self.compose(project, env_file, "--profile", "ingest", "run", "--rm", "-T",
                             *vols, service, *cmd, extra_env=extra_env, what=what)
+
+    def set_state(self, state: str, **cols: object) -> None:
+        """Change the ingest's state, then tell the callback URL, if any.
+        Delivery is logged and never fails the job."""
+        self.db.update_ingest(self.ingest["id"], state=state, **cols)
+        self.ingest["state"] = state
+        for k, v in cols.items():
+            self.ingest[k] = v
+        if state not in NOTIFY_STATES:
+            return
+        url = (self.ingest.get("callback_url") or "").strip()
+        if not url:
+            return
+        if not webhook_host_allowed(url, self.cfg.webhook_hosts):
+            self.log(f"webhook: {url} is not an allowed host (webhook_hosts in the runner config) — not posted")
+            return
+        row = self.db.get_ingest(self.ingest["id"]) or self.ingest
+        payload = {"event": f"ingest.{state}", "ingest_id": row.get("id"), "mno": row.get("mno"),
+                   "release": row.get("release"), "state": state, "stage": row.get("stage"),
+                   "verdict": row.get("verdict"), "label": row.get("label"),
+                   "previous_label": row.get("previous_label"), "error": row.get("error"),
+                   "at": now_iso()}
+        ok, note = webhook.deliver(url, payload, secret=self.cfg.webhook_secret,
+                                   timeout=self.cfg.webhook_timeout_seconds, post=self.post, sleep=self.sleep)
+        self.log(f"webhook: ingest.{state} → {url}: {note}")
 
     def check_cancelled(self) -> None:
         if self.db.job_status(self.job_id) == "cancelled":
@@ -366,7 +387,7 @@ def run_ingest(c: Ctx) -> None:
         c.log(f"retry from stage {retry_from} (build {c.build or '-'})")
     todo = STAGES[STAGES.index(retry_from):] if retry_from else STAGES
     total = len(STAGES)
-    c.db.update_ingest(c.ingest["id"], state="running", job_id=c.job_id, error=None)
+    c.set_state("running", job_id=c.job_id, error=None)
     for name in todo:
         c.check_cancelled()
         idx = STAGES.index(name)
@@ -374,7 +395,7 @@ def run_ingest(c: Ctx) -> None:
         c.db.update_ingest(c.ingest["id"], stage=name)
         c.log(f"[{idx + 1}/{total}] {name}")
         STAGE_FNS[name](c)
-    c.db.update_ingest(c.ingest["id"], state="staged", stage=None)
+    c.set_state("staged", stage=None)
 
 
 # -- flip / rollback / abandon ------------------------------------------------------
@@ -401,7 +422,7 @@ def run_flip(c: Ctx) -> None:
                           mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish flip")
     out = _publish_json(res)
     previous = out.get("from_label") or None
-    c.db.update_ingest(ing["id"], state="served", previous_label=previous, flipped_at=now_iso(), job_id=c.job_id)
+    c.set_state("served", previous_label=previous, flipped_at=now_iso(), job_id=c.job_id)
     c.log(f"flip: {label} is active (previous: {previous or '-'})")
     # the release map follows the flip; the new build holds the parse trees advance checks
     adv = ["python", "-m", "core.src.eval.golden_release_cli", "advance", "--env-dir", CTR_ENV,
@@ -424,7 +445,7 @@ def run_rollback(c: Ctx) -> None:
            "--to", ing["previous_label"], "--store-url", c.cfg.store_url]
     c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
                     mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish rollback")
-    c.db.update_ingest(ing["id"], state="rolled_back", rolled_back_at=now_iso(), job_id=c.job_id)
+    c.set_state("rolled_back", rolled_back_at=now_iso(), job_id=c.job_id)
     c.log(f"rollback: {ing['previous_label']} is active again; the release map still names "
           f"{ing['release']} for {ing['mno']} — golden runs pass --allow-map-mismatch until the next flip")
 
@@ -444,4 +465,4 @@ def run_abandon(c: Ctx) -> None:
         if cell.is_dir():
             shutil.rmtree(cell)
             c.log(f"abandon: removed the staged documents under {cell}")
-    c.db.update_ingest(ing["id"], state="abandoned", job_id=c.job_id)
+    c.set_state("abandoned", job_id=c.job_id)

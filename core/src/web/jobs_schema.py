@@ -12,6 +12,8 @@ Tables:
 - `job_logs` — the streamed log lines of a job.
 - `ingests` — one row per self-serve ingest across its jobs (run, retry,
   flip, rollback, abandon): the state the Ingest page shows.
+- `runners` — when each runner last polled and what it was running, so
+  the page can say whether anyone will pick a job up.
 """
 
 from __future__ import annotations
@@ -74,7 +76,16 @@ CREATE TABLE IF NOT EXISTS ingests (
     previous_label TEXT,
     flipped_at TEXT,
     rolled_back_at TEXT,
-    error TEXT
+    error TEXT,
+    callback_url TEXT
+)
+"""
+
+RUNNERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runners (
+    name TEXT PRIMARY KEY,
+    seen_at TEXT NOT NULL,
+    job_id TEXT
 )
 """
 
@@ -94,6 +105,12 @@ JOBS_ADDED_COLUMNS = (
     ("runner", "TEXT"),
     ("heartbeat_at", "TEXT"),
 )
+INGESTS_ADDED_COLUMNS = (
+    ("callback_url", "TEXT"),
+)
+
+# Ingest states a client is told about (webhook events `ingest.<state>`).
+NOTIFY_STATES = ("running", "staged", "served", "rolled_back", "failed", "cancelled", "abandoned")
 
 # The ingest lifecycle. `queued` → `running` → `staged` (gate passed or
 # failed; the verdict says which) | `failed` | `cancelled`; `staged` →
@@ -107,6 +124,14 @@ INGEST_STATES = (
 # Job types the runner claims; the web never runs these in-process.
 RUNNER_JOB_TYPES = ("ingest", "ingest-flip", "ingest-rollback", "ingest-abandon")
 
+# The stages of an `ingest` job, in order (the runner runs them, the
+# page shows them), and the stage a failed one is retried from.
+INGEST_STAGES = (
+    "documents", "start", "parse", "prompts", "taxonomy", "enrich",
+    "verify", "promote", "convert", "publish", "eval", "gate",
+)
+RETRY_FROM = {**{s: s for s in INGEST_STAGES}, "verify": "enrich"}
+
 
 def ensure_schema(con: sqlite3.Connection) -> None:
     """Create the tables and indexes; add the columns an older `jobs`
@@ -114,10 +139,12 @@ def ensure_schema(con: sqlite3.Connection) -> None:
     con.execute(JOBS_SCHEMA)
     con.execute(LOGS_SCHEMA)
     con.execute(INGESTS_SCHEMA)
-    have = {r[1] for r in con.execute("PRAGMA table_info(jobs)")}
-    for name, decl in JOBS_ADDED_COLUMNS:
-        if name not in have:
-            con.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
+    con.execute(RUNNERS_SCHEMA)
+    for table, added in (("jobs", JOBS_ADDED_COLUMNS), ("ingests", INGESTS_ADDED_COLUMNS)):
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        for name, decl in added:
+            if name not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
     for ddl in INDEXES:
         con.execute(ddl)
     con.commit()

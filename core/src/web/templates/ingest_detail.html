@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Ingest {{ ing.mno }} {{ ing.release }}{% endblock %}
+{% block nav_ingest %}active{% endblock %}
+
+{% block content %}
+{% set i = ing %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="mb-1">{{ ing.mno }} {{ ing.release }} {% include "partials/ingest_state.html" %}</h4>
+        <small class="text-muted font-monospace">{{ ing.id }}{% if ing.label %} · label {{ ing.label }}{% endif %}</small>
+    </div>
+    <div>
+        <a href="{{ root_path }}/ingest" class="btn btn-outline-secondary btn-sm me-2"><i class="bi bi-arrow-left me-1"></i>All ingests</a>
+        {% if ing.can_flip %}
+        <form method="post" action="{{ root_path }}/api/ingest/{{ ing.id }}/flip" class="d-inline"
+              onsubmit="return confirm('Serve {{ ing.label }} to everyone now? The previous set stays available for roll back.');">
+            <button type="submit" class="btn btn-success btn-sm"><i class="bi bi-broadcast me-1"></i>Serve</button>
+        </form>
+        {% endif %}
+        {% if ing.can_rollback %}
+        <form method="post" action="{{ root_path }}/api/ingest/{{ ing.id }}/rollback" class="d-inline"
+              onsubmit="return confirm('Roll back to {{ ing.previous_label }}?');">
+            <button type="submit" class="btn btn-warning btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Roll back</button>
+        </form>
+        {% endif %}
+        {% if ing.can_retry %}
+        <form method="post" action="{{ root_path }}/api/ingest/{{ ing.id }}/retry" class="d-inline">
+            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-arrow-repeat me-1"></i>Retry from {{ ing.retry_from }}</button>
+        </form>
+        {% endif %}
+        {% if ing.can_cancel %}
+        <form method="post" action="{{ root_path }}/api/ingest/{{ ing.id }}/cancel" class="d-inline">
+            <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-x-circle me-1"></i>Cancel</button>
+        </form>
+        {% endif %}
+        {% if ing.can_abandon %}
+        <form method="post" action="{{ root_path }}/api/ingest/{{ ing.id }}/abandon" class="d-inline"
+              onsubmit="return confirm('Abandon this ingest? Its build is closed and the staged copy of the documents is removed.');">
+            <button type="submit" class="btn btn-outline-secondary btn-sm"><i class="bi bi-trash me-1"></i>Abandon</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if ing.error %}<div class="alert alert-danger"><strong>Failed:</strong> {{ ing.error }}</div>{% endif %}
+
+<div class="row g-4 mb-4">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-diagram-3 me-2"></i>Stages</div>
+            <div class="card-body">
+                <div class="d-flex flex-wrap gap-2">
+                {% for s in ing.stages %}
+                    <span class="badge rounded-pill {% if s.current %}bg-primary{% elif s.done %}bg-success{% else %}bg-light text-dark border{% endif %}"
+                          title="{{ s.hint }}">{{ loop.index }}. {{ s.name }}</span>
+                {% endfor %}
+                </div>
+                <div class="form-text mt-2">Enrichment is the long stage (about an hour); the rest take seconds to minutes. Cancel takes effect between stages.</div>
+            </div>
+        </div>
+        <div class="card mt-3">
+            <div class="card-header"><i class="bi bi-check2-square me-2"></i>Gate</div>
+            <div class="card-body">
+                {% if ing.verdict %}
+                {% if ing.verdict == 'pass' %}<span class="badge bg-success me-2">pass</span>{% else %}<span class="badge bg-danger me-2">fail</span>{% endif %}
+                {{ ing.verdict_detail }}
+                <div class="form-text mt-2">Stage 1 of the golden eval over the staged set, compared with the last gated run. The new release is covered by {{ ing.mno }}'s standard samples until experts add version samples.{% if ing.run_ref %} Run <code>{{ ing.run_ref }}</code>.{% endif %}</div>
+                {% else %}
+                <span class="text-muted">not evaluated yet</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-info-circle me-2"></i>Details</div>
+            <div class="card-body">
+                <table class="table table-sm table-borderless mb-0">
+                    <tr><td class="text-muted" style="width: 120px;">Source</td><td class="font-monospace small">{{ ing.source }}</td></tr>
+                    <tr><td class="text-muted">Submitted by</td><td>{{ ing.submitted_by }}</td></tr>
+                    <tr><td class="text-muted">Created</td><td>{{ ing.created_at[:19] | replace('T', ' ') }} UTC</td></tr>
+                    {% if ing.note %}<tr><td class="text-muted">Note</td><td>{{ ing.note }}</td></tr>{% endif %}
+                    <tr><td class="text-muted">Build</td><td class="font-monospace small">{{ ing.build or '-' }}</td></tr>
+                    {% if ing.previous_label %}<tr><td class="text-muted">Previous</td><td class="font-monospace small">{{ ing.previous_label }}</td></tr>{% endif %}
+                    {% if ing.flipped_at %}<tr><td class="text-muted">Served</td><td>{{ ing.flipped_at[:19] | replace('T', ' ') }} UTC</td></tr>{% endif %}
+                    {% if ing.rolled_back_at %}<tr><td class="text-muted">Rolled back</td><td>{{ ing.rolled_back_at[:19] | replace('T', ' ') }} UTC</td></tr>{% endif %}
+                    <tr><td class="text-muted">Runner</td><td>{{ runner.text }}</td></tr>
+                    {% if job %}<tr><td class="text-muted">Job</td><td><a href="{{ root_path }}/jobs/{{ job.id }}" class="font-monospace small">{{ job.id[:8] }}</a> {{ job.status }}</td></tr>{% endif %}
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if job %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-terminal me-2"></i>Log</span>
+        <span id="log-status" class="small text-muted">{% if job.status in ('submitted', 'running') %}streaming…{% else %}{{ job.status }}{% endif %}</span>
+    </div>
+    <div id="log-output" class="card-body p-0">
+        <pre id="log-pre" class="mb-0 p-3 small" style="max-height: 480px; overflow: auto; background: #111; color: #ddd;"></pre>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+{% if job %}
+<script>
+(function () {
+    var rootPath = "{{ root_path }}";
+    var jobId = "{{ job.id }}";
+    var pre = document.getElementById("log-pre");
+    var status = document.getElementById("log-status");
+    var source = new EventSource(rootPath + "/api/jobs/" + jobId + "/stream?after=0");
+    source.onmessage = function (event) {
+        var data = JSON.parse(event.data);
+        pre.textContent += data.line + "\n";
+        pre.scrollTop = pre.scrollHeight;
+    };
+    source.addEventListener("done", function (event) {
+        var data = JSON.parse(event.data);
+        status.textContent = data.status;
+        source.close();
+        setTimeout(function () { window.location.reload(); }, 1500);
+    });
+    source.addEventListener("stream_error", function () { status.textContent = "stream error"; source.close(); });
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -3,7 +3,10 @@
 Status: 2026-11-03, rulings settled (§9) and the host facts folded in.
 Built and tested: the cycle driver changes of §7
 (`core/tests/test_cycle_driver.py`), the jobs schema and the runner of §4
-(`core/tests/test_ingest_runner.py`). The page and the API of §5 follow.
+(`core/tests/test_ingest_runner.py`), the page and the API of §5 with
+the ingest token (`core/tests/test_web_ingest.py`, gate on and off).
+Docs: README "Self-serve ingestion", architecture §28, the two
+MODULE.md files. Left: the field run (§8).
 
 ## 1. Goal
 
@@ -245,6 +248,15 @@ publish `flip` row's note.
 note, build, label, run name, stage, eval run id and summary line,
 verdict and baseline, previous label, timestamps). Migration is
 additive (`ALTER TABLE … ADD COLUMN` on init).
+
+Notification (ruling 2026-11-03, built): clients do not poll. The page
+and API clients hold `GET /api/ingest/{id}/events` (server-sent events:
+`state` on each change, `done` when no job runs); a submit may carry a
+`callback_url` and the runner posts `ingest.<state>` events to it,
+signed with HMAC-SHA256 under the runner's `webhook_secret`, to hosts in
+its `webhook_hosts` only, three attempts, never failing the job. A skill
+has no listener: it submits, keeps the id and asks later; the webhook
+feeds a chat or mail bridge for the people.
 
 ## 6. The eval gate
 

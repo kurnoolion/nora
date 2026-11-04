@@ -15,7 +15,7 @@
 | II. Processes and their interfaces | Each image and process: what it contains, what it mounts, which routes and CLIs it exposes, which env wires it. | Developers, Operations Agents. |
 | III. Data design | Identity and fingerprints; every file layout and database schema with ER diagrams. | Developers who read or write a store. |
 | IV. End-to-end flows | One sequence diagram per use case: ingest a release, publish, serve a question per query pattern, review enrichments, run a golden evaluation, operate two stacks. | Everyone building or debugging a flow. |
-| V. Properties and boundaries | The invariants and where each is enforced; known gaps; glossary. | Architects, reviewers. |
+| V. Properties and boundaries | The invariants and where each is enforced; known gaps; self-serve ingestion (the one flow added after the gaps were listed); glossary. | Architects, reviewers. |
 
 Each part goes one level deeper than the one before it. A term is defined
 where it first appears and used unchanged afterwards. Diagrams are
@@ -1443,19 +1443,22 @@ What each phase reuses, as built:
 
 | Phase | Reused from the previous cycle | Redone |
 |---|---|---|
-| parse | nothing: `start` creates an empty env dir and `parse` runs every cell | every cell is extracted and parsed again |
-| taxonomy | `out/taxonomy` may be copied in by hand; the ledger then keeps every plan whose tree sha is unchanged | plans of the new release, and any plan the newest release now supersedes |
-| enrich | nothing: the SIRA db-root is per build | every cell is enriched again |
-| publish (§21) | every unit whose `source_fingerprint` and schema match a live version, by content, regardless of build | only cells whose corpus or phrases changed; History for MNOs whose Trees changed |
+| parse | with `start --seed <prev>`: the previous build's `out/{extract,profile,parse,resolve,taxonomy}` are copied in, and the lane skips every tree that is newer than its source with the same profile fingerprint. Without `--seed`: nothing, `parse` runs every cell | the new cell; without `--seed`, every cell |
+| taxonomy | the seeded ledger keeps every plan whose tree sha is unchanged | plans of the new release, and any plan the newest release now supersedes |
+| enrich | nothing on the build side: the SIRA db-root is per build, and an incremental cycle enriches only the new cell (`enrich --cell`) | the new cell; a full cycle, every cell |
+| publish (§21) | every unit whose `source_fingerprint` and schema match a live version, by content, regardless of build; units the build did not produce are inherited from the active set | only cells whose corpus or phrases changed; History for MNOs whose Trees changed |
 
-So today the build plane is a full rebuild per cycle and the publish plane
-is where reuse happens. For a release that adds one cell, that is
-expensive but correct: unchanged cells produce byte-identical corpus and
-phrases only if the enrichment is deterministic, which a language model
-is not, so a re-enriched unchanged cell publishes as a new version with a
-new fingerprint. §27 lists the two steps that would make the build
-incremental (seed `out/parse` and the SIRA cells from the previous
-build, and run the lane with `--only` the new cell).
+A full cycle (no `--seed`) rebuilds everything, which is expensive but
+correct: unchanged cells produce byte-identical corpus and phrases only
+if the enrichment is deterministic, which a language model is not, so a
+re-enriched unchanged cell publishes as a new version with a new
+fingerprint. The incremental cycle avoids that by not enriching the
+unchanged cells at all: `start --seed` copies the previous build's
+outputs (a copy, not hard links, since the stages rewrite their ledgers
+in place), takes its profile bindings and binds the new cell to the
+profile of its MNO's latest bound release, and the SIRA build holds the
+new cell alone; publish inherits the rest. §28 runs this cycle from the
+web.
 
 Artifacts after the flow: the build's env dir and db-root on the build
 machine; `serve/<label>/` on both hosts; nothing in any serving root yet.
@@ -1920,21 +1923,20 @@ the opposite from the design.
 
 ### Build plane
 
-- **The build is not incremental across cycles.** `cycle.sh start` makes
-  an empty env dir; `parse` runs every cell; the SIRA db-root is per
-  build, so every cell is re-enriched. The ingestion guide says a new
-  release re-parses and re-enriches only that cell; that holds only
-  inside one build. Two steps would make it true: seed `out/parse` and
-  the previous build's SIRA cells, and run the lane with `--only` the
-  new cell. `sira_incremental` already has `prune` and `commit` for
-  changed documents; nothing calls them.
+- **A full cycle is not incremental.** Without `--seed`, `cycle.sh start`
+  makes an empty env dir, `parse` runs every cell and every cell is
+  re-enriched. The incremental cycle (`start --seed`, §20) covers one new
+  release of a known MNO; a changed document in an existing cell still
+  needs a full cycle. `sira_incremental` already has `prune` and `commit`
+  for changed documents; nothing calls them.
 - **Standards is skipped by habit, not by configuration.** It runs in the
   ingestion lane unless `--skip-standards` is passed; it needs the
   network. `config/llm.json` has no `skip_standards`.
 - **The flat promote does not carry cell DBs** (`cell-dbs/` is not
   linked). Served stacks do not need them, since publish converts from
   the flat cells; the lane's `--index cell-db` output is for dev.
-- **Taxonomy seeding is manual** (copy the previous `out/taxonomy`).
+- **Taxonomy seeding without `--seed` is manual** (copy the previous
+  `out/taxonomy`).
 
 ### Publish plane
 
@@ -1944,9 +1946,11 @@ the opposite from the design.
   schema is portable.
 - **`run_ref` is free text.** The gate records what the Operations Agent
   types; nothing links it to `runs/<run-id>/`.
-- **No target values.** Acceptance is a human comparison against a
-  baseline file kept by hand per stack; NFR-15 speaks of per-release
-  targets that the code does not hold.
+- **No target values.** By hand, acceptance is a comparison against a
+  baseline file kept per stack; NFR-15 speaks of per-release targets
+  that the code does not hold. The self-serve gate (§28) codes one
+  relative rule (Stage 1, within a tolerance of the last gated run); it
+  is a floor against regression, not a target.
 - **GC of orphan files** is reported, not done.
 
 ### Serve plane
@@ -1986,7 +1990,107 @@ labels plus env repoint as the serve path, or JSON files as the
 corrections authority, are listed with line references in the strand's
 journal and are being updated after this document lands.
 
-## 28. Glossary
+## 28. Self-serve ingestion
+
+The requirements team ingests a new release of a served MNO from the
+web, with no shell: the Ingest page takes the shared folder, the MNO and
+the release month; a host-side runner does the incremental cycle of
+§20, the publish steps of §21, a Stage-1 golden eval against a staging
+store and the gate record; the page offers Serve (the flip) and Roll
+back. Strand self-serve-ingestion; code in `core/src/web/routes/ingest.py`
+and `core/src/ingest_runner/`.
+
+### 28.1 Shape
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor T as requirements team
+  participant W as nora-web
+  participant J as jobs DB (web state dir, bind mount)
+  participant R as ingest runner (host, build user)
+  participant CY as cycle.sh
+  participant P as publish / converter / golden_cli (one-shot containers)
+  participant ST as staging nora-store
+  participant S as serving nora-store
+
+  T->>W: POST /api/ingest {source, mno, release}
+  W->>W: validate: shape, MNO served, cell free, one at a time
+  W->>J: ingests row (queued) + job ingest {ingest_id}
+  R->>J: claim (one guarded UPDATE); heartbeat while running
+  R->>R: copy documents to requirements/<MNO>/<rel>/
+  R->>CY: start <build> --seed <last served build>
+  R->>CY: parse --skip-standards · prompts --yes · taxonomy · enrich --cell · verify-enrich --yes · promote --label
+  R->>P: cell_db_convert (one cell) · publish publish --cells-src --env-dir
+  R->>ST: up with SERVE_RELEASE_SET=<label>; golden_cli --stage 1 --allow-map-mismatch; down
+  R->>P: publish gate --kind golden-stage1 --verdict pass|fail --run-ref
+  R->>J: every command's output as job log lines; ingest row: staged, verdict
+  T->>W: Serve
+  W->>J: job ingest-flip
+  R->>P: publish flip --store-url ; golden_release_cli advance
+  P->>S: POST /registry/reload; healthz verified
+  T->>W: Roll back
+  R->>P: publish rollback --to <previous>
+```
+
+The web never starts a container: it validates, writes one job to its
+own jobs database and streams that job's log as it does for pipeline
+jobs. Progress reaches clients by push, not polling: the page and any
+API client hold a server-sent event stream (`/api/ingest/{id}/events`,
+`state` on each change, `done` at the end), and a submit may name a
+`callback_url` that the runner posts signed `ingest.<state>` events to
+(host allowlist in its config), the path for a chat or mail bridge. A
+client with no listener, such as a skill in a chat session, submits,
+keeps the id and asks later. The runner is a `systemd --user` unit of the build user on the host
+that builds and serves (both stacks' state dirs, the builds roots and the
+serving stores are on one host today); it needs the system python3 and
+the docker CLI, nothing from the project's requirements. It mounts the
+registry root, the flat labels, a work dir and the overlay into the
+one-shot containers it starts, and runs exactly the commands of §20 and
+§21. The jobs database is the contract: its schema lives in one
+standard-library module (`core/src/web/jobs_schema.py`), every change
+to it is additive, and the `ingests` table is the state the page shows.
+
+### 28.2 Access
+
+The ingest surface has its own token, given to the requirements team:
+`NORA_WEB_INGEST_TOKEN`, set as an HttpOnly cookie by
+`/ingest-unlock?token=…`, checked by every `/ingest*` route with team
+mode on or off (the admin cookie also passes). Under the team gate the
+paths are allowlisted so a member holding the cookie reaches them; the
+route check is the gate. No token configured closes the surface.
+
+### 28.3 The gate
+
+Stage 1 only; Stage 2 stays the experts' tool. The verdict is `pass` when
+the run has no `GEV-E` error and `recall_avg` is at least the baseline
+minus a tolerance (0.03; runs move about ±0.02, §24). The baseline is the
+Stage-1 result of the last ingest whose gate passed; before any, a value
+in the runner config, else the newest recorded golden run; before any of
+those, the run passes and seeds the baseline. The staged set's latest
+release for the MNO is one ahead of the release map until the flip, so
+the eval runs with `--allow-map-mismatch` (stamped on the run) and the
+flip job runs `golden_release_cli advance`; samples the text check flags
+are counted on the page. A new release is covered only by that MNO's
+standard samples until experts add version samples; the verdict line
+says so. The administrator can still flip by hand with a waiver
+(`publish flip --force --reason`).
+
+### 28.4 States and actions
+
+`queued → running → staged` (gate recorded, pass or fail) `| failed |
+cancelled`; `staged → served` (Serve); `served → rolled_back` (Roll
+back); `failed → queued` (Retry, from the failed stage, or from enrich
+for a verify failure) `| abandoned`; `cancelled | staged → abandoned`.
+Cancel takes effect between stages and while a detached phase is
+followed; the cycle in flight is then left for Abandon, which runs
+`cycle.sh abandon` and removes the staged copy of the documents. One
+ingest at a time, as the cycle driver enforces with its baton. Out of
+scope: a new MNO (first release by hand: profile choice, prompt
+derivation), cross-host promote, a Windows-side skill (a thin client
+over `POST /api/ingest`, later).
+
+## 29. Glossary
 
 | Term | Meaning |
 |---|---|

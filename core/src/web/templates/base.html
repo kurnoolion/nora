@@ -119,6 +119,14 @@
                     <i class="bi bi-clipboard-data"></i><span class="nav-label">Eval Studio</span>
                 </a>
             </li>
+            {% if not team or is_ingest_user(request) %}
+            <li class="nav-item">
+                <a class="nav-link {% block nav_ingest %}{% endblock %}"
+                   href="{{ root_path }}/ingest" title="Ingest a release">
+                    <i class="bi bi-box-arrow-in-down"></i><span class="nav-label">Ingest</span>
+                </a>
+            </li>
+            {% endif %}
         </ul>
 
         {% if not team %}

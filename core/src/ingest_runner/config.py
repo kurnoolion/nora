@@ -72,6 +72,14 @@ class RunnerConfig:
     abandon_removes_documents: bool = True
     detached_poll_seconds: float = 5.0
     detached_timeout_seconds: float = 6 * 3600
+    # Webhooks: a submit may name a callback_url; the runner posts
+    # `ingest.<state>` events to it, signed with HMAC-SHA256 over the body
+    # (`X-NORA-Signature: sha256=<hex>`) when webhook_secret is set. Only
+    # hosts listed here (exact host, or `.suffix`) are posted to; others
+    # are logged and skipped.
+    webhook_secret: str = ""
+    webhook_hosts: list[str] = field(default_factory=list)
+    webhook_timeout_seconds: float = 5.0
 
     REQUIRED = (
         "jobs_db", "docker_dir", "builds_wiring", "requirements_dir",
@@ -200,4 +208,27 @@ def read_env_value(env_file: str | Path, key: str) -> str:
                 v = v[1:-1]
             value = v
     return value
+
+
+def webhook_host_allowed(url: str, allowed: list[str]) -> bool:
+    """`allowed` entries: an exact hostname, or `.example.test` for that
+    domain and its subdomains. http and https only."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+    except ValueError:
+        return False
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False
+    host = u.hostname.lower()
+    for a in allowed:
+        a = a.strip().lower()
+        if not a:
+            continue
+        if a.startswith("."):
+            if host == a[1:] or host.endswith(a):
+                return True
+        elif host == a:
+            return True
+    return False
 

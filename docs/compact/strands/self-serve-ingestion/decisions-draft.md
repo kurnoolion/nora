@@ -48,3 +48,23 @@
 
 **Consequences.** Builds grow by one copy of the parse outputs each; `gc` of old builds stays by hand. A release whose documents changed shape enough to need a new profile is not self-serve: the parse will warn or fail and the administrator binds by hand.
 
+### D-DRAFT-6 — 2026-11-03 — The ingest surface has its own token, separate from the admin token
+
+**Context.** The Ingest page flips what every user is served. It must be gated, and the people who use it are the requirements team, not the administrator.
+
+**Decision.** A second token, `NORA_WEB_INGEST_TOKEN`, set as its own HttpOnly cookie by `/ingest-unlock?token=…` and required by every `/ingest*` route, with team mode on or off; the admin cookie also passes. The paths are on the team-mode allowlist so a gated member holding the cookie reaches them.
+
+**Why.** Reusing the admin cookie was rejected: it opens the whole app, and the token would have to be shared with the team. A token of its own can be given to the team and rotated alone. The same mechanism as the admin unlock keeps one pattern in the web.
+
+**Consequences.** Two tokens to configure per stack; with no ingest token the surface is closed. The cookie carries the token, as the admin cookie does: acceptable on the internal network, not an authentication scheme.
+
+### D-DRAFT-7 — 2026-11-03 — The share mapping lives in the ingestion wiring env, not in a committed file
+
+**Context.** The runner must map the Windows share path the team types to the host's own mount. The web's `path_mappings` in `config/web.json` is committed and names a container path the host does not have.
+
+**Decision.** `NORA_SHARE_MAP=\\SERVER\Share=/host/mount;…` in the ingestion wiring env (`.env.builds`), read by the runner and merged over the optional JSON form in its gitignored config. The web validates only the shape of the path; the runner fails loud at the documents stage when the path is under no mapped share.
+
+**Why.** Host mounts are deployment facts and must not enter the repo; the wiring env is already the per-host file the runner and the cycle driver read.
+
+**Consequences.** The web cannot tell the team at submit time that a share is unmapped; the job fails in seconds with the reason instead.
+

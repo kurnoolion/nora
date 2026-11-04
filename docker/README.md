@@ -219,6 +219,66 @@ publish time every other unit is inherited from the active set (Phase
 6). A new MNO is never seeded — its profile is chosen by hand (Phase
 0.4).
 
+### Self-serve ingestion (the Ingest page)
+
+The requirements team ingests a new release of a served MNO from the
+web: the Ingest page (`/ingest`) takes the shared folder, the MNO and
+the release month, and a host-side runner does the incremental cycle
+above, the publish steps, a Stage-1 golden eval against a staging store
+and the gate record; the page then offers **Serve** (the flip) and
+**Roll back**. Design: `docs/architecture.md` §28.
+
+**One-time setup, on the host that builds and serves** (the build user):
+
+1. `cp config/ingest_runner.example.json config/ingest_runner.json` and
+   fill in the host paths (jobs DB of the stack's web state dir, builds
+   wiring env, requirements dir, the flat labels root, the registry
+   serve root, a work dir, the pooled golden dir, the overlay DB, the
+   stack's compose project and env file, a staging project and env file,
+   the prompt scheme, `seed_build` = the build the served set came from).
+   The file is gitignored.
+2. Share mapping in the ingestion wiring env (`.env.builds`):
+   `NORA_SHARE_MAP=\\SERVER\OADocs=/path/to/mount;…` — the Windows
+   prefix the team types, and where this host mounts it.
+3. A staging store: a second compose project (`<stack>-stage`) with its
+   own env file — same registry root, a spare `STORE_PORT`; the runner
+   sets `SERVE_RELEASE_SET` per ingest and brings it up and down itself.
+4. The ingest token in the web's env (`NORA_WEB_INGEST_TOKEN`, see
+   `env.nora-web.example`); give the team the link
+   `<web>/ingest-unlock?token=<it>` — once per browser. It is separate
+   from the admin token and works with team mode on or off.
+5. The runner as a user service: `docker/ingest-runner.service.example`
+   (lingering on, `python3 -m core.src.ingest_runner.ingest_runner_cli
+   --check` first). Only the system python3 and the docker CLI are
+   needed on the host.
+
+**What one ingest does** (the job log on the page shows every command):
+documents copied to `requirements/<MNO>/<MMMYYYY>/` → `cycle.sh start
+--seed <last served build>` → `parse --skip-standards` → `prompts --yes`
+→ `taxonomy` → `enrich --cell` → `verify-enrich --yes` → `promote
+--label` → `cell_db_convert` (one cell) → `publish publish` → staging
+store up, `golden_cli --stage 1 --allow-map-mismatch`, store down →
+`publish gate`. About an hour and a half, enrichment most of it. The gate
+passes when Stage-1 `recall_avg` is within `eval_tolerance` (0.03) of
+the last gated run's; the first run takes its baseline from the newest
+recorded golden run. **Serve** runs `publish flip --store-url` and
+`golden_release_cli advance`; **Roll back** runs `publish rollback --to
+<previous>`. A failed stage offers **Retry** (from the stage, or from
+enrich for a verify failure); **Abandon** closes the cycle and removes
+the staged copy of the documents. One ingest at a time, as the cycle
+driver itself enforces. The same operation as an API:
+`POST /api/ingest {source, mno, release, note?, submitted_by?}` → 202
+`{ingest_id, job_id}`; `GET /api/ingest/{id}`;
+`POST /api/ingest/{id}/{flip|rollback|retry|abandon|cancel}` — with the
+ingest cookie. Nobody has to poll: `GET /api/ingest/{id}/events` is a
+server-sent event stream (`state` on each change, `done` at the end),
+and a submit may carry a `callback_url` that the runner posts
+`ingest.<state>` events to (JSON, `X-NORA-Signature` HMAC with
+`webhook_secret`; only hosts in the runner's `webhook_hosts`). Point the
+callback at a chat or mail bridge and the team hears "staged, gate
+passed" without watching the page; a client that cannot listen, such
+as a skill in a chat session, submits, keeps the id, and asks later.
+
 Ingest jobs run against the BUILD dirs — never against a promoted serve
 label. Placeholders: `<MNO>` / `<MMMYYYY>` = cell coordinates as they appear
 under `requirements/`; `<you>` = your home dir; `<build>` = new build name
