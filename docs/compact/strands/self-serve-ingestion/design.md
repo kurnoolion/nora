@@ -1,8 +1,9 @@
 # Self-serve ingestion — design
 
-Status: draft for review, 2026-11-03. Field facts (cycle timings, host
-user, mounts) are still to be folded in; nothing here depends on them
-except the numbers the page will show.
+Status: 2026-11-03, rulings settled (§9) and the host facts folded in;
+the cycle driver changes of §7 are built and tested
+(`core/tests/test_cycle_driver.py`). The runner and the page follow the
+order of §10.
 
 ## 1. Goal
 
@@ -86,7 +87,7 @@ no pipeline logic.
 | # | Stage | Command (host) | Reuse | On failure |
 |---|---|---|---|---|
 | 1 | stage documents | copy `<share>/<folder>/*` to `requirements/<mno>/<release>/`; refuse if the cell exists | — | job fails before anything runs |
-| 2 | open build | `cycle.sh start <build> --seed <prev> --profiles <prev>` | seed hard-links the previous build's `out/` (all cells) and copies its profile bindings, adding the new cell bound to the profile of the MNO's latest cell | CYC-E021 (cycle in flight): refused at submit; here only on a race |
+| 2 | open build | `cycle.sh start <build> --seed <prev>` | seed copies the previous build's `out/` (all cells) and takes its profile bindings, adding the new cell bound to the profile of the MNO's latest bound cell | CYC-E021 (cycle in flight): refused at submit; here only on a race. CYC-E026/E027: bad seed, MNO without a binding |
 | 3 | parse | `cycle.sh parse --skip-standards` | the lane skips every cell whose IR and tree are newer than the source (D-DRAFT-8 keys), so only the new cell is parsed | failed cells named in the log; Retry re-runs the verb |
 | 4 | taxonomy | `cycle.sh taxonomy` | the ledger keeps every plan whose tree sha is unchanged; only the new release's plans are extracted | the verb's own retry: Retry re-runs it for failed docs |
 | 5 | enrich | `cycle.sh enrich --cell <mno>__<release>` | the SIRA db-root holds the new cell only; nothing else is enriched | Retry runs `--retry-failed`; a verify FAIL stops here |
@@ -243,14 +244,30 @@ the count. See §9, ruling 2.
 
 ## 7. Cycle driver changes
 
-- `--yes` on `prompts` and `verify-enrich`: skips the prompt and records
-  `confirmed_by:<owner> (auto)` in CYCLE.json and the CYC block.
-- `start --seed <prev-build>`: hard-links `<prev>/out/{extract,profile,parse,resolve,taxonomy}` into the new build (same filesystem; `cp -al`), then copies `profiles.json` and adds the new cell's binding from the MNO's latest cell. Fails loud (new CYC-E code) when the previous build is missing or the MNO has no cell in it.
-- `enrich --cell` already exists. `promote` without `--host` already produces the local label.
-- The detached phase's container id is recorded in CYCLE.json (today it is discarded), so an administrator can stop it by name.
+Built 2026-11-03:
 
-These are small and keep every verb runnable by hand; the README's phase
-sections get one line each.
+- `--yes` on `prompts` and `verify-enrich`: skips the prompt and records
+  the confirmation as `<user> (auto)` in CYCLE.json and the CYC block.
+  The evidence lines are still printed, so the job log carries them.
+- `start --seed <prev-build>`: copies `<prev>/out/{extract,profile,parse,resolve,taxonomy}`
+  into the new build with `cp -a --reflink=auto`. A copy, not hard links:
+  the taxonomy ledger, the profile stage and resolve rewrite their files
+  in place, and shared inodes would corrupt the seed build, which is the
+  served one. The seed's `profiles.json` is the default binding source
+  (`--profiles` still wins); every cell it does not cover is bound to the
+  profile of that MNO's latest bound release, recorded in the CYC block
+  as `inherited=<cell><-<release>`. CYC-E026 for a bad or unparsed seed,
+  CYC-E027 for a cell of an MNO with no binding to inherit; both fail
+  before anything is created. Without `--seed` nothing changes: bindings
+  are still chosen, not inherited.
+- The detached phase's container id is recorded with the phase entry in
+  CYCLE.json and shown by `status`, so an administrator can stop a
+  runaway phase by name.
+- `enrich --cell` already existed. `promote` without `--host` already
+  produced the local label.
+
+Every verb stays runnable by hand. The README's driver paragraph names
+the two flags.
 
 ## 8. Tests
 
@@ -277,25 +294,23 @@ sections get one line each.
   enrichment. The page shows enrichment as the long stage and the rest
   as short.
 
-## 9. Open rulings
+## 9. Rulings (settled 2026-11-03)
 
-1. **Where the runner lives and as which user.** Recommendation: a
-   `systemd --user` service of the build user on the host that holds the
-   builds root, the serve root and the serving store, with lingering on.
-   Version 1 requires build and serve roots on one host; the cross-host
-   promote (`serve-push.sh`) stays a by-hand path. The current host
-   holds both stacks' state dirs, the builds roots and the serving
-   stores, so the one-host assumption holds. The build user is in the
-   `docker` group and has sudo, and lingering is off: a user service
-   would stop at logout. The administrator turns lingering on once
-   (`loginctl enable-linger <user>`) before the service is installed,
-   or installs a system unit with `User=<build user>`; the design works
-   with either, and the user unit keeps the runner out of root's hands.
+1. **Where the runner lives and as which user.** A `systemd --user`
+   service of the build user on the host that holds the builds root, the
+   serve root and the serving store (D-DRAFT-3). Version 1 requires
+   build and serve roots on one host; the cross-host promote
+   (`serve-push.sh`) stays a by-hand path. The current host holds both
+   stacks' state dirs, the builds roots and the serving stores, so that
+   holds. The build user is in the `docker` group; lingering is off
+   today, so the administrator turns it on once
+   (`loginctl enable-linger <user>`) before the service is installed, or
+   the service stops at logout.
 2. **What the eval compares for a cell with no golden samples of its
-   own.** Recommendation: the rule in §6 (baseline-relative Stage 1,
-   first run seeds the baseline). The host already has a Stage-1 run
-   over every served cell on record, so the first ingest can seed its
-   baseline from that run instead of passing unconditionally. The new release is covered only by
+   own.** The rule in §6: baseline-relative Stage 1 (D-DRAFT-4). The
+   host already has a Stage-1 run over every served cell on record, so
+   the first ingest seeds its baseline from that run instead of passing
+   unconditionally. The new release is covered only by
    standard samples of that MNO until experts add version samples; the
    page states this on the verdict line.
 

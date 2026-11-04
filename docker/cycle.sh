@@ -18,15 +18,15 @@
 #     corpus text) under <build>/reports/CYC-*.txt — paste-safe.
 #
 # Usage:
-#   ./cycle.sh start <build-id> [--profiles <path|prev-build-id>]
+#   ./cycle.sh start <build-id> [--profiles <path|prev-build-id>] [--seed <prev-build-id>]
 #   ./cycle.sh status
 #   ./cycle.sh parse        [--force] [--skip-standards]
-#   ./cycle.sh prompts                          # gate: per-MNO prompts present + shaped, publish to <build>/prompts/
+#   ./cycle.sh prompts      [--yes]             # gate: per-MNO prompts present + shaped, publish to <build>/prompts/
 #   ./cycle.sh taxonomy     [--force]           # re-run = retry of failed docs
 #   ./cycle.sh enrich       [--cell <MNO>__<MMMYYYY>] [--retry-failed] [--run-name <r>]
 #                           [--index flat|cell-db]  (cell-db: ALSO emit SQLite cell DBs
 #                            under <db_root>/cell-dbs/ — dual-emit; default flat unchanged)
-#   ./cycle.sh verify-enrich                    # gate: sira_multi --verify must PASS
+#   ./cycle.sh verify-enrich [--yes]            # gate: sira_multi --verify must PASS
 #   ./cycle.sh promote --label <label> [--host <serving-host>] [--scheme <s>] [--sira-only]
 #   ./cycle.sh abandon      [--note "<why>"]
 #
@@ -34,7 +34,20 @@
 # once with the log path; `status` (and the next verb's precondition)
 # reads completion from the log's trailing CYC-EXIT line. Re-run `status`
 # until the phase shows ok. Phase 2 (prompt derivation, AI-assisted) is
-# outside the driver — `prompts` gates on its result.
+# outside the driver — `prompts` gates on its result. The detached
+# container's id is recorded with the phase (CYCLE.json, `status`) so a
+# runaway phase can be stopped by name.
+#
+# Incremental cycle (one new cell of a known MNO): `start --seed <prev>`
+# copies the previous build's out/{extract,profile,parse,resolve,taxonomy}
+# into the new build (a copy, never hard links: the stages rewrite their
+# ledgers in place and shared inodes would corrupt the seed), takes its
+# profile bindings unless --profiles says otherwise, and binds each cell
+# the seed does not cover to the profile of that MNO's latest bound cell.
+# parse then skips every up-to-date tree (D-DRAFT-8) and taxonomy reuses
+# every unchanged plan (D-DRAFT-9): only the new cell costs anything.
+# `--yes` on the two gates records the confirmation as "<user> (auto)" —
+# for an unattended runner, not for a person skipping the evidence.
 #
 # Layout (override with env vars): NORA_ROOT=/srv/nora →
 #   $NORA_ROOT/builds/{nora,sira}/<build-id>   NORA_BUILDS_ROOT
@@ -75,10 +88,12 @@ die() { echo "CYC-E$1: $2" >&2; echo "  fix: $3" >&2; exit 1; }
 usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 VERB="${1:-}"; [ -n "$VERB" ] || usage; shift
-BUILD="" PROFILES="" FORCE="" SKIPSTD="" CELL="" RETRY=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE="" INDEX_MODE="flat"
+BUILD="" PROFILES="" SEED="" YES=0 FORCE="" SKIPSTD="" CELL="" RETRY=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE="" INDEX_MODE="flat"
 while (( $# > 0 )); do
   case "$1" in
     --profiles)      PROFILES="$2"; shift 2;;
+    --seed)          SEED="$2"; shift 2;;
+    --yes)           YES=1; shift;;
     --force)         FORCE="--force"; shift;;
     --skip-standards) SKIPSTD="--skip-standards"; shift;;
     --cell)          CELL="$2"; shift 2;;
@@ -108,9 +123,11 @@ if op == "init":
     build, owner, images = a
     save({"build": build, "owner": owner, "status": "open", "opened": now,
           "run_name": build, "images": json.loads(images), "phases": []})
-elif op == "phase":            # phase <name> <status> <by> [log]
+elif op == "phase":            # phase <name> <status> <by> [log] [container]
     d = load(); name, status, by = a[:3]; log = a[3] if len(a) > 3 else ""
-    d["phases"].append({"phase": name, "status": status, "by": by, "at": now, "log": log})
+    e = {"phase": name, "status": status, "by": by, "at": now, "log": log}
+    if len(a) > 4 and a[4]: e["container"] = a[4]
+    d["phases"].append(e)
     save(d)
 elif op == "set":              # set <key> <value>
     d = load(); d[a[0]] = a[1]; save(d)
@@ -126,7 +143,7 @@ elif op == "summary":
     d = load()
     print(f"build={d['build']} owner={d['owner']} status={d['status']} run_name={d['run_name']} opened={d['opened']}")
     for p in d["phases"]:
-        print(f"  {p['at']}  {p['phase']:<14} {p['status']:<10} by={p['by']}" + (f"  log={os.path.basename(p['log'])}" if p['log'] else ""))
+        print(f"  {p['at']}  {p['phase']:<14} {p['status']:<10} by={p['by']}" + (f"  log={os.path.basename(p['log'])}" if p['log'] else "") + (f"  container={p['container'][:12]}" if p.get('container') else ""))
 PY
 }
 
@@ -174,10 +191,10 @@ need_wiring() {
 detach() {  # detach <phase> <service> <log-in-container> <inner command...>
   local phase="$1" svc="$2" clog="$3"; shift 3
   local inner="mkdir -p /data/env/reports && ( $* ) > $clog 2>&1; echo \"CYC-EXIT rc=\$?\" >> $clog"
-  ( cd "$HERE" && docker compose --env-file "$WIRING" --profile ingest run -d --rm -T "$svc" sh -c "$inner" >/dev/null )
+  local cid; cid="$( cd "$HERE" && docker compose --env-file "$WIRING" --profile ingest run -d --rm -T "$svc" sh -c "$inner" )"
   local hlog="$NB/reports/$(basename "$clog")"
-  cyc phase "$CJ" "$phase" running "$ME" "$hlog"
-  echo "$phase: detached — log $hlog"
+  cyc phase "$CJ" "$phase" running "$ME" "$hlog" "$cid"
+  echo "$phase: detached — log $hlog  container ${cid:0:12}"
   echo "  follow: tail -f $hlog      completion: ./cycle.sh status"
 }
 cyc_block() {  # cyc_block <phase> <status> <kv lines via stdin>
@@ -189,10 +206,15 @@ cells() { find "$REQS" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' | sort | s
 cells_by_size() {  # smallest first (doc count) — inspect the small cell before fanning out
   for c in $(cells); do echo "$(find "$REQS/${c%%__*}/${c##*__}" -type f | wc -l) $c"; done | sort -n | cut -d' ' -f2
 }
-gate() {  # gate <phase> — explicit yes, recorded
-  local ans; read -r -p "confirm gate '$1' for $BUILD? type yes: " ans
-  [ "$ans" = yes ] || { cyc phase "$CJ" "$1" declined "$ME"; echo "not confirmed (recorded)"; exit 1; }
-  cyc phase "$CJ" "$1" confirmed "$ME"
+GATE_BY="$ME"
+gate() {  # gate <phase> — explicit yes, recorded; --yes records "<user> (auto)"
+  if (( YES )); then
+    GATE_BY="$ME (auto)"; echo "gate '$1' for $BUILD: confirmed by --yes (recorded as $GATE_BY)"
+  else
+    local ans; read -r -p "confirm gate '$1' for $BUILD? type yes: " ans
+    [ "$ans" = yes ] || { cyc phase "$CJ" "$1" declined "$ME"; echo "not confirmed (recorded)"; exit 1; }
+  fi
+  cyc phase "$CJ" "$1" confirmed "$GATE_BY"
 }
 
 # =============================================================================
@@ -215,6 +237,13 @@ start)
   # Deliberately NO automatic fallback: omitted --profiles means the build
   # opens without bindings (NOTE below) and parse refuses at CYC-E030 —
   # bindings encode document-structure judgment and are chosen, not inherited.
+  # incremental cycle: --seed names a previous build whose out/ is copied in
+  # (header NOTE); its profiles.json is the default binding source.
+  if [ -n "$SEED" ]; then
+    echo "$SEED" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$' || die 026 "bad --seed '$SEED'" "name a previous build-id"
+    [ -d "$NROOT/$SEED/out/parse" ] || die 026 "--seed '$SEED' has no out/parse under $NROOT" "name a previous build that parsed"
+    [ -n "$PROFILES" ] || PROFILES="$SEED"
+  fi
   src=""
   if [ -n "$PROFILES" ]; then
     if [ -f "$PROFILES" ]; then src="$PROFILES"; elif [ -f "$NROOT/$PROFILES/profiles.json" ]; then src="$NROOT/$PROFILES/profiles.json"; fi
@@ -226,15 +255,61 @@ start)
     [ -n "$id" ] || die 025 "image local/$i:dev not found" "rebake: docker compose --env-file $WIRING --profile ingest build nora-batch sira-batch"
     images="$(printf '%s' "$images" | python3 -c "import json,sys; d=json.load(sys.stdin); d['$i']='$id'; print(json.dumps(d))")"
   done
+  # --seed: resolve the new build's profile bindings BEFORE anything is
+  # created, so a CYC-E027 leaves no half-made build behind. Every cell the
+  # seed's profiles.json does not cover is bound to the profile of that
+  # MNO's latest bound cell (a new release of a known MNO); an MNO with no
+  # binding at all fails loud — new MNOs are hand-bound.
+  seeded="-" inherited="-" pf=""
+  if [ -n "$SEED" ]; then
+    pf="$(mktemp)"; cp "$src" "$pf"; chmod 644 "$pf"
+    inherited="$(python3 - "$pf" $(cells) <<'PY'
+import json, sys, re
+path, cells = sys.argv[1], sys.argv[2:]
+d = json.load(open(path)); bs = d.get("bindings", []); default = d.get("default")
+M = {m: i for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split())}
+def key(r):
+    m = re.match(r"([A-Za-z]{3})(\d{4})$", r or "")
+    return (int(m.group(2)), M.get(m.group(1).lower(), 0)) if m else (0, 0)
+def covered(mno, rel):
+    return default or any(b["mno"].upper() == mno.upper() and b.get("release", "*") in (rel, "*") for b in bs)
+added = []
+for c in cells:
+    mno, rel = c.split("__", 1)
+    if covered(mno, rel): continue
+    same = [b for b in bs if b["mno"].upper() == mno.upper()]
+    if not same:
+        print(f"CYC-E027: cell {mno}/{rel} has no binding and MNO {mno} has none to inherit", file=sys.stderr)
+        print("  fix: author its binding in profiles.json (README Phase 0.4) — new MNOs are bound by hand", file=sys.stderr)
+        sys.exit(1)
+    src = max(same, key=lambda b: key(b.get("release", "*")))
+    bs.append({"mno": mno, "release": rel, "profile": src["profile"]})
+    added.append(f"{mno}__{rel}<-{src.get('release', '*')}")
+d["bindings"] = bs
+json.dump(d, open(path, "w"), indent=2); open(path, "a").write("\n")
+print(",".join(added) or "-")
+PY
+)" || { rm -f "$pf"; exit 1; }
+  fi
   mkdir -p "$NB/reports" "$NB/prompts" "$SB"
-  [ -n "$src" ] && cp "$src" "$NB/profiles.json"
+  if [ -n "$pf" ]; then mv "$pf" "$NB/profiles.json"; elif [ -n "$src" ]; then cp "$src" "$NB/profiles.json"; fi
+  if [ -n "$SEED" ]; then
+    mkdir -p "$NB/out"; seeded=""
+    for d in extract profile parse resolve taxonomy; do
+      [ -d "$NROOT/$SEED/out/$d" ] || continue
+      cp -a --reflink=auto "$NROOT/$SEED/out/$d" "$NB/out/$d"; seeded="$seeded$d,"
+    done
+    seeded="${seeded%,}"
+  fi
   cyc init "$CJ" "$BUILD" "$ME" "$images"
+  [ -n "$SEED" ] && cyc set "$CJ" seed "$SEED"
   sed -i "s|^NORA_ENV_DIR=.*|NORA_ENV_DIR=$NB|; s|^STORE_ROOT=.*|STORE_ROOT=$SB|" "$WIRING"
   echo "$BUILD" > "$ACTIVE"
   n=$(cells | wc -l)
   cyc_block start ok <<EOF
 cells=$n profiles=$([ -f "$NB/profiles.json" ] && echo present || echo MISSING) wiring=$WIRING
 images=$images
+seed=${SEED:--} seeded=$seeded inherited=$inherited
 EOF
   [ -f "$NB/profiles.json" ] || echo "NOTE: no profiles.json — new cells need bindings before parse (architect-reviewed, README Phase 0.4)"
   echo "next: ./cycle.sh parse"
@@ -287,7 +362,7 @@ prompts)
   gate prompts
   cp "$PD"/*_v*.txt "$NB/prompts/" 2>/dev/null || true
   cyc_block prompts confirmed <<EOF
-mnos=$mnos missing=$missing misshaped=$bad published=$(ls "$NB/prompts" | wc -l) gate=confirmed_by:$ME
+mnos=$mnos missing=$missing misshaped=$bad published=$(ls "$NB/prompts" | wc -l) gate=confirmed_by:$GATE_BY
 EOF
   echo "next: ./cycle.sh taxonomy"
   ;;
@@ -350,7 +425,7 @@ EOF
   echo "verify PASS (warn lines: $warns). The output above is paste-safe."
   gate verify-enrich
   cyc_block verify-enrich confirmed <<EOF
-run_name=$RUN verify_rc=0 warn_lines=$warns gate=confirmed_by:$ME
+run_name=$RUN verify_rc=0 warn_lines=$warns gate=confirmed_by:$GATE_BY
 EOF
   echo "next: ./cycle.sh promote --label <label> [--host <serving-host>]"
   ;;

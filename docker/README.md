@@ -196,14 +196,28 @@ cache auto-busts when overview files change (fingerprint includes their
 hash), so nothing needs `--force` bookkeeping.
 
 **Driver:** `./cycle.sh` wraps Phases 0.3–6 as phase-gated verbs
-(`start <build-id>` / `status` / `parse` / `prompts` / `taxonomy` /
-`enrich [--cell C] [--retry-failed]` / `verify-enrich` / `promote --label L
-[--host H]` / `abandon`). It runs exactly the commands below, records
-one cycle at a time in `<builds>/ACTIVE` + `<build>/CYCLE.json`, checks
+(`start <build-id> [--seed <prev>]` / `status` / `parse` / `prompts` /
+`taxonomy` / `enrich [--cell C] [--retry-failed]` / `verify-enrich` /
+`promote --label L [--host H]` / `abandon`). It runs exactly the commands
+below, records one cycle at a time in `<builds>/ACTIVE` +
+`<build>/CYCLE.json` (with each detached phase's container id), checks
 each phase's artifacts before the next, and emits a paste-safe `CYC`
 block per phase under `<build>/reports/`. Image snapshot/rebake (0.1–0.2)
 and Phase 2 stay manual; `prompts` and `verify-enrich` are explicit-yes
-gates. `./cycle.sh -h` for the layout env vars (`NORA_ROOT=/srv/nora`).
+gates (`--yes` records the confirmation as `<user> (auto)` — for an
+unattended runner only). `./cycle.sh -h` for the layout env vars
+(`NORA_ROOT=/srv/nora`).
+
+**One new release of a known MNO (incremental cycle):** stage the cell
+under `requirements/<MNO>/<MMMYYYY>/`, then `./cycle.sh start <build>
+--seed <previous-build>`. The seed copies the previous build's parse and
+taxonomy outputs and its profile bindings, binding the new cell to the
+MNO's latest bound release; `parse` then skips every up-to-date tree,
+`taxonomy` reuses every unchanged plan, and `enrich --cell <MNO>__<MMMYYYY>`
+enriches only the new cell. The SIRA build holds that cell alone: at
+publish time every other unit is inherited from the active set (Phase
+6). A new MNO is never seeded — its profile is chosen by hand (Phase
+0.4).
 
 Ingest jobs run against the BUILD dirs — never against a promoted serve
 label. Placeholders: `<MNO>` / `<MMMYYYY>` = cell coordinates as they appear
