@@ -1,0 +1,33 @@
+{
+  "_comment": "Copy to config/ingest_runner.json on the build host (gitignored: it holds host paths). All paths are host paths; the runner mounts them into its one-shot containers. The share mapping (Windows UNC prefix -> host mount) is read from the ingestion wiring env's NORA_SHARE_MAP line (\\\\SERVER\\Share=/host/mount;...); share_mappings here is the optional JSON form. No secrets here - the containers read their own env files.",
+  "runner_name": "",
+  "jobs_db": "/path/to/web-state/nora_jobs.db",
+  "docker_dir": "/path/to/nora/docker",
+  "builds_wiring": "/path/to/env/.env.builds",
+  "cycle_env": {
+    "NORA_ROOT": "/srv/nora",
+    "NORA_BUILDS_NORA_ROOT": "/path/to/nora-builds",
+    "NORA_BUILDS_SIRA_ROOT": "/path/to/sira-builds",
+    "NORA_REQUIREMENTS_DIR": "/path/to/requirements",
+    "NORA_SERVE_ROOT": "/path/to/labels",
+    "NORA_BUILDS_WIRING": "/path/to/env/.env.builds"
+  },
+  "requirements_dir": "/path/to/requirements",
+  "labels_root": "/path/to/labels",
+  "registry_root": "/path/to/serve-root",
+  "work_dir": "/path/to/ingest-work",
+  "golden_dir": "/path/to/golden",
+  "overlay_db": "/path/to/corrections/overlay.db",
+  "stack_project": "<stack>",
+  "stack_env": "/path/to/env/.env.<stack>",
+  "staging_project": "<stack>-stage",
+  "staging_env": "/path/to/env/.env.<stack>-stage",
+  "store_url": "http://nora-store:8040",
+  "staging_store_url": "http://nora-store:8040",
+  "prompt_scheme": "",
+  "seed_build": "<the build the served set came from>",
+  "eval_tolerance": 0.03,
+  "verify_n": 25,
+  "poll_seconds": 5,
+  "heartbeat_seconds": 15
+}

@@ -84,3 +84,6 @@ docker/.env.*
 # push.sh DRY_RUN staging area (image tarballs)
 docker/push-staging/
 .claude/worktrees/
+
+# self-serve ingest runner: host paths, per build host (example is committed)
+config/ingest_runner.json

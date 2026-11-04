@@ -1,9 +1,9 @@
 # Self-serve ingestion — design
 
-Status: 2026-11-03, rulings settled (§9) and the host facts folded in;
-the cycle driver changes of §7 are built and tested
-(`core/tests/test_cycle_driver.py`). The runner and the page follow the
-order of §10.
+Status: 2026-11-03, rulings settled (§9) and the host facts folded in.
+Built and tested: the cycle driver changes of §7
+(`core/tests/test_cycle_driver.py`), the jobs schema and the runner of §4
+(`core/tests/test_ingest_runner.py`). The page and the API of §5 follow.
 
 ## 1. Goal
 
@@ -164,6 +164,22 @@ What it does not do: parse anything, decide anything the cycle driver or
 publish decides, or write outside the build roots, the requirements dir,
 the work dir and the jobs DB.
 
+As built (`core/src/ingest_runner/`, MODULE.md there): standard library
+only, so the service runs on the host's python3 without the project's
+virtualenv; the schema it shares with the web is `core/src/web/jobs_schema.py`,
+which imports nothing else. The one-shot containers get explicit `-v`
+mounts (`/data/serve`, `/data/labels`, `/data/work`, `/data/corrections`)
+rather than new compose services. The stage list has twelve entries:
+§3's eleven plus `prompts` (`cycle.sh prompts --yes`) between parse and
+taxonomy, which the driver requires before taxonomy. Jobs: `ingest`
+(params `ingest_id`, optional `retry_from`), `ingest-flip`,
+`ingest-rollback`, `ingest-abandon`. Abandon runs `cycle.sh abandon` when
+the cycle in flight is this ingest's build and removes the staged copy of
+the documents (the share keeps the originals; `abandon_removes_documents`
+turns that off). The baseline order of §6 gained a step: the last passed
+ingest, else `baseline_recall` from the config, else the newest recorded
+golden run other than this one, else the run seeds the baseline.
+
 Config (`config/ingest_runner.json`): the jobs DB path on the host, the
 repo's `docker/` dir, the builds wiring env, the serve root and store
 URL, the staging project name and env file, the share mapping
@@ -176,13 +192,28 @@ containers already read.
 The share mapping is the runner's own, not the web's. The web's
 `path_mappings` names a Linux path inside the web container that the
 host does not have (the host mounts the share at a different path), so
-the runner maps the Windows share to the host's own mount point and the
-web only validates that the submitted path lies under a mapped share.
-Stage 1 then copies from the host mount.
+the runner maps the Windows share to the host's own mount point. The
+mapping lives in the ingestion wiring env (`NORA_SHARE_MAP=\\SERVER\Share=/host/mount;…`
+in `.env.builds`, ruling 2026-11-03), never in a committed file; the
+JSON config's `share_mappings` is an optional second form. The web
+validates the shape of the submitted path (a UNC path) and the runner's
+documents stage fails loud when it is under no mapped share.
 
 Placement and user: see §9, ruling 1.
 
 ## 5. Web: page, API, gate
+
+Access (ruling 2026-11-03): the ingest surface has its own token, given
+to the requirements team, separate from the admin token.
+`NORA_WEB_INGEST_TOKEN` in the web's env; `/ingest-unlock?token=<it>`
+sets an HttpOnly cookie of its own (`nora_ingest`), the way
+`/admin-unlock` sets the admin cookie; `team_mode.is_ingest_user(request)`
+is true with that cookie or the admin cookie. Every `/ingest*` route
+requires it: the API answers 403 without it, the page says to unlock
+first. With team mode on, `/ingest`, `/api/ingest` and `/ingest-unlock`
+are on the allowlist so a gated member holding the cookie reaches them;
+the route check, not the allowlist, is the gate. With no token
+configured the surface is closed.
 
 **Routes** (`core/src/web/routes/ingest.py`):
 

@@ -1,0 +1,26 @@
+# nora ingest runner — a systemd --user unit of the build user.
+#
+# Install (as the build user, once; lingering keeps it alive after logout):
+#   sudo loginctl enable-linger $USER
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|<repo>|/path/to/nora|g" docker/ingest-runner.service.example \
+#       > ~/.config/systemd/user/nora-ingest-runner.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now nora-ingest-runner
+#   journalctl --user -u nora-ingest-runner -f
+#
+# The runner needs only the system python3 (standard library) and the
+# docker CLI; everything else runs in the batch and store containers.
+[Unit]
+Description=NORA self-serve ingest runner
+After=docker.service network-online.target
+
+[Service]
+WorkingDirectory=<repo>
+ExecStart=/usr/bin/python3 -m core.src.ingest_runner.ingest_runner_cli --config <repo>/config/ingest_runner.json
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
