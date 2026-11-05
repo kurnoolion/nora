@@ -130,6 +130,18 @@ switch at a time.
   - Guided by the logged rows and the golden A/B.
 - **Deferred to internal infra:** the held-out check on real feedback questions (dev-set option C).
 - **Deferred:** a user override control for intent, and multi-label intent.
+- **Not moving to jev:** MNO and release stay with the rules extractors (the
+  store's `_multi_cell_query` → `resolve_cells`).
+  - They are explicit scope, extracted from what the user wrote, unlike the
+    implicit scope this strand stops predicting.
+  - A decision model emits only `noul` / `choice` / `score`, so it cannot
+    output free-text fields (decision/MODULE.md). Releases are open-ended in
+    any case.
+  - MNO could be a `choice`, but regex already resolves names and aliases
+    exactly.
+  - Jev would help only with indirect references ("the latest one", an
+    operator nickname). The rules already handle `latest` and `previous` for
+    History.
 
 ## 10. Local stack
 
