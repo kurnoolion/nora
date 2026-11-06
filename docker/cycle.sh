@@ -303,7 +303,13 @@ PY
   fi
   cyc init "$CJ" "$BUILD" "$ME" "$images"
   [ -n "$SEED" ] && cyc set "$CJ" seed "$SEED"
-  sed -i "s|^NORA_ENV_DIR=.*|NORA_ENV_DIR=$NB|; s|^STORE_ROOT=.*|STORE_ROOT=$SB|" "$WIRING"
+  # repoint the wiring env; a host env that lacks either line gets it
+  # appended (field-found: a stack env without STORE_ROOT= left need_wiring
+  # failing after start, with nothing in the CYC block to say why)
+  for kv in "NORA_ENV_DIR=$NB" "STORE_ROOT=$SB"; do
+    k="${kv%%=*}"
+    if grep -q "^$k=" "$WIRING"; then sed -i "s|^$k=.*|$kv|" "$WIRING"; else printf '%s\n' "$kv" >> "$WIRING"; fi
+  done
   echo "$BUILD" > "$ACTIVE"
   n=$(cells | wc -l)
   cyc_block start ok <<EOF

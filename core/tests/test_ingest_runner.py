@@ -605,3 +605,24 @@ def test_ingest_webhook_failure_and_unlisted_host(host):
     assert r.run_once() == "completed"
     assert post.calls == []
     assert any("not an allowed host" in l for l in _run(q.get_logs(job2.id)))
+
+
+def test_config_defaults_wiring_env_and_check_refuses_template(host, tmp_path, capsys):
+    cfg = host["cfg"]
+    assert cfg.cycle_env["NORA_BUILDS_WIRING"] == cfg.builds_wiring
+    explicit = RunnerConfig.from_dict({**{k: getattr(cfg, k) for k in RunnerConfig.REQUIRED},
+                                       "cycle_env": {"NORA_BUILDS_WIRING": "/elsewhere"}})
+    assert explicit.cycle_env["NORA_BUILDS_WIRING"] == "/elsewhere"
+    assert cfg.template_values() == []
+    bad = RunnerConfig.from_dict({**{k: getattr(cfg, k) for k in RunnerConfig.REQUIRED},
+                                  "seed_build": "<the build the served set came from>",
+                                  "golden_dir": "/path/to/golden",
+                                  "cycle_env": {"NORA_ROOT": "/path/to/root"}})
+    assert sorted(bad.template_values()) == ["cycle_env", "golden_dir", "seed_build"]
+    cfgp = tmp_path / "ingest_runner.json"
+    data = {k: getattr(cfg, k) for k in RunnerConfig.REQUIRED}
+    data["registry_root"] = "/path/to/serve-root"
+    cfgp.write_text(json.dumps(data))
+    assert cli_main(["--config", str(cfgp), "--check"]) == 2
+    err = capsys.readouterr().err
+    assert "IRN-E003" in err and "registry_root" in err

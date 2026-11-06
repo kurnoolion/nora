@@ -98,7 +98,23 @@ class RunnerConfig:
         cfg = cls(**kwargs, share_mappings=mappings)
         if not cfg.runner_name:
             cfg.runner_name = socket.gethostname()
+        # cycle.sh reads the wiring env from NORA_BUILDS_WIRING; the runner
+        # already knows the file, so the layout env need not repeat it.
+        cfg.cycle_env = dict(cfg.cycle_env)
+        cfg.cycle_env.setdefault("NORA_BUILDS_WIRING", cfg.builds_wiring)
         return cfg
+
+    def template_values(self) -> list[str]:
+        """Keys whose value still looks like the example config's
+        placeholder (`/path/to/…`, `<…>`): `--check` refuses them."""
+        bad: list[str] = []
+        for k, v in self.__dict__.items():
+            vals = list(v.values()) if isinstance(v, dict) else (v if isinstance(v, list) else [v])
+            for x in vals:
+                if isinstance(x, str) and ("/path/to" in x or ("<" in x and ">" in x)):
+                    bad.append(k)
+                    break
+        return bad
 
     @classmethod
     def load(cls, path: str | Path) -> "RunnerConfig":

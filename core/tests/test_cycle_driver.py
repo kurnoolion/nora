@@ -263,3 +263,20 @@ def test_prompts_gate_typed_yes_records_user(host):
     assert r.returncode == 0, r.stderr + r.stdout
     last = _cycle_json(host, "b1")["phases"][-1]
     assert last["status"] == "confirmed" and not last["by"].endswith("(auto)")
+
+
+def test_start_appends_missing_wiring_lines(host):
+    """A stack env without STORE_ROOT= (field-found) gets the line appended,
+    so need_wiring holds for the next verb."""
+    host["cell"]("MNO-A", "Jan2031")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text("NORA_ENV_DIR=/old\nOTHER=1\n", encoding="utf-8")   # no STORE_ROOT line
+    r = host["run"]("start", "b1")
+    assert r.returncode == 0, r.stderr
+    lines = wiring.read_text().splitlines()
+    assert lines[0] == f"NORA_ENV_DIR={host['nora'] / 'b1'}" and "OTHER=1" in lines
+    assert f"STORE_ROOT={host['root'] / 'builds' / 'sira' / 'b1'}" in lines
+    assert sum(1 for l in lines if l.startswith("STORE_ROOT=")) == 1
+    # the next verb's need_wiring passes
+    r = host["run"]("parse")
+    assert r.returncode == 1 and "CYC-E030" in r.stderr   # profiles missing, not wiring (E004)
