@@ -248,7 +248,35 @@ def _work_cells(c: Ctx) -> str:
     return f"{CTR_WORK}/{c.label}/cells"
 
 
+def _run_name(c: Ctx) -> str:
+    cj = c.cfg.build_dir(c.build) / "CYCLE.json"
+    try:
+        return str(json.loads(cj.read_text(encoding="utf-8")).get("run_name") or c.build)
+    except (OSError, json.JSONDecodeError):
+        return c.build
+
+
+def heal_best_link(c: Ctx) -> None:
+    """A resumed enrichment that found every document already enriched
+    leaves `enrichments/doc/best.jsonl` as a dangling link (SIRA skips
+    the apply block but still re-points the link; field-found on the
+    first retry). `sira_incremental promote` writes the missing file;
+    run it when the link dangles, before the converter trips CNV-011."""
+    best = c.cfg.sira_build_dir(c.build) / c.cell / "enrichments" / "doc" / "best.jsonl"
+    if not os.path.islink(best) or os.path.exists(best):
+        return
+    run = _run_name(c)
+    c.log(f"enrich: best.jsonl dangles in {c.cell} (resumed run) — promoting run {run}")
+    c.batch_oneshot("", c.cfg.builds_wiring, "sira-batch",
+                    ["python", "-m", "sandbox.sira_incremental", "promote",
+                     "--dataset", f"/data/db/{c.cell}", "--run-name", run],
+                    mounts=[], what="sira_incremental promote")
+    if os.path.islink(best) and not os.path.exists(best):
+        raise StageError(f"best.jsonl still dangles in {c.cell} after promote — pin the run by hand (CNV-011)")
+
+
 def st_convert(c: Ctx) -> None:
+    heal_best_link(c)
     Path(c.cfg.work_dir, c.label).mkdir(parents=True, exist_ok=True)
     cmd = ["python", "-m", "sandbox.cell_db_convert", "--label", f"{CTR_LABELS}/{c.label}",
            "--cells", c.cell, "--out", _work_cells(c), "--verify", str(c.cfg.verify_n), "--force"]

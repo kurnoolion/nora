@@ -626,3 +626,80 @@ def test_config_defaults_wiring_env_and_check_refuses_template(host, tmp_path, c
     assert cli_main(["--config", str(cfgp), "--check"]) == 2
     err = capsys.readouterr().err
     assert "IRN-E003" in err and "registry_root" in err
+
+
+# -- the dangling best.jsonl after a resumed enrichment ------------------------------------------
+
+def _sira_cell(host, build: str, cell: str, dangling: bool) -> Path:
+    enr = host["root"] / "builds/sira" / build / cell / "enrichments" / "doc"
+    enr.mkdir(parents=True, exist_ok=True)
+    if dangling:
+        (enr / "best.jsonl").symlink_to(f"{build}.jsonl")   # target never written
+    else:
+        (enr / f"{build}.jsonl").write_text("{}\n")
+        (enr / "best.jsonl").symlink_to(f"{build}.jsonl")
+    return enr
+
+
+def test_convert_promotes_a_dangling_best_link(host):
+    sim = Sim(host["root"])
+    orig_cycle = sim._cycle
+
+    def cycle_with_sira(args):
+        res = orig_cycle(args)
+        if args[0] == "enrich":
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            _sira_cell(host, build, "MNO-A__Apr2031", dangling=True)
+        return res
+    sim._cycle = cycle_with_sira
+    orig_compose = sim._compose
+
+    def compose_with_promote(args, env):
+        text = " ".join(args)
+        if "sira_incremental promote" in text:
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            enr = host["root"] / "builds/sira" / build / "MNO-A__Apr2031" / "enrichments" / "doc"
+            (enr / f"{build}.jsonl").write_text("{}\n")
+            return Result(0, ["wrote 1 docs", "linked best.jsonl"])
+        return orig_compose(args, env)
+    sim._compose = compose_with_promote
+    job_id, ingest_id = _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "completed"
+    cmds = sim.cmds()
+    promote = next(c for c in cmds if "sira_incremental promote" in c)
+    assert "--dataset /data/db/MNO-A__Apr2031" in promote and "--run-name" in promote and "sira-batch" in promote
+    assert cmds.index(promote) < cmds.index(next(c for c in cmds if "cell_db_convert" in c))
+    assert any("best.jsonl dangles" in l for l in _run(host["q"].get_logs(job_id)))
+
+
+def test_convert_leaves_a_healthy_best_link_alone(host):
+    sim = Sim(host["root"])
+    orig_cycle = sim._cycle
+
+    def cycle_with_sira(args):
+        res = orig_cycle(args)
+        if args[0] == "enrich":
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            _sira_cell(host, build, "MNO-A__Apr2031", dangling=False)
+        return res
+    sim._cycle = cycle_with_sira
+    job_id, ingest_id = _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "completed"
+    assert not any("sira_incremental" in c for c in sim.cmds())
+
+
+def test_convert_fails_when_promote_does_not_heal(host):
+    sim = Sim(host["root"])
+    orig_cycle = sim._cycle
+
+    def cycle_with_sira(args):
+        res = orig_cycle(args)
+        if args[0] == "enrich":
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            _sira_cell(host, build, "MNO-A__Apr2031", dangling=True)
+        return res
+    sim._cycle = cycle_with_sira   # promote "succeeds" but writes nothing
+    job_id, ingest_id = _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "failed"
+    ing = _run(host["q"].get_ingest(ingest_id))
+    assert ing.stage == "convert" and "still dangles" in ing.error

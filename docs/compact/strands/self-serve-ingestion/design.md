@@ -96,7 +96,7 @@ no pipeline logic.
 | 5 | enrich | `cycle.sh enrich --cell <mno>__<release>` | the SIRA db-root holds the new cell only; nothing else is enriched | Retry runs `--retry-failed`; a verify FAIL stops here |
 | 6 | verify | `cycle.sh verify-enrich --yes` | — | FAIL lines → job fails with the CYC block; Retry goes back to 5 |
 | 7 | promote | `cycle.sh promote --label <label> --scheme <scheme>` (local, no `--host`) | the flat label is the converter's input | — |
-| 8 | convert | `cell_db_convert --label <serve>/<label> --cells <mno>__<release> --out <work>/cells --verify 25` | one cell | CNV code in the log |
+| 8 | convert | `cell_db_convert --label <serve>/<label> --cells <mno>__<release> --out <work>/cells --verify 25` | one cell; first, if the cell's `best.jsonl` dangles after a resumed enrichment, `sira_incremental promote` (field-found on the first retry) | CNV code in the log |
 | 9 | publish | `publish publish --serve-root --label --cells-src <work>/cells --env-dir <build> --prompt-scheme` | every other unit is inherited from the active set; Trees are reused by fingerprint; History of this MNO is rebuilt | PUB code; nothing is visible to the stack |
 | 10 | eval | staging store up with `SERVE_RELEASE_SET=<label>`; `golden_cli --stage 1 --stack-url <staging> --stack-label <label> --allow-map-mismatch`; store down | — | GEV-E: job fails; the set stays staged |
 | 11 | gate | verdict by the rule in §6; `publish gate --kind golden-stage1 --verdict pass|fail --run-ref <run-id>` | — | a `fail` verdict leaves the set staged and the page says why; Serve is disabled |
