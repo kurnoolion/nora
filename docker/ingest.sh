@@ -66,7 +66,7 @@ if (( WITH_TAX )); then
     CLI="$CLI && python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $FORCE"
     TAG="lane-${LANE}+tax"
 fi
-LOG="/data/env/reports/${TAG}-${MNO}__${REL}-$(date +%Y%m%d_%H%M%S).log"
+LOG="/data/env/reports/${TAG}-${MNO}-${REL}-$(date +%Y%m%d_%H%M%S).log"
 
 if (( FG )); then
     INNER="mkdir -p /data/env/reports && { $CLI; }"

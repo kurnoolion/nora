@@ -14,7 +14,7 @@ from core.src.web.app import app
 
 
 SERVICE_ROWS = {
-    "cell": "GP__Feb2026", "plan": "PlanA", "loaded_at": time.time(),
+    "cell": "GP/Feb2026", "plan": "PlanA", "loaded_at": time.time(),
     "enrich_model": "fooBar-32B",
     "rows": [
         {"req_id": "R1", "text": "**req_id**: R1\n**plan**: PlanA\nbody one",
@@ -47,7 +47,7 @@ def client(tmp_path, monkeypatch):
                 rows = [r for r in rows if r["req_id"] == params["req_id"]]
             return {**SERVICE_ROWS, "rows": rows}
         if path.endswith("/plans"):
-            return {"cell": "GP__Feb2026", "plans": ["PlanA"]}
+            return {"cell": "GP/Feb2026", "plans": ["PlanA"]}
         if path == "/cells":
             return {"cells": [{"mno": "GP", "release": "Feb2026"}]}
         raise AssertionError(f"unexpected service path {path}")
@@ -74,7 +74,7 @@ class TestPage:
 class TestTable:
     def test_table_renders_chips_and_held(self, client):
         r = client.get("/api/enrich-review/table",
-                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+                       params={"cell": "GP/Feb2026", "plan": "PlanA"})
         assert r.status_code == 200
         assert "handover" in r.text and "roaming" in r.text
         assert "R3" in r.text                      # unenriched row still listed
@@ -91,14 +91,14 @@ class TestTable:
     def test_table_chunks_with_revealed_sentinel(self, client, monkeypatch):
         monkeypatch.setattr(er, "_TABLE_PAGE", 2)
         r = client.get("/api/enrich-review/table",
-                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+                       params={"cell": "GP/Feb2026", "plan": "PlanA"})
         # first chunk: R1+R2, header shows the full total, sentinel present
         assert "R1" in r.text and "R2" in r.text and "R3" not in r.text
         assert "3 reqs" in r.text
         assert 'hx-trigger="revealed"' in r.text and "offset=2" in r.text
         # continuation: rows-only fragment, remaining row, no more sentinel
         r2 = client.get("/api/enrich-review/table",
-                        params={"cell": "GP__Feb2026", "plan": "PlanA",
+                        params={"cell": "GP/Feb2026", "plan": "PlanA",
                                 "offset": 2})
         assert "R3" in r2.text and "er-head" not in r2.text
         assert 'hx-trigger="revealed"' not in r2.text
@@ -109,14 +109,14 @@ class TestTable:
         store.edit("GP", "R2", "remove", words=["oldword"],
                    origin_release="Nov2025", by="e")
         r = client.get("/api/enrich-review/table",
-                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+                       params={"cell": "GP/Feb2026", "plan": "PlanA"})
         assert "correction(s) held" in r.text and "Nov2025" in r.text
         assert "Re-affirm" in r.text and "Discard" in r.text
 
 
 class TestRowEdit:
     def _edit(self, client, **form):
-        base = {"cell": "GP__Feb2026", "plan": "PlanA", "req_id": "R1",
+        base = {"cell": "GP/Feb2026", "plan": "PlanA", "req_id": "R1",
                 "label": "c1", "reason_category": "too-generic",
                 "reason_note": "", "by": "expert"}
         return client.post("/api/enrich-review/row-edit", data={**base, **form})
@@ -191,7 +191,7 @@ class TestRowEdit:
 
     def test_per_row_reason_and_note(self, client):
         r = client.get("/api/enrich-review/table",
-                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+                       params={"cell": "GP/Feb2026", "plan": "PlanA"})
         # one reason select + note input PER row (stamp bar no longer has them)
         assert r.text.count("row-reason") >= 3 and r.text.count("row-note") >= 3
         assert "misleading-enrichment" in r.text   # categories rendered in rows
@@ -224,11 +224,11 @@ class TestLabelBranches:
                                           words=["handover"], label="c9", by="e")
         # main view (no label): c9's un-merged edit is invisible
         r = client.get("/api/enrich-review/table",
-                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+                       params={"cell": "GP/Feb2026", "plan": "PlanA"})
         assert "</s>" not in r.text
         # c9's own view: the removal renders bright + undoable
         r = client.get("/api/enrich-review/table",
-                       params={"cell": "GP__Feb2026", "plan": "PlanA",
+                       params={"cell": "GP/Feb2026", "plan": "PlanA",
                                "label": "c9"})
         assert ">handover</s>" in r.text and "undo removal" in r.text
 
@@ -238,7 +238,7 @@ class TestLabelBranches:
         store.edit("GP", "R1", "remove", words=["handover"], label="c9", by="e")
         store.set_label_merged("c9", True)
         r = client.get("/api/enrich-review/table",
-                       params={"cell": "GP__Feb2026", "plan": "PlanA"})
+                       params={"cell": "GP/Feb2026", "plan": "PlanA"})
         # visible in main now — struck but muted and with no undo button
         assert ">handover</s>" in r.text and "in main" in r.text
         assert "undo removal" not in r.text
@@ -286,10 +286,10 @@ class TestApply:
                             lambda url, params=None, timeout=None:
                             calls.append(url) or _R())
         monkeypatch.setattr(er, "_SIRA_URLS", ["http://a:8040", "http://b:8041"])
-        r = client.post("/api/enrich-review/apply", data={"cell": "GP__Feb2026"})
+        r = client.post("/api/enrich-review/apply", data={"cell": "GP/Feb2026"})
         assert r.status_code == 200
-        assert calls == ["http://a:8040/cells/GP__Feb2026/reload",
-                         "http://b:8041/cells/GP__Feb2026/reload"]
+        assert calls == ["http://a:8040/cells/GP/Feb2026/reload",
+                         "http://b:8041/cells/GP/Feb2026/reload"]
         assert "in sync with serving" in r.text
         assert "ok" in r.text
 
@@ -315,7 +315,7 @@ class TestApply:
 
         monkeypatch.setattr(er.httpx, "post", fake_post)
         monkeypatch.setattr(er, "_SIRA_URLS", ["http://a:8040", "http://b:8041"])
-        r = client.post("/api/enrich-review/apply", data={"cell": "GP__Feb2026"})
+        r = client.post("/api/enrich-review/apply", data={"cell": "GP/Feb2026"})
         assert "in sync with serving" in r.text
         assert "corrections pending" not in r.text
 
@@ -342,7 +342,7 @@ class TestApplyAll:
             {"mno": "ZZ", "release": "Feb2026"},
         ])
         r = client.get("/api/enrich-review/pending-cells")
-        assert r.json() == {"pending": ["GP__Nov2025"]}
+        assert r.json() == {"pending": ["GP/Nov2025"]}
 
     def test_apply_all_reloads_each_stale_cell_on_every_service(
             self, client, monkeypatch):
@@ -365,11 +365,11 @@ class TestApplyAll:
                             calls.append(url) or _R())
         monkeypatch.setattr(er, "_SIRA_URLS", ["http://a:8040", "http://b:8041"])
         r = client.post("/api/enrich-review/apply-all", json={"label": ""})
-        assert r.json()["applied"] == ["GP__Feb2026", "GP__Nov2025"]
-        assert calls == ["http://a:8040/cells/GP__Feb2026/reload",
-                         "http://b:8041/cells/GP__Feb2026/reload",
-                         "http://a:8040/cells/GP__Nov2025/reload",
-                         "http://b:8041/cells/GP__Nov2025/reload"]
+        assert r.json()["applied"] == ["GP/Feb2026", "GP/Nov2025"]
+        assert calls == ["http://a:8040/cells/GP/Feb2026/reload",
+                         "http://b:8041/cells/GP/Feb2026/reload",
+                         "http://a:8040/cells/GP/Nov2025/reload",
+                         "http://b:8041/cells/GP/Nov2025/reload"]
 
 
 def test_empty_store_urls_value_counts_as_unset(monkeypatch):

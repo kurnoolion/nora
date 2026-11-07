@@ -576,7 +576,7 @@ def test_preview_uses_release_map(client, tmp_path, monkeypatch):
     monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {
         "results": [{"rank": 1, "req_id": "REQ_FOO_0001", "mno": "mno-a",
                      "release": "Apr2026"}],
-        "resolved_cells": ["mno-a__Apr2026"]})
+        "resolved_cells": ["mno-a/Apr2026"]})
     _save(tmp_path, kind="version", ground_truth=[
         GroundTruthEntry(req_id="REQ_FOO_0001", mno="mno-a", release="N")])
     r = client.post("/api/eval-studio/sample/gs-0001/preview")

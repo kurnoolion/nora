@@ -26,7 +26,7 @@ Conventions in this document:
 - Hosts and ports are written as placeholders: `host:PORT`, `<serve-root>`,
   `<env-dir>`. No deployment value appears here.
 - MNOs are written `MNO-A`, `MNO-B`; releases as `<MMMYYYY>` or `<rel>`;
-  a cell (one MNO at one release) as `<mno>__<rel>`.
+  a cell (one MNO at one release) as `<mno>/<rel>`.
 - "Administrator" is the person operating NORA. "Operator" is reserved for
   a mobile network operator (MNO).
 - Code paths are repo-relative. CLIs are `python -m <module>`.
@@ -86,7 +86,7 @@ flowchart LR
     nb["nora-batch<br/>pipeline stages"]
     envdir[("env dir<br/>out/parse, out/taxonomy, reports, prompts")]
     sb["sira-batch<br/>SIRA lane"]
-    cells[("SIRA cell dirs<br/>&lt;db-root&gt;/&lt;mno&gt;__&lt;rel&gt;/")]
+    cells[("SIRA cell dirs<br/>&lt;db-root&gt;/&lt;mno&gt;/&lt;rel&gt;/")]
     src --> nb --> envdir
     envdir --> sb --> cells
   end
@@ -126,7 +126,7 @@ into the build artifacts: parsed requirement trees per cell, a feature
 taxonomy, per-MNO prompts, and the SIRA enrichment per cell (a keyword
 index plus language-model phrases per requirement). Everything the build
 plane writes lives under one env dir per build; the SIRA cells are that
-build's last stage directory, `out/sira/<MNO>__<MMMYYYY>/` (since
+build's last stage directory, `out/sira/<MNO>/<MMMYYYY>/` (since
 2026-11-06; before, a twin SIRA db-root per build). A build can be rerun
 or discarded without touching serving.
 
@@ -193,7 +193,7 @@ a new file or a new version.
 | 2 | Profile bindings and profiles | `profiles.json`; `customizations/profiles/*.json` (committed) | `<env-dir>/profiles.json`; image | humans | nora-batch `profile` | yes (edited per cycle) | §11 |
 | 3 | Build artifacts | per-stage JSON under the env dir: `out/extract`, `out/profile`, `out/parse` (requirement trees), `out/resolve`, `out/taxonomy`, `reports/` | `<env-dir>/out/<stage>/[<MNO>/<rel>/]` | nora-batch | sira-batch adapter, trees/history builders, nora-web (dev fallback) | per build only | §11 |
 | 4 | Per-MNO SIRA prompts | `doc_requirement_<MNO>_vNN.txt` | `<env-dir>/prompts/` | humans (derived with a playbook) | sira-batch | yes (new version = new file) | §12 |
-| 5 | SIRA cell directories | `raw/corpus.jsonl`, `raw/fingerprints.jsonl`, `index/best` (bm25x), `runs/doc-enrich/<run>/`, `enrichments/doc/` | `<db-root>/<mno>__<rel>/` | sira-batch | converter, nora-store (flat dev mode) | per run (append-only runs) | §12 |
+| 5 | SIRA cell directories | `raw/corpus.jsonl`, `raw/fingerprints.jsonl`, `index/best` (bm25x), `runs/doc-enrich/<run>/`, `enrichments/doc/` | `<db-root>/<mno>/<rel>/` | sira-batch | converter, nora-store (flat dev mode) | per run (append-only runs) | §12 |
 | 6 | Flat label | hard-linked snapshot of 3 and 5 plus `MANIFEST.json` | `serve/<label>/{nora,sira}/` | `docker/promote.sh` | converter, publish | no | §12 |
 | 7 | **Cells store** | `cell-<mno>-<rel>-vN.db` (SQLite, schema 2): corpus rows, raw SIRA phrases, vanilla index blobs | `<serve-root>/cells/` | publish (via converter) | nora-store | no | §13 |
 | 8 | **Trees store** | `trees-<mno>-<rel>-vN.db` (SQLite): the parsed requirement tree per cell | `<serve-root>/trees/` | publish (via `trees_build`) | nora-store; nora-web through `/stores/trees/v1` | no | §14 |
@@ -301,9 +301,9 @@ profiles. The compose project name is the stack name.
 | Service | Profiles | Lifetime | User | Mounts (host → container) | Env files | Fixed environment |
 |---|---|---|---|---|---|---|
 | **nora-store** | serve, dev | daemon, `restart: unless-stopped` | `SERVE_UID:SERVE_GID` | `STORE_ROOT` → `/data/db` (optional in registry mode); `SERVE_REGISTRY_ROOT` → `/data/serve` **ro**; `CORRECTIONS_DIR` → `/data/corrections` **rw** (Overlay authority); `NORA_ENV_DIR` → `/data/env` ro; `TREES_ROOT`, `HISTORY_ROOT` → `/data/trees`, `/data/history` ro (dev/test) | `.env.nora-store`, `.env.secrets` | `NORA_STORE_ROOT`, `NORA_STORE_CORRECTIONS_ROOT`, `NORA_ENV_DIR`; `NORA_TREES_ROOT` / `NORA_HISTORY_ROOT` / `NORA_STORE_REGISTRY` set only when the host var is set; `NORA_STORE_RELEASE_SET`; `HOME=/tmp`; `HF_HUB_OFFLINE=1` |
-| **nora-web** | serve, dev | daemon | `SERVE_UID:SERVE_GID` | `NORA_ENV_DIR` → `/data/env` rw; `WEB_STATE_DIR` → `/data/web-state`; `FEEDBACK_DIR` → `/data/feedback` (pooled); `CORRECTIONS_DIR` → `/data/corrections` (dev fallback only); `GOLDEN_DIR` → `/data/env/eval/golden` (pooled, shadows the env dir) | `.env.nora-web`, `.env.secrets` | `ENV_DIR`; `NORA_{JOBS,METRICS,CONFIG}_DB` under web-state; `NORA_FEEDBACK_DB`; `NORA_CORRECTIONS_ROOT`; `NORA_STORE_URL`; `NORA_{OVERLAY,TREES,HISTORY}_URL` (interpolated from the wiring env; default this stack's nora-store) |
-| **nora-batch** | ingest, dev | one-shot (`compose run --rm`) | `JOB_UID:JOB_GID` | `NORA_ENV_DIR` → `/data/env`; `REQUIREMENTS_DIR` → `/data/requirements` ro; `STORE_ROOT` → `/data/db`; `MODELS_DIR` → `/data/models` (docling artifacts); `GOLDEN_DIR` → `/data/env/eval/golden` | `.env.nora-batch`, `.env.secrets` | `ENV_DIR`, `NORA_REQUIREMENTS_DIR`, `DOCLING_ARTIFACTS`, `HF_HUB_OFFLINE=1`, `HOME=/tmp` |
-| **sira-batch** | ingest, dev | one-shot | `JOB_UID:JOB_GID` | `STORE_ROOT` → `/data/db`; `NORA_ENV_DIR` → `/data/env` | `.env.sira-batch`, `.env.secrets` | `HOME=/tmp` |
+| **nora-web** | serve, dev | daemon | `SERVE_UID:SERVE_GID` | `NORA_BUILD_DIR` (or `NORA_ENV_DIR`) → `/data/env` rw; `WEB_STATE_DIR` → `/data/web-state`; `FEEDBACK_DIR` → `/data/feedback` (pooled); `CORRECTIONS_DIR` → `/data/corrections` (dev fallback only); `GOLDEN_DIR` → `/data/env/eval/golden` (pooled, shadows the env dir) | `.env.nora-web`, `.env.secrets` | `ENV_DIR`; `NORA_{JOBS,METRICS,CONFIG}_DB` under web-state; `NORA_FEEDBACK_DB`; `NORA_CORRECTIONS_ROOT`; `NORA_STORE_URL`; `NORA_{OVERLAY,TREES,HISTORY}_URL` (interpolated from the wiring env; default this stack's nora-store) |
+| **nora-batch** | ingest, dev | one-shot (`compose run --rm`) | `JOB_UID:JOB_GID` | `NORA_BUILD_DIR` → `/data/env` (or `NORA_ENV_DIR`); `REQUIREMENTS_DIR` → `/data/requirements` ro; `NORA_BUILD_DIR/out/sira` → `/data/db` (or `STORE_ROOT`); `MODELS_DIR` → `/data/models` (docling artifacts); `GOLDEN_DIR` → `/data/env/eval/golden` | `.env.nora-batch`, `.env.secrets` | `ENV_DIR`, `NORA_REQUIREMENTS_DIR`, `DOCLING_ARTIFACTS`, `HF_HUB_OFFLINE=1`, `HOME=/tmp` |
+| **sira-batch** | ingest, dev | one-shot | `JOB_UID:JOB_GID` | `NORA_BUILD_DIR/out/sira` → `/data/db` (or `STORE_ROOT`); `NORA_BUILD_DIR` → `/data/env` (or `NORA_ENV_DIR`) | `.env.sira-batch`, `.env.secrets` | `HOME=/tmp` |
 
 Rules the file encodes:
 
@@ -381,7 +381,7 @@ previous `out/taxonomy`). §20 spells out the consequence.
 
 | CLI | Input | Output | Verify |
 |---|---|---|---|
-| `python -m core.src.stores.trees_build --env-dir D --out O [--cells M__R,…] [--force]` | `out/parse/<mno>/<rel>/*_tree.json` | one `trees-<mno>-<rel>.db` per cell, temp name then rename | SQLite store vs file store must agree on `list_docs`, every `load_tree`, every `reqs_for_plan`, ~50 sampled `find_req` |
+| `python -m core.src.stores.trees_build --env-dir D --out O [--cells M/R,…] [--force]` | `out/parse/<mno>/<rel>/*_tree.json` | one `trees-<mno>-<rel>.db` per cell, temp name then rename | SQLite store vs file store must agree on `list_docs`, every `load_tree`, every `reqs_for_plan`, ~50 sampled `find_req` |
 | `python -m core.src.stores.history_build --env-dir D [--trees-root T] --out O [--mno M,…] [--release R,…] [--exclude R,…] [--force]` | the Trees store (SQLite root, else parse trees) across an MNO's releases: all of them, or `--release`'s list, or all but `--exclude`'s (a stray parse directory is otherwise a release); the report shows documents per release | one `history-<mno>.db` per MNO | release list equals the Trees store's; self-diff of the latest release empty; requirement counts match; sampled latest versions carry the tree's `text_fp` |
 
 Both print counts only, never requirement text, and carry error codes
@@ -425,7 +425,7 @@ enrichment language model at scale.
 flowchart LR
   parse[("out/parse/&lt;mno&gt;/&lt;rel&gt;/*_tree.json")]
   adapter["adapter<br/>sandbox.adapter.nora_to_beir --multi-cell"]
-  raw[("&lt;db-root&gt;/&lt;mno&gt;__&lt;rel&gt;/raw/<br/>corpus.jsonl · fingerprints.jsonl · metadata.json")]
+  raw[("&lt;db-root&gt;/&lt;mno&gt;/&lt;rel&gt;/raw/<br/>corpus.jsonl · fingerprints.jsonl · metadata.json")]
   multi["sandbox.sira_multi<br/>stages prepare, bm25, enrich_corpus<br/>(SIRA run_pipeline.py per cell)"]
   idx[("index/best<br/>vanilla bm25x")]
   runs[("runs/doc-enrich/&lt;run&gt;/<br/>trace · enrichments.kept.jsonl · config.json")]
@@ -508,7 +508,7 @@ flowchart TB
   mode -->|yes| reg["index mode forced to cell-db<br/>resolve registry: active set,<br/>or NORA_STORE_RELEASE_SET"]
   mode -->|no| idx{NORA_STORE_INDEX}
   idx -->|cell-db| cdb["load every cell-*.db under NORA_STORE_ROOT"]
-  idx -->|flat| flat["load every &lt;mno&gt;__&lt;rel&gt;/ under NORA_STORE_ROOT:<br/>corpus.jsonl, index/best, phrases, fingerprints"]
+  idx -->|flat| flat["load every &lt;mno&gt;/&lt;rel&gt;/ under NORA_STORE_ROOT:<br/>corpus.jsonl, index/best, phrases, fingerprints"]
   reg --> cdb2["load the resolved Cells files"]
   cdb --> sweep
   cdb2 --> sweep
@@ -524,7 +524,7 @@ Three modes, one code path after load:
 |---|---|---|---|---|
 | registry | `NORA_STORE_REGISTRY` (compose sets it from `SERVE_REGISTRY_ROOT`) | the registry's `active` rows, or the set named by `NORA_STORE_RELEASE_SET` (a staging store) | `POST /registry/reload` swaps only units whose file changed | every served stack |
 | cell-db | `NORA_STORE_INDEX=cell-db` | every `cell-*.db` under `NORA_STORE_ROOT` | per-cell `POST /cells/{cell}/reload` | dev, converter testing |
-| flat | default when neither is set | every `<mno>__<rel>/` directory under `NORA_STORE_ROOT` | per-cell reload re-reads the directory | the build machine's dev stack |
+| flat | default when neither is set | every `<mno>/<rel>/` directory under `NORA_STORE_ROOT` | per-cell reload re-reads the directory | the build machine's dev stack |
 
 In every mode the Overlay backend is chosen the same way: `NORA_OVERLAY_URL`
 (a peer, read-only), else `NORA_OVERLAY_DB` (SQLite, this store is the
@@ -752,7 +752,7 @@ come from the corpus row in context.
 ### 10.2 Unit names
 
 A **unit** is what publish versions: one cell for Cells and Trees
-(`<mno>__<rel>`), one MNO for History (`<mno>`). The publish CLI reads a
+(`<mno>/<rel>`), one MNO for History (`<mno>`). The publish CLI reads a
 unit's identity from its file's `meta`, never from the file name. File
 names in a serving root are `cells/cell-<mno>-<rel>-vN.db`,
 `trees/trees-<mno>-<rel>-vN.db`, `history/history-<mno>-vN.db`.
@@ -806,7 +806,7 @@ every consumer that needs a field not yet a column reads it from there.
 <db-root>/
 ├── SOURCE.json                                   # env dir, git sha, adapter stamp
 ├── .hydra-configs/data/<cell>.yaml               # per-cell SIRA config written by sira_multi
-└── <mno>__<rel>/
+└── <mno>/<rel>/
     ├── raw/
     │   ├── corpus.jsonl        # one row per requirement (+ doc:/section: rows); _id, title, text with context
     │   ├── fingerprints.jsonl  # _id → text_fp
@@ -835,7 +835,7 @@ scheme, git sha) at the root and in each subdirectory:
 serve/<label>/
 ├── MANIFEST.json
 ├── nora/out/{parse,taxonomy,graph}/   # hard links; vectorstore copied when present
-└── sira/<mno>__<rel>/ … , SOURCE.json  # hard links; cell-dbs/ is NOT carried
+└── sira/<mno>/<rel>/ … , SOURCE.json  # hard links; cell-dbs/ is NOT carried
 ```
 
 `docker/serve-push.sh` moves it to the serving host (rsync, checksum
@@ -1203,7 +1203,7 @@ erDiagram
   release_set ||--o{ flip : "target of"
   store_version {
     TEXT store PK "cells | trees | history"
-    TEXT unit PK "mno__release, or mno for history"
+    TEXT unit PK "mno/release, or mno for history"
     INTEGER version PK "per-unit counter"
     TEXT fingerprint "content identity (source_fingerprint; history: hash of its Trees inputs)"
     TEXT file "relative path under the serving root"
@@ -1341,12 +1341,13 @@ that change what the system does, not tuning knobs.
 | Variable | Meaning |
 |---|---|
 | `STACK_NAME` | compose project; the stack's name in metrics and baselines |
-| `NORA_ENV_DIR` | the build or label env dir mounted at `/data/env` |
+| `NORA_BUILD_DIR` | the build (or label) directory: mounted at `/data/env`, its `out/sira` at `/data/db` (since 2026-11-06; `cycle.sh start` writes it) |
+| `NORA_ENV_DIR` | optional override of the `/data/env` mount (an older layout) |
 | `SERVE_REGISTRY_ROOT` | the serving root; sets registry mode on nora-store |
 | `SERVE_RELEASE_SET` | a staged set for a staging store |
 | `CORRECTIONS_DIR` | holds `overlay.db` and the JSON backup |
 | `WEB_STATE_DIR`, `FEEDBACK_DIR`, `GOLDEN_DIR` | web DBs; pooled feedback; pooled golden set |
-| `STORE_ROOT`, `TREES_ROOT`, `HISTORY_ROOT` | dev/test only: flat cells or cell DBs; pre-built Trees and History directories |
+| `STORE_ROOT`, `TREES_ROOT`, `HISTORY_ROOT` | dev/test only: an override of the `/data/db` mount (flat cells or cell DBs); pre-built Trees and History directories |
 | `REQUIREMENTS_DIR`, `MODELS_DIR` | build inputs; docling artifacts |
 | `NORA_OVERLAY_URL`, `NORA_TREES_URL`, `NORA_HISTORY_URL` | nora-web's store clients; default this stack's nora-store; another stack's nora-store to share its Overlay |
 | `STORE_PORT`, `NORA_WEB_PORT`, `SERVE_UID`, `SERVE_GID`, `JOB_UID`, `JOB_GID`, `IMAGE_PREFIX`, `IMAGE_TAG`, `OFFLINE`, `SIRA_REF`, `*_ENV_FILE` | ports, users, images, env-file names |
@@ -2101,7 +2102,7 @@ over `POST /api/ingest`, later).
 |---|---|
 | **active** | the registry rows that say which version of each unit a stack serves; always one set's members after a flip |
 | **authority (Overlay)** | the nora-store whose Overlay backend is opened read-write; the only writer |
-| **cell** | one MNO at one release: `<mno>__<rel>`; the unit of retrieval, of Cells and Trees |
+| **cell** | one MNO at one release: `<mno>/<rel>`; the unit of retrieval, of Cells and Trees |
 | **Cells store** | per-cell SQLite with corpus rows, raw SIRA phrases and the vanilla index blobs (schema 2) |
 | **composition** | folding the Overlay onto a cell's SIRA phrases at load, then enriching the in-memory index |
 | **effective set** | the phrases that reach the index for one requirement after the fold |

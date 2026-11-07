@@ -49,33 +49,33 @@ def _identity_setup(monkeypatch, db_root: Path, cells: dict) -> None:
 
 class TestFingerprint:
     def test_deterministic_and_per_cell(self, tmp_path, monkeypatch):
-        pa = _mk_cell_dir(tmp_path, "AAA__May2030", b"row1\n", b"ph1\n")
-        pb = _mk_cell_dir(tmp_path, "BBB__Aug2031", b"row2\n", None)
+        pa = _mk_cell_dir(tmp_path, "AAA/May2030", b"row1\n", b"ph1\n")
+        pb = _mk_cell_dir(tmp_path, "BBB/Aug2031", b"row2\n", None)
         cells = {CELL_A: _cell_state(CELL_A, pa),
                  CELL_B: _cell_state(CELL_B, pb)}
         _identity_setup(monkeypatch, tmp_path, cells)
         svc._compute_identity()
         first = svc._data_fingerprint
         first_cells = dict(svc._data_fingerprint_cells)
-        assert set(first_cells) == {"AAA__May2030", "BBB__Aug2031"}
+        assert set(first_cells) == {"AAA/May2030", "BBB/Aug2031"}
         assert first and len(first) == 64
         svc._compute_identity()
         assert svc._data_fingerprint == first
         assert svc._data_fingerprint_cells == first_cells
 
     def test_corpus_change_changes_fingerprint(self, tmp_path, monkeypatch):
-        pa = _mk_cell_dir(tmp_path, "AAA__May2030", b"row1\n", b"ph1\n")
+        pa = _mk_cell_dir(tmp_path, "AAA/May2030", b"row1\n", b"ph1\n")
         cells = {CELL_A: _cell_state(CELL_A, pa)}
         _identity_setup(monkeypatch, tmp_path, cells)
         svc._compute_identity()
         before = svc._data_fingerprint
-        (tmp_path / "AAA__May2030" / "raw" / "corpus.jsonl").write_bytes(
+        (tmp_path / "AAA/May2030" / "raw" / "corpus.jsonl").write_bytes(
             b"row1-edited\n")
         svc._compute_identity()
         assert svc._data_fingerprint != before
 
     def test_enrichment_change_changes_fingerprint(self, tmp_path, monkeypatch):
-        pa = _mk_cell_dir(tmp_path, "AAA__May2030", b"row1\n", b"ph1\n")
+        pa = _mk_cell_dir(tmp_path, "AAA/May2030", b"row1\n", b"ph1\n")
         cells = {CELL_A: _cell_state(CELL_A, pa)}
         _identity_setup(monkeypatch, tmp_path, cells)
         svc._compute_identity()
@@ -114,7 +114,7 @@ class TestManifestAndEnv:
         assert svc._code_version() == "img-sha-42"
 
     def test_healthz_carries_identity_keys(self, tmp_path, monkeypatch):
-        pa = _mk_cell_dir(tmp_path, "AAA__May2030", b"row1\n", b"ph1\n")
+        pa = _mk_cell_dir(tmp_path, "AAA/May2030", b"row1\n", b"ph1\n")
         cells = {CELL_A: _cell_state(CELL_A, pa)}
         _identity_setup(monkeypatch, tmp_path, cells)
         monkeypatch.setattr(svc, "_serve_manifest", {})

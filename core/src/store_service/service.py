@@ -434,7 +434,7 @@ def _compute_identity() -> None:
                     # both A/B stacks report comparable identities.
                     per_cell[cell_dirname(cell)] = cstate.db_meta["source_fingerprint"]
                     continue
-                base = db_root / cell_dirname(cell)
+                base = cell_dir(db_root, cell)
                 phrases = (
                     Path(cstate.doc_enrich_source)
                     if cstate.doc_enrich_source else None
@@ -491,7 +491,7 @@ from core.src.query.analyzer import (  # noqa: E402
     make_query_analyzer_from_knob,
     query_analyzer_arm,
 )
-from core.src.stores.cells import CellKey, cell_dirname, enumerate_cells  # noqa: E402
+from core.src.stores.cells import CellKey, cell_dir, cell_dirname, enumerate_cells  # noqa: E402
 from core.src.store_service.fusion import merge_candidates, rank_candidates  # noqa: E402
 from core.src.store_service.scope import resolve_cells  # noqa: E402
 
@@ -1204,7 +1204,7 @@ def _load_cells() -> None:
 
     cells = enumerate_cells(db_root)
     for cell in cells:
-        base = db_root / cell_dirname(cell)
+        base = cell_dir(db_root, cell)
         try:
             _cells[cell] = _load_one_cell(base, cell)
         except Exception as exc:
@@ -1554,7 +1554,7 @@ def _load_cell_prompts() -> None:
         _load_prompts(Path(prompts_from) if prompts_from else Path(_DB_ROOT or "."))
     else:
         first = sorted(_cells)[0]
-        _load_prompts(Path(_DB_ROOT) / cell_dirname(first))
+        _load_prompts(cell_dir(_DB_ROOT, first))
 
 
 @app.on_event("startup")
@@ -1609,7 +1609,7 @@ def cells_inventory(label: str = "") -> dict[str, Any]:
                 if m:
                     plans.add(m.group(1))
             try:
-                base = Path(_DB_ROOT) / cell_dirname(cell)
+                base = cell_dir(_DB_ROOT, cell)
                 ingested = _dt.fromtimestamp(base.stat().st_mtime).strftime("%Y-%m-%d")
             except OSError:
                 ingested = ""
@@ -1667,7 +1667,7 @@ def _plan_matches(p: str, plan: str) -> bool:
     return plan == p or plan in {s.strip() for s in p.split(" / ")}
 
 
-@app.get("/cells/{cell_name}/plans")
+@app.get("/cells/{cell_name:path}/plans")
 def cell_plans(cell_name: str, label: str = "") -> dict[str, Any]:
     label = label.strip()
     ck = _parse_cell_or_404(cell_name)
@@ -1731,7 +1731,7 @@ def _get_variant(ck: CellKey, label: str,
     return st
 
 
-@app.get("/cells/{cell_name}/enrichments")
+@app.get("/cells/{cell_name:path}/enrichments")
 def cell_enrichments(cell_name: str, plan: str = "", req_id: str = "",
                      label: str = "") -> dict[str, Any]:
     """Per-req enrichment data for the review UI: LLM output, the applied
@@ -1788,10 +1788,10 @@ def _fresh_cell(ck: CellKey) -> CellState:
     flat cell dir, or the same schema-2 DB file the live cell came from."""
     if _INDEX_MODE == "cell-db":
         return _load_one_cell_db(Path(_cells[ck].db_path))
-    return _load_one_cell(Path(_DB_ROOT) / cell_dirname(ck), ck)
+    return _load_one_cell(cell_dir(_DB_ROOT, ck), ck)
 
 
-@app.post("/cells/{cell_name}/reload")
+@app.post("/cells/{cell_name:path}/reload")
 def cell_reload(cell_name: str, label: str = "") -> dict[str, Any]:
     """Re-read the cell from disk (vanilla index + corpus + enrichments +
     corrections overlay) and swap it in atomically. The expert's Apply

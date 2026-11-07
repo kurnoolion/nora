@@ -293,13 +293,13 @@ def _cli_env(tmp_path, monkeypatch, healthz_cells):
     monkeypatch.setattr(golden_runner, "_post_json", lambda u, p, t: {
         "results": [{"rank": 1, "req_id": "R-1", "mno": "mno-b",
                      "release": "Apr2026"}],
-        "resolved_cells": ["mno-b__Apr2026"]})
+        "resolved_cells": ["mno-b/Apr2026"]})
 
 
 def test_cli_refuses_map_stack_disagreement(tmp_path, monkeypatch, capsys):
     from core.src.eval.golden_cli import main
 
-    _cli_env(tmp_path, monkeypatch, ["mno-b__Jan2026"])
+    _cli_env(tmp_path, monkeypatch, ["mno-b/Jan2026"])
     argv = ["--env-dir", str(tmp_path), "--stack-url",
             "http://127.0.0.1:9999", "--stage", "1"]
     assert main(argv) == 2
@@ -312,7 +312,7 @@ def test_cli_refuses_map_stack_disagreement(tmp_path, monkeypatch, capsys):
 def test_cli_scores_with_map(tmp_path, monkeypatch, capsys):
     from core.src.eval.golden_cli import main
 
-    _cli_env(tmp_path, monkeypatch, ["mno-b__Jan2026", "mno-b__Apr2026"])
+    _cli_env(tmp_path, monkeypatch, ["mno-b/Jan2026", "mno-b/Apr2026"])
     assert main(["--env-dir", str(tmp_path), "--stack-url",
                  "http://127.0.0.1:9999", "--stage", "1"]) == 0
     out = capsys.readouterr().out
@@ -324,7 +324,7 @@ def test_cli_scores_with_map(tmp_path, monkeypatch, capsys):
 def test_cli_bad_pinned_map_version(tmp_path, monkeypatch, capsys):
     from core.src.eval.golden_cli import main
 
-    _cli_env(tmp_path, monkeypatch, ["mno-b__Apr2026"])
+    _cli_env(tmp_path, monkeypatch, ["mno-b/Apr2026"])
     assert main(["--env-dir", str(tmp_path), "--stack-url",
                  "http://127.0.0.1:9999", "--stage", "1",
                  "--release-map-version", "9"]) == 2

@@ -811,7 +811,7 @@ bash sandbox/install_configs.sh
 python -m sandbox.sira_preflight --env-dir <env_dir>
 
 # 3. Adapter: partition parse output into per-cell BEIR datasets.
-#    --output is the db_root (parent of all <mno>__<release>/ cells).
+#    --output is the db_root (parent of all <mno>/<release>/ cells).
 python -m sandbox.adapter.nora_to_beir \
     --env-dir <env_dir> --output <db_root> --multi-cell
 
@@ -820,13 +820,13 @@ python -m sandbox.sira_multi --db-root <db_root> --sira-clone sandbox/sira --dry
 python -m sandbox.sira_multi --db-root <db_root> --sira-clone sandbox/sira
 #    Default stages = prepare,bm25,enrich_corpus (corpus-only; the cells
 #    have no real queries, so enrich_query/rerank/eval are skipped — the
-#    service does query enrichment + rerank live). --only VZW__Feb2026,…
+#    service does query enrichment + rerank live). --only VZW/Feb2026,…
 #    to run a subset.
 
 # 5. Launch the query service pointed at the cell db_root.
 export NORA_STORE_ROOT=<db_root>
 uvicorn core.src.store_service.service:app --port 8040
-#    On first query the service enumerates <mno>__<MMMYYYY>/ cells and
+#    On first query the service enumerates <mno>/<MMMYYYY>/ cells and
 #    routes through the multi-cell path. /healthz / startup logs show
 #    "Multi-cell mode: loaded N cell(s): ...".
 #    Optional, closer to serving: convert the cells to cell DBs and load
@@ -852,7 +852,7 @@ uvicorn core.src.store_service.service:app --port 8040
 | `sira_multi`: `ModuleNotFoundError: bm25x` (or hydra) in the subprocess | `sira_multi` run under the wrong Python | activate the SIRA venv first (the gotcha above) |
 | `run_pipeline.py`: `Could not override 'data.name'` | SIRA's Hydra config doesn't accept the `data.name` override (D-DRAFT-6 assumption) | the one unverified spot — likely a small config-syntax tweak in `scripts/configs/data/nora.yaml` (or pass `+data.name=`); inspect the `--dry-run` command |
 | bm25 stage: `index/best` FileNotFoundError | eval+pick-best produced no best index | confirmed-mitigated: the adapter emits a dummy index-build query/qrel; if it recurs, check the cell's `raw/queries-test.jsonl` has the `_idxbuild_0` row |
-| service `/healthz` shows no cells / legacy mode | `NORA_STORE_ROOT` not pointed at the cell db_root, or cells lack `raw/metadata.json`; in registry mode (`NORA_STORE_REGISTRY` set) the registry has no active set yet | confirm `<db_root>/<mno>__<release>/raw/metadata.json` exists; re-run the adapter. Registry mode: `publish status`, then flip a set and `POST /registry/reload` |
+| service `/healthz` shows no cells / legacy mode | `NORA_STORE_ROOT` not pointed at the cell db_root, or cells lack `raw/metadata.json`; in registry mode (`NORA_STORE_REGISTRY` set) the registry has no active set yet | confirm `<db_root>/<mno>/<release>/raw/metadata.json` exists; re-run the adapter. Registry mode: `publish status`, then flip a set and `POST /registry/reload` |
 | service `ModuleNotFoundError: bm25x` at query time | service launched under the wrong Python | launch uvicorn under the SIRA venv |
 
 ### Notes

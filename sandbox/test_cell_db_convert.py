@@ -34,7 +34,7 @@ DOCS = [
 def make_cell(db_root: Path, mno: str, release: str,
               docs=DOCS, enrich: dict[str, list[str]] | None = None,
               fingerprints: dict[str, str] | None = None) -> Path:
-    base = db_root / f"{mno}__{release}"
+    base = db_root / f"{mno}/{release}"
     (base / "raw").mkdir(parents=True)
     (base / "raw" / "metadata.json").write_text("{}", encoding="utf-8")
     with open(base / "raw" / "corpus.jsonl", "w", encoding="utf-8") as f:
@@ -98,7 +98,7 @@ def test_convert_end_to_end(tmp_path):
         assert meta["enrich_run"] == "best"
         assert json.loads(meta["bm25x_ngrams"])
         # fingerprint must match the service's formula over the same files
-        base = db_root / "mnoa__Apr2098"
+        base = db_root / "mnoa/Apr2098"
         expect = _sha256_files([base / "raw" / "corpus.jsonl",
                                 base / "enrichments" / "doc" / "best.jsonl"])
         assert meta["source_fingerprint"] == expect
@@ -200,10 +200,10 @@ def test_cross_release_record_is_held(tmp_path):
     report = convert(db_root, out, verify_n=0, overlay_root=str(corr))
     by_cell = {c["cell"]: c for c in report["cells"]}
     # Apr: same-release remove applied; Aug-origin record unverifiable -> held
-    assert by_cell["mnoa__Apr2098"]["overlay"]["removes"] == 1
-    assert by_cell["mnoa__Apr2098"]["overlay"]["held"] == 1
+    assert by_cell["mnoa/Apr2098"]["overlay"]["removes"] == 1
+    assert by_cell["mnoa/Apr2098"]["overlay"]["held"] == 1
     # Aug: Apr-origin remove of cbm verifies OK (same text both releases)
-    assert by_cell["mnoa__Aug2098"]["overlay"]["removes"] == 1
+    assert by_cell["mnoa/Aug2098"]["overlay"]["removes"] == 1
 
 
 def test_existing_output_needs_force(tmp_path):
@@ -319,8 +319,8 @@ def test_fingerprint_match_applies_unverifiable_record(tmp_path):
 
     report = convert(db_root, tmp_path / "out", verify_n=0, overlay_db=str(db))
     by_cell = {c["cell"]: c for c in report["cells"]}
-    assert by_cell["mnoa__Apr2098"]["overlay"]["removes"] == 1
-    assert by_cell["mnoa__Apr2098"]["overlay"]["held"] == 0
+    assert by_cell["mnoa/Apr2098"]["overlay"]["removes"] == 1
+    assert by_cell["mnoa/Apr2098"]["overlay"]["held"] == 0
 
 
 def test_dangling_best_link_is_cnv011(tmp_path):

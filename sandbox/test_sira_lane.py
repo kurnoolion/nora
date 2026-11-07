@@ -26,9 +26,9 @@ def test_two_steps_adapter_then_multi():
 
 
 def test_only_reaches_both_steps():
-    cmds = build_commands(_args(only="MNOA__Feb2026"))
-    assert cmds[0][cmds[0].index("--only") + 1] == "MNOA__Feb2026"
-    assert cmds[1][cmds[1].index("--only") + 1] == "MNOA__Feb2026"
+    cmds = build_commands(_args(only="MNOA/Feb2026"))
+    assert cmds[0][cmds[0].index("--only") + 1] == "MNOA/Feb2026"
+    assert cmds[1][cmds[1].index("--only") + 1] == "MNOA/Feb2026"
 
 
 def test_wipe_all_takes_precedence_over_stale():
@@ -50,17 +50,17 @@ def test_coarse_chunk_flags_forwarded_to_multi_only():
 
 def test_heal_targets_filters_by_only_and_existence(tmp_path):
     from sandbox.sira_lane import heal_targets
-    for cell, has_run in (("MNOA__Feb2026", True), ("MNOB__Feb2026", True),
-                          ("MNOC__Feb2026", False)):
+    for cell, has_run in (("MNOA/Feb2026", True), ("MNOB/Feb2026", True),
+                          ("MNOC/Feb2026", False)):
         d = tmp_path / cell
         (d / "runs" / "doc-enrich" / "r1" if has_run else d).mkdir(parents=True)
-    # all cells with the run dir
-    assert [t.parents[2].name for t in heal_targets(tmp_path, "r1", None)] == \
-        ["MNOA__Feb2026", "MNOB__Feb2026"]
+    # all cells with the run dir (cell dirs are <mno>/<release>/)
+    assert [t.parents[2].relative_to(tmp_path).as_posix() for t in heal_targets(tmp_path, "r1", None)] == \
+        ["MNOA/Feb2026", "MNOB/Feb2026"]
     # --only restricts
-    assert [t.parents[2].name
-            for t in heal_targets(tmp_path, "r1", "MNOB__Feb2026")] == \
-        ["MNOB__Feb2026"]
+    assert [t.parents[2].relative_to(tmp_path).as_posix()
+            for t in heal_targets(tmp_path, "r1", "MNOB/Feb2026")] == \
+        ["MNOB/Feb2026"]
     # wrong run name / missing db_root -> empty
     assert heal_targets(tmp_path, "other-run", None) == []
     assert heal_targets(tmp_path / "absent", "r1", None) == []
@@ -96,11 +96,11 @@ def test_run_repairs_incremental_heals_and_retries(tmp_path, capsys):
     """Incremental mode (--wipe-stale-index keeps runs/): both repairs run —
     torn line dropped, recorded failure evicted for retry."""
     from sandbox.sira_lane import run_repairs
-    rd = _seed_cell(tmp_path, "MNOA__Feb2026")
+    rd = _seed_cell(tmp_path, "MNOA/Feb2026")
     run_repairs(_repair_args(tmp_path, wipe_stale_index=True))
     out = capsys.readouterr().out
-    assert "healed MNOA__Feb2026/r1: 1 torn line(s)" in out
-    assert "retry-failed MNOA__Feb2026/r1: evicted 1 doc(s)" in out
+    assert "healed MNOA/Feb2026/r1: 1 torn line(s)" in out
+    assert "retry-failed MNOA/Feb2026/r1: evicted 1 doc(s)" in out
     assert '"doc_id": "B"' not in (rd / "trace.kept.jsonl").read_text()
     assert (rd / "trace.failed.jsonl").read_text() == ""
 
@@ -109,7 +109,7 @@ def test_run_repairs_skipped_under_full_wipe(tmp_path, capsys):
     """Full-rebuild mode: the adapter wipes runs/ anyway — repairs are
     superseded and must be skipped (files untouched, note printed)."""
     from sandbox.sira_lane import run_repairs
-    rd = _seed_cell(tmp_path, "MNOA__Feb2026")
+    rd = _seed_cell(tmp_path, "MNOA/Feb2026")
     before = (rd / "trace.kept.jsonl").read_text()
     run_repairs(_repair_args(tmp_path, wipe_all_derived=True))
     out = capsys.readouterr().out
@@ -120,7 +120,7 @@ def test_run_repairs_skipped_under_full_wipe(tmp_path, capsys):
 
 def test_run_repairs_dry_run_lists_without_touching(tmp_path, capsys):
     from sandbox.sira_lane import run_repairs
-    rd = _seed_cell(tmp_path, "MNOA__Feb2026")
+    rd = _seed_cell(tmp_path, "MNOA/Feb2026")
     before = (rd / "trace.kept.jsonl").read_text()
     run_repairs(_repair_args(tmp_path, dry_run=True))
     out = capsys.readouterr().out
@@ -130,7 +130,7 @@ def test_run_repairs_dry_run_lists_without_touching(tmp_path, capsys):
 
 def test_run_repairs_noop_without_flags(tmp_path, capsys):
     from sandbox.sira_lane import run_repairs
-    _seed_cell(tmp_path, "MNOA__Feb2026")
+    _seed_cell(tmp_path, "MNOA/Feb2026")
     run_repairs(_repair_args(tmp_path, heal_torn=False, retry_failed=False))
     assert capsys.readouterr().out == ""
 
@@ -186,7 +186,7 @@ def test_main_verify_runs_sweep_after_build(tmp_path, monkeypatch):
         lambda db_root, run_name, only=None, **kw:
             calls.update(db_root=db_root, run_name=run_name, only=only) or 0)
     rc = main(["--env-dir", str(tmp_path / "env"), "--db-root", str(tmp_path),
-               "--run-name", "r1", "--only", "VZW__Feb2026", "--verify"])
+               "--run-name", "r1", "--only", "VZW/Feb2026", "--verify"])
     assert rc == 0
     assert calls["run_name"] == "r1" and calls["only"] == [("VZW", "Feb2026")]
 
@@ -234,7 +234,7 @@ def test_emit_dry_run_prints_plan_only(tmp_path, capsys):
     from sandbox.sira_lane import run_cell_db_emit
 
     rc = run_cell_db_emit(_args(db_root=tmp_path, dry_run=True,
-                                index="cell-db", only="mnoa__Apr2098"))
+                                index="cell-db", only="mnoa/Apr2098"))
     out = capsys.readouterr().out
     assert rc == 0
     assert "would emit cell DBs" in out
@@ -263,7 +263,7 @@ def test_emit_converts_built_cells(tmp_path, capsys):
     from sandbox.sira_lane import run_cell_db_emit
 
     db_root = tmp_path
-    base = db_root / "mnoa__Apr2098"
+    base = db_root / "mnoa/Apr2098"
     (base / "raw").mkdir(parents=True)
     (base / "raw" / "metadata.json").write_text("{}", encoding="utf-8")
     docs = [("REQ-0", "emergency callback", "the device shall support emergency callback mode"),

@@ -575,7 +575,7 @@ def check_map_against_stack(
         return []
     served: dict[str, list[str]] = {}
     for c in cells:
-        mno, _, rel = str(c).partition("__")
+        mno, rel = _split_cell(str(c))
         if release_order_key(rel) is not None:
             served.setdefault(mno, []).append(rel)
     out = []
@@ -604,10 +604,20 @@ def row_key(row: dict) -> str:
 
 
 def _cell_name(mno: str, release: str) -> str:
-    # The serving side's cell_dirname convention (`<mno>__<release>`,
-    # source case kept) — restated, not imported: core never imports
-    # sandbox.
-    return f"{mno}__{release}"
+    # The serving side's cell name (`<mno>/<release>`, source case kept —
+    # `core.src.stores.cells.cell_dirname`), restated so this module
+    # stays import-light.
+    return f"{mno}/{release}"
+
+
+def _split_cell(name: str) -> tuple[str, str]:
+    """`(mno, release)` of a cell name in either spelling (`/`, or `__`
+    for stacks and runs that predate 2026-11-06)."""
+    if "/" in name:
+        mno, _, rel = name.partition("/")
+    else:
+        mno, _, rel = name.partition("__")
+    return mno, rel
 
 
 def classify_scope(
@@ -637,8 +647,8 @@ def classify_scope(
         for m in misses:
             m["miss_kind"] = ""
         return "n/a", [], []
-    searched = set(resolved_cells)
-    searched_mnos = {c.partition("__")[0] for c in searched}
+    searched = {_cell_name(*_split_cell(str(c))) for c in resolved_cells}
+    searched_mnos = {_split_cell(c)[0] for c in searched}
     expected_cells = {
         _cell_name(e.mno, e.release)
         for e in ground_truth if e.mno and e.release
@@ -658,14 +668,14 @@ def classify_scope(
     missing = sorted(expected_cells - searched) + sorted(
         _cell_name(mno, "*") for mno in expected_mnos
         if mno not in searched_mnos
-        and not any(c.startswith(mno + "__") for c in expected_cells)
+        and not any(_split_cell(c)[0] == mno for c in expected_cells)
     )
     # An mno-only entry accepts any cell of its MNO, so those cells are
     # not "extra"; a qualified entry accepts only its own cell.
-    mno_only = expected_mnos - {c.partition("__")[0] for c in expected_cells}
+    mno_only = expected_mnos - {_split_cell(c)[0] for c in expected_cells}
     extra = sorted(
         c for c in searched
-        if c not in expected_cells and c.partition("__")[0] not in mno_only
+        if c not in expected_cells and _split_cell(c)[0] not in mno_only
     )
     if missing and extra:
         scope = "miss+extra"

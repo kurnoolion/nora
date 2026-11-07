@@ -132,10 +132,13 @@ def _row_view(service_row: dict, entry: dict | None,
 
 
 def _cell_mno_release(cell: str) -> tuple[str, str]:
-    if "__" not in cell:
+    """`(mno, release)` of a cell name: `<mno>/<release>`, or the older
+    `<mno>__<release>` from links written before 2026-11-06."""
+    from core.src.stores.cells import parse_cell_dirname
+    ck = parse_cell_dirname(cell)
+    if ck is None:
         raise HTTPException(status_code=422, detail=f"bad cell name: {cell}")
-    mno, release = cell.split("__", 1)
-    return mno, release
+    return ck
 
 
 def _pending_ctx(cell: str, store: EnrichOverlayStore, svc: dict,
@@ -302,7 +305,7 @@ def export(label: str = "", mno: str = "", mode: str = "report",
                     (release_order_key(latest[m]) or (0, 0))):
                 latest[m] = rel
         for m, rel in latest.items():
-            data = _service_get(f"/cells/{m}__{rel}/enrichments")
+            data = _service_get(f"/cells/{m}/{rel}/enrichments")
             for row in data.get("rows", []):
                 key = (m, row["req_id"])
                 plans[key] = row.get("plan", "")
@@ -381,7 +384,7 @@ def _stale_cells(store: EnrichOverlayStore, label: str) -> list[str]:
         served = row.get("overlay_digest")
         if served is not None and served != store.overlay_digest(row["mno"],
                                                                  label):
-            stale.append(f"{row['mno']}__{row['release']}")
+            stale.append(f"{row['mno']}/{row['release']}")
     return stale
 
 

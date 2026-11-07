@@ -20,10 +20,10 @@
 # Usage:
 #   ./cycle.sh start <build-id> [--profiles <path|prev-build-id>] [--seed <prev-build-id>]
 #   ./cycle.sh status
-#   ./cycle.sh parse        [--cell <MNO>__<MMMYYYY>] [--force] [--skip-standards]
+#   ./cycle.sh parse        [--cell <MNO>/<MMMYYYY>] [--force] [--skip-standards]
 #   ./cycle.sh prompts      [--yes]             # gate: per-MNO prompts present + shaped, publish to <build>/prompts/
-#   ./cycle.sh taxonomy     [--cell <MNO>__<MMMYYYY>] [--force]   # per cell; re-run = retry of failed docs
-#   ./cycle.sh enrich       [--cell <MNO>__<MMMYYYY>] [--retry-failed] [--run-name <r>]
+#   ./cycle.sh taxonomy     [--cell <MNO>/<MMMYYYY>] [--force]   # per cell; re-run = retry of failed docs
+#   ./cycle.sh enrich       [--cell <MNO>/<MMMYYYY>] [--retry-failed] [--run-name <r>]
 #                           [--index flat|cell-db]  (cell-db: ALSO emit SQLite cell DBs
 #                            under <db_root>/cell-dbs/ — dual-emit; default flat unchanged)
 #   ./cycle.sh verify-enrich [--yes]            # gate: sira_multi --verify must PASS
@@ -51,7 +51,7 @@
 #
 # Layout (override with env vars): NORA_ROOT=/srv/nora →
 #   $NORA_ROOT/builds/nora/<build-id>          NORA_BUILDS_ROOT (NORA_BUILDS_NORA_ROOT: the dir holding the builds)
-#   <build>/out/sira/<MNO>__<MMMYYYY>/         the SIRA cells: the build's last stage dir (since 2026-11-06);
+#   <build>/out/sira/<MNO>/<MMMYYYY>/          the SIRA cells: the build's last stage dir (since 2026-11-06);
 #                                              NORA_BUILDS_SIRA_ROOT=<dir> keeps the older <dir>/<build-id> twin
 #   $NORA_ROOT/requirements                    NORA_REQUIREMENTS_DIR
 #   $NORA_ROOT/serve                           NORA_SERVE_ROOT
@@ -99,7 +99,7 @@ while (( $# > 0 )); do
     --yes)           YES=1; shift;;
     --force)         FORCE="--force"; shift;;
     --skip-standards) SKIPSTD="--skip-standards"; shift;;
-    --cell)          CELL="$2"; shift 2;;
+    --cell)          CELL="${2//__//}"; shift 2;;   # <MNO>/<MMMYYYY>; the older <MNO>__<MMMYYYY> is accepted
     --retry-failed)  RETRY=1; shift;;
     --run-name)      RUN="$2"; shift 2;;
     --label)         LABEL="$2"; shift 2;;
@@ -188,8 +188,13 @@ require_phase() {  # require_phase <phase> <fix-hint>
 need_wiring() {
   [ -f "$WIRING" ] || die 003 "no builds wiring env ($ENV_ROOT/.env.builds or docker/.env.builds)" \
     "copy a stack env to .env.builds (README Phase 0) — all seven path vars present"
-  grep -q "^NORA_ENV_DIR=$NB\$" "$WIRING" && grep -q "^STORE_ROOT=$SB\$" "$WIRING" \
+  grep -q "^NORA_BUILD_DIR=$NB\$" "$WIRING" \
     || die 004 "wiring env does not point at build $BUILD" "./cycle.sh start rewrote it; check $WIRING for a later manual edit"
+  for kv in "NORA_ENV_DIR=$NB" "STORE_ROOT=$SB"; do   # an older env that still carries them must agree
+    k="${kv%%=*}"
+    ! grep -q "^$k=" "$WIRING" || grep -q "^$kv\$" "$WIRING" \
+      || die 004 "wiring env's $k disagrees with NORA_BUILD_DIR for build $BUILD" "remove the $k= line (NORA_BUILD_DIR is enough) or ./cycle.sh start again"
+  done
 }
 detach() {  # detach <phase> <service> <log-in-container> <inner command...>
   local phase="$1" svc="$2" clog="$3"; shift 3
@@ -205,9 +210,9 @@ cyc_block() {  # cyc_block <phase> <status> <kv lines via stdin>
   { echo "CYC build=$BUILD phase=$1 op=$ME ts=$(date -u +%FT%TZ) status=$2"; cat; } | tee "$f"
   echo "  (saved $f)"
 }
-cells() { find "$REQS" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' | sort | sed 's#/#__#'; }
+cells() { find "$REQS" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' | sort; }   # <MNO>/<MMMYYYY>
 cells_by_size() {  # smallest first (doc count) — inspect the small cell before fanning out
-  for c in $(cells); do echo "$(find "$REQS/${c%%__*}/${c##*__}" -type f | wc -l) $c"; done | sort -n | cut -d' ' -f2
+  for c in $(cells); do echo "$(find "$REQS/$c" -type f | wc -l) $c"; done | sort -n | cut -d' ' -f2
 }
 GATE_BY="$ME"
 tax_ledger_counts() {  # ok/failed over every cell's taxonomy ledger in the build
@@ -288,7 +293,7 @@ def covered(mno, rel):
     return default or any(b["mno"].upper() == mno.upper() and b.get("release", "*") in (rel, "*") for b in bs)
 added = []
 for c in cells:
-    mno, rel = c.split("__", 1)
+    mno, rel = c.split("/", 1)
     if covered(mno, rel): continue
     same = [b for b in bs if b["mno"].upper() == mno.upper()]
     if not same:
@@ -297,7 +302,7 @@ for c in cells:
         sys.exit(1)
     src = max(same, key=lambda b: key(b.get("release", "*")))
     bs.append({"mno": mno, "release": rel, "profile": src["profile"]})
-    added.append(f"{mno}__{rel}<-{src.get('release', '*')}")
+    added.append(f"{mno}/{rel}<-{src.get('release', '*')}")
 d["bindings"] = bs
 json.dump(d, open(path, "w"), indent=2); open(path, "a").write("\n")
 print(",".join(added) or "-")
@@ -308,12 +313,14 @@ PY
   if [ -n "$pf" ]; then mv "$pf" "$NB/profiles.json"; elif [ -n "$src" ]; then cp "$src" "$NB/profiles.json"; fi
   cyc init "$CJ" "$BUILD" "$ME" "$images"
   [ -n "$SEED" ] && cyc set "$CJ" seed "$SEED"
-  # repoint the wiring env; a host env that lacks either line gets it
-  # appended (field-found: a stack env without STORE_ROOT= left need_wiring
-  # failing after start, with nothing in the CYC block to say why)
+  # repoint the wiring env at the build. One line names the build
+  # (NORA_BUILD_DIR; the compose file derives /data/env and /data/db from
+  # it); the older NORA_ENV_DIR= / STORE_ROOT= lines are rewritten when a
+  # host env still carries them, never added.
+  if grep -q "^NORA_BUILD_DIR=" "$WIRING"; then sed -i "s|^NORA_BUILD_DIR=.*|NORA_BUILD_DIR=$NB|" "$WIRING"; else printf '%s\n' "NORA_BUILD_DIR=$NB" >> "$WIRING"; fi
   for kv in "NORA_ENV_DIR=$NB" "STORE_ROOT=$SB"; do
     k="${kv%%=*}"
-    if grep -q "^$k=" "$WIRING"; then sed -i "s|^$k=.*|$kv|" "$WIRING"; else printf '%s\n' "$kv" >> "$WIRING"; fi
+    grep -q "^$k=" "$WIRING" && sed -i "s|^$k=.*|$kv|" "$WIRING"
   done
   echo "$BUILD" > "$ACTIVE"
   n=$(cells | wc -l)
@@ -333,7 +340,7 @@ status)
   for p in parse prompts taxonomy enrich verify-enrich promote; do printf '  %-14s %s\n' "$p" "$(phase_state "$p")"; done
   [ -d "$NB/out/parse" ] && echo "  parse dirs   : $(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d | wc -l) (cells staged: $(cells | wc -l))"
   [ -d "$NB/out/taxonomy" ] && echo "  taxonomy     : $(tax_ledger_counts) cells=$(find "$NB/out/taxonomy" -mindepth 2 -maxdepth 2 -type d | wc -l) features=$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name '*_features.json' | wc -l)"
-  [ -d "$SB" ] && echo "  sira cells   : $(find "$SB" -mindepth 1 -maxdepth 1 -type d -name '*__*' | wc -l) run_name=$RUN"
+  [ -d "$SB" ] && echo "  sira cells   : $(find "$SB" -mindepth 3 -maxdepth 3 -path '*/raw/metadata.json' | wc -l) run_name=$RUN"
   ;;
 
 parse)
@@ -342,8 +349,8 @@ parse)
   [ "$(phase_state parse)" != running ] || die 031 "parse already running" "./cycle.sh status; wait for CYC-EXIT"
   scope=""; tag="ALL"
   if [ -n "$CELL" ]; then
-    [ -d "$REQS/${CELL%%__*}/${CELL##*__}" ] || die 032 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
-    scope="--mno ${CELL%%__*} --release ${CELL##*__}"; tag="$CELL"
+    [ -d "$REQS/$CELL" ] || die 032 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
+    scope="--mno ${CELL%%/*} --release ${CELL##*/}"; tag="${CELL//\//-}"
   fi
   detach parse nora-batch "/data/env/reports/lane-ingestion-$tag-$TS.log" \
     "exec python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --skip-taxonomy $scope $FORCE $SKIPSTD"
@@ -390,8 +397,8 @@ taxonomy)
   [ "$(phase_state taxonomy)" != running ] || die 050 "taxonomy already running" "./cycle.sh status"
   scope=""; tag="ALL"
   if [ -n "$CELL" ]; then
-    [ -d "$REQS/${CELL%%__*}/${CELL##*__}" ] || die 052 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
-    scope="--mno ${CELL%%__*} --release ${CELL##*__}"; tag="$CELL"
+    [ -d "$REQS/$CELL" ] || die 052 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
+    scope="--mno ${CELL%%/*} --release ${CELL##*/}"; tag="${CELL//\//-}"
   fi
   detach taxonomy nora-batch "/data/env/reports/stage-taxonomy-$tag-$TS.log" \
     "exec python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $scope $FORCE"
@@ -403,7 +410,7 @@ enrich)
   require_phase taxonomy "./cycle.sh taxonomy, then status until ok"
   # per-cell ledgers (out/taxonomy/<MNO>/<MMMYYYY>/extraction_state.json);
   # with --cell only that cell's, else every cell's in the build
-  if [ -n "$CELL" ]; then ledgers="$NB/out/taxonomy/${CELL%%__*}/${CELL##*__}/extraction_state.json"; else ledgers="$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name extraction_state.json 2>/dev/null)"; fi
+  if [ -n "$CELL" ]; then ledgers="$NB/out/taxonomy/$CELL/extraction_state.json"; else ledgers="$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name extraction_state.json 2>/dev/null)"; fi
   [ -n "$ledgers" ] && [ -f "$(echo "$ledgers" | head -1)" ] || die 060 "no taxonomy ledger under $NB/out/taxonomy${CELL:+ for $CELL}" "./cycle.sh taxonomy${CELL:+ --cell $CELL}"
   failed="$(echo "$ledgers" | python3 -c "import json,sys; print(sum(sum(1 for v in json.load(open(p))['docs'].values() if v['status']=='failed') for p in sys.stdin.read().split()))")"
   [ "$failed" = 0 ] || die 061 "taxonomy ledger has $failed failed doc(s)" "./cycle.sh taxonomy${CELL:+ --cell $CELL} again (retries only failures); tax_debug for persistent ones"
@@ -418,17 +425,17 @@ enrich)
     *) die 065 "unknown --index $INDEX_MODE" "flat (default) or cell-db";;
   esac
   if [ -n "$CELL" ]; then
-    [ -d "$REQS/${CELL%%__*}/${CELL##*__}" ] || die 064 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
-    [ -d "$NB/out/taxonomy/${CELL%%__*}/${CELL##*__}" ] || die 066 "no taxonomy for $CELL at $NB/out/taxonomy/${CELL%%__*}/${CELL##*__}" "./cycle.sh taxonomy --cell $CELL"
+    [ -d "$REQS/$CELL" ] || die 064 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
+    [ -d "$NB/out/taxonomy/$CELL" ] || die 066 "no taxonomy for $CELL at $NB/out/taxonomy/$CELL" "./cycle.sh taxonomy --cell $CELL"
     # the lane reads the cell's own taxonomy (per release since 2026-11-06)
-    inner="NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/${CELL%%__*}/${CELL##*__} python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
+    inner="NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/$CELL python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
   else
     order="$(cells_by_size | tr '\n' ' ')"
     echo "enrich: all cells smallest-first: $order"
-    inner="for c in $order; do NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/\${c%%__*}/\${c##*__} python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
+    inner="for c in $order; do NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/\$c python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
   fi
-  detach enrich sira-batch "/data/env/reports/enrich-${CELL:-ALL}-$TS.log" "$inner"
-  echo "  resume/retry: same verb (same run name $RUN); one cell: --cell <MNO>__<MMMYYYY>; failures: --retry-failed"
+  detach enrich sira-batch "/data/env/reports/enrich-${CELL:+${CELL//\//-}}${CELL:-ALL}-$TS.log" "$inner"
+  echo "  resume/retry: same verb (same run name $RUN); one cell: --cell <MNO>/<MMMYYYY>; failures: --retry-failed"
   ;;
 
 verify-enrich)

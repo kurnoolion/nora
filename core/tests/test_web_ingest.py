@@ -36,7 +36,7 @@ def web(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(tm, "TEAM_MODE", False)
     monkeypatch.setattr(tm, "ADMIN_TOKEN", "adm")
     monkeypatch.setattr(tm, "INGEST_TOKEN", "ing")
-    cells = {"value": ["MNO-A__Jan2031", "MNO-B__Jan2031"]}
+    cells = {"value": ["MNO-A/Jan2031", "MNO-B/Jan2031"]}
 
     async def _cells():
         return cells["value"]

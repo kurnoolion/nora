@@ -49,11 +49,11 @@ def test_format_sample_marks_scope_misses():
         ],
         "retrieved_req_ids": ["REQ-4"],
         "scope": "miss",
-        "scope_missing_cells": ["mno-b__Jan2026"],
+        "scope_missing_cells": ["mno-b/Jan2026"],
         "scope_extra_cells": [],
     }
     text = "\n".join(format_sample(s1))
-    assert "scope: miss  not searched: mno-b__Jan2026" in text
+    assert "scope: miss  not searched: mno-b/Jan2026" in text
     assert "REQ-4" in text and "SCOPE" in text
     line5 = next(l for l in text.splitlines() if "REQ-5" in l)
     assert "MISS" in line5

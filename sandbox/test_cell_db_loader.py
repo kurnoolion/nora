@@ -52,7 +52,7 @@ def _restore_service_module():
 
 def make_flat_cells(db_root: Path) -> None:
     for mno, release in (("mnoa", "Apr2098"), ("mnob", "Apr2098")):
-        base = db_root / f"{mno}__{release}"
+        base = db_root / f"{mno}/{release}"
         (base / "raw").mkdir(parents=True)
         (base / "raw" / "metadata.json").write_text("{}", encoding="utf-8")
         with open(base / "raw" / "corpus.jsonl", "w", encoding="utf-8") as f:

@@ -1,6 +1,6 @@
 # Self-serve ingestion — design
 
-Status: 2026-11-03, rulings settled (§9) and the host facts folded in.
+Status: 2026-11-06. One spelling of a cell everywhere, `<MNO>/<release>` (D-DRAFT-10), the SIRA cells inside the build (D-DRAFT-9) and one wiring variable, `NORA_BUILD_DIR` (D-DRAFT-11), are built; `publish migrate-units` rewrites each stack's registry rows once. Earlier: 2026-11-03, rulings settled (§9) and the host facts folded in.
 Built and tested: the cycle driver changes of §7
 (`core/tests/test_cycle_driver.py`), the jobs schema and the runner of §4
 (`core/tests/test_ingest_runner.py`), the page and the API of §5 with
@@ -91,12 +91,12 @@ no pipeline logic.
 |---|---|---|---|---|
 | 1 | stage documents | copy `<share>/<folder>/*` to `requirements/<mno>/<release>/`; refuse if the cell exists | — | job fails before anything runs |
 | 2 | open build | `cycle.sh start <build> --seed <prev>` | seed takes the previous build's profile bindings, adding the new cell bound to the profile of the MNO's latest bound cell; nothing is copied (every stage is per cell since the taxonomy became per release) | CYC-E021 (cycle in flight): a failed or cancelled ingest still holds the baton; the page names it, Retry or Abandon it first. CYC-E026/E027: bad seed, MNO without a binding |
-| 3 | parse | `cycle.sh parse --cell <mno>__<release> --skip-standards` | the lane runs that cell alone | failed cells named in the log; Retry re-runs the verb |
-| 4 | taxonomy | `cycle.sh taxonomy --cell <mno>__<release>` | one taxonomy per release (D-DRAFT-8), derived from the cell's own trees into `out/taxonomy/<mno>/<release>/`; the enrichment lane reads that directory | the verb's own retry: Retry re-runs it for failed plans |
-| 5 | enrich | `cycle.sh enrich --cell <mno>__<release>` | the build's `out/sira/` holds the new cell only (the SIRA cells are the build's last stage dir, ruling 2026-11-06); nothing else is enriched | Retry runs `--retry-failed`; a verify FAIL stops here |
+| 3 | parse | `cycle.sh parse --cell <mno>/<release> --skip-standards` | the lane runs that cell alone | failed cells named in the log; Retry re-runs the verb |
+| 4 | taxonomy | `cycle.sh taxonomy --cell <mno>/<release>` | one taxonomy per release (D-DRAFT-8), derived from the cell's own trees into `out/taxonomy/<mno>/<release>/`; the enrichment lane reads that directory | the verb's own retry: Retry re-runs it for failed plans |
+| 5 | enrich | `cycle.sh enrich --cell <mno>/<release>` | the build's `out/sira/` holds the new cell only (the SIRA cells are the build's last stage dir, ruling 2026-11-06); nothing else is enriched | Retry runs `--retry-failed`; a verify FAIL stops here |
 | 6 | verify | `cycle.sh verify-enrich --yes` | — | FAIL lines → job fails with the CYC block; Retry goes back to 5 |
 | 7 | promote | `cycle.sh promote --label <label> --scheme <scheme>` (local, no `--host`) | the flat label is the converter's input | — |
-| 8 | convert | `cell_db_convert --label <serve>/<label> --cells <mno>__<release> --out <work>/cells --verify 25` | one cell; first, if the cell's `best.jsonl` dangles after a resumed enrichment, `sira_incremental promote` (field-found on the first retry) | CNV code in the log |
+| 8 | convert | `cell_db_convert --label <serve>/<label> --cells <mno>/<release> --out <work>/cells --verify 25` | one cell; first, if the cell's `best.jsonl` dangles after a resumed enrichment, `sira_incremental promote` (field-found on the first retry) | CNV code in the log |
 | 9 | publish | `publish publish --serve-root --label --cells-src <work>/cells --env-dir <build> --prompt-scheme` | every other unit is inherited from the active set; Trees are reused by fingerprint; History of this MNO is rebuilt | PUB code; nothing is visible to the stack |
 | 10 | eval | staging store up with `SERVE_RELEASE_SET=<label>`; `golden_cli --stage 1 --stack-url <staging> --stack-label <label> --allow-map-mismatch`; store down | — | GEV-E: job fails; the set stays staged |
 | 11 | gate | verdict by the rule in §6; `publish gate --kind golden-stage1 --verdict pass|fail --run-ref <run-id>` | — | a `fail` verdict leaves the set staged and the page says why; Serve is disabled |

@@ -11,7 +11,7 @@ live); images ship as Release-asset tarballs on the internal GitHub
 | Image | Profile | Runs | Purpose | Reads (mounts) | Writes (mounts) |
 |---|---|---|---|---|---|
 | **nora-web** | serve | uvicorn `:8000`, long-lived | Web UI + API: query, compare, compliance views; jobs/metrics/config; feedback capture | `/data/env` (promoted nora label: vectorstore, graph, taxonomy) | `/data/web-state` (per stack), `/data/feedback` + `/data/corrections` (pooled) |
-| **nora-store** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank; hosts the Overlay / Trees / History stores under `/stores/<store>/v1` (see "Stores") | `/data/db` (promoted sira label: `<MNO>__<MMMYYYY>` cells), `/data/env` (ro — parse trees for the Trees store) | `/data/corrections` (the Overlay authority: nora-web's review edits land here over HTTP) |
+| **nora-store** | serve | uvicorn `:8040`, long-lived | Per-query retrieval service: BM25 over the cells + LLM query-enrichment / rerank; hosts the Overlay / Trees / History stores under `/stores/<store>/v1` (see "Stores") | `/data/db` (promoted sira label: `<MNO>/<MMMYYYY>` cells), `/data/env` (ro — parse trees for the Trees store) | `/data/corrections` (the Overlay authority: nora-web's review edits land here over HTTP) |
 | **nora-batch** | ingest | `run --rm` jobs | Batch lanes over the corpus: **ingestion** lane (extract → parse → resolve → standards) and **nora** lane (taxonomy → graph → vectorstore → eval); Docling layout for opt-in corpora | `/data/requirements` (ro, the corpus), `/data/models` | `/data/env` (a nora-BUILD dir: `out/`, images incl.) |
 | **sira-batch** | ingest | `run --rm` jobs | SIRA lane: NORA→BEIR adapter, per-cell index build, batch doc-enrichment, incremental retries | `/data/env` outputs via adapter | `/data/db` (a sira-BUILD dir: cells) |
 
@@ -56,7 +56,7 @@ paths (`$HOME` does not expand there).
     │                                  #   shared by all builds (requirements_dir
     │                                  #   override; default is <env_dir>/input)
     ├── nora-builds/<build>/           # env_dirs: out/, state/, corrections/, reports/
-    │   └── out/sira/<MNO>__<MMMYYYY>/ #   the SIRA cells: the build's last stage dir
+    │   └── out/sira/<MNO>/<MMMYYYY>/ #   the SIRA cells: the build's last stage dir
     │                                  #   (since 2026-11-06; NORA_BUILDS_SIRA_ROOT keeps the
     │                                  #   older sira-builds/<build> twin) — NEVER inside the
     │                                  #   repo tree (git clean would wipe the enrichment cache)
@@ -135,8 +135,8 @@ In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
     SERVE_REGISTRY_ROOT=/home/<you>/nora-data/serve-a       # served stacks: the registry root (publish)
-    NORA_ENV_DIR=/home/<you>/nora-data/nora-builds/<build>   # ingest jobs' build dir (unused by a registry-mode store)
-    #STORE_ROOT=/home/<you>/nora-data/serve/<label>/sira    # dev/test only: flat label pointer instead of the registry
+    NORA_BUILD_DIR=/home/<you>/nora-data/nora-builds/<build>  # THE build: /data/env, and its out/sira as /data/db (unused by a registry-mode store)
+    #NORA_ENV_DIR= / #STORE_ROOT=                              # optional overrides of the two mounts (an older layout; dev/test flat labels)
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
     CORRECTIONS_DIR=/home/<you>/nora-data/corrections
@@ -215,7 +215,7 @@ under `requirements/<MNO>/<MMMYYYY>/`, then `./cycle.sh start <build>
 --seed <previous-build>`. The seed takes the previous build's profile
 bindings and binds the new cell to the MNO's latest bound release;
 nothing else is copied, because every stage is per cell: `parse --cell
-<MNO>__<MMMYYYY>`, `taxonomy --cell …` (a release's taxonomy is derived
+<MNO>/<MMMYYYY>`, `taxonomy --cell …` (a release's taxonomy is derived
 from its own trees) and `enrich --cell …` work on that one cell, and the
 build holds only it. At publish time every other unit is inherited from
 the active set (Phase 6). A new MNO is never seeded — its profile is
@@ -326,9 +326,9 @@ cp /home/<you>/nora-data/nora-builds/<previous-build>/profiles.json \
 #  customizations/profiles/*.json path — those are baked into the image;
 #  a single-profile run can bypass via --profile <path>)
 
-# 0.5 repoint the builds wiring env at the new dirs (only these two lines):
-#     .env.builds:  NORA_ENV_DIR=/home/<you>/nora-data/nora-builds/<build>
-#                   STORE_ROOT=/home/<you>/nora-data/nora-builds/<build>/out/sira
+# 0.5 repoint the builds wiring env at the new build (one line; the compose
+#     file derives /data/env from it and /data/db from its out/sira):
+#     .env.builds:  NORA_BUILD_DIR=/home/<you>/nora-data/nora-builds/<build>
 ```
 
 ### Phase 1 — parse the corpus (all cells, or `--cell` for one)
@@ -557,7 +557,7 @@ trimmed images deliberately do not carry.)
 ```bash
 docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
   python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
-  --run-name <run-name> --only <MNO>__<MMMYYYY> --wipe-stale-index \
+  --run-name <run-name> --only <MNO>/<MMMYYYY> --wipe-stale-index \
   2>&1 | tee ~/sira-<run-name>-pilot.log
 ```
 
@@ -579,7 +579,7 @@ Inspect the pilot cell before continuing (host
 paths — the sira-build dir is directly visible):
 
 ```bash
-D=/home/<you>/nora-data/nora-builds/<build>/out/sira/<MNO>__<MMMYYYY>/runs/doc-enrich/<run-name>
+D=/home/<you>/nora-data/nora-builds/<build>/out/sira/<MNO>/<MMMYYYY>/runs/doc-enrich/<run-name>
 grep -c '{taxonomy_block}' $D/prompt.txt   # 1 -> per-MNO BATCHED template resolved
                                            # (0 -> fell back to generic v01: check
                                            #  NORA_SIRA_DOC_PROMPT_DIR + that the dir
@@ -621,7 +621,7 @@ and is local-only.
     docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
       python -m sandbox.sira_multi --verify \
       --db-root /data/db --run-name <run-name>
-    # restrict: --only <MNO>__<REL>[,...]
+    # restrict: --only <MNO>/<REL>[,...]
 
 Per cell: batch status / closed_by / round histograms (with
 single-req-mode detection), kept/failed reconciliation (kept AND failed
@@ -644,7 +644,7 @@ always current (retry evicts before re-running).
 
     docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
       python -m sandbox.sira_incremental verify-run \
-      --dataset /data/db/<MNO>__<REL> --run-name <run-name>
+      --dataset /data/db/<MNO>/<REL> --run-name <run-name>
 
 Add `--compare-run <other-run-name>` to diff per-doc phrase sets between
 two runs of the same cell (e.g. batch mode vs `--max-reqs 1`) as Jaccard
@@ -660,7 +660,7 @@ codes; redact before sharing):
     docker compose --env-file .env.builds --profile ingest run --rm -T sira-batch \
       python -m sandbox.sira_enrich_inspect --failed \
       --db-root /data/db --run <run-name>
-    # --cell <MNO>__<REL> for one cell; --limit 20 for more ids per group;
+    # --cell <MNO>/<REL> for one cell; --limit 20 for more ids per group;
     # then drill into one req: `sira_enrich_inspect <req_id> --trace`
 
 Failed reqs per cell, grouped status → plan, biggest problem first.
@@ -740,7 +740,7 @@ dir's trace files (kept AND failed) are skipped. When verification
       python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db \
       --run-name <run-name> --wipe-stale-index --retry-failed --max-reqs 1 --verify
     # (per-cell standalone form: `python -m sandbox.sira_incremental
-    #  retry-failed --dataset /data/db/<MNO>__<REL> --run-name <run-name>
+    #  retry-failed --dataset /data/db/<MNO>/<REL> --run-name <run-name>
     #  --stage doc-enrich`, then re-run the lane exactly as before)
 
 `--max-reqs 1` on the retry pass runs each evicted req as its own LLM call
@@ -766,7 +766,7 @@ and orphan enrichment rows are dropped so phrases don't merge twice.
 `--heal-torn` and `--retry-failed` compose (heal runs first) — one command
 covers "power loss mid-run AND old failures to retry". Standalone form,
 per cell: `python -m sandbox.sira_incremental heal-torn --dataset
-/data/db/<MNO>__<REL> --run-name <run-name>`.
+/data/db/<MNO>/<REL> --run-name <run-name>`.
 
 Both flags are for INCREMENTAL runs (no wipe, or `--wipe-stale-index`,
 which keeps the `runs/` cache). Under `--wipe-all-derived` the adapter
@@ -813,6 +813,8 @@ python -m core.src.stores.publish flip --serve-root <serve-root> --label <YYYY-M
 python -m core.src.stores.publish rollback --serve-root <serve-root> --to <previous> \
     --store-url http://nora-store:8040
 python -m core.src.stores.publish gc --serve-root <serve-root> --keep 3     # files only; rows stay
+# one-shot after 2026-11-06 (cell names are <MNO>/<MMMYYYY>): rewrite a registry's unit rows, then reload the store
+python -m core.src.stores.publish migrate-units --serve-root <serve-root> [--dry-run]
 python -m core.src.stores.publish status --serve-root <serve-root>
 ```
 
@@ -860,7 +862,7 @@ here; only the serving half differs.
 ./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
     --sira-build /home/<you>/nora-data/nora-builds/<build>/out/sira
 
-# dev/test stack .env: NORA_ENV_DIR/STORE_ROOT -> serve/<label>/{nora,sira}, then
+# dev/test stack .env: NORA_ENV_DIR/STORE_ROOT -> serve/<label>/{nora,sira} (the overrides), then
 # RECREATE (a plain `restart` does NOT re-read .env or the env_files —
 # recreate does):
 docker compose --env-file <stack .env> --profile serve up -d
@@ -876,7 +878,7 @@ then recreate.
 
 First promotion note: `--nora-build` / `--sira-build` accept ANY dir in build
 shape — including pre-docker bare-metal artifacts (an env_dir with
-`out/{vectorstore,graph,taxonomy}`, a db_root with `<MNO>__<MMMYYYY>` cells) —
+`out/{vectorstore,graph,taxonomy}`, a db_root with `<MNO>/<MMMYYYY>` cells) —
 so existing deployments promote their current data as the first label.
 
 **Cross-host promote (build machine → serving host).** When builds and

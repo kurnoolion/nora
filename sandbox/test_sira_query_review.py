@@ -111,8 +111,8 @@ class TestEndpoints:
         svc._apply_overlay_and_enrich(feb)
         c = TestClient(svc.app)
         # composite rows' `plan_id / plan_name` stamp is NOT a selectable plan
-        assert c.get("/cells/GP__Feb2026/plans").json()["plans"] == ["PlanA", "PlanB"]
-        data = c.get("/cells/GP__Feb2026/enrichments", params={"plan": "PlanA"}).json()
+        assert c.get("/cells/GP/Feb2026/plans").json()["plans"] == ["PlanA", "PlanB"]
+        data = c.get("/cells/GP/Feb2026/enrichments", params={"plan": "PlanA"}).json()
         # ALL corpus rows of the plan are listed — R3 has no enrichments but
         # must still appear (the expert may add words to it), and the doc:
         # composite matches PlanA via the plan_id part of its stamp
@@ -138,7 +138,7 @@ class TestEndpoints:
         svc._apply_overlay_and_enrich(feb)
         c = TestClient(svc.app)
         # applied == on-disk -> nothing pending
-        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == []
+        assert c.get("/cells/GP/Feb2026/plans").json()["pending_plans"] == []
         # edit R1 (PlanA) on disk; R999 is unknown to this cell -> ignored
         p = tmp_path / "sira-enrich" / "GP.json"
         overlay = json.loads(p.read_text())
@@ -146,22 +146,22 @@ class TestEndpoints:
                                  "at": "y", "origin": {"release": "Feb2026"}}]
         overlay["R999"] = {"add": [{"word": "x"}]}
         p.write_text(json.dumps(overlay))
-        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
+        assert c.get("/cells/GP/Feb2026/plans").json()["pending_plans"] == ["PlanA"]
         # an un-merged labeled record on R2 (PlanB) is invisible to main
         overlay["R2"]["remove"] = [{"word": "roaming", "label": "camp1",
                                     "by": "t", "at": "z",
                                     "origin": {"release": "Feb2026"}}]
         p.write_text(json.dumps(overlay))
-        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
+        assert c.get("/cells/GP/Feb2026/plans").json()["pending_plans"] == ["PlanA"]
         # merging camp1 flags ONLY the plans its records touch — not all
         (tmp_path / "sira-enrich" / "accepted-labels.json").write_text(
             json.dumps({"accepted": ["camp1"]}))
-        assert (c.get("/cells/GP__Feb2026/plans").json()["pending_plans"]
+        assert (c.get("/cells/GP/Feb2026/plans").json()["pending_plans"]
                 == ["PlanA", "PlanB"])
         # un-merge reverts to the pre-merge pending set the same way
         (tmp_path / "sira-enrich" / "accepted-labels.json").write_text(
             json.dumps({"accepted": []}))
-        assert c.get("/cells/GP__Feb2026/plans").json()["pending_plans"] == ["PlanA"]
+        assert c.get("/cells/GP/Feb2026/plans").json()["pending_plans"] == ["PlanA"]
 
     def test_label_records_invisible_to_default_view(self, two_release_cells,
                                                      tmp_path):
@@ -196,18 +196,18 @@ class TestEndpoints:
                 {rid: d["text"] for rid, d in feb.corpus_by_id.items()},
                 feb.llm_words))
         c = TestClient(svc.app)
-        r = c.post("/cells/GP__Feb2026/reload", params={"label": "exp1"})
+        r = c.post("/cells/GP/Feb2026/reload", params={"label": "exp1"})
         assert r.status_code == 200 and r.json()["label"] == "exp1"
         # exp1 view: BOTH removes applied -> R1 has no effective words
-        data = c.get("/cells/GP__Feb2026/enrichments",
+        data = c.get("/cells/GP/Feb2026/enrichments",
                      params={"req_id": "R1", "label": "exp1"}).json()
         assert data["rows"][0]["effective"] == []
         # default view untouched by the labeled apply
-        data = c.get("/cells/GP__Feb2026/enrichments",
+        data = c.get("/cells/GP/Feb2026/enrichments",
                      params={"req_id": "R1"}).json()
         assert data["rows"][0]["effective"] == ["retry"]
         # a default (main) reload drops the cell's label variants
-        c.post("/cells/GP__Feb2026/reload")
+        c.post("/cells/GP/Feb2026/reload")
         assert svc._label_cells == {}
 
     def test_enrich_model_env_override_beats_config(self, two_release_cells,
@@ -219,7 +219,7 @@ class TestEndpoints:
         feb.enrich_model = "config-derived"
         monkeypatch.setattr(svc, "_ENRICH_MODEL_NAME", "trueModel-7B")
         c = TestClient(svc.app)
-        data = c.get("/cells/GP__Feb2026/enrichments",
+        data = c.get("/cells/GP/Feb2026/enrichments",
                      params={"plan": "PlanA"}).json()
         assert data["enrich_model"] == "trueModel-7B"
 
@@ -258,7 +258,7 @@ class TestEndpoints:
 
     def test_unknown_cell_404(self, two_release_cells):
         c = TestClient(svc.app)
-        assert c.get("/cells/XX__Jan2020/plans").status_code == 404
+        assert c.get("/cells/XX/Jan2020/plans").status_code == 404
         assert c.post("/cells/not-a-cell/reload").status_code == 404
 
 

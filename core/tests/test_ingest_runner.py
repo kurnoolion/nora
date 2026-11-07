@@ -275,15 +275,15 @@ def test_ingest_happy_path(host):
     assert sorted(p.name for p in cell.iterdir()) == ["spec.pdf"]
     cmds = sim.cmds()
     assert any(c.endswith(f"cycle.sh start {ing.build} --seed seed0") for c in cmds)
-    assert any("cycle.sh parse --cell MNO-A__Apr2031 --skip-standards" in c for c in cmds)
+    assert any("cycle.sh parse --cell MNO-A/Apr2031 --skip-standards" in c for c in cmds)
     assert any("cycle.sh prompts --yes" in c for c in cmds)
-    assert any("cycle.sh taxonomy --cell MNO-A__Apr2031" in c for c in cmds)
-    assert any("cycle.sh enrich --cell MNO-A__Apr2031" in c and "--retry-failed" not in c for c in cmds)
+    assert any("cycle.sh taxonomy --cell MNO-A/Apr2031" in c for c in cmds)
+    assert any("cycle.sh enrich --cell MNO-A/Apr2031" in c and "--retry-failed" not in c for c in cmds)
     assert any("cycle.sh verify-enrich --yes" in c for c in cmds)
     assert any(f"cycle.sh promote --label {ing.label} --scheme v9" in c for c in cmds)
     conv_argv = next(a for a, _ in sim.calls if "sandbox.cell_db_convert" in a)
     conv = " ".join(conv_argv)
-    assert "--cells MNO-A__Apr2031" in conv and "--verify 25" in conv
+    assert "--cells MNO-A/Apr2031" in conv and "--verify 25" in conv
     assert "-p" not in conv_argv and "sira-batch" in conv_argv   # builds wiring, no stack project
     pub = next(c for c in cmds if "publish publish" in c)
     assert "-p stackp" in pub and f"--cells-src /data/work/{ing.label}/cells" in pub and "--prompt-scheme v9" in pub
@@ -317,7 +317,7 @@ def test_ingest_fails_at_a_detached_phase_and_retries(host):
     assert r.run_once() == "completed"
     cmds = sim.cmds()
     assert not any("cycle.sh start" in c or "cycle.sh parse" in c for c in cmds)
-    assert any("cycle.sh enrich --cell MNO-A__Apr2031 --retry-failed" in c for c in cmds)
+    assert any("cycle.sh enrich --cell MNO-A/Apr2031 --retry-failed" in c for c in cmds)
     ing = _run(q.get_ingest(ingest_id))
     assert ing.state == "staged" and ing.verdict == "pass" and ing.job_id == job2
 
@@ -652,7 +652,7 @@ def test_convert_promotes_a_dangling_best_link(host):
         res = orig_cycle(args)
         if args[0] == "enrich":
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
-            _sira_cell(host, build, "MNO-A__Apr2031", dangling=True)
+            _sira_cell(host, build, "MNO-A/Apr2031", dangling=True)
         return res
     sim._cycle = cycle_with_sira
     orig_compose = sim._compose
@@ -661,7 +661,7 @@ def test_convert_promotes_a_dangling_best_link(host):
         text = " ".join(args)
         if "sira_incremental promote" in text:
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
-            enr = host["root"] / "builds/nora" / build / "out" / "sira" / "MNO-A__Apr2031" / "enrichments" / "doc"
+            enr = host["root"] / "builds/nora" / build / "out" / "sira" / "MNO-A/Apr2031" / "enrichments" / "doc"
             (enr / f"{build}.jsonl").write_text("{}\n")
             return Result(0, ["wrote 1 docs", "linked best.jsonl"])
         return orig_compose(args, env)
@@ -670,7 +670,7 @@ def test_convert_promotes_a_dangling_best_link(host):
     assert _runner(host, sim).run_once() == "completed"
     cmds = sim.cmds()
     promote = next(c for c in cmds if "sira_incremental promote" in c)
-    assert "--dataset /data/db/MNO-A__Apr2031" in promote and "--run-name" in promote and "sira-batch" in promote
+    assert "--dataset /data/db/MNO-A/Apr2031" in promote and "--run-name" in promote and "sira-batch" in promote
     assert cmds.index(promote) < cmds.index(next(c for c in cmds if "cell_db_convert" in c))
     assert any("best.jsonl dangles" in l for l in _run(host["q"].get_logs(job_id)))
 
@@ -683,7 +683,7 @@ def test_convert_leaves_a_healthy_best_link_alone(host):
         res = orig_cycle(args)
         if args[0] == "enrich":
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
-            _sira_cell(host, build, "MNO-A__Apr2031", dangling=False)
+            _sira_cell(host, build, "MNO-A/Apr2031", dangling=False)
         return res
     sim._cycle = cycle_with_sira
     job_id, ingest_id = _submit_ingest(host)
@@ -699,7 +699,7 @@ def test_convert_fails_when_promote_does_not_heal(host):
         res = orig_cycle(args)
         if args[0] == "enrich":
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
-            _sira_cell(host, build, "MNO-A__Apr2031", dangling=True)
+            _sira_cell(host, build, "MNO-A/Apr2031", dangling=True)
         return res
     sim._cycle = cycle_with_sira   # promote "succeeds" but writes nothing
     job_id, ingest_id = _submit_ingest(host)

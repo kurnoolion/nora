@@ -117,7 +117,8 @@ def test_start_plain_records_no_seed(host):
     # the SIRA cells are the build's last stage dir, and the wiring env points there
     sira = host["nora"] / "b1" / "out" / "sira"
     assert sira.is_dir() and not (host["root"] / "builds" / "sira" / "b1").exists()
-    assert f"STORE_ROOT={sira}" in (host["root"] / "env" / ".env.builds").read_text()
+    env_text = (host["root"] / "env" / ".env.builds").read_text()
+    assert f"NORA_BUILD_DIR={host['nora'] / 'b1'}" in env_text and f"STORE_ROOT={sira}" in env_text
     assert "seed=- inherited=-" in r.stdout
     assert "no profiles.json" in r.stdout  # the deliberate NOTE, unchanged
     assert (host["root"] / "builds" / "ACTIVE").read_text().strip() == "b1"
@@ -147,7 +148,7 @@ def test_start_seed_inherits_binding_and_copies_nothing(host):
     assert len(json.loads((prev / "profiles.json").read_text())["bindings"]) == 1
     # recorded
     assert _cycle_json(host, "b1")["seed"] == "b0"
-    assert "seed=b0 inherited=MNO-A__Apr2031<-Jan2031" in r.stdout
+    assert "seed=b0 inherited=MNO-A/Apr2031<-Jan2031" in r.stdout
 
 
 def test_start_seed_picks_latest_release_binding(host):
@@ -219,21 +220,21 @@ def test_parse_and_taxonomy_take_a_cell(host):
     _seed_build(host, "b0", [("MNO-A", "Jan2031")],
                 [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
     assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
-    r = host["run"]("parse", "--cell", "MNO-B__Jan2031")
+    r = host["run"]("parse", "--cell", "MNO-B/Jan2031")
     assert r.returncode == 1 and "CYC-E032" in r.stderr
-    r = host["run"]("parse", "--cell", "MNO-A__Apr2031", "--skip-standards")
+    r = host["run"]("parse", "--cell", "MNO-A/Apr2031", "--skip-standards")
     assert r.returncode == 0, r.stderr
     phases = _cycle_json(host, "b1")["phases"]
-    assert phases[-1]["phase"] == "parse" and "lane-ingestion-MNO-A__Apr2031-" in phases[-1]["log"]
+    assert phases[-1]["phase"] == "parse" and "lane-ingestion-MNO-A-Apr2031-" in phases[-1]["log"]
     # prompts: a partial build (one of two cells parsed) is a NOTE, not a refusal
     (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Apr2031").mkdir(parents=True)
     r = host["run"]("prompts", "--yes")
     assert r.returncode == 0, r.stderr + r.stdout
     assert "partial build" in r.stdout
-    r = host["run"]("taxonomy", "--cell", "MNO-A__Apr2031")
+    r = host["run"]("taxonomy", "--cell", "MNO-A/Apr2031")
     assert r.returncode == 0, r.stderr
     phases = _cycle_json(host, "b1")["phases"]
-    assert phases[-1]["phase"] == "taxonomy" and "stage-taxonomy-MNO-A__Apr2031-" in phases[-1]["log"]
+    assert phases[-1]["phase"] == "taxonomy" and "stage-taxonomy-MNO-A-Apr2031-" in phases[-1]["log"]
 
 
 def test_start_seed_explicit_profiles_wins(host, tmp_path):
@@ -307,18 +308,23 @@ def test_prompts_gate_typed_yes_records_user(host):
     assert last["status"] == "confirmed" and not last["by"].endswith("(auto)")
 
 
-def test_start_appends_missing_wiring_lines(host):
-    """A stack env without STORE_ROOT= (field-found) gets the line appended,
-    so need_wiring holds for the next verb."""
+def test_start_writes_the_build_var_and_rewrites_older_lines(host):
+    """One line names the build (NORA_BUILD_DIR); an older env's
+    NORA_ENV_DIR= line is rewritten to agree, a missing STORE_ROOT= is not
+    added (the compose file derives /data/db from the build dir)."""
     host["cell"]("MNO-A", "Jan2031")
     wiring = host["root"] / "env" / ".env.builds"
-    wiring.write_text("NORA_ENV_DIR=/old\nOTHER=1\n", encoding="utf-8")   # no STORE_ROOT line
+    wiring.write_text("NORA_ENV_DIR=/old\nOTHER=1\n", encoding="utf-8")   # older layout, no build var
     r = host["run"]("start", "b1")
     assert r.returncode == 0, r.stderr
     lines = wiring.read_text().splitlines()
     assert lines[0] == f"NORA_ENV_DIR={host['nora'] / 'b1'}" and "OTHER=1" in lines
-    assert f"STORE_ROOT={host['nora'] / 'b1' / 'out' / 'sira'}" in lines
-    assert sum(1 for l in lines if l.startswith("STORE_ROOT=")) == 1
+    assert f"NORA_BUILD_DIR={host['nora'] / 'b1'}" in lines
+    assert not any(l.startswith("STORE_ROOT=") for l in lines)
     # the next verb's need_wiring passes
     r = host["run"]("parse")
     assert r.returncode == 1 and "CYC-E030" in r.stderr   # profiles missing, not wiring (E004)
+    # a hand edit that makes an older line disagree is refused
+    wiring.write_text(wiring.read_text().replace(f"NORA_ENV_DIR={host['nora'] / 'b1'}", "NORA_ENV_DIR=/elsewhere"))
+    r = host["run"]("parse")
+    assert r.returncode == 1 and "CYC-E004" in r.stderr and "disagrees" in r.stderr

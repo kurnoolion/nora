@@ -37,24 +37,24 @@ def _seed_clone(tmp_path: Path, body: str = "name: nora\nsplit: test\nk_values: 
 
 def test_ensure_cell_data_config_writes_named_yaml(tmp_path):
     clone = _seed_clone(tmp_path)
-    out = ensure_cell_data_config(clone, "VZW__Feb2026")
-    assert out == clone / "scripts" / "configs" / "data" / "VZW__Feb2026.yaml"
+    out = ensure_cell_data_config(clone, "VZW/Feb2026")
+    assert out == clone / "scripts" / "configs" / "data" / "VZW/Feb2026.yaml"
     body = out.read_text(encoding="utf-8")
-    assert "name: VZW__Feb2026" in body and "name: nora" not in body
+    assert "name: VZW/Feb2026" in body and "name: nora" not in body
     assert "split: test" in body and "k_values: [10]" in body  # other fields preserved
 
 
 def test_ensure_cell_data_config_adds_name_when_absent(tmp_path):
     clone = _seed_clone(tmp_path, body="split: test\n")
-    assert ensure_cell_data_config(clone, "TMO__Jan2026").read_text(
+    assert ensure_cell_data_config(clone, "TMO/Jan2026").read_text(
         encoding="utf-8"
-    ).startswith("name: TMO__Jan2026\n")
+    ).startswith("name: TMO/Jan2026\n")
 
 
 def test_ensure_cell_data_config_missing_template_fails_loud(tmp_path):
     (tmp_path / "scripts" / "configs" / "data").mkdir(parents=True)  # no nora.yaml
     with pytest.raises(SystemExit, match="template not found"):
-        ensure_cell_data_config(tmp_path, "VZW__Feb2026")
+        ensure_cell_data_config(tmp_path, "VZW/Feb2026")
 
 
 # ── build_pipeline_cmd ────────────────────────────────────────────
@@ -63,7 +63,7 @@ def test_build_cmd_basic(tmp_path):
     cmd = build_pipeline_cmd(("VZW", "Feb2026"), tmp_path, python_exe="py")
     assert cmd[:2] == ["py", "scripts/run_pipeline.py"]
     assert "data=nora" in cmd
-    assert "data.name=VZW__Feb2026" in cmd          # D-DRAFT-6 override
+    assert "data.name=VZW/Feb2026" in cmd          # D-DRAFT-6 override
     assert f"db_root={tmp_path.resolve()}" in cmd    # absolute, cwd-independent
     assert "enrich=nora" in cmd and "rerank=nora" in cmd
 
@@ -97,7 +97,7 @@ def test_build_cmd_no_run_name_when_unset(tmp_path):
 # ── _parse_cell_list ──────────────────────────────────────────────
 
 def test_parse_cell_list_ok():
-    assert _parse_cell_list("VZW__Feb2026, TMO__Jan2026") == [
+    assert _parse_cell_list("VZW/Feb2026, TMO/Jan2026") == [
         ("VZW", "Feb2026"), ("TMO", "Jan2026"),
     ]
 
@@ -110,19 +110,19 @@ def test_parse_cell_list_rejects_bad_name():
 # ── run_cells (dry-run + selection) ───────────────────────────────
 
 def test_run_cells_dry_run_all(tmp_path, capsys):
-    _make_cell(tmp_path, "VZW__Feb2026")
-    _make_cell(tmp_path, "TMO__Jan2026")
+    _make_cell(tmp_path, "VZW/Feb2026")
+    _make_cell(tmp_path, "TMO/Jan2026")
     results = run_cells(tmp_path, tmp_path, dry_run=True)
     assert set(results) == {("VZW", "Feb2026"), ("TMO", "Jan2026")}
     assert all(rc == 0 for rc in results.values())
     out = capsys.readouterr().out
-    assert "data.name=VZW__Feb2026" in out          # command printed
-    assert "data.name=TMO__Jan2026" in out
+    assert "data.name=VZW/Feb2026" in out          # command printed
+    assert "data.name=TMO/Jan2026" in out
 
 
 def test_run_cells_only_subset(tmp_path):
-    _make_cell(tmp_path, "VZW__Feb2026")
-    _make_cell(tmp_path, "TMO__Jan2026")
+    _make_cell(tmp_path, "VZW/Feb2026")
+    _make_cell(tmp_path, "TMO/Jan2026")
     results = run_cells(
         tmp_path, tmp_path, only=[("VZW", "Feb2026")], dry_run=True)
     assert set(results) == {("VZW", "Feb2026")}     # TMO excluded
@@ -136,8 +136,8 @@ def test_run_cells_no_cells(tmp_path, capsys):
 
 def test_run_cells_continue_on_error(tmp_path, monkeypatch):
     _seed_clone(tmp_path)  # clone == db_root here; provide the nora.yaml template
-    _make_cell(tmp_path, "VZW__Feb2026")
-    _make_cell(tmp_path, "TMO__Jan2026")
+    _make_cell(tmp_path, "VZW/Feb2026")
+    _make_cell(tmp_path, "TMO/Jan2026")
 
     class _FakeProc:
         # VZW fails (1), TMO succeeds (0) — verify both attempted
@@ -147,7 +147,7 @@ def test_run_cells_continue_on_error(tmp_path, monkeypatch):
 
     def _fake_run(cmd, cwd=None, env=None):
         calls.append(cmd)
-        rc = 1 if "data.name=VZW__Feb2026" in cmd else 0
+        rc = 1 if "data.name=VZW/Feb2026" in cmd else 0
         return _FakeProc(rc)
 
     monkeypatch.setattr("sandbox.sira_multi.subprocess.run", _fake_run)
@@ -171,9 +171,9 @@ def test_ensure_cell_data_config_external_root(tmp_path):
     db_root.mkdir()
     root = cell_config_root(db_root)
 
-    out = ensure_cell_data_config(clone, "GP__Feb2026", config_root=root)
-    assert out == root / "data" / "GP__Feb2026.yaml"
-    assert "name: GP__Feb2026" in out.read_text()
+    out = ensure_cell_data_config(clone, "GP/Feb2026", config_root=root)
+    assert out == root / "data" / "GP/Feb2026.yaml"
+    assert "name: GP/Feb2026" in out.read_text()
     # the clone's config dir gained nothing
     assert list(cfg.iterdir()) == [cfg / "nora.yaml"]
 
@@ -198,8 +198,8 @@ def test_run_cells_passes_extra_config_dir_env(tmp_path, monkeypatch):
     cfg.mkdir(parents=True)
     (cfg / "nora.yaml").write_text("name: nora\n")
     db_root = tmp_path / "db"
-    (db_root / "GP__Feb2026" / "raw").mkdir(parents=True)
-    (db_root / "GP__Feb2026" / "raw" / "metadata.json").write_text("{}")
+    (db_root / "GP/Feb2026" / "raw").mkdir(parents=True)
+    (db_root / "GP/Feb2026" / "raw" / "metadata.json").write_text("{}")
 
     seen = {}
 
@@ -217,8 +217,8 @@ def test_run_cells_passes_extra_config_dir_env(tmp_path, monkeypatch):
     expected = str(cell_config_root(db_root).resolve())
     assert seen["env"]["SIRA_EXTRA_CONFIG_DIR"] == expected
     # and the cell YAML was generated externally, not in the clone
-    assert (cell_config_root(db_root) / "data" / "GP__Feb2026.yaml").is_file()
-    assert not (cfg / "GP__Feb2026.yaml").exists()
+    assert (cell_config_root(db_root) / "data" / "GP/Feb2026.yaml").is_file()
+    assert not (cfg / "GP/Feb2026.yaml").exists()
 
 
 # ── verify_cells / --verify mode ──────────────────────────────────
@@ -258,17 +258,17 @@ def _make_verified_cell(db_root: Path, dirname: str, run: str = "r1") -> Path:
 
 
 def test_verify_cells_all_pass(tmp_path, capsys):
-    _make_verified_cell(tmp_path, "VZW__Feb2026")
-    _make_verified_cell(tmp_path, "TMO__Jan2026")
+    _make_verified_cell(tmp_path, "VZW/Feb2026")
+    _make_verified_cell(tmp_path, "TMO/Jan2026")
     assert verify_cells(tmp_path, "r1") == 0
     out = capsys.readouterr().out
-    assert "TMO__Jan2026/runs" in out and "VZW__Feb2026/runs" in out
+    assert "TMO/Jan2026/runs" in out and "VZW/Feb2026/runs" in out
     assert "verify summary: 2 cell(s) — 2 PASS" in out
 
 
 def test_verify_cells_fail_propagates(tmp_path, capsys):
-    _make_verified_cell(tmp_path, "VZW__Feb2026")
-    ds = _make_verified_cell(tmp_path, "TMO__Jan2026")
+    _make_verified_cell(tmp_path, "VZW/Feb2026")
+    ds = _make_verified_cell(tmp_path, "TMO/Jan2026")
     with open(ds / "runs" / "doc-enrich" / "r1" / "trace.kept.jsonl",
               "a", encoding="utf-8") as f:
         f.write('{"doc_id": "torn')
@@ -277,26 +277,26 @@ def test_verify_cells_fail_propagates(tmp_path, capsys):
 
 
 def test_verify_cells_only_intersects_and_warns_missing(tmp_path, capsys):
-    _make_verified_cell(tmp_path, "VZW__Feb2026")
-    _make_verified_cell(tmp_path, "TMO__Jan2026")
+    _make_verified_cell(tmp_path, "VZW/Feb2026")
+    _make_verified_cell(tmp_path, "TMO/Jan2026")
     rc = verify_cells(tmp_path, "r1",
                       only=[("VZW", "Feb2026"), ("ATT", "Mar2026")])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "cell not found" in out and "ATT__Mar2026" in out
-    assert "TMO__Jan2026/runs" not in out
+    assert "cell not found" in out and "ATT/Mar2026" in out
+    assert "TMO/Jan2026/runs" not in out
     assert "verify summary: 1 cell(s) — 1 PASS" in out
 
 
 def test_verify_cells_unknown_run_name_all_skipped(tmp_path, capsys):
-    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    _make_verified_cell(tmp_path, "VZW/Feb2026")
     assert verify_cells(tmp_path, "nope") == 1
     out = capsys.readouterr().out
     assert "skipping" in out and "every cell was skipped" in out
 
 
 def test_verify_cells_non_cell_dirs_invisible(tmp_path, capsys):
-    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    _make_verified_cell(tmp_path, "VZW/Feb2026")
     # corpus but no metadata.json + non-cell name → not a cell
     legacy = tmp_path / "legacy-dataset" / "raw"
     legacy.mkdir(parents=True)
@@ -313,7 +313,7 @@ def test_verify_cells_no_cells(tmp_path, capsys):
 
 
 def test_main_verify_mode_no_clone_needed(tmp_path, capsys):
-    _make_verified_cell(tmp_path, "VZW__Feb2026")
+    _make_verified_cell(tmp_path, "VZW/Feb2026")
     rc = multi_main(["--db-root", str(tmp_path), "--verify",
                      "--run-name", "r1"])
     assert rc == 0
@@ -326,7 +326,7 @@ def test_main_verify_requires_run_name(tmp_path):
 
 
 def test_main_verify_strict_fails_on_warn(tmp_path):
-    ds = _make_verified_cell(tmp_path, "VZW__Feb2026")
+    ds = _make_verified_cell(tmp_path, "VZW/Feb2026")
     (ds / "runs" / "doc-enrich" / "r1" / "batches.jsonl").write_text(
         _batch_row(status="parse_error") + "\n", encoding="utf-8")
     argv = ["--db-root", str(tmp_path), "--verify", "--run-name", "r1"]
@@ -342,7 +342,7 @@ def test_main_coarse_chunk_flags_export_env(tmp_path, monkeypatch):
     monkeypatch.setenv("NORA_SIRA_BATCH_ENRICH_SECTION_CHUNKS", "")
     _seed_clone(tmp_path)
     (tmp_path / "scripts" / "run_pipeline.py").write_text("")
-    _make_cell(tmp_path, "VZW__Feb2026")
+    _make_cell(tmp_path, "VZW/Feb2026")
     rc = multi_main(["--db-root", str(tmp_path),
                      "--sira-clone", str(tmp_path), "--dry-run",
                      "--enrich-doc-chunks", "--enrich-section-chunks"])

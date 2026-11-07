@@ -91,7 +91,7 @@ def _post(client, q, top_k=10):
 def test_cross_mno_routes_to_multi_cell_with_provenance(client):
     body = _post(client, "compare vzw and tmo VoWiFi")
     assert body["mode"] == "multi-cell"
-    assert body["resolved_cells"] == ["TMO__Jan2026", "VZW__Feb2026"]
+    assert body["resolved_cells"] == ["TMO/Jan2026", "VZW/Feb2026"]
     # ranked by rerank score (t1=95, v1=40, t2=30, v2=20)
     assert [r["req_id"] for r in body["results"]] == \
         ["req:t1", "req:v1", "req:t2", "req:v2"]
@@ -102,13 +102,13 @@ def test_cross_mno_routes_to_multi_cell_with_provenance(client):
 
 def test_mno_scoped_query_hits_one_cell(client):
     body = _post(client, "what does tmobile support")
-    assert body["resolved_cells"] == ["TMO__Jan2026"]
+    assert body["resolved_cells"] == ["TMO/Jan2026"]
     assert {r["mno"] for r in body["results"]} == {"TMO"}
 
 
 def test_no_mno_named_expands_to_all_cells(client):
     body = _post(client, "what 5G bands are supported")
-    assert set(body["resolved_cells"]) == {"TMO__Jan2026", "VZW__Feb2026"}
+    assert set(body["resolved_cells"]) == {"TMO/Jan2026", "VZW/Feb2026"}
 
 
 def test_unresolved_scope_surfaced(client):
@@ -116,7 +116,7 @@ def test_unresolved_scope_surfaced(client):
     assert r.status_code == 503
     detail = r.json()["detail"]
     assert ["ATT", "*"] in detail["requested_unresolved"]
-    assert "VZW__Feb2026" in detail["available_cells"]
+    assert "VZW/Feb2026" in detail["available_cells"]
 
 
 def test_release_diff_same_reqid_both_cells(monkeypatch):
@@ -125,7 +125,7 @@ def test_release_diff_same_reqid_both_cells(monkeypatch):
         VZW_F: _cell(VZW_F, [("req:FOO:5.1", "x", "DOCSCORE:80")]),
     })
     body = _post(c, "how did vzw change from Oct 2025 to Feb 2026")
-    assert body["resolved_cells"] == ["VZW__Feb2026", "VZW__Oct2025"]
+    assert body["resolved_cells"] == ["VZW/Feb2026", "VZW/Oct2025"]
     assert len(body["results"]) == 2                       # not deduped
     assert {r["release"] for r in body["results"]} == {"Oct2025", "Feb2026"}
     assert body["results"][0]["release"] == "Feb2026"      # 80 > 70
@@ -142,7 +142,7 @@ def test_healthz_reports_cell_state(client):
     body = client.get("/healthz").json()
     assert body["ok"] is True
     assert body["mode"] == "multi-cell"
-    assert body["cells"] == ["TMO__Jan2026", "VZW__Feb2026"]   # sorted
+    assert body["cells"] == ["TMO/Jan2026", "VZW/Feb2026"]   # sorted
     assert body["corpus_size"] == 4        # 2 + 2 across both cells
     assert body["n_req_rows"] == 4
     assert body["cells_load_error"] is None
@@ -340,17 +340,17 @@ def test_healthz_aggregates_per_cell_doc_enrich(monkeypatch):
     # would set). Otherwise it falsely reads "(none) / 0" even when cells are
     # enriched.
     a = _cell(VZW_F, [("req:v1", "v1", "x")])
-    a.doc_enrich_source = "/db/VZW__Feb2026/runs/doc-enrich/enrich-1/enrichments.kept.jsonl"
+    a.doc_enrich_source = "/db/VZW/Feb2026/runs/doc-enrich/enrich-1/enrichments.kept.jsonl"
     a.doc_enrich_applied_docs = 10
     b = _cell(TMO_J, [("req:t1", "t1", "x")])
-    b.doc_enrich_source = "/db/TMO__Jan2026/runs/doc-enrich/enrich-2/enrichments.kept.jsonl"
+    b.doc_enrich_source = "/db/TMO/Jan2026/runs/doc-enrich/enrich-2/enrichments.kept.jsonl"
     b.doc_enrich_applied_docs = 7
     client = _setup(monkeypatch, {VZW_F: a, TMO_J: b})
 
     body = client.get("/healthz").json()
     assert body["doc_enrich_applied_docs"] == 17        # summed across cells
-    assert set(body["doc_enrich_source"]) == {"TMO__Jan2026", "VZW__Feb2026"}
-    assert "enrich-1" in body["doc_enrich_source"]["VZW__Feb2026"]
+    assert set(body["doc_enrich_source"]) == {"TMO/Jan2026", "VZW/Feb2026"}
+    assert "enrich-1" in body["doc_enrich_source"]["VZW/Feb2026"]
 
 
 def test_load_prompts_from_run_dir(tmp_path, monkeypatch):
@@ -360,7 +360,7 @@ def test_load_prompts_from_run_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_USE_LATEST", True)
     monkeypatch.setattr(svc, "_QUERY_ENRICH_RUN", "")
     monkeypatch.setattr(svc, "_RERANK_RUN", "")
-    base = tmp_path / "VZW__Feb2026"
+    base = tmp_path / "VZW/Feb2026"
     (base / "runs" / "query-enrich" / "r1").mkdir(parents=True)
     (base / "runs" / "query-enrich" / "r1" / "query_prompt.txt").write_text("QP", encoding="utf-8")
     (base / "runs" / "rerank" / "r1").mkdir(parents=True)

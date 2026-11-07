@@ -19,7 +19,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
 
-def _seed_cell(db_root: Path, name: str = "VZW__Feb2026") -> Path:
+def _seed_cell(db_root: Path, name: str = "VZW/Feb2026") -> Path:
     """A minimal cell laid out the way enumerate_cells + the inspector expect."""
     cell = db_root / name
     (cell / "raw").mkdir(parents=True, exist_ok=True)
@@ -69,7 +69,7 @@ def test_inspect_cell_prints_both_sources(tmp_path, capsys):
     found = inspect_cell(cell, "A-1", run=None, show_text=False, show_trace=False)
     out = capsys.readouterr().out
     assert found
-    assert "cell: VZW__Feb2026" in out and "NR SA Bands" in out
+    assert "cell: VZW/Feb2026" in out and "NR SA Bands" in out
     assert "best.jsonl phrases (2)" in out          # 5G, n78
     assert "enrich-1" in out and "standalone" in out  # latest run's phrases
 
@@ -80,12 +80,12 @@ def test_inspect_cell_missing_req_returns_false(tmp_path):
 
 
 def test_main_found_across_cells(tmp_path, capsys):
-    _seed_cell(tmp_path, "VZW__Feb2026")
-    _seed_cell(tmp_path, "ATT__Nov2025")
+    _seed_cell(tmp_path, "VZW/Feb2026")
+    _seed_cell(tmp_path, "ATT/Nov2025")
     rc = main(["A-1", "--db-root", str(tmp_path)])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "VZW__Feb2026" in out and "ATT__Nov2025" in out   # searched both cells
+    assert "VZW/Feb2026" in out and "ATT/Nov2025" in out   # searched both cells
 
 
 def test_main_not_found_returns_1(tmp_path):
@@ -102,7 +102,7 @@ def test_main_no_db_root_errors(tmp_path):
 from sandbox.sira_enrich_inspect import list_failed_cell, load_corpus_plans
 
 
-def _seed_failed_cell(db_root: Path, name: str = "VZW__Feb2026") -> Path:
+def _seed_failed_cell(db_root: Path, name: str = "VZW/Feb2026") -> Path:
     """A cell whose run has failed rows across two statuses / two plans."""
     cell = _seed_cell(db_root, name)
     _write_jsonl(cell / "raw" / "corpus.jsonl", [
@@ -171,13 +171,13 @@ def test_list_failed_counts_but_hides_skipped_rows(tmp_path, capsys):
 
 
 def test_main_failed_sweeps_cells_with_banner(tmp_path, capsys):
-    _seed_failed_cell(tmp_path, "VZW__Feb2026")
-    _seed_cell(tmp_path, "TMO__Jan2026")
+    _seed_failed_cell(tmp_path, "VZW/Feb2026")
+    _seed_cell(tmp_path, "TMO/Jan2026")
     rc = main(["--failed", "--db-root", str(tmp_path), "--run", "enrich-1"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "local triage only, redact before sharing" in out
-    assert "cell: TMO__Jan2026" in out and "cell: VZW__Feb2026" in out
+    assert "cell: TMO/Jan2026" in out and "cell: VZW/Feb2026" in out
     assert "total failed rows: 4" in out
 
 
@@ -195,7 +195,7 @@ class TestCompareMode:
     @staticmethod
     def _mk_cell(tmp_path, runs: dict):
         import json as _json
-        cell = tmp_path / "mnoa__Apr2098"
+        cell = tmp_path / "mnoa/Apr2098"
         for name, kept in runs.items():
             d = cell / "runs" / "doc-enrich" / name
             d.mkdir(parents=True)

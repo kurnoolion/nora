@@ -852,7 +852,7 @@ def _batch_row(**kw) -> str:
 
 def _seed_verified_run(tmp_path, run="r1"):
     """Healthy 3-row cell: 2 req rows + 1 coarse doc row, all kept."""
-    ds = tmp_path / "MNOA__Feb2026"
+    ds = tmp_path / "MNOA/Feb2026"
     rd = ds / "runs" / "doc-enrich" / run
     _write_corpus(ds / "raw" / "corpus.jsonl", [
         {"_id": "R1", "title": "t", "text": "one"},

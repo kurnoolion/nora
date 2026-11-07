@@ -70,8 +70,8 @@ def test_release_re_rejects_non_mmmyyyy(bad):
 # ── _cell_dirname — source-case-preserved naming ──────────────────
 
 def test_cell_dirname_double_underscore_source_case():
-    assert _cell_dirname(("VZW", "Feb2026")) == "VZW__Feb2026"
-    assert _cell_dirname(("TMO", "Jan2026")) == "TMO__Jan2026"
+    assert _cell_dirname(("VZW", "Feb2026")) == "VZW/Feb2026"
+    assert _cell_dirname(("TMO", "Jan2026")) == "TMO/Jan2026"
 
 
 # ── _partition_trees_by_cell ──────────────────────────────────────
@@ -134,10 +134,10 @@ def test_emit_multi_cell_layout_and_partition(tmp_path):
         trees, tmp_path, section_max_depth=2, wipe_index=False, wipe_all=False,
     )
     # two cells, source-case-preserved names
-    assert sorted(names) == ["TMO__Jan2026", "VZW__Feb2026"]
+    assert sorted(names) == ["TMO/Jan2026", "VZW/Feb2026"]
 
-    vzw = tmp_path / "VZW__Feb2026" / "raw"
-    tmo = tmp_path / "TMO__Jan2026" / "raw"
+    vzw = tmp_path / "VZW/Feb2026" / "raw"
+    tmo = tmp_path / "TMO/Jan2026" / "raw"
     # each cell has the four files; queries/qrels carry a single dummy
     # index-build row (keeps SIRA's bm25 eval+pick-best alive so
     # index/best is produced) targeting a real corpus id.
@@ -166,8 +166,8 @@ def test_emit_multi_cell_metadata_name_is_cell_dir(tmp_path):
     trees = [_tree_with_req("VZW", "Feb2026", "A", "req:A:1")]
     _emit_multi_cell(trees, tmp_path, section_max_depth=2,
                      wipe_index=False, wipe_all=False)
-    meta = json.loads((tmp_path / "VZW__Feb2026" / "raw" / "metadata.json").read_text())
-    assert meta["name"] == "VZW__Feb2026"
+    meta = json.loads((tmp_path / "VZW/Feb2026" / "raw" / "metadata.json").read_text())
+    assert meta["name"] == "VZW/Feb2026"
 
 
 def test_emit_multi_cell_same_reqid_isolated_across_cells(tmp_path):
@@ -181,9 +181,9 @@ def test_emit_multi_cell_same_reqid_isolated_across_cells(tmp_path):
     _emit_multi_cell(trees, tmp_path, section_max_depth=2,
                      wipe_index=False, wipe_all=False)
     oct_ids = {r["_id"] for r in _read_jsonl(
-        tmp_path / "VZW__Oct2025" / "raw" / "corpus.jsonl")}
+        tmp_path / "VZW/Oct2025" / "raw" / "corpus.jsonl")}
     feb_ids = {r["_id"] for r in _read_jsonl(
-        tmp_path / "VZW__Feb2026" / "raw" / "corpus.jsonl")}
+        tmp_path / "VZW/Feb2026" / "raw" / "corpus.jsonl")}
     # same req_id present in BOTH cells, independently — not deduped away
     assert "req:FOO:5.1" in oct_ids
     assert "req:FOO:5.1" in feb_ids
@@ -443,13 +443,14 @@ def test_emit_corpus_backcompat_no_flag_keeps_reqid_rows(tmp_path):
 # ── --only cell filter ────────────────────────────────────────────
 
 def test_parse_only_splits_mno_release_pairs():
-    assert _parse_only("MNOC__Mar2026, MNOA__Feb2026") == [
+    assert _parse_only("MNOC/Mar2026, MNOA/Feb2026") == [
         ("MNOC", "Mar2026"), ("MNOA", "Feb2026")]
 
 
 def test_parse_only_rejects_missing_separator():
-    with pytest.raises(ValueError, match="__"):
-        _parse_only("MNOC/Mar2026")          # slash is not the separator
+    with pytest.raises(ValueError, match="<MNO>/<RELEASE>"):
+        _parse_only("MNOC-Apr2026")          # neither separator
+    assert _parse_only("MNOC__Apr2026") == [("MNOC", "Apr2026")]   # the older spelling still parses
 
 
 def test_filter_trees_by_only_keeps_requested_cells():
@@ -533,9 +534,9 @@ def test_print_noid_off_by_default(tmp_path, capsys):
 
 def test_multi_cell_emits_source_json(tmp_path):
     from sandbox.adapter.nora_to_beir import _write_source_json
-    _write_source_json(tmp_path, tmp_path / "env", ["MNOA__Feb2026"])
+    _write_source_json(tmp_path, tmp_path / "env", ["MNOA/Feb2026"])
     src = json.loads((tmp_path / "SOURCE.json").read_text())
-    assert src["cells_last_emitted"] == ["MNOA__Feb2026"]
+    assert src["cells_last_emitted"] == ["MNOA/Feb2026"]
     assert src["env_dir"].endswith("/env")
     assert "generated_at" in src and "repo_git_sha" in src
 

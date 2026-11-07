@@ -152,13 +152,36 @@ def now_iso() -> str:
 
 
 def unit_name(mno: str, release: str = "") -> str:
-    """Cells / Trees units are ``<mno>__<release>``; History units ``<mno>``."""
-    return f"{mno}__{release}" if release else mno
+    """Cells / Trees units are ``<mno>/<release>``; History units ``<mno>``.
+    (``<mno>__<release>`` before 2026-11-06; ``publish migrate-units``
+    rewrites a registry's rows.)"""
+    return f"{mno}/{release}" if release else mno
 
 
 def split_unit(unit: str) -> tuple[str, str]:
-    mno, _, rel = unit.partition("__")
+    """``(mno, release)`` of a Cells/Trees unit; ``(mno, "")`` for History.
+    Reads both spellings."""
+    if "/" in unit:
+        mno, _, rel = unit.partition("/")
+    else:
+        mno, _, rel = unit.partition("__")
     return mno, rel
+
+
+_UNIT_TABLES = ("store_version", "release_set_member", "active")
+
+
+def migrate_unit_names(con: sqlite3.Connection) -> dict[str, int]:
+    """Rewrite ``<mno>__<release>`` units to ``<mno>/<release>`` in every
+    table that names units. Idempotent; returns rows changed per table.
+    Run inside ``begin_write`` by ``publish migrate-units``."""
+    out: dict[str, int] = {}
+    for table in _UNIT_TABLES:
+        cur = con.execute(
+            f"UPDATE {table} SET unit = replace(unit, '__', '/') "
+            f"WHERE store IN ('cells', 'trees') AND instr(unit, '__') > 0")
+        out[table] = cur.rowcount
+    return out
 
 
 def history_fingerprint(trees_fps: dict[str, str]) -> str:

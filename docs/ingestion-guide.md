@@ -41,7 +41,7 @@ that refusal, talk to the owner it names rather than working around it.
   share as `/srv/nora/requirements/<MNO>/<MMMYYYY>/` (Windows-side
   members drop them there directly). One directory per MNO × release
   — the directory name IS the cell name the rest of the cycle uses,
-  spelled `<MNO>__<MMMYYYY>` (e.g. a new release for an existing MNO is
+  spelled `<MNO>/<MMMYYYY>` (e.g. a new release for an existing MNO is
   one new directory beside the old ones).
 - Ingest images rebaked for the code you intend to run. The images
   carry the lane code; the architect rebakes them when code changed.
@@ -53,7 +53,7 @@ Layout you will see on the build machine (`NORA_ROOT=/srv/nora`):
 /srv/nora/
 ├── requirements/<MNO>/<MMMYYYY>/   # source docs (NAS share, read here)
 ├── builds/nora/<build-id>/         # env dir: out/, prompts/, reports/, CYCLE.json
-│   └── out/sira/<MNO>__<MMMYYYY>/  #   the SIRA cells, the build's last stage dir
+│   └── out/sira/<MNO>/<MMMYYYY>/  #   the SIRA cells, the build's last stage dir
 ├── builds/ACTIVE                   # the baton: name of the cycle in flight
 ├── serve/<label>/                  # flat labels: the converter's input (also on the serving host)
 ├── serve-<stack>/                  # serving host only: registry.db + cells/ trees/ history/ (what a stack serves)
@@ -67,7 +67,7 @@ All commands below run from the checkout's `docker/` directory.
 | # | Phase | Command | Gate | "Done" looks like |
 |---|---|---|---|---|
 | 0 | open the cycle | `./cycle.sh start <build-id> --profiles <prev-build-id>` | — | CYC start block; `next: parse` |
-| 1 | parse | `./cycle.sh parse` (or `--cell <MNO>__<MMMYYYY>` for one) | — | `status` shows `parse ok`, parse dirs = cells (or the one cell) |
+| 1 | parse | `./cycle.sh parse` (or `--cell <MNO>/<MMMYYYY>` for one) | — | `status` shows `parse ok`, parse dirs = cells (or the one cell) |
 | 2 | derive prompts | Cline playbook (new MNOs only) | — | prompt files committed by the architect |
 | 3 | publish prompts | `./cycle.sh prompts` | **yes** | CYC prompts block, `missing=0 misshaped=0` |
 | 4 | taxonomy | `./cycle.sh taxonomy` (or `--cell …`; repeat until `failed=0`) | — | `status` shows `taxonomy ok`, ledgers `failed: 0` |
@@ -188,8 +188,8 @@ by document: an interrupted or partially failed run is continued by
 Targeted forms:
 
 ```bash
-./cycle.sh enrich --cell <MNO>__<MMMYYYY>            # one cell (e.g. inspect the smallest first)
-./cycle.sh enrich --cell <MNO>__<MMMYYYY> --retry-failed   # evict genuine failures, solo LLM calls, re-verify
+./cycle.sh enrich --cell <MNO>/<MMMYYYY>            # one cell (e.g. inspect the smallest first)
+./cycle.sh enrich --cell <MNO>/<MMMYYYY> --retry-failed   # evict genuine failures, solo LLM calls, re-verify
 ```
 
 After a hard interruption (host reboot, killed container) the runbook's

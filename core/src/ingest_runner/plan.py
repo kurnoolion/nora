@@ -64,7 +64,8 @@ class Ctx:
 
     @property
     def cell(self) -> str:
-        return f"{self.ingest['mno']}__{self.ingest['release']}"
+        """The cell's name, `<mno>/<release>` (one spelling everywhere)."""
+        return f"{self.ingest['mno']}/{self.ingest['release']}"
 
     def log(self, line: str) -> None:
         self.db.append_log(self.job_id, line)
@@ -262,7 +263,7 @@ def heal_best_link(c: Ctx) -> None:
     the apply block but still re-points the link; field-found on the
     first retry). `sira_incremental promote` writes the missing file;
     run it when the link dangles, before the converter trips CNV-011."""
-    best = c.cfg.sira_build_dir(c.build) / c.cell / "enrichments" / "doc" / "best.jsonl"
+    best = c.cfg.sira_build_dir(c.build) / c.ingest["mno"] / c.ingest["release"] / "enrichments" / "doc" / "best.jsonl"
     if not os.path.islink(best) or os.path.exists(best):
         return
     run = _run_name(c)

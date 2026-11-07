@@ -167,19 +167,21 @@ def _partition_trees_by_cell(
 
 
 def _parse_only(spec: str) -> list[tuple[str, str]]:
-    """Parse a --only spec ('<MNO>__<REL>,<MNO>__<REL>') into (mno, release)
-    pairs — the same cell-name format as sira_multi's --only. Whitespace-tolerant;
-    matched case-insensitively against each tree later."""
+    """Parse a --only spec ('<MNO>/<REL>,<MNO>/<REL>'; the older
+    '<MNO>__<REL>' is accepted) into (mno, release) pairs — the same
+    cell-name format as sira_multi's --only. Whitespace-tolerant; matched
+    case-insensitively against each tree later."""
     out: list[tuple[str, str]] = []
     for tok in spec.split(","):
         tok = tok.strip()
         if not tok:
             continue
-        if "__" not in tok:
+        sep = "/" if "/" in tok else "__"
+        if sep not in tok:
             raise ValueError(
-                f"--only entry {tok!r} must be '<MNO>__<RELEASE>' "
-                f"(e.g. 'MNOA__Mar2026')")
-        mno, rel = tok.split("__", 1)
+                f"--only entry {tok!r} must be '<MNO>/<RELEASE>' "
+                f"(e.g. 'MNOA/Mar2026')")
+        mno, rel = tok.split(sep, 1)
         out.append((mno.strip(), rel.strip()))
     return out
 

@@ -45,17 +45,17 @@ def test_scan_parse_counts_inline_vs_missing(tmp_path):
 
 def test_scan_corpus_per_cell(tmp_path):
     db = tmp_path / "db"
-    _write(db / "VZW__Feb2026" / "raw" / "corpus.jsonl", _corpus([
+    _write(db / "VZW/Feb2026" / "raw" / "corpus.jsonl", _corpus([
         {"_id": "A-1", "text": "intro\n| Band | BW |\n| n78 | 100 |"},
         {"_id": "A-2", "text": "no table here"},
     ]))
-    _write(db / "ATT__Nov2025" / "raw" / "corpus.jsonl", _corpus([
+    _write(db / "ATT/Nov2025" / "raw" / "corpus.jsonl", _corpus([
         {"_id": "B-1", "text": "| x | y |"},
     ]))
     res = scan_corpus(db)
     assert res["rows"] == 3 and res["with_tables"] == 2
-    assert res["per"]["VZW__Feb2026"] == {"rows": 2, "with_tables": 1}
-    assert res["per"]["ATT__Nov2025"] == {"rows": 1, "with_tables": 1}
+    assert res["per"]["VZW/Feb2026"] == {"rows": 2, "with_tables": 1}
+    assert res["per"]["ATT/Nov2025"] == {"rows": 1, "with_tables": 1}
 
 
 def test_main_fails_on_missing_inline(tmp_path, capsys):
@@ -74,7 +74,7 @@ def test_main_ok_and_crosscheck(tmp_path, capsys):
         {"text": "intro\n| Band | BW |\n| n78 | 100 |", "tables": [{"headers": ["Band"]}]},
     ]))
     db = tmp_path / "db"
-    _write(db / "VZW__Feb2026" / "raw" / "corpus.jsonl", _corpus([
+    _write(db / "VZW/Feb2026" / "raw" / "corpus.jsonl", _corpus([
         {"_id": "A-1", "text": "intro\n| Band | BW |\n| n78 | 100 |"},
     ]))
     rc = main(["--parse", str(parse), "--db-root", str(db)])
@@ -89,7 +89,7 @@ def test_main_crosscheck_fails_when_corpus_has_no_tables(tmp_path, capsys):
         {"text": "intro\n| Band |\n| n78 |", "tables": [{"headers": ["Band"]}]},
     ]))
     db = tmp_path / "db"
-    _write(db / "VZW__Feb2026" / "raw" / "corpus.jsonl", _corpus([
+    _write(db / "VZW/Feb2026" / "raw" / "corpus.jsonl", _corpus([
         {"_id": "A-1", "text": "tables dropped — old corpus"},
     ]))
     rc = main(["--parse", str(parse), "--db-root", str(db)])

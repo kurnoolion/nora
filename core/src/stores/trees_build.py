@@ -62,11 +62,12 @@ def build_trees(env_dir: "str | Path", out_dir: "str | Path",
         raise PipelineError("TRS-E001", {"path": str(parse_dir(env_dir))})
     if cells:
         selected = []
+        from core.src.stores.cells import parse_cell_dirname
         for name in cells:
-            mno, _, rel = name.partition("__")
-            if (mno, rel) not in available:
+            ck = parse_cell_dirname(name)
+            if ck is None or ck not in available:
                 raise PipelineError("TRS-E003", {"cell": name})
-            selected.append((mno, rel))
+            selected.append(ck)
     else:
         selected = available
     for mno, rel in selected:          # refuse before writing anything
@@ -78,7 +79,7 @@ def build_trees(env_dir: "str | Path", out_dir: "str | Path",
     counts = {"cells": 0, "docs": 0, "nodes": 0, "per_cell": {}}
     for mno, rel in selected:
         c = _build_cell(files, env_dir, out_dir, mno, rel)
-        counts["per_cell"][f"{mno}__{rel}"] = c
+        counts["per_cell"][f"{mno}/{rel}"] = c
         counts["cells"] += 1
         counts["docs"] += c["n_docs"]
         counts["nodes"] += c["n_nodes"]
@@ -86,7 +87,7 @@ def build_trees(env_dir: "str | Path", out_dir: "str | Path",
 
 
 def _read_cell(env_dir: Path, mno: str, rel: str) -> tuple[list[Path], list]:
-    cell = f"{mno}__{rel}"
+    cell = f"{mno}/{rel}"
     paths = sorted((parse_dir(env_dir) / mno / rel).glob("*_tree.json"))
     docs = []
     for p in paths:
@@ -125,7 +126,7 @@ def _build_cell(files: FileTreeStore, env_dir: Path, out_dir: Path,
 
 def _verify(a: FileTreeStore, b: SqliteTreeStore, mno: str, rel: str) -> None:
     """Both backends must return the same content for the cell."""
-    cell = f"{mno}__{rel}"
+    cell = f"{mno}/{rel}"
 
     def fail(what: str, n: int = 1):
         raise PipelineError("TRS-E005", {"cell": cell, "what": what, "count": str(n)})

@@ -59,6 +59,7 @@ from urllib.parse import quote
 
 from core.src.models.fingerprint import FINGERPRINT_VERSION
 from core.src.pipeline.error_codes import PipelineError
+from core.src.stores.cells import parse_cell_dirname
 from core.src.stores.registry import (
     FLIP_MODES,
     GATE_KINDS,
@@ -69,6 +70,7 @@ from core.src.stores.registry import (
     RegistryError,
     StoreVersion,
     history_fingerprint,
+    migrate_unit_names,
     now_iso,
     registry_path,
     split_unit,
@@ -443,7 +445,7 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
         cells = scan_units("cells", cells_src) if cells_src else []
         trees = scan_units("trees", trees_src) if trees_src else []
         if cells_filter:
-            wanted = set(cells_filter)
+            wanted = {unit_name(*ck) if (ck := parse_cell_dirname(c)) else c for c in cells_filter}
             cells = [c for c in cells if c.unit in wanted]
             trees = [t for t in trees if t.unit in wanted]
         ex = set(exclude or ())
@@ -654,6 +656,31 @@ def _add_root(ap: argparse.ArgumentParser) -> None:
                     help="serving root; the registry is <root>/registry.db")
 
 
+def migrate_units(serve_root: "str | Path", dry_run: bool = False) -> dict:
+    """One-shot: rewrite the registry's unit names to ``<mno>/<release>``
+    (2026-11-06). Counts the rows that still carry the old spelling; with
+    ``dry_run`` nothing is written. Serving keeps working either way (the
+    store parses both spellings); after the rewrite reload the store."""
+    reg = Registry(registry_path(serve_root), read_only=dry_run)
+    if dry_run:
+        con = reg._connect()
+        try:
+            pending = {t: con.execute(
+                f"SELECT count(*) FROM {t} WHERE store IN ('cells','trees') AND instr(unit, '__') > 0"
+            ).fetchone()[0] for t in ("store_version", "release_set_member", "active")}
+        finally:
+            con.close()
+        return {"dry_run": True, "pending": pending}
+    con = reg.begin_write()
+    try:
+        changed = migrate_unit_names(con)
+        reg.commit_write(con)
+    except Exception:
+        reg.rollback_write(con)
+        raise
+    return {"changed": changed, "active_label": reg.active_label()}
+
+
 def main(argv: "list[str] | None" = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m core.src.stores.publish",
                                  description="Publish store versions into a serving root.")
@@ -667,7 +694,7 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--env-dir", default="", help="build Trees from this env dir's parse output")
     p.add_argument("--sira-root", default="", help="build Cells from these flat SIRA cells (needs bm25x)")
     p.add_argument("--enrich-run", default="", help="pinned doc-enrich run for --sira-root")
-    p.add_argument("--cells", default="", help="comma-separated <mno>__<release> filter")
+    p.add_argument("--cells", default="", help="comma-separated <mno>/<release> filter")
     p.add_argument("--exclude", default="",
                    help="comma-separated <mno>__<release> units the set must not carry, "
                         "built or inherited (drops a stray release; History follows)")
@@ -706,6 +733,9 @@ def main(argv: "list[str] | None" = None) -> int:
     c.add_argument("--keep", type=int, required=True, help="release sets (and flips) to keep")
     c.add_argument("--dry-run", action="store_true")
 
+    mu = sub.add_parser("migrate-units", help="rewrite <mno>__<release> units to <mno>/<release> (one-shot, idempotent)")
+    mu.add_argument("--dry-run", action="store_true")
+
     s = sub.add_parser("status", help="registry summary")
     _add_root(s)
     s.add_argument("--label", default="")
@@ -733,6 +763,8 @@ def main(argv: "list[str] | None" = None) -> int:
                            store_url=args.store_url)
         elif args.cmd == "gc":
             out = gc(args.serve_root, args.keep, dry_run=args.dry_run)
+        elif args.cmd == "migrate-units":
+            out = migrate_units(args.serve_root, dry_run=args.dry_run)
         else:
             out = status(args.serve_root, args.label)
     except PipelineError as exc:

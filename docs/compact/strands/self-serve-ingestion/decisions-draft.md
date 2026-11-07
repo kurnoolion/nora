@@ -88,3 +88,23 @@
 
 **Consequences.** New builds hold their SIRA cells; old builds stay where they were (publish inherits served cells from the registry, the seed needs only the nora side). The batch and store containers get a nested mount: `/data/env` is the build and `/data/db` its `out/sira`. The README's layout, Phase 0 and the ingestion guide say so.
 
+### D-DRAFT-10 — 2026-11-06 — One spelling of a cell everywhere: `<MNO>/<release>`
+
+**Context.** A cell was `<MNO>__<release>` as a directory, a registry unit, a store API name, a page parameter and a command-line argument, while every nora stage writes `<MNO>/<release>/`. Two spellings of one thing, and the SIRA directory had just moved inside the build beside the nested ones.
+
+**Decision.** `<MNO>/<release>` is the cell's name everywhere: `out/sira/<MNO>/<release>/`, registry units `cells/<MNO>/<release>` and `trees/<MNO>/<release>`, healthz and `resolved_cells`, the `/cells/{cell}` routes (path parameter), the review and ingest pages, `cycle.sh --cell`, the lane's `--only`, the converter's and publish's `--cells`, SIRA's `data.name`. The old spelling is still parsed on input (registries, links and reports from before), and `publish migrate-units` rewrites a registry's rows once. A flat `<MNO>__<release>/` directory under a root is still found and read.
+
+**Why.** One name to read and type. The cost was a dozen files, a one-shot migration of the registry rows on each stack, and one line in the batched-enrichment patch (the MNO for the per-MNO prompt now splits the name on the slash). SIRA joins the root and the name as a path, so the nested directory needed no change in the vendored code.
+
+**Consequences.** Both stacks run `migrate-units` once after the images are rebuilt; until then the store serves the old rows unchanged. Old golden-run reports keep the old strings in their records. The converter's and registry's file names (hyphenated) are unchanged.
+
+### D-DRAFT-11 — 2026-11-06 — One wiring variable names the build: `NORA_BUILD_DIR`
+
+**Context.** The wiring env named the build twice, `NORA_ENV_DIR` for the env dir and `STORE_ROOT` for the SIRA root, and a host env missing one of them failed at the next verb.
+
+**Decision.** `NORA_BUILD_DIR=<build>` is the one line; the compose file mounts it at `/data/env` and its `out/sira` at `/data/db`, with `NORA_ENV_DIR` and `STORE_ROOT` kept only as overrides for an older layout (a dev stack mounting a flat label, for example). `cycle.sh start` writes the one line and rewrites the older ones when an env still carries them; `need_wiring` refuses an env whose older line disagrees.
+
+**Why.** With the SIRA cells inside the build there is one directory to name. Nested defaults in the compose file carry the derivation, so the env file holds one fact.
+
+**Consequences.** Hosts replace the two lines with one on their next cycle; the runner config's `cycle_env` no longer names the SIRA root.
+

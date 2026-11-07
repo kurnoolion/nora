@@ -73,12 +73,12 @@ or after `git -C sandbox/sira pull`):
 **Directory concepts** — the three paths every command below uses:
 
     ENV=/path/to/env_dir        # NORA env dir: $ENV/out/parse/<mno>/<rel>/*_tree.json
-    DB=/path/to/db_root         # SIRA db_root: one <MNO>__<MMMYYYY>/ cell dataset each
+    DB=/path/to/db_root         # SIRA db_root: one <MNO>/<MMMYYYY>/ cell dataset each
     CLONE=sandbox/sira          # the SIRA clone (run_pipeline.py under scripts/)
     RUN=enrich-stable           # pinned run name — pick once, reuse forever
 
 `$ENV` comes from NORA's extract + parse stages (per-cell layout, D-096);
-`$DB` cells (e.g. `VZW-OA__Feb2026`) are what the adapter emits and what
+`$DB` cells (e.g. `VZW-OA/Feb2026`) are what the adapter emits and what
 `sira_multi` + the query service consume (D-107 / D-109). Pinning `$RUN`
 is what makes resume, prune, and retry work.
 
@@ -125,7 +125,7 @@ empty or absent.
     python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" --multi-cell
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN" --dry-run
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
-    python -m sandbox.sira_incremental commit --dataset "$DB/<MNO>__<REL>" --run-name "$RUN" --full
+    python -m sandbox.sira_incremental commit --dataset "$DB/<MNO>/<REL>" --run-name "$RUN" --full
 
 One cell is still a cell (D-107) — always use `--multi-cell`. Verify: the
 adapter prints per-cell row/skip counts; run §2.12's checks; then start the
@@ -140,7 +140,7 @@ the baseline commit becomes a loop:
     python -m sandbox.sira_preflight --env-dir "$ENV"
     python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" --multi-cell
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" --run-name "$RUN"
-    for c in "$DB"/*__*/; do
+    for c in "$DB"/*/*/; do
         python -m sandbox.sira_incremental commit --dataset "$c" --run-name "$RUN" --full
     done
 
@@ -154,11 +154,11 @@ must stay untouched.
 
     python -m sandbox.adapter.nora_to_beir \
         --env-dir "$ENV" --output "$DB" --multi-cell \
-        --only <MNO>__<NEWREL> --wipe-stale-index
+        --only <MNO>/<NEWREL> --wipe-stale-index
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
-        --run-name "$RUN" --only <MNO>__<NEWREL>
+        --run-name "$RUN" --only <MNO>/<NEWREL>
     python -m sandbox.sira_incremental commit \
-        --dataset "$DB/<MNO>__<NEWREL>" --run-name "$RUN" --full
+        --dataset "$DB/<MNO>/<NEWREL>" --run-name "$RUN" --full
 
 A new cell's first commit takes `--full` (sets its drift baseline). Verify:
 only the new cell's docs hit the LLM; restart the query service — §3 —
@@ -170,9 +170,9 @@ Same flow as §2.3 — `--only` takes a comma-separated cell list:
 
     python -m sandbox.adapter.nora_to_beir \
         --env-dir "$ENV" --output "$DB" --multi-cell \
-        --only <MNO-C>__<REL1>,<MNO-C>__<REL2> --wipe-stale-index
+        --only <MNO-C>/<REL1>,<MNO-C>/<REL2> --wipe-stale-index
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
-        --run-name "$RUN" --only <MNO-C>__<REL1>,<MNO-C>__<REL2>
+        --run-name "$RUN" --only <MNO-C>/<REL1>,<MNO-C>/<REL2>
     # then commit each new cell with --full, as in §2.3
 
 Verify: restart the query service — §3; `/healthz` `cells` includes the new
@@ -185,11 +185,11 @@ baseline exists for it (no baseline → prune can't diff; use §2.6).
 
     python -m sandbox.adapter.nora_to_beir \
         --env-dir "$ENV" --output "$DB" --multi-cell \
-        --only <MNO>__<REL> --wipe-stale-index
-    python -m sandbox.sira_incremental prune --dataset "$DB/<MNO>__<REL>" --run-name "$RUN"
+        --only <MNO>/<REL> --wipe-stale-index
+    python -m sandbox.sira_incremental prune --dataset "$DB/<MNO>/<REL>" --run-name "$RUN"
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
-        --run-name "$RUN" --only <MNO>__<REL>
-    python -m sandbox.sira_incremental commit --dataset "$DB/<MNO>__<REL>" --run-name "$RUN"
+        --run-name "$RUN" --only <MNO>/<REL>
+    python -m sandbox.sira_incremental commit --dataset "$DB/<MNO>/<REL>" --run-name "$RUN"
 
 Needed because SIRA's resume is doc_id-keyed and would wrongly skip changed
 text. Verify: the enrich log shows only changed/new docs calling the LLM;
@@ -227,19 +227,19 @@ resume". Verify: resume log lines show skipped counts ≈ prior progress.
 ### 2.8 Retry failed docs only
 
 Preconditions: a finished run left rows in `trace.failed.jsonl` (inspect
-`$DB/<MNO>__<REL>/runs/doc-enrich/$RUN/trace.failed.jsonl` first — retry
+`$DB/<MNO>/<REL>/runs/doc-enrich/$RUN/trace.failed.jsonl` first — retry
 genuine errors; `status: all_filtered` rows are NOT worth retrying).
 
     python -m sandbox.sira_incremental retry-failed \
-        --dataset "$DB/<MNO>__<REL>" --run-name "$RUN" --stage doc-enrich
+        --dataset "$DB/<MNO>/<REL>" --run-name "$RUN" --stage doc-enrich
     python -m sandbox.sira_multi --db-root "$DB" --sira-clone "$CLONE" \
-        --run-name "$RUN" --only <MNO>__<REL>
+        --run-name "$RUN" --only <MNO>/<REL>
 
 One-command form via the lane (evict + re-run; add `--heal-torn` too if
 the previous run was killed mid-write — power loss, SIGKILL):
 
     python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
-        --run-name "$RUN" --only <MNO>__<REL> --wipe-stale-index --retry-failed
+        --run-name "$RUN" --only <MNO>/<REL> --wipe-stale-index --retry-failed
 
 Add `--max-reqs 1` to run the retried reqs in single-req mode (one LLM
 call per req, same batched prompt incl. taxonomy block) — a req that
@@ -266,7 +266,7 @@ re-enriches exactly those docs; `trace.failed.jsonl` shrinks.
 
 Preconditions: the cell exists in `$DB`; you no longer want it served.
 
-    rm -rf "$DB/<MNO>__<REL>"
+    rm -rf "$DB/<MNO>/<REL>"
     # restart the query service — §3
     curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 
@@ -304,7 +304,7 @@ adapter's filtering, re-run your last adapter command with the two print
 flags added (follow with a §2.10 index rebuild since it re-wipes):
 
     python -m sandbox.adapter.nora_to_beir --env-dir "$ENV" --output "$DB" \
-        --multi-cell --only <MNO>__<REL> --wipe-stale-index --print-skips --print-noid
+        --multi-cell --only <MNO>/<REL> --wipe-stale-index --print-skips --print-noid
 
     # tables inlined into parse text AND present in the per-cell corpus (D-119):
     python -m sandbox.verify_tables --parse "$ENV/out/parse" --db-root "$DB"
@@ -313,9 +313,9 @@ flags added (follow with a §2.10 index rebuild since it re-wipes):
     python -m sandbox.sira_enrich_inspect <req_id> --db-root "$DB" --text
 
     # corpus row counts per cell / per granularity:
-    wc -l "$DB/<MNO>__<REL>/raw/corpus.jsonl"
-    grep -c '"_id": "doc:'     "$DB/<MNO>__<REL>/raw/corpus.jsonl"
-    grep -c '"_id": "section:' "$DB/<MNO>__<REL>/raw/corpus.jsonl"
+    wc -l "$DB/<MNO>/<REL>/raw/corpus.jsonl"
+    grep -c '"_id": "doc:'     "$DB/<MNO>/<REL>/raw/corpus.jsonl"
+    grep -c '"_id": "section:' "$DB/<MNO>/<REL>/raw/corpus.jsonl"
 
 Skip-count interpretation: the adapter always prints counts of rows
 dropped as **sections** (`is_requirement=False` — the parser's type
@@ -393,7 +393,7 @@ redacted) under each stack's state dir.
 ### `sandbox.sira_lane` — the sira lane in one command
 
     python -m sandbox.sira_lane --env-dir "$ENV" --db-root "$DB" \
-        [--run-name enrich-stable] [--only <MNO>__<REL>,...] \
+        [--run-name enrich-stable] [--only <MNO>/<REL>,...] \
         [--wipe-stale-index | --wipe-all-derived] \
         [--heal-torn] [--retry-failed [--include-all-filtered] [--include-skipped]
                        [--include-refused]] \
@@ -429,7 +429,7 @@ commands below remain valid for surgical use.
 - `--env-dir PATH` (required) — NORA env dir; reads
   `out/parse/**/*_tree.json` recursively.
 - `--output PATH` (required) — in `--multi-cell` mode this is the
-  **db_root**; one dataset lands at `<output>/<MNO>__<REL>/raw/` per cell
+  **db_root**; one dataset lands at `<output>/<MNO>/<REL>/raw/` per cell
   (D-096 layout; composite `(MNO, release, doc_id)` identity D-108).
   Without `--multi-cell` it's a single dataset dir (legacy path, kept by
   D-114).
@@ -437,7 +437,7 @@ commands below remain valid for surgical use.
   `MMMYYYY` or the run **fails loud** (D-109).
 - `--name NAME` — dataset name in `metadata.json` (single-dataset mode
   only; defaults to the `--output` basename; ignored with `--multi-cell`).
-- `--only <MNO>__<REL>[,...]` — emit only these cells (case-insensitive;
+- `--only <MNO>/<REL>[,...]` — emit only these cells (case-insensitive;
   fails loud on a cell with no parsed trees). Without it every cell under
   `$ENV` is re-emitted — and wiped, if a wipe flag is set.
 - `--wipe-stale-index` vs `--wipe-all-derived` — both clear the
@@ -455,7 +455,7 @@ commands below remain valid for surgical use.
 
 ### `sandbox.sira_multi` — run SIRA's pipeline once per cell (D-110)
 
-- `--db-root PATH` (required) — parent of the `<MNO>__<REL>/` cells.
+- `--db-root PATH` (required) — parent of the `<MNO>/<REL>/` cells.
 - `--sira-clone PATH` (required) — the SIRA clone
   (`<clone>/scripts/run_pipeline.py`).
 - `--stages LIST` — default `prepare,bm25,enrich_corpus` (corpus-only;
@@ -472,7 +472,7 @@ commands below remain valid for surgical use.
 
 ### `sandbox.sira_incremental` — content-hash resume helper
 
-All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
+All subcommands take `--dataset <db_root>/<MNO>/<REL>` and
 `--run-name NAME` (both required; run-name must match the ingest's).
 
 - `prune` — pre-enrich: evict changed/removed doc_ids from the resume
@@ -518,7 +518,7 @@ All subcommands take `--dataset <db_root>/<MNO>__<REL>` and
 
 ### Query-service env vars (`core/src/store_service/service.py`)
 
-- `NORA_STORE_ROOT` — the cell db_root: flat `<mno>__<rel>/` dirs, or
+- `NORA_STORE_ROOT` — the cell db_root: flat `<mno>/<rel>/` dirs, or
   `cell-*.db` files with `NORA_STORE_INDEX=cell-db`. Unused when
   `NORA_STORE_REGISTRY` is set.
 - `NORA_STORE_REGISTRY` / `NORA_STORE_RELEASE_SET` — registry mode

@@ -77,13 +77,14 @@ def build_commands(args: argparse.Namespace) -> list[list[str]]:
 def heal_targets(db_root: Path, run_name: str, only: str | None) -> list[Path]:
     """Existing doc-enrich run dirs the pre-lane repairs operate on, one
     per cell under db_root (restricted to --only cells when given)."""
+    from sandbox.sira_cells import cell_dir, cell_dirname, enumerate_cells, parse_cell_dirname
     if not db_root.is_dir():
         return []
-    cells = sorted(d for d in db_root.iterdir() if d.is_dir())
+    cells = enumerate_cells(db_root, require_marker=False)
     if only:
-        wanted = {c.strip() for c in only.split(",") if c.strip()}
-        cells = [d for d in cells if d.name in wanted]
-    run_dirs = [d / "runs" / "doc-enrich" / run_name for d in cells]
+        wanted = {parse_cell_dirname(c.strip()) for c in only.split(",") if c.strip()}
+        cells = [c for c in cells if c in wanted]
+    run_dirs = [cell_dir(db_root, c) / "runs" / "doc-enrich" / run_name for c in cells]
     return [rd for rd in run_dirs if rd.is_dir()]
 
 
@@ -111,7 +112,8 @@ def run_repairs(args: argparse.Namespace) -> None:
     from sandbox.sira_incremental import heal_run_dir, retry_failed_in_run
 
     for rd in targets:
-        cell = rd.parents[2].name
+        _cd = rd.parents[2]   # <db_root>/<mno>/<release> (or an older <mno>__<release>)
+        cell = _cd.name if "__" in _cd.name else f"{_cd.parent.name}/{_cd.name}"
         if args.dry_run:
             verbs = " + ".join(v for v, on in (("heal-torn", args.heal_torn),
                                                ("retry-failed", args.retry_failed)) if on)

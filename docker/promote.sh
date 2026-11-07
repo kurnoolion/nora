@@ -5,7 +5,7 @@
 #   serve/<label>/
 #   ├── MANIFEST.json          # which builds + git sha + timestamp
 #   ├── nora/out/{vectorstore,graph,taxonomy,parse}/  # env_dir-SHAPED: mount as /data/env
-#   └── sira/<MNO>__<MMMYYYY>/...                     # cells: mount as /data/db
+#   └── sira/<MNO>/<MMMYYYY>/...                      # cells: mount as /data/db
 #
 # parse is part of the serve-set: the web app reads out/parse/ trees at
 # SERVE time (Eval Studio ground-truth picker, req-browser) — a label
@@ -78,14 +78,16 @@ if [ -n "$NORA_BUILD" ]; then
 fi
 if [ -n "$SIRA_BUILD" ]; then
   found=0
-  for cell in "$SIRA_BUILD"/*__*/; do
-    [ -d "$cell" ] || continue
-    mkdir -p "$DEST/sira"
-    cp -al "$cell" "$DEST/sira/$(basename "$cell")"
-    echo "promoted sira cell $(basename "$cell")"
+  # cells are <MNO>/<MMMYYYY>/ (since 2026-11-06); a build from before holds <MNO>__<MMMYYYY>/
+  for cell in "$SIRA_BUILD"/*/*/ "$SIRA_BUILD"/*__*/; do
+    [ -d "$cell" ] && [ -f "$cell/raw/metadata.json" ] || continue
+    rel="${cell#"$SIRA_BUILD"/}"; rel="${rel%/}"
+    mkdir -p "$DEST/sira/$(dirname "$rel")"
+    cp -al "$cell" "$DEST/sira/$rel"
+    echo "promoted sira cell $rel"
     found=1
   done
-  (( found )) || { echo "no <MNO>__<MMMYYYY> cells under $SIRA_BUILD" >&2; exit 1; }
+  (( found )) || { echo "no <MNO>/<MMMYYYY> cells under $SIRA_BUILD" >&2; exit 1; }
   [ -f "$SIRA_BUILD/SOURCE.json" ] && cp -al "$SIRA_BUILD/SOURCE.json" "$DEST/sira/SOURCE.json"
   promoted_sira="$(cd "$SIRA_BUILD" && pwd)"
 fi

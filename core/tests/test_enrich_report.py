@@ -122,11 +122,11 @@ SERVICE_CELLS = {"cells": [
     {"mno": "XX", "release": "Feb2026"},   # no overlay -> not queried
 ]}
 SERVICE_ENRICH = {
-    "GP__Feb2026": {"rows": [
+    "GP/Feb2026": {"rows": [
         {"req_id": "R1", "plan": "PlanA", "llm_words": ["retry"]},
         {"req_id": "R2", "plan": "PlanB", "llm_words": ["handover"]},
     ]},
-    "MB__Feb2026": {"rows": []},
+    "MB/Feb2026": {"rows": []},
 }
 
 
@@ -171,7 +171,7 @@ class TestExportEndpoint:
         assert "records: 3 remove" in r.text
         assert "handover  ·  reqs=3  plans=2" in r.text     # plans from latest cells
         # only the LATEST release per overlay-MNO is queried; XX never is
-        assert "/cells/GP__Feb2026/enrichments" in client.service_calls
+        assert "/cells/GP/Feb2026/enrichments" in client.service_calls
         assert not any("Nov2025" in p or "XX" in p for p in client.service_calls)
 
     def test_scorecard_mode(self, client):

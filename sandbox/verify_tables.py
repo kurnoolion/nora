@@ -107,8 +107,12 @@ def scan_corpus(db_root: Path) -> dict:
     table (markdown or HTML). Returns totals plus a per-cell breakdown."""
     per: dict[str, dict[str, int]] = {}
     total_rows = total_tbl = 0
-    for c in sorted(glob.glob(str(db_root / "*" / "raw" / "corpus.jsonl"))):
-        cell = Path(c).parts[-3]
+    # cells are <mno>/<release>/ (since 2026-11-06); a root written before holds <mno>__<release>/
+    paths = sorted(set(glob.glob(str(db_root / "*" / "*" / "raw" / "corpus.jsonl"))
+                       + glob.glob(str(db_root / "*__*" / "raw" / "corpus.jsonl"))))
+    for c in paths:
+        parts = Path(c).parts
+        cell = parts[-3] if "__" in parts[-3] else f"{parts[-4]}/{parts[-3]}"
         rows = tbl = 0
         with open(c, encoding="utf-8") as f:
             for line in f:

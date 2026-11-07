@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 
 from core.src.web import team_mode as tm
 from core.src.web.jobs import Ingest, JobQueue
+from core.src.stores.cells import parse_cell_dirname
 from core.src.web.jobs_schema import INGEST_STAGES, RETRY_FROM
 
 logger = logging.getLogger(__name__)
@@ -150,10 +151,11 @@ async def validate_request(job_queue: JobQueue, mno: str, release: str, source: 
     cells = await served_cells()
     if cells is None:
         return "the serving store cannot be asked which MNOs it serves; try again or tell the administrator"
-    mnos = {c.split("__", 1)[0].upper() for c in cells}
+    served = {ck for ck in (parse_cell_dirname(c) for c in cells) if ck}
+    mnos = {m.upper() for m, _ in served}
     if mno.upper() not in mnos:
         return f"{mno} is not a served MNO (a new MNO's first release is ingested by the administrator)"
-    if f"{mno}__{release}".upper() in {c.upper() for c in cells}:
+    if (mno.upper(), release) in {(m.upper(), r) for m, r in served}:
         return f"{mno} {release} is already served"
     for ing in await job_queue.list_ingests(limit=500):
         if ing.state in _TAKEN_STATES and ing.mno.upper() == mno.upper() and ing.release == release:
@@ -186,7 +188,7 @@ async def ingest_page(request: Request):
     job_queue: JobQueue = request.app.state.job_queue
     ingests = await job_queue.list_ingests(limit=50)
     cells = await served_cells()
-    mnos = sorted({c.split("__", 1)[0] for c in cells}) if cells else []
+    mnos = sorted({ck[0] for ck in (parse_cell_dirname(c) for c in cells) if ck}) if cells else []
     return _template_response(request, "ingest.html", {
         "locked": False,
         "ingests": _views(ingests),

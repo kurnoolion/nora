@@ -32,7 +32,7 @@ def test_invalid_release(bad):
 # ── cell_dirname / parse_cell_dirname round-trip ──────────────────
 
 def test_cell_dirname():
-    assert cell_dirname(("VZW", "Feb2026")) == "VZW__Feb2026"
+    assert cell_dirname(("VZW", "Feb2026")) == "VZW/Feb2026"
 
 
 @pytest.mark.parametrize("cell", [("VZW", "Feb2026"), ("TMO", "Jan2026")])
@@ -53,7 +53,7 @@ def test_parse_rejects_non_cells(bad):
 
 def test_parse_mno_with_underscore_splits_on_first():
     # an MNO token containing '_' before '__' shouldn't break: split on FIRST __
-    assert parse_cell_dirname("VZW_X__Feb2026") == ("VZW_X", "Feb2026")
+    assert parse_cell_dirname("VZW_X/Feb2026") == ("VZW_X", "Feb2026")
 
 
 # ── order_key / latest_release ────────────────────────────────────
@@ -97,16 +97,16 @@ def _make_cell(db_root, dirname, with_metadata=True):
 
 
 def test_enumerate_cells(tmp_path):
-    _make_cell(tmp_path, "VZW__Feb2026")
-    _make_cell(tmp_path, "VZW__Oct2025")
-    _make_cell(tmp_path, "TMO__Jan2026")
+    _make_cell(tmp_path, "VZW/Feb2026")
+    _make_cell(tmp_path, "VZW/Oct2025")
+    _make_cell(tmp_path, "TMO/Jan2026")
     assert enumerate_cells(tmp_path) == [
         ("TMO", "Jan2026"), ("VZW", "Feb2026"), ("VZW", "Oct2025"),
     ]
 
 
 def test_enumerate_skips_non_cell_dirs(tmp_path):
-    _make_cell(tmp_path, "VZW__Feb2026")
+    _make_cell(tmp_path, "VZW/Feb2026")
     (tmp_path / "nora").mkdir()                 # legacy single dataset
     (tmp_path / "VZW__OA-baseline").mkdir()     # bad release
     (tmp_path / "loose-file.txt").write_text("x")
@@ -114,8 +114,8 @@ def test_enumerate_skips_non_cell_dirs(tmp_path):
 
 
 def test_enumerate_requires_metadata(tmp_path):
-    _make_cell(tmp_path, "VZW__Feb2026", with_metadata=True)
-    _make_cell(tmp_path, "TMO__Jan2026", with_metadata=False)  # no metadata.json
+    _make_cell(tmp_path, "VZW/Feb2026", with_metadata=True)
+    _make_cell(tmp_path, "TMO/Jan2026", with_metadata=False)  # no metadata.json
     assert enumerate_cells(tmp_path) == [("VZW", "Feb2026")]
 
 
