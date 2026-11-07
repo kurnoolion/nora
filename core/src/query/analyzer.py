@@ -15,6 +15,7 @@ import json
 import logging
 import re
 
+from core.src.query.intent import classify_intent
 from core.src.query.schema import (
     QueryIntent,
     QueryType,
@@ -148,9 +149,10 @@ class MockQueryAnalyzer:
             likely_features=likely_features,
             plan_ids=plan_ids,
         )
+        intent.intent = classify_intent(query, intent)
 
         logger.info(
-            f"Query analysis: type={query_type.value}, "
+            f"Query analysis: type={query_type.value}, intent={intent.intent.value}, "
             f"mnos={mnos}, features={likely_features}, "
             f"plans={plan_ids}, entities={entities[:3]}"
         )

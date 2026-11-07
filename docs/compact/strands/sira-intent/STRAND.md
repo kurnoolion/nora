@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** Hanif
 **Target modules:** query, decision, web, eval
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 
