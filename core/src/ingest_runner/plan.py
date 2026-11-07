@@ -23,6 +23,7 @@ from typing import Callable
 from core.src.ingest_runner import verdict as V
 from core.src.ingest_runner.config import (
     CTR_CORRECTIONS, CTR_ENV, CTR_LABELS, CTR_SERVE, CTR_WORK, ConfigError, RunnerConfig,
+    read_env_value,
 )
 from core.src.ingest_runner import webhook
 from core.src.ingest_runner.config import webhook_host_allowed
@@ -87,7 +88,7 @@ class Ctx:
     def compose(self, project: str, env_file: str, *args: str,
                 extra_env: dict[str, str] | None = None, what: str = "",
                 quiet: bool = False) -> Result:
-        env = {**os.environ, **(extra_env or {})}
+        env = {**os.environ, **_job_user(env_file), **(extra_env or {})}
         proj = ["-p", project] if project else []
         return self.run(["docker", "compose", *proj, "--env-file", env_file, *args],
                         env=env, cwd=self.cfg.docker_dir, what=what, quiet=quiet)
@@ -189,6 +190,19 @@ def st_documents(c: Ctx) -> None:
     for p in files:
         shutil.copy2(p, dst / p.name)
     c.log(f"documents: {len(files)} file(s) staged into {dst}")
+
+
+def _job_user(env_file: str) -> dict[str, str]:
+    """JOB_UID/JOB_GID for a one-shot: the runner's own identity unless the
+    shell or the env file sets them. compose's `user:` defaults to 0:0, and a
+    serving or staging env has no reason to carry the job user — without
+    this, eval runs and registry writes land root-owned on the host."""
+    out: dict[str, str] = {}
+    for var, val in (("JOB_UID", os.getuid()), ("JOB_GID", os.getgid())):
+        if os.environ.get(var) or read_env_value(env_file, var):
+            continue
+        out[var] = str(val)
+    return out
 
 
 def _label_taken(c: Ctx, name: str) -> bool:
@@ -392,7 +406,8 @@ def st_eval(c: Ctx) -> None:
             cmd += ["--sira-prompt-scheme", c.cfg.prompt_scheme]
         res = c.ex.run(["docker", "compose", "-p", c.cfg.staging_project, "--env-file", c.cfg.staging_env,
                         "--profile", "ingest", "run", "--rm", "-T", "nora-batch", *cmd],
-                       env={**os.environ, **stage_env}, cwd=c.cfg.docker_dir, on_line=c.log)
+                       env={**os.environ, **_job_user(c.cfg.staging_env), **stage_env},
+                       cwd=c.cfg.docker_dir, on_line=c.log)
         run_ref = ""
         for line in res.lines:
             m = re.search(r"Run artifacts:\s*(\S+)", line)

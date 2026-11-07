@@ -140,7 +140,9 @@ In `.env`, point the volume paths at the layout above:
     # NORA_BUILD_DIR and is rewritten by cycle.sh start per cycle — never a symlink
     # to this one, or every ingest repoints the serving stack's mounts. It needs
     # none of the serving-only lines (WEB_STATE_DIR, FEEDBACK_DIR, CORRECTIONS_DIR):
-    # cycle.sh points them at docker/empty for its one-shots when they are absent
+    # cycle.sh points them at docker/empty for its one-shots when they are absent.
+    # JOB_UID/JOB_GID may be left out too: cycle.sh and the ingest runner run their
+    # one-shots as the calling user unless an env file or the shell names a job user
     #NORA_ENV_DIR= / #STORE_ROOT=                              # dev/test only: a flat label's nora/ and sira/ dirs instead of the registry
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback

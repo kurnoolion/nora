@@ -92,6 +92,11 @@ fi
 for v in WEB_STATE_DIR FEEDBACK_DIR CORRECTIONS_DIR; do
   if [ -z "$(eval echo "\${$v:-}")" ] && ! { [ -f "$WIRING" ] && grep -q "^$v=" "$WIRING"; }; then export "$v=$HERE/empty"; fi
 done
+# The one-shots run as the caller unless the wiring env or the shell names
+# a job user: compose's default is 0:0, which leaves build artifacts
+# root-owned on the host.
+[ -n "${JOB_UID:-}" ] || { [ -f "$WIRING" ] && grep -q '^JOB_UID=' "$WIRING"; } || export JOB_UID="$(id -u)"
+[ -n "${JOB_GID:-}" ] || { [ -f "$WIRING" ] && grep -q '^JOB_GID=' "$WIRING"; } || export JOB_GID="$(id -g)"
 ME="$(whoami)"
 TS="$(date +%Y%m%d_%H%M%S)"
 

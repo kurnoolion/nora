@@ -40,6 +40,7 @@ if [ "$1" = compose ]; then
   done
   envdir="$(grep '^NORA_ENV_DIR=' "$envfile" | cut -d= -f2-)"
   echo "WEB_STATE_DIR=${WEB_STATE_DIR:-} FEEDBACK_DIR=${FEEDBACK_DIR:-} CORRECTIONS_DIR=${CORRECTIONS_DIR:-}" >> "$NORA_ROOT/compose-env.txt"
+  echo "JOB_UID=${JOB_UID:-} JOB_GID=${JOB_GID:-}" >> "$NORA_ROOT/compose-user.txt"
   log="$(printf '%s' "$inner" | grep -oE '> /data/env/reports/[^ ]+' | head -1 | sed 's#^> /data/env#'"$envdir"'#')"
   if [ -n "$log" ]; then mkdir -p "$(dirname "$log")"; { echo "INNER: $inner"; echo "fake phase ran"; echo "CYC-EXIT rc=0"; } > "$log"; fi
   (( detached )) && echo "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
@@ -392,6 +393,24 @@ def test_serving_only_variables_get_a_placeholder_for_one_shots(host):
     assert r.returncode == 0, r.stderr
     seen = (host["root"] / "compose-env.txt").read_text().strip().splitlines()[-1]
     assert seen == f"WEB_STATE_DIR= FEEDBACK_DIR={empty} CORRECTIONS_DIR={empty}"  # compose reads it from the env file, not the shell
+
+
+def test_one_shots_run_as_the_caller_unless_a_job_user_is_named(host):
+    """JOB_UID/JOB_GID default to the caller's ids; a value in the wiring env
+    (or the shell) is left to compose."""
+    import os
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    assert host["run"]("parse", "--skip-standards").returncode == 0
+    seen = (host["root"] / "compose-user.txt").read_text().strip().splitlines()[-1]
+    assert seen == f"JOB_UID={os.getuid()} JOB_GID={os.getgid()}"
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "JOB_UID=4242\nJOB_GID=4243\n")
+    assert host["run"]("parse", "--skip-standards").returncode == 0
+    seen = (host["root"] / "compose-user.txt").read_text().strip().splitlines()[-1]
+    assert seen == "JOB_UID= JOB_GID="
 
 
 def test_start_inspects_the_images_the_wiring_env_names(host):

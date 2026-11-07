@@ -299,6 +299,29 @@ def test_ingest_happy_path(host):
     assert any("gate: pass" in l and "seeds it" in l for l in logs)
 
 
+def test_one_shots_carry_the_runners_job_user(host, monkeypatch):
+    """Every compose one-shot gets JOB_UID/JOB_GID = the runner's own ids
+    unless the env file names them (compose's default is root, and a
+    staging or serving env has no job user)."""
+    import os
+    monkeypatch.delenv("JOB_UID", raising=False)
+    monkeypatch.delenv("JOB_GID", raising=False)
+    (host["root"] / "docker/.env.stack").write_text("STORE_PORT=8040\nJOB_UID=4242\nJOB_GID=4243\n")
+    sim = Sim(host["root"])
+    _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "completed"
+    composes = [(a, e) for a, e in sim.calls if a[:2] == ["docker", "compose"]]
+    assert composes
+    for argv, env in composes:
+        env_file = argv[argv.index("--env-file") + 1]
+        if env_file.endswith(".env.stack"):
+            assert "JOB_UID" not in env and "JOB_GID" not in env, argv  # the env file's values stand
+        else:
+            assert env["JOB_UID"] == str(os.getuid()) and env["JOB_GID"] == str(os.getgid()), argv
+    evals = [a for a, _ in composes if "golden_cli" in " ".join(a)]
+    assert evals and evals[0][evals[0].index("--env-file") + 1].endswith(".env.stage")
+
+
 def test_same_day_labels_skip_taken_names(host):
     """A removed build does not free its label: the build id skips a name a
     promoted snapshot or a registry release set still carries, and promote
