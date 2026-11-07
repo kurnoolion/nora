@@ -98,12 +98,30 @@ The store is unchanged. It keeps rules-only scope (`mnos`, `releases`) in
 
 ## 5. Per-intent synthesis prompts
 
-- **File:** `config/sira_intent_prompts.json`, keyed by intent value.
-  - nora-web reads it once at startup.
-  - A missing file means the defaults in code are used.
-  - A malformed file, or one naming an unknown intent, fails startup loudly.
-  - Edits need a restart.
-- **Content:** every prompt keeps today's `_SELECT_SYNTH_SYSTEM_PROMPT` skeleton (`web/routes/playground.py:139`): select by meaning, answer from the selected chunks only, cite the exact req_id inline, and say so plainly when nothing answers. Only step 2, the answer shape, changes per intent, as in the §2 table.
+Prompts will be revised often as the dataset grows, so they have two layers
+(Q18–Q22 of the prompt round, 2026-11-07):
+
+- **Defaults in source:** `core/src/web/sira_intent_prompts.py`, a dict keyed
+  by intent next to the select-synth code. Reviewed in PRs like any code.
+- **Optional override per environment**, as JSON keyed by intent value:
+  - `NORA_SIRA_INTENT_PROMPTS_FILE=<path>` names the file (matches
+    `NORA_HISTORY_DIFF_CONFIG`). A served stack points it at a mounted file.
+  - With the variable unset, nora-web looks for
+    `<env_dir>/sira_intent_prompts.json` (`config.env_dir_path()`), so a local
+    env dir can hold its own prompts with no variable.
+  - The variable wins when both exist. No file means the defaults only.
+- **Merged per intent:** an override may list only some intents; the rest
+  come from the defaults.
+- **Loud failures:** a malformed file, a non-string prompt, or an unknown
+  intent name stops nora-web at startup. A file named by the variable that
+  doesn't exist also stops it (a typo must not silently fall back).
+- **Load once at startup;** an edit needs a restart. No reload on file change
+  (can be added later if the revision loop feels slow).
+- **Version stamp:** each intent's prompt gets `prompt_source`
+  (`default` | `override`) and `prompt_hash` (first 8 hex of the SHA-256 of
+  the exact text). The startup log lists both per intent, and each answer's
+  `lane_config` records them (§7).
+- **Content:** every prompt keeps today's `_SELECT_SYNTH_SYSTEM_PROMPT` skeleton (`core/src/web/routes/playground.py:139`): select by meaning, answer from the selected chunks only, cite the exact req_id inline, and say so plainly when nothing answers. Only step 2, the answer shape, changes per intent, as in the §2 table.
   - `other` is today's prompt verbatim.
   - The reasoning-sentinel suffix applies to every prompt, as it does today.
 - **Review:** I draft the prompts and Hanif reviews them.
@@ -118,6 +136,7 @@ is not touched in phase 1.
 | `NORA_QUERY_ANALYZER` | nora-web | `rules` | Which classifier decides intent. `rules` reproduces today's routing. |
 | `NORA_DECISION_PROVIDER` / `_BASE_URL` / `_CONFIDENCE_FLOOR` | nora-web | unset / unset / 0.50 | Kev endpoint, needed for the Kev arms only. |
 | `NORA_SIRA_INTENT_PROMPTS` | nora-web | off | Per-intent prompts, plus the §4 error behaviour. |
+| `NORA_SIRA_INTENT_PROMPTS_FILE` | nora-web | unset | Override file for the prompts (§5). Unset → `<env_dir>/sira_intent_prompts.json` if present, else the source defaults. |
 
 With every default, served answers are unchanged. Each phase turns on one
 switch at a time.
@@ -125,7 +144,7 @@ switch at a time.
 ## 7. UI and logging
 
 - **Badge:** SIRA answer cards in **Ask** and **`/test`** show the intent as a small badge. There is no override control.
-- **Feedback rows:** `lane_config` on the rows records `intent`, `arm` (`kev` | `rules`) and `confidence`. These logged rows become the labelled real-traffic set for the internal held-out check and for tuning the floor.
+- **Feedback rows:** `lane_config` on the rows records `intent`, `arm` (`kev` | `rules`) and `confidence`, plus `prompt_source` and `prompt_hash` when the per-intent prompts are on (§5). These logged rows become the labelled real-traffic set for the internal held-out check, for tuning the floor, and for comparing answers before and after a prompt revision.
 - **Team-mode gate:** there are no new routes. Verify with the team-mode gate on before calling it shipped (branch-flow rule).
 
 ## 8. Measurement
@@ -184,5 +203,5 @@ switch at a time.
 - **Enum coverage:** `INTENT_DESCRIPTIONS` has every member, and `INTENT_QUESTION` options match the enum.
 - **Confidence routing:** below the floor the rules decide; no rule match gives `other`; a provider outage gives the rules, with `fallback_count` counted.
 - **History lane:** reads the passed intent; covers flag off (today's behaviour), lane disabled (SIRA change prompt), and no store or a single release (the error lists releases).
-- **Prompt loader:** missing file uses the defaults, a malformed file or unknown intent raises, and `other` equals today's prompt.
+- **Prompt loader:** no override uses the defaults; the variable beats the env-dir file; a partial override merges per intent; a malformed file, unknown intent, or missing variable-named file raises; `prompt_source` and `prompt_hash` are right; the default `other` equals today's prompt.
 - **Badge and `lane_config`:** fields present, with the team gate on and off.

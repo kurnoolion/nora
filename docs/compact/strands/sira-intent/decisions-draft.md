@@ -97,21 +97,30 @@
 **Consequences.**
 - One error path covers the missing-store and single-release cases.
 
-### D-DRAFT-6 — 2026-11-05 — Per-intent synthesis prompts in a config file, default off
+### D-DRAFT-6 — 2026-11-05, revised 2026-11-07 — Per-intent synthesis prompts: defaults in source, an optional per-environment override, default off
 
 **Context.**
-- Select-synth uses one hard-coded system prompt for every question (`web/routes/playground.py:139`).
+- Select-synth uses one hard-coded system prompt for every question (`core/src/web/routes/playground.py:139`).
+- The prompts will be revised often as the dataset grows.
 
 **Decision.**
-- `config/sira_intent_prompts.json`, keyed by intent, read once at startup. Missing file → code defaults; a malformed file or unknown intent → startup fails.
-- Each prompt keeps today's select/answer/cite skeleton and varies only the answer shape. `other` is today's prompt verbatim.
+- Defaults live in source (`core/src/web/sira_intent_prompts.py`), keyed by intent.
+- An optional JSON override per environment: the file named by `NORA_SIRA_INTENT_PROMPTS_FILE`, else `<env_dir>/sira_intent_prompts.json`. Merged per intent over the defaults.
+- Read once at startup. A malformed file, an unknown intent, or a missing variable-named file stops startup.
+- Each prompt is stamped with `prompt_source` (`default` | `override`) and an 8-hex `prompt_hash`, logged at startup and recorded in each answer's `lane_config`.
+- Each prompt keeps today's select/answer/cite skeleton and varies only the answer shape. The default `other` is today's prompt verbatim.
 - `NORA_SIRA_INTENT_PROMPTS` gates them, default off.
 
 **Why.**
-- The requirements team can tune wording without a code change.
-- A loud startup failure beats answering with half a prompt set.
+- Defaults in source are reviewed in PRs; an environment can trial new wording without a code change.
+- A per-intent merge means revising one prompt doesn't copy all seven.
+- The hash ties each feedback row and eval run to the exact wording, so a revision's effect can be measured.
+- A loud startup failure beats answering with half a prompt set, or silently using defaults after a path typo.
 - A shared skeleton keeps chunk selection and citation behaviour constant across intents, so an A/B measures answer shape only.
-- Rejected: hard-coded constants.
+- Rejected:
+  - a committed `config/sira_intent_prompts.json` as a third layer (the first plan): two places to look are enough;
+  - hard-coded constants with no override;
+  - reloading on file change: extra moving part, restart is cheap.
 
 **Consequences.**
 - A prompt edit needs a restart.
