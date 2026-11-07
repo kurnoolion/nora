@@ -135,8 +135,11 @@ In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
     SERVE_REGISTRY_ROOT=/home/<you>/nora-data/serve-a       # served stacks: the registry root (publish)
-    NORA_BUILD_DIR=/home/<you>/nora-data/nora-builds/<build>  # THE build: /data/env, and its out/sira as /data/db (unused by a registry-mode store)
-    #NORA_ENV_DIR= / #STORE_ROOT=                              # optional overrides of the two mounts (an older layout; dev/test flat labels)
+    # no build line: a registry-mode stack mounts no build (since 2026-11-07); the
+    # ingestion wiring env (.env.<stack>-builds) is a SEPARATE file that carries
+    # NORA_BUILD_DIR and is rewritten by cycle.sh start per cycle — never a symlink
+    # to this one, or every ingest repoints the serving stack's mounts
+    #NORA_ENV_DIR= / #STORE_ROOT=                              # dev/test only: a flat label's nora/ and sira/ dirs instead of the registry
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback
     CORRECTIONS_DIR=/home/<you>/nora-data/corrections

@@ -55,11 +55,11 @@ services:
       # over /stores/overlay/v1 and applies them at cell load (POST
       # /cells/<cell>/reload re-applies). Read-write mount, therefore.
       - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections
-      # parse trees for the Trees store (/stores/trees/v1): the Requirement
-      # Browser, /api/req and the Eval Studio picker read them from here
-      # once nora-web sets NORA_TREES_URL. Read-only: nora-store never
-      # writes under the env dir.
-      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:?set NORA_BUILD_DIR (the build dir) in .env}}:/data/env:ro
+      # parse trees for the Trees store (/stores/trees/v1) — the dev
+      # fallback only: a registry-mode stack serves Trees from the registry
+      # and mounts nothing here (unset = an empty dir; since 2026-11-07 a
+      # serving stack's env carries no build line). Read-only either way.
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env:ro
       # Pre-built SQLite stores, optional: set TREES_ROOT / HISTORY_ROOT in
       # the wiring .env. Unset mounts an empty dir and leaves the matching
       # NORA_*_ROOT empty, so the store falls back (Trees: the parse trees
@@ -112,7 +112,10 @@ services:
     ports:
       - "${NORA_WEB_PORT:-8000}:8000"
     volumes:
-      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:?set NORA_BUILD_DIR (the build dir) in .env}}:/data/env
+      # the build dir — the dev fallback for the parse/resolve review pages
+      # and the Trees fallback; a serving stack sets the store URLs and
+      # mounts nothing here (unset = an empty dir; since 2026-11-07)
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env
       - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
       # enrichment-corrections overlay — the dev FALLBACK (local backend).
@@ -124,7 +127,7 @@ services:
       # golden eval set (FR-38) — pooled across stacks and durable across
       # promote labels: shadows <env>/eval/golden so samples/runs never live
       # inside a promoted snapshot. Default keeps single-build setups as-is.
-      - ${GOLDEN_DIR:-${NORA_ENV_DIR:-${NORA_BUILD_DIR}}/eval/golden}:/data/env/eval/golden
+      - ${GOLDEN_DIR:-${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}/eval/golden}:/data/env/eval/golden
     env_file:
       - path: ${WEB_ENV_FILE:-.env.nora-web}
         required: false
@@ -177,7 +180,7 @@ services:
     image: ${IMAGE_PREFIX:-local}/nora-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
-      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:?set NORA_BUILD_DIR (the build dir) in .env}}:/data/env
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env   # the build (ingestion wiring env); cycle.sh need_wiring is the check, not :? — compose interpolates every service even for the serve profile
       - ${REQUIREMENTS_DIR:?set REQUIREMENTS_DIR in .env}:/data/requirements:ro
       - ${STORE_ROOT:-${NORA_BUILD_DIR:-./empty}/out/sira}:/data/db   # the build's SIRA cells; optional in registry mode (serve only)
       - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
@@ -221,7 +224,7 @@ services:
     volumes:
       - ${STORE_ROOT:-${NORA_BUILD_DIR:-./empty}/out/sira}:/data/db   # the build's SIRA cells; optional in registry mode (serve only)
       # sira_lane's adapter step reads the nora build's out/ tree
-      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:?set NORA_BUILD_DIR (the build dir) in .env}}:/data/env
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env   # the build (ingestion wiring env); cycle.sh need_wiring is the check, not :? — compose interpolates every service even for the serve profile
     user: "${JOB_UID:-0}:${JOB_GID:-0}"
     env_file:
       - path: ${SIRA_BATCH_ENV_FILE:-.env.sira-batch}

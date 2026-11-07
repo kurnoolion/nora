@@ -87,3 +87,7 @@ docker/push-staging/
 
 # self-serve ingest runner: host paths, per build host (example is committed)
 config/ingest_runner.json
+
+# compose bind-mount placeholder: anything Docker creates under it (e.g. out/sira for a build-less serving env) is not ours
+docker/empty/*
+!docker/empty/.gitkeep
