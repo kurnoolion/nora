@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -190,15 +191,42 @@ def st_documents(c: Ctx) -> None:
     c.log(f"documents: {len(files)} file(s) staged into {dst}")
 
 
-def _next_build_id(c: Ctx) -> str:
+def _label_taken(c: Ctx, name: str) -> bool:
+    """A label is taken when a promoted snapshot or a registry release set
+    carries it (labels are immutable). The registry is read if present."""
+    if (Path(c.cfg.labels_root) / name).exists():
+        return True
+    reg = Path(c.cfg.registry_root) / "registry.db"
+    if reg.is_file():
+        try:
+            con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+            try:
+                return con.execute("SELECT 1 FROM release_set WHERE label=?", (name,)).fetchone() is not None
+            finally:
+                con.close()
+        except sqlite3.Error:
+            return False
+    return False
+
+
+def _next_free(c: Ctx, prefix: str, *, builds: bool) -> str:
+    """The smallest <prefix><n> that is neither a build (when asked) nor a label."""
+    n = 1
+    while (builds and c.cfg.build_dir(f"{prefix}{n}").exists()) or _label_taken(c, f"{prefix}{n}"):
+        n += 1
+    return f"{prefix}{n}"
+
+
+def _label_prefix(c: Ctx) -> str:
     ing = c.ingest
     day = datetime.now(UTC).strftime("%Y%m%d")
-    prefix = f"{ing['release']}-{ing['mno']}-{day}-"
-    root = c.cfg.nora_builds_root
-    n = 1
-    if root.is_dir():
-        n += sum(1 for p in root.iterdir() if p.name.startswith(prefix))
-    return f"{prefix}{n}"
+    return f"{ing['release']}-{ing['mno']}-{day}-"
+
+
+def _next_build_id(c: Ctx) -> str:
+    """Build id = label: the first same-day sequence number no build, promoted
+    snapshot or release set carries (a removed build does not free its label)."""
+    return _next_free(c, _label_prefix(c), builds=True)
 
 
 def st_start(c: Ctx) -> None:
@@ -243,6 +271,13 @@ def st_verify(c: Ctx) -> None:
 
 
 def st_promote(c: Ctx) -> None:
+    if _label_taken(c, c.label):
+        # same-day re-ingest after a cleanup: the build is ours, the label is
+        # not (an older snapshot or release set still carries it)
+        new = _next_free(c, _label_prefix(c), builds=False)
+        c.log(f"promote: label {c.label} is taken by an earlier snapshot or release set; using {new}")
+        c.label = new
+        c.db.update_ingest(c.ingest["id"], label=new)
     args = ["promote", "--label", c.label]
     if c.cfg.prompt_scheme:
         args += ["--scheme", c.cfg.prompt_scheme]

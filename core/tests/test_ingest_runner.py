@@ -299,6 +299,43 @@ def test_ingest_happy_path(host):
     assert any("gate: pass" in l and "seeds it" in l for l in logs)
 
 
+def test_same_day_labels_skip_taken_names(host):
+    """A removed build does not free its label: the build id skips a name a
+    promoted snapshot or a registry release set still carries, and promote
+    moves to a free label when the one chosen at start is taken by then."""
+    import sqlite3
+    sim = Sim(host["root"])
+    q = host["q"]
+    day = __import__("datetime").datetime.now(__import__("datetime").UTC).strftime("%Y%m%d")
+    prefix = f"Apr2031-MNO-A-{day}-"
+    # an earlier (cleaned-up) ingest left its snapshot under labels/ and its
+    # release set in the registry; the build directory is gone
+    (host["root"] / "labels" / f"{prefix}1").mkdir(parents=True)
+    reg = host["root"] / "registry" / "registry.db"
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE release_set(label TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
+    con.execute("INSERT INTO release_set VALUES (?, 'x')", (f"{prefix}2",))
+    con.commit(); con.close()
+    job_id, ingest_id = _submit_ingest(host)
+    r = _runner(host, sim)
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.build == f"{prefix}3" and ing.label == ing.build
+    assert any(f"cycle.sh start {prefix}3 --seed seed0" in c for c in sim.cmds())
+    # the label chosen at start is taken by promote time (a snapshot appeared):
+    # promote picks the next free label and records it; the build keeps its name
+    (host["root"] / "labels" / f"{prefix}3").mkdir()
+    sim.calls.clear()
+    _submit_ingest(host, ingest_id=ingest_id, retry_from="promote")
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.build == f"{prefix}3" and ing.label == f"{prefix}4"
+    cmds = sim.cmds()
+    assert any(f"promote --label {prefix}4" in c for c in cmds)
+    assert any(f"publish stage --serve-root /data/serve --label {prefix}4" in c or f"--label {prefix}4" in c for c in cmds)
+    assert any("is taken by an earlier snapshot" in l for l in _run(q.get_logs(ing.job_id)))
+
+
 def test_ingest_fails_at_a_detached_phase_and_retries(host):
     sim = Sim(host["root"], fail_phase="enrich")
     job_id, ingest_id = _submit_ingest(host)

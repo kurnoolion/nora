@@ -84,6 +84,14 @@ if [ -n "${NORA_BUILDS_WIRING:-}" ]; then
 else
   WIRING="$ENV_ROOT/.env.builds"; [ -f "$WIRING" ] || WIRING="$HERE/.env.builds"
 fi
+# compose interpolates every service, serve profile included, so the
+# serving-only mounts marked :? (web state, feedback, corrections) must
+# resolve even for an ingest one-shot. The wiring env is ingestion-only;
+# when neither it nor the shell names one of them, point it at the empty
+# placeholder dir for this process only. The serving stack keeps its check.
+for v in WEB_STATE_DIR FEEDBACK_DIR CORRECTIONS_DIR; do
+  if [ -z "$(eval echo "\${$v:-}")" ] && ! { [ -f "$WIRING" ] && grep -q "^$v=" "$WIRING"; }; then export "$v=$HERE/empty"; fi
+done
 ME="$(whoami)"
 TS="$(date +%Y%m%d_%H%M%S)"
 

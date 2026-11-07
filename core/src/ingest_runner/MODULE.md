@@ -29,7 +29,7 @@ The host-side runner behind self-serve ingestion (strand self-serve-ingestion, D
 - Standard library only, so the service runs on the system python without the project's virtualenv; the schema it shares with the web lives in `core.src.web.jobs_schema`, which imports nothing else.
 - The jobs DB is the queue: the web's state directory is a bind mount, so the file is the contract; no broker, no HTTP between web and runner.
 - Explicit `-v` mounts on the one-shot containers (`/data/serve`, `/data/labels`, `/data/work`, `/data/corrections`) rather than new compose services: the runbook's commands, with their paths fixed.
-- The build id and the label are one string, `<release>-<mno>-<yyyymmdd>-<n>`.
+- The build id and the label are one string, `<release>-<mno>-<yyyymmdd>-<n>`, where `n` is the first same-day number no build directory, promoted snapshot (`labels_root`) or registry release set carries (labels are immutable; a removed build does not free its label). If the label is taken by promote time, promote moves to the next free one and records it on the ingest; the build keeps its name.
 - The seed of a cycle is the build of the last flipped ingest if its directory still exists under the builds root, else `seed_build` (D-DRAFT-5). A build removed by hand is logged and skipped, never a failed `start`.
 
 **Non-goals**

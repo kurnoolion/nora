@@ -138,7 +138,9 @@ In `.env`, point the volume paths at the layout above:
     # no build line: a registry-mode stack mounts no build (since 2026-11-07); the
     # ingestion wiring env (.env.<stack>-builds) is a SEPARATE file that carries
     # NORA_BUILD_DIR and is rewritten by cycle.sh start per cycle — never a symlink
-    # to this one, or every ingest repoints the serving stack's mounts
+    # to this one, or every ingest repoints the serving stack's mounts. It needs
+    # none of the serving-only lines (WEB_STATE_DIR, FEEDBACK_DIR, CORRECTIONS_DIR):
+    # cycle.sh points them at docker/empty for its one-shots when they are absent
     #NORA_ENV_DIR= / #STORE_ROOT=                              # dev/test only: a flat label's nora/ and sira/ dirs instead of the registry
     WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
     FEEDBACK_DIR=/home/<you>/nora-data/feedback

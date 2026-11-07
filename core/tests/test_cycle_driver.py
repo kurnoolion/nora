@@ -39,6 +39,7 @@ if [ "$1" = compose ]; then
     esac
   done
   envdir="$(grep '^NORA_ENV_DIR=' "$envfile" | cut -d= -f2-)"
+  echo "WEB_STATE_DIR=${WEB_STATE_DIR:-} FEEDBACK_DIR=${FEEDBACK_DIR:-} CORRECTIONS_DIR=${CORRECTIONS_DIR:-}" >> "$NORA_ROOT/compose-env.txt"
   log="$(printf '%s' "$inner" | grep -oE '> /data/env/reports/[^ ]+' | head -1 | sed 's#^> /data/env#'"$envdir"'#')"
   if [ -n "$log" ]; then mkdir -p "$(dirname "$log")"; { echo "INNER: $inner"; echo "fake phase ran"; echo "CYC-EXIT rc=0"; } > "$log"; fi
   (( detached )) && echo "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
@@ -370,6 +371,27 @@ def test_enrich_cell_log_name_and_retry_flags(host):
     r = host["run"]("enrich", "--cell", "MNO-A__Jan2031")
     assert r.returncode == 0, r.stderr
     assert "--only MNO-A/Jan2031" in Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+
+
+def test_serving_only_variables_get_a_placeholder_for_one_shots(host):
+    """compose interpolates every service: the serving-only :? mounts resolve
+    for an ingest one-shot without the wiring env carrying them. A value in
+    the wiring env or the shell wins over the placeholder."""
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    r = host["run"]("parse", "--skip-standards")
+    assert r.returncode == 0, r.stderr
+    seen = (host["root"] / "compose-env.txt").read_text().strip().splitlines()[-1]
+    empty = str(CYCLE.parent / "empty")
+    assert seen == f"WEB_STATE_DIR={empty} FEEDBACK_DIR={empty} CORRECTIONS_DIR={empty}"
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "WEB_STATE_DIR=/srv/web-state\n")
+    r = host["run"]("parse", "--skip-standards")
+    assert r.returncode == 0, r.stderr
+    seen = (host["root"] / "compose-env.txt").read_text().strip().splitlines()[-1]
+    assert seen == f"WEB_STATE_DIR= FEEDBACK_DIR={empty} CORRECTIONS_DIR={empty}"  # compose reads it from the env file, not the shell
 
 
 def test_start_inspects_the_images_the_wiring_env_names(host):
