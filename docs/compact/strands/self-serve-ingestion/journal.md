@@ -16,3 +16,27 @@
 
 ### Flags
 - A brand-new cell has no golden set. Until one exists the gate can only be the enrichment verify plus the publish dry run. Needs a ruling before the gate is coded.
+
+## 2026-11-06 — built end to end, field-run served, restructure landed
+
+### Done this session
+- Design settled (8774937): host-side runner over the web's jobs DB; the two rulings taken (runner as a `systemd --user` service of the build user; Stage 1 baseline-relative gate seeded from the recorded run).
+- Cycle driver: `--yes` on the gates, `start --seed` (bindings only), `parse --cell`, `taxonomy --cell`, detached container ids, wiring lines, executable bits; tests with a fake docker.
+- Runner `core/src/ingest_runner/` (stdlib only): twelve stages, flip, rollback, abandon, signed webhooks with a host allowlist, the `best.jsonl` heal before convert, `--check` refusing template values, share mapping from the ingestion wiring env.
+- Web: Ingest page and API, own token and cookie, event stream, submits queue with positions and a blocking notice, runners table.
+- Pipeline: taxonomy per release (no cross-release supersession, build-level consolidation); SIRA cells at `<build>/out/sira/`; one cell spelling `<MNO>/<release>` with `publish migrate-units`; one wiring variable `NORA_BUILD_DIR`.
+- Field: installed on the host; one release staged with a passing gate (recall 0.71 against 0.68), served and verified; a question on the Ask page resolved to the new cell.
+- Causes found: a leftover `NORA_SIRA_BATCH_MAX_REQS=1` made enrichment take fourteen hours; SIRA's resume path leaves `best.jsonl` dangling; the wiring env lacked `STORE_ROOT=`; three scripts had no executable bit; five error codes were unregistered.
+
+### In progress
+- Round four on the host: rebuild the three images, `NORA_BUILD_DIR` in the envs, `migrate-units` on both registries, one release staged through the page on the restructure.
+
+### Next
+- After round four: Serve from the page on the new names, then the rollout to the requirements team (token link, the README section).
+- `/land-strand` once the field run on the restructure is clean: D-DRAFT-1 to D-DRAFT-13 promote.
+- FR-6 still says "unified taxonomy"; reword at the next `/drift-check design` (per release, consolidated per build).
+
+### Flags
+- Three sandbox strict-verify tests fail at HEAD and before this strand (a resolved parse-error batch is classified as a note, the tests expect a warning); not touched here.
+- A failed or cancelled ingest that opened a build holds the cycle driver's baton until retried or abandoned; the page names it.
+

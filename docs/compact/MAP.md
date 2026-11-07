@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-10-26 by regen-map. Do not hand-edit.
+Generated 2026-11-06 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -12,6 +12,7 @@ Generated 2026-10-26 by regen-map. Do not hand-edit.
 | [eval](../../core/src/eval/MODULE.md) | Evaluation framework for the query pipeline. |
 | [extraction](../../core/src/extraction/MODULE.md) | Format-aware content extraction. |
 | [graph](../../core/src/graph/MODULE.md) | Unified Knowledge Graph construction (TDD §5.8, D-002). |
+| [ingest_runner](../../core/src/ingest_runner/MODULE.md) | The host-side runner behind self-serve ingestion (strand self-serve-ingestion, D-DRAFT-1): a long-lived process on the build host, run as the build user, that claims `ingest*` jobs from the web's jobs database and executes them the way the runbook does by hand — the cycle driver's verbs for one cell, the converter, publish, a staging store, Stage 1 of the golden eval, the gate record — then the flip, the rollback and the abandon on request. |
 | [llm](../../core/src/llm/MODULE.md) | LLM abstraction layer. |
 | [models](../../core/src/models/MODULE.md) | Shared document intermediate representation. |
 | [parser](../../core/src/parser/MODULE.md) | Generic, profile-driven structural parser. |
@@ -37,6 +38,7 @@ flowchart TD
     m_eval[eval]
     m_extraction[extraction]
     m_graph[graph]
+    m_ingest_runner[ingest_runner]
     m_llm[llm]
     m_models[models]
     m_parser[parser]
@@ -51,6 +53,7 @@ flowchart TD
     m_taxonomy[taxonomy]
     m_vectorstore[vectorstore]
     m_web[web]
+
     m_corrections --> m_env
     m_corrections --> m_profiler
     m_corrections --> m_taxonomy
@@ -67,6 +70,7 @@ flowchart TD
     m_graph --> m_resolver
     m_graph --> m_standards
     m_graph --> m_taxonomy
+    m_ingest_runner --> m_web
     m_llm --> m_env
     m_llm --> m_pipeline
     m_parser --> m_extraction
@@ -151,7 +155,9 @@ nora/
 │   └── share-back.md
 ├── config/
 │   ├── env.json
+│   ├── ingest_runner.example.json
 │   ├── llm.json
+│   ├── release_diff.json
 │   ├── retrieval.json
 │   └── web.json
 ├── core/
@@ -214,6 +220,17 @@ nora/
 │   │   │   ├── builder.py                               # Knowledge Graph builder (TDD 5.8).
 │   │   │   ├── graph_cli.py                             # CLI entry point for Knowledge Graph construction (TDD 5.8).
 │   │   │   └── schema.py                                # Knowledge Graph schema definitions (TDD 6.1–6.2).
+│   │   ├── ingest_runner/                               # The host-side runner behind self-serve ingestion (strand self-serve-ingestion, D-DRAFT-1): a long-lived process on the build host, run as the build user, that claims `ingest*` jobs from the web's jobs database and executes them the way the runbook does by hand — the cycle driver's verbs for one cell, the converter, publish, a staging store, Stage 1 of the golden eval, the gate record — then the flip, the rollback and the abandon on request.
+│   │   │   ├── MODULE.md
+│   │   │   ├── __init__.py                              # Host-side runner for self-serve ingestion.
+│   │   │   ├── config.py                                # Runner configuration (`config/ingest_runner.json`).
+│   │   │   ├── db.py                                    # The runner's view of the web's jobs database (stdlib `sqlite3`).
+│   │   │   ├── execute.py                               # Running host commands with their output streamed line by line.
+│   │   │   ├── ingest_runner_cli.py                     # CLI: `python -m core.src.ingest_runner.ingest_runner_cli --config config/ingest_runner.json`
+│   │   │   ├── plan.py                                  # The stages of one self-serve ingest, and the flip, rollback and
+│   │   │   ├── runner.py                                # The runner loop: claim one job at a time, heartbeat while it runs,
+│   │   │   ├── verdict.py                               # The eval gate rule (strand design §6, D-DRAFT-4).
+│   │   │   └── webhook.py                               # Webhook delivery for ingest state changes (standard library).
 │   │   ├── llm/                                         # LLM abstraction layer.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py                              # LLM providers.
@@ -373,6 +390,7 @@ nora/
 │   │       ├── enrich_report.py                         # Enrichment-review exports: the label × category pivot report and the
 │   │       ├── feedback_db.py                           # Test-page feedback store — async SQLite log of question / answer /
 │   │       ├── jobs.py                                  # Job queue for NORA pipeline execution tracking.
+│   │       ├── jobs_schema.py                           # The jobs database schema, shared by the web and the ingest runner.
 │   │       ├── markdown_render.py                       # Markdown → HTML rendering for LLM-synthesized answers.
 │   │       ├── metrics.py                               # Metrics persistence store for NORA observability.
 │   │       ├── middleware.py                            # Request timing middleware for NORA Web UI.
@@ -390,6 +408,7 @@ nora/
 │   │       │   ├── files.py                             # File browser page and routes.
 │   │       │   ├── golden_eval.py                       # Eval Studio — expert one-stop-shop for golden eval samples
 │   │       │   ├── history_lane.py                      # The release-change lane of the Ask page (strand rel-history).
+│   │       │   ├── ingest.py                            # Self-serve ingestion: the Ingest page and `POST /api/ingest`
 │   │       │   ├── jobs.py                              # Jobs routes -- listing, detail, SSE log streaming, cancel.
 │   │       │   ├── metrics_route.py                     # Metrics page and API routes.
 │   │       │   ├── parse_review.py                      # Parse routes — Summary landing + per-doc Review.
@@ -404,6 +423,7 @@ nora/
 │   │       │   ├── js/
 │   │       │   │   ├── app.js
 │   │       │   │   ├── parse_review.js
+│   │       │   │   ├── release_change.js
 │   │       │   │   ├── req_browser.js
 │   │       │   │   └── resolve_review.js
 │   │       │   └── vendor/
@@ -453,6 +473,8 @@ nora/
 │   │       │   │   ├── _status_result.html
 │   │       │   │   └── index.html
 │   │       │   ├── files.html
+│   │       │   ├── ingest.html
+│   │       │   ├── ingest_detail.html
 │   │       │   ├── job_detail.html
 │   │       │   ├── jobs.html
 │   │       │   ├── metrics.html
@@ -464,6 +486,7 @@ nora/
 │   │       │   │   ├── dashboard_jobs.html
 │   │       │   │   ├── dashboard_status.html
 │   │       │   │   ├── file_listing.html
+│   │       │   │   ├── ingest_state.html
 │   │       │   │   ├── jobs_table.html
 │   │       │   │   ├── metrics_resource.html
 │   │       │   │   └── query_result.html
@@ -483,6 +506,7 @@ nora/
 │   │       │       ├── _feedback_ack.html
 │   │       │       ├── _feedback_legacy.html
 │   │       │       ├── _feedback_merged.html
+│   │       │       ├── _history_req_bubble.html
 │   │       │       ├── _ingested.html
 │   │       │       ├── _merged_answer.html
 │   │       │       ├── _req_bubble.html
@@ -503,6 +527,7 @@ nora/
 │       ├── test_chunk_builder_definitions.py            # Tests for FR-35 [D-032] inline definition expansion in chunk_builder.
 │       ├── test_chunk_builder_hierarchy.py              # Tests for hierarchy path prefixing in chunk text and metadata.
 │       ├── test_chunk_builder_subsections.py            # Tests for parent-chunk augmentation with child titles.
+│       ├── test_cycle_driver.py                         # Tests for docker/cycle.sh — the phase-gated cycle driver.
 │       ├── test_decision.py                             # Tests for the decision-model seam (strand jev-experimentation, phase 2).
 │       ├── test_decision_head_check.py                  # The decision-head verification gate (strand jev-experimentation,
 │       ├── test_decision_systemone.py                   # The /v1/systemone HTTP provider (strand jev-experimentation, phase 3).
@@ -527,6 +552,7 @@ nora/
 │       ├── test_glossary_skip_from_rag.py               # Tests for Phase 5 of the generic-rules pivot — skip glossary from RAG.
 │       ├── test_graph.py                                # Tests for the Knowledge Graph construction (Step 8).
 │       ├── test_hf_source.py                            # Tests for HuggingFaceSource — fully mocked, no network.
+│       ├── test_ingest_runner.py                        # Tests for core/src/ingest_runner — the host-side self-serve ingest runner.
 │       ├── test_integration_oa_corpus.py                # Integration test: extract → profile → parse against the 5 Verizon OA PDFs.
 │       ├── test_last_run_req_id.py                      # Tests for ``RequirementIdPattern.anchor`` extraction modes.
 │       ├── test_layout_fusion.py                        # Extractor fusion of a LayoutProvider's tables/figures into the pymupdf text
@@ -611,11 +637,13 @@ nora/
 │       ├── test_web_config_db.py                        # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_eval_studio.py                      # Eval Studio route tests (FR-39): sample CRUD, ground-truth add flows,
 │       ├── test_web_history_lane.py                     # The Ask page's release-change lane (core/src/web/routes/history_lane.py
+│       ├── test_web_ingest.py                           # Tests for the Ingest page and API (core/src/web/routes/ingest.py).
 │       ├── test_web_jobs.py                             # Tests for the NORA web job queue.
 │       ├── test_web_markdown_bubbles.py                 # Tests for req-ID bubbles in the web markdown renderer (strand req-id-bubbles).
 │       ├── test_web_markdown_render.py                  # Tests for the web markdown renderer.
 │       ├── test_web_path_mapper.py                      # Tests for the web path mapper module.
 │       ├── test_web_playground.py                       # Tests for the Test-page corpus-label helper.
+│       ├── test_web_release_change_js.py                # Browser check of `static/js/release_change.js` over a rendered answer.
 │       ├── test_web_req_body.py                         # Tests for the requirement-body renderer behind the Ask-page bubble
 │       ├── test_web_req_bubbles.py                      # Tests for the req-bubble endpoint and its wiring (strand req-id-bubbles).
 │       ├── test_web_req_tree.py                         # Tests for the shared requirement-tree loader (web/req_tree.py).
@@ -650,6 +678,7 @@ nora/
 │   ├── env.nora-store.example
 │   ├── env.nora-web.example
 │   ├── env.sira-batch.example
+│   ├── ingest-runner.service.example
 │   ├── ingest.sh                                        # ingest.sh — quoting-proof launcher for containerized pipeline lane runs.
 │   ├── nora.Dockerfile
 │   ├── prep-offline.sh                                  # prep-offline.sh — HOST-side prep for OFFLINE=1 docker builds.
@@ -792,6 +821,11 @@ nora/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
+│   │   │   │   ├── rel-history/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── design.md
+│   │   │   │   │   └── journal.md
 │   │   │   │   ├── req-bubble-metadata/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
@@ -863,7 +897,7 @@ nora/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   └── journal.md
-│   │   │   ├── rel-history/
+│   │   │   ├── self-serve-ingestion/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── design.md

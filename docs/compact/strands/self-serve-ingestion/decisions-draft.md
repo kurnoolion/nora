@@ -108,3 +108,23 @@
 
 **Consequences.** Hosts replace the two lines with one on their next cycle; the runner config's `cycle_env` no longer names the SIRA root.
 
+### D-DRAFT-12 — 2026-11-06 — Submits queue; one cycle runs at a time; a blocking ingest is named, never auto-abandoned
+
+**Context.** The first page refused a second submit while an ingest was queued or running: the cycle driver's baton, the wiring env and the staging store are singletons, so two cycles cannot run at once. Refusing made the second person come back and retry.
+
+**Decision.** Submits queue in order; the page shows each queued ingest's position and the runner takes the oldest job first. A failed or cancelled ingest that opened a build may still hold the baton; the page names it and the next queued ingest fails at `start` until someone retries or abandons it.
+
+**Why.** The long stage is enrichment, bound by the language-model endpoint, so parallel cycles would share that capacity and gain little; a queue removes the human retry at no cost. Making the baton, the wiring env and the staging store per ingest was the alternative and was not worth its size. Auto-abandoning a blocking ingest was rejected: a failed build is evidence someone may want.
+
+**Consequences.** Three submits in a row finish about three hours later and each person sees where they stand. The cell-uniqueness refusal stays.
+
+### D-DRAFT-13 — 2026-11-06 — Progress by push: an event stream for clients, signed webhooks for people and systems; a skill submits and returns
+
+**Context.** The page already received pushes over the job log's event stream; an API client would have polled `GET /api/ingest/{id}`. A future skill in a chat session has no listener a webhook could reach.
+
+**Decision.** `GET /api/ingest/{id}/events` streams `state` on every change and `done` at the end for any client that can hold a connection. A submit may carry a `callback_url`; the runner posts one signed JSON event per state change (HMAC-SHA256 under `webhook_secret`, host allowlist `webhook_hosts`, three attempts, never failing the job), the path for a chat or mail bridge. A skill, when built, submits, keeps the id and asks later.
+
+**Why.** A ninety-minute job at a handful of clients makes polling harmless, so the stream and the webhook are for convenience and for people, not load. The runner posts the webhook because it is the one process that knows when a state changes. A long-held stream inside a tool call was rejected for the skill: tool runtimes time out long before enrichment ends.
+
+**Consequences.** Webhook targets must be allowlisted in the runner config; an unlisted host is logged and skipped. The web validates only the URL's shape.
+
