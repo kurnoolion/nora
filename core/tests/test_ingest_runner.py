@@ -425,6 +425,15 @@ def test_flip_rollback_abandon(host):
     rb2 = _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest2}))
     assert r.run_once() == "failed"
     assert "nothing to roll back" in _run(q.get_meta(rb2.id)).error_message
+    # the served build's directory was removed (the ingest was cleaned up by hand):
+    # the next ingest falls back to the configured seed instead of a missing --seed
+    import shutil
+    shutil.rmtree(host["root"] / "builds/nora" / build)
+    sim.calls.clear()
+    job3, ingest3 = _submit_ingest(host, release="Oct2031")
+    assert r.run_once() == "completed"
+    assert any("--seed seed0" in c for c in sim.cmds())
+    assert any(f"{build} is gone from the builds root" in l for l in _run(q.get_logs(job3)))
 
 
 def test_documents_stage_refusals(host):

@@ -202,7 +202,11 @@ def _next_build_id(c: Ctx) -> str:
 
 
 def st_start(c: Ctx) -> None:
-    seed = c.db.last_served_build() or c.cfg.seed_build
+    seed = c.db.last_served_build() or ""
+    if seed and not c.cfg.build_dir(seed).is_dir():
+        c.log(f"start: last served build {seed} is gone from the builds root; seeding from the configured {c.cfg.seed_build or '-'}")
+        seed = ""
+    seed = seed or c.cfg.seed_build
     if not seed:
         raise StageError("no seed build: set seed_build in the runner config for the first ingest")
     c.build = _next_build_id(c)
