@@ -199,7 +199,7 @@ hash), so nothing needs `--force` bookkeeping.
 
 **Driver:** `./cycle.sh` wraps Phases 0.3–6 as phase-gated verbs
 (`start <build-id> [--seed <prev>]` / `status` / `parse` / `prompts` /
-`taxonomy` / `enrich [--cell C] [--retry-failed]` / `verify-enrich` /
+`taxonomy` / `enrich [--cell C] [--retry-failed [--single]]` / `verify-enrich` /
 `promote --label L [--host H]` / `abandon`). It runs exactly the commands
 below, records one cycle at a time in `<builds>/ACTIVE` +
 `<build>/CYCLE.json` (with each detached phase's container id), checks

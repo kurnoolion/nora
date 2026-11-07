@@ -128,3 +128,13 @@
 
 **Consequences.** Webhook targets must be allowlisted in the runner config; an unlisted host is logged and skipped. The web validates only the URL's shape.
 
+### D-DRAFT-14 — 2026-11-07 — A retry of the enrichment is batched; single-request mode is opt-in
+
+**Context.** The driver paired `--retry-failed` with `--max-reqs 1` on every retry (D-178's "standard retry pairing"). The runner retries from the enrich stage after any failure there, including an interrupted first run, and `--retry-failed` resumes the run: the whole cell then went one request per call. Field-found: fourteen hours for a cell that batches in sixty-five minutes.
+
+**Decision.** `cycle.sh enrich --retry-failed` re-queues the failed rows and resumes, batched. `--single` adds `--max-reqs 1` for the rows that keep failing, by hand. The runner's Retry passes `--retry-failed` only.
+
+**Why.** D-178's single-request mode is for stubborn rows after a complete run, a second step, not the first retry; most retries are resumes of an interrupted run, where batching is the whole speed. The alternative, a separate "resume" button beside "retry failed rows", was rejected as a distinction the team should not have to make.
+
+**Consequences.** A row that fails in a batch twice is retried in a batch twice; the administrator runs `--retry-failed --single` for it. D-178's text stays true for that step.
+

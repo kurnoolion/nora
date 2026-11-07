@@ -25,6 +25,7 @@ CYCLE = REPO / "docker" / "cycle.sh"
 FAKE_DOCKER = r'''#!/usr/bin/env bash
 # fake docker for cycle.sh tests
 if [ "$1" = image ] && [ "$2" = inspect ]; then
+  echo "$5" >> "$NORA_ROOT/inspected.txt"   # the image name the driver asked about
   echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; exit 0
 fi
 if [ "$1" = compose ]; then
@@ -39,7 +40,7 @@ if [ "$1" = compose ]; then
   done
   envdir="$(grep '^NORA_ENV_DIR=' "$envfile" | cut -d= -f2-)"
   log="$(printf '%s' "$inner" | grep -oE '> /data/env/reports/[^ ]+' | head -1 | sed 's#^> /data/env#'"$envdir"'#')"
-  if [ -n "$log" ]; then mkdir -p "$(dirname "$log")"; { echo "fake phase ran"; echo "CYC-EXIT rc=0"; } > "$log"; fi
+  if [ -n "$log" ]; then mkdir -p "$(dirname "$log")"; { echo "INNER: $inner"; echo "fake phase ran"; echo "CYC-EXIT rc=0"; } > "$log"; fi
   (( detached )) && echo "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
   exit 0
 fi
@@ -328,3 +329,60 @@ def test_start_writes_the_build_var_and_rewrites_older_lines(host):
     wiring.write_text(wiring.read_text().replace(f"NORA_ENV_DIR={host['nora'] / 'b1'}", "NORA_ENV_DIR=/elsewhere"))
     r = host["run"]("parse")
     assert r.returncode == 1 and "CYC-E004" in r.stderr and "disagrees" in r.stderr
+
+
+def _to_taxonomy_ok(host, cell=("MNO-A", "Jan2031")):
+    """Through start, parse, prompts and taxonomy with a clean per-cell ledger."""
+    _to_parsed(host)
+    assert host["run"]("prompts", "--yes").returncode == 0
+    assert host["run"]("taxonomy").returncode == 0
+    tx = host["nora"] / "b1" / "out" / "taxonomy" / cell[0] / cell[1]
+    tx.mkdir(parents=True, exist_ok=True)
+    (tx / "extraction_state.json").write_text(json.dumps({"prompt_fp": "x", "docs": {"d": {"status": "ok"}}}))
+
+
+def test_enrich_cell_log_name_and_retry_flags(host):
+    """The detached log is named with the cell's dashes (no slash in a file
+    name); a retry re-queues failed rows batched, and --single adds the
+    one-request-per-call mode (D-178) only when asked."""
+    _to_taxonomy_ok(host)
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    log = Path(_cycle_json(host, "b1")["phases"][-1]["log"])
+    assert log.name.startswith("enrich-MNO-A-Jan2031-") and "/" not in log.name
+    inner = log.read_text().splitlines()[0]
+    assert "--only MNO-A/Jan2031" in inner and "--retry-failed" not in inner and "--max-reqs" not in inner
+    assert "NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/MNO-A/Jan2031" in inner
+    # retry: batched
+    log.write_text("CYC-EXIT rc=1\n")   # the first run failed
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031", "--retry-failed")
+    assert r.returncode == 0, r.stderr
+    inner = Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+    assert "--retry-failed" in inner and "--max-reqs" not in inner
+    # retry, single-request mode on request
+    Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=1\n")
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031", "--retry-failed", "--single")
+    assert r.returncode == 0, r.stderr
+    inner = Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+    assert "--retry-failed --max-reqs 1" in inner
+    # the older spelling of the cell is accepted
+    Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=1\n")
+    r = host["run"]("enrich", "--cell", "MNO-A__Jan2031")
+    assert r.returncode == 0, r.stderr
+    assert "--only MNO-A/Jan2031" in Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+
+
+def test_start_inspects_the_images_the_wiring_env_names(host):
+    """The recorded image ids are those of the tag and prefix compose will
+    run (IMAGE_TAG / IMAGE_PREFIX in the wiring env), not a fixed `:dev`."""
+    host["cell"]("MNO-A", "Jan2031")
+    assert host["run"]("start", "b0").returncode == 0
+    seen = (host["root"] / "inspected.txt").read_text().split()
+    assert seen[-2:] == ["local/nora-batch:dev", "local/sira-batch:dev"]
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + 'IMAGE_TAG="v9"\nIMAGE_PREFIX=reg.example.test/nora\n')
+    (host["root"] / "builds" / "ACTIVE").unlink()
+    assert host["run"]("start", "b1").returncode == 0
+    seen = (host["root"] / "inspected.txt").read_text().split()
+    assert seen[-2:] == ["reg.example.test/nora/nora-batch:v9", "reg.example.test/nora/sira-batch:v9"]
+

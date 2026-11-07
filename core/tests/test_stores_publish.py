@@ -638,3 +638,22 @@ def test_exclude_drops_a_unit_built_or_inherited_and_history_follows(world):
     h = next(m for m in reg.members("set-2") if m.key == ("history", MNO_B))
     assert SqliteHistoryStore(db_paths=[world["root"] / h.file]).releases(MNO_B) == [R1]
 
+
+def test_migrate_units_cli_takes_serve_root(tmp_path):
+    """`publish migrate-units --serve-root R [--dry-run]` (field-found: the
+    subcommand shipped without --serve-root)."""
+    from core.src.stores.publish import main as pub_main
+    from core.src.stores.registry import Registry, registry_path
+    reg = Registry(registry_path(tmp_path), read_only=False)
+    reg.ensure()
+    con = reg.begin_write()
+    con.execute("INSERT INTO store_version(store, unit, version, fingerprint, file, sha256, bytes, schema_version, "
+                "fingerprint_version, staged_at, staged_by) VALUES ('cells','mno-a__Jan2031',1,'fp','f.db','s',1,'2','1','t','u')")
+    con.execute("INSERT INTO active(store, unit, version, label, since) VALUES ('cells','mno-a__Jan2031',1,'L','t')")
+    reg.commit_write(con)
+    assert pub_main(["migrate-units", "--serve-root", str(tmp_path), "--dry-run"]) == 0
+    assert pub_main(["migrate-units", "--serve-root", str(tmp_path)]) == 0
+    assert pub_main(["migrate-units", "--serve-root", str(tmp_path), "--dry-run"]) == 0
+    rows = [r[0] for r in reg._connect().execute("SELECT unit FROM active")]
+    assert rows == ["mno-a/Jan2031"]
+

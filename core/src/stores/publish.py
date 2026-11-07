@@ -734,6 +734,7 @@ def main(argv: "list[str] | None" = None) -> int:
     c.add_argument("--dry-run", action="store_true")
 
     mu = sub.add_parser("migrate-units", help="rewrite <mno>__<release> units to <mno>/<release> (one-shot, idempotent)")
+    _add_root(mu)
     mu.add_argument("--dry-run", action="store_true")
 
     s = sub.add_parser("status", help="registry summary")

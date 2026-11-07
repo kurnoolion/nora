@@ -189,7 +189,8 @@ Targeted forms:
 
 ```bash
 ./cycle.sh enrich --cell <MNO>/<MMMYYYY>            # one cell (e.g. inspect the smallest first)
-./cycle.sh enrich --cell <MNO>/<MMMYYYY> --retry-failed   # evict genuine failures, solo LLM calls, re-verify
+./cycle.sh enrich --cell <MNO>/<MMMYYYY> --retry-failed   # evict genuine failures, resume batched, re-verify
+./cycle.sh enrich --cell <MNO>/<MMMYYYY> --retry-failed --single   # rows that keep failing: one request per call (D-178)
 ```
 
 After a hard interruption (host reboot, killed container) the runbook's

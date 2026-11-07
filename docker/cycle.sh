@@ -23,7 +23,7 @@
 #   ./cycle.sh parse        [--cell <MNO>/<MMMYYYY>] [--force] [--skip-standards]
 #   ./cycle.sh prompts      [--yes]             # gate: per-MNO prompts present + shaped, publish to <build>/prompts/
 #   ./cycle.sh taxonomy     [--cell <MNO>/<MMMYYYY>] [--force]   # per cell; re-run = retry of failed docs
-#   ./cycle.sh enrich       [--cell <MNO>/<MMMYYYY>] [--retry-failed] [--run-name <r>]
+#   ./cycle.sh enrich       [--cell <MNO>/<MMMYYYY>] [--retry-failed [--single]] [--run-name <r>]
 #                           [--index flat|cell-db]  (cell-db: ALSO emit SQLite cell DBs
 #                            under <db_root>/cell-dbs/ — dual-emit; default flat unchanged)
 #   ./cycle.sh verify-enrich [--yes]            # gate: sira_multi --verify must PASS
@@ -91,7 +91,7 @@ die() { echo "CYC-E$1: $2" >&2; echo "  fix: $3" >&2; exit 1; }
 usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 VERB="${1:-}"; [ -n "$VERB" ] || usage; shift
-BUILD="" PROFILES="" SEED="" YES=0 FORCE="" SKIPSTD="" CELL="" RETRY=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE="" INDEX_MODE="flat"
+BUILD="" PROFILES="" SEED="" YES=0 FORCE="" SKIPSTD="" CELL="" RETRY=0 SINGLE=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE="" INDEX_MODE="flat"
 while (( $# > 0 )); do
   case "$1" in
     --profiles)      PROFILES="$2"; shift 2;;
@@ -101,6 +101,7 @@ while (( $# > 0 )); do
     --skip-standards) SKIPSTD="--skip-standards"; shift;;
     --cell)          CELL="${2//__//}"; shift 2;;   # <MNO>/<MMMYYYY>; the older <MNO>__<MMMYYYY> is accepted
     --retry-failed)  RETRY=1; shift;;
+    --single)        SINGLE=1; shift;;   # with --retry-failed: one request per call (D-178) for rows that keep failing
     --run-name)      RUN="$2"; shift 2;;
     --label)         LABEL="$2"; shift 2;;
     --host)          HOST="$2"; shift 2;;
@@ -267,10 +268,16 @@ start)
     if [ -f "$PROFILES" ]; then src="$PROFILES"; elif [ -f "$NROOT/$PROFILES/profiles.json" ]; then src="$NROOT/$PROFILES/profiles.json"; fi
     [ -n "$src" ] || die 024 "--profiles '$PROFILES' is neither a file nor a build-id with profiles.json" "point at a profiles.json"
   fi
+  # the images the phases will run: the tag and prefix the wiring env gives
+  # compose (IMAGE_TAG / IMAGE_PREFIX, defaults dev / local) — recording
+  # `:dev` while compose ran another tag named the wrong images (field-found)
+  wiring_var() { { grep -E "^$1=" "$WIRING" || true; } | tail -1 | cut -d= -f2- | tr -d "\"' "; }
+  tag="$(wiring_var IMAGE_TAG)"; tag="${tag:-dev}"
+  pfx="$(wiring_var IMAGE_PREFIX)"; pfx="${pfx:-local}"
   images="{}"
   for i in nora-batch sira-batch; do
-    id="$(docker image inspect -f '{{.Id}}' "local/$i:dev" 2>/dev/null | cut -c8-19)" || true
-    [ -n "$id" ] || die 025 "image local/$i:dev not found" "rebake: docker compose --env-file $WIRING --profile ingest build nora-batch sira-batch"
+    id="$(docker image inspect -f '{{.Id}}' "$pfx/$i:$tag" 2>/dev/null | cut -c8-19)" || true
+    [ -n "$id" ] || die 025 "image $pfx/$i:$tag not found" "rebake: docker compose --env-file $WIRING --profile ingest build nora-batch sira-batch"
     images="$(printf '%s' "$images" | python3 -c "import json,sys; d=json.load(sys.stdin); d['$i']='$id'; print(json.dumps(d))")"
   done
   # --seed: resolve the new build's profile bindings BEFORE anything is
@@ -418,7 +425,11 @@ enrich)
     || die 062 "TAX-W003 present in taxonomy log (overview not attached)" "check NORA_TAXONOMY_OVERVIEW_DIR + <build>/prompts/ contents"
   [ "$(phase_state enrich)" != running ] || die 063 "enrich already running" "./cycle.sh status"
   cyc set "$CJ" run_name "$RUN"
-  extra=""; (( RETRY )) && extra="--retry-failed --max-reqs 1"
+  # --retry-failed re-queues the failed rows and RESUMES the run, batched.
+  # Single-request mode (D-178) is opt-in with --single: it was forced on
+  # every retry once, and a retry of an interrupted run then enriched the
+  # whole cell one request per call (field-found: fourteen hours).
+  extra=""; (( RETRY )) && extra="--retry-failed"; (( RETRY && SINGLE )) && extra="$extra --max-reqs 1"
   case "$INDEX_MODE" in
     flat) ;;
     cell-db) extra="$extra --index cell-db";;   # dual-emit (corp-db-layer phase 3)
@@ -434,8 +445,9 @@ enrich)
     echo "enrich: all cells smallest-first: $order"
     inner="for c in $order; do NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/\$c python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
   fi
-  detach enrich sira-batch "/data/env/reports/enrich-${CELL:+${CELL//\//-}}${CELL:-ALL}-$TS.log" "$inner"
-  echo "  resume/retry: same verb (same run name $RUN); one cell: --cell <MNO>/<MMMYYYY>; failures: --retry-failed"
+  tag="${CELL:-ALL}"; tag="${tag//\//-}"
+  detach enrich sira-batch "/data/env/reports/enrich-$tag-$TS.log" "$inner"
+  echo "  resume/retry: same verb (same run name $RUN); one cell: --cell <MNO>/<MMMYYYY>; failures: --retry-failed [--single]"
   ;;
 
 verify-enrich)
