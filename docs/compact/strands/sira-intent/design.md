@@ -58,6 +58,22 @@ the asker most wants; the dev set README states this rule. Scope intents and
 
 ## 4. Flow
 
+0. **Bare requirement IDs → the `id_lookup` lane** (Q12–Q14, added
+   2026-11-07 after a review with the manager).
+   - Applies when the message is nothing but requirement IDs: one or several,
+     separated by spaces, commas or new lines.
+   - nora-web skips classification, retrieval and synthesis, and fetches each
+     ID with `req_tree.find_req` (Trees store).
+   - Shows the full text at once. Unknown IDs are listed as not found.
+   - Release shown: the latest served by default, with an "also in:
+     <releases>" line. A release named in the message wins.
+   - This is a **lane**, not an intent. It is recorded like History: the
+     feedback row's `lane_config.lane = "id_lookup"`, with `intent=other`, and
+     the badge reads "lookup". `Intent` keeps its seven values, so Kev never
+     sees a lookup option.
+   - It has its own tests. It is not part of the classifier dev set: o03 is
+     replaced.
+
 nora-web classifies **once, first**: Kev answers in about 0.55 s warm on a Mac
 with Kev-4B on MLX, and the first call takes about 3.5 s. Then:
 
@@ -68,6 +84,14 @@ with Kev-4B on MLX, and the first call takes about 3.5 s. Then:
    - **Lane enabled, but no History store, the store won't open, or only one release for the asked MNO** → an error telling the user what is available, for example "History has only Feb2026 for this operator; ask about one release, or pick another operator". No silent fallback (Q3, Q17).
    - **With the flag off** → today's behaviour: SIRA answers as before.
 3. **Any other intent** → the SIRA lane. Select-synth uses the intent's prompt when the flag is on, and today's prompt otherwise.
+
+4. **Requirement IDs inside a question** (Q15): the named requirements are
+   fetched by ID and placed first in the select-synth context, whatever BM25
+   returns.
+   - Reported symptom: the answer shows the requirements that cite the named
+     one, but not the named one itself.
+   - Reproduce it on the local stack before fixing.
+   - Built last in phase 1.
 
 The store is unchanged. It keeps rules-only scope (`mnos`, `releases`) in
 `_multi_cell_query`. Phase 1 does not send intent to the store (§9).
@@ -130,6 +154,9 @@ switch at a time.
   - Guided by the logged rows and the golden A/B.
 - **Deferred to internal infra:** the held-out check on real feedback questions (dev-set option C).
 - **Deferred:** a user override control for intent, and multi-label intent.
+- **Deferred:** requirement-ID patterns for other operators. The rules match
+  `VZ_REQ_\w+_\d+` only (`query/analyzer.py`). Add the AT&T and T-Mobile
+  formats when those operators are ingested, not by guessing (Q17).
 - **Not moving to jev:** MNO and release stay with the rules extractors (the
   store's `_multi_cell_query` → `resolve_cells`).
   - They are explicit scope, extracted from what the user wrote, unlike the

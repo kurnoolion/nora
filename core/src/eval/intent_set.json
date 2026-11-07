@@ -78,7 +78,7 @@
 
     {"sample_id": "o01", "query": "T3402", "intent": "other"},
     {"sample_id": "o02", "query": "hello", "intent": "other"},
-    {"sample_id": "o03", "query": "VZ_REQ_PLAN_A_0007", "intent": "other"},
+    {"sample_id": "o03", "query": "Summarize this chat in one line", "intent": "other"},
     {"sample_id": "o04", "query": "Thanks, that helps", "intent": "other"},
     {"sample_id": "o05", "query": "Can you translate the attach requirements into Spanish?", "intent": "other"},
     {"sample_id": "o06", "query": "Who wrote the data retry plan?", "intent": "other"},

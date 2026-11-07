@@ -135,3 +135,29 @@
 **Consequences.**
 - If Kev loses, phase 1 ships the rules intent with the prompts.
 - The success bar is in-sample on a small synthetic set: a starting point, not a validated setting.
+
+### D-DRAFT-8 — 2026-11-07 — Bare requirement IDs get an `id_lookup` lane with no model; IDs inside a question are pinned into the context
+
+**Context.**
+- Users often paste one or more requirement IDs and expect the requirement text back. The manager asked for no synthesis in that case.
+- When an ID appears inside a question, answers reportedly show the requirements that cite it but not the named one.
+- `req_tree.find_req` already fetches a requirement by ID from the Trees store.
+
+**Decision.**
+- **A message made only of requirement IDs** goes to a new `id_lookup` lane, ahead of classification:
+  - each ID is fetched with `find_req` and shown in full;
+  - the latest served release is shown unless the message names one, and other releases are mentioned;
+  - unknown IDs are listed as not found.
+- **IDs inside a question:** the named requirements are fetched by ID and placed first in the select-synth context.
+
+**Why.**
+- A pasted ID is a lookup, not a question: a model call adds latency and a chance of paraphrase for nothing.
+- It is a lane, recorded as `lane_config.lane = "id_lookup"` the way History records `"history"`, not an `Intent` value. A pattern decides it, not a judgment, so it does not belong in Kev's options.
+- Rejected:
+  - an eighth `lookup` intent, which Kev would have to learn to pick;
+  - a separate strand for the pinning fix, which would redo the same ID matching in the same nora-web code.
+
+**Consequences.**
+- The classifier dev set drops its bare-ID sample (o03).
+- The ID pattern is Verizon-only until other operators' formats are known.
+- The pinning fix is built last in phase 1, after reproducing the symptom.
