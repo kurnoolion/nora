@@ -7,7 +7,6 @@
   "cycle_env": {
     "NORA_ROOT": "/srv/nora",
     "NORA_BUILDS_NORA_ROOT": "/path/to/nora-builds",
-    "NORA_BUILDS_SIRA_ROOT": "/path/to/sira-builds",
     "NORA_REQUIREMENTS_DIR": "/path/to/requirements",
     "NORA_SERVE_ROOT": "/path/to/labels",
     "NORA_BUILDS_WIRING": "/path/to/env/.env.builds"

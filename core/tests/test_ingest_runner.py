@@ -189,9 +189,11 @@ def test_config_build_roots_follow_cycle_sh_rules(host):
     root = host["root"]
     assert cfg.nora_builds_root == root / "builds/nora"
     assert cfg.active_file == root / "builds/ACTIVE"
-    cfg.cycle_env = {"NORA_BUILDS_NORA_ROOT": "/other/nb"}
+    assert cfg.sira_build_dir("b1") == root / "builds/nora/b1/out/sira"
+    cfg.cycle_env = {"NORA_BUILDS_NORA_ROOT": "/other/nb", "NORA_BUILDS_SIRA_ROOT": "/other/sira"}
     assert cfg.nora_builds_root == Path("/other/nb")
     assert cfg.active_file == Path("/other/nb/ACTIVE")
+    assert cfg.sira_build_dir("b1") == Path("/other/sira/b1")
 
 
 # -- db --------------------------------------------------------------------------------------
@@ -273,8 +275,9 @@ def test_ingest_happy_path(host):
     assert sorted(p.name for p in cell.iterdir()) == ["spec.pdf"]
     cmds = sim.cmds()
     assert any(c.endswith(f"cycle.sh start {ing.build} --seed seed0") for c in cmds)
-    assert any("cycle.sh parse --skip-standards" in c for c in cmds)
+    assert any("cycle.sh parse --cell MNO-A__Apr2031 --skip-standards" in c for c in cmds)
     assert any("cycle.sh prompts --yes" in c for c in cmds)
+    assert any("cycle.sh taxonomy --cell MNO-A__Apr2031" in c for c in cmds)
     assert any("cycle.sh enrich --cell MNO-A__Apr2031" in c and "--retry-failed" not in c for c in cmds)
     assert any("cycle.sh verify-enrich --yes" in c for c in cmds)
     assert any(f"cycle.sh promote --label {ing.label} --scheme v9" in c for c in cmds)
@@ -631,7 +634,7 @@ def test_config_defaults_wiring_env_and_check_refuses_template(host, tmp_path, c
 # -- the dangling best.jsonl after a resumed enrichment ------------------------------------------
 
 def _sira_cell(host, build: str, cell: str, dangling: bool) -> Path:
-    enr = host["root"] / "builds/sira" / build / cell / "enrichments" / "doc"
+    enr = host["root"] / "builds/nora" / build / "out" / "sira" / cell / "enrichments" / "doc"
     enr.mkdir(parents=True, exist_ok=True)
     if dangling:
         (enr / "best.jsonl").symlink_to(f"{build}.jsonl")   # target never written
@@ -658,7 +661,7 @@ def test_convert_promotes_a_dangling_best_link(host):
         text = " ".join(args)
         if "sira_incremental promote" in text:
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
-            enr = host["root"] / "builds/sira" / build / "MNO-A__Apr2031" / "enrichments" / "doc"
+            enr = host["root"] / "builds/nora" / build / "out" / "sira" / "MNO-A__Apr2031" / "enrichments" / "doc"
             (enr / f"{build}.jsonl").write_text("{}\n")
             return Result(0, ["wrote 1 docs", "linked best.jsonl"])
         return orig_compose(args, env)

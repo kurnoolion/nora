@@ -20,9 +20,9 @@
 # Usage:
 #   ./cycle.sh start <build-id> [--profiles <path|prev-build-id>] [--seed <prev-build-id>]
 #   ./cycle.sh status
-#   ./cycle.sh parse        [--force] [--skip-standards]
+#   ./cycle.sh parse        [--cell <MNO>__<MMMYYYY>] [--force] [--skip-standards]
 #   ./cycle.sh prompts      [--yes]             # gate: per-MNO prompts present + shaped, publish to <build>/prompts/
-#   ./cycle.sh taxonomy     [--force]           # re-run = retry of failed docs
+#   ./cycle.sh taxonomy     [--cell <MNO>__<MMMYYYY>] [--force]   # per cell; re-run = retry of failed docs
 #   ./cycle.sh enrich       [--cell <MNO>__<MMMYYYY>] [--retry-failed] [--run-name <r>]
 #                           [--index flat|cell-db]  (cell-db: ALSO emit SQLite cell DBs
 #                            under <db_root>/cell-dbs/ — dual-emit; default flat unchanged)
@@ -38,19 +38,21 @@
 # container's id is recorded with the phase (CYCLE.json, `status`) so a
 # runaway phase can be stopped by name.
 #
-# Incremental cycle (one new cell of a known MNO): `start --seed <prev>`
-# copies the previous build's out/{extract,profile,parse,resolve,taxonomy}
-# into the new build (a copy, never hard links: the stages rewrite their
-# ledgers in place and shared inodes would corrupt the seed), takes its
-# profile bindings unless --profiles says otherwise, and binds each cell
-# the seed does not cover to the profile of that MNO's latest bound cell.
-# parse then skips every up-to-date tree (D-DRAFT-8) and taxonomy reuses
-# every unchanged plan (D-DRAFT-9): only the new cell costs anything.
+# Incremental cycle (one new cell of a known MNO): every stage is per
+# cell since the taxonomy became per release (2026-11-06), so a build
+# holds only the cells it parsed. `start --seed <prev>` takes the previous
+# build's profile bindings (unless --profiles says otherwise) and binds
+# each cell the seed does not cover to the profile of that MNO's latest
+# bound cell — nothing is copied. Then `parse --cell`, `taxonomy --cell`,
+# `enrich --cell` work on that one cell; publish inherits the rest from
+# the active set.
 # `--yes` on the two gates records the confirmation as "<user> (auto)" —
 # for an unattended runner, not for a person skipping the evidence.
 #
 # Layout (override with env vars): NORA_ROOT=/srv/nora →
-#   $NORA_ROOT/builds/{nora,sira}/<build-id>   NORA_BUILDS_ROOT
+#   $NORA_ROOT/builds/nora/<build-id>          NORA_BUILDS_ROOT (NORA_BUILDS_NORA_ROOT: the dir holding the builds)
+#   <build>/out/sira/<MNO>__<MMMYYYY>/         the SIRA cells: the build's last stage dir (since 2026-11-06);
+#                                              NORA_BUILDS_SIRA_ROOT=<dir> keeps the older <dir>/<build-id> twin
 #   $NORA_ROOT/requirements                    NORA_REQUIREMENTS_DIR
 #   $NORA_ROOT/serve                           NORA_SERVE_ROOT
 #   $NORA_ROOT/env/.env.builds                 NORA_ENV_ROOT (falls back to docker/)
@@ -63,14 +65,15 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 NORA_ROOT="${NORA_ROOT:-/srv/nora}"
 BUILDS="${NORA_BUILDS_ROOT:-$NORA_ROOT/builds}"
-# Per-lane build roots. Defaults preserve the single-root layout
-# ($BUILDS/nora, $BUILDS/sira) byte-for-byte; hosts whose wiring env
-# follows the README sibling-tree convention set these two vars to those
-# trees' parents, making the wiring-named dirs the build dirs (field
-# finding: the script's tree and the README convention couldn't both
-# hold). ACTIVE moves with the nora root only when it is overridden.
+# Build roots. The nora builds live under NROOT ($BUILDS/nora by default;
+# NORA_BUILDS_NORA_ROOT names the dir holding them directly). The SIRA
+# cells of a build are its last stage dir, <build>/out/sira/ (one build,
+# one tree — every stage's artifacts in one place); NORA_BUILDS_SIRA_ROOT,
+# when set, keeps the older layout of a <dir>/<build-id> twin instead.
+# ACTIVE moves with the nora root only when it is overridden.
 NROOT="${NORA_BUILDS_NORA_ROOT:-$BUILDS/nora}"
-SROOT="${NORA_BUILDS_SIRA_ROOT:-$BUILDS/sira}"
+SROOT="${NORA_BUILDS_SIRA_ROOT:-}"
+sira_dir() { if [ -n "$SROOT" ]; then echo "$SROOT/$1"; else echo "$NROOT/$1/out/sira"; fi; }  # sira_dir <build>
 REQS="${NORA_REQUIREMENTS_DIR:-$NORA_ROOT/requirements}"
 SERVE_ROOT="${NORA_SERVE_ROOT:-$NORA_ROOT/serve}"
 ENV_ROOT="${NORA_ENV_ROOT:-$NORA_ROOT/env}"
@@ -155,7 +158,7 @@ if [ -n "${NORA_BUILDS_NORA_ROOT:-}" ]; then ACTIVE="$NROOT/ACTIVE"; else ACTIVE
 resolve_build() {
   [ -f "$ACTIVE" ] || die 001 "no cycle in flight ($ACTIVE missing)" "./cycle.sh start <build-id>"
   BUILD="$(cat "$ACTIVE")"
-  NB="$NROOT/$BUILD"; SB="$SROOT/$BUILD"; CJ="$NB/CYCLE.json"
+  NB="$NROOT/$BUILD"; SB="$(sira_dir "$BUILD")"; CJ="$NB/CYCLE.json"
   [ -f "$CJ" ] || die 002 "ACTIVE names $BUILD but $CJ is missing" "restore CYCLE.json or rm $ACTIVE and start over"
   OWNER="$(cyc get "$CJ" owner)"
   [ "$OWNER" = "$ME" ] || echo "NOTE: cycle $BUILD is owned by $OWNER; you ($ME) are acting on it — recorded as such" >&2
@@ -207,6 +210,16 @@ cells_by_size() {  # smallest first (doc count) — inspect the small cell befor
   for c in $(cells); do echo "$(find "$REQS/${c%%__*}/${c##*__}" -type f | wc -l) $c"; done | sort -n | cut -d' ' -f2
 }
 GATE_BY="$ME"
+tax_ledger_counts() {  # ok/failed over every cell's taxonomy ledger in the build
+  find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name extraction_state.json 2>/dev/null | python3 -c "
+import json, sys
+ok = failed = 0
+for p in sys.stdin.read().split():
+    for v in json.load(open(p))['docs'].values():
+        if v['status'] == 'ok': ok += 1
+        elif v['status'] == 'failed': failed += 1
+print({'ok': ok, 'failed': failed})"
+}
 gate() {  # gate <phase> — explicit yes, recorded; --yes records "<user> (auto)"
   if (( YES )); then
     GATE_BY="$ME (auto)"; echo "gate '$1' for $BUILD: confirmed by --yes (recorded as $GATE_BY)"
@@ -229,7 +242,7 @@ start)
       || die 021 "cycle '$prev' is still in flight (status=$pst, owner=$(cyc get "$NROOT/$prev/CYCLE.json" owner))" \
          "finish it (./cycle.sh promote) or ./cycle.sh abandon — one cycle at a time"
   fi
-  NB="$NROOT/$BUILD"; SB="$SROOT/$BUILD"; CJ="$NB/CYCLE.json"
+  NB="$NROOT/$BUILD"; SB="$(sira_dir "$BUILD")"; CJ="$NB/CYCLE.json"
   [ ! -e "$NB" ] && [ ! -e "$SB" ] || die 022 "build dirs for $BUILD already exist" "pick a new build-id (builds are never reused)"
   [ -d "$REQS" ] && [ -n "$(cells)" ] || die 023 "no <MNO>/<MMMYYYY> cells under $REQS" "stage the source docs first (README Phase 0.3)"
   [ -f "$WIRING" ] || die 003 "no builds wiring env at $ENV_ROOT/.env.builds (nor docker/)" "README Phase 0: cp <stack env> .env.builds"
@@ -241,7 +254,7 @@ start)
   # (header NOTE); its profiles.json is the default binding source.
   if [ -n "$SEED" ]; then
     echo "$SEED" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$' || die 026 "bad --seed '$SEED'" "name a previous build-id"
-    [ -d "$NROOT/$SEED/out/parse" ] || die 026 "--seed '$SEED' has no out/parse under $NROOT" "name a previous build that parsed"
+    [ -f "$NROOT/$SEED/profiles.json" ] || die 026 "--seed '$SEED' has no profiles.json under $NROOT" "name a previous build with bindings"
     [ -n "$PROFILES" ] || PROFILES="$SEED"
   fi
   src=""
@@ -260,7 +273,7 @@ start)
   # seed's profiles.json does not cover is bound to the profile of that
   # MNO's latest bound cell (a new release of a known MNO); an MNO with no
   # binding at all fails loud — new MNOs are hand-bound.
-  seeded="-" inherited="-" pf=""
+  inherited="-" pf=""
   if [ -n "$SEED" ]; then
     pf="$(mktemp)"; cp "$src" "$pf"; chmod 644 "$pf"
     inherited="$(python3 - "$pf" $(cells) <<'PY'
@@ -293,14 +306,6 @@ PY
   fi
   mkdir -p "$NB/reports" "$NB/prompts" "$SB"
   if [ -n "$pf" ]; then mv "$pf" "$NB/profiles.json"; elif [ -n "$src" ]; then cp "$src" "$NB/profiles.json"; fi
-  if [ -n "$SEED" ]; then
-    mkdir -p "$NB/out"; seeded=""
-    for d in extract profile parse resolve taxonomy; do
-      [ -d "$NROOT/$SEED/out/$d" ] || continue
-      cp -a --reflink=auto "$NROOT/$SEED/out/$d" "$NB/out/$d"; seeded="$seeded$d,"
-    done
-    seeded="${seeded%,}"
-  fi
   cyc init "$CJ" "$BUILD" "$ME" "$images"
   [ -n "$SEED" ] && cyc set "$CJ" seed "$SEED"
   # repoint the wiring env; a host env that lacks either line gets it
@@ -315,7 +320,7 @@ PY
   cyc_block start ok <<EOF
 cells=$n profiles=$([ -f "$NB/profiles.json" ] && echo present || echo MISSING) wiring=$WIRING
 images=$images
-seed=${SEED:--} seeded=$seeded inherited=$inherited
+seed=${SEED:--} inherited=$inherited
 EOF
   [ -f "$NB/profiles.json" ] || echo "NOTE: no profiles.json — new cells need bindings before parse (architect-reviewed, README Phase 0.4)"
   echo "next: ./cycle.sh parse"
@@ -327,7 +332,7 @@ status)
   echo "artifact state:"
   for p in parse prompts taxonomy enrich verify-enrich promote; do printf '  %-14s %s\n' "$p" "$(phase_state "$p")"; done
   [ -d "$NB/out/parse" ] && echo "  parse dirs   : $(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d | wc -l) (cells staged: $(cells | wc -l))"
-  [ -f "$NB/out/taxonomy/extraction_state.json" ] && echo "  taxonomy     : $(python3 -c "import json; d=json.load(open('$NB/out/taxonomy/extraction_state.json'))['docs']; print({s: sum(1 for v in d.values() if v['status']==s) for s in ('ok','failed')})") features=$(ls "$NB"/out/taxonomy/*_features.json 2>/dev/null | wc -l)"
+  [ -d "$NB/out/taxonomy" ] && echo "  taxonomy     : $(tax_ledger_counts) cells=$(find "$NB/out/taxonomy" -mindepth 2 -maxdepth 2 -type d | wc -l) features=$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name '*_features.json' | wc -l)"
   [ -d "$SB" ] && echo "  sira cells   : $(find "$SB" -mindepth 1 -maxdepth 1 -type d -name '*__*' | wc -l) run_name=$RUN"
   ;;
 
@@ -335,15 +340,21 @@ parse)
   resolve_build; need_wiring
   [ -f "$NB/profiles.json" ] || die 030 "no $NB/profiles.json (PIP-E003 would fail the lane)" "./cycle.sh start ... --profiles <prev-build> or author bindings (README Phase 0.4)"
   [ "$(phase_state parse)" != running ] || die 031 "parse already running" "./cycle.sh status; wait for CYC-EXIT"
-  detach parse nora-batch "/data/env/reports/lane-ingestion-ALL-$TS.log" \
-    "exec python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --skip-taxonomy $FORCE $SKIPSTD"
+  scope=""; tag="ALL"
+  if [ -n "$CELL" ]; then
+    [ -d "$REQS/${CELL%%__*}/${CELL##*__}" ] || die 032 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
+    scope="--mno ${CELL%%__*} --release ${CELL##*__}"; tag="$CELL"
+  fi
+  detach parse nora-batch "/data/env/reports/lane-ingestion-$tag-$TS.log" \
+    "exec python -m core.src.pipeline.run_cli --env-dir /data/env --lane ingestion --skip-taxonomy $scope $FORCE $SKIPSTD"
   ;;
 
 prompts)
   resolve_build
   require_phase parse "./cycle.sh parse, then ./cycle.sh status until parse=ok"
-  [ "$(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l)" -ge "$(cells | wc -l)" ] \
-    || die 040 "parse dirs < staged cells" "check the parse log for failed cells; re-run ./cycle.sh parse"
+  np="$(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l)"
+  [ "$np" -ge 1 ] || die 040 "no parse dirs in this build" "check the parse log for failed cells; re-run ./cycle.sh parse"
+  [ "$np" -ge "$(cells | wc -l)" ] || echo "NOTE: partial build — $np of $(cells | wc -l) staged cells parsed (an incremental cycle holds only its own cell)"
   PD="$HERE/../customizations/prompts"
   echo "prompt evidence (per MNO found in parse output):"
   missing=0 bad=0 mnos=0
@@ -377,18 +388,25 @@ taxonomy)
   resolve_build; need_wiring
   require_phase prompts "./cycle.sh prompts (gate) first"
   [ "$(phase_state taxonomy)" != running ] || die 050 "taxonomy already running" "./cycle.sh status"
-  detach taxonomy nora-batch "/data/env/reports/stage-taxonomy-$TS.log" \
-    "exec python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $FORCE"
-  echo "  re-running this verb after completion retries only failed docs (README Phase 4)"
+  scope=""; tag="ALL"
+  if [ -n "$CELL" ]; then
+    [ -d "$REQS/${CELL%%__*}/${CELL##*__}" ] || die 052 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
+    scope="--mno ${CELL%%__*} --release ${CELL##*__}"; tag="$CELL"
+  fi
+  detach taxonomy nora-batch "/data/env/reports/stage-taxonomy-$tag-$TS.log" \
+    "exec python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $scope $FORCE"
+  echo "  per cell (out/taxonomy/<MNO>/<MMMYYYY>/); re-running this verb after completion retries only failed docs (README Phase 4)"
   ;;
 
 enrich)
   resolve_build; need_wiring
   require_phase taxonomy "./cycle.sh taxonomy, then status until ok"
-  ES="$NB/out/taxonomy/extraction_state.json"
-  [ -f "$ES" ] || die 060 "no taxonomy ledger at $ES" "./cycle.sh taxonomy"
-  failed="$(python3 -c "import json; d=json.load(open('$ES'))['docs']; print(sum(1 for v in d.values() if v['status']=='failed'))")"
-  [ "$failed" = 0 ] || die 061 "taxonomy ledger has $failed failed doc(s)" "./cycle.sh taxonomy again (retries only failures); tax_debug for persistent ones"
+  # per-cell ledgers (out/taxonomy/<MNO>/<MMMYYYY>/extraction_state.json);
+  # with --cell only that cell's, else every cell's in the build
+  if [ -n "$CELL" ]; then ledgers="$NB/out/taxonomy/${CELL%%__*}/${CELL##*__}/extraction_state.json"; else ledgers="$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name extraction_state.json 2>/dev/null)"; fi
+  [ -n "$ledgers" ] && [ -f "$(echo "$ledgers" | head -1)" ] || die 060 "no taxonomy ledger under $NB/out/taxonomy${CELL:+ for $CELL}" "./cycle.sh taxonomy${CELL:+ --cell $CELL}"
+  failed="$(echo "$ledgers" | python3 -c "import json,sys; print(sum(sum(1 for v in json.load(open(p))['docs'].values() if v['status']=='failed') for p in sys.stdin.read().split()))")"
+  [ "$failed" = 0 ] || die 061 "taxonomy ledger has $failed failed doc(s)" "./cycle.sh taxonomy${CELL:+ --cell $CELL} again (retries only failures); tax_debug for persistent ones"
   tl="$(cyc lastlog "$CJ" taxonomy)"; [ -z "$tl" ] || ! grep -q TAX-W003 "$tl" \
     || die 062 "TAX-W003 present in taxonomy log (overview not attached)" "check NORA_TAXONOMY_OVERVIEW_DIR + <build>/prompts/ contents"
   [ "$(phase_state enrich)" != running ] || die 063 "enrich already running" "./cycle.sh status"
@@ -401,11 +419,13 @@ enrich)
   esac
   if [ -n "$CELL" ]; then
     [ -d "$REQS/${CELL%%__*}/${CELL##*__}" ] || die 064 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
-    inner="python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
+    [ -d "$NB/out/taxonomy/${CELL%%__*}/${CELL##*__}" ] || die 066 "no taxonomy for $CELL at $NB/out/taxonomy/${CELL%%__*}/${CELL##*__}" "./cycle.sh taxonomy --cell $CELL"
+    # the lane reads the cell's own taxonomy (per release since 2026-11-06)
+    inner="NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/${CELL%%__*}/${CELL##*__} python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
   else
     order="$(cells_by_size | tr '\n' ' ')"
     echo "enrich: all cells smallest-first: $order"
-    inner="for c in $order; do python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
+    inner="for c in $order; do NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/\${c%%__*}/\${c##*__} python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
   fi
   detach enrich sira-batch "/data/env/reports/enrich-${CELL:-ALL}-$TS.log" "$inner"
   echo "  resume/retry: same verb (same run name $RUN); one cell: --cell <MNO>__<MMMYYYY>; failures: --retry-failed"

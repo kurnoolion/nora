@@ -569,37 +569,37 @@ def _load_taxonomy_ledger(state_path, prompt_fp: str) -> dict:
 
 
 def run_taxonomy(ctx: PipelineContext) -> StageResult:
-    """Extract feature taxonomy from parsed trees.
+    """Extract the feature taxonomy of each in-scope cell from its parsed trees.
 
-    The unit of extraction is a PLAN, not a file: multi-plan trees (one
-    doc whose chapters are each a plan) are split via split_tree_by_plan
-    into per-plan subtrees, and units are deduped by (MNO, plan_id) with
-    the newest release winning.
+    Per cell (strand self-serve-ingestion, 2026-11-06): every `(MNO,
+    release)` cell derives its own taxonomy under
+    `out/taxonomy/<mno>/<rel>/` — per-plan `<plan_id>_features.json`, the
+    cell's `taxonomy.json`, its `extraction_state.json` ledger and its
+    `.corpus_fingerprint`. Releases no longer supersede each other: a
+    plan published in two releases is extracted once per release, so each
+    release is enriched against the taxonomy of its own text and a build
+    can hold one cell without the rest of the corpus. The unit of
+    extraction is still a PLAN (multi-plan trees are split via
+    split_tree_by_plan); within a cell a plan appearing in two documents
+    keeps the later file. A build-level `out/taxonomy/taxonomy.json` is
+    consolidated over every cell present in the build (for the graph
+    builder and the review editor); a `corrections/taxonomy.json` replaces
+    that build-level file only (TAX-W002) — per-cell extraction still runs.
 
     Resilient by design: extraction is per-plan fail-soft (a flaky LLM
     call or unparseable response marks that plan failed and the run
-    continues), per-plan resumable (extraction_state.json records each
-    unit's status + source-tree hash; unchanged OK units are skipped on
-    re-run), and failed units retry automatically on the next run —
-    "re-run the same command" is the retry mechanism. The stage
-    fingerprint is stamped only on a zero-failure run so a degraded run
-    can never cache-lock itself.
+    continues), per-plan resumable (the cell's ledger records each unit's
+    status + source-tree hash; unchanged OK units are skipped on re-run),
+    and failed units retry automatically on the next run — "re-run the
+    same command" is the retry mechanism. A cell's fingerprint is stamped
+    only on a zero-failure run so a degraded cell can never cache-lock
+    itself; a cell whose tree set and prompt inputs are unchanged is
+    served from its cache (`stats.source == "cache"` when every cell was).
     """
     t0 = time.time()
     stage = "taxonomy"
-    out_dir = ctx.stage_output(stage)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check for correction override
-    correction = ctx.correction("taxonomy.json")
-    if correction:
-        shutil.copy2(correction, out_dir / "taxonomy.json")
-        ctx.state["taxonomy_path"] = str(out_dir / "taxonomy.json")
-        return StageResult(
-            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
-            stats={"source": "correction", "path": str(correction)},
-            warnings=["TAX-W002: Using correction file for taxonomy"],
-        )
+    base_out = ctx.stage_output(stage)
+    base_out.mkdir(parents=True, exist_ok=True)
 
     try:
         from core.src.parser.structural_parser import RequirementTree
@@ -609,20 +609,20 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     except ImportError as e:
         return _fail(stage, "TAX-E001", f"Import error: {e}", time.time() - t0)
 
-    parse_dir = ctx.stage_output("parse")
-    # rglob: taxonomy is a GLOBAL stage — it derives ONE union feature set
-    # over every cell's trees (D-DRAFT-9), so it reads nested per-cell trees.
-    tree_files = sorted(parse_dir.rglob("*_tree.json"))
-    if not tree_files:
-        return _fail(stage, "PIP-E002", f"No tree files in {parse_dir}", time.time() - t0)
-    # Newest release wins per (MNO, plan_id) — older copies are never sent
-    # to the LLM (they'd only be overwritten in the flat output layout).
-    selected, n_superseded = _select_newest_trees(tree_files, parse_dir)
+    # The cells are the parse output's cell directories (what the stage
+    # reads), narrowed by --mno/--release; the input dir need not be
+    # mounted at taxonomy time.
+    from core.src.pipeline.cells import Cell
+    parse_root = ctx.stage_output("parse")
+    cells = sorted(
+        (Cell(d.parent.name, d.name) for d in parse_root.glob("*/*") if d.is_dir()),
+        key=lambda c: (c.mno, c.release),
+    )
+    cells = [c for c in cells if ctx.cell_in_scope(c.mno, c.release)]
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"No per-cell parse output under {parse_root}", time.time() - t0)
 
-    # D-DRAFT-9: corpus-fingerprint cache. The taxonomy is LLM-derived,
-    # expensive, and non-deterministic across runs — so re-derive the (global,
-    # union) taxonomy only when the contributing tree set changed; otherwise
-    # reuse the cached taxonomy.json. `--force` busts the cache.
     # Optional per-MNO corpus-overview prompt context (strand
     # sira-enrichment-pe). Files: corpus_overview_<MNO>_<version>.txt.
     overview_dir = os.getenv("NORA_TAXONOMY_OVERVIEW_DIR", "").strip()
@@ -634,172 +634,181 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
                 f"TAX-W003: NORA_TAXONOMY_OVERVIEW_DIR={overview_dir} has no "
                 "corpus_overview_*.txt files — extracting without corpus context"
             )
-
-    taxonomy_path = out_dir / "taxonomy.json"
-    fp_path = out_dir / ".corpus_fingerprint"
-    corpus_fp = _corpus_fingerprint([f for f, _ in selected], parse_dir, overview_files)
-    if (not ctx.force and taxonomy_path.exists() and fp_path.exists()
-            and fp_path.read_text(encoding="utf-8").strip() == corpus_fp):
-        ctx.state["taxonomy_path"] = str(taxonomy_path)
-        return StageResult(
-            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
-            stats={"source": "cache", "trees": len(selected)},
-        )
-
     # Prompt inputs participate in per-doc reuse: an overview edit must
-    # invalidate every cached extraction, not just the stage fingerprint.
+    # invalidate every cached extraction, not just the cell fingerprint.
     ph = hashlib.sha256()
     for f in overview_files:
         ph.update(f.name.encode("utf-8"))
         ph.update(hashlib.sha256(f.read_bytes()).digest())
     prompt_fp = ph.hexdigest()[:16]
 
-    state_path = out_dir / "extraction_state.json"
-    prev_docs: dict[str, dict] = {}
-    if not ctx.force and state_path.exists():
-        prev_docs = _load_taxonomy_ledger(state_path, prompt_fp)
-
-    # Split multi-plan trees (one doc, chapter-per-plan) into per-plan
-    # extraction units, then dedupe units by (MNO, plan_id) with newest
-    # release winning. This second, unit-level supersession pass is needed
-    # because a chapter-per-plan doc has an empty tree-level plan_id, so
-    # file-level selection can't dedupe its plans across releases.
-    best_unit: dict[tuple[str, str], tuple[str, str, str, object]] = {}
-    n_unit_superseded = 0
-    for f, _pid in selected:
-        try:
-            rel_key = f.relative_to(parse_dir).as_posix()
-        except ValueError:
-            rel_key = f.name
-        tree_sha = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
-        subs = split_tree_by_plan(RequirementTree.load_json(f))
-        for sub in subs:
-            # Ledger key: per-file for single-plan trees, per-(file, plan)
-            # for split multi-plan trees — each plan fails/resumes/retries
-            # independently.
-            lkey = f"{rel_key}#{sub.plan_id}" if len(subs) > 1 else rel_key
-            ukey = (sub.mno, sub.plan_id)
-            rkey = _release_sort_key(sub.release)
-            cur = best_unit.get(ukey)
-            if cur is None or (rkey, lkey) > (cur[0], cur[1]):
-                if cur is not None:
-                    n_unit_superseded += 1
-                best_unit[ukey] = (rkey, lkey, tree_sha, sub)
-            else:
-                n_unit_superseded += 1
-    units = sorted(best_unit.values(), key=lambda u: u[1])
-    n_superseded += n_unit_superseded
-
-    # Drop per-plan outputs that no longer correspond to a selected plan
-    # (removed plans, empty files from failed runs pre-dating fail-soft,
-    # or a multi-plan doc's old empty-prefix "_features.json").
-    expected = {f"{u[3].plan_id}_features.json" for u in units}
-    for stale in out_dir.glob("*_features.json"):
-        if stale.name not in expected:
-            stale.unlink()
-
-    # Create LLM provider (extraction runs at temperature=0 — see
-    # FeatureExtractor — for reproducible feature mappings).
-    llm = ctx.create_llm_provider()
-    extractor = FeatureExtractor(llm, overview_dir=overview_dir or None)
-    all_doc_features = []
-    new_docs: dict[str, dict] = {}
-    n_extracted = n_cached = 0
+    extractor = None
+    warnings: list[str] = []
+    n_extracted = n_cached = n_superseded = 0
+    n_cells_derived = n_cells_cached = n_cells_skipped = 0
     failures: list[str] = []
+    cell_features: dict[str, list] = {}   # cell dirname -> DocumentFeatures
 
-    def _save_state() -> None:
-        # Written after every unit so a hard kill (docker stop, OOM) still
-        # leaves a resumable state file behind.
-        state_path.write_text(
-            json.dumps({"prompt_fp": prompt_fp, "docs": new_docs}, indent=2),
-            encoding="utf-8",
-        )
-
-    # Launch-time visibility (field-found: a fully stale ledger meant a
-    # full-corpus LLM re-extract whose only tell arrived hours in): say
-    # up front how much of the plan is cache vs LLM work, so an operator
-    # can stop an unexpectedly large run in minute one.
-    cached_lkeys = _cached_unit_keys(units, prev_docs, out_dir)
-    n_to_extract = len(units) - len(cached_lkeys)
-    logger.info(
-        f"TAX-I001: {len(cached_lkeys)} cached / {n_to_extract} to extract "
-        f"(of {len(units)} units)"
-    )
-    if units and not cached_lkeys and prev_docs:
-        logger.warning(
-            f"TAX-W005: ledger present but NO unit is cacheable — every "
-            f"stored tree hash is stale (parse trees regenerated since the "
-            f"last taxonomy run?). Full-corpus re-extract of {len(units)} "
-            f"units follows."
-        )
-
-    for _rkey, lkey, tree_sha, sub in units:
-        feat_path = out_dir / f"{sub.plan_id}_features.json"
-        if lkey in cached_lkeys:
-            all_doc_features.append(DocumentFeatures.load_json(feat_path))
-            new_docs[lkey] = prev_docs[lkey]
-            n_cached += 1
+    for cell in cells:
+        parse_dir = ctx.stage_output("parse", cell)
+        tree_files = sorted(parse_dir.glob("*_tree.json"))
+        cname = f"{cell.mno}__{cell.release}"
+        if not tree_files:
+            warnings.append(f"TAX-W007: {cname} has no parse trees — taxonomy skipped for that cell")
+            n_cells_skipped += 1
             continue
-        try:
-            doc_features = extractor.extract(sub)
-        except Exception as e:
-            logger.warning(f"TAX-E001: extraction failed for {sub.plan_id}: {e}")
-            feat_path.unlink(missing_ok=True)
-            new_docs[lkey] = {
-                "status": "failed", "tree_sha": tree_sha, "error": str(e)[:200],
-            }
-            failures.append(sub.plan_id)
+        out_dir = ctx.stage_output(stage, cell)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        taxonomy_path = out_dir / "taxonomy.json"
+        fp_path = out_dir / ".corpus_fingerprint"
+        corpus_fp = _corpus_fingerprint(tree_files, parse_dir, overview_files)
+        if (not ctx.force and taxonomy_path.exists() and fp_path.exists()
+                and fp_path.read_text(encoding="utf-8").strip() == corpus_fp):
+            cell_features[cname] = [DocumentFeatures.load_json(f)
+                                    for f in sorted(out_dir.glob("*_features.json"))]
+            n_cells_cached += 1
+            continue
+
+        state_path = out_dir / "extraction_state.json"
+        prev_docs: dict[str, dict] = {}
+        if not ctx.force and state_path.exists():
+            prev_docs = _load_taxonomy_ledger(state_path, prompt_fp)
+
+        # Split multi-plan trees (one doc, chapter-per-plan) into per-plan
+        # extraction units. Within a cell a plan appearing in two documents
+        # keeps the later file (the output layout is one file per plan);
+        # across releases nothing supersedes anything any more.
+        best_unit: dict[str, tuple[str, str, object]] = {}
+        n_cell_superseded = 0
+        for f in tree_files:
+            lkey_base = f.name
+            tree_sha = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+            subs = split_tree_by_plan(RequirementTree.load_json(f))
+            for sub in subs:
+                lkey = f"{lkey_base}#{sub.plan_id}" if len(subs) > 1 else lkey_base
+                if sub.plan_id in best_unit:
+                    n_cell_superseded += 1
+                best_unit[sub.plan_id] = (lkey, tree_sha, sub)
+        units = sorted(best_unit.values(), key=lambda u: u[0])
+        n_superseded += n_cell_superseded
+
+        expected = {f"{u[2].plan_id}_features.json" for u in units}
+        for stale in out_dir.glob("*_features.json"):
+            if stale.name not in expected:
+                stale.unlink()
+
+        unit_rows = [("", lkey, sha, sub) for lkey, sha, sub in units]
+        cached_lkeys = _cached_unit_keys(unit_rows, prev_docs, out_dir)
+        n_to_extract = len(units) - len(cached_lkeys)
+        logger.info(f"TAX-I001: {cname}: {len(cached_lkeys)} cached / {n_to_extract} to extract "
+                    f"(of {len(units)} units)")
+        if units and not cached_lkeys and prev_docs:
+            logger.warning(
+                f"TAX-W005: {cname}: ledger present but NO unit is cacheable — every "
+                f"stored tree hash is stale (parse trees regenerated since the "
+                f"last taxonomy run?). Full re-extract of {len(units)} units follows."
+            )
+
+        if n_to_extract and extractor is None:
+            provider = ctx.create_llm_provider()
+            extractor = FeatureExtractor(provider)
+
+        new_docs: dict[str, dict] = {}
+        doc_features_here: list = []
+        cell_failures: list[str] = []
+
+        def _save_state() -> None:
+            # Written after every unit so a hard kill (docker stop, OOM) still
+            # leaves a resumable state file behind.
+            state_path.write_text(
+                json.dumps({"prompt_fp": prompt_fp, "docs": new_docs}, indent=2),
+                encoding="utf-8",
+            )
+
+        for lkey, tree_sha, sub in units:
+            feat_path = out_dir / f"{sub.plan_id}_features.json"
+            if lkey in cached_lkeys:
+                doc_features_here.append(DocumentFeatures.load_json(feat_path))
+                new_docs[lkey] = prev_docs[lkey]
+                n_cached += 1
+                continue
+            try:
+                doc_features = extractor.extract(sub)
+            except Exception as e:
+                logger.warning(f"TAX-E001: extraction failed for {sub.plan_id}: {e}")
+                feat_path.unlink(missing_ok=True)
+                new_docs[lkey] = {"status": "failed", "tree_sha": tree_sha, "error": str(e)[:200]}
+                cell_failures.append(sub.plan_id)
+                _save_state()
+                continue
+            doc_features.save_json(feat_path)
+            doc_features_here.append(doc_features)
+            new_docs[lkey] = {"status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name}
+            n_extracted += 1
             _save_state()
-            continue
-        doc_features.save_json(feat_path)
-        all_doc_features.append(doc_features)
-        new_docs[lkey] = {
-            "status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name,
-        }
-        n_extracted += 1
-        _save_state()
+        if units:
+            _save_state()   # the complete ledger, cached tail included
 
-    # Persist the COMPLETE ledger once the loop ends. The in-loop saves
-    # fire only on extraction/failure events, so a run whose tail units
-    # are cached would otherwise leave a ledger truncated at its last
-    # extraction (field-found: a one-plan retry shrank a 267-entry
-    # ledger to 178 — the cached entries after the retried unit never
-    # reached disk, scheduling them for silent re-extraction).
-    if units:
-        _save_state()
+        failures.extend(cell_failures)
+        if doc_features_here:
+            TaxonomyConsolidator().consolidate(doc_features_here).save_json(taxonomy_path)
+            cell_features[cname] = doc_features_here
+        if cell_failures:
+            fp_path.unlink(missing_ok=True)   # a degraded cell never cache-locks itself
+        elif doc_features_here:
+            fp_path.write_text(corpus_fp, encoding="utf-8")   # D-DRAFT-9 per cell
+        n_cells_derived += 1
 
-    if not all_doc_features:
+    if not cell_features and failures:
         return _fail(
             stage, "TAX-E001",
-            f"All {len(units)} extractions failed — LLM endpoint down? "
+            f"All {len(failures)} extractions failed — LLM endpoint down? "
             "Re-run the taxonomy stage to retry.",
             time.time() - t0,
         )
+    if not cell_features:
+        return _fail(stage, "PIP-E002",
+                     f"No tree files under {ctx.stage_output('parse')} for the in-scope cells",
+                     time.time() - t0)
 
-    consolidator = TaxonomyConsolidator()
-    taxonomy = consolidator.consolidate(all_doc_features)
-    taxonomy.save_json(taxonomy_path)
+    # Build-level taxonomy: every cell present in the build (in scope or
+    # not), consolidated — the graph builder's and the review editor's input.
+    build_features: list = []
+    for feat in sorted(base_out.glob("*/*/*_features.json")):
+        try:
+            build_features.append(DocumentFeatures.load_json(feat))
+        except Exception as e:  # noqa: BLE001 — one unreadable file must not sink the build file
+            logger.warning(f"TAX-W008: unreadable features file {feat.name}: {e}")
+    build_path = base_out / "taxonomy.json"
+    correction = ctx.correction("taxonomy.json")
+    if correction:
+        shutil.copy2(correction, build_path)
+        warnings.append("TAX-W002: Using correction file for the build-level taxonomy")
+    elif build_features:
+        TaxonomyConsolidator().consolidate(build_features).save_json(build_path)
+    ctx.state["taxonomy_path"] = str(build_path)
 
-    warnings: list[str] = []
     if failures:
         warnings.append(
-            f"TAX-W004: {len(failures)} of {len(units)} plans failed "
-            f"extraction — re-run the taxonomy stage to retry "
-            f"(details in {state_path.name})"
+            f"TAX-W004: {len(failures)} plan(s) failed extraction — re-run the "
+            f"taxonomy stage to retry (details in each cell's extraction_state.json)"
         )
-        # A degraded run must never cache-lock itself.
-        fp_path.unlink(missing_ok=True)
-    else:
-        # D-DRAFT-9: stamp the corpus fingerprint so an unchanged re-run hits cache.
-        fp_path.write_text(corpus_fp, encoding="utf-8")
-
-    ctx.state["taxonomy_path"] = str(taxonomy_path)
+    n_features = 0
+    try:
+        from core.src.taxonomy.schema import FeatureTaxonomy
+        if build_path.exists():
+            n_features = len(FeatureTaxonomy.load_json(build_path).features)
+    except Exception:  # noqa: BLE001 — a count, not a result
+        pass
     stats = {
-        "features": len(taxonomy.features), "docs": n_extracted,
+        "cells": len(cell_features), "cells_cached": n_cells_cached,
+        "cells_skipped": n_cells_skipped,
+        "features": n_features, "docs": n_extracted,
         "cached_docs": n_cached, "failed": len(failures),
-        "superseded": n_superseded, "source": "derived",
+        "superseded": n_superseded,
+        "source": "cache" if (n_cells_cached and not n_cells_derived) else "derived",
     }
-    return StageResult(stage=stage, status="WARN" if failures else "OK",
+    return StageResult(stage=stage, status="WARN" if (failures or n_cells_skipped) else "OK",
                        elapsed_seconds=time.time() - t0, stats=stats,
                        warnings=warnings)
 

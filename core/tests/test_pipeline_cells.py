@@ -27,7 +27,7 @@ class TestStagePartition:
     def test_classification(self):
         for s in ("extract", "profile", "parse", "resolve", "vectorstore"):
             assert is_per_cell_stage(s) is True
-        for s in ("taxonomy", "standards", "graph", "eval"):
+        for s in ("standards", "graph", "eval"):
             assert is_per_cell_stage(s) is False
 
 

@@ -114,7 +114,11 @@ def test_start_plain_records_no_seed(host):
     host["cell"]("MNO-A", "Jan2031")
     r = host["run"]("start", "b1")
     assert r.returncode == 0, r.stderr
-    assert "seed=- seeded=- inherited=-" in r.stdout
+    # the SIRA cells are the build's last stage dir, and the wiring env points there
+    sira = host["nora"] / "b1" / "out" / "sira"
+    assert sira.is_dir() and not (host["root"] / "builds" / "sira" / "b1").exists()
+    assert f"STORE_ROOT={sira}" in (host["root"] / "env" / ".env.builds").read_text()
+    assert "seed=- inherited=-" in r.stdout
     assert "no profiles.json" in r.stdout  # the deliberate NOTE, unchanged
     assert (host["root"] / "builds" / "ACTIVE").read_text().strip() == "b1"
     assert "seed" not in _cycle_json(host, "b1")
@@ -122,7 +126,7 @@ def test_start_plain_records_no_seed(host):
 
 # -- start --seed --------------------------------------------------------------
 
-def test_start_seed_copies_outputs_and_inherits_binding(host):
+def test_start_seed_inherits_binding_and_copies_nothing(host):
     host["cell"]("MNO-A", "Jan2031")
     host["cell"]("MNO-A", "Apr2031")  # the new release of a known MNO
     prev = _seed_build(host, "b0", [("MNO-A", "Jan2031")],
@@ -130,13 +134,10 @@ def test_start_seed_copies_outputs_and_inherits_binding(host):
     r = host["run"]("start", "b1", "--seed", "b0")
     assert r.returncode == 0, r.stderr
     nb = host["nora"] / "b1"
-    # outputs copied, not linked: a different inode, same bytes
-    src = prev / "out" / "taxonomy" / "extraction_state.json"
-    dst = nb / "out" / "taxonomy" / "extraction_state.json"
-    assert dst.read_bytes() == src.read_bytes()
-    assert dst.stat().st_ino != src.stat().st_ino
-    assert (nb / "out" / "parse" / "MNO-A" / "Jan2031" / "doc_tree.json").exists()
-    assert (nb / "out" / "extract" / "MNO-A" / "Jan2031" / "doc_ir.json").exists()
+    # every stage is per cell: nothing of the previous build's out/ is copied
+    # (out/sira is the build's own empty SIRA dir, created by start)
+    assert sorted(p.name for p in (nb / "out").iterdir()) == ["sira"]
+    assert (prev / "out" / "parse" / "MNO-A" / "Jan2031" / "doc_tree.json").exists()
     # the new cell is bound to the MNO's latest bound release's profile
     pb = json.loads((nb / "profiles.json").read_text(encoding="utf-8"))
     added = [b for b in pb["bindings"] if b["release"] == "Apr2031"]
@@ -146,7 +147,7 @@ def test_start_seed_copies_outputs_and_inherits_binding(host):
     assert len(json.loads((prev / "profiles.json").read_text())["bindings"]) == 1
     # recorded
     assert _cycle_json(host, "b1")["seed"] == "b0"
-    assert "seed=b0 seeded=extract,parse,taxonomy inherited=MNO-A__Apr2031<-Jan2031" in r.stdout
+    assert "seed=b0 inherited=MNO-A__Apr2031<-Jan2031" in r.stdout
 
 
 def test_start_seed_picks_latest_release_binding(host):
@@ -184,8 +185,22 @@ def test_start_seed_new_mno_fails_loud_and_leaves_nothing(host):
     assert r.returncode == 1
     assert "CYC-E027" in r.stderr and "MNO-B" in r.stderr
     assert not (host["nora"] / "b1").exists()
-    assert not (host["root"] / "builds" / "sira" / "b1").exists()
     assert not (host["root"] / "builds" / "ACTIVE").exists()
+
+
+def test_sira_root_override_keeps_the_old_twin_layout(host):
+    host["cell"]("MNO-A", "Jan2031")
+    import os
+    env_extra = {"NORA_BUILDS_SIRA_ROOT": str(host["root"] / "sira-twins")}
+    orig = host["run"]
+    import subprocess
+    r = subprocess.run(["bash", str(CYCLE), "start", "b1"], cwd=str(host["root"]),
+                       env={**os.environ, "PATH": f"{host['root'].parent / 'bin'}:{os.environ['PATH']}",
+                            "NORA_ROOT": str(host["root"]), **env_extra},
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (host["root"] / "sira-twins" / "b1").is_dir()
+    assert not (host["nora"] / "b1" / "out" / "sira").exists()
 
 
 def test_start_seed_unknown_build_fails(host):
@@ -194,6 +209,31 @@ def test_start_seed_unknown_build_fails(host):
     assert r.returncode == 1
     assert "CYC-E026" in r.stderr
     assert not (host["nora"] / "b1").exists()
+
+
+def test_parse_and_taxonomy_take_a_cell(host):
+    """`--cell` narrows the lane to one (MNO, release); the detached log is
+    tagged with the cell, and an unknown cell fails loud."""
+    host["cell"]("MNO-A", "Jan2031")
+    host["cell"]("MNO-A", "Apr2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    r = host["run"]("parse", "--cell", "MNO-B__Jan2031")
+    assert r.returncode == 1 and "CYC-E032" in r.stderr
+    r = host["run"]("parse", "--cell", "MNO-A__Apr2031", "--skip-standards")
+    assert r.returncode == 0, r.stderr
+    phases = _cycle_json(host, "b1")["phases"]
+    assert phases[-1]["phase"] == "parse" and "lane-ingestion-MNO-A__Apr2031-" in phases[-1]["log"]
+    # prompts: a partial build (one of two cells parsed) is a NOTE, not a refusal
+    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Apr2031").mkdir(parents=True)
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "partial build" in r.stdout
+    r = host["run"]("taxonomy", "--cell", "MNO-A__Apr2031")
+    assert r.returncode == 0, r.stderr
+    phases = _cycle_json(host, "b1")["phases"]
+    assert phases[-1]["phase"] == "taxonomy" and "stage-taxonomy-MNO-A__Apr2031-" in phases[-1]["log"]
 
 
 def test_start_seed_explicit_profiles_wins(host, tmp_path):
@@ -234,6 +274,8 @@ def _to_parsed(host):
                 [{"mno": "MNO-A", "release": "Jan2031", "profile": "customizations/profiles/p1.json"}])
     assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
     assert host["run"]("parse").returncode == 0
+    # the fake lane wrote only the log; the real one writes the cell's parse dir
+    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True, exist_ok=True)
 
 
 def test_prompts_gate_declines_without_yes(host):
@@ -275,7 +317,7 @@ def test_start_appends_missing_wiring_lines(host):
     assert r.returncode == 0, r.stderr
     lines = wiring.read_text().splitlines()
     assert lines[0] == f"NORA_ENV_DIR={host['nora'] / 'b1'}" and "OTHER=1" in lines
-    assert f"STORE_ROOT={host['root'] / 'builds' / 'sira' / 'b1'}" in lines
+    assert f"STORE_ROOT={host['nora'] / 'b1' / 'out' / 'sira'}" in lines
     assert sum(1 for l in lines if l.startswith("STORE_ROOT=")) == 1
     # the next verb's need_wiring passes
     r = host["run"]("parse")

@@ -163,15 +163,26 @@ def test_submit_refusals(web, field, value, needle):
     assert _run(web["q"].list_ingests()) == []
 
 
-def test_submit_refuses_a_served_cell_and_a_taken_cell_and_a_second_run(web):
+def test_submit_refuses_a_served_cell_and_a_taken_cell_but_queues_a_second_run(web):
     c = _client()
     r = c.post("/api/ingest", headers=JSON, content=json.dumps({**REQ, "release": "Jan2031"}))
     assert r.status_code == 400 and "already served" in r.json()["error"]
-    assert c.post("/api/ingest", headers=JSON, content=json.dumps(REQ)).status_code == 202
-    r = c.post("/api/ingest", headers=JSON, content=json.dumps({**REQ, "release": "Jul2031"}))
-    assert r.status_code == 400 and "one at a time" in r.json()["error"]
+    first = c.post("/api/ingest", headers=JSON, content=json.dumps(REQ))
+    assert first.status_code == 202 and first.json()["queue_position"] == 1
+    second = c.post("/api/ingest", headers=JSON, content=json.dumps({**REQ, "release": "Jul2031"}))
+    assert second.status_code == 202 and second.json()["queue_position"] == 2
     r = c.post("/api/ingest", headers=JSON, content=json.dumps(REQ))
     assert r.status_code == 400 and "already queued" in r.json()["error"]
+    lst = c.get("/api/ingest", headers=JSON).json()
+    positions = {i["release"]: i["queue_position"] for i in lst["ingests"]}
+    assert positions == {"Apr2031": 1, "Jul2031": 2} and lst["blocking"] == []
+    page = c.get("/ingest").text
+    assert "queued #1" in page and "queued #2" in page
+    assert "queued #2" in c.get(f"/ingest/{second.json()['ingest_id']}").text
+    # the runner takes them in order: the oldest job first
+    from core.src.ingest_runner.db import RunnerDB
+    db = RunnerDB(web["q"]._db_path)
+    assert db.claim_next("r")["id"] == first.json()["job_id"]
 
 
 def test_submit_refused_when_store_unreachable(web):
@@ -309,3 +320,14 @@ def test_events_stream(web):
     assert events[-1][1] == {"state": "staged", "verdict": "pass"}
     assert _client(cookie=None).get(f"/api/ingest/{ingest_id}/events", headers=JSON).status_code == 403
     assert c.get("/api/ingest/nope/events", headers=JSON).status_code == 404
+
+
+def test_failed_ingest_with_a_build_is_flagged_as_blocking(web):
+    c = _client()
+    failed = _ingest(web, "failed", stage="enrich", build="B1")
+    _ingest(web, "failed", stage="documents")   # no build: nothing held
+    lst = c.get("/api/ingest", headers=JSON).json()
+    assert lst["blocking"] == [failed]
+    page = c.get("/ingest").text
+    assert "may still hold the cycle" in page and "MNO-A Apr2031 is failed at enrich" in page
+

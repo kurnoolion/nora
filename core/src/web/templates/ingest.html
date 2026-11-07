@@ -21,6 +21,13 @@
 {% if error %}
 <div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-2"></i>{{ error }}</div>
 {% endif %}
+{% if blocking %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    {% for b in blocking %}{{ b.mno }} {{ b.release }} is {{ b.state }}{% if b.stage %} at {{ b.stage }}{% endif %} and may still hold the cycle{% if not loop.last %}; {% endif %}{% endfor %}.
+    Queued ingests fail at <code>start</code> until it is retried or abandoned.
+</div>
+{% endif %}
 
 <div class="row g-4 mb-4">
     <div class="col-lg-5">
@@ -35,7 +42,7 @@
                         <label class="form-label">Shared folder with the release's documents</label>
                         <input type="text" class="form-control font-monospace" name="source" required
                                placeholder="\\SERVER\Share\MNO\Release" autocomplete="off">
-                        <div class="form-text">The folder's path as you see it in Windows. Every .pdf, .docx and .xlsx in it is taken.</div>
+                        <div class="form-text">The folder's path as you see it in Windows. Every .pdf, .docx and .xlsx in it is taken. Submits queue; one ingest runs at a time.</div>
                     </div>
                     <div class="row">
                         <div class="col-6 mb-3">

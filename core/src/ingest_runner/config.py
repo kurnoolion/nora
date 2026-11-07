@@ -163,16 +163,14 @@ class RunnerConfig:
     def build_dir(self, build: str) -> Path:
         return self.nora_builds_root / build
 
-    @property
-    def sira_builds_root(self) -> Path:
+    def sira_build_dir(self, build: str) -> Path:
+        """The build's SIRA cells: `<build>/out/sira/` (the build's last
+        stage dir), or `<NORA_BUILDS_SIRA_ROOT>/<build>` when that older
+        layout is kept — the same rule as `cycle.sh`."""
         env = self.cycle_env
         if env.get("NORA_BUILDS_SIRA_ROOT"):
-            return Path(env["NORA_BUILDS_SIRA_ROOT"])
-        root = Path(env.get("NORA_BUILDS_ROOT") or (Path(env.get("NORA_ROOT", "/srv/nora")) / "builds"))
-        return root / "sira"
-
-    def sira_build_dir(self, build: str) -> Path:
-        return self.sira_builds_root / build
+            return Path(env["NORA_BUILDS_SIRA_ROOT"]) / build
+        return self.build_dir(build) / "out" / "sira"
 
     def resolve_source(self, source: str) -> Path:
         """Map a submitted share path (UNC, or a host path under a mapped

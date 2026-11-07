@@ -110,6 +110,7 @@ def _ingest_view(ing: Ingest) -> dict[str, Any]:
     d["retry_from"] = RETRY_FROM.get(ing.stage or "", ing.stage) if d["can_retry"] else None
     d["can_abandon"] = st in ("failed", "cancelled", "staged")
     d["can_cancel"] = st in ("queued", "running")
+    d["queue_position"] = None
     d["stages"] = [{"name": s, "hint": STAGE_HINTS.get(s, ""),
                     "done": _stage_done(ing, s), "current": ing.stage == s and st == "running"}
                    for s in INGEST_STAGES]
@@ -137,7 +138,7 @@ def _callback_ok(url: str) -> bool:
 async def validate_request(job_queue: JobQueue, mno: str, release: str, source: str,
                            callback_url: str = "") -> str | None:
     """The reason a request is refused, or None. Order: shape, served MNO,
-    cell free, one ingest at a time."""
+    cell free. Submits queue; the runner runs one at a time."""
     if not _MNO_RE.match(mno):
         return "MNO must be the cell name as served (letters, digits, dashes; upper case)"
     if not _REL_RE.match(release):
@@ -157,10 +158,22 @@ async def validate_request(job_queue: JobQueue, mno: str, release: str, source: 
     for ing in await job_queue.list_ingests(limit=500):
         if ing.state in _TAKEN_STATES and ing.mno.upper() == mno.upper() and ing.release == release:
             return f"{mno} {release} is already {ing.state} (ingest {ing.id[:8]})"
-    for ing in await job_queue.list_ingests(limit=500):
-        if ing.state in ("queued", "running"):
-            return f"another ingest is {ing.state} ({ing.mno} {ing.release}); one at a time"
+    # Submits queue: the runner takes them in order, one cycle at a time.
     return None
+
+
+def queue_positions(ingests: list[Ingest]) -> dict[str, int]:
+    """1-based position of every queued ingest, oldest first."""
+    queued = sorted((i for i in ingests if i.state == "queued"), key=lambda i: i.created_at)
+    return {i.id: n for n, i in enumerate(queued, start=1)}
+
+
+def blocking_ingests(ingests: list[Ingest]) -> list[Ingest]:
+    """Failed or cancelled ingests that opened a build and were not
+    abandoned: their cycle may still hold the driver's baton, and the
+    next queued ingest fails at `start` until they are retried or
+    abandoned."""
+    return [i for i in ingests if i.state in ("failed", "cancelled") and i.build]
 
 
 # -- pages ------------------------------------------------------------------------------
@@ -176,7 +189,8 @@ async def ingest_page(request: Request):
     mnos = sorted({c.split("__", 1)[0] for c in cells}) if cells else []
     return _template_response(request, "ingest.html", {
         "locked": False,
-        "ingests": [_ingest_view(i) for i in ingests],
+        "ingests": _views(ingests),
+        "blocking": [_ingest_view(i) for i in blocking_ingests(ingests)],
         "mnos": mnos,
         "store_reachable": cells is not None,
         "runner": _runner_status(await job_queue.list_runners()),
@@ -194,11 +208,24 @@ async def ingest_detail_page(request: Request, ingest_id: str):
     if ing is None:
         return RedirectResponse(f"{_root(request)}/ingest?error=no+such+ingest", status_code=303)
     job = await job_queue.get_meta(ing.job_id) if ing.job_id else None
+    view = _ingest_view(ing)
+    if ing.state == "queued":
+        view["queue_position"] = queue_positions(await job_queue.list_ingests(limit=500)).get(ing.id)
     return _template_response(request, "ingest_detail.html", {
-        "ing": _ingest_view(ing), "job": job,
+        "ing": view, "job": job,
         "runner": _runner_status(await job_queue.list_runners()),
         "error": request.query_params.get("error", ""),
     })
+
+
+def _views(ingests: list[Ingest]) -> list[dict[str, Any]]:
+    pos = queue_positions(ingests)
+    out = []
+    for i in ingests:
+        v = _ingest_view(i)
+        v["queue_position"] = pos.get(i.id)
+        out.append(v)
+    return out
 
 
 def _root(request: Request) -> str:
@@ -230,7 +257,9 @@ async def api_list(request: Request):
     if not tm.is_ingest_user(request):
         return _forbidden(request)
     job_queue: JobQueue = request.app.state.job_queue
-    return JSONResponse({"ingests": [_ingest_view(i) for i in await job_queue.list_ingests(limit=100)],
+    ingests = await job_queue.list_ingests(limit=100)
+    return JSONResponse({"ingests": _views(ingests),
+                         "blocking": [i.id for i in blocking_ingests(ingests)],
                          "runner": _runner_status(await job_queue.list_runners())})
 
 
@@ -263,7 +292,9 @@ async def api_submit(request: Request):
                                  stages=list(INGEST_STAGES), params={"ingest_id": ing.id})
     await job_queue.update_ingest(ing.id, job_id=job.id)
     if _wants_json(request):
-        return JSONResponse({"ingest_id": ing.id, "job_id": job.id, "state": "queued"}, status_code=202)
+        position = queue_positions(await job_queue.list_ingests(limit=500)).get(ing.id)
+        return JSONResponse({"ingest_id": ing.id, "job_id": job.id, "state": "queued",
+                             "queue_position": position}, status_code=202)
     return RedirectResponse(f"{_root(request)}/ingest/{ing.id}", status_code=303)
 
 

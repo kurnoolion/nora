@@ -212,7 +212,7 @@ def st_start(c: Ctx) -> None:
 
 
 def st_parse(c: Ctx) -> None:
-    c.cycle("parse", "--skip-standards")
+    c.cycle("parse", "--cell", c.cell, "--skip-standards")
     c.wait_detached("parse")
 
 
@@ -221,7 +221,7 @@ def st_prompts(c: Ctx) -> None:
 
 
 def st_taxonomy(c: Ctx) -> None:
-    c.cycle("taxonomy")
+    c.cycle("taxonomy", "--cell", c.cell)
     c.wait_detached("taxonomy")
 
 

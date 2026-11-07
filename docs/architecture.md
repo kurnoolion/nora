@@ -125,8 +125,10 @@ flowchart LR
 into the build artifacts: parsed requirement trees per cell, a feature
 taxonomy, per-MNO prompts, and the SIRA enrichment per cell (a keyword
 index plus language-model phrases per requirement). Everything the build
-plane writes lives under one env dir per build and one SIRA db-root per
-build. A build can be rerun or discarded without touching serving.
+plane writes lives under one env dir per build; the SIRA cells are that
+build's last stage directory, `out/sira/<MNO>__<MMMYYYY>/` (since
+2026-11-06; before, a twin SIRA db-root per build). A build can be rerun
+or discarded without touching serving.
 
 **Publish plane.** One-shot containers on the serving host turn build
 artifacts into the four store files a stack serves (§3) and record them
@@ -1414,7 +1416,7 @@ sequenceDiagram
   participant NB as nora-batch
   participant SB as sira-batch
   participant ENV as env dir (new build)
-  participant DB as SIRA db-root (new build)
+  participant DB as <build>/out/sira (the build's SIRA cells)
   participant SH as serving host
 
   IA->>CY: start <build> --profiles <prev-build>
@@ -1443,22 +1445,23 @@ What each phase reuses, as built:
 
 | Phase | Reused from the previous cycle | Redone |
 |---|---|---|
-| parse | with `start --seed <prev>`: the previous build's `out/{extract,profile,parse,resolve,taxonomy}` are copied in, and the lane skips every tree that is newer than its source with the same profile fingerprint. Without `--seed`: nothing, `parse` runs every cell | the new cell; without `--seed`, every cell |
-| taxonomy | the seeded ledger keeps every plan whose tree sha is unchanged | plans of the new release, and any plan the newest release now supersedes |
-| enrich | nothing on the build side: the SIRA db-root is per build, and an incremental cycle enriches only the new cell (`enrich --cell`) | the new cell; a full cycle, every cell |
+| parse | nothing is copied: the stage is per cell, and `parse --cell` runs the new cell alone (`--mno`/`--release` on the lane) | the new cell; a full cycle, every cell |
+| taxonomy | nothing: since 2026-11-06 a release's taxonomy is derived from its own trees under `out/taxonomy/<mno>/<rel>/`, `taxonomy --cell` runs the new cell alone | the new cell's plans, once per release (no cross-release supersession) |
+| enrich | nothing on the build side: the SIRA cells are the build's own `out/sira/`, and an incremental cycle enriches only the new cell (`enrich --cell`) | the new cell; a full cycle, every cell |
 | publish (§21) | every unit whose `source_fingerprint` and schema match a live version, by content, regardless of build; units the build did not produce are inherited from the active set | only cells whose corpus or phrases changed; History for MNOs whose Trees changed |
 
 A full cycle (no `--seed`) rebuilds everything, which is expensive but
 correct: unchanged cells produce byte-identical corpus and phrases only
 if the enrichment is deterministic, which a language model is not, so a
 re-enriched unchanged cell publishes as a new version with a new
-fingerprint. The incremental cycle avoids that by not enriching the
-unchanged cells at all: `start --seed` copies the previous build's
-outputs (a copy, not hard links, since the stages rewrite their ledgers
-in place), takes its profile bindings and binds the new cell to the
-profile of its MNO's latest bound release, and the SIRA build holds the
-new cell alone; publish inherits the rest. §28 runs this cycle from the
-web.
+fingerprint. The incremental cycle avoids that by touching the unchanged
+cells not at all: every build-plane stage is per cell (the taxonomy
+became per release on 2026-11-06, so a release is enriched against the
+taxonomy of its own text and no stage needs the rest of the corpus),
+`start --seed` takes the previous build's profile bindings and binds the
+new cell to the profile of its MNO's latest bound release, and the build
+holds the new cell alone on both sides; publish inherits the rest. §28
+runs this cycle from the web.
 
 Artifacts after the flow: the build's env dir and db-root on the build
 machine; `serve/<label>/` on both hosts; nothing in any serving root yet.
@@ -1935,8 +1938,8 @@ the opposite from the design.
 - **The flat promote does not carry cell DBs** (`cell-dbs/` is not
   linked). Served stacks do not need them, since publish converts from
   the flat cells; the lane's `--index cell-db` output is for dev.
-- **Taxonomy seeding without `--seed` is manual** (copy the previous
-  `out/taxonomy`).
+- **A full cycle re-derives every cell's taxonomy** (no cache carries
+  across builds; the cost is one LLM call per plan per release).
 
 ### Publish plane
 
@@ -2015,7 +2018,7 @@ sequenceDiagram
   participant S as serving nora-store
 
   T->>W: POST /api/ingest {source, mno, release}
-  W->>W: validate: shape, MNO served, cell free, one at a time
+  W->>W: validate: shape, MNO served, cell free; submits queue
   W->>J: ingests row (queued) + job ingest {ingest_id}
   R->>J: claim (one guarded UPDATE); heartbeat while running
   R->>R: copy documents to requirements/<MNO>/<rel>/
@@ -2084,8 +2087,10 @@ back); `failed → queued` (Retry, from the failed stage, or from enrich
 for a verify failure) `| abandoned`; `cancelled | staged → abandoned`.
 Cancel takes effect between stages and while a detached phase is
 followed; the cycle in flight is then left for Abandon, which runs
-`cycle.sh abandon` and removes the staged copy of the documents. One
-ingest at a time, as the cycle driver enforces with its baton. Out of
+`cycle.sh abandon` and removes the staged copy of the documents.
+Submits queue, oldest first; one cycle runs at a time, as the driver
+enforces with its baton, and a failed ingest that still holds it is
+named on the page until it is retried or abandoned. Out of
 scope: a new MNO (first release by hand: profile choice, prompt
 derivation), cross-host promote, a Windows-side skill (a thin client
 over `POST /api/ingest`, later).

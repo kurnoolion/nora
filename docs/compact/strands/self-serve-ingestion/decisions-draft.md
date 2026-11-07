@@ -68,3 +68,23 @@
 
 **Consequences.** The web cannot tell the team at submit time that a share is unmapped; the job fails in seconds with the reason instead.
 
+### D-DRAFT-8 — 2026-11-06 — One taxonomy per release; every build-plane stage is per cell
+
+**Context.** The taxonomy was a global stage: one feature set over every cell's trees, with a plan present in several releases extracted once from the newest. The served path consumes only the per-plan features files in the enrichment prompt; the merged file feeds the disabled graph builder and a dormant review editor. The global stage forced the incremental cycle to carry the whole corpus's parse outputs into every build (D-DRAFT-5's copy), and the field run enriched an older release against a newer release's features.
+
+**Decision.** The taxonomy stage runs per `(MNO, release)`: `out/taxonomy/<mno>/<rel>/` holds that release's per-plan files, taxonomy, ledger and fingerprint, derived from the cell's own trees; releases do not supersede each other. The enrichment lane reads the cell's directory. A build-level `taxonomy.json` is consolidated over the cells present, for the graph and the editor. With that, `parse --cell` and `taxonomy --cell` run one cell, `start --seed` takes only the profile bindings, and a build holds only the cells it parsed. D-DRAFT-5's copy of the previous build's outputs is withdrawn.
+
+**Why.** A release enriched against the taxonomy of its own text is the correct input, and a self-contained per-cell build is simpler to reason about, to retry and to delete than one that carries a corpus copy. The cross-release dedupe saved LLM calls at the cost of blurring releases; one extraction per plan per release is minutes against the hour the enrichment takes. The alternative, keeping the global stage and the seed copy, was working but made every ingest a corpus-sized build.
+
+**Consequences.** No taxonomy cache carries across builds; a full cycle re-derives every cell. FR-6's "unified taxonomy" is now per release with a per-build consolidation; the review editor sees the build-level file. A `corrections/taxonomy.json` applies to the build-level file only. The architecture's §20 table and the README's Phase 1 and 4 say so.
+
+### D-DRAFT-9 — 2026-11-06 — The SIRA cells are the build's last stage directory, `<build>/out/sira/<MNO>__<REL>/`
+
+**Context.** Every nora stage writes under the build's `out/`, but the SIRA enrichment wrote to a twin tree, one SIRA db-root per build beside the nora builds. Two trees per build meant two roots to configure, two directories to move or delete, and one more place a build could be found in the wrong location (field-found).
+
+**Decision.** `cycle.sh start` creates `<build>/out/sira/` and points the wiring env's `STORE_ROOT` there; `enrich`, `verify-enrich`, `promote` and the runner use it. The cell directories inside keep the store's `<MNO>__<REL>` name. `NORA_BUILDS_SIRA_ROOT`, when set, keeps the older twin layout for hosts that have it.
+
+**Why.** One build, one tree: every stage's artifacts in one place, deletable and movable as a unit. Renaming the cells to `<MNO>/<REL>` was considered and rejected: that name is the cell's identity in the SIRA tooling, the verify sweep, the converter, the registry's unit names and the store's flat mode, and the rename would ripple through all of them for no functional gain.
+
+**Consequences.** New builds hold their SIRA cells; old builds stay where they were (publish inherits served cells from the registry, the seed needs only the nora side). The batch and store containers get a nested mount: `/data/env` is the build and `/data/db` its `out/sira`. The README's layout, Phase 0 and the ingestion guide say so.
+

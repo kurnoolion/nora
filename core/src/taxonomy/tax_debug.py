@@ -78,19 +78,34 @@ def _failed_units(env_dir: Path):
     from core.src.parser.structural_parser import RequirementTree
     from core.src.taxonomy.extractor import split_tree_by_plan
 
-    state_path = env_dir / "out" / "taxonomy" / "extraction_state.json"
-    if not state_path.exists():
-        raise SystemExit(f"No extraction ledger at {state_path} — run the taxonomy stage first.")
-    ledger = json.loads(state_path.read_text(encoding="utf-8"))
-    failed = {k: v for k, v in ledger.get("docs", {}).items()
-              if v.get("status") == "failed"}
+    # One ledger per cell (out/taxonomy/<mno>/<rel>/extraction_state.json,
+    # keys relative to that cell's parse dir); the pre-2026-11 flat ledger
+    # (out/taxonomy/extraction_state.json, keys relative to out/parse) is
+    # still read for older builds.
+    tax_dir = env_dir / "out" / "taxonomy"
+    ledgers = sorted(tax_dir.glob("*/*/extraction_state.json"))
+    flat = tax_dir / "extraction_state.json"
+    if flat.exists():
+        ledgers.append(flat)
+    if not ledgers:
+        raise SystemExit(f"No extraction ledger under {tax_dir} — run the taxonomy stage first.")
+    parse_root = env_dir / "out" / "parse"
+    failed: dict[str, tuple[Path, str]] = {}   # display key -> (tree file, plan)
+    for state_path in ledgers:
+        ledger = json.loads(state_path.read_text(encoding="utf-8"))
+        cell_rel = state_path.parent.relative_to(tax_dir) if state_path != flat else Path()
+        for k, v in ledger.get("docs", {}).items():
+            if v.get("status") != "failed":
+                continue
+            relpath, _, plan = k.partition("#")
+            failed[f"{cell_rel.as_posix() + '/' if str(cell_rel) != '.' else ''}{k}"] = (
+                parse_root / cell_rel / relpath, plan)
     print(f"failed units in ledger: {len(failed)}")
 
-    parse_dir = env_dir / "out" / "parse"
     subs_by_file: dict[str, list] = {}
     for lkey in sorted(failed):
-        relpath, _, plan = lkey.partition("#")
-        f = parse_dir / relpath
+        f, plan = failed[lkey]
+        relpath = str(f)
         if not f.exists():
             print(f"SKIP {lkey}: tree file missing")
             continue

@@ -24,7 +24,7 @@ How they connect (build → promote → serve, and the query path):
     requirements/ corpus (ro)
         │  ingestion lane                 sira lane
         ▼                                    ▼
-    [nora-batch] ──► nora-builds/<b> ─► [sira-batch] ──► sira-builds/<b>
+    [nora-batch] ──► nora-builds/<b> ─► [sira-batch] ──► nora-builds/<b>/out/sira
         │   (also nora lane:                     │
         │    taxonomy/graph/vectorstore)         │
         └────────────┬───────────────────────────┘
@@ -56,10 +56,12 @@ paths (`$HOME` does not expand there).
     │                                  #   shared by all builds (requirements_dir
     │                                  #   override; default is <env_dir>/input)
     ├── nora-builds/<build>/           # env_dirs: out/, state/, corrections/, reports/
+    │   └── out/sira/<MNO>__<MMMYYYY>/ #   the SIRA cells: the build's last stage dir
+    │                                  #   (since 2026-11-06; NORA_BUILDS_SIRA_ROOT keeps the
+    │                                  #   older sira-builds/<build> twin) — NEVER inside the
+    │                                  #   repo tree (git clean would wipe the enrichment cache)
     │                                  #   (+ prompts/ + RECIPE.md when the build is a
     │                                  #   variant lineage — see "Variant lineages")
-    ├── sira-builds/<build>/           # SIRA db_roots (cells) — NEVER inside the repo
-    │                                  #   tree (git clean would wipe the enrichment cache)
     ├── serve-<stack>/                 # the stack's serving root (core.src.stores.publish):
     │   ├── registry.db                #   store versions, release sets, gate runs, active, flips
     │   ├── cells/cell-<mno>-<rel>-vN.db   # write-once, versioned; several versions coexist
@@ -210,14 +212,14 @@ unattended runner only). `./cycle.sh -h` for the layout env vars
 
 **One new release of a known MNO (incremental cycle):** stage the cell
 under `requirements/<MNO>/<MMMYYYY>/`, then `./cycle.sh start <build>
---seed <previous-build>`. The seed copies the previous build's parse and
-taxonomy outputs and its profile bindings, binding the new cell to the
-MNO's latest bound release; `parse` then skips every up-to-date tree,
-`taxonomy` reuses every unchanged plan, and `enrich --cell <MNO>__<MMMYYYY>`
-enriches only the new cell. The SIRA build holds that cell alone: at
-publish time every other unit is inherited from the active set (Phase
-6). A new MNO is never seeded — its profile is chosen by hand (Phase
-0.4).
+--seed <previous-build>`. The seed takes the previous build's profile
+bindings and binds the new cell to the MNO's latest bound release;
+nothing else is copied, because every stage is per cell: `parse --cell
+<MNO>__<MMMYYYY>`, `taxonomy --cell …` (a release's taxonomy is derived
+from its own trees) and `enrich --cell …` work on that one cell, and the
+build holds only it. At publish time every other unit is inherited from
+the active set (Phase 6). A new MNO is never seeded — its profile is
+chosen by hand (Phase 0.4).
 
 ### Self-serve ingestion (the Ingest page)
 
@@ -254,9 +256,9 @@ and the gate record; the page then offers **Serve** (the flip) and
 
 **What one ingest does** (the job log on the page shows every command):
 documents copied to `requirements/<MNO>/<MMMYYYY>/` → `cycle.sh start
---seed <last served build>` → `parse --skip-standards` → `prompts --yes`
-→ `taxonomy` → `enrich --cell` → `verify-enrich --yes` → `promote
---label` → `cell_db_convert` (one cell) → `publish publish` → staging
+--seed <last served build>` (bindings only) → `parse --cell
+--skip-standards` → `prompts --yes` → `taxonomy --cell` → `enrich --cell`
+→ `verify-enrich --yes` → `promote --label` → `cell_db_convert` (one cell) → `publish publish` → staging
 store up, `golden_cli --stage 1 --allow-map-mismatch`, store down →
 `publish gate`. About an hour and a half, enrichment most of it. The gate
 passes when Stage-1 `recall_avg` is within `eval_tolerance` (0.03) of
@@ -265,8 +267,10 @@ recorded golden run. **Serve** runs `publish flip --store-url` and
 `golden_release_cli advance`; **Roll back** runs `publish rollback --to
 <previous>`. A failed stage offers **Retry** (from the stage, or from
 enrich for a verify failure); **Abandon** closes the cycle and removes
-the staged copy of the documents. One ingest at a time, as the cycle
-driver itself enforces. The same operation as an API:
+the staged copy of the documents. Submits queue and one ingest runs at
+a time (the cycle driver's baton); a failed ingest that still holds the
+cycle is named on the page and must be retried or abandoned before the
+queue moves. The same operation as an API:
 `POST /api/ingest {source, mno, release, note?, submitted_by?}` → 202
 `{ingest_id, job_id}`; `GET /api/ingest/{id}`;
 `POST /api/ingest/{id}/{flip|rollback|retry|abandon|cancel}` — with the
@@ -310,9 +314,8 @@ DRY_RUN=1 ./push.sh "$TAG" local/nora-web:dev local/nora-batch:dev \
 git pull
 docker compose --env-file .env.builds --profile ingest build nora-batch sira-batch
 
-# 0.3 create the new build dirs and stage the source docs
-mkdir -p /home/<you>/nora-data/nora-builds/<build>
-mkdir -p /home/<you>/nora-data/sira-builds/<build>
+# 0.3 create the new build dir and stage the source docs
+mkdir -p /home/<you>/nora-data/nora-builds/<build>/out/sira    # the SIRA cells live in the build
 # source corpus (if not already present for these cells):
 #   /home/<you>/nora-data/requirements/<MNO>/<MMMYYYY>/*.pdf|docx|xlsx
 
@@ -325,10 +328,10 @@ cp /home/<you>/nora-data/nora-builds/<previous-build>/profiles.json \
 
 # 0.5 repoint the builds wiring env at the new dirs (only these two lines):
 #     .env.builds:  NORA_ENV_DIR=/home/<you>/nora-data/nora-builds/<build>
-#                   STORE_ROOT=/home/<you>/nora-data/sira-builds/<build>
+#                   STORE_ROOT=/home/<you>/nora-data/nora-builds/<build>/out/sira
 ```
 
-### Phase 1 — parse the corpus (ALL cells, one shot)
+### Phase 1 — parse the corpus (all cells, or `--cell` for one)
 
 Run the ingestion lane with taxonomy skipped — deriving a taxonomy now would
 waste an expensive LLM pass on a context-less prompt; it runs in Phase 4
@@ -474,17 +477,19 @@ Multi-release + resilience semantics:
   `<plan_id>_features.json` per plan (what SIRA's taxonomy-block lookup
   needs). Any old empty-prefix `_features.json` is cleaned up
   automatically.
-- **Newest release wins — per plan.** When a plan appears in several
-  releases of one MNO, only the newest release's copy is extracted —
-  MMMYYYY release dir names are parsed to `YYYYMM` (`Jul2026` → `202607`)
-  so comparison is chronological, not alphabetical. This applies to
-  chapter-plans inside multi-plan docs too. Older copies count as
-  `superseded` in the stage stats and cost no LLM calls. Expect
-  `*_features.json` count ≈ distinct plans across all MNOs (chapter-plans
-  included), not plans × releases.
+- **One taxonomy per release (since 2026-11-06).** The stage runs per
+  cell: `out/taxonomy/<MNO>/<MMMYYYY>/` holds that release's per-plan
+  files, its `taxonomy.json`, its ledger and its cache fingerprint. A plan
+  present in several releases is extracted once per release, so each
+  release is enriched against the taxonomy of its own text and a build
+  can hold one cell. Expect `*_features.json` per cell ≈ that release's
+  distinct plans (chapter-plans included). `out/taxonomy/taxonomy.json`
+  is the build-level consolidation over the cells present (the graph
+  builder's and the review editor's input). `--mno`/`--release` (or
+  `./cycle.sh taxonomy --cell`) run one cell and leave the others alone.
 - **Sporadic LLM/server errors don't kill the run.** A failed doc is
-  recorded in `out/taxonomy/extraction_state.json` and the run continues
-  (stage ends `WARN` with `TAX-W004: N of M docs failed`).
+  recorded in the cell's `extraction_state.json` and the run continues
+  (stage ends `WARN` with `TAX-W004: N plan(s) failed`).
 - **Re-running the same command IS the retry.** A re-run skips docs already
   extracted (unchanged tree + unchanged overviews) and re-attempts only
   failed/new ones. No `--force` needed after a degraded or killed run — a
@@ -510,10 +515,10 @@ E=/home/<you>/nora-data/nora-builds/<build>
 grep "Corpus context" $E/reports/stage-taxonomy-*.log | head  # one per doc, right MNO's overview
 grep "TAX-W003" $E/reports/stage-taxonomy-*.log               # must be EMPTY
 grep "TAX-W004\|TAX-E001" $E/reports/stage-taxonomy-*.log     # failures -> re-run same command to retry
-ls $E/out/taxonomy/*_features.json | wc -l                    # ≈ DISTINCT plan count (newest release only)
-# per-doc ledger: ok/failed + error per doc
-python3 -c "import json; d=json.load(open('$E/out/taxonomy/extraction_state.json'))['docs']; \
-  print({s: sum(1 for v in d.values() if v['status']==s) for s in ('ok','failed')})"
+ls $E/out/taxonomy/*/*/*_features.json | wc -l                # ≈ plans × releases (one taxonomy per cell)
+# per-cell ledgers: ok/failed per plan (./cycle.sh status sums them)
+for f in $E/out/taxonomy/*/*/extraction_state.json; do python3 -c "import json,sys; d=json.load(open(sys.argv[1]))['docs']; \
+  print(sys.argv[1].split('/')[-3:-1], {s: sum(1 for v in d.values() if v['status']==s) for s in ('ok','failed')})" "$f"; done
 ```
 
 Repeat run + verify until the `failed` count is 0 (sporadic server errors
@@ -574,7 +579,7 @@ Inspect the pilot cell before continuing (host
 paths — the sira-build dir is directly visible):
 
 ```bash
-D=/home/<you>/nora-data/sira-builds/<build>/<MNO>__<MMMYYYY>/runs/doc-enrich/<run-name>
+D=/home/<you>/nora-data/nora-builds/<build>/out/sira/<MNO>__<MMMYYYY>/runs/doc-enrich/<run-name>
 grep -c '{taxonomy_block}' $D/prompt.txt   # 1 -> per-MNO BATCHED template resolved
                                            # (0 -> fell back to generic v01: check
                                            #  NORA_SIRA_DOC_PROMPT_DIR + that the dir
@@ -853,7 +858,7 @@ here; only the serving half differs.
 # serving doesn't read it). NORA-native query lanes will have no data on
 # this label. Add --nora-build after the Phase-4 full-stack variant.
 ./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
-    --sira-build /home/<you>/nora-data/sira-builds/<build>
+    --sira-build /home/<you>/nora-data/nora-builds/<build>/out/sira
 
 # dev/test stack .env: NORA_ENV_DIR/STORE_ROOT -> serve/<label>/{nora,sira}, then
 # RECREATE (a plain `restart` does NOT re-read .env or the env_files —
@@ -882,7 +887,7 @@ existing label:
 ```bash
 # build machine
 ./promote.sh --serve-root /srv/nora/serve --label <YYYY-MM-DD-a> \
-    --nora-build /srv/nora/builds/nora/<build> --sira-build /srv/nora/builds/sira/<build> \
+    --nora-build /srv/nora/builds/nora/<build> --sira-build /srv/nora/builds/nora/<build>/out/sira \
     --scheme <sira-prompt-scheme>
 ./serve-push.sh <YYYY-MM-DD-a> <serving-host>   # rsync into serve/.incoming/, verify -c, atomic mv
 # serving host
