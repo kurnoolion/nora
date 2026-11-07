@@ -73,6 +73,10 @@ the asker most wants; the dev set README states this rule. Scope intents and
      sees a lookup option.
    - It has its own tests. It is not part of the classifier dev set: o03 is
      replaced.
+   - Built 2026-11-07: `core/src/web/routes/id_lookup_lane.py`, checked in the
+     ask-stream route before History. At most one release may appear; a
+     release named that lacks an ID says which releases carry it. Requirement
+     text renders through `req_body` (not markdown); the stored answer fences it.
 
 nora-web classifies **once, first**: Kev answers in about 0.55 s warm on a Mac
 with Kev-4B on MLX, and the first call takes about 3.5 s. Then:
@@ -138,8 +142,10 @@ is not touched in phase 1.
 | `NORA_SIRA_INTENT_PROMPTS` | nora-web | off | Per-intent prompts, plus the §4 error behaviour. |
 | `NORA_SIRA_INTENT_PROMPTS_FILE` | nora-web | unset | Override file for the prompts (§5). Unset → `<env_dir>/sira_intent_prompts.json` if present, else the source defaults. |
 
-With every default, served answers are unchanged. Each phase turns on one
-switch at a time.
+With every default, served answers are unchanged, with one exception: a
+message made only of requirement IDs goes to the `id_lookup` lane (§4 step 0),
+which has no switch because the manager asked for it outright. Each phase turns
+on one switch at a time.
 
 ## 7. UI and logging
 

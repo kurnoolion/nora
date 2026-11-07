@@ -1,0 +1,33 @@
+{# Requirement-ID lookup lane (strand sira-intent, D-DRAFT-8): each pasted ID's
+   full text straight from the Trees store, no model. Rendered with req_body
+   like the answer bubbles, so corpus text is never treated as markdown. #}
+{% for e in lookup.entries %}
+  <div class="border rounded p-2 mb-2">
+    {% if e.missing_in %}
+      <code class="fw-semibold">{{ e.req_id }}</code>
+      <span class="text-muted">is not in {{ e.missing_in }}; it is in: {{ e.also_in | join(", ") }}.</span>
+    {% else %}
+      {% set req = e.req %}
+      <div class="d-flex justify-content-between gap-2 mb-1 flex-wrap">
+        <code class="fw-semibold">{{ req.req_id }}</code>
+        <span class="text-muted small">
+          {% if req.plan_name %}{{ req.plan_name }}{% elif req.plan %}{{ req.plan }}{% endif %}
+          {% if req.mno %} · {{ req.mno }}{% endif %}
+          {% if req.release %} · {{ req.release }}{% endif %}
+        </span>
+      </div>
+      {% if req.title %}<div class="fw-semibold mb-1">{{ req.title }}</div>{% endif %}
+      {% set section = req.section_number or req.parent_section %}
+      {% if section %}<div class="text-muted small mb-1">Section {{ section }}</div>{% endif %}
+      <div class="req-body">{{ req.text | req_body }}</div>
+      {% if e.also_in %}
+        <div class="text-muted small mt-1">Also in: {{ e.also_in | join(", ") }}</div>
+      {% endif %}
+    {% endif %}
+  </div>
+{% endfor %}
+{% if lookup.not_found %}
+  <div class="alert alert-warning py-2 small mb-2">
+    Not found in the parsed corpus: {% for i in lookup.not_found %}<code>{{ i }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  </div>
+{% endif %}
