@@ -138,3 +138,53 @@
 
 **Consequences.** A row that fails in a batch twice is retried in a batch twice; the administrator runs `--retry-failed --single` for it. D-178's text stays true for that step.
 
+
+### D-DRAFT-15 — 2026-11-07 — A serving stack mounts no build; the ingestion wiring env is its own file
+
+**Context.** The serving containers still bind-mounted the build directory, so the stack env carried `NORA_BUILD_DIR`, and on the host the ingestion wiring env was a symlink to it: every `cycle.sh start` repointed the serving stack's mounts at the newest build. Registry mode had made the mount unnecessary (the store URLs carry Trees and the Overlay).
+
+**Decision.** The serving containers' `/data/env` and db mounts default to `docker/empty`; a serving env has no build line (`GOLDEN_DIR` explicit). Each stack has two env files: the serving env and an ingestion wiring env (`NORA_BUILD_DIR`, rewritten by the driver per cycle; images; share map), a real file. The driver gives the serving-only `:?` variables a placeholder for its one-shots, so the wiring env stays ingestion-only.
+
+**Why.** One file for two purposes made the serving stack follow the build. The alternative, keeping one env and having the driver rewrite a second copy, was rejected: compose interpolates every service, so the only clean cut is "serving needs no build".
+
+**Consequences.** The parse/resolve review pages are dev tooling on a build mount only. A stack env missing `GOLDEN_DIR` mounts an empty golden dir. `docker/empty` may gain directories Docker creates; gitignored.
+
+### D-DRAFT-16 — 2026-11-07 — Build roots per serving stack
+
+**Context.** Two stacks run different enrichment recipes on the same corpus; `v1`/`v2` were meant as their lineages but had been treated as single builds, and the self-serve runner put new builds beside them.
+
+**Decision.** `nora-builds/<root>/<build>/`: a root per stack lineage (`NORA_BUILDS_NORA_ROOT` in that stack's wiring env and runner config), holding the base build the served set came from and one directory per ingest named by its label. Legacy cells were copied into the roots on the `<MNO>/<release>` spelling; the old SIRA tree is retired.
+
+**Why.** Until the stage-graph strand lets stacks share stages, lineages must not mix: a stack's next ingest seeds from its own last build. The alternative, one flat directory of builds, was rejected because two recipes' builds would be told apart only by name.
+
+**Consequences.** One runner config per stack; `seed_build` names the base. The four pre-restructure directories outside the roots are the administrator's to remove. Superseded when stage-graph lands.
+
+### D-DRAFT-17 — 2026-11-07 — One-shots run as the caller
+
+**Context.** Compose runs a container as root unless the env names a job user. The runner's one-shots under the stack and staging envs (publish, flip, rollback, convert, the eval run) had none, so registry writes and golden runs landed root-owned on the host.
+
+**Decision.** The runner passes the job user and group ids, its own, to every one-shot unless the shell or that env file names them; `cycle.sh` does the same for its one-shots.
+
+**Why.** The gap recurs with every new env file; the default belongs where the command is built. Adding the job user to each env was rejected for that reason.
+
+**Consequences.** A value in an env file still wins. Existing root-owned artifacts were fixed by hand once.
+
+### D-DRAFT-18 — 2026-11-07 — A label is never reused, and a cleanup does not free it
+
+**Context.** The build id counted same-day build directories. A by-hand cleanup removed a build but not its promoted snapshot or release set; the next ingest the same day took the same name and `promote` refused.
+
+**Decision.** The same-day sequence number is the first that no build directory, promoted snapshot or registry release set carries; if the label is taken by promote time, promote moves to the next free label and records it on the ingest (the build keeps its name).
+
+**Why.** Labels are immutable (D-DRAFT-13's registry); removing the stale snapshot on cleanup was rejected because it would make a cleanup a precondition of correctness.
+
+**Consequences.** Build id and label can differ after a collision; convert, publish, eval and flip read the ingest's label. Rows that share names after a by-hand cleanup are the purge guard's concern (D-DRAFT-19).
+
+### D-DRAFT-19 — 2026-11-08 — Purge: the fourth verb, by record, the administrator's
+
+**Context.** A dead ingest (abandoned, rolled back, failed, cancelled) left six things behind: build, work dir, snapshot, release set with its cell files, golden run, documents. Twice an administrator assembled the list by hand; once the list missed the snapshot and caused D-DRAFT-18's collision.
+
+**Decision.** `ingest-purge` removes every artifact of a dead ingest by its record: the baton if the build holds it, the release set through `publish purge` (the registry refuses an active set, REG-E009; the flip log keeps the label), snapshot, work dir, build and a separate SIRA tree, golden run, documents unless the active set serves the cell. Each removal is logged; one that fails fails the job with the list and leaves the state; every step tolerates what is gone, so a purge is re-run. A row whose label or build another live ingest carries is refused before anything is touched. The row stays, state `purged`. Purge needs the admin cookie in every deployment; the team's step is Abandon, which keeps the build.
+
+**Why.** A checklist in a message is not a mechanism. Abandon stays separate so a look at the failed build precedes the delete. Giving Purge to the ingest token was rejected: it is the one irreversible action on the page, and the token is shared, not an identity.
+
+**Consequences.** Two shared tokens, still no users (web non-goal reworded). NFR-17's immutability holds while a set exists; a dead set may go whole. `publish gc` keeps the retention rule for everything else.

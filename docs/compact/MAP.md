@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-11-06 by regen-map. Do not hand-edit.
+Generated 2026-11-08 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -61,7 +61,6 @@ flowchart TD
     m_eval --> m_decision
     m_eval --> m_env
     m_eval --> m_extraction
-    m_eval --> m_graph
     m_eval --> m_llm
     m_eval --> m_query
     m_eval --> m_vectorstore
@@ -76,14 +75,15 @@ flowchart TD
     m_parser --> m_extraction
     m_parser --> m_models
     m_parser --> m_profiler
-    m_pipeline --> m_corrections
     m_pipeline --> m_env
     m_pipeline --> m_eval
     m_pipeline --> m_extraction
     m_pipeline --> m_graph
     m_pipeline --> m_llm
+    m_pipeline --> m_models
     m_pipeline --> m_parser
     m_pipeline --> m_profiler
+    m_pipeline --> m_query
     m_pipeline --> m_resolver
     m_pipeline --> m_standards
     m_pipeline --> m_taxonomy
@@ -125,9 +125,12 @@ flowchart TD
     m_web --> m_models
     m_web --> m_parser
     m_web --> m_pipeline
+    m_web --> m_profiler
     m_web --> m_query
     m_web --> m_resolver
     m_web --> m_stores
+    m_web --> m_taxonomy
+    m_web --> m_vectorstore
 ```
 
 ## Project File Structure
@@ -902,6 +905,11 @@ nora/
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── design.md
 │   │   │   │   └── journal.md
+│   │   │   ├── stage-graph/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   ├── design.md
+│   │   │   │   └── journal.md
 │   │   │   └── team-operations/
 │   │   │       ├── STRAND.md
 │   │   │       ├── decisions-draft.md
@@ -911,7 +919,8 @@ nora/
 │   ├── golden-eval-guide.md
 │   ├── ingestion-guide.md
 │   ├── provisioning-checklist.md
-│   └── redaction-rules.md
+│   ├── redaction-rules.md
+│   └── self-serve-ingestion-guide.md
 ├── experiments/
 │   ├── image-analysis/
 │   │   ├── README.md

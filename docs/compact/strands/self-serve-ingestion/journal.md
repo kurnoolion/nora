@@ -40,3 +40,25 @@
 - Three sandbox strict-verify tests fail at HEAD and before this strand (a resolved parse-error batch is classified as a note, the tests expect a warning); not touched here.
 - A failed or cancelled ingest that opened a build holds the cycle driver's baton until retried or abandoned; the page names it.
 
+
+## 2026-11-08 — the layout settled, Purge, field rounds six to eleven
+
+### Done this session
+- Serving containers mount no build (`/data/env` and the db mount default to `docker/empty`); `NORA_BUILD_DIR` is ingestion wiring only; one serving env and one ingestion wiring env per stack, never a symlink; `v1`/`v2` are per-stack build roots, each with a base build; the six served cells copied into v2's base and v1's five renamed on the slash spelling.
+- Runner: seed falls back to `seed_build` when the last served build is gone; same-day build id and label skip names a snapshot or release set still carries; promote moves to a free label; every one-shot runs as the runner's own user unless the env file names a job user (the eval run included); `cycle.sh` gives the serving-only compose variables a placeholder and the same job-user default.
+- Purge, the fourth verb: `publish purge` (REG-E009 for an active set), `ingest-purge` job, state `purged`, administrator-only, refused when another live ingest carries the same names.
+- Query analyzer accepts the compact `MMMYYYY` release form.
+- Field: the release ingested from zero on the web page by the requirements lead, gate pass, served; Purge used on the dead rows; both guards seen refusing.
+- `docs/self-serve-ingestion-guide.md` for the team; drift-check dev-full on the six strand modules plus requirements (FR-47 new).
+
+### In progress
+- Nothing on the host. Landing the strand.
+
+### Next
+- `/land-strand self-serve-ingestion` (D-DRAFT-1..19).
+- stage-graph strand: two rulings open.
+
+### Flags
+- Four pre-restructure build directories remain outside the roots by the administrator's choice.
+- One abandoned ingest row shares its label with the served ingest; purge refuses it until the served one is dead.
+- Pre-existing sandbox strict-verify test failures unchanged.
