@@ -254,7 +254,8 @@ and the gate record; the page then offers **Serve** (the flip) and
    sets `SERVE_RELEASE_SET` per ingest and brings it up and down itself.
 4. The ingest token in the web's env (`NORA_WEB_INGEST_TOKEN`, see
    `env.nora-web.example`); give the team the link
-   `<web>/ingest-unlock?token=<it>` — once per browser. It is separate
+   `<web>/ingest-unlock?token=<it>` — once per browser — together with
+   `docs/self-serve-ingestion-guide.md`, their one page. It is separate
    from the admin token and works with team mode on or off.
 5. The runner as a user service: `docker/ingest-runner.service.example`
    (lingering on, `python3 -m core.src.ingest_runner.ingest_runner_cli

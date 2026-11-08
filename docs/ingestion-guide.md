@@ -10,7 +10,9 @@ go there when you need to run a phase by hand or understand a flag.
 
 Companion guides: `docs/golden-eval-guide.md` (the eval you run before
 flipping production), `docs/enrichment-review-guide.md` (what domain
-experts do with the served result).
+experts do with the served result), `docs/self-serve-ingestion-guide.md`
+(how the requirements team ingests a new release of a served MNO from
+the web page; the page runs this guide's cycle on one cell).
 
 ## Who does what
 
@@ -20,6 +22,7 @@ experts do with the served result).
 | Eval operator | serving host | golden evals; keeps `<nora-data>/eval-baselines/<stack>.txt` current |
 | Architect | both (sudo) | image rebakes, profile-binding commits, migrations |
 | Domain experts | web only | enrichment review, Eval Studio |
+| Requirements team | web only | a new release of a served MNO, from the Ingest page (`docs/self-serve-ingestion-guide.md`); Serve and Roll back |
 
 Exactly **one cycle is in flight at a time**. The driver enforces it
 (`cycle.sh start` refuses while another cycle is open) — if you hit

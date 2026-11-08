@@ -62,7 +62,7 @@ as such and collected in §27.
 | `.../publish-design.md` | The registry and the publish pipeline. | Superseded by §17 and §21. |
 | `.../converter-design.md` | Flat SIRA cell to cell DB. | Superseded by §12–§13. |
 | `docker/README.md` | Images, host layout, runbooks. | Stays as the runbook. Part II cites it; it does not repeat it. |
-| `docs/ingestion-guide.md`, `docs/golden-eval-guide.md`, `docs/enrichment-review-guide.md` | Procedures for the three human loops. | Stay as procedures. Part IV gives the flows they implement. |
+| `docs/ingestion-guide.md`, `docs/golden-eval-guide.md`, `docs/enrichment-review-guide.md`, `docs/self-serve-ingestion-guide.md` | Procedures for the human loops (the last one is the requirements team's page for a new release of a served MNO, §28). | Stay as procedures. Part IV gives the flows they implement. |
 | `core/src/<module>/MODULE.md` | Per-module contracts. | Stay authoritative for signatures. This document cites them. |
 
 ### 1.2 How to read it
