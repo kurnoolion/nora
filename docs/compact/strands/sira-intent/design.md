@@ -248,6 +248,12 @@ switch at a time.
   beats the rules there; below 0.4 the rules do better. The floor stays at
   0.50: 0.45 differs by one question on 77, too few to move it. Real-traffic
   `intent_confidence` is the later check.
+- **Repeatable report (2026-11-08):** `python -m core.src.eval.intent_report`
+  writes `reports/intent/<time>_kev-floor_<set_id>/` (`run.json` with time,
+  git commit, dataset hash and decision endpoint; `report.html` with the
+  three charts). The `eval-report` project skill runs it and proposes the
+  commit. The hand-made `kev_floor_report.html` in this folder is the first
+  version; the first scripted run is `reports/intent/2026-11-08-0931_*`.
 
 **Answer shape (A):**
 - A local spot-check of about 2 questions per intent, with the flag on and off.
