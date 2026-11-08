@@ -46,7 +46,13 @@ def test_every_prompt_keeps_the_skeleton_and_varies_only_step_two():
     for t in texts.values():
         assert t.startswith(sp._PREFIX) and t.endswith(sp._SUFFIX)
         assert t[len(sp._PREFIX):].startswith("2. ANSWER from the selected chunks only")
-    assert len({t for t in texts.values()}) == len(Intent)
+    # compliance has no prompt of its own yet (roadmap): it is today's prompt
+    assert texts[Intent.COMPLIANCE] == texts[Intent.OTHER]
+    assert len({t for t in texts.values()}) == len(Intent) - 1
+
+
+def test_list_asks_for_a_content_summary_of_each_requirement():
+    assert "its content, not just its section title" in sp.DEFAULT_PROMPTS[Intent.LIST]
 
 
 # ── loader ────────────────────────────────────────────────────────────
