@@ -83,6 +83,8 @@
        {% if row_id %}data-share-path="{{ root_path }}/ask/s/{{ row_id }}" data-lane="{{ lane or '' }}"{% endif %}>
     <div class="text-muted small mb-2">
       <strong>Q:</strong> {{ question }}
+      {# Answer intent (strand sira-intent, design §7): read-only, no override. #}
+      {% if intent_badge %}<span class="badge rounded-pill text-bg-light border ms-1" title="Answer intent">{{ intent_badge }}</span>{% endif %}
     </div>
 
     {# Failure alerts stay above the fold — they explain a missing or

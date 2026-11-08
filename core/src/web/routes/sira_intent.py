@@ -46,3 +46,26 @@ def classify(question: str) -> tuple[QueryIntent, dict]:
     if hasattr(a, "analyze_with_trace"):
         return a.analyze_with_trace(question)
     return a.analyze(question), {"intent": {"source": "rules", "confidence": None}}
+
+
+def lane_fields(qi: QueryIntent, trace: dict) -> dict:
+    """What the feedback row's ``lane_config`` records about the intent
+    (design §7): the label, who decided it (``model`` = the decision model
+    above the floor, ``rules`` otherwise), the model's confidence (``None``
+    when no model answered), and the analyzer arm serving the knob."""
+    from core.src.query.analyzer import query_analyzer_arm
+    t = trace.get("intent") or {}
+    return {
+        "intent": qi.intent.value,
+        "intent_source": t.get("source", "rules"),
+        "intent_confidence": t.get("confidence"),
+        "intent_analyzer": query_analyzer_arm(),
+    }
+
+
+def intent_badge(lane: str, lane_config: "dict | None") -> str:
+    """The badge an answer card shows: ``lookup`` for the id_lookup lane,
+    else the recorded intent; "" when none was recorded (older rows, NORA)."""
+    if lane == "id_lookup":
+        return "lookup"
+    return str((lane_config or {}).get("intent") or "")

@@ -194,3 +194,74 @@ def test_other_questions_go_to_sira(world):
     lanes, _ = _ask(world, PLAIN)
     assert lanes == ["sira"] and world["sira"] == [PLAIN]
     assert world["sira_intent"] is Intent.OTHER
+
+
+# ── badge and lane_config (design §7) ─────────────────────────────────
+
+def _sira_ok(question, request, **kw):
+    async def run():
+        return {"result": {"answer": "an answer"}, "sira_result": {}, "sira_results": [],
+                "max_rerank_score": 0, "pinned_count": 0, "synth_error": None,
+                "elapsed_ms": 1, "retrieved_ids": [], "reranked_ids": None,
+                "cited_ids": [], "lane_config": {"stack": "s"}}
+    return run()
+
+
+def _rows(w):
+    from core.src.web.app import app
+    return app.state.feedback_store.rows
+
+
+@pytest.mark.parametrize("team", [False, True])
+def test_sira_row_records_the_intent_and_the_card_shows_the_badge(world, monkeypatch, team):
+    if team:
+        import core.src.web.team_mode as tm
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    lanes, html = _ask(world, PLAIN)
+    assert lanes == ["sira"]
+    lc = _rows(world)[0]["lane_config"]
+    assert lc["intent"] == "other" and lc["intent_source"] == "rules"
+    assert lc["intent_confidence"] is None and lc["intent_analyzer"] == "rules"
+    assert lc["stack"] == "s"                                  # the lane's own snapshot kept
+    assert 'title="Answer intent">other</span>' in html
+
+
+def test_a_model_decision_is_recorded_with_its_confidence(world, monkeypatch):
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    monkeypatch.setattr(sira_intent, "classify",
+                        lambda q: (_qi(q, Intent.LIST), {"intent": {"source": "model", "confidence": 0.71}}))
+    _, html = _ask(world, PLAIN)
+    lc = _rows(world)[0]["lane_config"]
+    assert (lc["intent"], lc["intent_source"], lc["intent_confidence"]) == ("list", "model", 0.71)
+    assert 'title="Answer intent">list</span>' in html
+
+
+def test_history_row_records_the_change_intent(world):
+    lanes, html = _ask(world, QUESTION)
+    assert lanes == ["history"]
+    lc = _rows(world)[0]["lane_config"]
+    assert lc["lane"] == "history" and lc["intent"] == "change" and lc["intent_source"] == "rules"
+    assert 'title="Answer intent">change</span>' in html
+
+
+def test_badge_rules():
+    assert sira_intent.intent_badge("id_lookup", {"intent": "other"}) == "lookup"
+    assert sira_intent.intent_badge("sira", {"intent": "fact"}) == "fact"
+    assert sira_intent.intent_badge("nora", {}) == "" and sira_intent.intent_badge("sira", None) == ""
+
+
+def test_the_shared_page_shows_the_stored_badge(world):
+    import json as _json
+    from core.src.web.app import app
+
+    class Store:
+        async def get_row(self, row_id):
+            return {"id": 1, "lane": "sira", "question": "q", "answer": "a", "user_name": "u",
+                    "timestamp": "t", "lane_config": _json.dumps({"intent": "compare"}),
+                    "cited_ids": "[]", "retrieved_ids": "[]", "citations_json": "[]"}
+
+    app.state.feedback_store = Store()
+    r = world["client"].get("/api/ask/s/1")
+    assert r.status_code == 200 and 'title="Answer intent">compare</span>' in r.text

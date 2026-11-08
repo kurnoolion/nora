@@ -170,6 +170,7 @@ def test_stream_answers_an_id_message_from_the_trees_store(world):
     assert ev[0] == ("lanes", {"lanes": ["id_lookup"], "run_id": ""})
     html = [d for n, d in ev if n == "done"][0]["html"]
     assert "LOOKUP" in html and "new body" in html and "Also in: Mar2031, Jun2031" in html
+    assert 'title="Answer intent">lookup</span>' in html
     assert "Not found in the parsed corpus" in html and C in html
     row = world["fb"].rows[0]
     assert row["lane"] == "id_lookup" and row["lane_config"]["lane"] == "id_lookup"

@@ -634,6 +634,7 @@ async def _build_merged_response_html(
                 "history_absent": h.get("absent_plans") or [],
                 "history_run": h.get("run") or {},
             })
+        ctx["intent_badge"] = sira_intent.intent_badge(lane, out.get("lane_config"))
         if lane == id_lookup_lane.LANE:
             ctx["lookup"] = out.get("lookup") or {}
         lanes_html[lane] = _render_template_to_string(
@@ -1250,6 +1251,8 @@ async def _render_stored_ask(request: Request, row_id: int, template: str):
         # A release-change answer keeps its side-by-side bubbles when
         # re-rendered from the row (the shared page, the History page).
         "bubble_endpoints": _stored_bubble_endpoints(row),
+        "intent_badge": sira_intent.intent_badge(
+            row.get("lane") or "", _decode_json_column(row.get("lane_config"), {})),
     })
 
 
@@ -1730,6 +1733,7 @@ async def playground_ask_stream(request: Request):
     history_intent = None
     history_error: "dict | None" = None
     q_intent = None
+    _intent_trace: dict = {}
     if "sira" in lanes_checked:
         q_intent, _intent_trace = await asyncio.to_thread(sira_intent.classify, question)
         try:
@@ -1813,6 +1817,13 @@ async def playground_ask_stream(request: Request):
 
         # All tasks done — collect results, build final HTML, emit done.
         outputs = {lane: t.result() for lane, t in tasks.items()}
+        # Record the intent on the rows it routed (design §7).
+        if q_intent is not None:
+            fields = sira_intent.lane_fields(q_intent, _intent_trace)
+            for lane in ("sira", history_lane.LANE):
+                lc = (outputs.get(lane) or {}).get("lane_config")
+                if isinstance(lc, dict):
+                    lc.update(fields)
         try:
             html = await _build_merged_response_html(
                 request, question, user_name, outputs,

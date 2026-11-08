@@ -165,7 +165,8 @@ switch at a time.
 ## 7. UI and logging
 
 - **Badge:** SIRA answer cards in **Ask** and **`/test`** show the intent as a small badge. There is no override control.
-- **Feedback rows:** `lane_config` on the rows records `intent`, `arm` (`kev` | `rules`) and `confidence`, plus `prompt_source` and `prompt_hash` when the per-intent prompts are on (§5). These logged rows become the labelled real-traffic set for the internal held-out check, for tuning the floor, and for comparing answers before and after a prompt revision.
+- **Feedback rows:** `lane_config` on the rows records `intent`, `intent_source` (`model` | `rules`; `model` rather than `kev`, since served stacks run jev) and `intent_confidence`, plus `intent_analyzer` (the knob's arm), plus `prompt_source` and `prompt_hash` when the per-intent prompts are on (§5). These logged rows become the labelled real-traffic set for the internal held-out check, for tuning the floor, and for comparing answers before and after a prompt revision.
+- **Built 2026-11-07:** the badge also shows on the shared page and the History pane, read from the stored row; the id_lookup lane's badge reads `lookup`. Tested with the team gate on and off.
 - **Team-mode gate:** there are no new routes. Verify with the team-mode gate on before calling it shipped (branch-flow rule).
 
 ## 8. Measurement
