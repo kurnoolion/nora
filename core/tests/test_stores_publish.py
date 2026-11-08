@@ -22,6 +22,7 @@ from core.src.stores.registry import (
     REGISTRY_ENV,
     RELEASE_SET_ENV,
     Registry,
+    RegistryError,
     history_fingerprint,
     registry_path,
     registry_store_paths,
@@ -500,6 +501,52 @@ def test_verify_serving_compares_healthz_with_registry(world, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # gc
+
+def test_purge_removes_a_dead_set_and_only_its_files(world):
+    """`purge` deletes one set's rows and the version files no other set or
+    the active set references; an active set is refused; the flip log keeps
+    a purged label so `served_before` still knows it."""
+    root = world["root"]
+    do_publish(world, "set-1", base="none")
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1-v2")
+    do_publish(world, "set-2", base="none")                      # shares every unit but one with set-1
+    pub.gate(root, "set-2", "manual", "waived")
+    pub.flip(root, "set-2")
+    cell = f"cells/{MNO_A}/{R1}"
+    before = files(root, "cells")
+    with pytest.raises(RegistryError) as exc:
+        pub.purge(root, "set-2")
+    assert exc.value.code == "REG-E009" and files(root, "cells") == before
+    plan = pub.purge(root, "set-1", dry_run=True)
+    assert plan["dry_run"] and plan["removed"] == [f"{cell}@v1"] and files(root, "cells") == before
+    reg = Registry(registry_path(root))
+    assert reg.release_set("set-1") is not None                  # a dry run changes nothing
+    out = pub.purge(root, "set-1")
+    assert out["removed"] == [f"{cell}@v1"] and out["freed_bytes"] > 0 and not out["served_before"]
+    assert f"cell-{MNO_A}-{R1}-v1.db" not in files(root, "cells")
+    assert f"cell-{MNO_A}-{R1}-v2.db" in files(root, "cells")   # set-2's version stays
+    reg = Registry(registry_path(root))
+    assert reg.release_set("set-1") is None and reg.gates("set-1") == []
+    with pytest.raises(RegistryError):
+        reg.members("set-1")
+    v1 = reg.get_version("cells", f"{MNO_A}/{R1}", 1)
+    assert v1 is not None and v1.removed_at                      # the row stays, marked removed
+    assert len(reg.members("set-2")) == 8                        # the shared units are untouched
+    with pytest.raises(RegistryError) as exc:
+        pub.purge(root, "set-1")
+    assert exc.value.code == "REG-E007"
+    # a set that served and was rolled back can be purged; its flips remain history
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1-v3")
+    do_publish(world, "set-3", base="none")
+    pub.gate(root, "set-3", "manual", "waived")
+    pub.flip(root, "set-3")
+    pub.rollback(root, "set-2")
+    out = pub.purge(root, "set-3")
+    assert out["removed"] == [f"{cell}@v3"] and out["served_before"]
+    reg = Registry(registry_path(root))
+    assert reg.served_before("set-3") and reg.active_label() == "set-2"
+    assert pub.main(["purge", "--serve-root", str(root), "--label", "set-3"]) == 1   # unknown now
+
 
 def test_gc_keeps_active_plus_n_and_flip_targets(world):
     root = world["root"]

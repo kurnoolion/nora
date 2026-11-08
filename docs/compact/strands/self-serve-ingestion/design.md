@@ -114,13 +114,32 @@ rollback job runs `publish rollback --to <previous label> --store-url`.
 Both are small; they run through the same runner so the web still starts
 no container.
 
-### Retry and abandon
+### Retry, abandon and purge
 
 Retry re-enqueues the ingest from its failed stage: every verb is
 resumable and artifact-checked, so re-running it is safe. Abandon runs
-`cycle.sh abandon --note` (frees the baton; build dirs stay for the
-administrator to remove) and marks the ingest abandoned. A staged but
-unflipped set is harmless and is cleaned by `publish gc` later.
+`cycle.sh abandon --note` (frees the baton; the build stays for
+diagnosis) and marks the ingest abandoned. A staged but unflipped set is
+harmless and is cleaned by `publish gc` later.
+
+Purge (2026-11-07) is the fourth verb, for a dead ingest: `abandoned`,
+`rolled_back`, `failed` or `cancelled`, never `served` or `staged`
+(abandon a staged one first). A runner job (`ingest-purge`) removes
+every artifact of the ingest, by its record rather than by walking
+trees: the baton if the build still holds it (`cycle.sh abandon`), the
+release set through `publish purge` (the registry refuses an active
+one, `REG-E009`; the flip log keeps the label), the promoted snapshot,
+the work dir, the build and a separate SIRA tree, the golden run, and
+the documents unless the active set serves that cell. Each removal is
+logged; one that fails (ownership, a busy mount) fails the job with the
+list and leaves the state unchanged, and every step tolerates what is
+already gone, so the purge is re-run after the fix. The row stays,
+state `purged`, so the page still shows that the attempt happened. The
+page offers Purge in the allowed states; the API is
+`POST /api/ingest/{id}/purge`. Without it, a dead ingest left six things
+behind that an administrator had to find by hand, and a cleanup that
+removed the build but not the snapshot produced the same-day label
+collision the promote step now sidesteps.
 
 ### Cancel
 

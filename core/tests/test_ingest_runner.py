@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -124,6 +125,15 @@ class Sim:
                           ["GEV ...", f"Run artifacts: /data/env/eval/golden/runs/{self.run_id}"])
         if "publish flip" in text:
             return Result(0, [json.dumps({"from_label": "old-label", "label": "x"})])
+        if "publish purge" in text:
+            label = args[args.index("--label") + 1]
+            con = sqlite3.connect(self.root / "registry/registry.db")
+            if con.execute("SELECT 1 FROM active WHERE label=?", (label,)).fetchone():
+                con.close()
+                return Result(1, [f"[REG-E009] release set {label!r} is active"])
+            con.execute("DELETE FROM release_set WHERE label=?", (label,))
+            con.commit(); con.close()
+            return Result(0, [json.dumps({"label": label, "removed": ["cells/x@v1"], "freed_bytes": 10})])
         if "golden_release_cli advance" in text:
             return Result(0, ["s1 -> carried over", "s2 -> REVIEW", "wrote release map v3"])
         return Result(0, ["ok"])
@@ -320,6 +330,109 @@ def test_one_shots_carry_the_runners_job_user(host, monkeypatch):
             assert env["JOB_UID"] == str(os.getuid()) and env["JOB_GID"] == str(os.getgid()), argv
     evals = [a for a, _ in composes if "golden_cli" in " ".join(a)]
     assert evals and evals[0][evals[0].index("--env-file") + 1].endswith(".env.stage")
+
+
+def _registry(host, sets=(), active=()):
+    reg = host["root"] / "registry/registry.db"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE IF NOT EXISTS release_set(label TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
+    con.execute("CREATE TABLE IF NOT EXISTS active(store TEXT, unit TEXT, version INTEGER, label TEXT)")
+    con.execute("DELETE FROM active")
+    for lab in sets:
+        con.execute("INSERT OR IGNORE INTO release_set VALUES (?, 'x')", (lab,))
+    for lab, unit in active:
+        con.execute("INSERT INTO active VALUES ('cells', ?, 1, ?)", (unit, lab))
+    con.commit(); con.close()
+    return reg
+
+
+def test_purge_removes_every_artifact_of_a_dead_ingest(host, monkeypatch):
+    """Purge: baton released if held, release set removed (never an active
+    one), snapshot, work dir, build, golden run and documents gone; a
+    removal that fails fails the job and leaves the state, and a re-run
+    finishes. Documents stay when the active set serves the cell."""
+    sim = Sim(host["root"])
+    q = host["q"]
+    r = _runner(host, sim)
+    job_id, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    build, label = ing.build, ing.label
+    # the artifacts a staged ingest leaves (the Sim made the build and the golden run)
+    (host["root"] / "labels" / label).mkdir(parents=True)
+    (host["root"] / "work" / label / "cells").mkdir(parents=True)
+    _registry(host, sets=[label, "old-label"], active=[("old-label", "MNO-A/Jan2031")])
+    assert (host["root"] / "builds/nora" / build).is_dir()
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+    run_dir = host["root"] / "golden/runs" / ing.run_ref
+    assert run_dir.is_dir()
+    # staged is not purgeable: abandon first
+    sim.calls.clear()
+    pj0 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "failed"
+    assert "abandon a staged one first" in _run(q.get_meta(pj0.id)).error_message
+    assert _run(q.get_ingest(ingest_id)).state == "staged"
+    _run(q.update_ingest(ingest_id, state="rolled_back"))
+    # one removal fails → job failed, state unchanged, the rest done
+    real_rmtree = shutil.rmtree
+
+    def flaky(path, *a, **k):
+        if str(path).endswith(f"labels/{label}"):
+            raise PermissionError(13, "Permission denied")
+        return real_rmtree(path, *a, **k)
+    monkeypatch.setattr(plan.shutil, "rmtree", flaky)
+    sim.calls.clear()
+    pj = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "failed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.state == "rolled_back"
+    msg = _run(q.get_meta(pj.id)).error_message
+    assert "purge incomplete" in msg and "promoted snapshot" in msg
+    assert any("publish purge --serve-root /data/serve --label " + label in c for c in sim.cmds())
+    assert not (host["root"] / "builds/nora" / build).exists()          # the others went
+    assert not (host["root"] / "work" / label).exists()
+    assert not run_dir.exists()
+    assert not (host["root"] / "requirements/MNO-A/Apr2031").exists()    # cell not active → documents removed
+    assert (host["root"] / "labels" / label).exists()
+    # re-run after the fix: the gone parts are logged as absent, the state moves
+    monkeypatch.setattr(plan.shutil, "rmtree", real_rmtree)
+    sim.calls.clear()
+    pj2 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.state == "purged" and ing.build == build and ing.label == label   # the row keeps its history
+    assert not (host["root"] / "labels" / label).exists()
+    logs = _run(q.get_logs(pj2.id))
+    assert any("no release set" in l for l in logs) and any("build absent" in l for l in logs)
+    assert not any("publish purge" in c for c in sim.cmds())             # registry step skipped: set already gone
+    # a purged ingest does not take the cell: the same release resubmits
+    from core.src.web.routes.ingest import _TAKEN_STATES
+    assert "purged" not in _TAKEN_STATES
+    # documents are kept when the active set serves the cell; an active label is refused by the registry
+    job2, ingest2 = _submit_ingest(host, release="Jul2031")
+    assert r.run_once() == "completed"
+    ing2 = _run(q.get_ingest(ingest2))
+    _registry(host, sets=[ing2.label], active=[(ing2.label, "MNO-A/Jul2031")])
+    _run(q.update_ingest(ingest2, state="rolled_back"))
+    sim.calls.clear()
+    pj3 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest2}))
+    assert r.run_once() == "failed"
+    assert "REG-E009" in _run(q.get_meta(pj3.id)).error_message
+    assert _run(q.get_ingest(ingest2)).state == "rolled_back"
+    assert (host["root"] / "requirements/MNO-A/Jul2031").is_dir()
+    # the baton: a failed ingest that still holds the cycle is abandoned on the way
+    job3, ingest3 = _submit_ingest(host, release="Oct2031")
+    assert r.run_once() == "completed"
+    ing3 = _run(q.get_ingest(ingest3))
+    (host["root"] / "builds/ACTIVE").write_text(ing3.build)
+    _run(q.update_ingest(ingest3, state="failed", label=None))
+    sim.calls.clear()
+    pj4 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest3}))
+    assert r.run_once() == "completed"
+    assert any("cycle.sh abandon --note" in c for c in sim.cmds())
+    assert not (host["root"] / "builds/ACTIVE").exists()
+    assert _run(q.get_ingest(ingest3)).state == "purged"
 
 
 def test_same_day_labels_skip_taken_names(host):

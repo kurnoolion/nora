@@ -29,7 +29,7 @@ from core.src.ingest_runner import webhook
 from core.src.ingest_runner.config import webhook_host_allowed
 from core.src.ingest_runner.db import RunnerDB, now_iso
 from core.src.ingest_runner.execute import CommandError, Exec, Result
-from core.src.web.jobs_schema import INGEST_STAGES as STAGES, NOTIFY_STATES, RETRY_FROM  # noqa: F401
+from core.src.web.jobs_schema import INGEST_STAGES as STAGES, NOTIFY_STATES, PURGEABLE_STATES, RETRY_FROM  # noqa: F401
 
 _CELL_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{0,30}$")
 _REL_RE = re.compile(r"^[A-Z][a-z]{2}\d{4}$")
@@ -205,22 +205,27 @@ def _job_user(env_file: str) -> dict[str, str]:
     return out
 
 
+def _registry_has(c: Ctx, sql: str, params: tuple) -> bool:
+    """One read-only existence query against the registry, if there is one."""
+    reg = Path(c.cfg.registry_root) / "registry.db"
+    if not reg.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            return con.execute(sql, params).fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+
+
 def _label_taken(c: Ctx, name: str) -> bool:
     """A label is taken when a promoted snapshot or a registry release set
     carries it (labels are immutable). The registry is read if present."""
     if (Path(c.cfg.labels_root) / name).exists():
         return True
-    reg = Path(c.cfg.registry_root) / "registry.db"
-    if reg.is_file():
-        try:
-            con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
-            try:
-                return con.execute("SELECT 1 FROM release_set WHERE label=?", (name,)).fetchone() is not None
-            finally:
-                con.close()
-        except sqlite3.Error:
-            return False
-    return False
+    return _registry_has(c, "SELECT 1 FROM release_set WHERE label=?", (name,))
 
 
 def _next_free(c: Ctx, prefix: str, *, builds: bool) -> str:
@@ -531,6 +536,87 @@ def run_rollback(c: Ctx) -> None:
     c.set_state("rolled_back", rolled_back_at=now_iso(), job_id=c.job_id)
     c.log(f"rollback: {ing['previous_label']} is active again; the release map still names "
           f"{ing['release']} for {ing['mno']} — golden runs pass --allow-map-mismatch until the next flip")
+
+
+def _remove_tree(c: Ctx, what: str, path: Path, problems: list[str]) -> None:
+    if not path.exists() and not path.is_symlink():
+        c.log(f"purge: {what} absent ({path})")
+        return
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except OSError as exc:
+        problems.append(f"{what} {path}: {exc.strerror or exc}")
+        return
+    c.log(f"purge: removed {what} ({path})")
+
+
+def run_purge(c: Ctx) -> None:
+    """Remove every artifact of a dead ingest: the cycle baton if it still
+    holds it, its release set (never an active one), promoted snapshot, work
+    dir, build (and SIRA tree), golden run, and its documents unless the
+    active set serves that cell. Each removal is logged; one that fails
+    (ownership, a busy mount) fails the job with the list and leaves the
+    state unchanged, so the purge is re-run after the fix — every step
+    tolerates what is already gone. The ingest row stays, state `purged`."""
+    ing = c.ingest
+    if ing.get("state") not in PURGEABLE_STATES:
+        raise StageError(f"ingest is {ing.get('state')}: only {', '.join(PURGEABLE_STATES)} ingests can be purged"
+                         " (abandon a staged one first)")
+    build = ing.get("build") or ""
+    label = ing.get("label") or ""
+    problems: list[str] = []
+    active = c.cfg.active_file
+    if build and active.is_file() and active.read_text(encoding="utf-8").strip() == build:
+        c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} purged")
+        c.log("purge: the cycle baton was this build's; abandoned")
+    if label and _registry_has(c, "SELECT 1 FROM release_set WHERE label=?", (label,)):
+        cmd = ["python", "-m", "core.src.stores.publish", "purge", "--serve-root", CTR_SERVE, "--label", label]
+        res = c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
+                              mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish purge")
+        c.log(f"purge: release set {label} removed from the registry" + _purge_summary(res))
+    elif label:
+        c.log(f"purge: no release set {label} in the registry")
+    if label:
+        _remove_tree(c, "promoted snapshot", Path(c.cfg.labels_root) / label, problems)
+        _remove_tree(c, "work dir", Path(c.cfg.work_dir) / label, problems)
+    if build:
+        bdir = c.cfg.build_dir(build)
+        sdir = c.cfg.sira_build_dir(build)
+        if not sdir.is_relative_to(bdir):
+            _remove_tree(c, "SIRA build", sdir, problems)
+        _remove_tree(c, "build", bdir, problems)
+    if ing.get("run_ref"):
+        _remove_tree(c, "golden run", Path(c.cfg.golden_dir) / "runs" / ing["run_ref"], problems)
+    cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
+    if cell.is_dir():
+        if _registry_has(c, "SELECT 1 FROM active WHERE store='cells' AND unit=?",
+                         (f"{ing['mno']}/{ing['release']}",)):
+            c.log("purge: documents kept — the active set serves this cell")
+        else:
+            _remove_tree(c, "documents", cell, problems)
+    if problems:
+        raise StageError("purge incomplete: " + "; ".join(problems)
+                         + " — fix the ownership or remove by hand, then purge again")
+    c.set_state("purged", job_id=c.job_id)
+
+
+def _purge_summary(res: Result) -> str:
+    for line in res.lines:
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            return f" ({len(d.get('removed') or [])} orphaned version file(s) removed)"
+    try:
+        d = json.loads("\n".join(res.lines))
+        return f" ({len(d.get('removed') or [])} orphaned version file(s) removed)"
+    except ValueError:
+        return ""
 
 
 def run_abandon(c: Ctx) -> None:

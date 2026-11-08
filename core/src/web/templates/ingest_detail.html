@@ -40,6 +40,12 @@
             <button type="submit" class="btn btn-outline-secondary btn-sm"><i class="bi bi-trash me-1"></i>Abandon</button>
         </form>
         {% endif %}
+        {% if ing.can_purge %}
+        <form method="post" action="{{ root_path }}/api/ingest/{{ ing.id }}/purge" class="d-inline"
+              onsubmit="return confirm('Purge this ingest? Its build, release set, snapshot, work files, eval run and documents are removed for good. The serving set is never touched.');">
+            <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-eraser me-1"></i>Purge</button>
+        </form>
+        {% endif %}
     </div>
 </div>
 

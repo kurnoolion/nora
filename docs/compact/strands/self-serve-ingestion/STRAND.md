@@ -23,3 +23,8 @@ ingested by hand.
 
 ## Notes
 
+- 2026-11-07 — scope widened: **Purge**, the fourth ingest verb. A dead
+  ingest (abandoned, rolled back, failed, cancelled) left six things
+  behind that an administrator had to find by hand; Purge removes them
+  all by the ingest record and never touches the serving set.
+

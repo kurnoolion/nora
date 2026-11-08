@@ -5,4 +5,6 @@
 {% elif i.state == 'rolled_back' %}<span class="badge bg-warning text-dark">rolled back</span>
 {% elif i.state == 'failed' %}<span class="badge bg-danger">failed{% if i.stage %} at {{ i.stage }}{% endif %}</span>
 {% elif i.state == 'cancelled' %}<span class="badge bg-warning text-dark">cancelled</span>
+{% elif i.state == 'abandoned' %}<span class="badge bg-secondary">abandoned</span>
+{% elif i.state == 'purged' %}<span class="badge bg-dark">purged</span>
 {% else %}<span class="badge bg-secondary">{{ i.state }}</span>{% endif %}

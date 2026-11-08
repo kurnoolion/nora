@@ -258,6 +258,25 @@ def test_rollback_retry_abandon_cancel(web):
     assert c.post("/api/ingest/nope/flip", headers=JSON).status_code == 404
 
 
+def test_purge_action(web):
+    c = _client()
+    rb = _ingest(web, "rolled_back", verdict="pass", label="L", previous_label="P", build="B")
+    page = c.get(f"/ingest/{rb}")
+    assert ">Purge<" in page.text and "rolled back" in page.text
+    r = c.post(f"/api/ingest/{rb}/purge", headers=JSON)
+    assert r.status_code == 202 and _run(web["q"].get_meta(r.json()["job_id"])).job_type == "ingest-purge"
+    assert _run(web["q"].get_ingest(rb)).job_id == r.json()["job_id"]
+    for state in ("served", "staged", "running", "queued"):
+        i = _ingest(web, state, verdict="pass", label="L2", previous_label="P", build="B2")
+        assert ">Purge<" not in c.get(f"/ingest/{i}").text
+        assert c.post(f"/api/ingest/{i}/purge", headers=JSON).status_code == 409
+    ab = _ingest(web, "abandoned", build="B3")
+    assert c.post(f"/api/ingest/{ab}/purge", headers=JSON).status_code == 202
+    _run(web["q"].update_ingest(ab, state="purged"))
+    page = c.get(f"/ingest/{ab}")
+    assert ">purged<" in page.text and ">Purge<" not in page.text
+
+
 def test_actions_need_the_cookie(web):
     served = _ingest(web, "served", verdict="pass", previous_label="P")
     assert _client(cookie=None).post(f"/api/ingest/{served}/rollback", headers=JSON).status_code == 403

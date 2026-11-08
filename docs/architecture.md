@@ -399,6 +399,7 @@ cycle script does.
 | `flip --label L [--mode staged\|expedited\|override] [--force --reason TEXT] [--note] [--store-url URL]` | Refuses without a passing gate rule and a present file per member; `--force` records a waived manual gate; `active` := the set, one transaction; with `--store-url`, reloads the store and verifies healthz. | `PUB-E004` no passing gate, `PUB-E005` member file missing, `PUB-E008` serving verification failed |
 | `rollback --to L [--force] [--note] [--store-url URL]` | A `kind=rollback`, `expedited` flip to a set that served before. | `PUB-E009` never served |
 | `gc --keep N [--dry-run]` | Removes files of versions outside the protected set (active, last N sets, last N flip targets); rows stay with `removed_at`; orphan files reported, not deleted. | — |
+| `purge --label L [--dry-run]` | Removes one release set that is not active — its rows (members, gate runs, the set) and the files of the versions no other set or the active set references; rows stay with `removed_at`, the flip log keeps the label. The self-serve runner's Purge calls it. | `REG-E009` set is active; `REG-E007` unknown set |
 | `status [--label L]` | Active set, versions, gates, flips as JSON. | `PUB-E010` registry unusable |
 
 Registry errors `REG-E001..E008` surface through the same CLI. Output is
@@ -2085,10 +2086,22 @@ says so. The administrator can still flip by hand with a waiver
 `queued → running → staged` (gate recorded, pass or fail) `| failed |
 cancelled`; `staged → served` (Serve); `served → rolled_back` (Roll
 back); `failed → queued` (Retry, from the failed stage, or from enrich
-for a verify failure) `| abandoned`; `cancelled | staged → abandoned`.
+for a verify failure) `| abandoned`; `cancelled | staged → abandoned`;
+`abandoned | rolled_back | failed | cancelled → purged` (Purge).
 Cancel takes effect between stages and while a detached phase is
 followed; the cycle in flight is then left for Abandon, which runs
-`cycle.sh abandon` and removes the staged copy of the documents.
+`cycle.sh abandon` and removes the staged copy of the documents but
+keeps the build for diagnosis. Purge is the deliberate second step for
+a dead ingest: the runner releases the baton if the build still holds
+it, removes the release set through `publish purge` (never an active
+one), then the promoted snapshot, the work dir, the build (and a
+separate SIRA tree), the golden run, and the documents unless the
+active set serves that cell. Every removal is logged; one that fails
+fails the job with the list and leaves the state, so a purge is re-run
+after the fix — each step tolerates what is already gone. The ingest
+row stays as history. A staged set is never purged directly: Abandon
+first. A purged label is not reused: the same-day sequence number
+skips names a snapshot or release set still carries.
 Submits queue, oldest first; one cycle runs at a time, as the driver
 enforces with its baton, and a failed ingest that still holds it is
 named on the page until it is retried or abandoned. Out of

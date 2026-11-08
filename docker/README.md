@@ -274,13 +274,17 @@ recorded golden run. **Serve** runs `publish flip --store-url` and
 `golden_release_cli advance`; **Roll back** runs `publish rollback --to
 <previous>`. A failed stage offers **Retry** (from the stage, or from
 enrich for a verify failure); **Abandon** closes the cycle and removes
-the staged copy of the documents. Submits queue and one ingest runs at
+the staged copy of the documents, keeping the build for a look;
+**Purge** (abandoned, rolled back, failed or cancelled ingests) removes
+every artifact of a dead ingest — release set, snapshot, work dir,
+build, eval run, documents unless the active set serves the cell — and
+never touches the serving set. Submits queue and one ingest runs at
 a time (the cycle driver's baton); a failed ingest that still holds the
 cycle is named on the page and must be retried or abandoned before the
 queue moves. The same operation as an API:
 `POST /api/ingest {source, mno, release, note?, submitted_by?}` → 202
 `{ingest_id, job_id}`; `GET /api/ingest/{id}`;
-`POST /api/ingest/{id}/{flip|rollback|retry|abandon|cancel}` — with the
+`POST /api/ingest/{id}/{flip|rollback|retry|abandon|purge|cancel}` — with the
 ingest cookie. Nobody has to poll: `GET /api/ingest/{id}/events` is a
 server-sent event stream (`state` on each change, `done` at the end),
 and a submit may carry a `callback_url` that the runner posts

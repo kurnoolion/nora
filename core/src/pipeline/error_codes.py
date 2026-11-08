@@ -184,6 +184,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("REG-E006", "Unit {unit} listed twice in one release set", "A unit has one version per set; check the base set and the sources"),
     ErrorDef("REG-E007", "Unknown release set {label}", "See `publish status` for the sets in this registry"),
     ErrorDef("REG-E008", "Bad gate / flip argument: {detail}", "Kinds: golden-stage1, golden-stage2, manual; verdicts: pass, fail, waived; flip modes: staged, expedited, override"),
+    ErrorDef("REG-E009", "Release set {label} is active", "An active set is never purged; flip or roll back to another set first"),
     # release-change answers from the History store (strand rel-history)
     ErrorDef("RHD-E001", "Fewer than two served releases for this MNO ({count})", "Release-change questions need two releases in the History store; publish the next release first"),
     ErrorDef("RHD-E002", "Release {release} is not served for this MNO", "Name a served release, 'latest' or 'previous'; the Ask page lists the served releases"),

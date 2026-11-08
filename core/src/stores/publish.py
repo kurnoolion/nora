@@ -627,6 +627,28 @@ def gc(serve_root: "str | Path", keep: int, *, dry_run: bool = False,
             "protected_labels": sorted(reg.protected_labels(keep)), "orphan_files": sorted(orphans)}
 
 
+def purge(serve_root: "str | Path", label: str, *, dry_run: bool = False,
+          transfer: "Transfer | None" = None) -> dict:
+    """Remove one release set that is not active: its rows, then the files
+    of the versions no other set or the active set still references (rows
+    stay with ``removed_at`` set, as after ``gc``). The flip log keeps the
+    label. For a dead ingest's set; the retention rule stays ``gc``'s."""
+    root = Path(serve_root)
+    reg = Registry(registry_path(root), read_only=False)
+    transfer = transfer or LocalTransfer(root)
+    victims = reg.purge_plan(label) if dry_run else reg.purge_release_set(label)
+    removed: list[str] = []
+    freed = 0
+    for v in victims:
+        if not dry_run:
+            transfer.remove(v.file)
+            reg.mark_removed(v.store, v.unit, v.version)
+        removed.append(f"{v.store}/{v.unit}@v{v.version}")
+        freed += v.bytes
+    return {"label": label, "dry_run": dry_run, "removed": removed, "freed_bytes": freed,
+            "served_before": reg.served_before(label)}
+
+
 def status(serve_root: "str | Path", label: str = "") -> dict:
     reg = Registry(registry_path(serve_root), read_only=True)
     out: dict = {"registry": str(reg.path), "active_label": reg.active_label(),
@@ -733,6 +755,11 @@ def main(argv: "list[str] | None" = None) -> int:
     c.add_argument("--keep", type=int, required=True, help="release sets (and flips) to keep")
     c.add_argument("--dry-run", action="store_true")
 
+    pg = sub.add_parser("purge", help="remove a release set that is not active, and the files only it referenced")
+    _add_root(pg)
+    pg.add_argument("--label", required=True)
+    pg.add_argument("--dry-run", action="store_true")
+
     mu = sub.add_parser("migrate-units", help="rewrite <mno>__<release> units to <mno>/<release> (one-shot, idempotent)")
     _add_root(mu)
     mu.add_argument("--dry-run", action="store_true")
@@ -764,6 +791,8 @@ def main(argv: "list[str] | None" = None) -> int:
                            store_url=args.store_url)
         elif args.cmd == "gc":
             out = gc(args.serve_root, args.keep, dry_run=args.dry_run)
+        elif args.cmd == "purge":
+            out = purge(args.serve_root, args.label, dry_run=args.dry_run)
         elif args.cmd == "migrate-units":
             out = migrate_units(args.serve_root, dry_run=args.dry_run)
         else:

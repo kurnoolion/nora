@@ -601,6 +601,43 @@ class Registry:
         return [v for v in self.versions() if not v.removed_at
                 and (v.store, v.unit, v.version) not in keep_versions]
 
+    def purge_plan(self, label: str) -> list[StoreVersion]:
+        """The set's members that would belong to no other set and are not
+        active once the set is gone (``purge_release_set`` removes the rows;
+        the caller removes these files and calls ``mark_removed``). Refuses
+        an unknown or an active set."""
+        if self.release_set(label) is None:
+            raise RegistryError("REG-E007", f"unknown release set {label!r}")
+        if any(r["label"] == label for r in self.active()):
+            raise RegistryError("REG-E009", f"release set {label!r} is active")
+        keep: set[tuple[str, str, int]] = {
+            (r["store"], r["unit"], int(r["version"])) for r in self.active()}
+        con = self._connect()
+        try:
+            keep.update((r["store"], r["unit"], int(r["version"])) for r in con.execute(
+                "SELECT store, unit, version FROM release_set_member WHERE label<>?", (label,)))
+        finally:
+            con.close()
+        return [m for m in self.members(label)
+                if not m.removed_at and (m.store, m.unit, m.version) not in keep]
+
+    def purge_release_set(self, label: str) -> list[StoreVersion]:
+        """Delete the set's rows (members, gate runs, the set) in one
+        transaction and return ``purge_plan(label)`` as computed before.
+        Flip rows keep the label: history is never rewritten, and
+        ``served_before`` still answers for it. Never an active set."""
+        plan = self.purge_plan(label)
+        con = self._connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("DELETE FROM release_set_member WHERE label=?", (label,))
+            con.execute("DELETE FROM gate_run WHERE label=?", (label,))
+            con.execute("DELETE FROM release_set WHERE label=?", (label,))
+            con.execute("COMMIT")
+        finally:
+            con.close()
+        return plan
+
     def mark_removed(self, store: str, unit: str, version: int, at: str = "") -> None:
         con = self._connect()
         try:

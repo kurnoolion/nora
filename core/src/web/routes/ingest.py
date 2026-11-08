@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from core.src.web import team_mode as tm
 from core.src.web.jobs import Ingest, JobQueue
 from core.src.stores.cells import parse_cell_dirname
-from core.src.web.jobs_schema import INGEST_STAGES, RETRY_FROM
+from core.src.web.jobs_schema import INGEST_STAGES, PURGEABLE_STATES, RETRY_FROM
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,7 @@ def _ingest_view(ing: Ingest) -> dict[str, Any]:
     d["can_retry"] = st == "failed" and bool(ing.stage)
     d["retry_from"] = RETRY_FROM.get(ing.stage or "", ing.stage) if d["can_retry"] else None
     d["can_abandon"] = st in ("failed", "cancelled", "staged")
+    d["can_purge"] = st in PURGEABLE_STATES
     d["can_cancel"] = st in ("queued", "running")
     d["queue_position"] = None
     d["stages"] = [{"name": s, "hint": STAGE_HINTS.get(s, ""),
@@ -397,6 +398,12 @@ async def _action(request: Request, ingest_id: str, action: str):
         else:
             job = await job_queue.submit("ingest-abandon", by, environment=f"ingest:{ing.mno}/{ing.release}",
                                          params={"ingest_id": ing.id})
+    elif action == "purge":
+        if not view["can_purge"]:
+            error = f"cannot purge: state {ing.state} (abandon a staged ingest first)"
+        else:
+            job = await job_queue.submit("ingest-purge", by, environment=f"ingest:{ing.mno}/{ing.release}",
+                                         params={"ingest_id": ing.id})
     elif action == "cancel":
         if not view["can_cancel"] or not ing.job_id:
             error = f"nothing to cancel: state {ing.state}"
@@ -437,6 +444,11 @@ async def api_retry(request: Request, ingest_id: str):
 @router.post("/api/ingest/{ingest_id}/abandon")
 async def api_abandon(request: Request, ingest_id: str):
     return await _action(request, ingest_id, "abandon")
+
+
+@router.post("/api/ingest/{ingest_id}/purge")
+async def api_purge(request: Request, ingest_id: str):
+    return await _action(request, ingest_id, "purge")
 
 
 @router.post("/api/ingest/{ingest_id}/cancel")
