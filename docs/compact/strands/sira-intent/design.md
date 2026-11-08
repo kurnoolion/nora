@@ -138,6 +138,13 @@ Prompts will be revised often as the dataset grows, so they have two layers
   - `other` is today's prompt verbatim.
   - The reasoning-sentinel suffix applies to every prompt, as it does today.
 - **Review:** I draft the prompts and Hanif reviews them.
+- **Built 2026-11-07:** `core/src/web/sira_intent_prompts.py`. An override
+  value is the whole system prompt for that intent (what the file says is
+  what the model gets), not just step 2. The prompts are loaded at startup
+  whatever `NORA_SIRA_INTENT_PROMPTS` says, so a bad file is caught before the
+  switch goes on. Only the select-synth path uses them; the rerank-pin path
+  (NORA synthesizer) keeps its own prompt. A disabled History lane sends a
+  `change` question to SIRA with the `change` prompt (§4).
 
 Query enrichment (the store's `query_requirement_v01.txt`, in the SIRA clone)
 is not touched in phase 1.

@@ -121,6 +121,12 @@ async def lifespan(app: FastAPI):
             _pg._SYNTH_MODE, _pg._PIN_MODE, _pg._PIN_MAX,
         )
 
+    # Per-intent select-synth prompts (strand sira-intent, design §5): source
+    # defaults merged with the environment's override file. A bad file stops
+    # startup here rather than answering with half a prompt set.
+    from core.src.web.sira_intent_prompts import load_at_startup
+    load_at_startup(config.env_dir_path() if config.env_dir else None)
+
     # Ensure state/ directory exists (D-022: <env_dir>/state/)
     state_dir = config.state_path()
     state_dir.mkdir(parents=True, exist_ok=True)

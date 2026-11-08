@@ -30,7 +30,7 @@ from core.tests.test_web_history_lane import (  # noqa: E402
     QUESTION, EchoProvider, FakeFeedback, FakeHistory, _events,
 )
 
-PLAIN = "What is the retry timer?"          # a fact question by the rules
+PLAIN = "What is the retry timer?"          # not a change question; the rules say other
 
 
 def _qi(text, intent):
@@ -132,6 +132,7 @@ def world(monkeypatch):
 
     async def fake_sira(question, request, **kw):
         state["sira"].append(question)
+        state["sira_intent"] = kw.get("intent")
         return {"error": "stubbed"}
 
     monkeypatch.setattr(playground, "_run_sira_lane_for_merged", fake_sira)
@@ -186,8 +187,10 @@ def test_lane_disabled_goes_to_sira_even_when_strict(world, monkeypatch):
     world["cfg"] = OFF
     lanes, _ = _ask(world, QUESTION)
     assert lanes == ["sira"] and world["sira"] == [QUESTION]
+    assert world["sira_intent"] is Intent.CHANGE      # SIRA answers with the change prompt
 
 
 def test_other_questions_go_to_sira(world):
     lanes, _ = _ask(world, PLAIN)
     assert lanes == ["sira"] and world["sira"] == [PLAIN]
+    assert world["sira_intent"] is Intent.OTHER
