@@ -42,6 +42,7 @@
     {"sample_id": "l08", "query": "List the {MNO_A} requirements on emergency calls", "intent": "list"},
     {"sample_id": "l09", "query": "What requirements apply to OTA firmware updates?", "intent": "list"},
     {"sample_id": "l10", "query": "All requirements about PDN disconnect, please", "intent": "list"},
+    {"sample_id": "l11", "query": "what are the VoLTE emergency call requirements", "intent": "list"},
 
     {"sample_id": "k01", "query": "Does retrying attach after 12 minutes comply with the attach requirements?", "intent": "compliance"},
     {"sample_id": "k02", "query": "Is a device that ignores reject cause 15 compliant?", "intent": "compliance"},

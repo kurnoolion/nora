@@ -67,3 +67,11 @@ def test_change_intent_matches_the_release_change_rule(question):
 def test_change_rule_lives_in_intent_and_is_reexported_by_release_diff():
     from core.src.query import intent, release_diff
     assert release_diff.is_release_change_question is intent.is_release_change_question
+
+
+def test_what_are_the_requirements_is_list():
+    from core.src.query.analyzer import MockQueryAnalyzer
+    a = MockQueryAnalyzer()
+    assert a.analyze("what are the VoLTE emergency call requirements").intent is Intent.LIST
+    assert a.analyze("What requirements apply to OTA firmware updates?").intent is Intent.LIST
+    assert a.analyze("What is the default value of T3402?").intent is not Intent.LIST

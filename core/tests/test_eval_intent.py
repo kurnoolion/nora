@@ -21,9 +21,10 @@ from core.src.eval.intent_eval import (
 from core.src.query.schema import Intent, QueryIntent
 
 
-def test_committed_set_has_ten_per_intent_and_unique_ids():
+def test_committed_set_has_at_least_ten_per_intent_and_unique_ids():
     samples = load_intent_set()
-    assert Counter(s.intent for s in samples) == {i: 10 for i in Intent}
+    counts = Counter(s.intent for s in samples)
+    assert set(counts) == set(Intent) and min(counts.values()) >= 10
     assert len({s.sample_id for s in samples}) == len(samples)
 
 

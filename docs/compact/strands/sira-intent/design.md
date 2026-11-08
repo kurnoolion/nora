@@ -152,6 +152,11 @@ Prompts will be revised often as the dataset grows, so they have two layers
   switch goes on. Only the select-synth path uses them; the rerank-pin path
   (NORA synthesizer) keeps its own prompt. A disabled History lane sends a
   `change` question to SIRA with the `change` prompt (§4).
+- **Rules `list` gap (2026-11-08):** "what are the VoLTE emergency call
+  requirements" fell to `other` (Kev said `list` at 0.34, below the floor).
+  The rules' `list` check now also matches "what are the … requirements" and
+  "what requirements"; the question joined the dev set as l11 (rules
+  accuracy 0.714 → 0.732, labels still under review).
 - **Prompt review (2026-11-08):** `list` asks for a one-sentence summary of
   each requirement's content, not its section title. `compliance` has no
   prompt of its own (roadmap, §9).
@@ -172,7 +177,7 @@ is not touched in phase 1.
 | Switch | Where | Default | Effect |
 |---|---|---|---|
 | `NORA_QUERY_ANALYZER` | nora-web | `rules` | Which classifier decides intent. `rules` reproduces today's routing. |
-| `NORA_DECISION_PROVIDER` / `_BASE_URL` / `_CONFIDENCE_FLOOR` | nora-web | unset / unset / 0.50 | Kev endpoint, needed for the Kev arms only. |
+| `NORA_DECISION_PROVIDER` / `_BASE_URL` / `_CONFIDENCE_FLOOR` / `_TIMEOUT` | nora-web | unset / unset / 0.50 / 30 s | Kev endpoint, needed for the Kev arms only. A timeout falls back to the rules; `run_local.sh` uses 5 s, since on a 24 GB Mac Kev slowed to 75 s per call while Ollama held qwen3:8b at 32K and a second model (2026-11-08). |
 | `NORA_SIRA_INTENT_PROMPTS` | nora-web | off | Per-intent prompts, plus the §4 error behaviour. |
 | `NORA_ID_LOOKUP` | nora-web | off | A message made only of requirement IDs goes to the `id_lookup` lane (§4 step 0). Off: it goes to SIRA as today. |
 | `NORA_PIN_NAMED_IDS` | nora-web | off | Requirement IDs named inside a question go first in the select-synth context, from the Trees store (§4 item 4). |

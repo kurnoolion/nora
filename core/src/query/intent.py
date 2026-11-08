@@ -23,7 +23,8 @@ _COMPLIANCE_WORDS = re.compile(
     r"\b(compl(y|ies|iant|iance)|conform\w*|violat\w*|satisf(y|ies)|"
     r"meets? the requirements?)\b")
 _LIST_WORDS = re.compile(
-    r"^\s*(list|enumerate)\b|\b(what are all|which requirements|all (the )?requirements|all reqs)\b")
+    r"^\s*(list|enumerate)\b|\b(what are all|which requirements|all (the )?requirements|all reqs)\b"
+    r"|\bwhat are the\b[^?.]*\brequirements?\b|\bwhat requirements\b")
 _EXPLAIN_WORDS = re.compile(r"\b(how does|how do|why|purpose of)\b")
 
 

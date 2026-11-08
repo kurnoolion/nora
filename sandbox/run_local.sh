@@ -20,6 +20,8 @@
 #   KEV_DIR            a Kev checkout; when set, Kev serves on :8009 and nora-web
 #                      classifies intent confidence-routed (Kev above the floor,
 #                      else the rules). Unset: the rules classify.
+#   KEV_TIMEOUT=5      seconds nora-web waits for Kev before the rules answer
+#                      (Kev slows sharply when Ollama and Kev compete for memory)
 #   ID_LOOKUP=on       a message of only requirement IDs → lookup lane (off: SIRA)
 #   PIN_IDS=on         requirement IDs named inside a question go first in the
 #                      answer's context, from the Trees store (off: BM25 only)
@@ -75,6 +77,7 @@ NORA_HISTORY_DIFF_ENABLED=${HISTORY_LANE:-false} \
 NORA_QUERY_ANALYZER=$ANALYZER \
 NORA_DECISION_PROVIDER=systemone \
 NORA_DECISION_BASE_URL=http://127.0.0.1:8009 \
+NORA_DECISION_TIMEOUT=${KEV_TIMEOUT:-5} \
 NORA_SIRA_SYNTH_MODE=select-synth \
 NORA_SIRA_SYNTH_TOKEN_BUDGET=${SYNTH_BUDGET:-24000} \
 NORA_SIRA_SELECT_SYNTH_TOP_K=20 \
