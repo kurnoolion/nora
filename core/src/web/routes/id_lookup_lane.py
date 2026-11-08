@@ -25,11 +25,17 @@ from core.src.query.analyzer import _REQ_ID_PATTERN  # the rules' ID shape (Veri
 from core.src.stores.trees import latest_match, release_sort_key
 
 LANE = "id_lookup"
+ENV_SWITCH = "NORA_ID_LOOKUP"
 
 _ID_RE = re.compile(_REQ_ID_PATTERN.pattern, re.IGNORECASE)
 _MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 _RELEASE_RE = re.compile(rf"\b({_MONTHS})\s?(\d{{4}})\b", re.IGNORECASE)
 _SEPARATORS = re.compile(r"[\s,;]*")
+
+
+def enabled() -> bool:
+    """The ``NORA_ID_LOOKUP`` switch, read per request; default off."""
+    return os.getenv(ENV_SWITCH, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)

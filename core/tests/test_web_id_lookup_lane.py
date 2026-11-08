@@ -6,7 +6,8 @@ Covers:
 - `lookup`: latest release by default with the others listed, a named
   release wins, a named release that lacks the ID, unknown IDs.
 - The ask-stream route: the lane takes the SIRA slot, no retrieval or
-  model runs, the feedback row's lane_config, the team gate on.
+  model runs, the feedback row's lane_config, the team gate on; with the
+  NORA_ID_LOOKUP switch off (the default) the message goes to SIRA.
 
 IDs, plans and texts are placeholders; no corpus content.
 """
@@ -144,6 +145,7 @@ def world(monkeypatch):
     from core.src.web.app import app
 
     fb = FakeFeedback()
+    monkeypatch.setenv("NORA_ID_LOOKUP", "on")
     monkeypatch.setattr(req_tree, "find_req", fake_find_req)
 
     async def no_sira(*a, **k):
@@ -181,3 +183,28 @@ def test_stream_with_the_team_gate_on(world, monkeypatch):
     ev = _ask(world["client"], A)
     assert ev[0][1]["lanes"] == ["id_lookup"]
     assert "new body" in [d for n, d in ev if n == "done"][0]["html"]
+
+
+@pytest.mark.parametrize("value", [None, "", "off", "false", "0"])
+def test_switch_off_sends_an_id_message_to_sira(world, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("NORA_ID_LOOKUP", raising=False)
+    else:
+        monkeypatch.setenv("NORA_ID_LOOKUP", value)
+    ran = []
+
+    async def fake_sira(question, request, **kw):
+        ran.append(question)
+        return {"error": "stubbed"}
+
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", fake_sira)
+    monkeypatch.setattr(playground.history_lane, "history_diff_applies", lambda *a, **k: None)
+    ev = _ask(world["client"], A)
+    assert ev[0][1]["lanes"] == ["sira"] and ran == [A]
+    assert world["fb"].rows == []
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", " ON "])
+def test_switch_values_that_turn_it_on(monkeypatch, value):
+    monkeypatch.setenv("NORA_ID_LOOKUP", value)
+    assert lane.enabled()

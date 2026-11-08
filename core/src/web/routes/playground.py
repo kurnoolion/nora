@@ -1713,7 +1713,10 @@ async def playground_ask_stream(request: Request):
     # A message made only of requirement IDs is a lookup (strand
     # sira-intent, D-DRAFT-8): the id_lookup lane takes the SIRA slot and
     # shows each requirement from the Trees store, no model, no retrieval.
-    id_msg = id_lookup_lane.parse_id_message(question) if "sira" in lanes_checked else None
+    # Behind NORA_ID_LOOKUP (default off).
+    id_msg = None
+    if "sira" in lanes_checked and id_lookup_lane.enabled():
+        id_msg = id_lookup_lane.parse_id_message(question)
     if id_msg is not None:
         lanes_checked = [l for l in lanes_checked if l != "sira"] + [id_lookup_lane.LANE]
 

@@ -170,3 +170,4 @@
 - The classifier dev set drops its bare-ID sample (o03).
 - The ID pattern is Verizon-only until other operators' formats are known.
 - The pinning fix is built last in phase 1, after reproducing the symptom.
+- The lane sits behind `NORA_ID_LOOKUP`, default off, like the strand's other switches: served stacks change only when someone opts in.
