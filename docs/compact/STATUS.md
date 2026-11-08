@@ -3,7 +3,7 @@
 > **Strands active from 2026-05-16.** Mid-session journal entries land in `docs/compact/strands/<name>/journal.md`. Content below this line is historical and is no longer updated by `close-session` when a strand is bound. Architect-only writes (project-wide status, decisions promoted via `/land-strand`) continue to land here.
 
 **Active phase**: development
-**Last updated**: 2026-10-26
+**Last updated**: 2026-11-08
 **Last drift-check**: 2026-11-08 — mode: dev-full (six modules of strand self-serve-ingestion: ingest_runner, web, stores, pipeline, taxonomy, eval) + requirements — 21 drifts resolved (requirements follow code: FR-6 per-release taxonomy, new FR-47 self-serve ingestion, NFR-17 purge carve-out, FR-41 second token, FR-38 pooled golden dir; sixteen MODULE.md updates: public-surface additions for purge / runner_name / IRN-E003 / RunnerDB methods / Registry purge methods / REG-E009 / error-code prefixes / TAX-W008 / golden_release_cli flags, invariants carved out for Purge in ingest_runner and stores, web non-goal reworded for the two-token split, dependency edges corrected in web / pipeline / eval, taxonomy extractor parameter name), 0 deferred surfaced; previous: 2026-10-25 — mode: dev-module stores — 2 drifts resolved (Public surface updated to code: Registry `exists`/`root`/`next_version` and `flip` return; publish CLI `--note` on flip, `--note`/`--store-url` on rollback), 0 deferred surfaced; previous: 2026-10-18 — mode: design — 21 drifts resolved, 1 no change (NFR-1: only acceptable LLMs are configured) (requirements describe current serving: D-254 SIRA over NORA's taxonomy, KG-dependent FR-5/7/8/11/12/13/21 + NFR-14 deferred, FR-37 reworded; new FR-40 serving path, FR-41 team gate, FR-42 LLM roster + refusal fallback, FR-43 promotion; FR-19 Ask-page features; 12 stale FR/NFR rewordings incl. NFR-15/16 → golden eval with per-release targets; TOC default 0.7 in from_dict; carrier-name sweep), 1 deferred (FR-38 release handling — lands with golden-eval strand); same day: dev-full — 16 drifts resolved
 
 ## Done
@@ -164,6 +164,7 @@
   D-105/D-116/D-118 fusion; temperature knob shipped in code). Unshipped
   residue (fan-out query-type routing) carried to `nora-retrieval-quality`.
 - 2026-10-25 Landed strand `corp-db-layer` — D-255..D-287 promoted (four corpus stores behind nora-store, publish registry with gated flips, SQLite Overlay authority, store service under `core/src`); `docs/architecture.md` is the engineering reference; drafts 5 and 21 deferred in the archive.
+- 2026-11-08 Landed strand `self-serve-ingestion` (D-304..D-322): the requirements team ingests a new release of a served MNO from the web page through a host-side runner; Serve / Roll back / Retry / Abandon, Purge for the administrator; per-stack build roots and a serving stack that mounts no build; `docs/self-serve-ingestion-guide.md`. Left on the host by the administrator's choice: four pre-restructure build directories outside the roots; one abandoned ingest row sharing a label with the served one.
 
 ## In progress
 
@@ -174,6 +175,8 @@
 - ✅ 2026-05-15 **Nested-table extraction in DOCX — closed** (commit 1ddad84, D-081). `cell.tables` recursion shipped; nested tables emit as separate TABLE blocks in parent-first depth-first order. No `parent_table_idx` field added — simpler than the prior speculation.
 
 ## Next
+
+- `stage-graph` strand (opened 2026-11-06): two rulings before code — a recipe per stack or per ingest; one stage store per host or per corpus. Bind with `/switch-strand stage-graph`.
 
 - ✅ Browser smoke-test of Steps 1 + 2 complete (this session, on dev + work PCs).
 - ✅ 2026-05-10 **Pivot to general parser rules** — shipped end-to-end as the 5-phase generic-rules pivot (see Done 2026-05-10). Work-PC corpus parses cleanly with `reqs=13372`, `defs=1410`, `toc_pair_misses=5`.

@@ -849,6 +849,11 @@ nora/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
+│   │   │   │   ├── self-serve-ingestion/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── design.md
+│   │   │   │   │   └── journal.md
 │   │   │   │   ├── sira-enrichment-pe/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
@@ -899,11 +904,6 @@ nora/
 │   │   │   ├── nora-retrieval-quality/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
-│   │   │   │   └── journal.md
-│   │   │   ├── self-serve-ingestion/
-│   │   │   │   ├── STRAND.md
-│   │   │   │   ├── decisions-draft.md
-│   │   │   │   ├── design.md
 │   │   │   │   └── journal.md
 │   │   │   ├── stage-graph/
 │   │   │   │   ├── STRAND.md
