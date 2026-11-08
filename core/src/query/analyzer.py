@@ -108,9 +108,12 @@ _REQ_ID_PATTERN = re.compile(r"VZ_REQ_\w+_\d+")
 
 # ── Release patterns ───────────────────────────────────────────
 
+# `\s*` between month and year: the release labels themselves are the
+# compact `MMMYYYY` form, and a query that types one that way must resolve
+# to that release, not fall through to the latest (field finding 2026-11-08).
 _RELEASE_PATTERNS = [
-    (re.compile(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+20(\d{2})", re.I), None),
-    (re.compile(r"20(\d{2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.I), None),
+    (re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*20(\d{2})\b", re.I), None),
+    (re.compile(r"\b20(\d{2})\s*[-/ ]?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.I), None),
     (re.compile(r"latest|current", re.I), "latest"),
 ]
 

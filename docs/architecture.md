@@ -2101,7 +2101,9 @@ active set serves that cell. Every removal is logged; one that fails
 fails the job with the list and leaves the state, so a purge is re-run
 after the fix — each step tolerates what is already gone. The ingest
 row stays as history. A staged set is never purged directly: Abandon
-first. A purged label is not reused: the same-day sequence number
+first. A row whose label or build another live ingest also carries is
+refused before anything is touched: purge removes by name, and names
+restart after a by-hand cleanup. A purged label is not reused: the same-day sequence number
 skips names a snapshot or release set still carries.
 Submits queue, oldest first; one cycle runs at a time, as the driver
 enforces with its baton, and a failed ingest that still holds it is

@@ -567,6 +567,15 @@ def run_purge(c: Ctx) -> None:
                          " (abandon a staged one first)")
     build = ing.get("build") or ""
     label = ing.get("label") or ""
+    # Purge removes by name. Another row that carries the same label or build
+    # and is not itself dead (or purged) owns those artifacts now: refuse before
+    # touching anything. The registry's own guard protects only the active set.
+    shared = [r for r in c.db.ingests_sharing(ing["id"], label, build)
+              if r["state"] not in (*PURGEABLE_STATES, "purged")]
+    if shared:
+        who = ", ".join(f"{r['id'][:8]} ({r['state']})" for r in shared)
+        raise StageError(f"purge refused: label {label or '-'} / build {build or '-'} is also carried by ingest "
+                         f"{who}; nothing removed — a row that shares its names with a live ingest is left as it is")
     problems: list[str] = []
     active = c.cfg.active_file
     if build and active.is_file() and active.read_text(encoding="utf-8").strip() == build:

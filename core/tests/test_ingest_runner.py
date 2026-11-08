@@ -421,6 +421,28 @@ def test_purge_removes_every_artifact_of_a_dead_ingest(host, monkeypatch):
     assert "REG-E009" in _run(q.get_meta(pj3.id)).error_message
     assert _run(q.get_ingest(ingest2)).state == "rolled_back"
     assert (host["root"] / "requirements/MNO-A/Jul2031").is_dir()
+    # a row that shares its label or build with a live ingest is refused before anything is touched:
+    # after a by-hand cleanup the same-day number restarted and a later ingest reused the names
+    dup = _run(q.create_ingest(mno="MNO-A", release="Jul2031", source="\\\\S\\x", submitted_by="t"))
+    _run(q.update_ingest(dup.id, state="abandoned", label=ing2.label, build=ing2.build))
+    _run(q.update_ingest(ingest2, state="staged"))
+    (host["root"] / "labels" / ing2.label).mkdir(parents=True, exist_ok=True)
+    sim.calls.clear()
+    pjd = _run(q.submit("ingest-purge", "t", params={"ingest_id": dup.id}))
+    assert r.run_once() == "failed"
+    msg = _run(q.get_meta(pjd.id)).error_message
+    assert "purge refused" in msg and ingest2[:8] in msg and "staged" in msg
+    assert _run(q.get_ingest(dup.id)).state == "abandoned"
+    assert (host["root"] / "labels" / ing2.label).is_dir() and (host["root"] / "builds/nora" / ing2.build).is_dir()
+    assert not sim.calls or not any("publish purge" in c for c in sim.cmds())
+    # once the live row is dead too, the duplicate purges (and takes the shared artifacts with it)
+    _run(q.update_ingest(ingest2, state="abandoned"))
+    _registry(host, sets=[], active=[])
+    sim.calls.clear()
+    pjd2 = _run(q.submit("ingest-purge", "t", params={"ingest_id": dup.id}))
+    assert r.run_once() == "completed"
+    assert _run(q.get_ingest(dup.id)).state == "purged"
+    assert not (host["root"] / "labels" / ing2.label).exists()
     # the baton: a failed ingest that still holds the cycle is abandoned on the way
     job3, ingest3 = _submit_ingest(host, release="Oct2031")
     assert r.run_once() == "completed"

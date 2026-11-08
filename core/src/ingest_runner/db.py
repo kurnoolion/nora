@@ -159,6 +159,22 @@ class RunnerDB:
         finally:
             con.close()
 
+    def ingests_sharing(self, ingest_id: str, label: str, build: str) -> list[dict]:
+        """Other ingest rows that carry this label or this build. Two rows share a
+        name after a by-hand cleanup let the same-day number restart; a purge
+        of one of them by name would remove the other's artifacts."""
+        if not label and not build:
+            return []
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "SELECT id, state, label, build FROM ingests WHERE id <> ? AND "
+                "((label IS NOT NULL AND label = ?) OR (build IS NOT NULL AND build = ?)) "
+                "ORDER BY created_at", (ingest_id, label or "", build or ""))
+            return [dict(r) for r in rows]
+        finally:
+            con.close()
+
     def last_served_build(self) -> str | None:
         """The build of the newest ingest that was flipped (served, or
         served then rolled back): the seed for the next cycle."""
