@@ -1,4 +1,4 @@
-### D-DRAFT-1 — 2026-11-03 — Self-serve ingestion runs through a host-side runner, not a Docker socket in the web container
+### D-DRAFT-1 (promoted as D-304) — 2026-11-03 — Self-serve ingestion runs through a host-side runner, not a Docker socket in the web container
 
 **Context.** The ingestion cycle runs the batch and store images as sibling containers on the host. The web runs inside a container and cannot start them, yet the self-serve page must run the whole cycle for one cell.
 
@@ -8,7 +8,7 @@
 
 **Consequences.** One more process to install and keep running on the build host (placement, user and service model to be settled in the design). The web cannot report a stage the runner has not written; the runner's contract with the queue becomes a public surface of the web module.
 
-### D-DRAFT-2 — 2026-11-03 — Web page first; a skill is a thin client over `POST /api/ingest`
+### D-DRAFT-2 (promoted as D-305) — 2026-11-03 — Web page first; a skill is a thin client over `POST /api/ingest`
 
 **Context.** The team asked for a web interface and/or a Windows-side skill to trigger ingestion.
 
@@ -18,7 +18,7 @@
 
 **Consequences.** The endpoint is designed as a public contract from the start (request shape, job id, status and gate result), not as an internal form handler. The skill is deferred, not rejected.
 
-### D-DRAFT-3 — 2026-11-03 — The ingest runner is a `systemd --user` service of the build user, on the host that builds and serves
+### D-DRAFT-3 (promoted as D-306) — 2026-11-03 — The ingest runner is a `systemd --user` service of the build user, on the host that builds and serves
 
 **Context.** The runner (D-DRAFT-1) needs a home: which host, which user, which service manager. The build host holds the builds roots, both stacks' state directories and the serving stores; the build user is in the docker group and owns the web's jobs database with owner-only write; lingering is off for that user.
 
@@ -28,7 +28,7 @@
 
 **Consequences.** Lingering must be on, or the runner dies at logout; the install notes say so and the web shows a stale heartbeat as "runner not responding". A second host means a second runner and a second jobs database, not a remote runner.
 
-### D-DRAFT-4 — 2026-11-03 — The self-serve gate is Stage 1 of the golden eval, baseline-relative, seeded from the recorded run
+### D-DRAFT-4 (promoted as D-307) — 2026-11-03 — The self-serve gate is Stage 1 of the golden eval, baseline-relative, seeded from the recorded run
 
 **Context.** Acceptance today is a human comparison against a baseline kept by hand; no target values are coded. Self-service needs a mechanical rule, and a new release of an MNO has no golden samples of its own until experts add them.
 
@@ -38,7 +38,7 @@
 
 **Consequences.** The new release is covered only by that MNO's standard samples until version samples exist; the verdict line says so. The release-map mismatch before the flip is passed through with `--allow-map-mismatch` and `advance` runs after the flip; samples the text check flags are counted on the page for expert review.
 
-### D-DRAFT-5 — 2026-11-03 — An incremental cycle seeds the new build by copying the previous one; a new release inherits its MNO's latest profile binding
+### D-DRAFT-5 (promoted as D-308) — 2026-11-03 — An incremental cycle seeds the new build by copying the previous one; a new release inherits its MNO's latest profile binding
 
 **Context.** A cycle is a full rebuild: `start` opens an empty build, parse runs every cell, the SIRA root is per build. A self-serve ingest must cost one cell, not the corpus. The parse and taxonomy stages already skip unchanged work by mtime and fingerprint when the outputs are present.
 
@@ -48,7 +48,7 @@
 
 **Consequences.** Builds grow by one copy of the parse outputs each; `gc` of old builds stays by hand. A release whose documents changed shape enough to need a new profile is not self-serve: the parse will warn or fail and the administrator binds by hand.
 
-### D-DRAFT-6 — 2026-11-03 — The ingest surface has its own token, separate from the admin token
+### D-DRAFT-6 (promoted as D-309) — 2026-11-03 — The ingest surface has its own token, separate from the admin token
 
 **Context.** The Ingest page flips what every user is served. It must be gated, and the people who use it are the requirements team, not the administrator.
 
@@ -58,7 +58,7 @@
 
 **Consequences.** Two tokens to configure per stack; with no ingest token the surface is closed. The cookie carries the token, as the admin cookie does: acceptable on the internal network, not an authentication scheme.
 
-### D-DRAFT-7 — 2026-11-03 — The share mapping lives in the ingestion wiring env, not in a committed file
+### D-DRAFT-7 (promoted as D-310) — 2026-11-03 — The share mapping lives in the ingestion wiring env, not in a committed file
 
 **Context.** The runner must map the Windows share path the team types to the host's own mount. The web's `path_mappings` in `config/web.json` is committed and names a container path the host does not have.
 
@@ -68,7 +68,7 @@
 
 **Consequences.** The web cannot tell the team at submit time that a share is unmapped; the job fails in seconds with the reason instead.
 
-### D-DRAFT-8 — 2026-11-06 — One taxonomy per release; every build-plane stage is per cell
+### D-DRAFT-8 (promoted as D-311) — 2026-11-06 — One taxonomy per release; every build-plane stage is per cell
 
 **Context.** The taxonomy was a global stage: one feature set over every cell's trees, with a plan present in several releases extracted once from the newest. The served path consumes only the per-plan features files in the enrichment prompt; the merged file feeds the disabled graph builder and a dormant review editor. The global stage forced the incremental cycle to carry the whole corpus's parse outputs into every build (D-DRAFT-5's copy), and the field run enriched an older release against a newer release's features.
 
@@ -78,7 +78,7 @@
 
 **Consequences.** No taxonomy cache carries across builds; a full cycle re-derives every cell. FR-6's "unified taxonomy" is now per release with a per-build consolidation; the review editor sees the build-level file. A `corrections/taxonomy.json` applies to the build-level file only. The architecture's §20 table and the README's Phase 1 and 4 say so.
 
-### D-DRAFT-9 — 2026-11-06 — The SIRA cells are the build's last stage directory, `<build>/out/sira/<MNO>__<REL>/`
+### D-DRAFT-9 (promoted as D-312) — 2026-11-06 — The SIRA cells are the build's last stage directory, `<build>/out/sira/<MNO>__<REL>/`
 
 **Context.** Every nora stage writes under the build's `out/`, but the SIRA enrichment wrote to a twin tree, one SIRA db-root per build beside the nora builds. Two trees per build meant two roots to configure, two directories to move or delete, and one more place a build could be found in the wrong location (field-found).
 
@@ -88,7 +88,7 @@
 
 **Consequences.** New builds hold their SIRA cells; old builds stay where they were (publish inherits served cells from the registry, the seed needs only the nora side). The batch and store containers get a nested mount: `/data/env` is the build and `/data/db` its `out/sira`. The README's layout, Phase 0 and the ingestion guide say so.
 
-### D-DRAFT-10 — 2026-11-06 — One spelling of a cell everywhere: `<MNO>/<release>`
+### D-DRAFT-10 (promoted as D-313) — 2026-11-06 — One spelling of a cell everywhere: `<MNO>/<release>`
 
 **Context.** A cell was `<MNO>__<release>` as a directory, a registry unit, a store API name, a page parameter and a command-line argument, while every nora stage writes `<MNO>/<release>/`. Two spellings of one thing, and the SIRA directory had just moved inside the build beside the nested ones.
 
@@ -98,7 +98,7 @@
 
 **Consequences.** Both stacks run `migrate-units` once after the images are rebuilt; until then the store serves the old rows unchanged. Old golden-run reports keep the old strings in their records. The converter's and registry's file names (hyphenated) are unchanged.
 
-### D-DRAFT-11 — 2026-11-06 — One wiring variable names the build: `NORA_BUILD_DIR`
+### D-DRAFT-11 (promoted as D-314) — 2026-11-06 — One wiring variable names the build: `NORA_BUILD_DIR`
 
 **Context.** The wiring env named the build twice, `NORA_ENV_DIR` for the env dir and `STORE_ROOT` for the SIRA root, and a host env missing one of them failed at the next verb.
 
@@ -108,7 +108,7 @@
 
 **Consequences.** Hosts replace the two lines with one on their next cycle; the runner config's `cycle_env` no longer names the SIRA root.
 
-### D-DRAFT-12 — 2026-11-06 — Submits queue; one cycle runs at a time; a blocking ingest is named, never auto-abandoned
+### D-DRAFT-12 (promoted as D-315) — 2026-11-06 — Submits queue; one cycle runs at a time; a blocking ingest is named, never auto-abandoned
 
 **Context.** The first page refused a second submit while an ingest was queued or running: the cycle driver's baton, the wiring env and the staging store are singletons, so two cycles cannot run at once. Refusing made the second person come back and retry.
 
@@ -118,7 +118,7 @@
 
 **Consequences.** Three submits in a row finish about three hours later and each person sees where they stand. The cell-uniqueness refusal stays.
 
-### D-DRAFT-13 — 2026-11-06 — Progress by push: an event stream for clients, signed webhooks for people and systems; a skill submits and returns
+### D-DRAFT-13 (promoted as D-316) — 2026-11-06 — Progress by push: an event stream for clients, signed webhooks for people and systems; a skill submits and returns
 
 **Context.** The page already received pushes over the job log's event stream; an API client would have polled `GET /api/ingest/{id}`. A future skill in a chat session has no listener a webhook could reach.
 
@@ -128,7 +128,7 @@
 
 **Consequences.** Webhook targets must be allowlisted in the runner config; an unlisted host is logged and skipped. The web validates only the URL's shape.
 
-### D-DRAFT-14 — 2026-11-07 — A retry of the enrichment is batched; single-request mode is opt-in
+### D-DRAFT-14 (promoted as D-317) — 2026-11-07 — A retry of the enrichment is batched; single-request mode is opt-in
 
 **Context.** The driver paired `--retry-failed` with `--max-reqs 1` on every retry (D-178's "standard retry pairing"). The runner retries from the enrich stage after any failure there, including an interrupted first run, and `--retry-failed` resumes the run: the whole cell then went one request per call. Field-found: fourteen hours for a cell that batches in sixty-five minutes.
 
@@ -139,7 +139,7 @@
 **Consequences.** A row that fails in a batch twice is retried in a batch twice; the administrator runs `--retry-failed --single` for it. D-178's text stays true for that step.
 
 
-### D-DRAFT-15 — 2026-11-07 — A serving stack mounts no build; the ingestion wiring env is its own file
+### D-DRAFT-15 (promoted as D-318) — 2026-11-07 — A serving stack mounts no build; the ingestion wiring env is its own file
 
 **Context.** The serving containers still bind-mounted the build directory, so the stack env carried `NORA_BUILD_DIR`, and on the host the ingestion wiring env was a symlink to it: every `cycle.sh start` repointed the serving stack's mounts at the newest build. Registry mode had made the mount unnecessary (the store URLs carry Trees and the Overlay).
 
@@ -149,7 +149,7 @@
 
 **Consequences.** The parse/resolve review pages are dev tooling on a build mount only. A stack env missing `GOLDEN_DIR` mounts an empty golden dir. `docker/empty` may gain directories Docker creates; gitignored.
 
-### D-DRAFT-16 — 2026-11-07 — Build roots per serving stack
+### D-DRAFT-16 (promoted as D-319) — 2026-11-07 — Build roots per serving stack
 
 **Context.** Two stacks run different enrichment recipes on the same corpus; `v1`/`v2` were meant as their lineages but had been treated as single builds, and the self-serve runner put new builds beside them.
 
@@ -159,7 +159,7 @@
 
 **Consequences.** One runner config per stack; `seed_build` names the base. The four pre-restructure directories outside the roots are the administrator's to remove. Superseded when stage-graph lands.
 
-### D-DRAFT-17 — 2026-11-07 — One-shots run as the caller
+### D-DRAFT-17 (promoted as D-320) — 2026-11-07 — One-shots run as the caller
 
 **Context.** Compose runs a container as root unless the env names a job user. The runner's one-shots under the stack and staging envs (publish, flip, rollback, convert, the eval run) had none, so registry writes and golden runs landed root-owned on the host.
 
@@ -169,7 +169,7 @@
 
 **Consequences.** A value in an env file still wins. Existing root-owned artifacts were fixed by hand once.
 
-### D-DRAFT-18 — 2026-11-07 — A label is never reused, and a cleanup does not free it
+### D-DRAFT-18 (promoted as D-321) — 2026-11-07 — A label is never reused, and a cleanup does not free it
 
 **Context.** The build id counted same-day build directories. A by-hand cleanup removed a build but not its promoted snapshot or release set; the next ingest the same day took the same name and `promote` refused.
 
@@ -179,7 +179,7 @@
 
 **Consequences.** Build id and label can differ after a collision; convert, publish, eval and flip read the ingest's label. Rows that share names after a by-hand cleanup are the purge guard's concern (D-DRAFT-19).
 
-### D-DRAFT-19 — 2026-11-08 — Purge: the fourth verb, by record, the administrator's
+### D-DRAFT-19 (promoted as D-322) — 2026-11-08 — Purge: the fourth verb, by record, the administrator's
 
 **Context.** A dead ingest (abandoned, rolled back, failed, cancelled) left six things behind: build, work dir, snapshot, release set with its cell files, golden run, documents. Twice an administrator assembled the list by hand; once the list missed the snapshot and caused D-DRAFT-18's collision.
 
