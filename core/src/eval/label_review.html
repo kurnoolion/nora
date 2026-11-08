@@ -213,12 +213,13 @@ details li { margin: 5px 0; }
 const LABEL_KEYS = ["intent", "query_type", "label"];
 const PALETTE = ["--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c7"];
 let data = null, labelKey = null, labels = [], orig = {}, handle = null, fileName = "dataset.json";
+let loadedText = null;  // the file as opened: Save refuses if the file on disk no longer matches
 let i = 0, reviewed = new Set(), streak = 0, dirty = false, best = 0;
 const $ = id => document.getElementById(id);
 const color = l => `var(${PALETTE[labels.indexOf(l) % PALETTE.length] || "--c7"})`;
 
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show");
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1700); }
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), msg.length > 60 ? 5000 : 1700); }
 function setDirty(v) { dirty = v; $("save").classList.toggle("dirty", v); }
 
 function storeKey() { return "label-review:" + (data.set_id || fileName); }
@@ -236,7 +237,7 @@ function load(text, name) {
   if (!Array.isArray(d.samples) || !d.samples.length) throw new Error("This file has no samples array.");
   labelKey = LABEL_KEYS.find(k => k in d.samples[0]);
   if (!labelKey) throw new Error("Samples need an intent, query_type or label field.");
-  data = d; fileName = name || fileName;
+  data = d; fileName = name || fileName; loadedText = text;
   labels = [];
   for (const s of d.samples) if (!labels.includes(s[labelKey])) labels.push(s[labelKey]);
   orig = Object.fromEntries(d.samples.map(s => [s.sample_id, s[labelKey]]));
@@ -409,8 +410,13 @@ async function save() {
   JSON.parse(text);  // never write a broken file
   try {
     if (handle && handle.createWritable) {
+      const onDisk = await (await handle.getFile()).text();
+      if (loadedText !== null && onDisk !== loadedText) {
+        toast("Not saved: " + handle.name + " changed on disk since you opened it. Reopen it, then redo your changes.");
+        return;
+      }
       const w = await handle.createWritable(); await w.write(text); await w.close();
-      setDirty(false); toast("Saved to " + handle.name); return;
+      loadedText = text; setDirty(false); toast("Saved to " + handle.name); return;
     }
   } catch (e) { toast("Couldn't write the file, so it's downloading instead"); }
   const a = document.createElement("a");
