@@ -213,5 +213,7 @@ def test_switch_off_never_adds_the_note(lane, monkeypatch):
 
 def test_compliance_judges_both_sides_of_a_bug_report():
     p = sp.DEFAULT_PROMPTS[Intent.COMPLIANCE]
-    assert "MEETS, VIOLATES, or UNCLEAR" in p
-    assert "observed" in p and "expected" in p
+    assert "VIOLATES (the device does what the requirement forbids" in p
+    assert "OBSERVED behaviour, never what the reporter expected" in p
+    assert "whether a requirement backs the reporter's expectation" in p
+    assert "MEETS (the device does what the requirement asks)" in p

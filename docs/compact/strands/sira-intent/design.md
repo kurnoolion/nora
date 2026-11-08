@@ -178,6 +178,14 @@ Prompts will be revised often as the dataset grows, so they have two layers
   0.732 → 0.753, confidence-routed 0.870 (all `kb*` right, change bar met);
   the `kb*` samples share phrasings with the rule, so real traffic is the
   test.
+  Local spot-check (qwen3:8b, five synthetic free-form bug reports): all
+  five classified `compliance` and retrieval found the governing requirement
+  each time, but the model judged the reporter's expected behaviour instead
+  of the device's (valid bugs marked MEETS). The prompt now first states the
+  device behaviour being judged (in a bug report, the observed one) and
+  defines MEETS and VIOLATES in terms of it: four of five overall verdicts
+  right, the miss being the IMS re-registration case. Verdict quality on an
+  8B model varies run to run; the served model is the real test.
 - **Single-release fallback (2026-11-08):** the local spot-check (qwen3:8b,
   32K) showed the `change` prompt inventing Added / Changed items from chunks
   of one release, despite the prompt's instruction. So a `change` question
@@ -224,6 +232,22 @@ switch at a time.
   - overall intent accuracy is no worse than the rules.
 - **If Kev loses,** phase 1 still ships the rules intent and the prompts.
 - **Where it runs:** locally, rules vs Kev-4B on the Mac at `127.0.0.1:8009`. The head check is verified (`lora=16`, `temperature=2.41`).
+- **Baseline (2026-11-08, labels reviewed by Hanif, no label changed):**
+
+  | Arm | Accuracy | Change P / R | Change bar |
+  |---|---|---|---|
+  | rules | 0.753 | 0.91 / 1.00 | met |
+  | decision (Kev alone) | 0.753 | 1.00 / 0.40 | not met |
+  | confidence-routed, floor 0.50 | 0.870 | 0.90 / 0.90 | met |
+
+  Kev wins on the confidence-routed arm (both conditions hold).
+- **Floor sweep (2026-11-08):** one Kev pass, every floor scored offline.
+  Accuracy plateaus at 0.870 for floors 0.40–0.50 and falls on either side
+  (0.753 at 0 and at 0.9, where one side decides everything); the change bar
+  holds from 0.45 up. By confidence bin, Kev is right 89–100% above 0.5 and
+  beats the rules there; below 0.4 the rules do better. The floor stays at
+  0.50: 0.45 differs by one question on 77, too few to move it. Real-traffic
+  `intent_confidence` is the later check.
 
 **Answer shape (A):**
 - A local spot-check of about 2 questions per intent, with the flag on and off.
