@@ -349,15 +349,26 @@ the runner executes in that order and stops at the first failure unless
 
 | # | Stage | Scope | Reads | Writes | Reuse rule | In current builds |
 |---|---|---|---|---|---|---|
-| 1 | `extract` | per cell | every supported file under `input/<MNO>/<rel>/` (or `NORA_REQUIREMENTS_DIR`); profile hints | `out/extract/<MNO>/<rel>/<stem>_ir.json` + `images/` | skipped when the IR is newer than its source | on |
+| 1 | `extract` | per cell | every supported file under `input/<MNO>/<rel>/` (or `NORA_REQUIREMENTS_DIR`); profile hints | `out/extract/<MNO>/<rel>/<stem>_ir.json` + `images/` | the cell is reused when its stage fingerprint is unchanged (documents, extractor code version); within a cell an IR newer than its source is reused | on |
 | 2 | `profile` | per cell | `<env-dir>/profiles.json` bindings (or `--profile`, or `corrections/profile.json`) | `out/profile/<MNO>/<rel>/profile.json` | always; a cell with no binding fails `PIP-E003` | on |
-| 3 | `parse` | per cell | the IRs; `annotations/<doc>_annotations.json` | `out/parse/<MNO>/<rel>/<doc>_tree.json`; `reports/parse_log/`, `reports/parse_summary.json` | skipped when the tree is newer than the IR **and** its `profile_fingerprint` matches | on |
+| 3 | `parse` | per cell | the IRs; `annotations/<doc>_annotations.json` | `out/parse/<MNO>/<rel>/<doc>_tree.json`; `reports/parse_log/`, `reports/parse_summary.json` | the cell is reused when its stage fingerprint is unchanged (parser code version, the cell's extract and profile fingerprints, its annotations) and every tree is present | on |
 | 4 | `resolve` | per cell | the cell's trees | `out/resolve/<MNO>/<rel>/<plan>_xrefs.json` | always recomputed | on |
 | 5 | `standards` | global | all resolve manifests, parse trees | `out/standards/reference_index.json`, per-spec sections | — | **runs unless `--skip-standards`**; needs network, so skipped in practice |
-| 6 | `taxonomy` | global | every cell's trees (newest release wins per MNO and plan); optional overview texts | `out/taxonomy/taxonomy.json`, `<plan>_features.json`, `extraction_state.json` ledger, `.corpus_fingerprint` | per-plan ledger keyed on tree sha; fail-soft per plan; `corrections/taxonomy.json` short-circuits | off by `config/llm.json` `skip_taxonomy`; run explicitly by the cycle driver |
+| 6 | `taxonomy` | per cell | the cell's trees; the MNO's overview text | `out/taxonomy/<MNO>/<rel>/taxonomy.json`, `<plan>_features.json`, `extraction_state.json` ledger; build-level `out/taxonomy/taxonomy.json` | the cell is reused when its stage fingerprint is unchanged (model, code version, the cell's parse fingerprint, the overview); per-plan ledger keyed on tree sha; fail-soft per plan; `corrections/taxonomy.json` replaces the build-level file | off by `config/llm.json` `skip_taxonomy`; run explicitly by the cycle driver |
 | 7 | `graph` | global | parse, resolve, taxonomy, standards | `out/graph/knowledge_graph.json` | — | off (`skip_graph`) |
 | 8 | `vectorstore` | per cell | the cell's trees | Chroma under `out/vectorstore/<MNO>/<rel>/` | always rebuilt | not run (the `nora` lane is never invoked) |
 | 9 | `eval` | global | xlsx in `eval/` | `out/eval/report.json` | — | not run |
+
+Every stage records a **fingerprint** per cell in the build manifest
+`<env-dir>/STAGES.json` when it completes the cell cleanly (strand
+stage-graph, step 1): `sha256(stage, code version, parameters, the
+inputs' fingerprints, the external inputs)[:16]`. The graph of stages,
+inputs and parameters is data in `core/src/pipeline/stage_graph.py`.
+Corpus-tier stages (extract, profile, parse, resolve, standards: no
+model call) hash their package's own `CODE_VERSION`; variant-tier stages
+(taxonomy, graph, vectorstore, eval) hash the image's `NORA_CODE_VERSION`.
+The reuse rules above read the manifest; `--force` ignores it; a cell
+with a failed document is not recorded, so it runs again next time.
 
 Lane aliases: `ingestion` = stages 1–5, `nora` = stages 6–9. The SIRA
 lane (§6) is not a pipeline stage. The skip flags resolve CLI > env var
@@ -776,6 +787,7 @@ lane reads `out/parse` from here and writes to its own db-root (§12).
 ```
 <env-dir>/
 ├── profiles.json                        # cell → profile binding (copied forward per cycle)
+├── STAGES.json                          # build manifest: stage → cell → fingerprint, with provenance
 ├── prompts/                             # per-MNO SIRA document prompts, doc_requirement_<MNO>_vNN.txt
 ├── annotations/<doc>_annotations.json   # reviewer removals applied at parse
 ├── corrections/{profile,taxonomy}.json  # overrides for those two stages (not the Overlay)
@@ -786,7 +798,7 @@ lane reads `out/parse` from here and writes to its own db-root (§12).
 │   ├── parse/<MNO>/<rel>/<doc>_tree.json         # the requirement trees: input to SIRA, Trees, History, Eval Studio
 │   ├── resolve/<MNO>/<rel>/<plan>_xrefs.json
 │   ├── standards/ · graph/ · vectorstore/<MNO>/<rel>/ · eval/   # off or not run in current builds
-│   └── taxonomy/taxonomy.json, <plan>_features.json, extraction_state.json, .corpus_fingerprint
+│   └── taxonomy/<MNO>/<rel>/taxonomy.json, <plan>_features.json, extraction_state.json; taxonomy/taxonomy.json (build-level)
 ├── reports/                             # parse_log/, parse_summary.json, report_<ts>.txt, lane-*.log, CYC-*.txt
 ├── state/                               # web DBs when the web runs against this env dir directly (dev)
 └── eval/golden/                         # shadowed by the pooled GOLDEN_DIR mount in served stacks

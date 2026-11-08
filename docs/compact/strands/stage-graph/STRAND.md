@@ -5,7 +5,7 @@
 **Landed:**
 **Assignees:** kurnoolion
 **Target modules:** pipeline, env, stores, store_service, ingest_runner, web, docker (cycle driver, compose)
-**Active phase:** architecture
+**Active phase:** development
 
 ## Summary
 
@@ -28,3 +28,7 @@ working.
 - Opened from strand self-serve-ingestion, where the build layout changed
   three times in one day (per-release taxonomy, SIRA inside the build, one
   cell spelling); this strand is where the layout stops moving.
+- 2026-11-08: baseline agreed and both rulings taken (recipe per stack,
+  no fan-out; one stage store per host). Two tiers by rule: the corpus
+  prefix extract→resolve is shared by every stack; variant stages per
+  recipe. D-DRAFT-1..6. Diagram: artifact "Stage Graph Host Layout".

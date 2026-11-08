@@ -74,6 +74,39 @@ class PipelineContext:
     # Accumulated state between stages (paths, intermediate data)
     state: dict = field(default_factory=dict)
 
+    # The build directory (strand stage-graph): holds STAGES.json, the
+    # build manifest. Set by the factories; derived from `stage_dirs` when
+    # a caller constructs the context directly.
+    build_dir: Path | None = None
+
+    @property
+    def env_dir(self) -> Path:
+        """The build / environment directory (`<env_dir>`)."""
+        if self.build_dir is not None:
+            return self.build_dir
+        # <env_dir>/out/<stage> -> <env_dir>
+        return next(iter(self.stage_dirs.values())).parent.parent
+
+    @property
+    def fingerprints(self):
+        """The build's `Fingerprinter` over `<env_dir>/STAGES.json` (lazy)."""
+        fp = self.state.get("_fingerprinter")
+        if fp is None:
+            from core.src.pipeline.fingerprints import Fingerprinter
+            from core.src.pipeline.manifest import MANIFEST_NAME, BuildManifest
+            fp = Fingerprinter(self, BuildManifest(self.env_dir / MANIFEST_NAME))
+            self.state["_fingerprinter"] = fp
+        return fp
+
+    def profile_override(self) -> str | None:
+        """The single-profile override applied to every cell, if any:
+        `--profile` (CLI) first, else `corrections/profile.json`."""
+        override = self.state.get("profile_path")
+        if override:
+            return str(override)
+        correction = self.correction("profile.json")
+        return str(correction) if correction else None
+
     def stage_output(self, stage: str, cell: "Cell | None" = None) -> Path:
         """Get the output directory for a stage.
 
@@ -239,6 +272,7 @@ class PipelineContext:
             eval_dir=env.eval_path(),
             verbose=False,
             stage_dirs=stage_dirs,
+            build_dir=env.env_dir_path,
             model_provider=env.model_provider,
             model_name=env.model_name,
             model_timeout=env.model_timeout,
@@ -278,6 +312,7 @@ class PipelineContext:
             eval_dir=env_dir / "eval",
             verbose=False,
             stage_dirs=stage_dirs,
+            build_dir=env_dir,
             model_provider=model_provider,
             model_name=model_name,
             model_timeout=model_timeout,

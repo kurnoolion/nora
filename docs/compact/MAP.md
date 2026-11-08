@@ -268,9 +268,12 @@ nora/
 │   │   │   ├── __init__.py
 │   │   │   ├── cells.py                                 # (MNO, release) cell primitives for the NORA pipeline (D-DRAFT-6).
 │   │   │   ├── error_codes.py                           # Structured error codes for all pipeline stages.
+│   │   │   ├── fingerprints.py                          # Uniform stage fingerprints (strand stage-graph, D-DRAFT-2).
+│   │   │   ├── manifest.py                              # The build manifest: which fingerprint each stage produced per cell
 │   │   │   ├── report.py                                # Pipeline report generation.
 │   │   │   ├── run_cli.py                               # CLI entry point for the pipeline runner.
 │   │   │   ├── runner.py                                # Pipeline orchestrator.
+│   │   │   ├── stage_graph.py                           # The stage graph as data (strand stage-graph, D-DRAFT-1).
 │   │   │   └── stages.py                                # Pipeline stage functions.
 │   │   ├── profile_miner/                               # Convert human-supplied parse corrections (from the Web UI Review tab) into proposed `DocumentProfile` regex patches.
 │   │   │   ├── MODULE.md
@@ -522,6 +525,8 @@ nora/
 │   └── tests/
 │       ├── __init__.py
 │       ├── conftest.py                                  # Shared pytest fixtures.
+│       ├── fixtures/
+│       │   └── stage_code_hashes.json
 │       ├── test_apply_profile_patch.py                  # Tests for the profile_patch → corrections-profile merger.
 │       ├── test_ask_reasoning.py                        # Per-question provider + Fast/Think mode on the Ask page (Phase 1).
 │       ├── test_bm25_index.py                           # Unit tests for BM25 sparse retrieval (`bm25_index.py`).
@@ -581,6 +586,7 @@ nora/
 │       ├── test_pipeline.py                             # Pipeline smoke tests — extract, profile, and parse real PDFs.
 │       ├── test_pipeline_cells.py                       # Tests for the pipeline (MNO, release) cell substrate (D-DRAFT-6).
 │       ├── test_pipeline_error_codes.py                 # Every error code the source raises or prints is registered in CODES.
+│       ├── test_pipeline_stage_graph.py                 # Stage graph, fingerprints and the build manifest (strand stage-graph,
 │       ├── test_plan_metadata.py                        # Tests for plan-metadata extraction (`_extract_plan_metadata`).
 │       ├── test_playground_helpers.py                   # Tests for the merged-tab helpers in core/src/web/routes/playground.py:
 │       ├── test_profile_bindings.py                     # Tests for per-cell profile binding (D-DRAFT-7).

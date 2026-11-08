@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from core.src.models.document import DocumentIR
+from core.src.pipeline.cells import Cell
 from core.src.pipeline.runner import PipelineContext
 from core.src.pipeline.stages import run_parse, run_profile, run_resolve, run_taxonomy
 from core.src.parser.structural_parser import Requirement, RequirementTree
@@ -26,19 +27,16 @@ def _seed_env(env: Path) -> Path:
         d = env / "input" / mno / rel
         d.mkdir(parents=True, exist_ok=True)
         (d / "doc.pdf").write_text("x", encoding="utf-8")
-    # a minimal profile + a binding manifest pointing every cell at it
-    prof = env / "prof.json"
-    DocumentProfile(profile_name="test").save_json(prof)
+    # a minimal profile per MNO + a binding manifest pointing each MNO at its own
+    # (the stage-graph fingerprint of a cell's profile is the BOUND profile
+    # after substitution, so a profile edit is made at the source)
+    bindings = []
+    for m, _ in CELLS:
+        prof = env / f"prof_{m}.json"
+        DocumentProfile(profile_name=f"test-{m}").save_json(prof)
+        bindings.append({"mno": m, "release": "*", "profile": str(prof)})
     (env / "profiles.json").write_text(
-        json.dumps(
-            {
-                "bindings": [
-                    {"mno": m, "release": "*", "profile": str(prof)} for m, _ in CELLS
-                ],
-                "default": None,
-            }
-        ),
-        encoding="utf-8",
+        json.dumps({"bindings": bindings, "default": None}), encoding="utf-8",
     )
     return env
 
@@ -113,13 +111,40 @@ class TestIncrementalSkip:
     def test_profile_change_reparses_only_that_cell(self, tmp_path):
         ctx = self._prep(tmp_path)
         run_parse(ctx)
-        # mutate MNO-A's materialized profile -> its fingerprint flips
-        pj = tmp_path / "out" / "profile" / "MNO-A" / "Feb2026" / "profile.json"
+        # edit MNO-A's bound profile -> the profile stage re-materializes it
+        # under a new fingerprint -> parse's input fingerprint flips for A only
+        pj = tmp_path / "prof_MNO-A.json"
+        data = json.loads(pj.read_text(encoding="utf-8"))
+        data["profile_name"] = "changed"
+        pj.write_text(json.dumps(data), encoding="utf-8")
+        run_profile(ctx)
+        r = run_parse(ctx)
+        assert r.stats["docs"] == 1 and r.stats["skipped"] == 1  # A re-parsed, B skipped
+
+    def test_parse_rerun_without_profile_stage_sees_recorded_profile(self, tmp_path):
+        """A source-profile edit reaches parse through the profile stage:
+        the manifest records the profile stage's fingerprint, and parse
+        reads that record. Running parse alone after the edit reuses the
+        cell (the pipeline runs profile before parse)."""
+        ctx = self._prep(tmp_path)
+        run_parse(ctx)
+        pj = tmp_path / "prof_MNO-A.json"
         data = json.loads(pj.read_text(encoding="utf-8"))
         data["profile_name"] = "changed"
         pj.write_text(json.dumps(data), encoding="utf-8")
         r = run_parse(ctx)
-        assert r.stats["docs"] == 1 and r.stats["skipped"] == 1  # A re-parsed, B skipped
+        assert r.stats["docs"] == 0 and r.stats["skipped"] == 2
+
+    def test_manifest_records_parse_per_cell(self, tmp_path):
+        from core.src.pipeline.manifest import MANIFEST_NAME
+        ctx = self._prep(tmp_path)
+        run_parse(ctx)
+        m = json.loads((tmp_path / MANIFEST_NAME).read_text(encoding="utf-8"))
+        assert set(m["stages"]["parse"]) == {f"{a}/{b}" for a, b in CELLS}
+        assert set(m["stages"]["profile"]) == {f"{a}/{b}" for a, b in CELLS}
+        entry = m["stages"]["parse"]["MNO-A/Feb2026"]
+        assert entry["inputs"]["profile"] == m["stages"]["profile"]["MNO-A/Feb2026"]["fp"]
+        assert entry["code_version"] == "1" and entry["inputs"]["extract"] == "absent"
 
 
 class TestCellScopeInStages:
@@ -213,6 +238,28 @@ class TestTaxonomyCache:
         run_taxonomy(ctx)
         ctx.force = True
         assert run_taxonomy(ctx).stats["source"] == "derived"
+
+    def test_overview_dir_reaches_the_extractor(self, tmp_path, monkeypatch):
+        """Regression: the stage hashed the overview files but stopped passing
+        the directory to `FeatureExtractor` on 2026-11-06, so the prompt
+        context never reached the model in pipeline runs."""
+        import core.src.taxonomy.extractor as ex
+        seen: list = []
+        real = ex.FeatureExtractor
+
+        class Recording(real):
+            def __init__(self, llm, overview_dir=None):
+                seen.append(overview_dir)
+                super().__init__(llm, overview_dir=overview_dir)
+
+        monkeypatch.setattr(ex, "FeatureExtractor", Recording)
+        self._seed_tree(tmp_path, "MNO-A", "Feb2026", "PLANX")
+        ov_dir = tmp_path / "overviews"
+        ov_dir.mkdir()
+        monkeypatch.setenv("NORA_TAXONOMY_OVERVIEW_DIR", str(ov_dir))
+        ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+        assert run_taxonomy(ctx).stats["source"] == "derived"
+        assert seen == [str(ov_dir)]
 
     def test_overview_change_busts_cache(self, tmp_path, monkeypatch):
         """Corpus-overview files are prompt inputs — adding or editing one
@@ -309,8 +356,9 @@ class TestTaxonomyResilience:
         assert (out / "taxonomy.json").is_file()          # degraded but usable
         assert (cell_a / "PLANA_features.json").is_file() and (cell_a / "taxonomy.json").is_file()
         assert not (cell_b / "PLANB_features.json").exists() # no empty success
-        assert (cell_a / ".corpus_fingerprint").is_file()  # the clean cell is stamped
-        assert not (cell_b / ".corpus_fingerprint").exists()  # the degraded one is not
+        fps = ctx.fingerprints   # the clean cell is stamped, the degraded one is not
+        assert fps.recorded("taxonomy", Cell("MNO-A", "R2026Q1")) is not None
+        assert fps.recorded("taxonomy", Cell("MNO-B", "R2026Q1")) is None
 
         prov.fail_plans.clear()                           # endpoint recovered
         r2 = run_taxonomy(ctx)

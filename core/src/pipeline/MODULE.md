@@ -11,6 +11,10 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 - Stage functions (stages.py): `run_extract`, `run_profile`, `run_parse`, `run_resolve`, `run_taxonomy`, `run_standards`, `run_graph`, `run_vectorstore`, `run_eval` — each `PipelineContext -> StageResult`
 - `StageResult` — `stage`, `status` (`OK | WARN | FAIL | SKIP`), `elapsed_seconds`, `stats`, optional `error_code`, `error_message`
 - `STAGE_FUNCS` — the stage-name → function dispatch table
+- Stage graph (stage_graph.py, strand stage-graph, D-DRAFT-1): `StageSpec(name, inputs, externals, params, uses_model)` with `.per_cell`; `SPECS` / `STAGE_GRAPH` / `STAGE_ORDER` (equals `STAGE_NAMES`); `spec_of(stage)`; `tier_of(stage) -> "corpus" | "variant"` by the rule *no model call and corpus inputs only*; `CORPUS_STAGES` (extract, profile, parse, resolve, standards), `VARIANT_STAGES`, `CORPUS_PREFIX`; `GLOBAL_KEY` (`"*"`, the manifest key of a global stage); `validate_graph() -> list[str]`.
+- Fingerprints (fingerprints.py, D-DRAFT-2): `stage_fingerprint(stage, code_version, params, input_fps, external_fps)` (sha256 of canonical JSON, 16 hex), `digest`, `hash_bytes`, `hash_files(files, rel_to)`, `code_version(stage)` (a corpus stage's package `CODE_VERSION` via `CORPUS_VERSION_MODULES`; else `NORA_CODE_VERSION` or `"dev"`), `cell_key(stage, cell)`, constants `ABSENT` / `UNRESOLVED`; `Fingerprinter(ctx, manifest)` — `params`, `input_fps`, `externals` (`documents`, `profile`, `annotations`, `overview_prompt`), `current(stage, cell)`, `recorded`, `unchanged(stage, cell, fp=None)` (False under `--force`), `stamp(stage, cell, fp=None)` (records with provenance), `forget`, `cell_input_dir(cell)`.
+- Build manifest (manifest.py): `BuildManifest(path)` over `<env_dir>/STAGES.json` (`MANIFEST_NAME`) — `get(stage, key)`, `entry`, `fingerprints(stage)`, `stages()`, `record(stage, key, fp, **provenance)`, `forget`, `save` (atomic); a corrupt file raises `PIP-E004`.
+- `PipelineContext.build_dir` / `.env_dir` (the build directory), `.fingerprints` (the build's `Fingerprinter`, lazy), `.profile_override()` (the `--profile` / `corrections/profile.json` single-profile override).
 - Error catalog (error_codes.py):
   - `ErrorDef` (code, message, hint), `PipelineError` (raised by stages)
   - `CODES` dict — every EXT-, PRF-, PRS-, PRV-, RES-, RSV-, TAX-, STD-, GRF-, VEC-, EVL-, GEV-, OVL-, TRS-, HIS-, PUB-, REG-, RHD-, IRN-, PIP-, ENV-, MDL- code with human-readable hint. Every code raised anywhere is registered, including `PIP-E003` (uncovered profile binding; raised in stages.py and env/profile_bindings.py) and `EXT-E004` (non-MMMYYYY release dir; raised via extraction/release_key.py). `GEV-` is the golden-eval family; `OVL-` / `TRS-` / `HIS-` are the Overlay, Trees and History stores (their build/import CLIs and their readers' schema refusals, `SchemaVersionError`); `PRV-` and `RSV-` are the parse-review and resolve-review CLIs. A test scans the source for unregistered codes.
@@ -24,9 +28,10 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 - **Per-cell vs global stage outputs** (D-DRAFT-6, strand `multi-mno-nora`): `stage_output(stage, cell)` resolves a **per-cell** stage (`extract`/`profile`/`parse`/`resolve`/`taxonomy`/`vectorstore`) to `out/<stage>/<mno>/<rel>/` when a `Cell` is supplied, and a **global** stage (`standards`/`graph`/`eval`) — or any stage with no cell — to the flat `out/<stage>/`. The per-cell/global partition is exhaustive + disjoint over `STAGE_NAMES`. The per-cell stages write to cell subdirs: `run_extract` routes each IR by its `(mno, release)`; `run_parse` reads each cell's profile + IRs and writes per-cell trees; `run_resolve` runs per cell; `run_taxonomy` runs per cell (since 2026-11-06, strand self-serve-ingestion; below); `run_vectorstore` builds one ChromaDB per cell (D-DRAFT-11 slice 1). **Global readers use `rglob`** (the graph + vectorstore builders, the standards collector) so they find nested per-cell trees/manifests *and* the legacy flat layout.
 - **Profile stage is binding-driven, not auto-profiling** (D-DRAFT-7): `run_profile` resolves each cell's profile from `<env_dir>/profiles.json` (or a `--profile` / `corrections/profile.json` override applied to every cell), placeholder-substitutes it once, and materializes `out/profile/<mno>/<rel>/profile.json`. An uncovered cell **fails loud** (`PIP-E003`) listing every miss — the previous auto-`DocumentProfiler` fallback is gone (hand-authored profiles are the contract). `run_parse` reads the materialized per-cell profile **raw** (substitution already applied).
 - **Cross-reference resolution is cell-scoped** (D-DRAFT-10): `run_resolve` resolves within one cell's trees at a time, so a cross-plan reference never matches across MNOs/releases; cross-cell relationships live in the global graph.
-- **Taxonomy is per cell and fingerprint-cached per cell** (D-DRAFT-9 as amended by strand self-serve-ingestion, 2026-11-06): `run_taxonomy` derives one taxonomy per `(MNO, release)` from that cell's trees alone — per-plan `<plan_id>_features.json`, the cell's `taxonomy.json`, its `extraction_state.json` ledger and `.corpus_fingerprint` all under `out/taxonomy/<mno>/<rel>/`. The cells are the parse output's cell directories narrowed by `--mno`/`--release` (the input dir need not be mounted). A release is therefore enriched against the taxonomy of its own text, and a build can hold one cell without the rest of the corpus. Because extraction is LLM-driven, expensive and run-to-run non-deterministic, each cell's derivation is gated on its fingerprint (hash of its tree set, path + content, plus the overview files): an unchanged cell is served from its cache; `--force` busts it; `stats.source` is `"cache"` only when every in-scope cell was cached. Per-MNO corpus-overview files (`$NORA_TAXONOMY_OVERVIEW_DIR/corpus_overview_*.txt`, strand sira-enrichment-pe) are prompt inputs hashed into every cell's fingerprint. A **build-level** `out/taxonomy/taxonomy.json` is consolidated over every cell present in the build after each run (the graph builder's and the review editor's input; in an incremental build it holds that build's cells); `corrections/taxonomy.json` replaces that build-level file only (`TAX-W002`), per-cell extraction still runs. Extraction runs at `temperature=0` (already in `FeatureExtractor`).
+- **Every stage records a fingerprint per cell in the build manifest** (strand stage-graph, step 1; D-DRAFT-1/2): `fp(stage, cell) = sha256(stage, code version, params, the inputs' recorded fingerprints, the external inputs)[:16]`, computed the same way for every stage from `stage_graph.SPECS`. A stage stamps a cell in `<env_dir>/STAGES.json` when it completes the cell cleanly and forgets it when a run of the cell degrades (a failed document, a failed plan), so a recorded fingerprint always stands for a complete output. Corpus-tier stages hash their package's `CODE_VERSION`, never the image's, so an image rebuild for a prompt change leaves every parse fingerprint intact; variant-tier stages hash `NORA_CODE_VERSION`. A global stage takes each per-cell input's whole `{cell: fp}` map, so adding a cell changes it. An input with no recorded output enters as `"absent"`. The externals are the cell's documents (extract), the bound profile after substitution (profile), the cell's documents' annotations (parse) and the MNO's overview prompt (taxonomy). The skip rules of extract, parse and taxonomy read the manifest: a cell is reused when its recorded fingerprint equals the current one and its output is present; `--force` ignores the manifest. A source-profile edit reaches parse through the profile stage (parse reads the profile stage's recorded fingerprint), which is the pipeline's stage order; the materialized `out/profile/<cell>/profile.json` is not an input of record. Language-model outputs are not reproducible, so a fingerprint identifies the intent of an output, not its bytes.
+- **Taxonomy is per cell and fingerprint-cached per cell** (D-DRAFT-9 as amended by strand self-serve-ingestion, 2026-11-06; cache key replaced by the stage-graph fingerprint, 2026-11-08): `run_taxonomy` derives one taxonomy per `(MNO, release)` from that cell's trees alone — per-plan `<plan_id>_features.json`, the cell's `taxonomy.json` and its `extraction_state.json` ledger under `out/taxonomy/<mno>/<rel>/`. The cells are the parse output's cell directories narrowed by `--mno`/`--release` (the input dir need not be mounted). A release is therefore enriched against the taxonomy of its own text, and a build can hold one cell without the rest of the corpus. Because extraction is LLM-driven, expensive and run-to-run non-deterministic, each cell's derivation is gated on its stage fingerprint (the model, the code version, the cell's parse fingerprint, the MNO's overview file): an unchanged cell is served from its output; `--force` busts it; `stats.source` is `"cache"` only when every in-scope cell was cached. The per-MNO corpus-overview file (`$NORA_TAXONOMY_OVERVIEW_DIR/corpus_overview_<MNO>_<version>.txt`, highest version, strand sira-enrichment-pe) is a prompt input of that MNO's cells only, and the directory is passed to `FeatureExtractor` (restored 2026-11-08; dropped on 2026-11-06). A **build-level** `out/taxonomy/taxonomy.json` is consolidated over every cell present in the build after each run (the graph builder's and the review editor's input; in an incremental build it holds that build's cells); `corrections/taxonomy.json` replaces that build-level file only (`TAX-W002`), per-cell extraction still runs. Extraction runs at `temperature=0` (already in `FeatureExtractor`).
 - **Taxonomy: plan-unit extraction, per-plan fail-soft + resume** (strand sira-enrichment-pe; the cross-release "newest release wins" selection was removed on 2026-11-06 — releases no longer supersede each other, `_select_newest_trees` and `_release_sort_key` remain as helpers): the unit of extraction is a **plan**, not a tree file. Each tree of the cell is split via `taxonomy.split_tree_by_plan` (chapter-per-plan docs → one subtree per plan); within a cell a plan carried by two documents keeps the later file name (the layout is one `<plan_id>_features.json` per plan per cell) and the other copy counts as `superseded`. Extraction is per-plan fail-soft: an LLM error or unparseable response (`LLMParseError`) marks that unit `failed` in the cell's `extraction_state.json` (keys: `<tree file name>` for single-plan trees, `<tree file name>#<plan_id>` for split ones; written after every unit — survives hard kills) and the run continues; unchanged `ok` units (same tree hash + same overview-prompt hash) are reused on re-run, and `failed` units retry automatically — re-running the same command *is* the retry mechanism. A partial run consolidates what succeeded, returns `WARN` (`TAX-W004`), and does **not** stamp that cell's fingerprint, so a degraded cell can never cache-lock itself; every unit of every cell failed is a `FAIL`; a cell with no parse trees is skipped with `TAX-W007`; a per-cell features file the build-level consolidation cannot read is skipped with `TAX-W008`. Ledger contract (strand corp-db-layer): launch logs `TAX-I001` ("N cached / M to extract") before any LLM call; all-units-stale warns `TAX-W005`; an overview-prompt fingerprint mismatch discards the ledger loudly (`TAX-W006`) instead of silently; the state file is also saved unconditionally after the unit loop, so a zero-extraction retry can never truncate it — a stamped stage therefore implies a complete ledger. Stale `*_features.json` with no matching selected plan (including a multi-plan doc's old empty-prefix `_features.json`) are deleted on re-derive.
-- **Incremental ingestion: scope + skip** (D-DRAFT-8): `--mno` / `--release` (`PipelineContext.scope_mnos` / `scope_releases`, comma-separable) restrict which cells the **per-cell** stages process — `input_cells()` and `run_extract` filter by `cell_in_scope()`; global stages still read the whole union. Per-cell stages also **skip-if-unchanged**: `run_extract` reuses an IR newer than its source; `run_parse` reuses a tree newer than its IR whose stamped `RequirementTree.profile_fingerprint` (hash of the substituted cell profile) matches the current profile — so a profile/mapping edit (different fingerprint) forces a re-parse that mtime alone couldn't detect. `--force` (`ctx.force`) overrides the skip. So a re-run after dropping a new cell reprocesses only the new/changed cells while the global graph rebuilds over the union.
+- **Incremental ingestion: scope + skip** (D-DRAFT-8, skip keys replaced by the stage-graph fingerprints on 2026-11-08): `--mno` / `--release` (`PipelineContext.scope_mnos` / `scope_releases`, comma-separable) restrict which cells the **per-cell** stages process — `input_cells()` and `run_extract` filter by `cell_in_scope()`; global stages still read the whole union. Per-cell stages **skip-if-unchanged** by the manifest: `run_extract` reuses a whole cell whose fingerprint is recorded and unchanged (and still reuses an IR newer than its source within a cell it does process); `run_parse` reuses a whole cell whose fingerprint is unchanged and whose trees are all present, else re-parses every document of the cell (`RequirementTree.profile_fingerprint` is still stamped on each tree for the review UI, but it is no longer the skip key). `--force` (`ctx.force`) overrides the skip. So a re-run after dropping a new cell reprocesses only the new/changed cells while the global graph rebuilds over the union.
 - Stage order is fixed and matches `env.config.PIPELINE_STAGES`. Running a downstream stage without its prerequisites emits `PIP-E002` (required input missing) rather than silently failing later.
 - `StageResult.status` uses four discrete values: `OK` (clean), `WARN` (completed but flagged), `FAIL` (aborted), `SKIP` (not run this invocation). Collapsing WARN into OK loses the signal that drives compact QC reports.
 - **Embedder is resolved, never defaulted**: `PipelineContext.embedding_provider` / `embedding_model` default to `""`. `from_env()` and `standalone()` both resolve them through `env.config.resolve_embedding_provider` / `resolve_embedding_model` (CLI arg > `NORA_EMBEDDING_*` env var > `config/llm.json` > `EnvironmentConfig` field), so the web pipeline route and the CLI resolve the same way. An empty result makes the vectorstore stage refuse (`make_embedder` raises); there is no built-in sentence-transformers fallback.
@@ -36,6 +41,8 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 
 **Key choices**
 - Plain functions per stage + dispatch dict instead of a class hierarchy — each stage is independently runnable from the CLI or tests without instantiating anything upstream.
+- The stage graph is data, and the tier of a stage is derived by one rule rather than listed (strand stage-graph, D-DRAFT-1): a stage that gains a model call moves to the variant tier by definition, and `validate_graph` keeps the order equal to `PIPELINE_STAGES` and per-cell stages free of global inputs. The build manifest is `STAGES.json`, not `MANIFEST.json`, because the promoted snapshot under the labels root already has a `MANIFEST.json` of another shape.
+- Stages stamp their own cells (the stage knows which cells completed cleanly) rather than the runner stamping after a stage returns: a degraded taxonomy run or a parse with one failed document must leave that cell unrecorded while the others are.
 - Prefix-per-module error codes (EXT / PRF / PRS / PRV / RES / RSV / TAX / STD / GRF / VEC / EVL / GEV / OVL / TRS / HIS / PIP / ENV / MDL) — the prefix points the user at the right module without needing to read the message.
 - LLM provider creation is centralized in `PipelineContext` so stages don't each invent their own fallback policy; the "Ollama → Mock" fallback lives in one place.
 - Two report formats (compact vs verbose): compact is chat-pasteable and content-free; verbose goes to disk and may include context. The split is explicit because mixing them is exactly how proprietary content leaks.
@@ -67,6 +74,52 @@ _Alphabetical, regenerated by regen-map._
   - `__init__` — constructor — internal
 - `_DEFS` — constant — internal
 
+`fingerprints.py`
+- `ABSENT` — constant — pub
+- `CORPUS_VERSION_MODULES` — constant — pub
+- `DEFAULT_VARIANT_CODE_VERSION` — constant — pub
+- `FP_LEN` — constant — pub
+- `Fingerprinter` — class — pub — Computes, compares and records stage fingerprints for one build.
+  - `__init__` — constructor — internal
+  - `_annotations` — method — internal — The user annotations (D-061) of the cell's documents.
+  - `_documents` — method — internal
+  - `_env_dir` — method — internal
+  - `_overview_prompt` — method — internal — The MNO's corpus-overview prompt file the taxonomy extractor
+  - `_profile` — method — internal — Hash of the cell's bound profile after placeholder substitution,
+  - `cell_input_dir` — method — pub — The cell's directory under the documents root (MNO dir matched
+  - `current` — method — pub
+  - `externals` — method — pub
+  - `forget` — method — pub
+  - `input_fps` — method — pub
+  - `params` — method — pub
+  - `recorded` — method — pub
+  - `stamp` — method — pub — Record the current fingerprint (or `fp`) with its provenance.
+  - `unchanged` — method — pub — True when the recorded fingerprint equals the current one and
+- `UNRESOLVED` — constant — pub
+- `VARIANT_CODE_VERSION_ENV` — constant — pub
+- `canonical` — function — pub — Canonical JSON bytes (sorted keys, no whitespace).
+- `cell_key` — function — pub — The manifest key: ``<MNO>/<release>`` for a per-cell stage, ``*`` for
+- `code_version` — function — pub — A corpus stage's own ``CODE_VERSION``; the image version otherwise.
+- `digest` — function — pub
+- `hash_bytes` — function — pub
+- `hash_files` — function — pub — Hash a file set: each file's path (relative to `rel_to`, else its
+- `stage_fingerprint` — function — pub — The rule. `input_fps` values are strings (per-cell) or ``{cell: fp}``
+
+`manifest.py`
+- `BuildManifest` — class — pub — Read-modify-write view of one build's ``STAGES.json``.
+  - `__init__` — constructor — internal
+  - `_load` — method — internal
+  - `entry` — method — pub
+  - `fingerprints` — method — pub — ``{key: fp}`` for every recorded output of `stage`.
+  - `forget` — method — pub — Drop the entry for (`stage`, `key`) if present and save.
+  - `get` — method — pub — The recorded fingerprint, or None.
+  - `record` — method — pub — Record `fp` for (`stage`, `key`) with its provenance and save.
+  - `save` — method — pub
+  - `stages` — method — pub
+- `MANIFEST_NAME` — constant — pub
+- `MANIFEST_VERSION` — constant — pub
+- `_now_iso` — function — internal
+
 `report.py`
 - `FIX_TEMPLATES` — constant — pub
 - `QC_TEMPLATES` — constant — pub
@@ -91,14 +144,33 @@ _Alphabetical, regenerated by regen-map._
   - `cell_in_scope` — method — pub — True iff `(mno, release)` passes the `--mno`/`--release` scope (D-DRAFT-8).
   - `correction` — method — pub — Get a correction file path if it exists.
   - `create_llm_provider` — method — pub — Create an LLM provider based on config, wrapped with the
+  - `env_dir` — property — pub — The build / environment directory (`<env_dir>`).
+  - `fingerprints` — property — pub — The build's `Fingerprinter` over `<env_dir>/STAGES.json` (lazy).
   - `from_env` — classmethod — pub — Create context from an EnvironmentConfig.
   - `input_cells` — method — pub — The in-scope `(MNO, release)` cells present under `input/`, validated + sorted.
+  - `profile_override` — method — pub — The single-profile override applied to every cell, if any:
   - `stage_output` — method — pub — Get the output directory for a stage.
   - `standalone` — classmethod — pub — Create context for standalone (no EnvironmentConfig) mode.
 - `PipelineRunner` — class — pub — Orchestrates pipeline stage execution.
   - `__init__` — constructor — internal
   - `run` — method — pub — Run the specified stages in order.
 - `logger` — constant — pub
+
+`stage_graph.py`
+- `CORPUS` — constant — pub
+- `CORPUS_PREFIX` — constant — pub
+- `CORPUS_STAGES` — constant — pub
+- `GLOBAL_KEY` — constant — pub
+- `SPECS` — constant — pub
+- `STAGE_GRAPH` — constant — pub
+- `STAGE_ORDER` — constant — pub
+- `StageSpec` — dataclass — pub — One stage's node in the graph.
+  - `per_cell` — property — pub
+- `VARIANT` — constant — pub
+- `VARIANT_STAGES` — constant — pub
+- `spec_of` — function — pub — The spec of `stage`; `KeyError` for an unknown name.
+- `tier_of` — function — pub — ``"corpus"`` or ``"variant"``, by the tier rule.
+- `validate_graph` — function — pub — Structural checks; an empty list means the graph is well formed.
 
 `stages.py`
 - `STAGE_FUNCS` — constant — pub
@@ -108,7 +180,6 @@ _Alphabetical, regenerated by regen-map._
 - `_RELEASE_RE` — constant — internal
 - `_cached_unit_keys` — function — internal — Ledger keys of units the extraction loop will serve from cache:
 - `_cell_extract_hints` — function — internal — Per-cell PDF extractor hints from each in-scope cell's bound profile
-- `_corpus_fingerprint` — function — internal — Hash of the contributing tree set (D-DRAFT-9).
 - `_fail` — function — internal
 - `_load_taxonomy_ledger` — function — internal — Load extraction_state.json's per-doc ledger, honored only when its
 - `_load_user_eval_questions` — function — internal — Load user-supplied evaluation questions from Excel files.
