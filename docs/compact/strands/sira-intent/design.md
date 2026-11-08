@@ -88,6 +88,14 @@ with Kev-4B on MLX, and the first call takes about 3.5 s. Then:
    - **Lane disabled in config** (operator's choice) → SIRA with the `change` prompt. No error.
    - **Lane enabled, but no History store, the store won't open, or only one release for the asked MNO** → an error telling the user what is available, for example "History has only Feb2026 for this operator; ask about one release, or pick another operator". No silent fallback (Q3, Q17).
    - **With the flag off** → today's behaviour: SIRA answers as before.
+   - Built 2026-11-07: `core/src/web/routes/sira_intent.py` (`classify`, run
+     once in a thread before any lane; the analyzer is built once per
+     process) and `history_lane.history_diff_applies(intent=, strict=)`.
+     RHD-E001 / RHD-E002 errors now name the releases History has, flag or
+     not (text only; those questions already ended in that error). The
+     `change` prompt for a disabled lane comes with the prompts (§5).
+     Kev's first call after it starts takes about 13 s (warm-up); later ones
+     about 0.3–0.4 s.
 3. **Any other intent** → the SIRA lane. Select-synth uses the intent's prompt when the flag is on, and today's prompt otherwise.
 
 4. **Requirement IDs inside a question** (Q15): the named requirements are

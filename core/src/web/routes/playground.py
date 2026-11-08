@@ -36,6 +36,8 @@ from core.src.web.feedback_db import CATEGORIES
 from core.src.web.markdown_render import render_markdown
 from core.src.web.routes import history_lane
 from core.src.web.routes import id_lookup_lane
+from core.src.web.routes import sira_intent
+from core.src.pipeline.error_codes import PipelineError
 from core.src.web.team_mode import team_restricted
 from core.src.web.timeline import build_timeline
 
@@ -1720,12 +1722,25 @@ async def playground_ask_stream(request: Request):
     if id_msg is not None:
         lanes_checked = [l for l in lanes_checked if l != "sira"] + [id_lookup_lane.LANE]
 
+    # Classify once, first (strand sira-intent, D-DRAFT-3): the analyzer
+    # NORA_QUERY_ANALYZER picks (rules by default = today's routing). A
+    # `change` intent goes to History; with NORA_SIRA_INTENT_PROMPTS on, a
+    # change question History can't serve is an error, not a SIRA answer.
     run_id = ""
     history_intent = None
+    history_error: "dict | None" = None
     if "sira" in lanes_checked:
-        history_intent = history_lane.history_diff_applies(question)
-    if history_intent is not None:
+        q_intent, _intent_trace = await asyncio.to_thread(sira_intent.classify, question)
+        try:
+            history_intent = history_lane.history_diff_applies(
+                question, intent=q_intent, strict=sira_intent.prompts_enabled())
+        except PipelineError as exc:
+            history_error = {"error": f"[{exc.code}] {exc.message}. Release history is not "
+                                      "available on this stack; ask about a single release.",
+                             "error_code": exc.code}
+    if history_intent is not None or history_error is not None:
         lanes_checked = [l for l in lanes_checked if l != "sira"] + [history_lane.LANE]
+    if history_intent is not None:
         run_id = history_lane.new_run_id()
 
     async def _emit_partial(p: dict) -> None:
@@ -1749,6 +1764,10 @@ async def playground_ask_stream(request: Request):
         runners[id_lookup_lane.LANE] = id_lookup_lane.run_id_lookup_lane(
             question, id_msg, env_dir=config.env_dir_path(),
         )
+    if history_error is not None:
+        async def _history_error() -> dict[str, Any]:
+            return history_error
+        runners[history_lane.LANE] = _history_error()
     if history_intent is not None:
         runners[history_lane.LANE] = history_lane.run_history_lane(
             question, history_intent,
