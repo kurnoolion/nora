@@ -275,10 +275,11 @@ recorded golden run. **Serve** runs `publish flip --store-url` and
 <previous>`. A failed stage offers **Retry** (from the stage, or from
 enrich for a verify failure); **Abandon** closes the cycle and removes
 the staged copy of the documents, keeping the build for a look;
-**Purge** (abandoned, rolled back, failed or cancelled ingests) removes
-every artifact of a dead ingest — release set, snapshot, work dir,
-build, eval run, documents unless the active set serves the cell — and
-never touches the serving set. Submits queue and one ingest runs at
+**Purge** (abandoned, rolled back, failed or cancelled ingests; the
+administrator's action, admin cookie) removes every artifact of a dead
+ingest — release set, snapshot, work dir, build, eval run, documents
+unless the active set serves the cell — and never touches the serving
+set. The team's own step for a dead ingest is Abandon. Submits queue and one ingest runs at
 a time (the cycle driver's baton); a failed ingest that still holds the
 cycle is named on the page and must be retried or abandoned before the
 queue moves. The same operation as an API:

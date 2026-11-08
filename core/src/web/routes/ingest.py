@@ -102,7 +102,7 @@ def _runner_status(runners: list[dict]) -> dict[str, Any]:
             "text": text, "runners": runners}
 
 
-def _ingest_view(ing: Ingest) -> dict[str, Any]:
+def _ingest_view(ing: Ingest, admin: bool = False) -> dict[str, Any]:
     d = ing.__dict__.copy()
     st = ing.state
     d["can_flip"] = st == "staged" and ing.verdict == "pass"
@@ -110,7 +110,8 @@ def _ingest_view(ing: Ingest) -> dict[str, Any]:
     d["can_retry"] = st == "failed" and bool(ing.stage)
     d["retry_from"] = RETRY_FROM.get(ing.stage or "", ing.stage) if d["can_retry"] else None
     d["can_abandon"] = st in ("failed", "cancelled", "staged")
-    d["can_purge"] = st in PURGEABLE_STATES
+    d["can_purge"] = st in PURGEABLE_STATES and admin   # the administrator's action: it deletes
+    d["purgeable"] = st in PURGEABLE_STATES
     d["can_cancel"] = st in ("queued", "running")
     d["queue_position"] = None
     d["stages"] = [{"name": s, "hint": STAGE_HINTS.get(s, ""),
@@ -192,7 +193,7 @@ async def ingest_page(request: Request):
     mnos = sorted({ck[0] for ck in (parse_cell_dirname(c) for c in cells) if ck}) if cells else []
     return _template_response(request, "ingest.html", {
         "locked": False,
-        "ingests": _views(ingests),
+        "ingests": _views(ingests, tm.is_ingest_admin(request)),
         "blocking": [_ingest_view(i) for i in blocking_ingests(ingests)],
         "mnos": mnos,
         "store_reachable": cells is not None,
@@ -211,7 +212,7 @@ async def ingest_detail_page(request: Request, ingest_id: str):
     if ing is None:
         return RedirectResponse(f"{_root(request)}/ingest?error=no+such+ingest", status_code=303)
     job = await job_queue.get_meta(ing.job_id) if ing.job_id else None
-    view = _ingest_view(ing)
+    view = _ingest_view(ing, tm.is_ingest_admin(request))
     if ing.state == "queued":
         view["queue_position"] = queue_positions(await job_queue.list_ingests(limit=500)).get(ing.id)
     return _template_response(request, "ingest_detail.html", {
@@ -221,11 +222,11 @@ async def ingest_detail_page(request: Request, ingest_id: str):
     })
 
 
-def _views(ingests: list[Ingest]) -> list[dict[str, Any]]:
+def _views(ingests: list[Ingest], admin: bool = False) -> list[dict[str, Any]]:
     pos = queue_positions(ingests)
     out = []
     for i in ingests:
-        v = _ingest_view(i)
+        v = _ingest_view(i, admin)
         v["queue_position"] = pos.get(i.id)
         out.append(v)
     return out
@@ -310,7 +311,7 @@ async def api_get(request: Request, ingest_id: str):
     if ing is None:
         return JSONResponse({"error": "no such ingest"}, status_code=404)
     job = await job_queue.get_meta(ing.job_id) if ing.job_id else None
-    return JSONResponse({"ingest": _ingest_view(ing),
+    return JSONResponse({"ingest": _ingest_view(ing, tm.is_ingest_admin(request)),
                          "job": {"id": job.id, "status": job.status, "current_stage": job.current_stage,
                                  "progress": job.progress, "heartbeat_at": job.heartbeat_at,
                                  "error_message": job.error_message} if job else None})
@@ -342,7 +343,7 @@ async def api_events(request: Request, ingest_id: str):
                    job.current_stage if job else None)
             if key != last:
                 last = key
-                view = _ingest_view(ing)
+                view = _ingest_view(ing, tm.is_ingest_admin(request))
                 view["job"] = {"id": job.id, "status": job.status, "current_stage": job.current_stage,
                                "progress": job.progress} if job else None
                 yield f"event: state\ndata: {json.dumps(view)}\n\n"
@@ -368,9 +369,10 @@ async def _action(request: Request, ingest_id: str, action: str):
     ing = await job_queue.get_ingest(ingest_id)
     if ing is None:
         return JSONResponse({"error": "no such ingest"}, status_code=404)
-    view = _ingest_view(ing)
+    view = _ingest_view(ing, tm.is_ingest_admin(request))
     by = (await _body(request)).get("submitted_by", "") or "anonymous"
     error = None
+    status = 409
     job = None
     if action == "flip":
         if not view["can_flip"]:
@@ -399,7 +401,10 @@ async def _action(request: Request, ingest_id: str, action: str):
             job = await job_queue.submit("ingest-abandon", by, environment=f"ingest:{ing.mno}/{ing.release}",
                                          params={"ingest_id": ing.id})
     elif action == "purge":
-        if not view["can_purge"]:
+        if not tm.is_ingest_admin(request):
+            error = "purge is the administrator's action (admin cookie); abandon is yours"
+            status = 403
+        elif not view["can_purge"]:
             error = f"cannot purge: state {ing.state} (abandon a staged ingest first)"
         else:
             job = await job_queue.submit("ingest-purge", by, environment=f"ingest:{ing.mno}/{ing.release}",
@@ -415,7 +420,7 @@ async def _action(request: Request, ingest_id: str, action: str):
         error = f"unknown action {action}"
     if error:
         if _wants_json(request):
-            return JSONResponse({"error": error}, status_code=409)
+            return JSONResponse({"error": error}, status_code=status)
         return RedirectResponse(f"{_root(request)}/ingest/{ing.id}?error={httpx.QueryParams({'e': error})['e']}",
                                 status_code=303)
     if job is not None:

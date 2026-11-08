@@ -258,11 +258,24 @@ def test_rollback_retry_abandon_cancel(web):
     assert c.post("/api/ingest/nope/flip", headers=JSON).status_code == 404
 
 
-def test_purge_action(web):
-    c = _client()
+def test_purge_action_is_the_administrators(web):
+    """Purge deletes, so it needs the admin cookie in every deployment: the
+    ingest token sees no button, gets 403, and the view says `purgeable`
+    without `can_purge`. The administrator purges a dead ingest only."""
+    team = _client()                      # the requirements team's token
     rb = _ingest(web, "rolled_back", verdict="pass", label="L", previous_label="P", build="B")
+    page = team.get(f"/ingest/{rb}")
+    assert ">Purge<" not in page.text and "rolled back" in page.text and ">Abandon<" not in page.text
+    r = team.post(f"/api/ingest/{rb}/purge", headers=JSON)
+    assert r.status_code == 403 and "administrator" in r.json()["error"]
+    v = team.get(f"/api/ingest/{rb}", headers=JSON).json()["ingest"]
+    assert v["purgeable"] is True and v["can_purge"] is False
+    r = team.post(f"/api/ingest/{rb}/purge", data={}, follow_redirects=False)
+    assert r.status_code == 303 and "administrator" in r.headers["location"]
+    c = _client(cookie=None, admin=True)   # the administrator
     page = c.get(f"/ingest/{rb}")
-    assert ">Purge<" in page.text and "rolled back" in page.text
+    assert ">Purge<" in page.text
+    assert c.get(f"/api/ingest/{rb}", headers=JSON).json()["ingest"]["can_purge"] is True
     r = c.post(f"/api/ingest/{rb}/purge", headers=JSON)
     assert r.status_code == 202 and _run(web["q"].get_meta(r.json()["job_id"])).job_type == "ingest-purge"
     assert _run(web["q"].get_ingest(rb)).job_id == r.json()["job_id"]

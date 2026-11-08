@@ -135,8 +135,10 @@ logged; one that fails (ownership, a busy mount) fails the job with the
 list and leaves the state unchanged, and every step tolerates what is
 already gone, so the purge is re-run after the fix. The row stays,
 state `purged`, so the page still shows that the attempt happened. The
-page offers Purge in the allowed states; the API is
-`POST /api/ingest/{id}/purge`. Without it, a dead ingest left six things
+page offers Purge in the allowed states to the administrator only (the
+admin cookie, in every deployment — Purge deletes, so the team's token
+does not carry it; 2026-11-08); the API is `POST /api/ingest/{id}/purge`,
+403 for the team's token. Without it, a dead ingest left six things
 behind that an administrator had to find by hand, and a cleanup that
 removed the build but not the snapshot produced the same-day label
 collision the promote step now sidesteps.

@@ -2092,7 +2092,8 @@ Cancel takes effect between stages and while a detached phase is
 followed; the cycle in flight is then left for Abandon, which runs
 `cycle.sh abandon` and removes the staged copy of the documents but
 keeps the build for diagnosis. Purge is the deliberate second step for
-a dead ingest: the runner releases the baton if the build still holds
+a dead ingest and the administrator's action (admin cookie; the team's
+token sees no button and gets 403): the runner releases the baton if the build still holds
 it, removes the release set through `publish purge` (never an active
 one), then the promoted snapshot, the work dir, the build (and a
 separate SIRA tree), the golden run, and the documents unless the
