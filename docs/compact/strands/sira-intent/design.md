@@ -26,7 +26,7 @@ The jev decision model (Kev locally) is measured against a rules baseline.
 | `fact` | one value or one statement ("what is the T3402 value") | short, direct, cited |
 | `explain` | how or why something works; includes "summarize" | prose |
 | `list` | every item of a kind ("all SMS over IMS requirements") | exhaustive bullets |
-| `compliance` | whether a behaviour the user describes meets the requirements ("is this allowed?") | checklist, MEETS / VIOLATES / UNCLEAR per requirement |
+| `compliance` | whether a behaviour the user describes meets the requirements ("is this allowed?"), including a pasted bug report asking whether it is valid | checklist, MEETS / VIOLATES / UNCLEAR per requirement; for a bug report, both sides judged |
 | `change` | what moved between releases of the same document | added / removed / changed |
 | `compare` | two things side by side (MNOs, plans, features) | table |
 | `other` | none of the above, or unsure | today's prompt, unchanged |
@@ -161,6 +161,23 @@ Prompts will be revised often as the dataset grows, so they have two layers
   each requirement's content, not its section title. `compliance` keeps its
   checklist prompt (briefly switched to today's prompt after it was mistaken
   for the client compliance-tracking plan, §9).
+- **Pasted bug reports (2026-11-08):** users paste a bug description
+  (mostly free form: what happens, what was expected) and ask "is this
+  valid?", "can you comment on this issue?". That is a `compliance`
+  question, answered MEETS / VIOLATES as before; a separate intent was
+  rejected (same answer shape, and a harder boundary for Kev, which was
+  unsure on all five probes, 0.14–0.41). Five synthetic probes showed four
+  misclassified: three as `other`, and one as `change` because the rules
+  analyzer files any "changed" ("nothing changed") as a release diff. Fixes:
+  the rules match a bug report asking for a verdict (`_VERDICT_ASK`) as
+  `compliance` right after `change`, and `is_release_change_question` is
+  false for one and for a negated change, so History routing on the rules
+  arm stops catching them too; six `kb*` samples joined the dev set; the
+  compliance prompt judges both sides of a bug report (is the expected
+  behaviour backed by a requirement, does the observed one meet it). Rules
+  0.732 → 0.753, confidence-routed 0.870 (all `kb*` right, change bar met);
+  the `kb*` samples share phrasings with the rule, so real traffic is the
+  test.
 - **Single-release fallback (2026-11-08):** the local spot-check (qwen3:8b,
   32K) showed the `change` prompt inventing Added / Changed items from chunks
   of one release, despite the prompt's instruction. So a `change` question
@@ -197,7 +214,7 @@ switch at a time.
 ## 8. Measurement
 
 **Classification:**
-- **Dev set:** `core/src/eval/intent_set.json`, about 70 synthetic questions, 10 per intent, over the public Verizon ODI docs (Feb2026 and Oct2024).
+- **Dev set:** `core/src/eval/intent_set.json`, 77 synthetic questions, at least 10 per intent (compliance includes six pasted bug reports, `kb*`), over the public Verizon ODI docs (Feb2026 and Oct2024).
   - It follows the `classify_set.json` conventions: MNO placeholders and no MNO named in the committed file.
   - Labels are human-read intent, never rule output.
   - I draft the questions and labels; Hanif reviews them before any number is recorded.

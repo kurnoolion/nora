@@ -28,6 +28,11 @@ def test_committed_set_has_at_least_ten_per_intent_and_unique_ids():
     assert len({s.sample_id for s in samples}) == len(samples)
 
 
+def test_committed_set_covers_pasted_bug_reports_as_compliance():
+    bugs = [s for s in load_intent_set() if s.sample_id.startswith("kb")]
+    assert len(bugs) >= 6 and all(s.intent is Intent.COMPLIANCE for s in bugs)
+
+
 def test_placeholders_are_filled_and_committed_text_names_no_operator():
     raw = DEFAULT_INTENT_SET_PATH.read_text(encoding="utf-8").lower()
     assert not re.search(r"\b(verizon|t-mobile|tmobile|at&t|vzw|tmo|att)\b", raw)

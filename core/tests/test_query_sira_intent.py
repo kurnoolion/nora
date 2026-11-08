@@ -75,3 +75,46 @@ def test_what_are_the_requirements_is_list():
     assert a.analyze("what are the VoLTE emergency call requirements").intent is Intent.LIST
     assert a.analyze("What requirements apply to OTA firmware updates?").intent is Intent.LIST
     assert a.analyze("What is the default value of T3402?").intent is not Intent.LIST
+
+
+# ── bug reports asking for a verdict are compliance (design §3) ───────
+
+@pytest.mark.parametrize("question", [
+    "Device crashes when the network sends an unknown NAS IE. Expected it to ignore the IE. "
+    "Is this a real issue on our side?",
+    "Tester wants the attach retry after 5 minutes instead of 12. Can you comment on this issue?",
+    "The device replies 415 to 3GPP2 SMS over IMS and drops it. Expected delivery. is this bug valid?",
+    "Lost service in a tunnel, came back on the same cell, and it re-registered IMS. "
+    "Expected it to keep the registration since nothing changed. What do you think, is this true?",
+    "REGISTER goes out with a long expiry and the lab says that's wrong. Are we wrong here?",
+    "The phone stays in limited service after attach fails. Expected 3G fallback but it never "
+    "happens. Thoughts?",
+])
+def test_bug_reports_asking_for_a_verdict_are_compliance(question):
+    assert MockQueryAnalyzer().analyze(question).intent is Intent.COMPLIANCE
+
+
+def test_a_bug_report_is_never_a_release_change_even_when_it_mentions_one():
+    from core.src.query.release_diff import is_release_change_question
+    q = ("Since the latest release changed the retry timer the device waits 12 minutes; "
+         "expected 5. Is this bug valid?")
+    qi = MockQueryAnalyzer().analyze(q)
+    assert qi.intent is Intent.COMPLIANCE and not is_release_change_question(q, qi)
+
+
+@pytest.mark.parametrize("question", [
+    "Nothing changed on our side but the device now drops calls. Why?",
+    "The cell is unchanged and the device re-registers anyway; how does registration work?",
+    "It hasn't changed since the last build, so why does attach fail?",
+])
+def test_negated_change_words_are_not_a_release_change(question):
+    from core.src.query.release_diff import is_release_change_question
+    qi = MockQueryAnalyzer().analyze(question)
+    assert qi.intent is not Intent.CHANGE and not is_release_change_question(question, qi)
+
+
+def test_real_change_questions_still_route_to_change():
+    a = MockQueryAnalyzer()
+    for q in ("what changed?", "What changed in the latest release compared to the previous one?",
+              "Nothing else matters: what changed in the data retry plan in the latest release?"):
+        assert a.analyze(q).intent is Intent.CHANGE, q

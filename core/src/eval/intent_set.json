@@ -5,7 +5,7 @@
     "One label per question: the answer shape the asker most wants.",
     "change: what moved between releases or versions of ONE operator's documents. A change question that asks for a list ('list the requirements that changed') is still change, because it routes to History.",
     "compare: two or more things side by side (operators, plans, features, or an operator against a standard). Two operators asking 'what changed' is compare, never change.",
-    "compliance: whether a described behaviour or implementation meets the requirements. A yes/no about what the spec itself says ('is T3402 reset at power off?') is fact.",
+    "compliance: whether a described behaviour or implementation meets the requirements. A yes/no about what the spec itself says ('is T3402 reset at power off?') is fact. A pasted bug report asking for a verdict ('is this bug valid?', 'can you comment on this issue?', 'expected X but it does Y') is compliance, even when it mentions a release or a change.",
     "list: every item of a kind. explain: how, why, overview, summary. fact: one value or one statement.",
     "other: none of the above (greetings, bare keywords, requests the system does not serve)."
   ],
@@ -54,6 +54,12 @@
     {"sample_id": "k08", "query": "Can the device skip the OTA session on first boot and still pass certification?", "intent": "compliance"},
     {"sample_id": "k09", "query": "Is it acceptable to retry the attach immediately after reject cause 17?", "intent": "compliance"},
     {"sample_id": "k10", "query": "Our firmware resets T3402 when airplane mode is toggled. Any requirement against that?", "intent": "compliance"},
+    {"sample_id": "kb1", "query": "Device keeps retrying the PDN connection every 2 seconds after the network rejects it with cause 33. Field team says it floods the network and expected the device to back off. Is this bug valid?", "intent": "compliance"},
+    {"sample_id": "kb2", "query": "Bug from the lab: when LTE attach fails five times the phone just sits in limited service and never tries 3G. They expected a fallback. Can you comment on this issue?", "intent": "compliance"},
+    {"sample_id": "kb3", "query": "After toggling airplane mode the APN the user edited goes back to the default. Reporter expected the edited APN to survive the toggle but the device resets it. Is this a real issue?", "intent": "compliance"},
+    {"sample_id": "kb4", "query": "Customer complains the phone shows emergency calls only while roaming on a {MNO_A} partner network even though data works fine. Is this true that we should show full service there?", "intent": "compliance"},
+    {"sample_id": "kb5", "query": "The device sends the IMS REGISTER with a 600000 second expiry and the network side says it should be 600. Nothing changed on our side since the last build. Are we wrong here?", "intent": "compliance"},
+    {"sample_id": "kb6", "query": "Tester filed this: when the network asks for UE capability the device leaves out band 66 even though it supports it, expected it to report every supported band. What do you think, is this correct behaviour?", "intent": "compliance"},
 
     {"sample_id": "c01", "query": "What changed in the latest {MNO_A} release?", "intent": "change"},
     {"sample_id": "c02", "query": "What is new in the Sep 2031 data retry requirements compared to Mar 2031?", "intent": "change"},

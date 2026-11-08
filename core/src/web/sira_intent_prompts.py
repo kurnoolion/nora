@@ -86,8 +86,13 @@ _ANSWER_STEP = {
         "2. ANSWER from the selected chunks only, as a compliance check of the "
         "behaviour the user describes: one line per relevant requirement giving "
         "its req_id, what it requires, and a verdict — MEETS, VIOLATES, or UNCLEAR "
-        "when the description lacks the detail needed. End with an overall verdict "
-        "and its main reason. Do not assume details the user didn't give.\n"
+        "when the description lacks the detail needed. When the user pastes a bug "
+        "report with an observed and an expected behaviour, judge both: whether a "
+        "requirement backs the expected behaviour, and whether the observed one "
+        "MEETS or VIOLATES it; when no requirement backs the expected behaviour, "
+        "say so — the report asks for more than the requirements do. End with an "
+        "overall verdict and its main reason. Do not assume details the user "
+        "didn't give.\n"
     ),
     Intent.CHANGE: (
         "2. ANSWER from the selected chunks only, about what changed between "

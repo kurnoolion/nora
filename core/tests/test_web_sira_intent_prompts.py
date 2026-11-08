@@ -209,3 +209,9 @@ def test_switch_off_never_adds_the_note(lane, monkeypatch):
     monkeypatch.delenv("NORA_SIRA_INTENT_PROMPTS", raising=False)
     out = run(Intent.CHANGE)
     assert not out["result"]["answer"].startswith("_Release history")
+
+
+def test_compliance_judges_both_sides_of_a_bug_report():
+    p = sp.DEFAULT_PROMPTS[Intent.COMPLIANCE]
+    assert "MEETS, VIOLATES, or UNCLEAR" in p
+    assert "observed" in p and "expected" in p
