@@ -209,3 +209,90 @@ def test_switch_off_sends_an_id_message_to_sira(world, monkeypatch, value):
 def test_switch_values_that_turn_it_on(monkeypatch, value):
     monkeypatch.setenv("NORA_ID_LOOKUP", value)
     assert lane.enabled()
+
+
+# ── IDs named inside a question (pinning) ─────────────────────────────
+
+def test_named_ids_finds_ids_anywhere_and_one_release():
+    assert lane.named_ids(f"What does {A} say vs {B.lower()} and {A}?") == ([A, B], "")
+    assert lane.named_ids(f"Explain {A} in Mar2031") == ([A], "Mar2031")
+    assert lane.named_ids(f"{A} Mar2031 vs Sep2031") == ([A], "")
+    assert lane.named_ids("What is the T3402 value?") == ([], "")
+
+
+def test_pinned_candidates_latest_or_named_release_and_capped():
+    ids, cands = lane.pinned_candidates(None, f"What does {A} and {C} require?",
+                                        text_chars=3, find_req=fake_find_req)
+    assert ids == [A, C] and [c["req_id"] for c in cands] == [A]
+    assert cands[0]["release"] == "Sep2031" and cands[0]["text"] == "new" and cands[0]["pinned_by_id"]
+    _, cands = lane.pinned_candidates(None, f"What did {A} say in Jun2031?", find_req=fake_find_req)
+    assert cands[0]["release"] == "Jun2031" and cands[0]["text"] == "placeholder body"
+
+
+@pytest.fixture()
+def synth_lane(monkeypatch):
+    from core.src.web.routes import query
+
+    seen = {}
+
+    class LLM:
+        model = "m"
+
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            seen["context"] = prompt
+            return f"answer citing {A}"
+
+    sira = [{"req_id": "VZ_REQ_PLANA_0100", "mno": "mno-w", "release": "Sep2031", "text": "cites the named one"},
+            {"req_id": A, "mno": "mno-w", "release": "Sep2031", "text": "sira copy"},
+            {"req_id": A, "mno": "mno-w", "release": "Mar2031", "text": "older copy"}]
+
+    async def store(*a, **k):
+        return {"results": [dict(r) for r in sira]}
+
+    async def snap():
+        return {}
+
+    async def say(msg):
+        pass
+
+    monkeypatch.setattr(query, "_build_llm_from_env_or_default", lambda **k: LLM())
+    monkeypatch.setattr(playground, "_call_store_query", store)
+    monkeypatch.setattr(playground, "_snapshot_sira_lane_config", snap)
+    monkeypatch.setattr(req_tree, "find_req", fake_find_req)
+
+    def run(question):
+        return asyncio.run(playground._run_select_synth_lane(question, say, 0.0))
+
+    return run, seen
+
+
+def test_switch_on_puts_the_named_requirement_first(synth_lane, monkeypatch):
+    run, seen = synth_lane
+    monkeypatch.setenv("NORA_PIN_NAMED_IDS", "on")
+    out = run(f"What does {A} require?")
+    ctx = seen["context"]
+    assert ctx.index(f"req_id: {A}") < ctx.index("req_id: VZ_REQ_PLANA_0100")
+    assert "new body" in ctx and "sira copy" not in ctx        # the store's text replaces SIRA's same-release copy
+    assert "older copy" in ctx                                 # another release's copy stays
+    lc = out["lane_config"]
+    assert lc["named_ids"] == [A] and lc["named_pinned"] == [A] and lc["named_in_sira"] == [A]
+    assert "new body" not in json.dumps(lc)
+
+
+def test_switch_off_leaves_the_context_to_bm25(synth_lane, monkeypatch):
+    run, seen = synth_lane
+    monkeypatch.delenv("NORA_PIN_NAMED_IDS", raising=False)
+    out = run(f"What does {A} require?")
+    assert "sira copy" in seen["context"] and "new body" not in seen["context"]
+    assert "named_ids" not in out["lane_config"]
+
+
+def test_a_store_failure_never_breaks_the_answer(synth_lane, monkeypatch):
+    run, seen = synth_lane
+    monkeypatch.setenv("NORA_PIN_NAMED_IDS", "on")
+
+    def boom(*a, **k):
+        raise OSError("down")
+    monkeypatch.setattr(req_tree, "find_req", boom)
+    out = run(f"What does {A} require?")
+    assert "sira copy" in seen["context"] and out["result"]["answer"].startswith("answer")

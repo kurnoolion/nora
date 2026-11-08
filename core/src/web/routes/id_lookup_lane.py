@@ -156,3 +156,50 @@ async def run_id_lookup_lane(question: str, msg: IdMessage, *, env_dir: Path,
         },
         "lookup": found,
     }
+
+
+# ── IDs named inside a question (D-DRAFT-8, design §4 item 4) ─────────
+
+PIN_SWITCH = "NORA_PIN_NAMED_IDS"
+
+
+def pin_enabled() -> bool:
+    """The ``NORA_PIN_NAMED_IDS`` switch, read per request; default off."""
+    return os.getenv(PIN_SWITCH, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def named_ids(question: str) -> tuple[list[str], str]:
+    """Requirement IDs named anywhere in the question (message order, no
+    duplicates) and the one release it names ("" for none or several)."""
+    seen: dict[str, None] = {}
+    for m in _ID_RE.finditer(question):
+        seen.setdefault(m.group(0).upper(), None)
+    rels = list(_RELEASE_RE.finditer(question))
+    release = rels[0].group(1).title() + rels[0].group(2) if len(rels) == 1 else ""
+    return list(seen), release
+
+
+def pinned_candidates(env_dir: Path, question: str, *, text_chars: int = 0,
+                      find_req=None) -> tuple[list[str], list[dict]]:
+    """The question's named IDs and, for each one found in the Trees store,
+    a select-synth candidate (``req_id``, ``mno``, ``release``, ``title``,
+    ``text``): the named release when the question names one that carries
+    it, else the latest. Text capped at ``text_chars`` when > 0."""
+    ids, release = named_ids(question)
+    if not ids:
+        return [], []
+    if find_req is None:
+        from core.src.web import req_tree
+        find_req = req_tree.find_req
+    out: list[dict] = []
+    for req_id in ids:
+        matches = find_req(env_dir, req_id, ignore_case=True)
+        if not matches:
+            continue
+        in_rel = [m for m in matches if release and m["release"] == release]
+        r = in_rel[0] if in_rel else latest_match(matches)
+        text = r.get("text") or ""
+        out.append({"req_id": r["req_id"], "mno": r.get("mno", ""), "release": r.get("release", ""),
+                    "title": r.get("title", ""), "text": text[:text_chars] if text_chars > 0 else text,
+                    "pinned_by_id": True})
+    return ids, out

@@ -105,6 +105,13 @@ with Kev-4B on MLX, and the first call takes about 3.5 s. Then:
      one, but not the named one itself.
    - Reproduce it on the local stack before fixing.
    - Built last in phase 1.
+   - Reproduced 2026-11-08 on the local stack ("What does <ID> require?", four
+     Feb2026 IDs): BM25 left the named requirement out of its top 20, or
+     ranked it near the bottom (17 of 20).
+   - Built behind `NORA_PIN_NAMED_IDS` (default off): the named requirements
+     come from the Trees store and go first in the context, ahead of the
+     round-robin; `lane_config` records `named_ids`, `named_pinned`,
+     `named_in_sira`.
 
 The store is unchanged. It keeps rules-only scope (`mnos`, `releases`) in
 `_multi_cell_query`. Phase 1 does not send intent to the store (§9).
@@ -157,6 +164,7 @@ is not touched in phase 1.
 | `NORA_DECISION_PROVIDER` / `_BASE_URL` / `_CONFIDENCE_FLOOR` | nora-web | unset / unset / 0.50 | Kev endpoint, needed for the Kev arms only. |
 | `NORA_SIRA_INTENT_PROMPTS` | nora-web | off | Per-intent prompts, plus the §4 error behaviour. |
 | `NORA_ID_LOOKUP` | nora-web | off | A message made only of requirement IDs goes to the `id_lookup` lane (§4 step 0). Off: it goes to SIRA as today. |
+| `NORA_PIN_NAMED_IDS` | nora-web | off | Requirement IDs named inside a question go first in the select-synth context, from the Trees store (§4 item 4). |
 | `NORA_SIRA_INTENT_PROMPTS_FILE` | nora-web | unset | Override file for the prompts (§5). Unset → `<env_dir>/sira_intent_prompts.json` if present, else the source defaults. |
 
 With every default, served answers are unchanged. Each phase turns on one

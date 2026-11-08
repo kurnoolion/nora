@@ -853,7 +853,23 @@ async def _run_select_synth_lane(
         return {"error": f"SIRA service call failed: {exc}"}
 
     sira_results = sira_result.get("results", []) or []
-    packed = _pack_select_synth(sira_results, _SYNTH_TOKEN_BUDGET)
+    # Requirements named by ID in the question go first, fetched from the
+    # Trees store whatever BM25 returned (strand sira-intent, D-DRAFT-8),
+    # behind NORA_PIN_NAMED_IDS. SIRA's copy of a pinned id is dropped.
+    named, pinned_named = [], []
+    if id_lookup_lane.pin_enabled():
+        from core.src.web.app import config
+        try:
+            named, pinned_named = await asyncio.to_thread(
+                id_lookup_lane.pinned_candidates, config.env_dir_path(), question,
+                text_chars=_SELECT_SYNTH_TEXT_CHARS)
+        except Exception:                                # noqa: BLE001 — pinning is best-effort
+            logger.exception("pinning named requirement ids failed")
+    pinned_keys = {(c["mno"], c["release"], c["req_id"]) for c in pinned_named}
+    rest = [r for r in sira_results
+            if (r.get("mno"), r.get("release"), r.get("req_id")) not in pinned_keys]
+    pinned_tokens = int(sum(len(c["text"]) for c in pinned_named) / _CHARS_PER_TOKEN)
+    packed = pinned_named + _pack_select_synth(rest, max(_SYNTH_TOKEN_BUDGET - pinned_tokens, 0))
     packed_keys = {(p.get("mno"), p.get("req_id")) for p in packed}
     for r in sira_results:
         r["pinned"] = (r.get("mno"), r.get("req_id")) in packed_keys
@@ -888,6 +904,11 @@ async def _run_select_synth_lane(
     lane_config = await _snapshot_sira_lane_config()
     lane_config["llm_provider_id"] = provider_id or ""
     lane_config["llm_mode"] = mode or ""
+    if named:
+        sira_ids = {r.get("req_id") for r in sira_results}
+        lane_config["named_ids"] = named
+        lane_config["named_pinned"] = [c["req_id"] for c in pinned_named]
+        lane_config["named_in_sira"] = [i for i in named if i in sira_ids]
     if intent_prompt is not None:
         lane_config["prompt_intent"] = intent_prompt.intent.value
         lane_config["prompt_source"] = intent_prompt.source

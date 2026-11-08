@@ -21,6 +21,8 @@
 #                      classifies intent confidence-routed (Kev above the floor,
 #                      else the rules). Unset: the rules classify.
 #   ID_LOOKUP=on       a message of only requirement IDs → lookup lane (off: SIRA)
+#   PIN_IDS=on         requirement IDs named inside a question go first in the
+#                      answer's context, from the Trees store (off: BM25 only)
 #   INTENT_PROMPTS=on  per-intent select-synth prompts (off: today's prompt)
 #   HISTORY_LANE=false no History store locally, so change questions use SIRA's
 #                      change prompt; true routes them to History (an RHD-E003
@@ -67,6 +69,7 @@ nohup sandbox/sira/.venv/bin/uvicorn core.src.store_service.service:app \
 # nora-web: select-synth answers straight from SIRA chunks (no NORA vector store).
 NORA_STORE_URL=http://127.0.0.1:8040 \
 NORA_ID_LOOKUP=${ID_LOOKUP:-on} \
+NORA_PIN_NAMED_IDS=${PIN_IDS:-on} \
 NORA_SIRA_INTENT_PROMPTS=${INTENT_PROMPTS:-on} \
 NORA_HISTORY_DIFF_ENABLED=${HISTORY_LANE:-false} \
 NORA_QUERY_ANALYZER=$ANALYZER \
@@ -98,5 +101,5 @@ if [ "$KEV" = 1 ]; then
     > /dev/null 2>&1 || echo "Kev warm-up failed (see $LOGS/kev.log); nora-web falls back to the rules"
 fi
 echo "store: http://127.0.0.1:8040/healthz   web: http://127.0.0.1:8000/test   model: $MODEL"
-echo "intent: analyzer=$ANALYZER prompts=${INTENT_PROMPTS:-on} id_lookup=${ID_LOOKUP:-on} history_lane=${HISTORY_LANE:-false}"
+echo "intent: analyzer=$ANALYZER prompts=${INTENT_PROMPTS:-on} id_lookup=${ID_LOOKUP:-on} pin_ids=${PIN_IDS:-on} history_lane=${HISTORY_LANE:-false}"
 if [ "$KEV" = 1 ]; then echo "kev:   http://127.0.0.1:8009/v1/models"; fi
