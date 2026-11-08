@@ -152,6 +152,14 @@ Prompts will be revised often as the dataset grows, so they have two layers
   switch goes on. Only the select-synth path uses them; the rerank-pin path
   (NORA synthesizer) keeps its own prompt. A disabled History lane sends a
   `change` question to SIRA with the `change` prompt (§4).
+- **Single-release fallback (2026-11-08):** the local spot-check (qwen3:8b,
+  32K) showed the `change` prompt inventing Added / Changed items from chunks
+  of one release, despite the prompt's instruction. So a `change` question
+  whose context has no operator with two releases answers with today's
+  prompt instead, and the answer opens with a note saying release history
+  isn't available and naming the release it used (`lane_config`
+  `change_fallback`). Rejected: a fixed no-model reply (the user still wants
+  an answer from the release they have) and relying on the prompt alone.
 
 Query enrichment (the store's `query_requirement_v01.txt`, in the SIRA clone)
 is not touched in phase 1.

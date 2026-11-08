@@ -827,6 +827,20 @@ def _select_synth_synthesize(
     }
 
 
+def _single_release_note(packed: list[dict[str, Any]]) -> str:
+    """"" when some operator has chunks from two or more releases; else the
+    note a change answer carries, naming the releases it drew on."""
+    by_mno: dict[str, set[str]] = {}
+    for c in packed:
+        by_mno.setdefault(c.get("mno") or "", set()).add(c.get("release") or "")
+    if any(len(rels) >= 2 for rels in by_mno.values()):
+        return ""
+    cells = ", ".join(f"{m} {r}".strip() for m, rels in sorted(by_mno.items())
+                      for r in sorted(rels) if m or r) or "a single release"
+    return (f"Release history isn't available here: the matching requirements come from "
+            f"{cells} only, so this answers from that release instead of comparing releases.")
+
+
 async def _run_select_synth_lane(
     question: str, _say: "Callable[[str], Awaitable[None]]", start: float,
     label: str = "",
@@ -882,6 +896,14 @@ async def _run_select_synth_lane(
     # Per-intent prompt (strand sira-intent, design §5) when the switch is on
     # and nora-web classified the question; otherwise today's prompt.
     intent_prompt = prompt_for(intent) if intent is not None and sira_intent.prompts_enabled() else None
+    # A change question needs two releases of one operator in the context.
+    # Without them the change prompt invites invented diffs, so answer with
+    # today's prompt and say so on the answer (spot-check 2026-11-08).
+    change_note = ""
+    if intent_prompt is not None and intent_prompt.intent is Intent.CHANGE:
+        change_note = _single_release_note(packed)
+        if change_note:
+            intent_prompt = prompt_for(Intent.OTHER)
     synth_start = time.time()
     synth_result = await asyncio.to_thread(
         _select_synth_synthesize, question, packed,
@@ -894,6 +916,8 @@ async def _run_select_synth_lane(
         timings["synth_ms"] = synth_ms
 
     synth_error = synth_result.get("error")
+    if change_note and not synth_error:
+        synth_result["answer"] = f"_{change_note}_\n\n{synth_result['answer']}"
     if synth_error:
         await _say(f"select-synth synth error: {synth_error}")
     elapsed_ms = int((time.time() - start) * 1000)
@@ -909,6 +933,8 @@ async def _run_select_synth_lane(
         lane_config["named_ids"] = named
         lane_config["named_pinned"] = [c["req_id"] for c in pinned_named]
         lane_config["named_in_sira"] = [i for i in named if i in sira_ids]
+    if change_note:
+        lane_config["change_fallback"] = True
     if intent_prompt is not None:
         lane_config["prompt_intent"] = intent_prompt.intent.value
         lane_config["prompt_source"] = intent_prompt.source

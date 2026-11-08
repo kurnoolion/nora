@@ -96,6 +96,7 @@
 
 **Consequences.**
 - One error path covers the missing-store and single-release cases.
+- In SIRA (History lane disabled), a `change` question whose retrieved context holds only one release per operator falls back to today's prompt with a note on the answer, not the `change` prompt: on the local spot-check the model invented release diffs from one release's chunks (2026-11-08). A fixed no-model reply was rejected: the user still gets an answer from the release that is there.
 
 ### D-DRAFT-6 — 2026-11-05, revised 2026-11-07 — Per-intent synthesis prompts: defaults in source, an optional per-environment override, default off
 

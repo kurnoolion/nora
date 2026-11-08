@@ -121,9 +121,11 @@ def lane(monkeypatch):
             seen["system"] = system
             return "answer citing VZ_REQ_PLANA_0001"
 
+    seen["results"] = [{"req_id": "VZ_REQ_PLANA_0001", "mno": "mno-w", "release": "Sep2031",
+                        "text": "placeholder"}]
+
     async def store(*a, **k):
-        return {"results": [{"req_id": "VZ_REQ_PLANA_0001", "mno": "mno-w", "release": "Sep2031",
-                             "text": "placeholder"}]}
+        return {"results": [dict(r) for r in seen["results"]]}
 
     async def snap():
         return {}
@@ -165,3 +167,41 @@ def test_no_intent_keeps_todays_prompt_even_when_on(lane, monkeypatch):
     monkeypatch.setenv("NORA_SIRA_INTENT_PROMPTS", "on")
     run(None)
     assert seen["system"] == playground._SELECT_SYNTH_SYSTEM_PROMPT
+
+
+def test_change_with_one_release_falls_back_to_todays_prompt_with_a_note(lane, monkeypatch):
+    run, seen, playground = lane
+    monkeypatch.setenv("NORA_SIRA_INTENT_PROMPTS", "on")
+    out = run(Intent.CHANGE)
+    assert seen["system"] == sp.DEFAULT_PROMPTS[Intent.OTHER] + playground._SENTINEL_SUFFIX
+    assert out["result"]["answer"].startswith(
+        "_Release history isn't available here: the matching requirements come from mno-w Sep2031 only")
+    lc = out["lane_config"]
+    assert lc["change_fallback"] is True and lc["prompt_intent"] == "other"
+
+
+def test_change_with_two_releases_of_one_operator_keeps_the_change_prompt(lane, monkeypatch):
+    run, seen, playground = lane
+    monkeypatch.setenv("NORA_SIRA_INTENT_PROMPTS", "on")
+    seen["results"].append({"req_id": "VZ_REQ_PLANA_0001", "mno": "mno-w", "release": "Mar2031",
+                            "text": "older"})
+    out = run(Intent.CHANGE)
+    assert seen["system"] == sp.DEFAULT_PROMPTS[Intent.CHANGE] + playground._SENTINEL_SUFFIX
+    assert "change_fallback" not in out["lane_config"]
+    assert not out["result"]["answer"].startswith("_Release history")
+
+
+def test_two_operators_one_release_each_is_still_a_fallback(lane, monkeypatch):
+    run, seen, _ = lane
+    monkeypatch.setenv("NORA_SIRA_INTENT_PROMPTS", "on")
+    seen["results"].append({"req_id": "R2", "mno": "mno-v", "release": "Mar2031", "text": "x"})
+    out = run(Intent.CHANGE)
+    assert out["lane_config"]["change_fallback"] is True
+    assert "mno-v Mar2031, mno-w Sep2031 only" in out["result"]["answer"]
+
+
+def test_switch_off_never_adds_the_note(lane, monkeypatch):
+    run, _, _ = lane
+    monkeypatch.delenv("NORA_SIRA_INTENT_PROMPTS", raising=False)
+    out = run(Intent.CHANGE)
+    assert not out["result"]["answer"].startswith("_Release history")
