@@ -172,3 +172,77 @@
 - The ID pattern is Verizon-only until other operators' formats are known.
 - The pinning fix is built last in phase 1, after reproducing the symptom.
 - The lane sits behind `NORA_ID_LOOKUP`, default off, like the strand's other switches: served stacks change only when someone opts in.
+
+### D-DRAFT-9 — 2026-11-08 — A pasted bug report asking for a verdict is `compliance`, not a new intent
+
+**Context.**
+- Users paste a bug description (mostly free form, description only, no logs) and ask "is this valid?", "can you comment on this issue?" or "are we wrong?".
+- The rules sent these to `other` or `explain`, and a bug report saying "nothing changed" was routed as a release change.
+
+**Decision.**
+- Such a message is `compliance`: the device behaviour is described and the asker wants to know whether the requirements allow it.
+- The rules match the verdict ask (`_VERDICT_ASK`) right after the change check, and `is_release_change_question` is false for it and for a negated change.
+- The compliance prompt judges the observed device behaviour, never the reporter's expectation, with MEETS / VIOLATES per requirement and an overall verdict.
+
+**Why.**
+- Rejected: a new `bug` intent. The answer is the same as for a compliance question (judge a behaviour against the requirements), so a new intent would add a Kev option and a prompt with nothing different to do.
+- The user asked for MEETS / VIOLATES wording, which compliance already uses.
+
+**Consequences.**
+- The dev set gains six synthetic bug reports (`kb1`–`kb6`, labelled compliance); its labelling rule says so.
+- Kev alone misses most of them, since its option descriptions don't mention bug reports. The confidence routing covers that today.
+
+### D-DRAFT-10 — 2026-11-08 — Compliance keeps its own checklist prompt, separate from the client compliance-tracking plan
+
+**Context.**
+- 6cdaa6c switched `compliance` to today's prompt, taking it for the planned client compliance-tracking (diff) system.
+- They are different things: the intent is a user describing a behaviour and asking whether it is allowed; the tracking plan is a client compliance matrix.
+
+**Decision.**
+- `compliance` answers with its own prompt: MEETS / VIOLATES / UNCLEAR per governing requirement, then an overall verdict (c932a61 reverts 6cdaa6c).
+- The client compliance matrix is out of this strand (design §9).
+
+**Why.**
+- Today's prompt summarizes requirements; a "is this allowed?" question needs a verdict, which only the checklist gives.
+
+**Consequences.**
+- The compliance prompt is distinct from `other` (a test asserts every intent's prompt differs).
+- A later compliance-tracking strand starts from its own design, not from this prompt.
+
+### D-DRAFT-11 — 2026-11-08 — The confidence floor stays at 0.50, on the sweep (amends D-DRAFT-4)
+
+**Context.**
+- D-DRAFT-4 routed low-confidence Kev answers to the rules at `NORA_DECISION_CONFIDENCE_FLOOR`, set to 0.50 before the dev set was reviewed.
+- Reviewed intent-dev-v1 (77 samples): rules 0.753, Kev alone 0.753 (change recall 0.40), confidence-routed 0.870.
+
+**Decision.**
+- Keep the floor at 0.50.
+
+**Why.**
+- Accuracy plateaus at 0.870 for floors 0.40–0.50, but the change bar (precision and recall ≥ 0.9) is met only from 0.45. 0.50 sits inside both.
+- Kev is right 89–100% of the time above 0.5; below 0.4 the rules do better. 17 of Kev's 19 wrong answers are below 0.5.
+- Rejected: 0.40, same accuracy but the change bar is not met.
+
+**Consequences.**
+- At 0.50 Kev decides 40 of 77 dev questions.
+- Re-measure with `python -m core.src.eval.intent_report` after any change to the rules, the set or Kev; the held-out real-question check (D-DRAFT-7) may move it.
+
+### D-DRAFT-12 — 2026-11-08 — Eval reports are committed under a top-level `reports/` folder, one timestamped folder per run
+
+**Context.**
+- The Kev floor report was made by hand; the user wanted the same report after every evaluation, with time details so runs can be correlated.
+
+**Decision.**
+- `python -m core.src.eval.intent_report` writes `reports/intent/<YYYY-MM-DD-HHMM>_kev-floor_<set_id>/` with `run.json` (numbers plus `meta`: time, git commit and dirty flag, dataset hash, decision endpoint, floor) and a self-contained `report.html`.
+- The project skill `eval-report` prepares the environment, runs it, reports against the previous run and proposes the commit.
+- Only reports on synthetic sets are committed; rows carry sample ids and labels, never question text.
+- New reports follow the same shape under `reports/<report>/`.
+
+**Why.**
+- The user asked for a dedicated top-level folder and a readable slug; reports outlive the strand that made them.
+- Rejected: a comparison tool between runs (the user said not needed); the metadata in each `run.json` is enough to correlate.
+- The script owns the numbers, so the page text can't drift from them.
+
+**Consequences.**
+- The repo is public: a run on an internal or real-traffic set stays out of it.
+- A failed decision call writes nothing, so a report never scores the rules under Kev's name.
