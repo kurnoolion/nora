@@ -82,9 +82,13 @@ _ANSWER_STEP = {
         "examples. Group the bullets by operator, or by topic when there is one "
         "operator, and end with the number of requirements listed.\n"
     ),
-    # Compliance answers are a roadmap feature (a diff system to be connected
-    # here later); until then they get today's answer, as `other` does.
-    Intent.COMPLIANCE: None,
+    Intent.COMPLIANCE: (
+        "2. ANSWER from the selected chunks only, as a compliance check of the "
+        "behaviour the user describes: one line per relevant requirement giving "
+        "its req_id, what it requires, and a verdict — MEETS, VIOLATES, or UNCLEAR "
+        "when the description lacks the detail needed. End with an overall verdict "
+        "and its main reason. Do not assume details the user didn't give.\n"
+    ),
     Intent.CHANGE: (
         "2. ANSWER from the selected chunks only, about what changed between "
         "releases: group the findings as Added, Removed and Changed (old → new), "
@@ -102,9 +106,7 @@ _ANSWER_STEP = {
     ),
 }
 
-DEFAULT_PROMPTS: dict[Intent, str] = {
-    i: _PREFIX + (_ANSWER_STEP[i] or _ANSWER_STEP[Intent.OTHER]) + _SUFFIX for i in Intent
-}
+DEFAULT_PROMPTS: dict[Intent, str] = {i: _PREFIX + _ANSWER_STEP[i] + _SUFFIX for i in Intent}
 
 
 @dataclass(frozen=True)

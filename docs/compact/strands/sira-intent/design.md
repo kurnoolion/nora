@@ -26,7 +26,7 @@ The jev decision model (Kev locally) is measured against a rules baseline.
 | `fact` | one value or one statement ("what is the T3402 value") | short, direct, cited |
 | `explain` | how or why something works; includes "summarize" | prose |
 | `list` | every item of a kind ("all SMS over IMS requirements") | exhaustive bullets |
-| `compliance` | whether a behaviour meets the requirements | today's prompt for now; a dedicated answer waits for the diff system (§9) |
+| `compliance` | whether a behaviour the user describes meets the requirements ("is this allowed?") | checklist, MEETS / VIOLATES / UNCLEAR per requirement |
 | `change` | what moved between releases of the same document | added / removed / changed |
 | `compare` | two things side by side (MNOs, plans, features) | table |
 | `other` | none of the above, or unsure | today's prompt, unchanged |
@@ -158,8 +158,9 @@ Prompts will be revised often as the dataset grows, so they have two layers
   "what requirements"; the question joined the dev set as l11 (rules
   accuracy 0.714 → 0.732, labels still under review).
 - **Prompt review (2026-11-08):** `list` asks for a one-sentence summary of
-  each requirement's content, not its section title. `compliance` has no
-  prompt of its own (roadmap, §9).
+  each requirement's content, not its section title. `compliance` keeps its
+  checklist prompt (briefly switched to today's prompt after it was mistaken
+  for the client compliance-tracking plan, §9).
 - **Single-release fallback (2026-11-08):** the local spot-check (qwen3:8b,
   32K) showed the `change` prompt inventing Added / Changed items from chunks
   of one release, despite the prompt's instruction. So a `change` question
@@ -219,9 +220,10 @@ switch at a time.
   - Guided by the logged rows and the golden A/B.
 - **Deferred to internal infra:** the held-out check on real feedback questions (dev-set option C).
 - **Deferred:** a user override control for intent, and multi-label intent.
-- **Roadmap: compliance answers.** The `compliance` intent is classified and
-  logged, but answers with today's prompt (2026-11-08, Hanif). A planned diff
-  system will be connected here later; its prompt or lane comes with it.
+- **Not this strand:** tracking the company's compliance status for every
+  requirement of a client (a compliance matrix) is separate planned work. The
+  `compliance` intent here is a user describing a behaviour and asking whether
+  it meets the requirements.
 - **Deferred:** requirement-ID patterns for other operators. The rules match
   `VZ_REQ_\w+_\d+` only (`query/analyzer.py`). Add the AT&T and T-Mobile
   formats when those operators are ingested, not by guessing (Q17).
