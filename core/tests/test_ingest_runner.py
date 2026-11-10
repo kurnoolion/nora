@@ -663,6 +663,38 @@ def test_with_a_corpus_root_any_served_build_seeds(host):
     assert any(f"--seed {build}" in c for c in sim.cmds())
 
 
+def test_rollback_refused_when_a_later_set_is_active(host):
+    """A row stays `served` after a later flip (from the page or by hand);
+    rolling it back would drop the newer set too."""
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    q = host["q"]
+    _run(q.submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    reg = host["root"] / "registry/registry.db"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE IF NOT EXISTS active(store TEXT, unit TEXT, version INTEGER, label TEXT)")
+    con.execute("DELETE FROM active")
+    con.execute("INSERT INTO active VALUES ('cells', 'MNO-A/Apr2031', 2, 'hand-flipped-label')")
+    con.commit(); con.close()
+    sim.calls.clear()
+    rb = _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "failed"
+    assert "no longer the active set (hand-flipped-label is)" in _run(q.get_meta(rb.id)).error_message
+    assert not any("publish rollback" in c for c in sim.cmds())
+    assert _run(q.get_ingest(ingest_id)).state == "served"
+    # the same row, active again, rolls back
+    con = sqlite3.connect(reg)
+    con.execute("UPDATE active SET label=?", (_run(q.get_ingest(ingest_id)).label,))
+    con.commit(); con.close()
+    _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert _run(q.get_ingest(ingest_id)).state == "rolled_back"
+
+
 def test_documents_stage_refusals(host):
     sim = Sim(host["root"])
     q = host["q"]

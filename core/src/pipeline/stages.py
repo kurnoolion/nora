@@ -736,6 +736,14 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
             )
 
         if n_to_extract and extractor is None:
+            if not overview_dir:
+                # the unset case used to pass silently (field-found 2026-11-07: a
+                # wiring env that named no batch env file); the cycle driver's
+                # enrich gate refuses on this code
+                warnings.append(
+                    "TAX-W003: NORA_TAXONOMY_OVERVIEW_DIR is not set — extracting "
+                    "without corpus-overview context")
+                logger.warning(warnings[-1])
             provider = ctx.create_llm_provider()
             # The overview dir reaches the extractor here (it was dropped
             # when this construction moved into the cell loop on 2026-11-06).

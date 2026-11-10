@@ -537,10 +537,33 @@ def run_flip(c: Ctx) -> None:
         c.log(f"WARN: release map not advanced: {exc} — run `golden_release_cli advance` by hand")
 
 
+def _active_label(c: Ctx) -> str:
+    """The registry's active release set ('' when unknown, none or mixed)."""
+    reg = Path(c.cfg.registry_root) / "registry.db"
+    if not reg.is_file():
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            labels = {r[0] for r in con.execute("SELECT DISTINCT label FROM active")}
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return ""
+    return labels.pop() if len(labels) == 1 else ""
+
+
 def run_rollback(c: Ctx) -> None:
     ing = c.ingest
     if ing.get("state") != "served" or not ing.get("previous_label"):
         raise StageError(f"ingest is {ing.get('state')} (previous label {ing.get('previous_label') or '-'}): nothing to roll back to")
+    # A later flip (from this page or by hand) leaves this row `served` while
+    # another set is active; rolling back to this row's previous label would
+    # drop that newer set as well.
+    active = _active_label(c)
+    if active and active != ing.get("label"):
+        raise StageError(f"{ing.get('label')} is no longer the active set ({active} is): rolling back to "
+                         f"{ing['previous_label']} would drop {active} too; roll back by hand if that is meant")
     cmd = ["python", "-m", "core.src.stores.publish", "rollback", "--serve-root", CTR_SERVE,
            "--to", ing["previous_label"], "--store-url", c.cfg.store_url]
     c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,

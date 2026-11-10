@@ -431,11 +431,20 @@ prompts)
     echo "  $m: doc=$(basename "$doc") overview=$(basename "$ov") shape=$shape"
   done
   (( bad == 0 )) || die 041 "$bad MNO prompt set(s) mis-shaped (see above)" "fix the files under customizations/prompts/ and re-run"
-  for f in .env.nora-batch .env.sira-batch; do
-    ef="$ENV_ROOT/$f"; [ -f "$ef" ] || ef="$HERE/$f"
-    [ -f "$ef" ] && grep -qE '^NORA_(TAXONOMY_OVERVIEW|SIRA_DOC_PROMPT)_DIR=/data/env/prompts' "$ef" \
-      || echo "  WARN: $f lacks the /data/env/prompts *_DIR setting (README Phase 3) — mounted prompts will be ignored"
+  # the batch env files compose reads: the wiring env's BATCH_ENV_FILE /
+  # SIRA_BATCH_ENV_FILE (relative to docker/), else the two default names.
+  # A refusal, not a warning: without the line the stage runs on generic
+  # prompts and says nothing (field-found 2026-11-07).
+  nomiss=0
+  for spec in BATCH_ENV_FILE:.env.nora-batch:NORA_TAXONOMY_OVERVIEW_DIR SIRA_BATCH_ENV_FILE:.env.sira-batch:NORA_SIRA_DOC_PROMPT_DIR; do
+    IFS=: read -r var def key <<< "$spec"
+    ef="$(wiring_var "$var")"
+    if [ -n "$ef" ]; then case "$ef" in /*) ;; *) ef="$HERE/$ef";; esac
+    else ef="$ENV_ROOT/$def"; [ -f "$ef" ] || ef="$HERE/$def"; fi
+    if [ -f "$ef" ] && grep -qE "^$key=/data/env/prompts" "$ef"; then echo "  $key: set in $ef"
+    else echo "  MISSING: $key=/data/env/prompts in $ef"; nomiss=$((nomiss+1)); fi
   done
+  (( nomiss == 0 )) || die 042 "$nomiss batch env file(s) do not point the stages at the published prompts" "add the line(s) above to the file(s) named (README Phase 3), or name the right file in the wiring env"
   gate prompts
   cp "$PD"/*_v*.txt "$NB/prompts/" 2>/dev/null || true
   cyc_block prompts confirmed <<EOF

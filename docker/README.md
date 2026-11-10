@@ -212,7 +212,11 @@ below, records one cycle at a time in `<builds>/ACTIVE` +
 `<build>/CYCLE.json` (with each detached phase's container id), checks
 each phase's artifacts before the next, and emits a paste-safe `CYC`
 block per phase under `<build>/reports/`. Image snapshot/rebake (0.1–0.2)
-and Phase 2 stay manual; `prompts` and `verify-enrich` are explicit-yes
+and Phase 2 stay manual. `prompts` refuses (`CYC-E042`) when the batch env
+files compose reads (the wiring env's `BATCH_ENV_FILE` /
+`SIRA_BATCH_ENV_FILE`, else `.env.nora-batch` / `.env.sira-batch`) do not
+set `NORA_TAXONOMY_OVERVIEW_DIR` / `NORA_SIRA_DOC_PROMPT_DIR` to
+`/data/env/prompts`. `prompts` and `verify-enrich` are explicit-yes
 gates (`--yes` records the confirmation as `<user> (auto)` — for an
 unattended runner only). `./cycle.sh -h` for the layout env vars
 (`NORA_ROOT=/srv/nora`).

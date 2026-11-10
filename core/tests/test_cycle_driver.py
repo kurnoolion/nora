@@ -60,6 +60,9 @@ def host(tmp_path: Path):
     (root / "env").mkdir()
     wiring = root / "env" / ".env.builds"
     wiring.write_text("NORA_ENV_DIR=/nowhere\nSTORE_ROOT=/nowhere\n", encoding="utf-8")
+    # the batch env files the prompts gate checks (README Phase 3)
+    (root / "env" / ".env.nora-batch").write_text("NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts\n", encoding="utf-8")
+    (root / "env" / ".env.sira-batch").write_text("NORA_SIRA_DOC_PROMPT_DIR=/data/env/prompts\n", encoding="utf-8")
     bindir = tmp_path / "bin"
     bindir.mkdir()
     fake = bindir / "docker"
@@ -504,3 +507,34 @@ def test_corpus_new_mno_fails_loud_and_leaves_the_corpus_file(host):
     assert r.returncode == 1 and "CYC-E027" in r.stderr
     assert (corpus / "profiles.json").read_bytes() == before
     assert not (host["nora"] / "b1").exists()
+
+
+# -- the prompts gate checks the batch env files compose reads ----------------
+
+def _prompts_ready(host) -> None:
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    assert host["run"]("parse").returncode == 0
+    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True)
+
+
+def test_prompts_gate_refuses_a_batch_env_without_the_overview_dir(host):
+    _prompts_ready(host)
+    (host["root"] / "env" / ".env.nora-batch").write_text("OTHER=1\n", encoding="utf-8")
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 1 and "CYC-E042" in r.stderr
+    assert "MISSING: NORA_TAXONOMY_OVERVIEW_DIR" in r.stdout
+
+
+def test_prompts_gate_reads_the_batch_env_the_wiring_names(host, tmp_path):
+    _prompts_ready(host)
+    (host["root"] / "env" / ".env.nora-batch").write_text("OTHER=1\n", encoding="utf-8")
+    named = tmp_path / "stack-batch.env"
+    named.write_text("NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts\n", encoding="utf-8")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + f"BATCH_ENV_FILE={named}\n", encoding="utf-8")
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert f"NORA_TAXONOMY_OVERVIEW_DIR: set in {named}" in r.stdout

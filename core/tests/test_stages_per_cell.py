@@ -314,6 +314,19 @@ class TestTaxonomyResilience:
         assert (out / "MNO-A" / "Jul2026" / "taxonomy.json").is_file()
         assert (out / "taxonomy.json").is_file()   # build-level, over both cells
 
+    def test_unset_overview_dir_warns_when_extracting(self, tmp_path, monkeypatch):
+        """No NORA_TAXONOMY_OVERVIEW_DIR at all used to pass silently; it is
+        TAX-W003 now (the cycle driver's enrich gate refuses on it). A run
+        served wholly from cache extracts nothing and says nothing."""
+        monkeypatch.delenv("NORA_TAXONOMY_OVERVIEW_DIR", raising=False)
+        _seed_plan_tree(tmp_path, "MNO-A", "Apr2026", "PLANX")
+        ctx = self._ctx(tmp_path, monkeypatch, _ScriptedProvider())
+        res = run_taxonomy(ctx)
+        assert any(w.startswith("TAX-W003") and "not set" in w for w in res.warnings)
+        res = run_taxonomy(ctx)
+        assert res.stats["source"] == "cache"
+        assert not any(w.startswith("TAX-W003") for w in res.warnings)
+
     def test_scope_narrows_to_one_cell(self, tmp_path, monkeypatch):
         """--mno/--release restrict the stage to that cell; other cells'
         directories are neither derived nor touched."""
