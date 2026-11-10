@@ -11,6 +11,7 @@ profile inheritance, the gates) is the real script.
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import stat
@@ -29,6 +30,7 @@ if [ "$1" = image ] && [ "$2" = inspect ]; then
   echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; exit 0
 fi
 if [ "$1" = compose ]; then
+  echo "$*" >> "$NORA_ROOT/compose-args.txt"
   envfile=""; inner=""; detached=0
   while (( $# > 0 )); do
     case "$1" in
@@ -648,3 +650,41 @@ def test_promote_carries_the_recipe_and_the_manifest_into_the_label(tmp_path):
                         "--label", "lbl-2", "--nora-build", str(nb2)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert not (serve / "lbl-2" / "nora" / "RECIPE.json").exists()
+
+
+
+def test_verify_enrich_stamps_enrich_with_the_lane_s_model_and_revision(host):
+    """After the verify passes, verify-enrich records the enrich fingerprints
+    in a nora-batch one-shot: the model from the sira-batch env file (or the
+    recipe), the SIRA revision from the wiring env (or the compose pin)."""
+    _to_taxonomy_ok(host)
+    (host["root"] / "env" / ".env.sira-batch").write_text(
+        "NORA_SIRA_DOC_PROMPT_DIR=/data/env/prompts\nNORA_SIRA_ENRICH_LLM_MODEL=env-model\n")
+    assert host["run"]("enrich", "--cell", "MNO-A/Jan2031").returncode == 0
+    Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=0\n")
+    r = host["run"]("verify-enrich", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    stamp = [l for l in (host["root"] / "compose-args.txt").read_text().splitlines() if "--stamp enrich" in l]
+    assert len(stamp) == 1
+    pin = re.search(r"SIRA_REF:-([0-9a-f]+)", (REPO / "docker" / "docker-compose.yml").read_text()).group(1)
+    assert f"-e NORA_SIRA_ENRICH_LLM_MODEL=env-model -e SIRA_REF={pin} nora-batch" in stamp[0]
+    assert "enrich_stamped=0" in r.stdout          # the fake container stamps nothing
+    # the wiring env's revision wins over the pin
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "SIRA_REF=abc123\n")
+    r = host["run"]("verify-enrich", "--yes")
+    assert r.returncode == 0
+    last = [l for l in (host["root"] / "compose-args.txt").read_text().splitlines() if "--stamp enrich" in l][-1]
+    assert "SIRA_REF=abc123" in last
+
+
+def test_verify_enrich_takes_the_recipe_s_model(host):
+    body = {"stages": ["enrich"], "params": {"enrich": {"model": "recipe-model"}}}
+    with _temp_recipe(body) as name:
+        _parsed_with(host, name)
+        assert host["run"]("prompts", "--yes").returncode == 0
+        assert host["run"]("enrich", "--cell", "MNO-A/Jan2031").returncode == 0
+        Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=0\n")
+        assert host["run"]("verify-enrich", "--yes").returncode == 0
+    last = [l for l in (host["root"] / "compose-args.txt").read_text().splitlines() if "--stamp enrich" in l][-1]
+    assert "NORA_SIRA_ENRICH_LLM_MODEL=recipe-model" in last

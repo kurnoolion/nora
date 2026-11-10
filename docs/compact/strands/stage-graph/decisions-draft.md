@@ -87,3 +87,13 @@
 **Why.** Freezing makes a build reproducible after the recipe file changes. Moving every model choice into recipes was rejected for now: endpoints and keys must stay in env files, and splitting a model from its endpoint would make a wrong pairing easy; the override is there when a recipe needs it. The validator is standard library only because the host-side driver and runner import it.
 
 **Consequences.** A recipe without taxonomy unsets the taxonomy directory for the lane, so an env file cannot supply one. A generation bump changes the variant fingerprint; per-unit reuse keeps the cost of the re-stamp to what actually changed.
+
+### D-DRAFT-10 — 2026-11-10 — Enrich is a driver-side stage: fingerprinted and recorded, not stored
+
+**Context.** Enrichment runs in the SIRA lane under the cycle driver, not in the pipeline, and its outputs (SIRA cells) are large and already reused per requirement by SIRA's incremental promote.
+
+**Decision.** `enrich` gets a stage spec in a driver table outside the pipeline's order: inputs parse and, when the recipe says enrich reads it, taxonomy; external the MNO's published document prompt (the lane's resolution rule); parameters the lane's model and the SIRA revision, plus the recipe's enrich parameters. `verify-enrich` records the fingerprint per completed cell before its gate, through `run_cli --stamp enrich`. Enrich outputs are never put in the stage store.
+
+**Why.** Recording makes the release set say exactly how its Cells were built and lets a later redo key on the fingerprint. A pipeline stage for enrich was rejected: the lane's container, env file and gate are the driver's, and moving them would change every host step for no gain. Storing enrich outputs was rejected for now: they are the largest artifact and the sharing they would give across stacks needs equal recipes, which today's stacks do not have.
+
+**Consequences.** A recipe without taxonomy gives enrich a fingerprint without the taxonomy input, so turning taxonomy on or off is a different output. A stamp failure stops the verify gate (`CYC-E071`).

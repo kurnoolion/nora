@@ -587,6 +587,7 @@ nora/
 │       ├── test_pdf_extractor_text_tables.py            # Guards for the opt-in text-strategy (borderless) table detection.
 │       ├── test_pipeline.py                             # Pipeline smoke tests — extract, profile, and parse real PDFs.
 │       ├── test_pipeline_cells.py                       # Tests for the pipeline (MNO, release) cell substrate (D-DRAFT-6).
+│       ├── test_pipeline_enrich_stage.py                # Enrich as a recorded, driver-side stage (strand stage-graph, step 3, slice 2).
 │       ├── test_pipeline_error_codes.py                 # Every error code the source raises or prints is registered in CODES.
 │       ├── test_pipeline_recipes.py                     # Recipes (strand stage-graph, step 3): validation, the committed recipes,
 │       ├── test_pipeline_stage_graph.py                 # Stage graph, fingerprints and the build manifest (strand stage-graph,

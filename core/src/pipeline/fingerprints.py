@@ -58,7 +58,7 @@ DEFAULT_VARIANT_CODE_VERSION = "dev"
 
 #: Per-cell stages whose outputs never go to the store: Chroma rewrites
 #: its database file on open, which a shared or read-only copy cannot take.
-NOT_STORED = frozenset({"vectorstore"})
+NOT_STORED = frozenset({"vectorstore", "enrich"})   # enrich: SIRA cells, large, reused per requirement
 
 #: Manifest provenance: where a recorded output came from.
 ORIGIN_COMPUTED = "computed"   # this build computed it (and stored it, if stored)
@@ -160,10 +160,24 @@ class Fingerprinter:
             out["recipe"] = canonical(recipe.stage_params(stage)).decode("ascii")
         return out
 
+    def uses_input(self, stage: str, inp: str) -> bool:
+        """Whether `inp` enters `stage`'s fingerprint: always, unless it is
+        an optional input and the build's recipe says the stage does not
+        read it (``params.<stage>.<inp>``, defaulting to whether the recipe
+        runs `inp`). Without a recipe every input counts."""
+        if inp not in spec_of(stage).optional_inputs:
+            return True
+        recipe = self.ctx.recipe
+        if recipe is None:
+            return True
+        return bool(recipe.param(stage, inp, recipe.has(inp)))
+
     def input_fps(self, stage: str, cell: Cell | None) -> dict:
         spec = spec_of(stage)
         out: dict = {}
         for inp in spec.inputs:
+            if not self.uses_input(stage, inp):
+                continue
             if spec.per_cell:
                 out[inp] = self.manifest.get(inp, cell_key(inp, cell)) or ABSENT
             elif spec_of(inp).per_cell:
@@ -345,9 +359,21 @@ class Fingerprinter:
             return ABSENT
         return hash_files([path], rel_to=path.parent)
 
+    def _doc_prompt(self, cell: Cell | None) -> str:
+        """The MNO's document prompt the SIRA lane would use: the highest
+        ``doc_requirement_<MNO>_*.txt`` by name under the build's published
+        prompts (``<env_dir>/prompts``), the rule of
+        ``sandbox.enrich_batching.resolve_doc_prompt``."""
+        if cell is None:
+            return ABSENT
+        d = self._env_dir() / "prompts"
+        hits = sorted(d.glob(f"doc_requirement_{cell.mno}_*.txt")) if d.is_dir() else []
+        return hash_files([hits[-1]], rel_to=d) if hits else ABSENT
+
     _EXTERNALS = {
         "documents": _documents,
         "profile": _profile,
         "annotations": _annotations,
         "overview_prompt": _overview_prompt,
+        "doc_prompt": _doc_prompt,
     }

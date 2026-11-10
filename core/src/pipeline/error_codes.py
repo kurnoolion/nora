@@ -197,6 +197,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),
     ErrorDef("PIP-E003", "No profile bound for {cells}", "Add bindings to profiles.json (the corpus root when NORA_CORPUS_DIR is set, else <env_dir>), or pass --profile"),
     ErrorDef("PIP-W001", "Stage {stage} skipped: {reason}", "May affect downstream stages"),
+    ErrorDef("PIP-W002", "Stage {stage} {cell}: input {input} has no recorded fingerprint in this build", "The input was built before the build had a manifest, or in another build; the fingerprint records it as absent"),
     ErrorDef("PIP-E004", "Build manifest unreadable: {path} ({reason})", "Fix or remove <env_dir>/STAGES.json; every stage then recomputes its fingerprints"),
     ErrorDef("RCP-E001", "Recipe unreadable: {path} ({reason})", "Fix the JSON under customizations/recipes/ (or the build's RECIPE.json)"),
     ErrorDef("RCP-E002", "Recipe invalid: {reason}", "Recipes name variant stages only (taxonomy, enrich) with their known params; see core/src/pipeline/recipes.py"),

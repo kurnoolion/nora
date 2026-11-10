@@ -18,6 +18,13 @@ model call moves tiers by definition.
 ``STAGE_ORDER`` is the graph's topological order and equals
 ``env.config.STAGE_NAMES`` (a test pins that). The per-cell / global
 partition is ``pipeline.cells``'; this module reads it.
+
+**Driver-side stages** (step 3, slice 2) are run by the cycle driver,
+not the pipeline: ``enrich`` is the SIRA lane. They have a spec, a tier
+and a per-cell fingerprint like any stage, and live in ``DRIVER_GRAPH``,
+outside ``STAGE_ORDER``. An *optional input* enters a stage's fingerprint
+only when the build's recipe says the stage reads it (enrich reads the
+taxonomy only under such a recipe; without a recipe it always does).
 """
 
 from __future__ import annotations
@@ -47,10 +54,14 @@ class StageSpec:
     params: tuple[str, ...] = ()
     #: True when the stage calls a language model or an embedder.
     uses_model: bool = False
+    #: Inputs (a subset of `inputs`) the build's recipe can turn off.
+    optional_inputs: tuple[str, ...] = ()
+    #: Run by the cycle driver, not the pipeline; always per cell.
+    driver: bool = False
 
     @property
     def per_cell(self) -> bool:
-        return self.name in PER_CELL_STAGES
+        return self.driver or self.name in PER_CELL_STAGES
 
 
 SPECS: tuple[StageSpec, ...] = (
@@ -77,15 +88,27 @@ SPECS: tuple[StageSpec, ...] = (
 STAGE_GRAPH: dict[str, StageSpec] = {s.name: s for s in SPECS}
 STAGE_ORDER: tuple[str, ...] = tuple(s.name for s in SPECS)
 
+#: Stages the cycle driver runs (the SIRA lane), fingerprinted and recorded
+#: in the build manifest like the pipeline's.
+DRIVER_SPECS: tuple[StageSpec, ...] = (
+    StageSpec(
+        "enrich", inputs=("parse", "taxonomy"), optional_inputs=("taxonomy",),
+        externals=("doc_prompt",), params=("enrich_model", "sira_ref"),
+        uses_model=True, driver=True,
+    ),
+)
+DRIVER_GRAPH: dict[str, StageSpec] = {s.name: s for s in DRIVER_SPECS}
+
 
 def spec_of(stage: str) -> StageSpec:
-    """The spec of `stage`; `KeyError` for an unknown name."""
-    return STAGE_GRAPH[stage]
+    """The spec of `stage`, pipeline or driver-side; `KeyError` for an unknown name."""
+    spec = STAGE_GRAPH.get(stage)
+    return spec if spec is not None else DRIVER_GRAPH[stage]
 
 
 def tier_of(stage: str) -> str:
     """``"corpus"`` or ``"variant"``, by the tier rule."""
-    spec = STAGE_GRAPH[stage]
+    spec = spec_of(stage)
     if spec.uses_model:
         return VARIANT
     return VARIANT if any(tier_of(i) == VARIANT for i in spec.inputs) else CORPUS
@@ -109,7 +132,11 @@ def validate_graph() -> list[str]:
     if list(STAGE_ORDER) != list(STAGE_NAMES):
         problems.append(f"STAGE_ORDER {list(STAGE_ORDER)} != STAGE_NAMES {list(STAGE_NAMES)}")
     seen: set[str] = set()
-    for spec in SPECS:
+    for spec in SPECS + DRIVER_SPECS:
+        if set(spec.optional_inputs) - set(spec.inputs):
+            problems.append(f"{spec.name}: optional inputs not among its inputs")
+        if spec.driver and spec.name in STAGE_GRAPH:
+            problems.append(f"{spec.name}: a driver stage named like a pipeline stage")
         for inp in spec.inputs:
             if inp not in STAGE_GRAPH:
                 problems.append(f"{spec.name}: unknown input {inp!r}")

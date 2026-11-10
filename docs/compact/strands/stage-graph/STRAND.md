@@ -43,3 +43,7 @@ working.
   frozen in the build by `cycle.sh start --recipe`, followed by the
   driver and the runner, carried into taxonomy fingerprints, recorded on
   the release set. D-DRAFT-9.
+- 2026-11-10: slice 2 built: enrich as a driver-side stage (spec outside
+  the pipeline order, taxonomy input per recipe, document prompt, model
+  and SIRA revision), recorded by `verify-enrich`, never stored.
+  D-DRAFT-10.

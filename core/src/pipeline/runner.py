@@ -98,6 +98,12 @@ class PipelineContext:
     stages_root: Path | None = None
     corpus_dir: Path | None = None
 
+    # The driver-side enrich stage's parameters (step 3, slice 2): the
+    # SIRA lane's model and the SIRA clone's revision. The cycle driver
+    # passes both when it stamps enrich; read from the environment.
+    enrich_model: str = field(default_factory=lambda: os.getenv("NORA_SIRA_ENRICH_LLM_MODEL", "").strip())
+    sira_ref: str = field(default_factory=lambda: os.getenv("SIRA_REF", "").strip())
+
     @property
     def env_dir(self) -> Path:
         """The build / environment directory (`<env_dir>`)."""

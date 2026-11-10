@@ -8,15 +8,16 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
   - `PipelineContext` — shared state (documents_dir, corrections_dir, eval_dir, stage_dirs, model_provider/name/timeout, llm_reasoning, embedding_provider/model, mnos, releases, state); `stage_output(stage, cell=None)`, `input_cells()`, `correction(filename)`, `create_llm_provider(require_real=False)`
   - `PipelineRunner(ctx)` — `run(stages, continue_on_error=False) -> list[StageResult]`
 - Cell primitives (cells.py, D-DRAFT-6): `Cell(mno, release)` with `.relpath`; `PER_CELL_STAGES` / `GLOBAL_STAGES` partition + `is_per_cell_stage(stage)`; `enumerate_input_cells(documents_dir) -> list[Cell]` (validated + sorted by `release_order_key`)
+- `stamp_driver_stage(ctx, stage) -> StageResult` (stages.py, step 3 slice 2): records `enrich`'s fingerprint for every completed SIRA cell in scope (`<env_dir>/out/sira/<MNO>/<rel>/raw/metadata.json`); unchanged cells are left; `PIP-W002` per input with no recorded fingerprint; `PIP-E002` with no cell. CLI `run_cli --stamp enrich` (honours `--mno` / `--release`), run by `cycle.sh verify-enrich`.
 - Stage functions (stages.py): `run_extract`, `run_profile`, `run_parse`, `run_resolve`, `run_taxonomy`, `run_standards`, `run_graph`, `run_vectorstore`, `run_eval` — each `PipelineContext -> StageResult`
 - `StageResult` — `stage`, `status` (`OK | WARN | FAIL | SKIP`), `elapsed_seconds`, `stats`, optional `error_code`, `error_message`
 - `STAGE_FUNCS` — the stage-name → function dispatch table
-- Stage graph (stage_graph.py, strand stage-graph, D-DRAFT-1): `StageSpec(name, inputs, externals, params, uses_model)` with `.per_cell`; `SPECS` / `STAGE_GRAPH` / `STAGE_ORDER` (equals `STAGE_NAMES`); `spec_of(stage)`; `tier_of(stage) -> "corpus" | "variant"` by the rule *no model call and corpus inputs only*; `CORPUS_STAGES` (extract, profile, parse, resolve, standards), `VARIANT_STAGES`, `CORPUS_PREFIX`; `GLOBAL_KEY` (`"*"`, the manifest key of a global stage); `validate_graph() -> list[str]`.
-- Fingerprints (fingerprints.py, D-DRAFT-2): `stage_fingerprint(stage, code_version, params, input_fps, external_fps)` (sha256 of canonical JSON, 16 hex), `digest`, `hash_bytes`, `hash_files(files, rel_to)`, `code_version(stage)` (a corpus stage's package `CODE_VERSION` via `CORPUS_VERSION_MODULES`; else `NORA_CODE_VERSION` or `"dev"`), `cell_key(stage, cell)`, constants `ABSENT` / `UNRESOLVED`; `Fingerprinter(ctx, manifest)` — `params`, `input_fps`, `externals` (`documents`, `profile`, `annotations`, `overview_prompt`), `current(stage, cell)`, `recorded`, `unchanged(stage, cell, fp=None)` (False under `--force`), `in_store(stage)`, `prepare(stage, cell, fp, complete=None) -> bool` (True = reuse: recorded here, or found in the store and cloned in; False = compute: the cell's directory made private, the store's building marker set), `stamp(stage, cell, fp=None)` (records with provenance and `origin`, puts a stored stage's cell into the store), `forget(stage, cell, fp=None)`, `cell_input_dir(cell)`; constants `NOT_STORED`, `ORIGIN_COMPUTED` / `ORIGIN_STORE` / `ORIGIN_FORCED`.
+- Stage graph (stage_graph.py, strand stage-graph, D-DRAFT-1): `StageSpec(name, inputs, externals, params, uses_model)` with `.per_cell`; `SPECS` / `STAGE_GRAPH` / `STAGE_ORDER` (equals `STAGE_NAMES`); `spec_of(stage)`; `tier_of(stage) -> "corpus" | "variant"` by the rule *no model call and corpus inputs only*; `CORPUS_STAGES` (extract, profile, parse, resolve, standards), `VARIANT_STAGES`, `CORPUS_PREFIX`; `GLOBAL_KEY` (`"*"`, the manifest key of a global stage); `validate_graph() -> list[str]`. `StageSpec.optional_inputs` (inputs a recipe can turn off) and `.driver` (run by the cycle driver, always per cell); `DRIVER_SPECS` / `DRIVER_GRAPH` hold `enrich` (inputs parse and optional taxonomy, external `doc_prompt`, params `enrich_model` and `sira_ref`), outside `STAGE_ORDER`; `spec_of` and `tier_of` read both tables.
+- Fingerprints (fingerprints.py, D-DRAFT-2): `stage_fingerprint(stage, code_version, params, input_fps, external_fps)` (sha256 of canonical JSON, 16 hex), `digest`, `hash_bytes`, `hash_files(files, rel_to)`, `code_version(stage)` (a corpus stage's package `CODE_VERSION` via `CORPUS_VERSION_MODULES`; else `NORA_CODE_VERSION` or `"dev"`), `cell_key(stage, cell)`, constants `ABSENT` / `UNRESOLVED`; `Fingerprinter(ctx, manifest)` — `params`, `input_fps`, `externals` (`documents`, `profile`, `annotations`, `overview_prompt`), `current(stage, cell)`, `recorded`, `unchanged(stage, cell, fp=None)` (False under `--force`), `uses_input(stage, inp)` (an optional input counts unless the recipe says the stage does not read it), `in_store(stage)`, `prepare(stage, cell, fp, complete=None) -> bool` (True = reuse: recorded here, or found in the store and cloned in; False = compute: the cell's directory made private, the store's building marker set), `stamp(stage, cell, fp=None)` (records with provenance and `origin`, puts a stored stage's cell into the store), `forget(stage, cell, fp=None)`, `cell_input_dir(cell)`; externals now include `doc_prompt` (the MNO's highest `doc_requirement_<MNO>_*.txt` under `<env_dir>/prompts`, the SIRA lane's rule); constants `NOT_STORED` (vectorstore, enrich), `ORIGIN_COMPUTED` / `ORIGIN_STORE` / `ORIGIN_FORCED`.
 - Stage store (stage_store.py, step 2, D-DRAFT-5/8): `StageStore(root, wait_seconds=None, poll_seconds=5, sleep=time.sleep)` over `<stages-root>/<stage>/<MNO>/<release>/<fp>/` — `path`, `provenance_path`, `marker_path`, `cell_dir`, `has`, `provenance`, `commit(stage, cell, fp, src, provenance) -> bool` (False when the store already held `fp`; `PIP-E005` when unwritable), `link_view(stage, cell, fp, view)`, `mark_building`, `release`, `wait_for(stage, cell, fp, build) -> bool`; helpers `clone_tree(src, dst)` (hard link, else copy), `make_readonly(tree)`, `privatize(tree) -> int`; `DEFAULT_WAIT_SECONDS`, `WAIT_SECONDS_ENV`.
 - Recipes (recipes.py, step 3, standard library only): `Recipe(name, stages, params, serve, note)` with `has`, `stage_params(stage)` (`generation` defaulted to 1), `param`, `enrich_uses_taxonomy`, `prompt_scheme`, `digest` (16 hex, note excluded), `to_dict`; `parse(data, name_hint)`, `load(path, check_name)`, `load_frozen(build_dir)`, `recipe_path(repo_root, name)`, `get(recipe, key)`; `RecipeError` (`RCP-E001` unreadable, `RCP-E002` invalid); `DRIVER_STAGES` (taxonomy, enrich), `RESERVED_STAGES`, `PARAMS`, `SERVE_MODES`, `SERVE_UNITS`, `RECIPES_DIR`, `RECIPE_FILE`. CLI `python3 -m core.src.pipeline.recipes check <file> | get <file> <key>` for the host-side driver.
 - Build manifest (manifest.py): `BuildManifest(path)` over `<env_dir>/STAGES.json` (`MANIFEST_NAME`) — `get(stage, key)`, `entry`, `fingerprints(stage)`, `stages()`, `record(stage, key, fp, **provenance)`, `forget`, `save` (atomic); a corrupt file raises `PIP-E004`.
-- `PipelineContext.build_dir` / `.env_dir` (the build directory), `.build_id`, `.recipe` (the build's frozen `RECIPE.json`, or None; lazy), `.fingerprints` (the build's `Fingerprinter`, lazy), `.profile_override()` (the `--profile` / `corrections/profile.json` single-profile override); `.stages_root` / `.stage_store` (the host's store, or None) and `.corpus_dir` with `.bindings_dir` / `.annotations_dir` (the corpus root when set, else the build), both factories reading `STAGES_ROOT_ENV` / `CORPUS_DIR_ENV`.
+- `PipelineContext.build_dir` / `.env_dir` (the build directory), `.build_id`, `.recipe` (the build's frozen `RECIPE.json`, or None; lazy), `.enrich_model` / `.sira_ref` (enrich's parameters, from `NORA_SIRA_ENRICH_LLM_MODEL` / `SIRA_REF`), `.fingerprints` (the build's `Fingerprinter`, lazy), `.profile_override()` (the `--profile` / `corrections/profile.json` single-profile override); `.stages_root` / `.stage_store` (the host's store, or None) and `.corpus_dir` with `.bindings_dir` / `.annotations_dir` (the corpus root when set, else the build), both factories reading `STAGES_ROOT_ENV` / `CORPUS_DIR_ENV`.
 - Error catalog (error_codes.py):
   - `ErrorDef` (code, message, hint), `PipelineError` (raised by stages)
   - `CODES` dict — every EXT-, PRF-, PRS-, PRV-, RES-, RSV-, TAX-, STD-, GRF-, VEC-, EVL-, GEV-, OVL-, TRS-, HIS-, PUB-, REG-, RHD-, IRN-, PIP-, ENV-, MDL- code with human-readable hint. Every code raised anywhere is registered, including `PIP-E003` (uncovered profile binding; raised in stages.py and env/profile_bindings.py) and `EXT-E004` (non-MMMYYYY release dir; raised via extraction/release_key.py). `GEV-` is the golden-eval family; `OVL-` / `TRS-` / `HIS-` are the Overlay, Trees and History stores (their build/import CLIs and their readers' schema refusals, `SchemaVersionError`); `PRV-` and `RSV-` are the parse-review and resolve-review CLIs. A test scans the source for unregistered codes.
@@ -87,6 +88,7 @@ _Alphabetical, regenerated by regen-map._
 - `Fingerprinter` — class — pub — Computes, compares and records stage fingerprints for one build.
   - `__init__` — constructor — internal
   - `_annotations` — method — internal — The user annotations (D-061) of the cell's documents.
+  - `_doc_prompt` — method — internal — The MNO's document prompt the SIRA lane would use: the highest
   - `_documents` — method — internal
   - `_env_dir` — method — internal
   - `_overview_prompt` — method — internal — The MNO's corpus-overview prompt file the taxonomy extractor
@@ -103,6 +105,7 @@ _Alphabetical, regenerated by regen-map._
   - `recorded` — method — pub
   - `stamp` — method — pub — Record the current fingerprint (or `fp`) with its provenance and,
   - `unchanged` — method — pub — True when the recorded fingerprint equals the current one and
+  - `uses_input` — method — pub — Whether `inp` enters `stage`'s fingerprint: always, unless it is
 - `NOT_STORED` — constant — pub
 - `ORIGIN_COMPUTED` — constant — pub
 - `ORIGIN_FORCED` — constant — pub
@@ -209,6 +212,8 @@ _Alphabetical, regenerated by regen-map._
 - `CORPUS` — constant — pub
 - `CORPUS_PREFIX` — constant — pub
 - `CORPUS_STAGES` — constant — pub
+- `DRIVER_GRAPH` — constant — pub
+- `DRIVER_SPECS` — constant — pub
 - `GLOBAL_KEY` — constant — pub
 - `SPECS` — constant — pub
 - `STAGE_GRAPH` — constant — pub
@@ -217,7 +222,7 @@ _Alphabetical, regenerated by regen-map._
   - `per_cell` — property — pub
 - `VARIANT` — constant — pub
 - `VARIANT_STAGES` — constant — pub
-- `spec_of` — function — pub — The spec of `stage`; `KeyError` for an unknown name.
+- `spec_of` — function — pub — The spec of `stage`, pipeline or driver-side; `KeyError` for an unknown name.
 - `tier_of` — function — pub — ``"corpus"`` or ``"variant"``, by the tier rule.
 - `validate_graph` — function — pub — Structural checks; an empty list means the graph is well formed.
 
@@ -262,6 +267,7 @@ _Alphabetical, regenerated by regen-map._
 - `_load_user_eval_questions` — function — internal — Load user-supplied evaluation questions from Excel files.
 - `_release_sort_key` — function — internal — Chronological sort key for MMMYYYY release names.
 - `_select_newest_trees` — function — internal — Newest instance of each (MNO, plan_id) across releases.
+- `_sira_cells` — function — internal — The SIRA cells the enrich lane completed in this build:
 - `_split_csv` — function — internal — Split comma-separated string into list, stripping whitespace.
 - `logger` — constant — pub
 - `run_eval` — function — pub — Run evaluation.
@@ -273,6 +279,7 @@ _Alphabetical, regenerated by regen-map._
 - `run_standards` — function — pub — Ingest referenced 3GPP standards.
 - `run_taxonomy` — function — pub — Extract the feature taxonomy of each in-scope cell from its parsed trees.
 - `run_vectorstore` — function — pub — Build one vector store PER CELL (D-DRAFT-11).
+- `stamp_driver_stage` — function — pub — Record a driver-side stage's fingerprint per completed cell.
 <!-- END:STRUCTURE -->
 
 **Depends on**

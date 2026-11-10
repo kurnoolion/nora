@@ -124,6 +124,15 @@ REPO="$(cd "$HERE/.." && pwd)"
 recipe_cli() { ( cd "$REPO" && python3 -m core.src.pipeline.recipes "$@" ); }
 has_recipe() { [ -f "$NB/RECIPE.json" ]; }
 recipe_get() { has_recipe || return 0; recipe_cli get "$NB/RECIPE.json" "$1"; }
+# the batch env file compose reads for a service: the wiring env's var
+# (relative to docker/), else the default name under ENV_ROOT, else docker/
+batch_env_path() {  # batch_env_path <WIRING_VAR> <default-name>
+  local ef; ef="$(wiring_var "$1")"
+  if [ -n "$ef" ]; then case "$ef" in /*) ;; *) ef="$HERE/$ef";; esac
+  else ef="$ENV_ROOT/$2"; [ -f "$ef" ] || ef="$HERE/$2"; fi
+  echo "$ef"
+}
+env_file_value() { [ -f "$1" ] || return 0; { grep -E "^$2=" "$1" || true; } | tail -1 | cut -d= -f2- | tr -d "\"' "; }
 usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 VERB="${1:-}"; [ -n "$VERB" ] || usage; shift
@@ -462,9 +471,7 @@ prompts)
   nomiss=0
   for spec in BATCH_ENV_FILE:.env.nora-batch:NORA_TAXONOMY_OVERVIEW_DIR SIRA_BATCH_ENV_FILE:.env.sira-batch:NORA_SIRA_DOC_PROMPT_DIR; do
     IFS=: read -r var def key <<< "$spec"
-    ef="$(wiring_var "$var")"
-    if [ -n "$ef" ]; then case "$ef" in /*) ;; *) ef="$HERE/$ef";; esac
-    else ef="$ENV_ROOT/$def"; [ -f "$ef" ] || ef="$HERE/$def"; fi
+    ef="$(batch_env_path "$var" "$def")"
     if [ -f "$ef" ] && grep -qE "^$key=/data/env/prompts" "$ef"; then echo "  $key: set in $ef"
     else echo "  MISSING: $key=/data/env/prompts in $ef"; nomiss=$((nomiss+1)); fi
   done
@@ -565,9 +572,23 @@ EOF
     die 070 "verify reports FAIL (rc=$rc)" "triage: sira_enrich_inspect --failed (local-only); then ./cycle.sh enrich --retry-failed [--cell X]"
   fi
   echo "verify PASS (warn lines: $warns). The output above is paste-safe."
+  # record the enrich fingerprints (stage graph, step 3): the lane's model
+  # (the recipe's, else the sira-batch env file's) and the SIRA revision
+  # (the wiring env's SIRA_REF, else the compose pin) are its parameters
+  emodel="$(recipe_get enrich.model)"
+  [ -n "$emodel" ] || emodel="$(env_file_value "$(batch_env_path SIRA_BATCH_ENV_FILE .env.sira-batch)" NORA_SIRA_ENRICH_LLM_MODEL)"
+  sref="$(wiring_var SIRA_REF)"
+  [ -n "$sref" ] || sref="$({ grep -oE 'SIRA_REF:-[0-9a-f]+' "$HERE/docker-compose.yml" || true; } | head -1 | cut -d- -f2)"
+  set +e
+  ( cd "$HERE" && docker compose --env-file "$WIRING" --profile ingest run --rm -T \
+      -e NORA_SIRA_ENRICH_LLM_MODEL="$emodel" -e SIRA_REF="$sref" nora-batch \
+      python -m core.src.pipeline.run_cli --env-dir /data/env --stamp enrich ) | tee -a "$out"
+  src=${PIPESTATUS[0]}; set -e
+  [ "$src" = 0 ] || die 071 "the enrich fingerprints were not recorded (rc=$src)" "see the STAMP lines above; the verify passed, so re-run ./cycle.sh verify-enrich"
+  stamped="$({ grep -oE "'stamped': [0-9]+" "$out" || true; } | tail -1 | grep -oE '[0-9]+' || true)"
   gate verify-enrich
   cyc_block verify-enrich confirmed <<EOF
-run_name=$RUN verify_rc=0 warn_lines=$warns gate=confirmed_by:$GATE_BY
+run_name=$RUN verify_rc=0 warn_lines=$warns enrich_stamped=${stamped:-0} gate=confirmed_by:$GATE_BY
 EOF
   echo "next: ./cycle.sh promote --label <label> [--host <serving-host>]"
   ;;

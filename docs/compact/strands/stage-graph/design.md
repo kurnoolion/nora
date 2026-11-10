@@ -414,7 +414,7 @@ working:
    passes the stack env's `NORA_RECIPE`. A build without a recipe runs as
    today. Model choice stays in the env files unless a recipe names one;
    endpoints and keys never move into a recipe.
-2. **Enrich as a recorded stage.** A stage spec for `enrich` (inputs
+2. **Enrich as a recorded stage** (built 2026-11-10). A stage spec for `enrich` (inputs
    parse and, when the recipe says so, taxonomy; externals the MNO's doc
    prompt; params the recipe's enrich parameters and the model); the
    driver stamps it in `STAGES.json` after `verify-enrich`. Enrich

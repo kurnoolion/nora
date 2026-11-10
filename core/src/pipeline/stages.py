@@ -850,6 +850,57 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
 
 
 # ---------------------------------------------------------------------------
+# Driver-side stages (stage graph, step 3, slice 2)
+# ---------------------------------------------------------------------------
+
+def _sira_cells(ctx: PipelineContext) -> list[Cell]:
+    """The SIRA cells the enrich lane completed in this build:
+    ``<env_dir>/out/sira/<MNO>/<release>/`` holding ``raw/metadata.json``
+    (promote's completeness test), narrowed by --mno / --release."""
+    root = ctx.env_dir / "out" / "sira"
+    cells = [Cell(d.parent.name, d.name) for d in sorted(root.glob("*/*"))
+             if (d / "raw" / "metadata.json").is_file()] if root.is_dir() else []
+    return [c for c in cells if ctx.cell_in_scope(c.mno, c.release)]
+
+
+def stamp_driver_stage(ctx: PipelineContext, stage: str) -> StageResult:
+    """Record a driver-side stage's fingerprint per completed cell.
+
+    The cycle driver runs the stage itself (enrich: the SIRA lane) and calls
+    this after its gate (``verify-enrich``). The fingerprint follows the one
+    rule: the stage's code version, its parameters (``enrich_model``,
+    ``sira_ref`` and the recipe's enrich parameters), the cell's parse and,
+    when the recipe says enrich reads it, taxonomy fingerprints, and the
+    MNO's published document prompt. Enrich outputs are not put in the
+    stage store. A cell whose recorded fingerprint is current is left as it is.
+    """
+    t0 = time.time()
+    if stage != "enrich":
+        return _fail(stage, "PIP-E001", f"no driver-side stage {stage!r}", time.time() - t0)
+    cells = _sira_cells(ctx)
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"no completed SIRA cell under {ctx.env_dir / 'out' / 'sira'} in scope",
+                     time.time() - t0)
+    fps = ctx.fingerprints
+    stats = {"cells": len(cells), "stamped": 0, "unchanged": 0}
+    warnings: list[str] = []
+    for cell in cells:
+        fp = fps.current(stage, cell)
+        if fps.recorded(stage, cell) == fp:
+            stats["unchanged"] += 1
+            continue
+        for inp, value in fps.input_fps(stage, cell).items():
+            if value == "absent":
+                warnings.append(f"PIP-W002: {stage} {cell.mno}/{cell.release}: input {inp} "
+                                "has no recorded fingerprint in this build")
+        fps.stamp(stage, cell, fp)
+        stats["stamped"] += 1
+    return StageResult(stage=stage, status="WARN" if warnings else "OK",
+                       elapsed_seconds=time.time() - t0, stats=stats, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
 # Stage 6: standards
 # ---------------------------------------------------------------------------
 

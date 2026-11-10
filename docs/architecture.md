@@ -399,7 +399,11 @@ builds and their parameters. The cycle driver freezes it in the build as
 parameters (`generation` among them); the driver skips taxonomy and
 unsets the SIRA taxonomy directory for a recipe without one; the release
 set records the recipe's name and digest and the build's stage
-fingerprints (§21).
+fingerprints (§21). Enrichment is a driver-side stage: `verify-enrich`
+records its fingerprint per cell (the cell's parse and, per the recipe,
+taxonomy fingerprints, the MNO's published document prompt, the lane's
+model, the SIRA revision, the recipe's enrich parameters); its outputs
+stay in the build.
 
 ### 5.2 Drivers
 

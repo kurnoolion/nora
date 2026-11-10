@@ -247,6 +247,11 @@ with `CYC-E036`. Promote copies `RECIPE.json` and `STAGES.json` into the
 label and publish records the recipe's name and digest and the stage
 fingerprints on the release set. `python3 -m core.src.pipeline.recipes
 check <file>` validates a recipe. No recipe: everything as before.
+`verify-enrich` records the enrich fingerprints after the verify passes
+(a nora-batch one-shot, `run_cli --stamp enrich`): the model is the
+recipe's, else the sira-batch env file's; the SIRA revision is the
+wiring env's `SIRA_REF`, else the compose pin. A failure stops the gate
+(`CYC-E071`); the CYC block counts `enrich_stamped`.
 
 **The corpus root and the stage store (stage graph, step 2).** Two
 optional lines in the ingestion wiring env, the same values for every
