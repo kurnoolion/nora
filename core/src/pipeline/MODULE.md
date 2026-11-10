@@ -14,7 +14,7 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 - `STAGE_FUNCS` — the stage-name → function dispatch table
 - Stage graph (stage_graph.py, strand stage-graph, D-DRAFT-1): `StageSpec(name, inputs, externals, params, uses_model)` with `.per_cell`; `SPECS` / `STAGE_GRAPH` / `STAGE_ORDER` (equals `STAGE_NAMES`); `spec_of(stage)`; `tier_of(stage) -> "corpus" | "variant"` by the rule *no model call and corpus inputs only*; `CORPUS_STAGES` (extract, profile, parse, resolve, standards), `VARIANT_STAGES`, `CORPUS_PREFIX`; `GLOBAL_KEY` (`"*"`, the manifest key of a global stage); `validate_graph() -> list[str]`. `StageSpec.optional_inputs` (inputs a recipe can turn off) and `.driver` (run by the cycle driver, always per cell); `DRIVER_SPECS` / `DRIVER_GRAPH` hold `enrich` (inputs parse and optional taxonomy, external `doc_prompt`, params `enrich_model` and `sira_ref`), outside `STAGE_ORDER`; `spec_of` and `tier_of` read both tables.
 - Fingerprints (fingerprints.py, D-DRAFT-2): `stage_fingerprint(stage, code_version, params, input_fps, external_fps)` (sha256 of canonical JSON, 16 hex), `digest`, `hash_bytes`, `hash_files(files, rel_to)`, `code_version(stage)` (a corpus stage's package `CODE_VERSION` via `CORPUS_VERSION_MODULES`; else `NORA_CODE_VERSION` or `"dev"`), `cell_key(stage, cell)`, constants `ABSENT` / `UNRESOLVED`; `Fingerprinter(ctx, manifest)` — `params`, `input_fps`, `externals` (`documents`, `profile`, `annotations`, `overview_prompt`), `current(stage, cell)`, `recorded`, `unchanged(stage, cell, fp=None)` (False under `--force`), `uses_input(stage, inp)` (an optional input counts unless the recipe says the stage does not read it), `in_store(stage)`, `prepare(stage, cell, fp, complete=None) -> bool` (True = reuse: recorded here, or found in the store and cloned in; False = compute: the cell's directory made private, the store's building marker set), `stamp(stage, cell, fp=None)` (records with provenance and `origin`, puts a stored stage's cell into the store), `forget(stage, cell, fp=None)`, `cell_input_dir(cell)`; externals now include `doc_prompt` (the MNO's highest `doc_requirement_<MNO>_*.txt` under `<env_dir>/prompts`, the SIRA lane's rule); constants `NOT_STORED` (vectorstore, enrich), `ORIGIN_COMPUTED` / `ORIGIN_STORE` / `ORIGIN_FORCED`.
-- Stage store (stage_store.py, step 2, D-DRAFT-5/8): `StageStore(root, wait_seconds=None, poll_seconds=5, sleep=time.sleep)` over `<stages-root>/<stage>/<MNO>/<release>/<fp>/` — `path`, `provenance_path`, `marker_path`, `cell_dir`, `has`, `provenance`, `commit(stage, cell, fp, src, provenance) -> bool` (False when the store already held `fp`; `PIP-E005` when unwritable), `link_view(stage, cell, fp, view)`, `mark_building`, `release`, `wait_for(stage, cell, fp, build) -> bool`; helpers `clone_tree(src, dst)` (hard link, else copy), `make_readonly(tree)`, `privatize(tree) -> int`; `DEFAULT_WAIT_SECONDS`, `WAIT_SECONDS_ENV`.
+- Stage store (stage_store.py, step 2, D-DRAFT-5/8): `StageStore(root, wait_seconds=None, poll_seconds=5, sleep=time.sleep)` over `<stages-root>/<stage>/<MNO>/<release>/<fp>/` — `path`, `provenance_path`, `marker_path`, `cell_dir`, `has`, `provenance`, `commit(stage, cell, fp, src, provenance) -> bool` (False when the store already held `fp`; `PIP-E005` when unwritable), `link_view(stage, cell, fp, view)`, `mark_building`, `release`, `wait_for(stage, cell, fp, build) -> bool`; helpers `clone_tree(src, dst)` (hard link, else copy), `make_readonly(tree)`, `privatize(tree) -> int`; `DEFAULT_WAIT_SECONDS`, `WAIT_SECONDS_ENV`. GC (step 3 slice 4, D-DRAFT-12): `gc(store, keep_from, registries, min_age_hours=24, apply=False, now=None) -> GcReport` (`kept`, `young`, `building`, `removed`, `debris`, `freed_bytes`, `shared_bytes`, `manifests`, `empty_sources`: a `--keep-from` dir holding no manifest, warned on), `keep_set(keep_from, registries, empty=None)`; CLI `python3 -m core.src.pipeline.stage_store gc <root> --keep-from DIR... --registry DB... [--min-age-hours H] [--apply] [-v]`; `PIP-E006` when it cannot know what to keep. Standard library and `cells`/`error_codes` only, so it runs on the host.
 - Recipes (recipes.py, step 3, standard library only): `Recipe(name, stages, params, serve, note)` with `has`, `stage_params(stage)` (`generation` defaulted to 1), `param`, `enrich_uses_taxonomy`, `prompt_scheme`, `digest` (16 hex, note excluded), `to_dict`; `parse(data, name_hint)`, `load(path, check_name)`, `load_frozen(build_dir)`, `recipe_path(repo_root, name)`, `get(recipe, key)`; `RecipeError` (`RCP-E001` unreadable, `RCP-E002` invalid); `DRIVER_STAGES` (taxonomy, enrich), `RESERVED_STAGES`, `PARAMS`, `SERVE_MODES`, `SERVE_UNITS`, `RECIPES_DIR`, `RECIPE_FILE`. CLI `python3 -m core.src.pipeline.recipes check <file> | get <file> <key>` for the host-side driver.
 - Generations (generations.py, step 3 slice 3, standard library only): `<corpus>/generations.json` holds a per-cell generation; `cell_generation(corpus_dir, cell_key) -> int` (1 by default), `bump(corpus_dir, cell_key, by, note) -> int` (atomic), `GENERATIONS_FILE`; CLI `python3 -m core.src.pipeline.generations show <corpus> | bump <corpus> <MNO>/<rel>`. `Fingerprinter.externals` adds `cell_generation` to a variant per-cell stage's externals when the cell's generation is above 1, so a redo moves that cell's variant fingerprints only and generation 1 moves nothing.
 - Build manifest (manifest.py): `BuildManifest(path)` over `<env_dir>/STAGES.json` (`MANIFEST_NAME`) — `get(stage, key)`, `entry`, `fingerprints(stage)`, `stages()`, `record(stage, key, fp, **provenance)`, `forget`, `save` (atomic); a corrupt file raises `PIP-E004`.
@@ -237,7 +237,10 @@ _Alphabetical, regenerated by regen-map._
 - `validate_graph` — function — pub — Structural checks; an empty list means the graph is well formed.
 
 `stage_store.py`
+- `DEFAULT_MIN_AGE_HOURS` — constant — pub
 - `DEFAULT_WAIT_SECONDS` — constant — pub
+- `GcReport` — dataclass — pub
+- `MANIFEST_NAME` — constant — pub
 - `POLL_SECONDS` — constant — pub
 - `StageStore` — class — pub — One host's stage store rooted at `root`.
   - `__init__` — constructor — internal
@@ -257,10 +260,17 @@ _Alphabetical, regenerated by regen-map._
 - `_LINK_FALLBACK` — constant — internal
 - `_WRITE_BITS` — constant — internal
 - `_files` — function — internal
+- `_human` — function — internal
 - `_link_or_copy` — function — internal
+- `_manifest_keys` — function — internal — ``(stage, "<MNO>/<release>", fp)`` for every per-cell entry of one
 - `_now_iso` — function — internal
+- `_registry_keys` — function — internal — The same triples from every release set's ``stage_fps`` in one
 - `_remove_tree` — function — internal
+- `_tree_bytes` — function — internal — (bytes freed by removing `path`, bytes still held by other links).
 - `clone_tree` — function — pub — Recreate `src` at `dst` (which must not exist): directories made,
+- `gc` — function — pub — Remove (with `apply`) or list the store entries nothing names.
+- `keep_set` — function — pub — Every stored output something on the host names, and the number of
+- `main` — function — pub
 - `make_readonly` — function — pub — Clear the write bits of every file under `tree` (directories keep
 - `privatize` — function — pub — Give every file under `tree` that shares its inode (or is read-only)
 

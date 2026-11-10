@@ -390,7 +390,11 @@ A `.building` marker makes a second producer wait for the first. With
 `NORA_CORPUS_DIR` (the wiring env's `CORPUS_DIR`, mounted read-only at
 `/data/corpus`), the profile bindings and annotations are read from the
 corpus root, shared by every stack. The manifest records each entry's
-origin: `computed`, `store` or `forced`.
+origin: `computed`, `store` or `forced`. `stage_store gc` (by hand; dry
+run unless `--apply`) removes the entries no build manifest, label
+manifest or release set's `stage_fps` on the host names, keeping recent
+entries and those under a live marker; it refuses (`PIP-E006`) without a
+source to keep from or with an unreadable one.
 
 **Recipes** (step 3). A stack's recipe (`NORA_RECIPE` in its serving
 env; `customizations/recipes/<name>.json`) names the variant stages it

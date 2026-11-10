@@ -172,7 +172,8 @@ its own output; the store keeps the first result (origin `forced`).
 **Garbage collection**, by hand, and safe at any time: builds and
 labels hold their own links or copies, so removing a store entry loses
 only the sharing, never an artifact. Policy (keep what any manifest on
-the host names) is step 3's, with the release sets' fingerprints.
+the host names, and the release sets' fingerprints) is step 3's, slice 4
+(§10b).
 
 ## 5. The build and its manifest
 
@@ -424,9 +425,15 @@ working:
    (computed, store, forced) on the ingest; the Ingest page shows it.
    "Redo a served cell": a per-cell `generation` bump recorded at the
    corpus root, which enters that cell's variant fingerprints only.
-4. **Store garbage collection.** `stage_store gc`: keep what any
-   manifest under a builds root or any release set in a registry on the
-   host names; dry run by default.
+4. **Store garbage collection** (built 2026-11-10). `stage_store gc`:
+   keep what any manifest under a builds root or labels root, or any
+   release set's `stage_fps` in a registry on the host names; also keep
+   an entry younger than `--min-age-hours` (default 24: a build may
+   have found it and not yet recorded it) and one under a live building
+   marker; clear temp dirs, orphan provenance and abandoned markers past
+   the same age. Dry run by default. It refuses (`PIP-E006`) with no
+   source, a missing one, or an unreadable manifest or registry: a
+   source it cannot read could name anything.
 
 ## 11. Invariants
 

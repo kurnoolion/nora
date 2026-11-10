@@ -107,3 +107,14 @@
 **Why.** A per-cell value redoes one cell and nothing else; the recipe's `generation` would redo every cell of a stack on its next build. Redoing in place (re-running the served ingest's build) was rejected: the served set would lose its build and the rollback target its provenance. A generation outside the fingerprint was rejected: two outputs would share one identity.
 
 **Consequences.** Redo needs the corpus root. A bump survives an abandoned redo; the next redo bumps again, which is harmless. The page also shows each stage's origin (found or computed) from the build's manifest, copied onto the ingest row by the runner.
+
+### D-DRAFT-12 — 2026-11-10 — Store GC is by hand, keeps what anything on the host names, and refuses on doubt
+
+**Context.** The store only grows; each code version and each redo adds entries.
+
+**Decision.** `stage_store gc` keeps every entry named by a manifest under the given builds and labels roots or by a release set's `stage_fps` in the given registries, plus entries younger than a minimum age (24 hours) and entries under a live building marker. It is a dry run unless `--apply`. It refuses with no source, a missing source, or an unreadable manifest or registry.
+
+**Why.** Removing an entry costs only a recompute, never an artifact, so the rule can be simple. Refusing on an unreadable source was chosen over skipping it: a skipped source could name anything. A scheduled GC was rejected for now: the host has no record of every stack's roots, so the person running it names them.
+
+**Consequences.** A stack left off the command loses sharing, not data. Nothing calls it automatically.
+

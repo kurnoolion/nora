@@ -276,6 +276,23 @@ missing corpus `profiles.json` or store directory stops `start`
 copy the active build's `profiles.json` to `<corpus>/`. Rebake the batch
 images with `CODE_VERSION` (below) so taxonomy outputs are shared too.
 
+**Cleaning the store.** The store only grows. `gc` removes the entries
+that no build, label or release set on the host names. Removing an entry
+never breaks a build or a label, because each holds its own copy; the
+next build that needs the output computes it again. Name every stack's
+builds root, labels root and registry; it refuses when given none, or
+when one of them is unreadable (`PIP-E006`), and it warns about a
+`--keep-from` directory that holds no `STAGES.json` (check the path). It is a dry run unless
+`--apply` is given, and it keeps an entry stored in the last 24 hours
+(`--min-age-hours`) and one another build is still computing:
+
+```bash
+python3 -m core.src.pipeline.stage_store gc <stages> \
+  --keep-from <builds-root> --keep-from <serve-root> \
+  --registry <serve-registry>/registry.db   # repeat the three for every stack
+# then the same with --apply
+```
+
 ### Self-serve ingestion (the Ingest page)
 
 The requirements team ingests a new release of a served MNO from the

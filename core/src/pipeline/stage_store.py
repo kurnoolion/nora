@@ -24,7 +24,13 @@ build tree that shares inodes with the store is made private again
 stored file, nor a promoted label that hard-links the build.
 
 Removing a store entry never breaks a build or a label (they hold their
-own links or copies); it only loses the sharing.
+own links or copies); it only loses the sharing. `gc` (step 3, slice 4)
+removes the entries no build manifest, label and release set on the host
+names; it is a dry run unless told to apply::
+
+    python3 -m core.src.pipeline.stage_store gc <stages-root> \
+        --keep-from <builds-root> --keep-from <labels-root> \
+        --registry <serve-registry>/registry.db [--min-age-hours 24] [--apply]
 """
 
 from __future__ import annotations
@@ -34,9 +40,12 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import stat
+import sys
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -258,3 +267,233 @@ class StageStore:
         os.rename(tmp, view)
         if old is not None:
             _remove_tree(old)
+
+
+# -- garbage collection (step 3, slice 4) ------------------------------------
+
+MANIFEST_NAME = "STAGES.json"   # pipeline/manifest.py; repeated so this stays importable alone
+DEFAULT_MIN_AGE_HOURS = 24.0
+
+
+def _manifest_keys(path: Path) -> set[tuple[str, str, str]]:
+    """``(stage, "<MNO>/<release>", fp)`` for every per-cell entry of one
+    ``STAGES.json``. An unreadable manifest refuses the collection: what it
+    names cannot be known."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        stages = data.get("stages", {})
+        out = set()
+        for stage, cells in stages.items():
+            for key, entry in cells.items():
+                fp = entry.get("fp") if isinstance(entry, dict) else None
+                if key != "*" and fp:
+                    out.add((stage, key, fp))
+        return out
+    except (OSError, ValueError, AttributeError) as e:
+        raise PipelineError("PIP-E006", {"reason": f"manifest {path} unreadable ({e})"}) from e
+
+
+def _registry_keys(db: Path) -> set[tuple[str, str, str]]:
+    """The same triples from every release set's ``stage_fps`` in one
+    registry (read only; a registry from before the column names none)."""
+    if not db.is_file():
+        raise PipelineError("PIP-E006", {"reason": f"registry {db} not found"})
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(release_set)")}
+            rows = con.execute("SELECT stage_fps FROM release_set").fetchall() if "stage_fps" in cols else []
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        raise PipelineError("PIP-E006", {"reason": f"registry {db} unreadable ({e})"}) from e
+    out = set()
+    for (raw,) in rows:
+        if not raw:
+            continue
+        try:
+            for stage, cells in json.loads(raw).items():
+                for key, fp in cells.items():
+                    if key != "*" and fp:
+                        out.add((stage, key, fp))
+        except (ValueError, AttributeError) as e:
+            raise PipelineError("PIP-E006", {"reason": f"registry {db}: a stage_fps value is unreadable ({e})"}) from e
+    return out
+
+
+def keep_set(keep_from: list[Path], registries: list[Path],
+             empty: list[str] | None = None) -> tuple[set[tuple[str, str, str]], int]:
+    """Every stored output something on the host names, and the number of
+    manifests read. Each ``keep_from`` directory contributes its own
+    ``STAGES.json`` and its children's (a builds root holds builds, a
+    labels root holds labels). A directory holding none is appended to
+    `empty` (a mistyped root protects nothing; builds from before the
+    manifest hold none either, so it is a warning, not a refusal)."""
+    if not keep_from and not registries:
+        raise PipelineError("PIP-E006", {"reason": "no --keep-from or --registry given; every entry would go"})
+    keep: set[tuple[str, str, str]] = set()
+    n = 0
+    for d in keep_from:
+        d = Path(d)
+        if not d.is_dir():
+            raise PipelineError("PIP-E006", {"reason": f"{d} is not a directory"})
+        found = 0
+        for m in [d / MANIFEST_NAME] + sorted(d.glob(f"*/{MANIFEST_NAME}")):
+            if m.is_file():
+                keep |= _manifest_keys(m)
+                found += 1
+        n += found
+        if not found and empty is not None:
+            empty.append(str(d))
+    for db in registries:
+        keep |= _registry_keys(Path(db))
+    return keep, n
+
+
+def _tree_bytes(path: Path) -> tuple[int, int]:
+    """(bytes freed by removing `path`, bytes still held by other links)."""
+    freed = shared = 0
+    files = [path] if path.is_file() else list(_files(path))
+    for p in files:
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_nlink > 1:
+            shared += st.st_size
+        else:
+            freed += st.st_size
+    return freed, shared
+
+
+@dataclass
+class GcReport:
+    kept: int = 0
+    young: int = 0                 # unnamed, but younger than the minimum age
+    building: int = 0              # unnamed, under a live building marker
+    removed: list[str] = field(default_factory=list)   # "<stage>/<MNO>/<release>/<fp>"
+    debris: list[str] = field(default_factory=list)    # temp dirs, orphan provenance, stale markers
+    freed_bytes: int = 0
+    shared_bytes: int = 0
+    manifests: int = 0
+    empty_sources: list[str] = field(default_factory=list)   # --keep-from dirs naming nothing
+
+
+def gc(store: StageStore, keep_from: list[Path], registries: list[Path],
+       min_age_hours: float = DEFAULT_MIN_AGE_HOURS, apply: bool = False,
+       now: float | None = None) -> GcReport:
+    """Remove (with `apply`) or list the store entries nothing names.
+
+    Kept: every entry a manifest or release set names; an unnamed entry
+    stored less than `min_age_hours` ago (a build may have found it and
+    not yet recorded it); an entry under a live building marker. Debris
+    (a temp dir of a failed commit or view, a provenance file without its
+    output, a marker older than the store's wait) goes when older than
+    the minimum age too. Nothing a build or label holds is touched: they
+    own their links or copies."""
+    empty: list[str] = []
+    keep, n = keep_set(keep_from, registries, empty)
+    now = time.time() if now is None else now
+    min_age = min_age_hours * 3600.0
+    rep = GcReport(manifests=n, empty_sources=empty)
+
+    def age(p: Path) -> float:
+        try:
+            return now - p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def drop(p: Path, label: str, bucket: list[str]) -> None:
+        f, sh = _tree_bytes(p)
+        rep.freed_bytes += f
+        rep.shared_bytes += sh
+        bucket.append(label)
+        if apply:
+            if p.is_dir():
+                _remove_tree(p)
+            else:
+                p.unlink(missing_ok=True)
+
+    if not store.root.is_dir():
+        return rep
+    for stage_dir in sorted(x for x in store.root.iterdir() if x.is_dir() and not x.name.startswith(".")):
+        for mno_dir in sorted(x for x in stage_dir.iterdir() if x.is_dir()):
+            for rel_dir in sorted(x for x in mno_dir.iterdir() if x.is_dir()):
+                cell = Cell(mno_dir.name, rel_dir.name)
+                key = f"{cell.mno}/{cell.release}"
+                where = f"{stage_dir.name}/{key}"
+                outputs = set()
+                for e in sorted(rel_dir.iterdir()):
+                    name = e.name
+                    if e.is_dir() and "." not in name:
+                        outputs.add(name)
+                        if (stage_dir.name, key, name) in keep:
+                            rep.kept += 1
+                        elif store._foreign_marker(stage_dir.name, cell, name, build=""):
+                            rep.building += 1
+                        elif age(e) < min_age:
+                            rep.young += 1
+                        else:
+                            drop(e, f"{where}/{name}", rep.removed)
+                            if apply:
+                                store.provenance_path(stage_dir.name, cell, name).unlink(missing_ok=True)
+                    elif ".tmp-" in name or ".view-" in name or ".old-" in name:
+                        if age(e) >= min_age:
+                            drop(e, f"{where}/{name}", rep.debris)
+                for e in sorted(rel_dir.iterdir()):
+                    if e.suffix == ".json" and e.stem not in outputs and age(e) >= min_age:
+                        drop(e, f"{where}/{e.name}", rep.debris)
+                    elif e.suffix == ".building" and age(e) >= max(store.wait_seconds, min_age):
+                        drop(e, f"{where}/{e.name}", rep.debris)
+                if apply:
+                    for d in (rel_dir, mno_dir, stage_dir):
+                        try:
+                            d.rmdir()          # only when empty
+                        except OSError:
+                            break
+    return rep
+
+
+def _human(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+    return str(n)
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="stage_store", description="The host's stage store.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    g = sub.add_parser("gc", help="remove the entries no manifest, label or release set names (dry run by default)")
+    g.add_argument("root", type=Path)
+    g.add_argument("--keep-from", action="append", default=[], type=Path,
+                   help="a builds root, a labels root or one build/label; repeat for every stack on the host")
+    g.add_argument("--registry", action="append", default=[], type=Path,
+                   help="a serve registry.db; repeat for every stack")
+    g.add_argument("--min-age-hours", type=float, default=DEFAULT_MIN_AGE_HOURS)
+    g.add_argument("--apply", action="store_true", help="remove; without it, only list")
+    g.add_argument("-v", "--verbose", action="store_true", help="list every entry removed")
+    args = ap.parse_args(argv)
+    try:
+        rep = gc(StageStore(args.root), args.keep_from, args.registry,
+                 min_age_hours=args.min_age_hours, apply=args.apply)
+    except PipelineError as e:
+        print(f"{e}\n  fix: {e.hint}", file=sys.stderr)
+        return 1
+    for d in rep.empty_sources:
+        print(f"stage_store gc: warning: {d} holds no {MANIFEST_NAME}; check the path", file=sys.stderr)
+    verb = "removed" if args.apply else "to_remove"
+    if args.verbose:
+        for x in rep.removed + rep.debris:
+            print(f"  {'removed' if args.apply else 'would remove'} {x}")
+    print(f"stage_store gc: manifests={rep.manifests} kept={rep.kept} young={rep.young} "
+          f"building={rep.building} {verb}={len(rep.removed)} debris={len(rep.debris)} "
+          f"freed={_human(rep.freed_bytes)} still_linked={_human(rep.shared_bytes)}"
+          + ("" if args.apply else " (dry run; --apply to remove)"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

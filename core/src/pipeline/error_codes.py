@@ -202,6 +202,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("RCP-E001", "Recipe unreadable: {path} ({reason})", "Fix the JSON under customizations/recipes/ (or the build's RECIPE.json)"),
     ErrorDef("RCP-E002", "Recipe invalid: {reason}", "Recipes name variant stages only (taxonomy, enrich) with their known params; see core/src/pipeline/recipes.py"),
     ErrorDef("PIP-E005", "Stage store unwritable: {path} ({reason})", "Check NORA_STAGES_ROOT: it must exist and be writable by the build user; unset it to run without the store"),
+    ErrorDef("PIP-E006", "Stage store GC refused: {reason}", "Name every builds root, labels root and registry on the host (--keep-from, --registry); fix or remove an unreadable manifest first"),
 
     # --- Environment (ENV) ---
     ErrorDef("ENV-E001", "Document root does not exist: {path}", "Create directory or check path"),

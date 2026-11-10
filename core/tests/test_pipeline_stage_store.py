@@ -266,3 +266,154 @@ class TestInStore:
         ctx = PipelineContext.standalone(env_dir=tmp_path / "e")
         assert ctx.stages_root is None and ctx.corpus_dir is None
         assert ctx.bindings_dir == ctx.env_dir
+
+
+# -- garbage collection (step 3, slice 4) ------------------------------------
+
+from core.src.pipeline import stage_store as ss  # noqa: E402
+from core.src.pipeline.error_codes import PipelineError  # noqa: E402
+
+GC_CELL = Cell("MNOA", "Apr2031")
+DAY = 86400.0
+
+
+def _stored(store: StageStore, stage: str, fp: str, tmp: Path, cell: Cell = GC_CELL) -> Path:
+    src = tmp / f"src-{stage}-{fp}"
+    src.mkdir()
+    (src / "out.json").write_text(fp)
+    assert store.commit(stage, cell, fp, src, {"build": "b"})
+    return store.path(stage, cell, fp)
+
+
+def _manifest_file(d: Path, entries: dict) -> None:
+    d.mkdir(parents=True, exist_ok=True)
+    stages = {s: {k: {"fp": fp} for k, fp in cells.items()} for s, cells in entries.items()}
+    (d / "STAGES.json").write_text(json.dumps({"version": 1, "stages": stages}))
+
+
+def _registry(db: Path, stage_fps: list[str], column: bool = True) -> Path:
+    import sqlite3
+    con = sqlite3.connect(db)
+    cols = "label TEXT, stage_fps TEXT" if column else "label TEXT"
+    con.execute(f"CREATE TABLE release_set({cols})")
+    for i, v in enumerate(stage_fps):
+        con.execute("INSERT INTO release_set VALUES (?,?)" if column else "INSERT INTO release_set VALUES (?)",
+                    (f"l{i}", v) if column else (f"l{i}",))
+    con.commit()
+    con.close()
+    return db
+
+
+def test_gc_keeps_what_manifests_and_release_sets_name(tmp_path):
+    store = StageStore(tmp_path / "stages")
+    a = _stored(store, "parse", "aaaa", tmp_path)
+    b = _stored(store, "parse", "bbbb", tmp_path)
+    c = _stored(store, "taxonomy", "cccc", tmp_path)
+    d = _stored(store, "resolve", "dddd", tmp_path)
+    builds = tmp_path / "builds"
+    _manifest_file(builds / "b1", {"parse": {"MNOA/Apr2031": "aaaa"}, "graph": {"*": "gggg"}})
+    labels = tmp_path / "labels"
+    _manifest_file(labels / "label-1", {"taxonomy": {"MNOA/Apr2031": "cccc"}})
+    db = _registry(tmp_path / "registry.db", [json.dumps({"resolve": {"MNOA/Apr2031": "dddd"}}), ""])
+    later = time.time() + 2 * DAY
+
+    dry = ss.gc(store, [builds, labels], [db], now=later)
+    assert dry.manifests == 2 and dry.kept == 3
+    assert dry.removed == ["parse/MNOA/Apr2031/bbbb"]
+    assert b.is_dir()                      # a dry run removes nothing
+
+    rep = ss.gc(store, [builds, labels], [db], apply=True, now=later)
+    assert rep.removed == ["parse/MNOA/Apr2031/bbbb"]
+    assert not b.exists() and not store.provenance_path("parse", GC_CELL, "bbbb").exists()
+    assert a.is_dir() and c.is_dir() and d.is_dir()
+    assert (rep.freed_bytes, rep.shared_bytes) == (0, 4)   # the source still links it
+
+
+def test_gc_keeps_young_and_building_entries(tmp_path):
+    store = StageStore(tmp_path / "stages", wait_seconds=3600)
+    young = _stored(store, "parse", "aaaa", tmp_path)
+    old = _stored(store, "parse", "bbbb", tmp_path)
+    busy = _stored(store, "parse", "cccc", tmp_path)
+    past = time.time() - 2 * DAY
+    for p in (old, busy):
+        os.utime(p, (past, past))
+    store.mark_building("parse", GC_CELL, "cccc", "other-build")
+    builds = tmp_path / "builds"
+    builds.mkdir()
+    rep = ss.gc(store, [builds], [], apply=True)
+    assert (rep.young, rep.building, rep.removed) == (1, 1, ["parse/MNOA/Apr2031/bbbb"])
+    assert rep.empty_sources == [str(builds)]
+    assert young.is_dir() and busy.is_dir() and not old.exists()
+
+
+def test_gc_clears_debris_and_empty_dirs(tmp_path):
+    store = StageStore(tmp_path / "stages", wait_seconds=60)
+    cell_dir = store.cell_dir("parse", GC_CELL)
+    cell_dir.mkdir(parents=True)
+    (cell_dir / "eeee.tmp-0123456789ab").mkdir()
+    (cell_dir / "ffff.json").write_text("{}")          # provenance without its output
+    (cell_dir / "ffff.building").write_text("{}")      # an abandoned marker
+    past = time.time() - 2 * DAY
+    for p in cell_dir.iterdir():
+        os.utime(p, (past, past))
+    builds = tmp_path / "builds"
+    builds.mkdir()
+    rep = ss.gc(store, [builds], [], apply=True)
+    assert len(rep.debris) == 3 and rep.removed == []
+    assert not (tmp_path / "stages" / "parse").exists()   # empty parents go too
+
+
+def test_gc_leaves_builds_and_labels_intact(tmp_path):
+    store = StageStore(tmp_path / "stages")
+    _stored(store, "parse", "aaaa", tmp_path)
+    view = tmp_path / "builds" / "b1" / "out" / "parse" / "MNOA" / "Apr2031"
+    store.link_view("parse", GC_CELL, "aaaa", view)
+    (tmp_path / "builds" / "b1" / "STAGES.json").write_text(json.dumps({"version": 1, "stages": {}}))
+    rep = ss.gc(store, [tmp_path / "builds"], [], apply=True, now=time.time() + 2 * DAY)
+    assert rep.removed == ["parse/MNOA/Apr2031/aaaa"]
+    assert (view / "out.json").read_text() == "aaaa"     # the build's clone survives
+
+
+@pytest.mark.parametrize("case", ["nothing", "bad-manifest", "missing-dir", "missing-db", "bad-fps"])
+def test_gc_refuses_when_it_cannot_know_what_to_keep(tmp_path, case):
+    store = StageStore(tmp_path / "stages")
+    kept = _stored(store, "parse", "aaaa", tmp_path)
+    builds = tmp_path / "builds"
+    builds.mkdir()
+    keep, dbs = [builds], []
+    if case == "nothing":
+        keep = []
+    elif case == "bad-manifest":
+        (builds / "b1").mkdir()
+        (builds / "b1" / "STAGES.json").write_text("{not json")
+    elif case == "missing-dir":
+        keep = [tmp_path / "nowhere"]
+    elif case == "missing-db":
+        dbs = [tmp_path / "none.db"]
+    else:
+        dbs = [_registry(tmp_path / "registry.db", ["{bad"])]
+    with pytest.raises(PipelineError) as e:
+        ss.gc(store, keep, dbs, apply=True, now=time.time() + 2 * DAY)
+    assert e.value.code == "PIP-E006"
+    assert kept.is_dir()
+
+
+def test_gc_reads_a_registry_without_the_column(tmp_path):
+    db = _registry(tmp_path / "registry.db", [], column=False)
+    assert ss.keep_set([], [db]) == (set(), 0)
+
+
+def test_gc_cli_dry_run_and_refusal(tmp_path, capsys):
+    store = StageStore(tmp_path / "stages")
+    _stored(store, "parse", "aaaa", tmp_path)
+    builds = tmp_path / "builds"
+    builds.mkdir()
+    assert ss.main(["gc", str(tmp_path / "stages"), "--keep-from", str(builds),
+                    "--min-age-hours", "0", "-v"]) == 0
+    cap = capsys.readouterr()
+    out = cap.out
+    assert "holds no STAGES.json" in cap.err
+    assert "would remove parse/MNOA/Apr2031/aaaa" in out and "to_remove=1" in out and "dry run" in out
+    assert store.has("parse", GC_CELL, "aaaa")
+    assert ss.main(["gc", str(tmp_path / "stages")]) == 1
+    assert "PIP-E006" in capsys.readouterr().err

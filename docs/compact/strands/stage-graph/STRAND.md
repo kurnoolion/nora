@@ -51,3 +51,7 @@ working.
   output was found or computed; Redo on a served ingest makes a new
   ingest of the cell under a bumped per-cell generation
   (`pipeline/generations.py`). D-DRAFT-11.
+- 2026-11-10: slice 4 built: `stage_store gc`, by hand, dry run unless
+  `--apply`; keeps what any build, label or release set names, recent
+  entries and live markers; refuses on an unreadable source. Step 3 is
+  code-complete. D-DRAFT-12.
