@@ -116,5 +116,14 @@
 
 **Why.** Removing an entry costs only a recompute, never an artifact, so the rule can be simple. Refusing on an unreadable source was chosen over skipping it: a skipped source could name anything. A scheduled GC was rejected for now: the host has no record of every stack's roots, so the person running it names them.
 
-**Consequences.** A stack left off the command loses sharing, not data. Nothing calls it automatically.
+**Consequences.** A stack left off the command loses sharing, not data. Nothing calls it automatically. A `--keep-from` directory holding no manifest is warned on, not refused: builds from before step 2 hold none, and refusing would block every stack that has them.
 
+### D-DRAFT-13 — 2026-11-10 — A rollback is refused when its label is no longer the active set
+
+**Context.** A flip done by hand left an earlier ingest row `served` while the registry served a newer set; its Roll back would have flipped to that row's previous label and dropped the newer set.
+
+**Decision.** `run_rollback` reads the registry's active label and refuses when it differs from the ingest's label.
+
+**Why.** Silently rolling back past a newer set loses it from serving with no record on the page. Repairing the stale row automatically was rejected: which row is right after a hand flip is the administrator's call.
+
+**Consequences.** A row left stale by a hand flip keeps a Roll back button that refuses; the fix is in the registry or a new ingest.
