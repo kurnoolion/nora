@@ -18,8 +18,16 @@ Language-model outputs are not reproducible, so a fingerprint identifies
 the *intent* of an output, not its bytes.
 
 `Fingerprinter` binds the rule to a `PipelineContext` and its manifest;
-stages ask it whether a cell is `unchanged` and `stamp` the cell when
-they complete it cleanly.
+before a stage writes a cell it calls `prepare`, which either reuses the
+output (recorded in this build, or found in the host's stage store) or
+makes the cell's directory safe to write; when the stage completes the
+cell cleanly it calls `stamp`, which records the fingerprint and puts the
+output into the store. A degraded cell is `forget`-ten.
+
+Which outputs go to the store (`in_store`): per-cell stages except the
+vector store (Chroma rewrites its database file on open), and a
+variant-tier stage only when the image carries a real code version (an
+unversioned image would share outputs across code changes).
 """
 
 from __future__ import annotations
@@ -29,11 +37,12 @@ import importlib
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 from core.src.pipeline.cells import Cell
 from core.src.pipeline.manifest import BuildManifest
 from core.src.pipeline.stage_graph import CORPUS, GLOBAL_KEY, spec_of, tier_of
+from core.src.pipeline.stage_store import privatize
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.src.pipeline.runner import PipelineContext
@@ -46,6 +55,15 @@ UNRESOLVED = "unresolved"
 
 VARIANT_CODE_VERSION_ENV = "NORA_CODE_VERSION"
 DEFAULT_VARIANT_CODE_VERSION = "dev"
+
+#: Per-cell stages whose outputs never go to the store: Chroma rewrites
+#: its database file on open, which a shared or read-only copy cannot take.
+NOT_STORED = frozenset({"vectorstore"})
+
+#: Manifest provenance: where a recorded output came from.
+ORIGIN_COMPUTED = "computed"   # this build computed it (and stored it, if stored)
+ORIGIN_STORE = "store"         # found in the stage store
+ORIGIN_FORCED = "forced"       # recomputed under --force; the store kept its earlier result
 
 #: The package that owns each corpus stage's ``CODE_VERSION``.
 CORPUS_VERSION_MODULES: dict[str, str] = {
@@ -170,20 +188,92 @@ class Fingerprinter:
             return False
         return recorded == (fp if fp is not None else self.current(stage, cell))
 
+    # -- the stage store ---------------------------------------------------
+
+    def in_store(self, stage: str) -> bool:
+        """True when `stage`'s per-cell outputs are found in and put into
+        the host's stage store."""
+        if self.ctx.stage_store is None or stage in NOT_STORED or not spec_of(stage).per_cell:
+            return False
+        return tier_of(stage) == CORPUS or code_version(stage) != DEFAULT_VARIANT_CODE_VERSION
+
+    def _provenance(self, stage: str, cell: Cell | None) -> dict:
+        return {
+            "code_version": code_version(stage),
+            "params": self.params(stage),
+            "inputs": self.input_fps(stage, cell),
+            "externals": self.externals(stage, cell),
+        }
+
+    def prepare(self, stage: str, cell: Cell, fp: str,
+                complete: Callable[[Path], bool] | None = None) -> bool:
+        """Decide whether `stage` must compute `cell` under `fp`.
+
+        Returns True when the output can be reused: this build recorded
+        `fp` for the cell, or the stage store holds `fp` (another build
+        computed it; its output is cloned into this build and recorded,
+        origin ``store``). `complete(view)` is the stage's own check that
+        the cell's directory holds a whole output; without it the
+        directory's presence is enough.
+
+        Returns False when the stage must compute: the cell's directory is
+        made private (no file in it shares an inode with the store or a
+        promoted label) and, with the store, a ``.building`` marker tells
+        other producers this build is on it. Waits first while another
+        build's marker for `fp` is live. `--force` always computes.
+        """
+        view = self.ctx.stage_output(stage, cell)
+
+        def whole() -> bool:
+            return complete(view) if complete is not None else view.is_dir()
+
+        store = self.ctx.stage_store if self.in_store(stage) else None
+        if not self.ctx.force:
+            if self.recorded(stage, cell) == fp and whole():
+                return True
+            if store is not None and (store.has(stage, cell, fp)
+                                      or store.wait_for(stage, cell, fp, self.ctx.build_id)):
+                store.link_view(stage, cell, fp, view)
+                if whole():
+                    self.manifest.record(stage, cell_key(stage, cell), fp, origin=ORIGIN_STORE,
+                                         **self._provenance(stage, cell))
+                    return True
+        privatize(view)
+        if store is not None and not store.has(stage, cell, fp):
+            store.mark_building(stage, cell, fp, self.ctx.build_id)
+        return False
+
     def stamp(self, stage: str, cell: Cell | None = None, fp: str | None = None) -> str:
-        """Record the current fingerprint (or `fp`) with its provenance."""
+        """Record the current fingerprint (or `fp`) with its provenance and,
+        for a stored stage, put the cell's output into the store. When the
+        store already holds `fp` the stored output wins and replaces this
+        build's copy (first complete result wins), unless the run was
+        forced, which keeps its own output and leaves the store alone."""
         fp = fp if fp is not None else self.current(stage, cell)
-        self.manifest.record(
-            stage, cell_key(stage, cell), fp,
-            code_version=code_version(stage),
-            params=self.params(stage),
-            inputs=self.input_fps(stage, cell),
-            externals=self.externals(stage, cell),
-        )
+        provenance = self._provenance(stage, cell)
+        origin = ORIGIN_COMPUTED
+        if cell is not None and self.in_store(stage):
+            store = self.ctx.stage_store
+            view = self.ctx.stage_output(stage, cell)
+            placed = store.commit(stage, cell, fp, view, dict(
+                provenance, stage=stage, cell=cell_key(stage, cell), fp=fp,
+                tier=tier_of(stage), build=self.ctx.build_id))
+            if not placed:
+                if self.ctx.force:
+                    origin = ORIGIN_FORCED
+                else:
+                    store.link_view(stage, cell, fp, view)
+                    origin = ORIGIN_STORE
+            store.release(stage, cell, fp, self.ctx.build_id)
+        self.manifest.record(stage, cell_key(stage, cell), fp, origin=origin, **provenance)
         return fp
 
-    def forget(self, stage: str, cell: Cell | None = None) -> None:
+    def forget(self, stage: str, cell: Cell | None = None, fp: str | None = None) -> None:
+        """Drop the cell's entry (a degraded run) and release this build's
+        marker for `fp` when given."""
         self.manifest.forget(stage, cell_key(stage, cell))
+        if fp is not None and cell is not None and self.in_store(stage):
+            self.ctx.stage_store.release(stage, cell, fp, self.ctx.build_id)
 
     # -- external inputs ----------------------------------------------------
 
@@ -218,7 +308,7 @@ class Fingerprinter:
             from core.src.env.profile_bindings import load_profile_bindings
             from core.src.profiler.profile_substitute import load_substituted_profile
             env_dir = self._env_dir()
-            bindings = load_profile_bindings(env_dir, override=self.ctx.profile_override())
+            bindings = load_profile_bindings(self.ctx.bindings_dir, override=self.ctx.profile_override())
             path = Path(bindings.resolve(cell.mno, cell.release))
             return digest(load_substituted_profile(path, env_dir=env_dir).to_dict())
         except Exception:  # noqa: BLE001 — the stage reports the cause (PIP-E003 / PIP-E002)
@@ -228,7 +318,7 @@ class Fingerprinter:
         """The user annotations (D-061) of the cell's documents."""
         if cell is None:
             return ABSENT
-        ann_dir = self._env_dir() / "annotations"
+        ann_dir = self.ctx.annotations_dir
         if not ann_dir.is_dir():
             return ABSENT
         stems = [f.stem[:-len("_ir")] for f in self.ctx.stage_output("extract", cell).glob("*_ir.json")]

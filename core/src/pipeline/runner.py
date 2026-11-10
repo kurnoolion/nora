@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,16 @@ from core.src.pipeline.cells import Cell, enumerate_input_cells, is_per_cell_sta
 from core.src.pipeline.stages import STAGE_FUNCS, StageResult
 
 logger = logging.getLogger(__name__)
+
+#: The host's stage store and corpus root (strand stage-graph, step 2);
+#: unset or empty runs without them.
+STAGES_ROOT_ENV = "NORA_STAGES_ROOT"
+CORPUS_DIR_ENV = "NORA_CORPUS_DIR"
+
+
+def _env_path(name: str) -> Path | None:
+    value = os.getenv(name, "").strip()
+    return Path(value).expanduser() if value else None
 
 
 @dataclass
@@ -79,6 +90,14 @@ class PipelineContext:
     # a caller constructs the context directly.
     build_dir: Path | None = None
 
+    # Step 2 of the stage graph. `stages_root` is the host's stage store
+    # (NORA_STAGES_ROOT): outputs found there are reused, outputs completed
+    # here are put there; None runs without it. `corpus_dir` is the corpus
+    # root (NORA_CORPUS_DIR): the profile bindings and the user annotations
+    # are read there instead of from the build; None reads the build.
+    stages_root: Path | None = None
+    corpus_dir: Path | None = None
+
     @property
     def env_dir(self) -> Path:
         """The build / environment directory (`<env_dir>`)."""
@@ -97,6 +116,33 @@ class PipelineContext:
             fp = Fingerprinter(self, BuildManifest(self.env_dir / MANIFEST_NAME))
             self.state["_fingerprinter"] = fp
         return fp
+
+    @property
+    def build_id(self) -> str:
+        """The build's name (its directory name), as recorded in the store."""
+        return self.env_dir.name
+
+    @property
+    def bindings_dir(self) -> Path:
+        """Where `profiles.json` is read: the corpus root, else the build."""
+        return self.corpus_dir if self.corpus_dir is not None else self.env_dir
+
+    @property
+    def annotations_dir(self) -> Path:
+        """The user annotations (D-061) the parse stage applies."""
+        return (self.corpus_dir if self.corpus_dir is not None else self.env_dir) / "annotations"
+
+    @property
+    def stage_store(self):
+        """The host's `StageStore`, or None without `stages_root` (lazy)."""
+        if self.stages_root is None:
+            return None
+        store = self.state.get("_stage_store")
+        if store is None:
+            from core.src.pipeline.stage_store import StageStore
+            store = StageStore(self.stages_root)
+            self.state["_stage_store"] = store
+        return store
 
     def profile_override(self) -> str | None:
         """The single-profile override applied to every cell, if any:
@@ -283,6 +329,8 @@ class PipelineContext:
             mnos=env.mnos,
             releases=env.releases,
             standards_source=env.standards_source,
+            stages_root=_env_path(STAGES_ROOT_ENV),
+            corpus_dir=_env_path(CORPUS_DIR_ENV),
         )
 
     @classmethod
@@ -321,6 +369,8 @@ class PipelineContext:
             ),
             embedding_model=resolve_embedding_model(embedding_model or None),
             standards_source=standards_source,
+            stages_root=_env_path(STAGES_ROOT_ENV),
+            corpus_dir=_env_path(CORPUS_DIR_ENV),
         )
         if profile_path:
             ctx.state["profile_path"] = str(profile_path)

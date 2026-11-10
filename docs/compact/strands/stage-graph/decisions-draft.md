@@ -20,13 +20,13 @@
 
 ### D-DRAFT-3 — 2026-11-08 — The corpus prefix's external inputs live under one corpus root, not in the build
 
-**Context.** The profile bindings and the parse corrections are copied into each build from the seed build, so they are per stack. Two stacks could parse one release from different bindings: correct, unshared, and silent.
+**Context.** The profile bindings are copied into each build from the seed build and the user annotations live in the build, so both are per stack. Two stacks could parse one release from different bindings: correct, unshared, and silent.
 
-**Decision.** `<corpus>/` (`NORA_CORPUS_DIR`, one value per host in every stack's wiring env) holds `requirements/`, `profiles.json`, `profiles/` and `corrections/parse/`. The seed step stops copying them; the batch containers mount the corpus root. Overview prompts and SIRA prompt sets stay with the build: they feed variant stages.
+**Decision.** `<corpus>/` (`CORPUS_DIR` in every stack's wiring env, mounted read-only as `NORA_CORPUS_DIR`) holds `profiles.json` and `annotations/`. With it, `cycle.sh start` binds new cells there and copies nothing into the build. Bound profiles stay in `customizations/profiles/`, documents under `REQUIREMENTS_DIR` (already shared); parse corrections feed the profile miner, not parse, so they stay put. Overview prompts and SIRA prompt sets stay with the build: they feed variant stages.
 
 **Why.** A shared prefix needs shared inputs; the alternative, detecting divergence after the fact, would only report what this prevents.
 
-**Consequences.** A profile edit reaches every stack on its next ingest. The parse review page's corrections target moves with the files.
+**Consequences.** A profile edit reaches every stack on its next ingest. The parse review page still writes annotations to the env dir it serves; pointing it at the corpus root is open.
 
 ### D-DRAFT-4 — 2026-11-08 — Recipe per stack, in its serving env; an ingest builds that stack's recipe only
 
@@ -46,7 +46,7 @@
 
 **Why.** Fingerprints separate corpora (document bytes enter extract), so a store per corpus would add a root and a stack-to-corpus rule for isolation already present. One tree is one mount, one backup, one GC pass.
 
-**Consequences.** Cell names are visible across stacks on the host. GC needs a host-level list of serve roots and builds roots. The superseded clause of D-319 fires at step 2: builds roots stay per stack but hold manifests, not copies.
+**Consequences.** Cell names are visible across stacks on the host. A forced run keeps its own output and leaves the store's first result. Builds keep their outputs (D-DRAFT-8), so removing a store entry loses sharing, never an artifact.
 
 ### D-DRAFT-6 — 2026-11-08 — Variant stages reuse per unit by text fingerprint; a redo bumps `generation`
 
@@ -57,3 +57,23 @@
 **Why.** The taxonomy ledger and SIRA's incremental promote already reuse by text; the design keeps that instead of paying the cascade. A redo knob outside the fingerprint was rejected: it would make two outputs with one identity.
 
 **Consequences.** A parse fix that changes structure but not text costs a parse and a cheap pass. The Overlay, serving knobs and golden eval stay outside every fingerprint (composed or applied at serve time).
+
+### D-DRAFT-7 — 2026-11-09 — Step 2 imports no legacy outputs; old builds stay as they are
+
+**Context.** The 2026-11-08 inventory: one real build per stack, no manifests, identical bindings across stacks; served sets do not depend on builds (D-318); an incremental ingest touches one cell.
+
+**Decision.** Step 2 adds the corpus root and the store and leaves existing builds untouched. No legacy output is imported into the store.
+
+**Why.** An import would stamp fingerprints on outputs made by older code with no check, and nothing needs them before a full rebuild. A later import tool may admit a legacy build's corpus-prefix outputs for stages whose package is unchanged between the build's commit and the tip.
+
+**Consequences.** The first ingest after cutover computes its cell's corpus prefix once for the host. Stack A joins the self-serve wiring in the same host edit that adds the two roots.
+
+### D-DRAFT-8 — 2026-11-09 — Builds keep their `out/` tree; the store is cloned into it by hard link or copy
+
+**Context.** The baseline (§5) had builds hold manifests only and the pipeline resolve every path through the store. About thirty modules outside the pipeline read `<build>/out/<stage>/<cell>/` by layout. The batch containers mount the build and the store separately, and the kernel refuses a hard link across mounts.
+
+**Decision.** A stage reuses a cell by fingerprint (the build's manifest, then the store); a stored output is cloned into the build's cell directory; a completed one is cloned into the store, made read-only and renamed into place. Clones are hard links on one mount and copies across mounts. Before a stage writes a cell, files sharing an inode or read-only are replaced by private copies. The vector store and unversioned variant stages are not stored.
+
+**Why.** It gives the cross-stack sharing with no change outside the pipeline. Manifest-only builds were rejected for this step: a cross-module change that adds no sharing. Symlinks were rejected: their targets differ between host and container paths.
+
+**Consequences.** On the host the store costs one copy per stored output. A re-run can no longer edit a promoted label through its hard links (it could before).

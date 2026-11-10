@@ -248,10 +248,22 @@ def _next_build_id(c: Ctx) -> str:
     return _next_free(c, _label_prefix(c), builds=True)
 
 
+def _corpus_bindings(c: Ctx) -> bool:
+    """True when the wiring env names a corpus root: the bindings live
+    there and a seed build needs none of its own (stage graph, step 2)."""
+    return bool(read_env_value(c.cfg.builds_wiring, "CORPUS_DIR"))
+
+
 def st_start(c: Ctx) -> None:
     seed = c.db.last_served_build() or ""
+    fallback = f"seeding from the configured {c.cfg.seed_build or '-'}"
     if seed and not c.cfg.build_dir(seed).is_dir():
-        c.log(f"start: last served build {seed} is gone from the builds root; seeding from the configured {c.cfg.seed_build or '-'}")
+        c.log(f"start: last served build {seed} is gone from the builds root; {fallback}")
+        seed = ""
+    elif seed and not _corpus_bindings(c) and not (c.cfg.build_dir(seed) / "profiles.json").is_file():
+        # a purged or hand-cleaned build can stay on disk without its bindings;
+        # cycle.sh start would refuse it for want of bindings
+        c.log(f"start: last served build {seed} holds no profiles.json; {fallback}")
         seed = ""
     seed = seed or c.cfg.seed_build
     if not seed:

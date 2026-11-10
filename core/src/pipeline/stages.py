@@ -65,14 +65,8 @@ def _cell_extract_hints(ctx: PipelineContext) -> dict[tuple[str, str], dict]:
         from core.src.profiler.profile_schema import DocumentProfile
     except ImportError:
         return out
-    override = ctx.state.get("profile_path")
-    if not override:
-        corr = ctx.correction("profile.json")
-        if corr:
-            override = str(corr)
-    env_dir = ctx.stage_output("extract").parent.parent
     try:
-        bindings = load_profile_bindings(env_dir, override=override)
+        bindings = load_profile_bindings(ctx.bindings_dir, override=ctx.profile_override())
     except Exception:
         return out
     for cell in ctx.input_cells():
@@ -126,12 +120,14 @@ def run_extract(ctx: PipelineContext) -> StageResult:
 
     # Stage-graph fingerprints (strand stage-graph): a cell whose documents
     # and extractor code version are unchanged since its recorded fingerprint
-    # is reused whole; a cell with any failed document is not stamped.
+    # is reused whole, from this build or from the host's stage store; a
+    # cell with any failed document is not stamped.
     fps = ctx.fingerprints
     cell_fp: dict[Cell, str] = {}
     cell_failed: dict[Cell, int] = {}
     cell_skip: set[Cell] = set()
 
+    planned: list[tuple[Path, dict, Cell]] = []
     for f in files:
         # infer_metadata_from_path enforces the MMMYYYY cell convention
         # fail-loud (EXT-E004); a mis-named release dir aborts the stage here.
@@ -142,13 +138,20 @@ def run_extract(ctx: PipelineContext) -> StageResult:
         if not ctx.cell_in_scope(metadata["mno"], metadata["release"]):
             continue
         # D-DRAFT-6: route each IR to its (mno, release) cell directory.
-        cell = Cell(metadata["mno"], metadata["release"])
+        planned.append((f, metadata, Cell(metadata["mno"], metadata["release"])))
+    cell_irs: dict[Cell, list[str]] = {}
+    for f, _m, cell in planned:
+        cell_irs.setdefault(cell, []).append(f"{f.stem}_ir.json")
+
+    for f, metadata, cell in planned:
         cell_dir = ctx.stage_output(stage, cell)
         out_path = cell_dir / f"{f.stem}_ir.json"
         if cell not in cell_fp:
             cell_fp[cell] = fps.current(stage, cell)
             cell_failed[cell] = 0
-            if fps.unchanged(stage, cell, cell_fp[cell]):
+            names = cell_irs[cell]
+            if fps.prepare(stage, cell, cell_fp[cell],
+                           complete=lambda v, names=names: all((v / n).exists() for n in names)):
                 cell_skip.add(cell)
                 stats["cells_unchanged"] += 1
         if cell in cell_skip and out_path.exists():
@@ -199,7 +202,7 @@ def run_extract(ctx: PipelineContext) -> StageResult:
 
     for cell, fp in cell_fp.items():
         if cell_failed[cell]:
-            fps.forget(stage, cell)
+            fps.forget(stage, cell, fp)
         elif cell not in cell_skip:
             fps.stamp(stage, cell, fp)
 
@@ -244,7 +247,7 @@ def run_profile(ctx: PipelineContext) -> StageResult:
 
     # <env_dir>/out/profile -> <env_dir>
     env_dir = ctx.stage_output(stage).parent.parent
-    bindings = load_profile_bindings(env_dir, override=override)
+    bindings = load_profile_bindings(ctx.bindings_dir, override=override)
 
     # Coverage check — fail loud listing every uncovered cell at once.
     uncovered = bindings.uncovered(cells)
@@ -255,21 +258,28 @@ def run_profile(ctx: PipelineContext) -> StageResult:
                      f"<env_dir>/profiles.json (or pass --profile).",
                      time.time() - t0)
 
-    stats = {"cells": 0}
+    stats = {"cells": 0, "reused": 0}
+    fps = ctx.fingerprints
     for cell in cells:
         profile_path = bindings.resolve(cell.mno, cell.release)
         if not Path(profile_path).exists():
             return _fail(stage, "PIP-E002",
                          f"Bound profile not found for {cell.mno}/{cell.release}: "
                          f"{profile_path}", time.time() - t0)
+        stats["cells"] += 1
+        # stage-graph: the fingerprint carries the substituted profile's
+        # content, so an unchanged one is reused (this build or the store)
+        cell_fp = fps.current(stage, cell)
+        if fps.prepare(stage, cell, cell_fp, complete=lambda v: (v / "profile.json").exists()):
+            stats["reused"] += 1
+            continue
         # Substitute placeholders ONCE here; parse reads the materialized
         # profile raw (already substituted).
         profile = load_substituted_profile(Path(profile_path), env_dir=env_dir)
         cell_out = ctx.stage_output(stage, cell)
         cell_out.mkdir(parents=True, exist_ok=True)
         profile.save_json(cell_out / "profile.json")
-        ctx.fingerprints.stamp(stage, cell)   # stage-graph: the materialized profile's identity
-        stats["cells"] += 1
+        fps.stamp(stage, cell, cell_fp)
 
     return StageResult(stage=stage, status="OK",
                        elapsed_seconds=time.time() - t0, stats=stats)
@@ -312,7 +322,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     # ctx.stage_output("parse") == <env_dir>/out/parse → parent.parent == <env_dir>
     _env_dir = ctx.stage_output(stage).parent.parent
     log_dir = _env_dir / "reports" / "parse_log"
-    annotations_dir = _env_dir / "annotations"
+    annotations_dir = ctx.annotations_dir
 
     fps = ctx.fingerprints
     for cell in cells:
@@ -342,7 +352,9 @@ def run_parse(ctx: PipelineContext) -> StageResult:
         # document is parsed again next run (not stamped).
         cell_fp = fps.current(stage, cell)
         expected = [cell_out / (f.stem.replace("_ir", "_tree") + ".json") for f in ir_files]
-        if fps.unchanged(stage, cell, cell_fp) and all(p.exists() for p in expected):
+        names = [p.name for p in expected]
+        if fps.prepare(stage, cell, cell_fp,
+                       complete=lambda v, names=names: all((v / n).exists() for n in names)):
             tree_paths.extend(str(p) for p in expected)
             stats["skipped"] += len(expected)
             continue
@@ -382,7 +394,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
                 cell_failed += 1
                 warnings.append(f"PRS-E001: {f.name}: {e}")
         if cell_failed:
-            fps.forget(stage, cell)
+            fps.forget(stage, cell, cell_fp)
         else:
             fps.stamp(stage, cell, cell_fp)
 
@@ -440,6 +452,10 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
         if not tree_files:
             continue
         n_trees += len(tree_files)
+        cell_fp = ctx.fingerprints.current(stage, cell)
+        if ctx.fingerprints.prepare(stage, cell, cell_fp,
+                                    complete=lambda v: any(v.glob("*_xrefs.json"))):
+            continue   # stage-graph: reused from this build or the store
         trees = [RequirementTree.load_json(f) for f in tree_files]
         manifests = CrossReferenceResolver(trees).resolve_all()
         cell_out = ctx.stage_output(stage, cell)
@@ -451,7 +467,7 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
             stats["cross_plan"] += s.resolved_cross_plan
             stats["standards"] += s.resolved_standards
             stats["unresolved"] += s.broken_internal
-        ctx.fingerprints.stamp(stage, cell)   # stage-graph
+        ctx.fingerprints.stamp(stage, cell, cell_fp)   # stage-graph
 
     if n_trees == 0:
         return _fail(stage, "PIP-E002",
@@ -673,7 +689,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
         # MNO's overview prompt. An unchanged cell is served from its output;
         # `--force` busts it; a degraded cell is never stamped.
         corpus_fp = fps.current(stage, cell)
-        if fps.unchanged(stage, cell, corpus_fp) and taxonomy_path.exists():
+        if fps.prepare(stage, cell, corpus_fp, complete=lambda v: (v / "taxonomy.json").exists()):
             cell_features[cname] = [DocumentFeatures.load_json(f)
                                     for f in sorted(out_dir.glob("*_features.json"))]
             n_cells_cached += 1
@@ -766,7 +782,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
             TaxonomyConsolidator().consolidate(doc_features_here).save_json(taxonomy_path)
             cell_features[cname] = doc_features_here
         if cell_failures:
-            fps.forget(stage, cell)   # a degraded cell never cache-locks itself
+            fps.forget(stage, cell, corpus_fp)   # a degraded cell never cache-locks itself
         elif doc_features_here:
             fps.stamp(stage, cell, corpus_fp)
         n_cells_derived += 1

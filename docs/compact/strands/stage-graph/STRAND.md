@@ -32,3 +32,9 @@ working.
   no fan-out; one stage store per host). Two tiers by rule: the corpus
   prefix extract→resolve is shared by every stack; variant stages per
   recipe. D-DRAFT-1..6. Diagram: artifact "Stage Graph Host Layout".
+- 2026-11-09: step 2 built. Stage store (`pipeline/stage_store.py`) and
+  corpus root; builds keep their `out/` tree as clones of stored outputs,
+  because about thirty modules outside the pipeline read that layout
+  (D-DRAFT-8 revises the baseline's manifest-only build). Migration from
+  the 2026-11-08 inventory: no legacy import (D-DRAFT-7). The one
+  taxonomy-gap cell is being re-derived by hand on the host.

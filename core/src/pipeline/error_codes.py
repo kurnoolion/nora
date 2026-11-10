@@ -195,9 +195,10 @@ _DEFS: list[ErrorDef] = [
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),
-    ErrorDef("PIP-E003", "No profile bound for {cells}", "Add bindings to <env_dir>/profiles.json, or pass --profile"),
+    ErrorDef("PIP-E003", "No profile bound for {cells}", "Add bindings to profiles.json (the corpus root when NORA_CORPUS_DIR is set, else <env_dir>), or pass --profile"),
     ErrorDef("PIP-W001", "Stage {stage} skipped: {reason}", "May affect downstream stages"),
     ErrorDef("PIP-E004", "Build manifest unreadable: {path} ({reason})", "Fix or remove <env_dir>/STAGES.json; every stage then recomputes its fingerprints"),
+    ErrorDef("PIP-E005", "Stage store unwritable: {path} ({reason})", "Check NORA_STAGES_ROOT: it must exist and be writable by the build user; unset it to run without the store"),
 
     # --- Environment (ENV) ---
     ErrorDef("ENV-E001", "Document root does not exist: {path}", "Create directory or check path"),

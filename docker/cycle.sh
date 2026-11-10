@@ -49,6 +49,14 @@
 # `--yes` on the two gates records the confirmation as "<user> (auto)" —
 # for an unattended runner, not for a person skipping the evidence.
 #
+# Stage graph, step 2 (optional, per wiring env): CORPUS_DIR names the
+# host's corpus root, whose profiles.json holds the bindings of every
+# stack on the host. With it, `start` reads and extends that file (a new
+# release of a known MNO is bound there, as above), the build holds no
+# profiles.json, --profiles is refused and the seed needs no bindings.
+# STAGES_ROOT names the host's stage store: the batch container finds
+# outputs another build computed there and puts its own there.
+#
 # Layout (override with env vars): NORA_ROOT=/srv/nora →
 #   $NORA_ROOT/builds/nora/<build-id>          NORA_BUILDS_ROOT (NORA_BUILDS_NORA_ROOT: the dir holding the builds)
 #   <build>/out/sira/<MNO>/<MMMYYYY>/          the SIRA cells: the build's last stage dir (since 2026-11-06);
@@ -101,6 +109,10 @@ ME="$(whoami)"
 TS="$(date +%Y%m%d_%H%M%S)"
 
 die() { echo "CYC-E$1: $2" >&2; echo "  fix: $3" >&2; exit 1; }
+wiring_var() { [ -f "$WIRING" ] || return 0; { grep -E "^$1=" "$WIRING" || true; } | tail -1 | cut -d= -f2- | tr -d "\"' "; }
+CORPUS="$(wiring_var CORPUS_DIR)"     # the corpus root (stage graph); empty = bindings in the build
+STAGES="$(wiring_var STAGES_ROOT)"    # the host's stage store; empty = none
+bindings_file() { if [ -n "$CORPUS" ]; then echo "$CORPUS/profiles.json"; else echo "$NB/profiles.json"; fi; }
 usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 VERB="${1:-}"; [ -n "$VERB" ] || usage; shift
@@ -269,22 +281,29 @@ start)
   # Deliberately NO automatic fallback: omitted --profiles means the build
   # opens without bindings (NOTE below) and parse refuses at CYC-E030 —
   # bindings encode document-structure judgment and are chosen, not inherited.
-  # incremental cycle: --seed names a previous build whose out/ is copied in
-  # (header NOTE); its profiles.json is the default binding source.
+  # incremental cycle: --seed names a previous build (nothing of it is
+  # copied); its profiles.json is the default binding source unless the
+  # wiring env names a corpus root, which then holds the bindings.
   if [ -n "$SEED" ]; then
     echo "$SEED" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$' || die 026 "bad --seed '$SEED'" "name a previous build-id"
-    [ -f "$NROOT/$SEED/profiles.json" ] || die 026 "--seed '$SEED' has no profiles.json under $NROOT" "name a previous build with bindings"
-    [ -n "$PROFILES" ] || PROFILES="$SEED"
+    if [ -z "$CORPUS" ]; then
+      [ -f "$NROOT/$SEED/profiles.json" ] || die 026 "--seed '$SEED' has no profiles.json under $NROOT" "name a previous build with bindings"
+      [ -n "$PROFILES" ] || PROFILES="$SEED"
+    fi
   fi
   src=""
-  if [ -n "$PROFILES" ]; then
+  if [ -n "$CORPUS" ]; then
+    [ -z "$PROFILES" ] || die 028 "--profiles is not used when the wiring env names CORPUS_DIR" "edit $CORPUS/profiles.json: it binds every stack on this host"
+    [ -f "$CORPUS/profiles.json" ] || die 029 "no profiles.json at the corpus root $CORPUS" "copy the bindings of the active build there (stage-graph step 2)"
+    [ -z "$STAGES" ] || [ -d "$STAGES" ] || die 029 "the stage store $STAGES does not exist" "mkdir -p it (one per host), or remove STAGES_ROOT from the wiring env"
+    src="$CORPUS/profiles.json"
+  elif [ -n "$PROFILES" ]; then
     if [ -f "$PROFILES" ]; then src="$PROFILES"; elif [ -f "$NROOT/$PROFILES/profiles.json" ]; then src="$NROOT/$PROFILES/profiles.json"; fi
     [ -n "$src" ] || die 024 "--profiles '$PROFILES' is neither a file nor a build-id with profiles.json" "point at a profiles.json"
   fi
   # the images the phases will run: the tag and prefix the wiring env gives
   # compose (IMAGE_TAG / IMAGE_PREFIX, defaults dev / local) — recording
   # `:dev` while compose ran another tag named the wrong images (field-found)
-  wiring_var() { { grep -E "^$1=" "$WIRING" || true; } | tail -1 | cut -d= -f2- | tr -d "\"' "; }
   tag="$(wiring_var IMAGE_TAG)"; tag="${tag:-dev}"
   pfx="$(wiring_var IMAGE_PREFIX)"; pfx="${pfx:-local}"
   images="{}"
@@ -299,7 +318,7 @@ start)
   # MNO's latest bound cell (a new release of a known MNO); an MNO with no
   # binding at all fails loud — new MNOs are hand-bound.
   inherited="-" pf=""
-  if [ -n "$SEED" ]; then
+  if [ -n "$SEED" ] || [ -n "$CORPUS" ]; then
     pf="$(mktemp)"; cp "$src" "$pf"; chmod 644 "$pf"
     inherited="$(python3 - "$pf" $(cells) <<'PY'
 import json, sys, re
@@ -330,7 +349,13 @@ PY
 )" || { rm -f "$pf"; exit 1; }
   fi
   mkdir -p "$NB/reports" "$NB/prompts" "$SB"
-  if [ -n "$pf" ]; then mv "$pf" "$NB/profiles.json"; elif [ -n "$src" ]; then cp "$src" "$NB/profiles.json"; fi
+  if [ -n "$CORPUS" ]; then
+    # the corpus root keeps the bindings; rewrite it only when a cell was bound
+    if [ "$inherited" != "-" ]; then
+      cp "$pf" "$CORPUS/.profiles.json.$$" && mv "$CORPUS/.profiles.json.$$" "$CORPUS/profiles.json"
+    fi
+    rm -f "$pf"
+  elif [ -n "$pf" ]; then mv "$pf" "$NB/profiles.json"; elif [ -n "$src" ]; then cp "$src" "$NB/profiles.json"; fi
   cyc init "$CJ" "$BUILD" "$ME" "$images"
   [ -n "$SEED" ] && cyc set "$CJ" seed "$SEED"
   # repoint the wiring env at the build. One line names the build
@@ -345,11 +370,11 @@ PY
   echo "$BUILD" > "$ACTIVE"
   n=$(cells | wc -l)
   cyc_block start ok <<EOF
-cells=$n profiles=$([ -f "$NB/profiles.json" ] && echo present || echo MISSING) wiring=$WIRING
+cells=$n profiles=$([ -n "$CORPUS" ] && echo corpus || { [ -f "$NB/profiles.json" ] && echo present || echo MISSING; }) stages=$([ -n "$STAGES" ] && echo store || echo off) wiring=$WIRING
 images=$images
 seed=${SEED:--} inherited=$inherited
 EOF
-  [ -f "$NB/profiles.json" ] || echo "NOTE: no profiles.json — new cells need bindings before parse (architect-reviewed, README Phase 0.4)"
+  [ -f "$(bindings_file)" ] || echo "NOTE: no profiles.json — new cells need bindings before parse (architect-reviewed, README Phase 0.4)"
   echo "next: ./cycle.sh parse"
   ;;
 
@@ -359,13 +384,21 @@ status)
   echo "artifact state:"
   for p in parse prompts taxonomy enrich verify-enrich promote; do printf '  %-14s %s\n' "$p" "$(phase_state "$p")"; done
   [ -d "$NB/out/parse" ] && echo "  parse dirs   : $(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d | wc -l) (cells staged: $(cells | wc -l))"
+  echo "  bindings     : $(bindings_file)$([ -f "$(bindings_file)" ] || echo ' (MISSING)')"
+  echo "  stage store  : ${STAGES:-off}"
+  [ -f "$NB/STAGES.json" ] && echo "  manifest     : $(python3 -c '
+import json, sys, collections
+d = json.load(open(sys.argv[1])).get("stages", {})
+o = collections.Counter(e.get("origin", "computed") for s in d.values() for e in s.values())
+print(" ".join(f"{s}={len(v)}" for s, v in sorted(d.items())), "|", " ".join(f"{k}={n}" for k, n in sorted(o.items())))
+' "$NB/STAGES.json")"
   [ -d "$NB/out/taxonomy" ] && echo "  taxonomy     : $(tax_ledger_counts) cells=$(find "$NB/out/taxonomy" -mindepth 2 -maxdepth 2 -type d | wc -l) features=$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name '*_features.json' | wc -l)"
   [ -d "$SB" ] && echo "  sira cells   : $(find "$SB" -mindepth 3 -maxdepth 3 -path '*/raw/metadata.json' | wc -l) run_name=$RUN"
   ;;
 
 parse)
   resolve_build; need_wiring
-  [ -f "$NB/profiles.json" ] || die 030 "no $NB/profiles.json (PIP-E003 would fail the lane)" "./cycle.sh start ... --profiles <prev-build> or author bindings (README Phase 0.4)"
+  [ -f "$(bindings_file)" ] || die 030 "no $(bindings_file) (PIP-E003 would fail the lane)" "./cycle.sh start ... --profiles <prev-build> or author bindings (README Phase 0.4)"
   [ "$(phase_state parse)" != running ] || die 031 "parse already running" "./cycle.sh status; wait for CYC-EXIT"
   scope=""; tag="ALL"
   if [ -n "$CELL" ]; then

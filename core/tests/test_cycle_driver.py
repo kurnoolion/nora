@@ -427,3 +427,80 @@ def test_start_inspects_the_images_the_wiring_env_names(host):
     seen = (host["root"] / "inspected.txt").read_text().split()
     assert seen[-2:] == ["reg.example.test/nora/nora-batch:v9", "reg.example.test/nora/sira-batch:v9"]
 
+
+
+# -- stage graph, step 2: the corpus root and the stage store ----------------
+
+def _corpus_wiring(host, bindings: list[dict] | None, stages: bool = True) -> Path:
+    """Name a corpus root (and a stage store) in the wiring env."""
+    corpus = host["root"] / "corpus"
+    corpus.mkdir(exist_ok=True)
+    if bindings is not None:
+        (corpus / "profiles.json").write_text(
+            json.dumps({"bindings": bindings, "default": None}), encoding="utf-8")
+    store = host["root"] / "stages"
+    if stages:
+        store.mkdir(exist_ok=True)
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + f"CORPUS_DIR={corpus}\nSTAGES_ROOT={store}\n", encoding="utf-8")
+    return corpus
+
+
+def test_corpus_start_binds_at_the_corpus_root_and_not_in_the_build(host):
+    host["cell"]("MNO-A", "Jan2031")
+    host["cell"]("MNO-A", "Apr2031")
+    corpus = _corpus_wiring(host, [
+        {"mno": "MNO-A", "release": "Jan2031", "profile": "customizations/profiles/p1.json"}])
+    # a seed without bindings (a purged remnant) is fine: the corpus binds
+    (host["nora"] / "b0").mkdir()
+    r = host["run"]("start", "b1", "--seed", "b0")
+    assert r.returncode == 0, r.stderr
+    assert not (host["nora"] / "b1" / "profiles.json").exists()
+    pb = json.loads((corpus / "profiles.json").read_text(encoding="utf-8"))
+    assert {"mno": "MNO-A", "release": "Apr2031", "profile": "customizations/profiles/p1.json"} in pb["bindings"]
+    assert "profiles=corpus stages=store" in r.stdout
+    assert "inherited=MNO-A/Apr2031<-Jan2031" in r.stdout
+    assert not list(corpus.glob(".profiles.json.*"))
+    # parse checks the corpus bindings, status names them
+    r = host["run"]("parse", "--cell", "MNO-A/Apr2031")
+    assert r.returncode == 0, r.stderr
+    r = host["run"]("status")
+    assert f"bindings     : {corpus / 'profiles.json'}" in r.stdout
+    assert f"stage store  : {host['root'] / 'stages'}" in r.stdout
+
+
+def test_corpus_start_leaves_a_covered_corpus_file_alone(host):
+    host["cell"]("MNO-A", "Jan2031")
+    corpus = _corpus_wiring(host, [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    before = (corpus / "profiles.json").read_bytes()
+    r = host["run"]("start", "b1")
+    assert r.returncode == 0, r.stderr
+    assert (corpus / "profiles.json").read_bytes() == before
+
+
+def test_corpus_start_refuses_profiles_and_missing_roots(host, tmp_path):
+    host["cell"]("MNO-A", "Jan2031")
+    _corpus_wiring(host, None)
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E029" in r.stderr and "corpus root" in r.stderr
+    (host["root"] / "corpus" / "profiles.json").write_text(json.dumps({"bindings": [
+        {"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}]}), encoding="utf-8")
+    other = tmp_path / "other.json"
+    other.write_text("{}", encoding="utf-8")
+    r = host["run"]("start", "b1", "--profiles", str(other))
+    assert r.returncode == 1 and "CYC-E028" in r.stderr
+    (host["root"] / "stages").rmdir()
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E029" in r.stderr and "stage store" in r.stderr
+    assert not (host["nora"] / "b1").exists()
+
+
+def test_corpus_new_mno_fails_loud_and_leaves_the_corpus_file(host):
+    host["cell"]("MNO-A", "Jan2031")
+    host["cell"]("MNO-B", "Jan2031")
+    corpus = _corpus_wiring(host, [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    before = (corpus / "profiles.json").read_bytes()
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E027" in r.stderr
+    assert (corpus / "profiles.json").read_bytes() == before
+    assert not (host["nora"] / "b1").exists()

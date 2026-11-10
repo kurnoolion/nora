@@ -1,8 +1,10 @@
 # Stage graph — design note
 
-Status: 2026-11-08, baseline agreed; the two rulings of §9 are taken.
-Nothing is built yet; the self-serve-ingestion layout holds until step 2
-of §10 lands. Revision of the 2026-11-06 draft after the analysis of
+Status: 2026-11-09. Baseline agreed and the two rulings of §9 taken on
+2026-11-08; steps 1 and 2 of §10 built. Step 2 revised one point of the
+baseline: a build keeps its `out/` tree, because about thirty modules
+outside the pipeline read that layout; the store gives the sharing
+(§4, §5). Revision of the 2026-11-06 draft after the analysis of
 what changes each stage's output (§12). A diagram of the host and the
 config files accompanies this note (artifact "Stage Graph Host Layout").
 
@@ -121,35 +123,56 @@ records in its provenance which earlier output it reused from.
 
 ## 4. The stage store
 
-One tree per host, write-once:
+One tree per host (`NORA_STAGES_ROOT`), write-once
+(`pipeline/stage_store.py`):
 
 ```
-<stages-root>/<stage>/<MNO>/<release>/<fp>/        # the output as the stage writes it today
-<stages-root>/<stage>/<MNO>/<release>/<fp>.json    # provenance: inputs' fps, parameters, code
-                                                   # version, tier, when, by which build, reused-from
-<stages-root>/<stage>/<MNO>/<release>/<fp>.building  # marker while a runner computes it
+<stages-root>/<stage>/<MNO>/<release>/<fp>/          # the output, as the stage writes it
+<stages-root>/<stage>/<MNO>/<release>/<fp>.json      # provenance: inputs' fps, parameters, code
+                                                     # version, tier, the build that computed it
+<stages-root>/<stage>/<MNO>/<release>/<fp>.building  # marker while a producer computes it
 ```
 
-Produced under a temp name beside the target and renamed when complete;
-never edited after; `.json` provenance written last. A degraded run
-(taxonomy with failures) is not renamed into place, so the store holds
-complete outputs only; resumable ledgers stay in the build's own work
-dir until completion.
+**What goes in.** Every per-cell stage's complete output, except the
+vector store (Chroma rewrites its database file on open) and except a
+variant stage run from an image without a code version (the fingerprint
+would then not see code changes). Global stages (standards, graph, eval)
+stay in the build until a recipe needs them shared (step 4).
+
+**Find, compute, put.** Before a stage writes a cell it computes the
+fingerprint. If the build recorded it, the cell is reused. Else, if the
+store holds it, the stored output is cloned into the build's cell
+directory and recorded with origin `store`. Else the stage computes into
+the build's cell directory, and on a clean completion the output is
+cloned into the store under a temp name, its files made read-only, and
+renamed into place; provenance is written after the rename. A degraded
+run (taxonomy with failures, extract or parse with a failed document) is
+never put in the store; its resumable state stays in the build.
+
+**Clone.** Hard links when the build and the store share a mount (host
+runs), copies otherwise. The batch containers mount the build and the
+store separately, and the kernel refuses a hard link across mounts, so
+on the host the store holds a copy of each stored output. The cost is
+one copy per output per host; an incremental build holds one cell.
+
+**Write-once.** Before a stage writes a cell, every file in the cell's
+directory that shares an inode with another path, or is read-only, is
+replaced by a private copy. So a re-run never edits a stored output, nor
+a promoted label (promote hard-links the build's `out/`).
 
 **Concurrent producers.** Two stacks ingesting one release at once would
-both compute parse. The `.building` marker names the build and the
-runner; a second runner finding it waits, as it already waits on a
-detached phase, with a timeout after which it computes anyway. If both
-finish, the first rename wins and the second discards its copy and
-records the winner's fingerprint; the result is the same by intent.
+both compute parse. The `.building` marker names the build; a second
+producer finding a live marker of another build waits (polling, up to
+`NORA_STAGES_WAIT_SECONDS`, default one hour; an older marker counts as
+abandoned), then takes the stored output or computes it. If both
+finish, the first rename wins; the second clones the winner's output
+into its build and records it. `--force` computes regardless and keeps
+its own output; the store keeps the first result (origin `forced`).
 
-**Garbage collection**, by hand: an output is removable when no build
-manifest under any builds root and no release set in any registry on the
-host references its fingerprint. A host-level list of serve roots and
-builds roots is the input; the registry's `gc` rule, one level down.
-
-Cross-cell stages (`graph`, `standards`) key on the recipe's cell set
-instead of one cell: `<stage>/<fp>/` with the cell list in provenance.
+**Garbage collection**, by hand, and safe at any time: builds and
+labels hold their own links or copies, so removing a store entry loses
+only the sharing, never an artifact. Policy (keep what any manifest on
+the host names) is step 3's, with the release sets' fingerprints.
 
 ## 5. The build and its manifest
 
@@ -158,33 +181,35 @@ under the stack's builds root (D-319):
 
 ```
 <builds-root>/<build-id>/
-  RECIPE.json          # the recipe (§6), frozen at start
+  RECIPE.json          # the recipe (§6), frozen at start (step 3)
   CYCLE.json           # the baton and phase log, as today
-  STAGES.json          # the manifest: {stage: {"<MNO>/<release>": {fp, provenance}}}, filled as stages complete
-  work/                # in-progress ledgers, logs, reports (never shared)
-  prompts/             # the published prompt set, as today
+  STAGES.json          # the manifest: {stage: {"<MNO>/<release>": {fp, origin, provenance}}}
+  out/<stage>/<MNO>/<release>/   # the cell outputs: computed here or cloned from the store
+  prompts/  reports/   # as today
 ```
 
 The manifest is named `STAGES.json`, not `MANIFEST.json`: the promoted
 snapshot under the labels root already carries a `MANIFEST.json` of
 another shape. A global stage is keyed `*`; its fingerprint carries the
-cell set through its inputs.
+cell set through its inputs. `origin` says where an entry's output came
+from: `computed`, `store` or `forced`.
 
-`out/<stage>/<MNO>/<release>` disappears as a directory; the pipeline
-context resolves a stage's path for a cell through the manifest
-(`ctx.stage_output(stage, cell)` returns the store path), so no stage
-code changes beyond the resolver, and no symlinks exist. The batch
-containers mount the stages root, the corpus root and the builds root at
-fixed paths.
+**Why the build keeps `out/`.** The 2026-11-08 baseline had builds hold
+manifests only, with the pipeline resolving every path through the
+manifest into the store. A survey for step 2 found about thirty modules
+outside the pipeline that read `<build>/out/<stage>/<cell>/` by layout:
+the SIRA lane, promote, the Trees and History builders, the parse and
+resolve review pages, the request browser, golden eval, the debug CLIs.
+Moving them all to manifest lookups is a cross-module change that adds
+no sharing. The build's cell directories are therefore clones of the
+stored outputs: the pipeline decides through the manifest and the
+store; everything else reads the layout as before.
 
-Starting a build: for each stage, corpus prefix first and then the
-recipe's stages in order, and each cell in scope, compute the
-fingerprint from the inputs' fingerprints already in the manifest; if
-the store has it, record it and skip; if it is being built, wait; else
-run the stage into the store and record it. This is the incremental
-cycle, generalised: a new release of a known MNO runs every stage for
-that cell once per recipe; a second recipe on the same release runs
-nothing in the corpus prefix.
+Starting a build: for each stage in order and each cell in scope,
+compute the fingerprint from the inputs' fingerprints already in the
+manifest; reuse, find, or compute as in §4. A new release of a known MNO
+computes every stage for that cell once per host; a second stack on the
+same release computes nothing in the corpus prefix.
 
 ## 6. Recipes
 
@@ -218,25 +243,32 @@ holds. An ingest on a stack builds that stack's recipe and no other
 
 ## 6a. Corpus-level inputs
 
-The corpus prefix is shared only if its external inputs are shared. Today
-the profile bindings file and the parse corrections live in the build
-directory and are copied with the seed build, so they are per stack: two
-stacks could parse one release differently, correctly but without
-sharing, and nothing would say so.
+The corpus prefix is shared only if its external inputs are shared. The
+profile bindings and the user annotations lived in the build directory
+and the bindings were copied from the seed build, so they were per
+stack: two stacks could parse one release differently, correctly but
+without sharing, and nothing would say so.
 
 They move to one corpus root that every stack's wiring env names
-(`NORA_CORPUS_DIR`):
+(`CORPUS_DIR`, mounted read-only in the batch container as
+`NORA_CORPUS_DIR`):
 
 ```
-<corpus>/requirements/<MNO>/<release>/   # the documents, as today (NORA_REQUIREMENTS_DIR)
-<corpus>/profiles.json                   # the bindings
-<corpus>/profiles/*.json                 # the bound profiles
-<corpus>/corrections/parse/*.json        # parse corrections
+<corpus>/profiles.json        # the bindings of every stack on the host
+<corpus>/annotations/         # user annotations (D-061), read by parse
 ```
 
-The taxonomy overview prompts and the SIRA prompt sets stay with the
-build: they feed variant stages. The driver's seed step stops copying
-bindings and corrections; the batch containers mount the corpus root.
+The bound profile files stay in `customizations/profiles/` (committed,
+in the image). The documents stay under `REQUIREMENTS_DIR`, already one
+tree shared by both stacks' wiring envs. The parse corrections the parse
+review page writes feed the profile miner, not the parse stage, so they
+are not a corpus input. The taxonomy overview prompts and the SIRA
+prompt sets stay with the build: they feed variant stages.
+
+With a corpus root, `cycle.sh start` reads the bindings there and binds
+a new release of a known MNO there; the build holds no `profiles.json`,
+`--profiles` is refused, and a seed build needs no bindings. Without
+one, everything is as before.
 
 ## 7. Serving
 
@@ -295,14 +327,16 @@ Each step leaves the system working and is landed on its own.
    the extract, parse and taxonomy skip rules read the manifest. Found
    on the way: the taxonomy stage had stopped passing the overview
    directory to the extractor on 2026-11-06; restored.
-2. **Corpus root and the stage store**: bindings and parse corrections
-   move to `<corpus>`; outputs move into the store with provenance and
-   the building marker; the resolver reads through the manifest;
-   `start` plans find-or-compute. Both stacks' wiring envs name the
-   stages root and the corpus root. The corpus-and-variant sharing
-   appears here without a special case. D-319's "superseded when
-   stage-graph lands" clause fires here: the builds roots stay per
-   stack but hold manifests, not copies.
+2. **Corpus root and the stage store** (built 2026-11-09): bindings
+   and annotations read from `<corpus>`; per-cell outputs found in and
+   put into the store with provenance and the building marker
+   (`pipeline/stage_store.py`, `Fingerprinter.prepare`); builds keep
+   `out/` as clones (§5); `cycle.sh` corpus mode; the runner skips a
+   served seed without bindings; compose mounts both roots and passes
+   `CODE_VERSION`. Both stacks' wiring envs name the two roots. D-319's
+   "superseded when stage-graph lands" clause fires here in part: the
+   builds roots stay per stack and keep their outputs, and the corpus
+   prefix is computed once per host.
 3. **Recipes** in the driver, the runner and the page: `RECIPE.json`
    frozen from the stack env's recipe, `generation`, per-unit reuse
    recorded in provenance, the recipe and fingerprints recorded on the
@@ -310,20 +344,68 @@ Each step leaves the system working and is landed on its own.
 4. **New unit kinds** when a recipe needs them: graph and vector units
    in the registry, a serving mode in the store.
 
+## 10a. Step 2 on the host: migration of what exists (2026-11-09)
+
+The inventory of 2026-11-08 found: two per-stack builds roots with one
+real build each, no manifests; both builds bind the same three profiles
+(`release=*`, no default) and neither stack has parse corrections or
+annotations in a build; the requirements tree is already one directory
+shared by both wiring envs; ten serve labels and two cell-DB sets on
+disk, two labels read; stack A on the wiring that predates self-serve
+ingestion; the one taxonomy-gap cell being re-derived in a hand cycle.
+
+Three facts make the migration small:
+
+- Served sets do not depend on builds (D-318). Registries, labels and
+  cell DBs are untouched by step 2.
+- An incremental ingest touches one cell. Existing cells are not
+  recomputed until something about them changes.
+- The bindings are identical across stacks, so one corpus-level
+  `profiles.json` is a copy of either build's.
+
+**Plan.**
+
+1. Corpus root: `<corpus>/profiles.json` copied from the active build;
+   `<corpus>/annotations/` empty. Both wiring envs gain `CORPUS_DIR`.
+2. Stage store: one empty `<stages>/` per host, on the data filesystem;
+   both wiring envs gain `STAGES_ROOT`.
+3. Stack A joins the self-serve wiring (build dir, share map, token,
+   serving env without an env dir) in the same edit; the two roots are
+   not added to a wiring the runner cannot use.
+4. Batch images rebuilt with `CODE_VERSION` from the tip.
+5. Existing builds stay as they are, read-only history. No legacy
+   output is imported into the store: an import would stamp fingerprints
+   on outputs made by older code with no check, and nothing needs them
+   before a full rebuild. If a full rebuild is wanted later, an import
+   tool can admit a legacy build's corpus-prefix outputs for stages
+   whose package is unchanged between the build's commit and the tip.
+6. Clean-up of the unreferenced snapshots, legacy seed builds and cell
+   DBs (about 10 GB) is manual and separate.
+
+**Cutover order.** Corpus root, store and envs; rebake the batch images;
+the next ingest on stack B computes its one cell and puts the corpus
+prefix in the store; stack A follows with its first self-serve ingest.
+Nothing is flipped by step 2 itself, and each stack's last served set
+stays as the rollback.
+
 ## 11. Invariants
 
 - A stage output in the store is never modified; a different result is
   a different fingerprint; the first complete result for a fingerprint
   is the one kept.
-- A build's manifest is the only way the pipeline finds a stage output;
-  a path is never computed from a layout rule.
+- A cell's output is reused whole only by fingerprint (the build's
+  manifest, then the store); the stage's completeness check guards the
+  reuse, it never grants it. The build's `out/` tree is where outputs
+  are read; a stored output appears there as a clone.
+- A stage never writes a file that shares its inode with the store or a
+  label.
 - A fingerprint is a function of stage, code version, parameters and
   inputs, computed the same way for every stage; a corpus stage's code
   version is its own, never the image's.
 - A recipe names variant stages only; the corpus prefix is the same for
   every stack on a host.
-- The corpus prefix's external inputs live under the corpus root, never
-  in a build.
+- With a corpus root, the corpus prefix's external inputs (bindings,
+  annotations) live there, never in a build.
 - A release set records the recipe and the fingerprints it was built
   from.
 - Serving containers mount no build directory.

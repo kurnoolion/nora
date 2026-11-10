@@ -228,6 +228,29 @@ build holds only it. At publish time every other unit is inherited from
 the active set (Phase 6). A new MNO is never seeded — its profile is
 chosen by hand (Phase 0.4).
 
+**The corpus root and the stage store (stage graph, step 2).** Two
+optional lines in the ingestion wiring env, the same values for every
+stack on the host:
+
+```bash
+STAGES_ROOT=/home/<you>/nora-data/stages   # the stage store: one per host
+CORPUS_DIR=/home/<you>/nora-data/corpus    # profiles.json + annotations/: one per host
+```
+
+With `STAGES_ROOT`, a build reuses any extract, profile, parse, resolve
+(and, from a versioned image, taxonomy) output another build on the host
+already computed for the same fingerprint, and puts its own there; the
+build's `out/` keeps a copy either way, so promote and the SIRA lane read
+it as before. `STAGES.json` in the build says, per stage and cell,
+whether the output was `computed`, found in the `store`, or `forced`;
+`./cycle.sh status` counts them. With `CORPUS_DIR`, `start` binds new
+cells in `<corpus>/profiles.json`, the build holds no `profiles.json`,
+`--profiles` is refused (`CYC-E028`) and a seed needs no bindings; a
+missing corpus `profiles.json` or store directory stops `start`
+(`CYC-E029`). Set up once: `mkdir -p <stages> <corpus>/annotations` and
+copy the active build's `profiles.json` to `<corpus>/`. Rebake the batch
+images with `CODE_VERSION` (below) so taxonomy outputs are shared too.
+
 ### Self-serve ingestion (the Ingest page)
 
 The requirements team ingests a new release of a served MNO from the
@@ -989,11 +1012,14 @@ reverse proxy (Caddy)" below.
    `nora-store` per stack tag). A stale image surfaces as a missing CLI
    subcommand or as eval behavior that ignores the change you just
    pulled.
-2. **Bake the code version into serving images** so eval StackStamps
-   attribute scores to the code that served them:
-   `--build-arg CODE_VERSION="$(git rev-parse --short HEAD)"` on
-   `nora-web` and `nora-store` builds (surfaces as `code_version` on
-   `/healthz`).
+2. **Bake the code version into every image** so eval StackStamps
+   attribute scores to the code that served them, release sets record
+   it, and variant-stage fingerprints see code changes:
+   `CODE_VERSION="$(git rev-parse --short HEAD)" docker compose ... build`
+   (compose passes it to all four targets) or
+   `--build-arg CODE_VERSION=...` (surfaces as `code_version` on
+   `/healthz`). An image without it records an empty code version on
+   publish and never shares a taxonomy through the stage store.
 3. **Record the scheme**: `publish --prompt-scheme <sira-prompt-scheme>`
    on registry stacks (healthz reads it from the served release set), or
    `promote.sh --scheme` on a dev/test stack (the label MANIFEST records

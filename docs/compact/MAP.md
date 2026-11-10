@@ -274,6 +274,7 @@ nora/
 │   │   │   ├── run_cli.py                               # CLI entry point for the pipeline runner.
 │   │   │   ├── runner.py                                # Pipeline orchestrator.
 │   │   │   ├── stage_graph.py                           # The stage graph as data (strand stage-graph, D-DRAFT-1).
+│   │   │   ├── stage_store.py                           # The host's stage store: write-once outputs by fingerprint (strand
 │   │   │   └── stages.py                                # Pipeline stage functions.
 │   │   ├── profile_miner/                               # Convert human-supplied parse corrections (from the Web UI Review tab) into proposed `DocumentProfile` regex patches.
 │   │   │   ├── MODULE.md
@@ -587,6 +588,7 @@ nora/
 │       ├── test_pipeline_cells.py                       # Tests for the pipeline (MNO, release) cell substrate (D-DRAFT-6).
 │       ├── test_pipeline_error_codes.py                 # Every error code the source raises or prints is registered in CODES.
 │       ├── test_pipeline_stage_graph.py                 # Stage graph, fingerprints and the build manifest (strand stage-graph,
+│       ├── test_pipeline_stage_store.py                 # The host's stage store and the corpus root (strand stage-graph, step 2).
 │       ├── test_plan_metadata.py                        # Tests for plan-metadata extraction (`_extract_plan_metadata`).
 │       ├── test_playground_helpers.py                   # Tests for the merged-tab helpers in core/src/web/routes/playground.py:
 │       ├── test_profile_bindings.py                     # Tests for per-cell profile binding (D-DRAFT-7).

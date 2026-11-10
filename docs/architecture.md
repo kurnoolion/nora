@@ -375,11 +375,22 @@ lane (§6) is not a pipeline stage. The skip flags resolve CLI > env var
 > `config/llm.json` > env config. Every run writes
 `reports/report_<ts>.txt`.
 
-There is no manifest for a build. The reuse rules above are the state:
-file mtimes, the tree's profile fingerprint, and the taxonomy ledger.
-Reuse works within one env dir; the cycle driver (§5.2) creates a new env
-dir per cycle, so across cycles only taxonomy is seeded (by copying the
-previous `out/taxonomy`). §20 spells out the consequence.
+**The stage store** (step 2, optional per host). With `NORA_STAGES_ROOT`
+(the wiring env's `STAGES_ROOT`, mounted at `/data/stages`), a per-cell
+stage first looks for its fingerprint in the build's manifest, then in
+the store, `<stages-root>/<stage>/<MNO>/<rel>/<fp>/`; a stored output is
+cloned into the build's `out/<stage>/<MNO>/<rel>/`, and a cell the
+build computes cleanly is cloned into the store, made read-only and
+renamed into place. So a second build, of any stack, on the same cell
+and code computes nothing in the corpus prefix. The build keeps its own
+`out/` (every reader outside the pipeline reads that layout); clones are
+hard links on one mount and copies across mounts. The vector store and
+taxonomy from an image without `NORA_CODE_VERSION` stay out of the store.
+A `.building` marker makes a second producer wait for the first. With
+`NORA_CORPUS_DIR` (the wiring env's `CORPUS_DIR`, mounted read-only at
+`/data/corpus`), the profile bindings and annotations are read from the
+corpus root, shared by every stack. The manifest records each entry's
+origin: `computed`, `store` or `forced`.
 
 ### 5.2 Drivers
 
@@ -1434,7 +1445,7 @@ sequenceDiagram
   participant SH as serving host
 
   IA->>CY: start <build> --profiles <prev-build>
-  CY->>ENV: create, copy profiles.json, repoint .env.builds, take the baton
+  CY->>ENV: create, bind the new cell (build or corpus profiles.json), repoint .env.builds, take the baton
   IA->>SH: stage source docs under requirements/<MNO>/<rel>/
   IA->>CY: parse [--skip-standards]
   CY->>NB: run_cli --lane ingestion (all cells)
@@ -1459,7 +1470,7 @@ What each phase reuses, as built:
 
 | Phase | Reused from the previous cycle | Redone |
 |---|---|---|
-| parse | nothing is copied: the stage is per cell, and `parse --cell` runs the new cell alone (`--mno`/`--release` on the lane) | the new cell; a full cycle, every cell |
+| parse | nothing is copied: the stage is per cell, and `parse --cell` runs the new cell alone (`--mno`/`--release` on the lane); with the stage store, a cell another build already parsed under the same fingerprint is taken from the store (§5.1) | the new cell; a full cycle, every cell not in the store |
 | taxonomy | nothing: since 2026-11-06 a release's taxonomy is derived from its own trees under `out/taxonomy/<mno>/<rel>/`, `taxonomy --cell` runs the new cell alone | the new cell's plans, once per release (no cross-release supersession) |
 | enrich | nothing on the build side: the SIRA cells are the build's own `out/sira/`, and an incremental cycle enriches only the new cell (`enrich --cell`) | the new cell; a full cycle, every cell |
 | publish (§21) | every unit whose `source_fingerprint` and schema match a live version, by content, regardless of build; units the build did not produce are inherited from the active set | only cells whose corpus or phrases changed; History for MNOs whose Trees changed |
@@ -1472,8 +1483,9 @@ fingerprint. The incremental cycle avoids that by touching the unchanged
 cells not at all: every build-plane stage is per cell (the taxonomy
 became per release on 2026-11-06, so a release is enriched against the
 taxonomy of its own text and no stage needs the rest of the corpus),
-`start --seed` takes the previous build's profile bindings and binds the
-new cell to the profile of its MNO's latest bound release, and the build
+`start --seed` takes the previous build's profile bindings (or, with a
+corpus root, the corpus `profiles.json`) and binds the new cell to the
+profile of its MNO's latest bound release, and the build
 holds the new cell alone on both sides; publish inherits the rest. §28
 runs this cycle from the web.
 

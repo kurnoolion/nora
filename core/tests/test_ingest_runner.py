@@ -95,6 +95,7 @@ class Sim:
             nb = nb_root / build
             (nb / "reports").mkdir(parents=True)
             (nb / "CYCLE.json").write_text(json.dumps({"build": build, "phases": []}))
+            (nb / "profiles.json").write_text('{"bindings": [], "default": null}')  # as cycle.sh without a corpus root
             (self.root / "builds/ACTIVE").write_text(build)
             return Result(0, [f"CYC build={build} phase=start status=ok"])
         build = (self.root / "builds/ACTIVE").read_text().strip()
@@ -629,6 +630,37 @@ def test_flip_rollback_abandon(host):
     assert r.run_once() == "completed"
     assert any("--seed seed0" in c for c in sim.cmds())
     assert any(f"{build} is gone from the builds root" in l for l in _run(q.get_logs(job3)))
+
+
+def _served_build_without_bindings(host) -> tuple["Sim", "Runner", str]:
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    build = _run(host["q"].get_ingest(ingest_id)).build
+    _run(host["q"].submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    (host["root"] / "builds/nora" / build / "profiles.json").unlink()   # a purged remnant
+    sim.calls.clear()
+    return sim, r, build
+
+
+def test_served_build_without_bindings_is_not_a_seed(host):
+    sim, r, build = _served_build_without_bindings(host)
+    job, _ = _submit_ingest(host, release="Jul2031")
+    assert r.run_once() == "completed"
+    assert any("--seed seed0" in c for c in sim.cmds())
+    assert any(f"{build} holds no profiles.json" in l for l in _run(host["q"].get_logs(job)))
+
+
+def test_with_a_corpus_root_any_served_build_seeds(host):
+    wiring = Path(host["cfg"].builds_wiring)
+    wiring.parent.mkdir(parents=True, exist_ok=True)
+    wiring.write_text((wiring.read_text() if wiring.exists() else "") + "CORPUS_DIR=/srv/corpus\n")
+    sim, r, build = _served_build_without_bindings(host)
+    _submit_ingest(host, release="Jul2031")
+    assert r.run_once() == "completed"
+    assert any(f"--seed {build}" in c for c in sim.cmds())
 
 
 def test_documents_stage_refusals(host):
