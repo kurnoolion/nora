@@ -38,3 +38,8 @@ working.
   (D-DRAFT-8 revises the baseline's manifest-only build). Migration from
   the 2026-11-08 inventory: no legacy import (D-DRAFT-7). The one
   taxonomy-gap cell is being re-derived by hand on the host.
+- 2026-11-10: step 3 planned in four slices (design §10b); slice 1
+  built: recipes as data (`pipeline/recipes.py`, two example recipes),
+  frozen in the build by `cycle.sh start --recipe`, followed by the
+  driver and the runner, carried into taxonomy fingerprints, recorded on
+  the release set. D-DRAFT-9.

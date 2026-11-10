@@ -144,6 +144,15 @@ class PipelineContext:
             self.state["_stage_store"] = store
         return store
 
+    @property
+    def recipe(self):
+        """The recipe frozen in the build (``<env_dir>/RECIPE.json``), or
+        None for a build started without one (lazy; RCP-E001/E002 on a bad file)."""
+        if "_recipe" not in self.state:
+            from core.src.pipeline.recipes import load_frozen
+            self.state["_recipe"] = load_frozen(self.env_dir)
+        return self.state["_recipe"]
+
     def profile_override(self) -> str | None:
         """The single-profile override applied to every cell, if any:
         `--profile` (CLI) first, else `corrections/profile.json`."""

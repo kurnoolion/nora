@@ -150,7 +150,15 @@ class Fingerprinter:
     # -- parts ---------------------------------------------------------------
 
     def params(self, stage: str) -> dict:
-        return {p: str(getattr(self.ctx, p, "")) for p in spec_of(stage).params}
+        """The stage's parameters: its spec's context fields and, when the
+        build has a recipe that runs the stage, the recipe's parameters for
+        it (``generation`` included), so a recipe edit or a generation bump
+        changes the fingerprint. A build without a recipe hashes as before."""
+        out = {p: str(getattr(self.ctx, p, "")) for p in spec_of(stage).params}
+        recipe = self.ctx.recipe if tier_of(stage) != CORPUS else None
+        if recipe is not None and recipe.has(stage):
+            out["recipe"] = canonical(recipe.stage_params(stage)).decode("ascii")
+        return out
 
     def input_fps(self, stage: str, cell: Cell | None) -> dict:
         spec = spec_of(stage)

@@ -254,6 +254,34 @@ def _corpus_bindings(c: Ctx) -> bool:
     return bool(read_env_value(c.cfg.builds_wiring, "CORPUS_DIR"))
 
 
+def _stack_recipe(c: Ctx) -> str:
+    """The recipe the stack serves: `NORA_RECIPE` in its serving env ('' = none)."""
+    return read_env_value(c.cfg.stack_env, "NORA_RECIPE")
+
+
+def _build_recipe(c: Ctx):
+    """The recipe frozen in the ingest's build, or None."""
+    from core.src.pipeline.recipes import RecipeError, load_frozen
+    if not c.build:
+        return None
+    try:
+        return load_frozen(c.cfg.build_dir(c.build))
+    except RecipeError as exc:
+        raise StageError(str(exc))
+
+
+def _scheme(c: Ctx) -> str:
+    """The prompt scheme: the build's recipe's when it names one, else the
+    runner config's. A disagreement is logged once; the recipe wins."""
+    r = _build_recipe(c)
+    scheme = (r.prompt_scheme if r else "") or c.cfg.prompt_scheme
+    if r and r.prompt_scheme and c.cfg.prompt_scheme and r.prompt_scheme != c.cfg.prompt_scheme \
+            and not c.notes.get("scheme_logged"):
+        c.notes["scheme_logged"] = True
+        c.log(f"scheme: recipe {r.name} names {r.prompt_scheme}, the runner config {c.cfg.prompt_scheme}; using the recipe's")
+    return scheme
+
+
 def st_start(c: Ctx) -> None:
     seed = c.db.last_served_build() or ""
     fallback = f"seeding from the configured {c.cfg.seed_build or '-'}"
@@ -271,8 +299,9 @@ def st_start(c: Ctx) -> None:
     c.build = _next_build_id(c)
     c.label = c.build
     c.db.update_ingest(c.ingest["id"], build=c.build, label=c.label)
-    c.cycle("start", c.build, "--seed", seed)
-    c.log(f"start: build {c.build} seeded from {seed}")
+    recipe = _stack_recipe(c)
+    c.cycle("start", c.build, "--seed", seed, *(["--recipe", recipe] if recipe else []))
+    c.log(f"start: build {c.build} seeded from {seed}" + (f", recipe {recipe}" if recipe else ""))
 
 
 def st_parse(c: Ctx) -> None:
@@ -285,6 +314,10 @@ def st_prompts(c: Ctx) -> None:
 
 
 def st_taxonomy(c: Ctx) -> None:
+    r = _build_recipe(c)
+    if r and not r.has("taxonomy"):
+        c.log(f"taxonomy: recipe {r.name} runs none; skipped")
+        return
     c.cycle("taxonomy", "--cell", c.cell)
     c.wait_detached("taxonomy")
 
@@ -310,8 +343,8 @@ def st_promote(c: Ctx) -> None:
         c.label = new
         c.db.update_ingest(c.ingest["id"], label=new)
     args = ["promote", "--label", c.label]
-    if c.cfg.prompt_scheme:
-        args += ["--scheme", c.cfg.prompt_scheme]
+    if _scheme(c):
+        args += ["--scheme", _scheme(c)]
     c.cycle(*args)
 
 
@@ -366,8 +399,8 @@ def st_publish(c: Ctx) -> None:
     cmd = ["python", "-m", "core.src.stores.publish", "publish", "--serve-root", CTR_SERVE,
            "--label", c.label, "--cells-src", _work_cells(c),
            "--env-dir", f"{CTR_LABELS}/{c.label}/nora"]
-    if c.cfg.prompt_scheme:
-        cmd += ["--prompt-scheme", c.cfg.prompt_scheme]
+    if _scheme(c):
+        cmd += ["--prompt-scheme", _scheme(c)]
     c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
                     mounts=_publish_mounts(c), what="publish publish")
 
@@ -419,8 +452,8 @@ def st_eval(c: Ctx) -> None:
         cmd = ["python", "-m", "core.src.eval.golden_cli", "--env-dir", CTR_ENV,
                "--stack-url", c.cfg.staging_store_url, "--stack-label", c.label,
                "--stage", "1", "--allow-map-mismatch"]
-        if c.cfg.prompt_scheme:
-            cmd += ["--sira-prompt-scheme", c.cfg.prompt_scheme]
+        if _scheme(c):
+            cmd += ["--sira-prompt-scheme", _scheme(c)]
         res = c.ex.run(["docker", "compose", "-p", c.cfg.staging_project, "--env-file", c.cfg.staging_env,
                         "--profile", "ingest", "run", "--rm", "-T", "nora-batch", *cmd],
                        env={**os.environ, **_job_user(c.cfg.staging_env), **stage_env},

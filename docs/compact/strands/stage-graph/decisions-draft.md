@@ -77,3 +77,13 @@
 **Why.** It gives the cross-stack sharing with no change outside the pipeline. Manifest-only builds were rejected for this step: a cross-module change that adds no sharing. Symlinks were rejected: their targets differ between host and container paths.
 
 **Consequences.** On the host the store costs one copy per stored output. A re-run can no longer edit a promoted label through its hard links (it could before).
+
+### D-DRAFT-9 — 2026-11-10 — A recipe is frozen in the build and steers the driver; models stay in env files unless a recipe names one
+
+**Context.** Enrichment is not a pipeline stage: the cycle driver runs the SIRA lane, configured by the sira-batch env file and a taxonomy directory it sets per cell. The release set recorded only a scheme tag.
+
+**Decision.** `customizations/recipes/<name>.json` names variant stages (taxonomy, enrich) and their parameters (`generation`, optional `model`, the enrich `prompt_scheme`, whether enrich reads the taxonomy). `cycle.sh start --recipe` (the runner passes the stack env's `NORA_RECIPE`) freezes it as `<build>/RECIPE.json`; the driver, the taxonomy fingerprint, promote and publish read it there. The release set records the recipe's name and digest and the build's stage fingerprints. A recipe's scheme wins over the runner config's. A build without a recipe runs and hashes as before.
+
+**Why.** Freezing makes a build reproducible after the recipe file changes. Moving every model choice into recipes was rejected for now: endpoints and keys must stay in env files, and splitting a model from its endpoint would make a wrong pairing easy; the override is there when a recipe needs it. The validator is standard library only because the host-side driver and runner import it.
+
+**Consequences.** A recipe without taxonomy unsets the taxonomy directory for the lane, so an env file cannot supply one. A generation bump changes the variant fingerprint; per-unit reuse keeps the cost of the re-stamp to what actually changed.

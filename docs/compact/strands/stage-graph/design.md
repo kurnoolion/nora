@@ -340,7 +340,8 @@ Each step leaves the system working and is landed on its own.
 3. **Recipes** in the driver, the runner and the page: `RECIPE.json`
    frozen from the stack env's recipe, `generation`, per-unit reuse
    recorded in provenance, the recipe and fingerprints recorded on the
-   release set, the page showing found versus computed.
+   release set, the page showing found versus computed. In four slices
+   (§10b).
 4. **New unit kinds** when a recipe needs them: graph and vector units
    in the registry, a serving mode in the store.
 
@@ -387,6 +388,45 @@ the next ingest on stack B computes its one cell and puts the corpus
 prefix in the store; stack A follows with its first self-serve ingest.
 Nothing is flipped by step 2 itself, and each stack's last served set
 stays as the rollback.
+
+## 10b. Step 3 in slices (planned 2026-11-10)
+
+Enrichment is not a pipeline stage: the cycle driver runs the SIRA lane
+in the sira-batch container, configured by that container's env file
+(endpoint, model, prompt directory) and by `NORA_SIRA_TAXONOMY_DIR`,
+which the driver sets per cell. A release set records only a scheme
+tag. Step 3 therefore lands in four slices, each leaving the system
+working:
+
+1. **Recipe as data, frozen in the build, recorded on the release set.**
+   `customizations/recipes/<name>.json`, validated by
+   `pipeline/recipes.py` (standard library only: the host-side driver
+   and runner import it). `cycle.sh start --recipe <name>` (else the
+   wiring env's `RECIPE`) copies it to `<build>/RECIPE.json`. The driver
+   reads it: `taxonomy` refuses and `enrich` stops requiring it when the
+   recipe has no taxonomy; `enrich` sets the taxonomy directory only when
+   `enrich.taxonomy` is true, and passes a model the recipe names;
+   `promote` takes the scheme from the recipe. The taxonomy fingerprint
+   carries the recipe's taxonomy parameters (`generation`, `model`).
+   Promote copies `RECIPE.json` and `STAGES.json` into the label; publish
+   records the recipe's name and digest and the build's stage
+   fingerprints on the release set (two additive columns). The runner
+   passes the stack env's `NORA_RECIPE`. A build without a recipe runs as
+   today. Model choice stays in the env files unless a recipe names one;
+   endpoints and keys never move into a recipe.
+2. **Enrich as a recorded stage.** A stage spec for `enrich` (inputs
+   parse and, when the recipe says so, taxonomy; externals the MNO's doc
+   prompt; params the recipe's enrich parameters and the model); the
+   driver stamps it in `STAGES.json` after `verify-enrich`. Enrich
+   outputs stay in the build (large; SIRA's incremental promote already
+   reuses per requirement).
+3. **The page and the redo.** The runner records each stage's origin
+   (computed, store, forced) on the ingest; the Ingest page shows it.
+   "Redo a served cell": a per-cell `generation` bump recorded at the
+   corpus root, which enters that cell's variant fingerprints only.
+4. **Store garbage collection.** `stage_store gc`: keep what any
+   manifest under a builds root or any release set in a registry on the
+   host names; dry run by default.
 
 ## 11. Invariants
 

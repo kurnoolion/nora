@@ -18,7 +18,7 @@
 #     corpus text) under <build>/reports/CYC-*.txt — paste-safe.
 #
 # Usage:
-#   ./cycle.sh start <build-id> [--profiles <path|prev-build-id>] [--seed <prev-build-id>]
+#   ./cycle.sh start <build-id> [--profiles <path|prev-build-id>] [--seed <prev-build-id>] [--recipe <name>]
 #   ./cycle.sh status
 #   ./cycle.sh parse        [--cell <MNO>/<MMMYYYY>] [--force] [--skip-standards]
 #   ./cycle.sh prompts      [--yes]             # gate: per-MNO prompts present + shaped, publish to <build>/prompts/
@@ -56,6 +56,13 @@
 # profiles.json, --profiles is refused and the seed needs no bindings.
 # STAGES_ROOT names the host's stage store: the batch container finds
 # outputs another build computed there and puts its own there.
+#
+# Recipes (stage graph, step 3): `start --recipe <name>` (else the wiring
+# env's RECIPE) freezes customizations/recipes/<name>.json into the build
+# as RECIPE.json. Then `taxonomy` refuses when the recipe runs none,
+# `enrich` reads a taxonomy only when the recipe says so and passes a
+# model the recipe names, and `promote` takes the recipe's scheme unless
+# --scheme is given. A build started without a recipe runs as before.
 #
 # Layout (override with env vars): NORA_ROOT=/srv/nora →
 #   $NORA_ROOT/builds/nora/<build-id>          NORA_BUILDS_ROOT (NORA_BUILDS_NORA_ROOT: the dir holding the builds)
@@ -113,14 +120,19 @@ wiring_var() { [ -f "$WIRING" ] || return 0; { grep -E "^$1=" "$WIRING" || true;
 CORPUS="$(wiring_var CORPUS_DIR)"     # the corpus root (stage graph); empty = bindings in the build
 STAGES="$(wiring_var STAGES_ROOT)"    # the host's stage store; empty = none
 bindings_file() { if [ -n "$CORPUS" ]; then echo "$CORPUS/profiles.json"; else echo "$NB/profiles.json"; fi; }
+REPO="$(cd "$HERE/.." && pwd)"
+recipe_cli() { ( cd "$REPO" && python3 -m core.src.pipeline.recipes "$@" ); }
+has_recipe() { [ -f "$NB/RECIPE.json" ]; }
+recipe_get() { has_recipe || return 0; recipe_cli get "$NB/RECIPE.json" "$1"; }
 usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 VERB="${1:-}"; [ -n "$VERB" ] || usage; shift
-BUILD="" PROFILES="" SEED="" YES=0 FORCE="" SKIPSTD="" CELL="" RETRY=0 SINGLE=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE="" INDEX_MODE="flat"
+BUILD="" PROFILES="" SEED="" RECIPE_ARG="" YES=0 FORCE="" SKIPSTD="" CELL="" RETRY=0 SINGLE=0 RUN="" LABEL="" HOST="" SCHEME="" SIRA_ONLY=0 NOTE="" INDEX_MODE="flat"
 while (( $# > 0 )); do
   case "$1" in
     --profiles)      PROFILES="$2"; shift 2;;
     --seed)          SEED="$2"; shift 2;;
+    --recipe)        RECIPE_ARG="$2"; shift 2;;
     --yes)           YES=1; shift;;
     --force)         FORCE="--force"; shift;;
     --skip-standards) SKIPSTD="--skip-standards"; shift;;
@@ -301,6 +313,13 @@ start)
     if [ -f "$PROFILES" ]; then src="$PROFILES"; elif [ -f "$NROOT/$PROFILES/profiles.json" ]; then src="$NROOT/$PROFILES/profiles.json"; fi
     [ -n "$src" ] || die 024 "--profiles '$PROFILES' is neither a file nor a build-id with profiles.json" "point at a profiles.json"
   fi
+  # the recipe (stage graph, step 3): validated before anything is created
+  RNAME="${RECIPE_ARG:-$(wiring_var RECIPE)}" rfile=""
+  if [ -n "$RNAME" ]; then
+    rfile="$REPO/customizations/recipes/$RNAME.json"
+    [ -f "$rfile" ] || die 035 "no recipe '$RNAME' under customizations/recipes/" "commit it, or name one of: $(ls "$REPO/customizations/recipes" 2>/dev/null | sed 's/\.json$//' | tr '\n' ' ')"
+    rsum="$(recipe_cli check "$rfile" 2>&1)" || die 036 "recipe '$RNAME' is invalid: $rsum" "fix customizations/recipes/$RNAME.json"
+  fi
   # the images the phases will run: the tag and prefix the wiring env gives
   # compose (IMAGE_TAG / IMAGE_PREFIX, defaults dev / local) — recording
   # `:dev` while compose ran another tag named the wrong images (field-found)
@@ -358,6 +377,10 @@ PY
   elif [ -n "$pf" ]; then mv "$pf" "$NB/profiles.json"; elif [ -n "$src" ]; then cp "$src" "$NB/profiles.json"; fi
   cyc init "$CJ" "$BUILD" "$ME" "$images"
   [ -n "$SEED" ] && cyc set "$CJ" seed "$SEED"
+  if [ -n "$rfile" ]; then
+    cp "$rfile" "$NB/RECIPE.json"; chmod 444 "$NB/RECIPE.json"
+    cyc set "$CJ" recipe "$RNAME"
+  fi
   # repoint the wiring env at the build. One line names the build
   # (NORA_BUILD_DIR; the compose file derives /data/env and /data/db from
   # it); the older NORA_ENV_DIR= / STORE_ROOT= lines are rewritten when a
@@ -372,7 +395,7 @@ PY
   cyc_block start ok <<EOF
 cells=$n profiles=$([ -n "$CORPUS" ] && echo corpus || { [ -f "$NB/profiles.json" ] && echo present || echo MISSING; }) stages=$([ -n "$STAGES" ] && echo store || echo off) wiring=$WIRING
 images=$images
-seed=${SEED:--} inherited=$inherited
+seed=${SEED:--} inherited=$inherited recipe=${RNAME:--}
 EOF
   [ -f "$(bindings_file)" ] || echo "NOTE: no profiles.json — new cells need bindings before parse (architect-reviewed, README Phase 0.4)"
   echo "next: ./cycle.sh parse"
@@ -386,6 +409,7 @@ status)
   [ -d "$NB/out/parse" ] && echo "  parse dirs   : $(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d | wc -l) (cells staged: $(cells | wc -l))"
   echo "  bindings     : $(bindings_file)$([ -f "$(bindings_file)" ] || echo ' (MISSING)')"
   echo "  stage store  : ${STAGES:-off}"
+  if has_recipe; then echo "  $(recipe_cli check "$NB/RECIPE.json")"; else echo "  recipe       : none (taxonomy and enrich as before)"; fi
   [ -f "$NB/STAGES.json" ] && echo "  manifest     : $(python3 -c '
 import json, sys, collections
 d = json.load(open(sys.argv[1])).get("stages", {})
@@ -455,6 +479,9 @@ EOF
 
 taxonomy)
   resolve_build; need_wiring
+  if has_recipe && [ "$(recipe_get has.taxonomy)" != 1 ]; then
+    die 053 "recipe $(recipe_get name) runs no taxonomy" "./cycle.sh enrich (the recipe's enrichment reads no taxonomy)"
+  fi
   require_phase prompts "./cycle.sh prompts (gate) first"
   [ "$(phase_state taxonomy)" != running ] || die 050 "taxonomy already running" "./cycle.sh status"
   scope=""; tag="ALL"
@@ -463,12 +490,16 @@ taxonomy)
     scope="--mno ${CELL%%/*} --release ${CELL##*/}"; tag="${CELL//\//-}"
   fi
   detach taxonomy nora-batch "/data/env/reports/stage-taxonomy-$tag-$TS.log" \
-    "exec python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $scope $FORCE"
+    "exec python -m core.src.pipeline.run_cli --env-dir /data/env --start taxonomy --end taxonomy --no-skip-taxonomy $scope $FORCE$(m="$(recipe_get taxonomy.model)"; [ -n "$m" ] && printf ' --model %s' "$m")"
   echo "  per cell (out/taxonomy/<MNO>/<MMMYYYY>/); re-running this verb after completion retries only failed docs (README Phase 4)"
   ;;
 
 enrich)
   resolve_build; need_wiring
+  # the recipe decides whether enrichment reads a taxonomy (no recipe: it does)
+  use_tax=1; has_recipe && use_tax="$(recipe_get enrich.taxonomy)"
+  emodel="$(recipe_get enrich.model)"
+  if [ "$use_tax" = 1 ]; then
   require_phase taxonomy "./cycle.sh taxonomy, then status until ok"
   # per-cell ledgers (out/taxonomy/<MNO>/<MMMYYYY>/extraction_state.json);
   # with --cell only that cell's, else every cell's in the build
@@ -478,6 +509,17 @@ enrich)
   [ "$failed" = 0 ] || die 061 "taxonomy ledger has $failed failed doc(s)" "./cycle.sh taxonomy${CELL:+ --cell $CELL} again (retries only failures); tax_debug for persistent ones"
   tl="$(cyc lastlog "$CJ" taxonomy)"; [ -z "$tl" ] || ! grep -q TAX-W003 "$tl" \
     || die 062 "TAX-W003 present in taxonomy log (overview not attached)" "check NORA_TAXONOMY_OVERVIEW_DIR + <build>/prompts/ contents"
+  else
+    require_phase prompts "./cycle.sh prompts (gate) first"
+  fi
+  # the lane's environment for one cell: its taxonomy dir (or none, unset
+  # so the env file cannot supply one), and the recipe's model if it names one
+  lane_env() {
+    local e="env"
+    if [ "$use_tax" = 1 ]; then e="$e NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/$1"; else e="$e -u NORA_SIRA_TAXONOMY_DIR"; fi
+    [ -z "$emodel" ] || e="$e NORA_SIRA_ENRICH_LLM_MODEL=$emodel"
+    echo "$e"
+  }
   [ "$(phase_state enrich)" != running ] || die 063 "enrich already running" "./cycle.sh status"
   cyc set "$CJ" run_name "$RUN"
   # --retry-failed re-queues the failed rows and RESUMES the run, batched.
@@ -492,13 +534,13 @@ enrich)
   esac
   if [ -n "$CELL" ]; then
     [ -d "$REQS/$CELL" ] || die 064 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
-    [ -d "$NB/out/taxonomy/$CELL" ] || die 066 "no taxonomy for $CELL at $NB/out/taxonomy/$CELL" "./cycle.sh taxonomy --cell $CELL"
+    [ "$use_tax" != 1 ] || [ -d "$NB/out/taxonomy/$CELL" ] || die 066 "no taxonomy for $CELL at $NB/out/taxonomy/$CELL" "./cycle.sh taxonomy --cell $CELL"
     # the lane reads the cell's own taxonomy (per release since 2026-11-06)
-    inner="NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/$CELL python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
+    inner="$(lane_env "$CELL") python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
   else
     order="$(cells_by_size | tr '\n' ' ')"
     echo "enrich: all cells smallest-first: $order"
-    inner="for c in $order; do NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/\$c python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
+    inner="for c in $order; do $(lane_env '$c') python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
   fi
   tag="${CELL:-ALL}"; tag="${tag//\//-}"
   detach enrich sira-batch "/data/env/reports/enrich-$tag-$TS.log" "$inner"
@@ -536,6 +578,7 @@ promote)
   require_phase verify-enrich "./cycle.sh verify-enrich (gate) first"
   args=(--serve-root "$SERVE_ROOT" --label "$LABEL" --sira-build "$SB")
   (( SIRA_ONLY )) || { [ -d "$NB/out" ] && args+=(--nora-build "$NB"); }
+  [ -n "$SCHEME" ] || SCHEME="$(recipe_get prompt_scheme)"   # the recipe's, unless given
   [ -n "$SCHEME" ] && args+=(--scheme "$SCHEME")
   if [ -f "$SERVE_ROOT/$LABEL/MANIFEST.json" ] && grep -q "\"sira_build\": *\"$SB\"" "$SERVE_ROOT/$LABEL/MANIFEST.json"; then
     echo "label $LABEL already promoted from this build — resuming at push"

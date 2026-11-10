@@ -704,3 +704,54 @@ def test_migrate_units_cli_takes_serve_root(tmp_path):
     rows = [r[0] for r in reg._connect().execute("SELECT unit FROM active")]
     assert rows == ["mno-a/Jan2031"]
 
+
+
+# ---------------------------------------------------------------------------
+# stage graph, step 3: how a set was built
+
+def test_release_set_records_the_recipe_and_stage_fingerprints(world):
+    env = world["env"]
+    (env / "RECIPE.json").write_text(json.dumps({
+        "name": "r-tax", "stages": ["taxonomy", "enrich"],
+        "params": {"enrich": {"taxonomy": True, "prompt_scheme": "scheme-r"}}}))
+    (env / "STAGES.json").write_text(json.dumps({"version": 1, "stages": {
+        "parse": {f"{MNO_A}/{R1}": {"fp": "p1", "origin": "store"}},
+        "taxonomy": {f"{MNO_A}/{R1}": {"fp": "t1", "origin": "computed"}}}}))
+    do_publish(world, "set-r", base="none")
+    rs = Registry(registry_path(world["root"])).release_set("set-r")
+    from core.src.pipeline.recipes import load
+    assert rs["recipe"] == "r-tax" and rs["recipe_digest"] == load(env / "RECIPE.json").digest
+    assert rs["prompt_scheme"] == "scheme-r"                        # from the recipe
+    assert json.loads(rs["stage_fps"]) == {"parse": {f"{MNO_A}/{R1}": "p1"},
+                                           "taxonomy": {f"{MNO_A}/{R1}": "t1"}}
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1-new")
+    do_publish(world, "set-r2", prompt_scheme="given")              # an explicit scheme wins
+    assert Registry(registry_path(world["root"])).release_set("set-r2")["prompt_scheme"] == "given"
+
+
+def test_release_set_without_a_recipe_records_empty_values(world):
+    do_publish(world, "set-plain", base="none")
+    rs = Registry(registry_path(world["root"])).release_set("set-plain")
+    assert (rs["recipe"], rs["recipe_digest"], rs["stage_fps"], rs["prompt_scheme"]) == ("", "", "", "")
+
+
+def test_a_bad_recipe_in_the_label_fails_the_publish(world):
+    (world["env"] / "RECIPE.json").write_text(json.dumps({"name": "x", "stages": ["parse"]}))
+    from core.src.pipeline.error_codes import PipelineError
+    with pytest.raises(PipelineError) as e:
+        do_publish(world, "set-bad", base="none")
+    assert e.value.code == "RCP-E002"
+    assert Registry(registry_path(world["root"])).release_set("set-bad") is None
+
+
+def test_registry_adds_the_recipe_columns_to_an_older_file(world):
+    import sqlite3
+    do_publish(world, "set-old", base="none")
+    path = registry_path(world["root"])
+    con = sqlite3.connect(path)
+    for col in ("recipe", "recipe_digest", "stage_fps"):
+        con.execute(f"ALTER TABLE release_set DROP COLUMN {col}")
+    con.commit(); con.close()
+    Registry(path, read_only=False).ensure()
+    rs = Registry(path).release_set("set-old")
+    assert (rs["recipe"], rs["recipe_digest"], rs["stage_fps"]) == ("", "", "")

@@ -232,6 +232,22 @@ build holds only it. At publish time every other unit is inherited from
 the active set (Phase 6). A new MNO is never seeded — its profile is
 chosen by hand (Phase 0.4).
 
+**Recipes (stage graph, step 3).** A recipe is a committed file,
+`customizations/recipes/<name>.json`, naming the variant stages a stack
+builds (`taxonomy`, `enrich`) and their parameters (`generation`, an
+optional `model` overriding the env file's, the enrich `prompt_scheme`,
+whether enrich reads the taxonomy). `./cycle.sh start ... --recipe
+<name>` (else `RECIPE=` in the wiring env; the runner passes the stack
+env's `NORA_RECIPE`) freezes it in the build as `RECIPE.json`. Then
+`taxonomy` refuses when the recipe runs none (`CYC-E053`), `enrich`
+unsets `NORA_SIRA_TAXONOMY_DIR` when the recipe's enrichment reads no
+taxonomy, and `promote` takes the recipe's scheme unless `--scheme` is
+given. An unknown recipe stops `start` with `CYC-E035`, an invalid one
+with `CYC-E036`. Promote copies `RECIPE.json` and `STAGES.json` into the
+label and publish records the recipe's name and digest and the stage
+fingerprints on the release set. `python3 -m core.src.pipeline.recipes
+check <file>` validates a recipe. No recipe: everything as before.
+
 **The corpus root and the stage store (stage graph, step 2).** Two
 optional lines in the ingestion wiring env, the same values for every
 stack on the host:

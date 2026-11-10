@@ -96,6 +96,10 @@ class Sim:
             (nb / "reports").mkdir(parents=True)
             (nb / "CYCLE.json").write_text(json.dumps({"build": build, "phases": []}))
             (nb / "profiles.json").write_text('{"bindings": [], "default": null}')  # as cycle.sh without a corpus root
+            if "--recipe" in args:   # as cycle.sh: freeze the named recipe into the build
+                name = args[args.index("--recipe") + 1]
+                src = Path(__file__).resolve().parents[2] / "customizations/recipes" / f"{name}.json"
+                (nb / "RECIPE.json").write_text(src.read_text())
             (self.root / "builds/ACTIVE").write_text(build)
             return Result(0, [f"CYC build={build} phase=start status=ok"])
         build = (self.root / "builds/ACTIVE").read_text().strip()
@@ -693,6 +697,55 @@ def test_rollback_refused_when_a_later_set_is_active(host):
     _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest_id}))
     assert r.run_once() == "completed"
     assert _run(q.get_ingest(ingest_id)).state == "rolled_back"
+
+
+def _stack_env(host, text: str) -> None:
+    env = Path(host["cfg"].stack_env)
+    env.parent.mkdir(parents=True, exist_ok=True)
+    env.write_text(text)
+
+
+def test_stack_recipe_reaches_start_and_steers_the_run(host):
+    """NORA_RECIPE in the stack's serving env is passed to `cycle.sh start`;
+    a recipe without taxonomy skips that stage; a recipe's scheme wins over
+    the runner config's and reaches promote, publish and the eval."""
+    _stack_env(host, "NORA_RECIPE=sira-plain\n")
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    cmds = sim.cmds()
+    build = _run(host["q"].get_ingest(ingest_id)).build
+    assert any(c.endswith(f"cycle.sh start {build} --seed seed0 --recipe sira-plain") for c in cmds)
+    assert not any("cycle.sh taxonomy" in c for c in cmds)
+    assert any("recipe sira-plain runs none; skipped" in l for l in _run(host["q"].get_logs(job)))
+    assert any("cycle.sh enrich --cell MNO-A/Apr2031" in c for c in cmds)
+    # the scheme: sira-plain names none, so the runner config's (v9) is used
+    assert any("--prompt-scheme v9" in c for c in cmds)
+
+
+def test_recipe_scheme_wins_over_the_config(host):
+    import uuid
+    name = f"test-{uuid.uuid4().hex[:8]}"
+    path = Path(__file__).resolve().parents[2] / "customizations/recipes" / f"{name}.json"
+    path.write_text(json.dumps({"name": name, "stages": ["taxonomy", "enrich"],
+                                "params": {"enrich": {"taxonomy": True, "prompt_scheme": "from-recipe"}}}))
+    try:
+        _stack_env(host, f"NORA_RECIPE={name}\n")
+        sim = Sim(host["root"])
+        r = _runner(host, sim)
+        job, _ = _submit_ingest(host)
+        assert r.run_once() == "completed"
+        cmds = sim.cmds()
+        assert any("cycle.sh taxonomy --cell MNO-A/Apr2031" in c for c in cmds)
+        assert any("--scheme from-recipe" in c for c in cmds)
+        assert any("--prompt-scheme from-recipe" in c for c in cmds)
+        assert any("--sira-prompt-scheme from-recipe" in c for c in cmds)
+        assert not any(" v9" in c for c in cmds)
+        logs = _run(host["q"].get_logs(job))
+        assert sum("using the recipe's" in l for l in logs) == 1
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def test_documents_stage_refusals(host):

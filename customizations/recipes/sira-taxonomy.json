@@ -1,0 +1,10 @@
+{
+  "name": "sira-taxonomy",
+  "note": "Per-release taxonomy, then SIRA enrichment with each plan's taxonomy block in the prompt.",
+  "stages": ["taxonomy", "enrich"],
+  "params": {
+    "taxonomy": {"generation": 1},
+    "enrich": {"taxonomy": true, "generation": 1}
+  },
+  "serve": {"mode": "sira", "units": ["cells", "trees", "history"]}
+}

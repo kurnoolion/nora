@@ -14,8 +14,9 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 - Stage graph (stage_graph.py, strand stage-graph, D-DRAFT-1): `StageSpec(name, inputs, externals, params, uses_model)` with `.per_cell`; `SPECS` / `STAGE_GRAPH` / `STAGE_ORDER` (equals `STAGE_NAMES`); `spec_of(stage)`; `tier_of(stage) -> "corpus" | "variant"` by the rule *no model call and corpus inputs only*; `CORPUS_STAGES` (extract, profile, parse, resolve, standards), `VARIANT_STAGES`, `CORPUS_PREFIX`; `GLOBAL_KEY` (`"*"`, the manifest key of a global stage); `validate_graph() -> list[str]`.
 - Fingerprints (fingerprints.py, D-DRAFT-2): `stage_fingerprint(stage, code_version, params, input_fps, external_fps)` (sha256 of canonical JSON, 16 hex), `digest`, `hash_bytes`, `hash_files(files, rel_to)`, `code_version(stage)` (a corpus stage's package `CODE_VERSION` via `CORPUS_VERSION_MODULES`; else `NORA_CODE_VERSION` or `"dev"`), `cell_key(stage, cell)`, constants `ABSENT` / `UNRESOLVED`; `Fingerprinter(ctx, manifest)` — `params`, `input_fps`, `externals` (`documents`, `profile`, `annotations`, `overview_prompt`), `current(stage, cell)`, `recorded`, `unchanged(stage, cell, fp=None)` (False under `--force`), `in_store(stage)`, `prepare(stage, cell, fp, complete=None) -> bool` (True = reuse: recorded here, or found in the store and cloned in; False = compute: the cell's directory made private, the store's building marker set), `stamp(stage, cell, fp=None)` (records with provenance and `origin`, puts a stored stage's cell into the store), `forget(stage, cell, fp=None)`, `cell_input_dir(cell)`; constants `NOT_STORED`, `ORIGIN_COMPUTED` / `ORIGIN_STORE` / `ORIGIN_FORCED`.
 - Stage store (stage_store.py, step 2, D-DRAFT-5/8): `StageStore(root, wait_seconds=None, poll_seconds=5, sleep=time.sleep)` over `<stages-root>/<stage>/<MNO>/<release>/<fp>/` — `path`, `provenance_path`, `marker_path`, `cell_dir`, `has`, `provenance`, `commit(stage, cell, fp, src, provenance) -> bool` (False when the store already held `fp`; `PIP-E005` when unwritable), `link_view(stage, cell, fp, view)`, `mark_building`, `release`, `wait_for(stage, cell, fp, build) -> bool`; helpers `clone_tree(src, dst)` (hard link, else copy), `make_readonly(tree)`, `privatize(tree) -> int`; `DEFAULT_WAIT_SECONDS`, `WAIT_SECONDS_ENV`.
+- Recipes (recipes.py, step 3, standard library only): `Recipe(name, stages, params, serve, note)` with `has`, `stage_params(stage)` (`generation` defaulted to 1), `param`, `enrich_uses_taxonomy`, `prompt_scheme`, `digest` (16 hex, note excluded), `to_dict`; `parse(data, name_hint)`, `load(path, check_name)`, `load_frozen(build_dir)`, `recipe_path(repo_root, name)`, `get(recipe, key)`; `RecipeError` (`RCP-E001` unreadable, `RCP-E002` invalid); `DRIVER_STAGES` (taxonomy, enrich), `RESERVED_STAGES`, `PARAMS`, `SERVE_MODES`, `SERVE_UNITS`, `RECIPES_DIR`, `RECIPE_FILE`. CLI `python3 -m core.src.pipeline.recipes check <file> | get <file> <key>` for the host-side driver.
 - Build manifest (manifest.py): `BuildManifest(path)` over `<env_dir>/STAGES.json` (`MANIFEST_NAME`) — `get(stage, key)`, `entry`, `fingerprints(stage)`, `stages()`, `record(stage, key, fp, **provenance)`, `forget`, `save` (atomic); a corrupt file raises `PIP-E004`.
-- `PipelineContext.build_dir` / `.env_dir` (the build directory), `.build_id`, `.fingerprints` (the build's `Fingerprinter`, lazy), `.profile_override()` (the `--profile` / `corrections/profile.json` single-profile override); `.stages_root` / `.stage_store` (the host's store, or None) and `.corpus_dir` with `.bindings_dir` / `.annotations_dir` (the corpus root when set, else the build), both factories reading `STAGES_ROOT_ENV` / `CORPUS_DIR_ENV`.
+- `PipelineContext.build_dir` / `.env_dir` (the build directory), `.build_id`, `.recipe` (the build's frozen `RECIPE.json`, or None; lazy), `.fingerprints` (the build's `Fingerprinter`, lazy), `.profile_override()` (the `--profile` / `corrections/profile.json` single-profile override); `.stages_root` / `.stage_store` (the host's store, or None) and `.corpus_dir` with `.bindings_dir` / `.annotations_dir` (the corpus root when set, else the build), both factories reading `STAGES_ROOT_ENV` / `CORPUS_DIR_ENV`.
 - Error catalog (error_codes.py):
   - `ErrorDef` (code, message, hint), `PipelineError` (raised by stages)
   - `CODES` dict — every EXT-, PRF-, PRS-, PRV-, RES-, RSV-, TAX-, STD-, GRF-, VEC-, EVL-, GEV-, OVL-, TRS-, HIS-, PUB-, REG-, RHD-, IRN-, PIP-, ENV-, MDL- code with human-readable hint. Every code raised anywhere is registered, including `PIP-E003` (uncovered profile binding; raised in stages.py and env/profile_bindings.py) and `EXT-E004` (non-MMMYYYY release dir; raised via extraction/release_key.py). `GEV-` is the golden-eval family; `OVL-` / `TRS-` / `HIS-` are the Overlay, Trees and History stores (their build/import CLIs and their readers' schema refusals, `SchemaVersionError`); `PRV-` and `RSV-` are the parse-review and resolve-review CLIs. A test scans the source for unregistered codes.
@@ -44,6 +45,7 @@ Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract �
 **Key choices**
 - Plain functions per stage + dispatch dict instead of a class hierarchy — each stage is independently runnable from the CLI or tests without instantiating anything upstream.
 - The stage graph is data, and the tier of a stage is derived by one rule rather than listed (strand stage-graph, D-DRAFT-1): a stage that gains a model call moves to the variant tier by definition, and `validate_graph` keeps the order equal to `PIPELINE_STAGES` and per-cell stages free of global inputs. The build manifest is `STAGES.json`, not `MANIFEST.json`, because the promoted snapshot under the labels root already has a `MANIFEST.json` of another shape.
+- A recipe names variant stages only and is validated by a standard-library module (D-DRAFT-9): the host-side driver and runner import it with the host's python3. Its parameters for a stage enter that stage's fingerprint only when the build has a recipe, so builds without one keep their fingerprints. A model named in a recipe overrides the env file's for that stage; endpoints and keys never move into a recipe.
 - Builds keep their `out/` tree and the store is cloned into it (D-DRAFT-8): about thirty modules outside the pipeline read that layout. Clones are hard links on one mount and copies across mounts (the batch containers mount the build and the store separately). The vector store and variant stages from an unversioned image stay out of the store. `--force` keeps its own output and leaves the store's first result.
 - Stages stamp their own cells (the stage knows which cells completed cleanly) rather than the runner stamping after a stage returns: a degraded taxonomy run or a parse with one failed document must leave that cell unrecorded while the others are.
 - Prefix-per-module error codes (EXT / PRF / PRS / PRV / RES / RSV / TAX / STD / GRF / VEC / EVL / GEV / OVL / TRS / HIS / PIP / ENV / MDL) — the prefix points the user at the right module without needing to read the message.
@@ -96,7 +98,7 @@ _Alphabetical, regenerated by regen-map._
   - `forget` — method — pub — Drop the cell's entry (a degraded run) and release this build's
   - `in_store` — method — pub — True when `stage`'s per-cell outputs are found in and put into
   - `input_fps` — method — pub
-  - `params` — method — pub
+  - `params` — method — pub — The stage's parameters: its spec's context fields and, when the
   - `prepare` — method — pub — Decide whether `stage` must compute `cell` under `fp`.
   - `recorded` — method — pub
   - `stamp` — method — pub — Record the current fingerprint (or `fp`) with its provenance and,
@@ -129,6 +131,35 @@ _Alphabetical, regenerated by regen-map._
 - `MANIFEST_NAME` — constant — pub
 - `MANIFEST_VERSION` — constant — pub
 - `_now_iso` — function — internal
+
+`recipes.py`
+- `DRIVER_STAGES` — constant — pub
+- `PARAMS` — constant — pub
+- `RECIPES_DIR` — constant — pub
+- `RECIPE_FILE` — constant — pub
+- `RESERVED_STAGES` — constant — pub
+- `Recipe` — dataclass — pub — A validated recipe.
+  - `digest` — property — pub — sha256 of the canonical JSON, 16 hex: two recipes with one
+  - `enrich_uses_taxonomy` — property — pub — Whether enrich reads the cell's taxonomy: its `taxonomy` param,
+  - `has` — method — pub
+  - `param` — method — pub
+  - `prompt_scheme` — property — pub
+  - `stage_params` — method — pub — The stage's parameters with `generation` filled in (default 1);
+  - `to_dict` — method — pub
+- `RecipeError` — class — pub — A recipe that cannot be read or is not valid (RCP-E001 / RCP-E002).
+  - `__init__` — constructor — internal
+- `SERVE_MODES` — constant — pub
+- `SERVE_UNITS` — constant — pub
+- `_NAME_RE` — constant — internal
+- `_TOP_KEYS` — constant — internal
+- `_bad` — function — internal
+- `_canonical` — function — internal
+- `get` — function — pub — One value as text for the shell: ``name``, ``digest``, ``stages``
+- `load` — function — pub — Read and validate a recipe file. `check_name` requires the name to
+- `load_frozen` — function — pub — The recipe frozen in a build (``<build>/RECIPE.json``), or None.
+- `main` — function — pub
+- `parse` — function — pub — Validate `data` (the parsed JSON) and return the `Recipe`.
+- `recipe_path` — function — pub
 
 `report.py`
 - `FIX_TEMPLATES` — constant — pub
@@ -163,6 +194,7 @@ _Alphabetical, regenerated by regen-map._
   - `from_env` — classmethod — pub — Create context from an EnvironmentConfig.
   - `input_cells` — method — pub — The in-scope `(MNO, release)` cells present under `input/`, validated + sorted.
   - `profile_override` — method — pub — The single-profile override applied to every cell, if any:
+  - `recipe` — property — pub — The recipe frozen in the build (``<env_dir>/RECIPE.json``), or
   - `stage_output` — method — pub — Get the output directory for a stage.
   - `stage_store` — property — pub — The host's `StageStore`, or None without `stages_root` (lazy).
   - `standalone` — classmethod — pub — Create context for standalone (no EnvironmentConfig) mode.

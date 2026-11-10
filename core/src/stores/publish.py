@@ -380,6 +380,34 @@ def plan_release_set(reg: Registry, label: str, *, cells: list[UnitSource],
 # ---------------------------------------------------------------------------
 # publish
 
+def build_record(env_dir: "str | Path") -> dict:
+    """How the set's build was made (stage graph, step 3), from the files
+    promote copies into the label: ``RECIPE.json`` (name, digest, scheme)
+    and ``STAGES.json`` (``{stage: {cell: fp}}`` as compact JSON). Every
+    value is '' when the file is absent; a bad recipe fails the publish."""
+    out = {"recipe": "", "recipe_digest": "", "prompt_scheme": "", "stage_fps": ""}
+    if not env_dir:
+        return out
+    from core.src.pipeline.recipes import RECIPE_FILE, RecipeError, load
+    d = Path(env_dir)
+    if (d / RECIPE_FILE).is_file():
+        try:
+            r = load(d / RECIPE_FILE)
+        except RecipeError as e:
+            raise PipelineError("RCP-E002", {"reason": str(e)}) from e
+        out.update(recipe=r.name, recipe_digest=r.digest, prompt_scheme=r.prompt_scheme)
+    stages = d / "STAGES.json"
+    if stages.is_file():
+        try:
+            data = json.loads(stages.read_text(encoding="utf-8")).get("stages", {})
+            fps = {s: {k: e.get("fp", "") for k, e in sorted(cells.items())}
+                   for s, cells in sorted(data.items())}
+            out["stage_fps"] = json.dumps(fps, sort_keys=True, separators=(",", ":"))
+        except (OSError, ValueError, AttributeError):
+            out["stage_fps"] = ""   # a record, not a gate: an unreadable manifest is left out
+    return out
+
+
 def code_version() -> str:
     """The build's code version: the image-baked NORA_CODE_VERSION, else
     git for source runs, else '' (a container without .git)."""
@@ -478,11 +506,14 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
                 new_units.append(NewUnit(p.source.store, p.source.unit, p.source.fingerprint,
                                          p.rel_file, sha, n, p.source.schema_version,
                                          p.source.fingerprint_version))
+            built = build_record(env_dir)
             reg.record_release_set(
                 con, label, new_units, plan.reused,
                 versions={(p.source.store, p.source.unit): p.version for p in plan.new},
                 created_by=_user(), note=note, code_version=code_version(),
-                prompt_scheme=prompt_scheme)
+                prompt_scheme=prompt_scheme or built["prompt_scheme"],
+                recipe=built["recipe"], recipe_digest=built["recipe_digest"],
+                stage_fps=built["stage_fps"])
             reg.commit_write(con)
         except BaseException:
             reg.rollback_write(con)

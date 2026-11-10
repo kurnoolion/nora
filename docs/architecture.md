@@ -392,6 +392,15 @@ A `.building` marker makes a second producer wait for the first. With
 corpus root, shared by every stack. The manifest records each entry's
 origin: `computed`, `store` or `forced`.
 
+**Recipes** (step 3). A stack's recipe (`NORA_RECIPE` in its serving
+env; `customizations/recipes/<name>.json`) names the variant stages it
+builds and their parameters. The cycle driver freezes it in the build as
+`RECIPE.json`; the taxonomy fingerprint carries the recipe's taxonomy
+parameters (`generation` among them); the driver skips taxonomy and
+unsets the SIRA taxonomy directory for a recipe without one; the release
+set records the recipe's name and digest and the build's stage
+fingerprints (§21).
+
 ### 5.2 Drivers
 
 | Script | Role |

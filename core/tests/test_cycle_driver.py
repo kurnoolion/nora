@@ -538,3 +538,113 @@ def test_prompts_gate_reads_the_batch_env_the_wiring_names(host, tmp_path):
     r = host["run"]("prompts", "--yes")
     assert r.returncode == 0, r.stderr + r.stdout
     assert f"NORA_TAXONOMY_OVERVIEW_DIR: set in {named}" in r.stdout
+
+
+# -- recipes (stage graph, step 3) --------------------------------------------
+
+import contextlib
+import uuid
+
+
+@contextlib.contextmanager
+def _temp_recipe(body: dict):
+    """A recipe file under customizations/recipes for one test, always removed."""
+    name = f"test-{uuid.uuid4().hex[:8]}"
+    path = REPO / "customizations" / "recipes" / f"{name}.json"
+    path.write_text(json.dumps(dict(body, name=body.get("name", name))), encoding="utf-8")
+    try:
+        yield name
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def _parsed_with(host, recipe: str):
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    r = host["run"]("start", "b1", "--seed", "b0", "--recipe", recipe)
+    assert r.returncode == 0, r.stderr
+    assert host["run"]("parse").returncode == 0
+    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True, exist_ok=True)
+    return r
+
+
+def _last_inner(host) -> str:
+    return Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+
+
+def test_start_freezes_the_recipe_and_status_shows_it(host):
+    r = _parsed_with(host, "sira-taxonomy")
+    nb = host["nora"] / "b1"
+    assert json.loads((nb / "RECIPE.json").read_text())["name"] == "sira-taxonomy"
+    assert not (nb / "RECIPE.json").stat().st_mode & 0o222
+    assert _cycle_json(host, "b1")["recipe"] == "sira-taxonomy"
+    assert "recipe=sira-taxonomy" in r.stdout
+    assert "recipe sira-taxonomy: stages=taxonomy,enrich" in host["run"]("status").stdout
+
+
+def test_start_takes_the_wiring_recipe_and_refuses_unknown_or_invalid(host):
+    host["cell"]("MNO-A", "Jan2031")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "RECIPE=no-such-recipe\n", encoding="utf-8")
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E035" in r.stderr and "sira-plain" in r.stderr
+    with _temp_recipe({"stages": ["parse"]}) as bad:
+        r = host["run"]("start", "b1", "--recipe", bad)
+        assert r.returncode == 1 and "CYC-E036" in r.stderr and "corpus prefix" in r.stderr
+    assert not (host["nora"] / "b1").exists()
+    wiring.write_text(wiring.read_text().replace("no-such-recipe", "sira-plain"), encoding="utf-8")
+    assert host["run"]("start", "b1").returncode == 0
+    assert json.loads((host["nora"] / "b1" / "RECIPE.json").read_text())["name"] == "sira-plain"
+
+
+def test_plain_recipe_skips_taxonomy_and_enriches_without_it(host):
+    _parsed_with(host, "sira-plain")
+    r = host["run"]("taxonomy")
+    assert r.returncode == 1 and "CYC-E053" in r.stderr
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 1 and "phase 'prompts'" in r.stderr       # the gate still applies
+    assert host["run"]("prompts", "--yes").returncode == 0
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    inner = _last_inner(host)
+    assert "env -u NORA_SIRA_TAXONOMY_DIR python -m sandbox.sira_lane" in inner
+    assert "NORA_SIRA_TAXONOMY_DIR=" not in inner
+
+
+def test_recipe_models_and_scheme_reach_the_phases(host):
+    body = {"stages": ["taxonomy", "enrich"],
+            "params": {"taxonomy": {"model": "tax-model"},
+                       "enrich": {"model": "enr-model", "prompt_scheme": "scheme-x", "taxonomy": True}}}
+    with _temp_recipe(body) as name:
+        _parsed_with(host, name)
+        assert host["run"]("prompts", "--yes").returncode == 0
+        assert host["run"]("taxonomy").returncode == 0
+        assert "--model tax-model" in _last_inner(host)
+        tx = host["nora"] / "b1" / "out" / "taxonomy" / "MNO-A" / "Jan2031"
+        tx.mkdir(parents=True, exist_ok=True)
+        (tx / "extraction_state.json").write_text(json.dumps({"prompt_fp": "x", "docs": {"d": {"status": "ok"}}}))
+        assert host["run"]("enrich", "--cell", "MNO-A/Jan2031").returncode == 0
+        inner = _last_inner(host)
+        assert ("env NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/MNO-A/Jan2031 "
+                "NORA_SIRA_ENRICH_LLM_MODEL=enr-model python") in inner
+
+
+def test_promote_carries_the_recipe_and_the_manifest_into_the_label(tmp_path):
+    nb = tmp_path / "build"
+    (nb / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True)
+    (nb / "RECIPE.json").write_text('{"name": "sira-plain"}')
+    (nb / "STAGES.json").write_text('{"version": 1, "stages": {}}')
+    serve = tmp_path / "serve"
+    r = subprocess.run(["bash", str(REPO / "docker" / "promote.sh"), "--serve-root", str(serve),
+                        "--label", "lbl-1", "--nora-build", str(nb)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    for f in ("RECIPE.json", "STAGES.json"):
+        assert (serve / "lbl-1" / "nora" / f).read_text() == (nb / f).read_text()
+    # a build without them promotes as before
+    nb2 = tmp_path / "build2"
+    (nb2 / "out" / "parse").mkdir(parents=True)
+    r = subprocess.run(["bash", str(REPO / "docker" / "promote.sh"), "--serve-root", str(serve),
+                        "--label", "lbl-2", "--nora-build", str(nb2)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert not (serve / "lbl-2" / "nora" / "RECIPE.json").exists()

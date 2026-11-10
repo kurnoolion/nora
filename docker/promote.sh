@@ -74,6 +74,11 @@ if [ -n "$NORA_BUILD" ]; then
       echo "WARN: $NORA_BUILD/out/$d missing — skipped"
     fi
   done
+  # the build's recipe and stage manifest travel with the label: publish
+  # records them on the release set (stage graph, step 3)
+  for f in RECIPE.json STAGES.json; do
+    [ -f "$NORA_BUILD/$f" ] && { mkdir -p "$DEST/nora"; cp "$NORA_BUILD/$f" "$DEST/nora/$f"; echo "promoted nora $f"; }
+  done
   promoted_nora="$(cd "$NORA_BUILD" && pwd)"
 fi
 if [ -n "$SIRA_BUILD" ]; then
@@ -114,5 +119,5 @@ done
 echo ""
 echo "promoted -> $DEST"
 echo "point the stack .env at it and restart:"
-[ -n "$promoted_nora" ] && echo "  NORA_ENV_DIR=$DEST/nora"
-[ -n "$promoted_sira" ] && echo "  STORE_ROOT=$DEST/sira"
+if [ -n "$promoted_nora" ]; then echo "  NORA_ENV_DIR=$DEST/nora"; fi
+if [ -n "$promoted_sira" ]; then echo "  STORE_ROOT=$DEST/sira"; fi
