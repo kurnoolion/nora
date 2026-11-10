@@ -97,3 +97,13 @@
 **Why.** Recording makes the release set say exactly how its Cells were built and lets a later redo key on the fingerprint. A pipeline stage for enrich was rejected: the lane's container, env file and gate are the driver's, and moving them would change every host step for no gain. Storing enrich outputs was rejected for now: they are the largest artifact and the sharing they would give across stacks needs equal recipes, which today's stacks do not have.
 
 **Consequences.** A recipe without taxonomy gives enrich a fingerprint without the taxonomy input, so turning taxonomy on or off is a different output. A stamp failure stops the verify gate (`CYC-E071`).
+
+### D-DRAFT-11 — 2026-11-10 — A served cell is redone by a per-cell generation at the corpus root, as a new ingest
+
+**Context.** A served cell can only be rebuilt by hand today: the page refuses a served release, and the documents stage refuses an existing cell. With fingerprints, an unchanged cell is never recomputed, so a redo needs an input that changes on purpose.
+
+**Decision.** `<corpus>/generations.json` holds a generation per cell. The page's Redo on a served ingest creates a new ingest row (`redo_of`) and a job with `params.redo`; the runner bumps the cell's generation and runs from `start` with a new build. A generation above 1 enters the cell's variant fingerprints only; generation 1 enters nothing. The original stays served until the redo is served; abandon and purge of a redo keep the documents.
+
+**Why.** A per-cell value redoes one cell and nothing else; the recipe's `generation` would redo every cell of a stack on its next build. Redoing in place (re-running the served ingest's build) was rejected: the served set would lose its build and the rollback target its provenance. A generation outside the fingerprint was rejected: two outputs would share one identity.
+
+**Consequences.** Redo needs the corpus root. A bump survives an abandoned redo; the next redo bumps again, which is harmless. The page also shows each stage's origin (found or computed) from the build's manifest, copied onto the ingest row by the runner.

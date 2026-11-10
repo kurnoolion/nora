@@ -171,6 +171,9 @@ class Ctx:
 
 def st_documents(c: Ctx) -> None:
     ing = c.ingest
+    if ing.get("redo_of"):
+        c.log(f"documents: a redo of {str(ing['redo_of'])[:8]} uses the served cell's documents")
+        return
     if not _CELL_RE.match(ing["mno"]) or not _REL_RE.match(ing["release"]):
         raise StageError(f"bad cell coordinates {ing['mno']}/{ing['release']}")
     try:
@@ -505,10 +508,52 @@ STAGE_FNS = {
 }
 
 
+def _record_origins(c: Ctx) -> None:
+    """Copy where each stage's output for the ingest's cell came from
+    (`computed`, `store`, `forced`; the build's STAGES.json) onto the
+    ingest row, for the Ingest page. Best effort: a page detail."""
+    if not c.build:
+        return
+    try:
+        data = json.loads((c.cfg.build_dir(c.build) / "STAGES.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    key = f"{c.ingest['mno']}/{c.ingest['release']}"
+    origins = {stage: e.get("origin", "computed")
+               for stage, cells in (data.get("stages") or {}).items()
+               for k, e in cells.items() if k == key}
+    if origins:
+        c.db.update_ingest(c.ingest["id"], stage_origins=json.dumps(origins, sort_keys=True))
+
+
+def _start_redo(c: Ctx) -> None:
+    """A redo of a served cell: bump the cell's generation at the corpus
+    root, so every variant stage of that cell gets a new fingerprint and
+    is computed again; the corpus prefix is found as before."""
+    corpus = read_env_value(c.cfg.builds_wiring, "CORPUS_DIR")
+    if not corpus:
+        raise StageError("a redo needs the corpus root (CORPUS_DIR in the ingestion wiring env)")
+    from core.src.pipeline.generations import bump
+    try:
+        n = bump(corpus, f"{c.ingest['mno']}/{c.ingest['release']}",
+                 by=str(c.job.get("submitted_by") or c.cfg.runner_name),
+                 note=f"redo of ingest {str(c.ingest.get('redo_of') or '')[:8]}")
+    except (OSError, ValueError) as exc:
+        raise StageError(f"redo: generation not bumped: {exc}")
+    c.log(f"redo: {c.ingest['mno']}/{c.ingest['release']} is now generation {n}; its variant stages run again")
+
+
 def run_ingest(c: Ctx) -> None:
-    """Run the stages from the start, or from `params.retry_from`."""
-    retry_from = (c.job.get("params") or {}).get("retry_from") or ""
-    if retry_from:
+    """Run the stages from the start, from `params.retry_from`, or, for a
+    redo (`params.redo`), from `start` after bumping the cell's generation."""
+    params = c.job.get("params") or {}
+    retry_from = params.get("retry_from") or ""
+    if params.get("redo"):
+        if not c.ingest.get("redo_of"):
+            raise StageError("a redo job needs an ingest made by the Redo action")
+        _start_redo(c)
+        retry_from = "start"
+    elif retry_from:
         if retry_from not in STAGES:
             raise StageError(f"unknown retry stage {retry_from!r}")
         c.build = c.ingest.get("build") or ""
@@ -528,6 +573,8 @@ def run_ingest(c: Ctx) -> None:
         c.db.update_ingest(c.ingest["id"], stage=name)
         c.log(f"[{idx + 1}/{total}] {name}")
         STAGE_FNS[name](c)
+        if name in ("parse", "taxonomy", "verify"):
+            _record_origins(c)
     c.set_state("staged", stage=None)
 
 
@@ -668,7 +715,9 @@ def run_purge(c: Ctx) -> None:
     if ing.get("run_ref"):
         _remove_tree(c, "golden run", Path(c.cfg.golden_dir) / "runs" / ing["run_ref"], problems)
     cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
-    if cell.is_dir():
+    if cell.is_dir() and ing.get("redo_of"):
+        c.log("purge: documents kept — a redo's documents belong to the ingest it repeats")
+    elif cell.is_dir():
         if _registry_has(c, "SELECT 1 FROM active WHERE store='cells' AND unit=?",
                          (f"{ing['mno']}/{ing['release']}",)):
             c.log("purge: documents kept — the active set serves this cell")
@@ -706,7 +755,9 @@ def run_abandon(c: Ctx) -> None:
         c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} abandoned")
     else:
         c.log("abandon: no cycle in flight for this ingest")
-    if c.cfg.abandon_removes_documents:
+    if ing.get("redo_of"):
+        c.log("abandon: documents kept — a redo's documents belong to the ingest it repeats")
+    elif c.cfg.abandon_removes_documents:
         cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
         if cell.is_dir():
             shutil.rmtree(cell)

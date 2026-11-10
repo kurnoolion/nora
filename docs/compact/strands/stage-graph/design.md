@@ -420,7 +420,7 @@ working:
    driver stamps it in `STAGES.json` after `verify-enrich`. Enrich
    outputs stay in the build (large; SIRA's incremental promote already
    reuses per requirement).
-3. **The page and the redo.** The runner records each stage's origin
+3. **The page and the redo** (built 2026-11-10). The runner records each stage's origin
    (computed, store, forced) on the ingest; the Ingest page shows it.
    "Redo a served cell": a per-cell `generation` bump recorded at the
    corpus root, which enters that cell's variant fingerprints only.

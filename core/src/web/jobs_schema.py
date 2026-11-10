@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS ingests (
     flipped_at TEXT,
     rolled_back_at TEXT,
     error TEXT,
-    callback_url TEXT
+    callback_url TEXT,
+    redo_of TEXT,
+    stage_origins TEXT
 )
 """
 
@@ -107,6 +109,10 @@ JOBS_ADDED_COLUMNS = (
 )
 INGESTS_ADDED_COLUMNS = (
     ("callback_url", "TEXT"),
+    # stage graph, step 3: the served ingest a redo repeats, and where each
+    # stage's output came from ({stage: "computed" | "store" | "forced"})
+    ("redo_of", "TEXT"),
+    ("stage_origins", "TEXT"),
 )
 
 # Ingest states a client is told about (webhook events `ingest.<state>`).

@@ -187,7 +187,17 @@ class Fingerprinter:
         return out
 
     def externals(self, stage: str, cell: Cell | None) -> dict:
-        return {name: self._EXTERNALS[name](self, cell) for name in spec_of(stage).externals}
+        """The stage's external inputs, plus the cell's generation at the
+        corpus root when it is above 1 and the stage is variant-side (a
+        redo of that cell, `pipeline.generations`); generation 1 adds
+        nothing, so no fingerprint moves until a cell is redone."""
+        out = {name: self._EXTERNALS[name](self, cell) for name in spec_of(stage).externals}
+        if cell is not None and spec_of(stage).per_cell and tier_of(stage) != CORPUS:
+            from core.src.pipeline.generations import cell_generation
+            n = cell_generation(self.ctx.corpus_dir, cell_key(stage, cell))
+            if n > 1:
+                out["cell_generation"] = str(n)
+        return out
 
     # -- the rule, applied -------------------------------------------------
 

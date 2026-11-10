@@ -113,6 +113,13 @@ def _ingest_view(ing: Ingest, admin: bool = False) -> dict[str, Any]:
     d["can_purge"] = st in PURGEABLE_STATES and admin   # the administrator's action: it deletes
     d["purgeable"] = st in PURGEABLE_STATES
     d["can_cancel"] = st in ("queued", "running")
+    # stage graph, step 3: run the cell's model stages again (a new
+    # generation of the cell); the corpus prefix is found, not recomputed
+    d["can_redo"] = st == "served"
+    try:
+        d["origins"] = json.loads(ing.stage_origins) if ing.stage_origins else {}
+    except ValueError:
+        d["origins"] = {}
     d["queue_position"] = None
     d["stages"] = [{"name": s, "hint": STAGE_HINTS.get(s, ""),
                     "done": _stage_done(ing, s), "current": ing.stage == s and st == "running"}
@@ -409,6 +416,26 @@ async def _action(request: Request, ingest_id: str, action: str):
         else:
             job = await job_queue.submit("ingest-purge", by, environment=f"ingest:{ing.mno}/{ing.release}",
                                          params={"ingest_id": ing.id})
+    elif action == "redo":
+        body = await _body(request)
+        busy = [i for i in await job_queue.list_ingests(limit=500)
+                if i.mno == ing.mno and i.release == ing.release and i.state in ("queued", "running", "staged")]
+        if not view["can_redo"]:
+            error = f"only a served ingest can be redone: state {ing.state}"
+        elif busy:
+            error = f"{ing.mno} {ing.release} already has ingest {busy[0].id[:8]} {busy[0].state}"
+        else:
+            note = (str(body.get("note") or "").strip() or f"redo of {ing.id[:8]}")[:500]
+            redo = await job_queue.create_ingest(mno=ing.mno, release=ing.release, source=ing.source,
+                                                 submitted_by=by, note=note, redo_of=ing.id)
+            job = await job_queue.submit("ingest", by, environment=f"ingest:{ing.mno}/{ing.release}",
+                                         stages=list(INGEST_STAGES),
+                                         params={"ingest_id": redo.id, "redo": True})
+            await job_queue.update_ingest(redo.id, job_id=job.id)
+            if _wants_json(request):
+                return JSONResponse({"ingest_id": redo.id, "job_id": job.id, "action": action,
+                                     "redo_of": ing.id}, status_code=202)
+            return RedirectResponse(f"{_root(request)}/ingest/{redo.id}", status_code=303)
     elif action == "cancel":
         if not view["can_cancel"] or not ing.job_id:
             error = f"nothing to cancel: state {ing.state}"
@@ -454,6 +481,13 @@ async def api_abandon(request: Request, ingest_id: str):
 @router.post("/api/ingest/{ingest_id}/purge")
 async def api_purge(request: Request, ingest_id: str):
     return await _action(request, ingest_id, "purge")
+
+
+@router.post("/api/ingest/{ingest_id}/redo")
+async def api_redo(request: Request, ingest_id: str):
+    """Run a served cell's model stages again as a new ingest (a new
+    generation of the cell); the original stays served until the redo is."""
+    return await _action(request, ingest_id, "redo")
 
 
 @router.post("/api/ingest/{ingest_id}/cancel")

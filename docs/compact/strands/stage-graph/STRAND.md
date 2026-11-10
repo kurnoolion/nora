@@ -47,3 +47,7 @@ working.
   the pipeline order, taxonomy input per recipe, document prompt, model
   and SIRA revision), recorded by `verify-enrich`, never stored.
   D-DRAFT-10.
+- 2026-11-10: slice 3 built: the Ingest page shows per stage whether the
+  output was found or computed; Redo on a served ingest makes a new
+  ingest of the cell under a bumped per-cell generation
+  (`pipeline/generations.py`). D-DRAFT-11.

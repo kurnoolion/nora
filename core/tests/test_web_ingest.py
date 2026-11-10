@@ -363,3 +363,65 @@ def test_failed_ingest_with_a_build_is_flagged_as_blocking(web):
     page = c.get("/ingest").text
     assert "may still hold the cycle" in page and "MNO-A Apr2031 is failed at enrich" in page
 
+
+
+# -- stage graph, step 3: redo and stage origins ----------------------------------------
+
+def test_redo_makes_a_new_ingest_of_the_served_cell(web):
+    c = _client()
+    served = _ingest(web, "served", verdict="pass", label="L", previous_label="P")
+    page = c.get(f"/ingest/{served}")
+    assert ">Redo" in page.text
+    r = c.post(f"/api/ingest/{served}/redo", headers=JSON, content=json.dumps({"submitted_by": "req team"}))
+    assert r.status_code == 202, r.text
+    new_id = r.json()["ingest_id"]
+    assert new_id != served and r.json()["redo_of"] == served
+    job = _run(web["q"].get_meta(r.json()["job_id"]))
+    assert job.job_type == "ingest" and job.params == {"ingest_id": new_id, "redo": True}
+    redo = _run(web["q"].get_ingest(new_id))
+    orig = _run(web["q"].get_ingest(served))
+    assert (redo.mno, redo.release, redo.source) == (orig.mno, orig.release, orig.source)
+    assert redo.redo_of == served and redo.state == "queued" and redo.job_id == job.id
+    assert redo.note == f"redo of {served[:8]}" and redo.submitted_by == "req team"
+    assert orig.state == "served"                                   # the original stays served
+    assert f"/ingest/{served}" in c.get(f"/ingest/{new_id}").text   # the page links back
+    # a second redo while the first is queued is refused
+    r = c.post(f"/api/ingest/{served}/redo", headers=JSON)
+    assert r.status_code == 409 and "already has ingest" in r.json()["error"]
+    # the form redirects to the new ingest
+    _run(web["q"].update_ingest(new_id, state="cancelled"))
+    r = c.post(f"/api/ingest/{served}/redo", data={}, follow_redirects=False)
+    assert r.status_code == 303 and "/ingest/" in r.headers["location"] and served not in r.headers["location"]
+
+
+def test_redo_only_for_a_served_ingest_and_with_the_cookie(web):
+    staged = _ingest(web, "staged", verdict="pass", label="L2")
+    assert ">Redo" not in _client().get(f"/ingest/{staged}").text
+    r = _client().post(f"/api/ingest/{staged}/redo", headers=JSON)
+    assert r.status_code == 409 and "only a served ingest" in r.json()["error"]
+    served = _ingest(web, "served", verdict="pass", label="L3")
+    assert _client(cookie=None).post(f"/api/ingest/{served}/redo", headers=JSON).status_code == 403
+
+
+def test_page_shows_where_each_stage_came_from(web):
+    ing = _ingest(web, "running", stage="taxonomy", build="B")
+    _run(web["q"].update_ingest(ing, note="n"))
+    import sqlite3
+    con = sqlite3.connect(web["q"]._db_path)
+    con.execute("UPDATE ingests SET stage_origins=? WHERE id=?",
+                (json.dumps({"parse": "store", "taxonomy": "computed"}), ing))
+    con.commit(); con.close()
+    text = _client().get(f"/ingest/{ing}").text
+    assert ">found<" in text and ">computed<" in text and "another build on this host" in text
+
+
+def test_redo_under_the_team_mode_gate(web, monkeypatch):
+    """The Redo route sits under the allowlisted /api/ingest prefix: an
+    ingest-token holder reaches it with the gate on; no cookie, no redo."""
+    monkeypatch.setattr(tm, "TEAM_MODE", True)
+    served = _ingest(web, "served", verdict="pass", label="L")
+    assert ">Redo" in _client().get(f"/ingest/{served}").text
+    assert _client().post(f"/api/ingest/{served}/redo", headers=JSON).status_code == 202
+    r = TestClient(app).post(f"/api/ingest/{served}/redo", headers=JSON, follow_redirects=False)
+    assert r.status_code in (302, 303, 403)
+    assert len(_run(web["q"].list_ingests(limit=50))) == 2

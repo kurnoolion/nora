@@ -37,6 +37,11 @@ highlighted, and the job log underneath with every command the system
 runs. Enrichment is the long stage, about an hour; the rest take
 seconds to minutes. The whole run takes about an hour and a half.
 
+Under the stage pills, badges say where each early stage's result came
+from. **Found** means another build on this host had already done that
+stage on the same documents with the same settings, so it was reused in
+seconds. **Computed** means it ran now.
+
 At the end the ingest is **staged**: built, published to a staging
 store, and measured by the golden eval. The Gate card shows the
 verdict. **Pass** means the eval's recall over the staged set is
@@ -54,6 +59,13 @@ the new release visible to everyone on the Ask page, in minutes. The
 previous set stays available: the page then offers **Roll back**, one
 click, which puts the previous set back. Rolling back does not undo
 the build; the release can be served again later.
+
+A **served** ingest has a **Redo** button. Redo runs the release's
+taxonomy and enrichment again, as a new ingest with its own page (about
+an hour); the documents and the early stages are reused. Use it when
+the enrichment came out wrong, for example after a prompt fix. The
+original stays served until you serve the redo, and a failed or
+abandoned redo leaves it served.
 
 A staged ingest whose gate **failed** has no Serve button. Tell the
 administrator what the Gate card says; they can look at the eval,
@@ -83,8 +95,9 @@ and they can serve with a recorded waiver if the failure is understood.
 ## What not to expect
 
 - A new MNO. Ask the administrator.
-- A second ingest of the same release. Roll back or ask for a purge
-  first; the page refuses while the release is served or in flight.
+- A second ingest of the same release from the form. To build a served
+  release again, use **Redo** on its page; the form refuses while the
+  release is served or in flight.
 - Changes to what the documents say. Ingestion takes the folder as it
   is; corrections to parsed or enriched content are the review pages'
   job (`docs/enrichment-review-guide.md`).

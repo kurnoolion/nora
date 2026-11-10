@@ -104,6 +104,11 @@ class Sim:
             return Result(0, [f"CYC build={build} phase=start status=ok"])
         build = (self.root / "builds/ACTIVE").read_text().strip()
         nb = nb_root / build
+        if verb == "parse" and "--cell" in args:   # the manifest the real lane writes
+            key = args[args.index("--cell") + 1]
+            (nb / "STAGES.json").write_text(json.dumps({"version": 1, "stages": {
+                s: {key: {"fp": f"{s}-fp", "origin": "store" if s != "parse" else "computed"}}
+                for s in ("extract", "profile", "parse", "resolve")}}))
         if verb in ("parse", "taxonomy", "enrich"):
             log = nb / "reports" / f"{verb}.log"
             rc = 1 if self.fail_phase == verb else 0
@@ -1027,3 +1032,87 @@ def test_convert_fails_when_promote_does_not_heal(host):
     assert _runner(host, sim).run_once() == "failed"
     ing = _run(host["q"].get_ingest(ingest_id))
     assert ing.stage == "convert" and "still dangles" in ing.error
+
+
+
+# -- stage graph, step 3: redo of a served cell, stage origins ---------------------------
+
+def _served(host) -> tuple["Sim", "Runner", str]:
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    _run(host["q"].submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    return sim, r, ingest_id
+
+
+def _redo(host, orig_id: str) -> tuple[str, str]:
+    q = host["q"]
+    orig = _run(q.get_ingest(orig_id))
+    ing = _run(q.create_ingest(mno=orig.mno, release=orig.release, source=orig.source,
+                               submitted_by="req team", redo_of=orig_id))
+    job = _run(q.submit("ingest", "req team", params={"ingest_id": ing.id, "redo": True}))
+    _run(q.update_ingest(ing.id, job_id=job.id))
+    return job.id, ing.id
+
+
+def _corpus(host) -> Path:
+    corpus = host["root"] / "corpus"
+    corpus.mkdir(exist_ok=True)
+    wiring = Path(host["cfg"].builds_wiring)
+    wiring.parent.mkdir(parents=True, exist_ok=True)
+    wiring.write_text((wiring.read_text() if wiring.exists() else "") + f"CORPUS_DIR={corpus}\n")
+    return corpus
+
+
+def test_origins_reach_the_ingest_row(host):
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    origins = json.loads(_run(host["q"].get_ingest(ingest_id)).stage_origins)
+    assert origins == {"extract": "store", "profile": "store", "parse": "computed", "resolve": "store"}
+
+
+def test_redo_bumps_the_generation_and_runs_from_start(host):
+    corpus = _corpus(host)
+    sim, r, orig = _served(host)
+    sim.calls.clear()
+    job, redo = _redo(host, orig)
+    assert r.run_once() == "completed", _run(host["q"].get_meta(job)).error_message
+    gens = json.loads((corpus / "generations.json").read_text())["cells"]
+    assert gens["MNO-A/Apr2031"]["generation"] == 2 and gens["MNO-A/Apr2031"]["by"] == "req team"
+    cmds = sim.cmds()
+    assert any("cycle.sh start" in c for c in cmds) and any("cycle.sh enrich" in c for c in cmds)
+    assert not any("--retry-failed" in c for c in cmds)
+    logs = _run(host["q"].get_logs(job))
+    assert not any("staged into" in l for l in logs)   # no documents stage: the served cell's are used
+    assert any("is now generation 2" in l for l in logs)
+    ing = _run(host["q"].get_ingest(redo))
+    assert ing.state == "staged" and ing.build and ing.build != _run(host["q"].get_ingest(orig)).build
+    # abandoning the redo keeps the documents: they are the served cell's
+    _run(host["q"].submit("ingest-abandon", "t", params={"ingest_id": redo}))
+    assert r.run_once() == "completed"
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+
+
+def test_redo_needs_the_corpus_root_and_a_redo_row(host):
+    sim, r, orig = _served(host)
+    job, _redo_id = _redo(host, orig)
+    assert r.run_once() == "failed"
+    assert "needs the corpus root" in _run(host["q"].get_meta(job)).error_message
+    job2 = _run(host["q"].submit("ingest", "t", params={"ingest_id": orig, "redo": True}))
+    assert r.run_once() == "failed"
+    assert "made by the Redo action" in _run(host["q"].get_meta(job2.id)).error_message
+
+
+def test_a_redo_retried_from_documents_skips_the_staging(host):
+    _corpus(host)
+    sim, r, orig = _served(host)
+    _job, redo = _redo(host, orig)
+    _run(host["q"].update_ingest(redo, state="failed", stage="documents"))
+    _run(host["q"].cancel(_job))
+    job = _run(host["q"].submit("ingest", "t", params={"ingest_id": redo, "retry_from": "documents"}))
+    assert r.run_once() == "completed", _run(host["q"].get_meta(job.id)).error_message
+    assert any("uses the served cell's documents" in l for l in _run(host["q"].get_logs(job.id)))

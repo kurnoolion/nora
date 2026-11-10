@@ -403,7 +403,11 @@ fingerprints (§21). Enrichment is a driver-side stage: `verify-enrich`
 records its fingerprint per cell (the cell's parse and, per the recipe,
 taxonomy fingerprints, the MNO's published document prompt, the lane's
 model, the SIRA revision, the recipe's enrich parameters); its outputs
-stay in the build.
+stay in the build. A served cell is redone from the Ingest page: the
+runner bumps the cell's generation in `<corpus>/generations.json`, which
+enters that cell's variant fingerprints only, and runs a new ingest from
+`start`; the page shows per stage whether the output was found or
+computed.
 
 ### 5.2 Drivers
 
