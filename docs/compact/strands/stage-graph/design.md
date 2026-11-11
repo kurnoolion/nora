@@ -560,6 +560,30 @@ at one filesystem, so builds on a second host cannot share; compose and
 `/data/env` paths change). Both keep the privatize-before-write rule;
 under step 4 a re-run is a new fingerprint and never edits a file.
 
+## 10d. Step 5: stack A on the stage graph (planned 2026-11-11)
+
+Stack A was built by hand before the cycle driver: its builds root holds
+one build with no manifest, recipe or phase log; its wiring env predates
+self-serve ingestion (no builds root, image tag, stage store, corpus root
+or recipe); it has no runner; its release sets carry prompt scheme
+`scheme-v1`. It serves four cells; stack B serves seven.
+
+**Decided (2026-11-11).**
+- Recipe `sira-plain`: enrichment with the document prompts alone.
+- All seven cells, the same set as stack B, so the two recipes can be
+  compared cell for cell.
+- A runner for stack A, so both stacks run the same machinery end to
+  end: its own unit, jobs database, ingest token and share map.
+- The corpus prefix comes from the shared store: a cell stack B has
+  already computed since step 2 costs stack A nothing before enrich.
+
+**To settle from the host survey.** Whether stack A's `scheme-v1` doc
+prompts carry the placeholders the prompts gate checks
+(`{taxonomy_block}` among them, which a plain recipe does not fill);
+where the scheme is named (the recipe has a `prompt_scheme` parameter);
+which batch image tag stack A's cycles run (its wiring env names none,
+and the `dev` images predate step 4); the enrichment time per cell.
+
 ## 11. Invariants
 
 - A stage output in the store is never modified; a different result is

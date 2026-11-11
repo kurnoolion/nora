@@ -60,3 +60,8 @@ working.
   stage graph with recipe `sira-plain`), step 6 (parallel-build limits);
   the former step 4 (new unit kinds) becomes step 7. Step 4 goes before
   step 5. Design §10, §10c.
+- 2026-11-11: step 4 built (five slices) and confirmed on stack B (merge,
+  batch rebuild, resolver checks); the first stack B ingest after it is
+  the remaining evidence. Step 5 decided: stack A gets recipe
+  `sira-plain`, all seven cells, and a runner (design §10d); a host survey
+  comes first.
