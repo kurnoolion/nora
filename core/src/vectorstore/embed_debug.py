@@ -35,6 +35,7 @@ the source corpus content cannot appear.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -144,13 +145,17 @@ def cmd_chunks(args: argparse.Namespace) -> int:
     trees_dir = env_dir / "out" / "parse"
     taxonomy_path = env_dir / "out" / "taxonomy" / "taxonomy.json"
 
-    if not trees_dir.exists():
+    from core.src.pipeline.locate import stage_files
+
+    # flat legacy trees, then every cell's (in the build or the stage store)
+    tree_paths = stage_files(env_dir, "parse", "*_tree.json")
+    if not tree_paths and not trees_dir.exists():
         print(f"EMB chunks FAIL trees_dir not found: {trees_dir}")
         return 1
 
     config, embedder = _build_embedder(args)
     cb = ChunkBuilder(config)
-    trees = VectorStoreBuilder._load_trees(trees_dir)
+    trees = [json.loads(p.read_text(encoding="utf-8")) for p in tree_paths]
     taxonomy = VectorStoreBuilder._load_taxonomy(
         taxonomy_path if taxonomy_path.exists() else None
     )

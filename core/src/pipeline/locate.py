@@ -101,6 +101,47 @@ def cells(build: Path | str, stage: str, stages_root: Path | str | None = None) 
     return sorted(found)
 
 
+def stage_dirs(build: Path | str, stage: str, stages_root: Path | str | None = None
+               ) -> list[tuple[Cell, Path]]:
+    """``(cell, dir)`` for every cell `stage` has an output for in `build`."""
+    out = []
+    for c in cells(build, stage, stages_root):
+        d = locate(build, stage, c, stages_root)
+        if d is not None:
+            out.append((c, d))
+    return out
+
+
+def stage_files(build: Path | str, stage: str, pattern: str, cell: Cell | None = None,
+                stages_root: Path | str | None = None) -> list[Path]:
+    """Files matching `pattern` in `stage`'s output: one cell's when `cell`
+    is given, else the build's flat ``out/<stage>/`` (the layout from
+    before per-cell outputs) followed by every cell's, in cell order. For
+    the debug and audit tools, which take a document name, not a cell."""
+    if cell is not None:
+        d = locate(build, stage, cell, stages_root)
+        return sorted(d.glob(pattern)) if d is not None else []
+    flat = Path(build) / "out" / stage
+    found = sorted(p for p in flat.glob(pattern) if p.is_file()) if flat.is_dir() else []
+    for _, d in stage_dirs(build, stage, stages_root):
+        found += sorted(d.glob(pattern))
+    return found
+
+
+def cell_of(path: Path, stage: str) -> Cell | None:
+    """The cell a located per-cell file sits in, read from its path:
+    ``.../out/<stage>/<MNO>/<release>/<file>`` or
+    ``<stages-root>/<stage>/<MNO>/<release>/<fp>/<file>``."""
+    parts = Path(path).parts
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] != stage:
+            continue
+        rest = parts[i + 1:]
+        if len(rest) == 3 or (len(rest) == 4 and parts[i - 1] != "out"):
+            return Cell(rest[0], rest[1])
+    return None
+
+
 def _parse_cell(text: str) -> Cell:
     mno, sep, release = text.partition("/")
     if not sep or not mno or not release or "/" in release:

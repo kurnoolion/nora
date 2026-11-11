@@ -497,13 +497,28 @@ copied.
 
 1. The resolver and its CLI. Every build has `out/` today, so every
    answer is today's path.
-2. The build-time consumers and the debug tools move onto it, one file
-   at a time.
+2. The build-time consumers and the debug tools move onto it (built
+   2026-11-11). The file Trees store (`parse_cell_dir`, `parse_cells`)
+   and through it the Trees and History builders; the golden release
+   CLI; the SIRA adapter's tree loading; `cycle.sh`'s status counts,
+   taxonomy ledgers and the lane's taxonomy dir (resolved on the host
+   per cell, then mapped to the containers' mount by `ctr_path`); the
+   debug and audit tools through `stage_files` / `stage_dirs`
+   (`parse_debug`, `parse_audit`, `profile_debug`, `tax_debug`,
+   `embed_debug`, `verify_req_recall --env-dir`). Found on the way:
+   these tools read only the flat layout from before per-cell outputs,
+   so on any current build they found nothing; they now read every
+   cell, and `parse_audit` writes one report directory per cell.
+   Unchanged: `retrieval_debug` (the vector store stays in the build),
+   `verify_tables` (it takes a directory, not a build), serving.
 3. Promote assembles the label through it.
 4. Per-document extract reuse across store entries; check whether a
    taxonomy correction feeds a stage or only the review pages.
 5. The pipeline writes stored stages into the store and stops cloning;
-   a new build's `out/` holds only build-held stages.
+   a new build's `out/` holds only build-held stages. Before this, the
+   sira-batch container needs the store mounted read-only: the lane
+   reads parse trees through the adapter and, with a taxonomy recipe,
+   the cell's taxonomy dir, and today only nora-batch mounts the store.
 
 Rejected: a pass that relinks a build's copies to the store after each
 stage (N copies exist until it runs, and every build pays the copy and

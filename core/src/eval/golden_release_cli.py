@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.src.pipeline.cells import Cell
+from core.src.pipeline.locate import cells as locate_cells, locate
 from core.src.extraction.release_key import is_valid_release, release_order_key
 
 from .golden import (
@@ -68,20 +70,14 @@ from .release_map import ReleaseMap, load_release_map, save_release_map
 
 def parse_cells(env_dir: Path) -> dict[str, list[str]]:
     """``{mno: [release, ...]}`` (oldest first) for every cell with at
-    least one parsed tree under ``<env>/out/parse/<mno>/<release>/``."""
-    root = Path(env_dir) / "out" / "parse"
-    out: dict[str, list[str]] = {}
-    if not root.is_dir():
-        return out
-    for mno_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        rels = [
-            r.name for r in mno_dir.iterdir()
-            if r.is_dir() and is_valid_release(r.name)
-            and any(r.glob("*_tree.json"))
-        ]
-        if rels:
-            out[mno_dir.name] = sorted(rels, key=release_order_key)
-    return out
+    least one parsed tree, in the env's ``out/parse/<mno>/<release>/`` or
+    in the stage store entry its manifest names (``pipeline/locate.py``)."""
+    found: dict[str, list[str]] = {}
+    for c in locate_cells(env_dir, "parse"):
+        d = locate(env_dir, "parse", c)
+        if d is not None and is_valid_release(c.release) and any(d.glob("*_tree.json")):
+            found.setdefault(c.mno, []).append(c.release)
+    return {m: sorted(rels, key=release_order_key) for m, rels in sorted(found.items())}
 
 
 # Invisible characters that NFKC keeps but that never change meaning
@@ -117,7 +113,7 @@ def cell_texts(
     ``_norm``. Title and body are kept apart so a title-only edit is its
     own class. The first occurrence of an id wins (the parser can emit
     duplicate rows)."""
-    cell = Path(env_dir) / "out" / "parse" / mno / release
+    cell = locate(env_dir, "parse", Cell(mno, release)) or Path(env_dir) / "out" / "parse" / mno / release
     texts: dict[str, tuple[str, str]] = {}
     for path in sorted(cell.glob("*_tree.json")):
         try:

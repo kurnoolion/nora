@@ -82,24 +82,29 @@ def _failed_units(env_dir: Path):
     # keys relative to that cell's parse dir); the pre-2026-11 flat ledger
     # (out/taxonomy/extraction_state.json, keys relative to out/parse) is
     # still read for older builds.
+    # Each cell's taxonomy and parse dirs come from the resolver: the
+    # build's out/, else the stage store entry its manifest names.
+    from core.src.pipeline.locate import locate, stage_dirs
+
     tax_dir = env_dir / "out" / "taxonomy"
-    ledgers = sorted(tax_dir.glob("*/*/extraction_state.json"))
+    parse_root = env_dir / "out" / "parse"
+    ledgers = [(f"{c.mno}/{c.release}", d / "extraction_state.json",
+                locate(env_dir, "parse", c) or parse_root / c.mno / c.release)
+               for c, d in stage_dirs(env_dir, "taxonomy")
+               if (d / "extraction_state.json").exists()]
     flat = tax_dir / "extraction_state.json"
     if flat.exists():
-        ledgers.append(flat)
+        ledgers.append(("", flat, parse_root))
     if not ledgers:
         raise SystemExit(f"No extraction ledger under {tax_dir} — run the taxonomy stage first.")
-    parse_root = env_dir / "out" / "parse"
     failed: dict[str, tuple[Path, str]] = {}   # display key -> (tree file, plan)
-    for state_path in ledgers:
+    for cell_key, state_path, cell_parse in ledgers:
         ledger = json.loads(state_path.read_text(encoding="utf-8"))
-        cell_rel = state_path.parent.relative_to(tax_dir) if state_path != flat else Path()
         for k, v in ledger.get("docs", {}).items():
             if v.get("status") != "failed":
                 continue
             relpath, _, plan = k.partition("#")
-            failed[f"{cell_rel.as_posix() + '/' if str(cell_rel) != '.' else ''}{k}"] = (
-                parse_root / cell_rel / relpath, plan)
+            failed[f"{cell_key + '/' if cell_key else ''}{k}"] = (cell_parse / relpath, plan)
     print(f"failed units in ledger: {len(failed)}")
 
     subs_by_file: dict[str, list] = {}

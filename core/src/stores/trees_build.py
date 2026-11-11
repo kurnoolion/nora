@@ -43,6 +43,7 @@ from core.src.stores.trees import (
     FileTreeStore,
     SqliteTreeStore,
     db_name,
+    parse_cell_dir,
     parse_dir,
     source_fingerprint,
     write_tree_db,
@@ -88,7 +89,7 @@ def build_trees(env_dir: "str | Path", out_dir: "str | Path",
 
 def _read_cell(env_dir: Path, mno: str, rel: str) -> tuple[list[Path], list]:
     cell = f"{mno}/{rel}"
-    paths = sorted((parse_dir(env_dir) / mno / rel).glob("*_tree.json"))
+    paths = sorted(parse_cell_dir(env_dir, mno, rel).glob("*_tree.json"))
     docs = []
     for p in paths:
         try:

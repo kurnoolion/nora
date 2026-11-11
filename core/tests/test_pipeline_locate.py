@@ -120,3 +120,27 @@ def test_cli_imports_no_third_party_module(tmp_path):
             "print(json.dumps(sorted(bad)))")
     out = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, check=True)
     assert json.loads(out.stdout) == []
+
+
+# -- slice 2: helpers for tools that take a document name --------------------
+
+from core.src.pipeline.locate import cell_of, stage_dirs, stage_files  # noqa: E402
+
+
+def test_stage_files_flat_then_cells_and_cell_of(tmp_path):
+    build, root = tmp_path / "b", tmp_path / "s"
+    flat = build / "out" / "extract"
+    flat.mkdir(parents=True)
+    (flat / "old_ir.json").write_text("{}")
+    own = build / "out" / "extract" / A.mno / A.release
+    own.mkdir(parents=True)
+    (own / "d1_ir.json").write_text("{}")
+    entry = _stored(root, "extract", B, "fpE")
+    (entry / "d2_ir.json").write_text("{}")
+    _record(build, "extract", B, "fpE")
+    files = stage_files(build, "extract", "*_ir.json", stages_root=root)
+    assert [p.name for p in files] == ["old_ir.json", "d1_ir.json", "d2_ir.json"]
+    assert [cell_of(p, "extract") for p in files] == [None, A, B]
+    assert stage_files(build, "extract", "*_ir.json", B, root) == [entry / "d2_ir.json"]
+    assert stage_files(build, "extract", "*_ir.json", Cell("MNOB", "Apr2031"), root) == []
+    assert stage_dirs(build, "extract", root) == [(A, own), (B, entry)]

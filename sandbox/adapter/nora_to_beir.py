@@ -64,6 +64,7 @@ from typing import Any
 FINGERPRINTS_NAME = "fingerprints.jsonl"
 
 from core.src.models.fingerprint import text_fp
+from core.src.pipeline.locate import cells as locate_cells, locate
 from core.src.parser.structural_parser import build_context_string
 from core.src.vectorstore.chunk_builder import ChunkBuilder
 
@@ -76,7 +77,12 @@ _expand_defs = ChunkBuilder._expand_definitions
 
 def _load_trees(env_dir: Path) -> list[dict[str, Any]]:
     parse_dir = env_dir / "out" / "parse"
-    if not parse_dir.is_dir():
+    # Cells only the stage store holds (stage-graph §10c): the resolver
+    # finds them through the build's manifest when NORA_STAGES_ROOT is set.
+    stored = [d for c in locate_cells(env_dir, "parse")
+              if not (parse_dir / c.mno / c.release).is_dir()
+              and (d := locate(env_dir, "parse", c)) is not None]
+    if not parse_dir.is_dir() and not stored:
         raise FileNotFoundError(
             f"No parse output at {parse_dir} — run the parse stage first."
         )
@@ -86,7 +92,10 @@ def _load_trees(env_dir: Path) -> list[dict[str, Any]]:
     # matches the legacy flat layout. Trees still carry mno/release, so the
     # adapter's (mno, release) partitioning + --multi-cell emission are
     # unchanged.
-    for p in sorted(parse_dir.rglob("*_tree.json")):
+    paths = sorted(parse_dir.rglob("*_tree.json")) if parse_dir.is_dir() else []
+    for d in stored:
+        paths += sorted(d.glob("*_tree.json"))
+    for p in paths:
         with open(p, "r", encoding="utf-8") as f:
             trees.append(json.load(f))
     return trees

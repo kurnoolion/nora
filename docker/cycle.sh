@@ -122,6 +122,24 @@ STAGES="$(wiring_var STAGES_ROOT)"    # the host's stage store; empty = none
 bindings_file() { if [ -n "$CORPUS" ]; then echo "$CORPUS/profiles.json"; else echo "$NB/profiles.json"; fi; }
 REPO="$(cd "$HERE/.." && pwd)"
 recipe_cli() { ( cd "$REPO" && python3 -m core.src.pipeline.recipes "$@" ); }
+# where a stage's output for a cell is: the build's out/, else the store
+# entry its STAGES.json names (pipeline/locate.py, stage-graph §10c)
+locate_cli() { ( cd "$REPO" && python3 -m core.src.pipeline.locate "$NB" "$@" ${STAGES:+--stages-root "$STAGES"} ) 2>/dev/null; }
+stage_dir() { locate_cli "$1" "$2" || true; }        # stage_dir <stage> <MNO>/<MMMYYYY> -> host dir, or empty
+stage_cells() { locate_cli "$1" --cells || true; }   # stage_cells <stage> -> <MNO>/<MMMYYYY> lines
+ctr_path() {  # ctr_path <host dir> -> the same dir as the batch containers mount it
+  case "$1" in
+    "$NB"/*) echo "/data/env/${1#"$NB"/}";;
+    "${STAGES:-/nonexistent}"/*) echo "/data/stages/${1#"$STAGES"/}";;
+    *) echo "$1";;
+  esac
+}
+tax_ledgers() {  # tax_ledgers [<MNO>/<MMMYYYY>] -> each taxonomy ledger path (host)
+  local c d
+  for c in ${1:-$(stage_cells taxonomy)}; do
+    d="$(stage_dir taxonomy "$c")"; [ -n "$d" ] && [ -f "$d/extraction_state.json" ] && echo "$d/extraction_state.json"
+  done; return 0
+}
 has_recipe() { [ -f "$NB/RECIPE.json" ]; }
 recipe_get() { has_recipe || return 0; recipe_cli get "$NB/RECIPE.json" "$1"; }
 # the batch env file compose reads for a service: the wiring env's var
@@ -263,7 +281,7 @@ cells_by_size() {  # smallest first (doc count) — inspect the small cell befor
 }
 GATE_BY="$ME"
 tax_ledger_counts() {  # ok/failed over every cell's taxonomy ledger in the build
-  find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name extraction_state.json 2>/dev/null | python3 -c "
+  tax_ledgers | python3 -c "
 import json, sys
 ok = failed = 0
 for p in sys.stdin.read().split():
@@ -415,7 +433,8 @@ status)
   cyc summary "$CJ"
   echo "artifact state:"
   for p in parse prompts taxonomy enrich verify-enrich promote; do printf '  %-14s %s\n' "$p" "$(phase_state "$p")"; done
-  [ -d "$NB/out/parse" ] && echo "  parse dirs   : $(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d | wc -l) (cells staged: $(cells | wc -l))"
+  pc="$(stage_cells parse)"
+  [ -n "$pc" ] && echo "  parse dirs   : $(echo "$pc" | wc -l) (cells staged: $(cells | wc -l))"
   echo "  bindings     : $(bindings_file)$([ -f "$(bindings_file)" ] || echo ' (MISSING)')"
   echo "  stage store  : ${STAGES:-off}"
   if has_recipe; then echo "  $(recipe_cli check "$NB/RECIPE.json")"; else echo "  recipe       : none (taxonomy and enrich as before)"; fi
@@ -425,7 +444,8 @@ d = json.load(open(sys.argv[1])).get("stages", {})
 o = collections.Counter(e.get("origin", "computed") for s in d.values() for e in s.values())
 print(" ".join(f"{s}={len(v)}" for s, v in sorted(d.items())), "|", " ".join(f"{k}={n}" for k, n in sorted(o.items())))
 ' "$NB/STAGES.json")"
-  [ -d "$NB/out/taxonomy" ] && echo "  taxonomy     : $(tax_ledger_counts) cells=$(find "$NB/out/taxonomy" -mindepth 2 -maxdepth 2 -type d | wc -l) features=$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name '*_features.json' | wc -l)"
+  tc="$(stage_cells taxonomy)"
+  [ -n "$tc" ] && echo "  taxonomy     : $(tax_ledger_counts) cells=$(echo "$tc" | wc -l) features=$(for c in $tc; do find "$(stage_dir taxonomy "$c")" -maxdepth 1 -name '*_features.json'; done | wc -l)"
   [ -d "$SB" ] && echo "  sira cells   : $(find "$SB" -mindepth 3 -maxdepth 3 -path '*/raw/metadata.json' | wc -l) run_name=$RUN"
   ;;
 
@@ -445,13 +465,13 @@ parse)
 prompts)
   resolve_build
   require_phase parse "./cycle.sh parse, then ./cycle.sh status until parse=ok"
-  np="$(find "$NB/out/parse" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l)"
+  np="$(stage_cells parse | grep -c . || true)"
   [ "$np" -ge 1 ] || die 040 "no parse dirs in this build" "check the parse log for failed cells; re-run ./cycle.sh parse"
   [ "$np" -ge "$(cells | wc -l)" ] || echo "NOTE: partial build — $np of $(cells | wc -l) staged cells parsed (an incremental cycle holds only its own cell)"
   PD="$HERE/../customizations/prompts"
   echo "prompt evidence (per MNO found in parse output):"
   missing=0 bad=0 mnos=0
-  for m in $(find "$NB/out/parse" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
+  for m in $(stage_cells parse | cut -d/ -f1 | sort -u); do
     mnos=$((mnos+1))
     doc="$(ls "$PD"/doc_requirement_"$m"_v*.txt 2>/dev/null | sort -V | tail -1 || true)"
     ov="$(ls "$PD"/corpus_overview_"$m"_v*.txt 2>/dev/null | sort -V | tail -1 || true)"
@@ -508,10 +528,10 @@ enrich)
   emodel="$(recipe_get enrich.model)"
   if [ "$use_tax" = 1 ]; then
   require_phase taxonomy "./cycle.sh taxonomy, then status until ok"
-  # per-cell ledgers (out/taxonomy/<MNO>/<MMMYYYY>/extraction_state.json);
-  # with --cell only that cell's, else every cell's in the build
-  if [ -n "$CELL" ]; then ledgers="$NB/out/taxonomy/$CELL/extraction_state.json"; else ledgers="$(find "$NB/out/taxonomy" -mindepth 3 -maxdepth 3 -name extraction_state.json 2>/dev/null)"; fi
-  [ -n "$ledgers" ] && [ -f "$(echo "$ledgers" | head -1)" ] || die 060 "no taxonomy ledger under $NB/out/taxonomy${CELL:+ for $CELL}" "./cycle.sh taxonomy${CELL:+ --cell $CELL}"
+  # per-cell ledgers (<taxonomy dir of the cell>/extraction_state.json, in
+  # the build or the store); with --cell only that cell's, else every cell's
+  ledgers="$(tax_ledgers "$CELL")"
+  [ -n "$ledgers" ] || die 060 "no taxonomy ledger under $NB/out/taxonomy${CELL:+ for $CELL}" "./cycle.sh taxonomy${CELL:+ --cell $CELL}"
   failed="$(echo "$ledgers" | python3 -c "import json,sys; print(sum(sum(1 for v in json.load(open(p))['docs'].values() if v['status']=='failed') for p in sys.stdin.read().split()))")"
   [ "$failed" = 0 ] || die 061 "taxonomy ledger has $failed failed doc(s)" "./cycle.sh taxonomy${CELL:+ --cell $CELL} again (retries only failures); tax_debug for persistent ones"
   tl="$(cyc lastlog "$CJ" taxonomy)"; [ -z "$tl" ] || ! grep -q TAX-W003 "$tl" \
@@ -523,7 +543,8 @@ enrich)
   # so the env file cannot supply one), and the recipe's model if it names one
   lane_env() {
     local e="env"
-    if [ "$use_tax" = 1 ]; then e="$e NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/$1"; else e="$e -u NORA_SIRA_TAXONOMY_DIR"; fi
+    local td; td="$(stage_dir taxonomy "$1")"
+    if [ "$use_tax" = 1 ]; then e="$e NORA_SIRA_TAXONOMY_DIR=$(ctr_path "${td:-$NB/out/taxonomy/$1}")"; else e="$e -u NORA_SIRA_TAXONOMY_DIR"; fi
     [ -z "$emodel" ] || e="$e NORA_SIRA_ENRICH_LLM_MODEL=$emodel"
     echo "$e"
   }
@@ -541,13 +562,16 @@ enrich)
   esac
   if [ -n "$CELL" ]; then
     [ -d "$REQS/$CELL" ] || die 064 "no such cell $CELL under $REQS" "cells: $(cells | tr '\n' ' ')"
-    [ "$use_tax" != 1 ] || [ -d "$NB/out/taxonomy/$CELL" ] || die 066 "no taxonomy for $CELL at $NB/out/taxonomy/$CELL" "./cycle.sh taxonomy --cell $CELL"
+    [ "$use_tax" != 1 ] || [ -n "$(stage_dir taxonomy "$CELL")" ] || die 066 "no taxonomy for $CELL in this build or the stage store" "./cycle.sh taxonomy --cell $CELL"
     # the lane reads the cell's own taxonomy (per release since 2026-11-06)
     inner="$(lane_env "$CELL") python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $CELL --wipe-stale-index $extra --verify"
   else
     order="$(cells_by_size | tr '\n' ' ')"
     echo "enrich: all cells smallest-first: $order"
-    inner="for c in $order; do $(lane_env '$c') python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only \$c --wipe-stale-index $extra || exit 1; done; python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
+    # one line per cell, resolved here: each cell's taxonomy dir is found on the host
+    inner=""
+    for c in $order; do inner="$inner$(lane_env "$c") python -m sandbox.sira_lane --env-dir /data/env --db-root /data/db --run-name $RUN --only $c --wipe-stale-index $extra || exit 1; "; done
+    inner="${inner}python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
   fi
   tag="${CELL:-ALL}"; tag="${tag//\//-}"
   detach enrich sira-batch "/data/env/reports/enrich-$tag-$TS.log" "$inner"

@@ -62,6 +62,7 @@ flowchart TD
     m_eval --> m_env
     m_eval --> m_extraction
     m_eval --> m_llm
+    m_eval --> m_pipeline
     m_eval --> m_query
     m_eval --> m_vectorstore
     m_extraction --> m_models
@@ -74,6 +75,7 @@ flowchart TD
     m_llm --> m_pipeline
     m_parser --> m_extraction
     m_parser --> m_models
+    m_parser --> m_pipeline
     m_parser --> m_profiler
     m_pipeline --> m_env
     m_pipeline --> m_eval
@@ -95,6 +97,7 @@ flowchart TD
     m_profiler --> m_extraction
     m_profiler --> m_llm
     m_profiler --> m_models
+    m_profiler --> m_pipeline
     m_query --> m_decision
     m_query --> m_env
     m_query --> m_graph
@@ -117,6 +120,7 @@ flowchart TD
     m_taxonomy --> m_pipeline
     m_vectorstore --> m_env
     m_vectorstore --> m_parser
+    m_vectorstore --> m_pipeline
     m_web --> m_corrections
     m_web --> m_env
     m_web --> m_eval
@@ -593,6 +597,7 @@ nora/
 │       ├── test_pipeline_error_codes.py                 # Every error code the source raises or prints is registered in CODES.
 │       ├── test_pipeline_generations.py                 # Per-cell generations at the corpus root (strand stage-graph, step 3,
 │       ├── test_pipeline_locate.py                      # pipeline/locate.py: where a stage's output for a cell is (stage-graph §10c).
+│       ├── test_pipeline_locate_readers.py              # Build-time readers find parse output the build no longer holds
 │       ├── test_pipeline_recipes.py                     # Recipes (strand stage-graph, step 3): validation, the committed recipes,
 │       ├── test_pipeline_stage_graph.py                 # Stage graph, fingerprints and the build manifest (strand stage-graph,
 │       ├── test_pipeline_stage_store.py                 # The host's stage store and the corpus root (strand stage-graph, step 2).

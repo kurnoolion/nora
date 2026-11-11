@@ -939,11 +939,13 @@ def main() -> None:
     print(f"PRD {env_dir.name} {datetime.now().strftime('%Y-%m-%dT%H:%M')}")
     print(f"ENV {env_dir}")
 
-    if not extract_dir.exists():
+    from core.src.pipeline.locate import cell_of, stage_files
+
+    # flat legacy IRs, then every cell's (in the build or the stage store)
+    ir_files = stage_files(env_dir, "extract", "*_ir.json")
+    if not ir_files and not extract_dir.exists():
         print(f"ERR no extract dir at out/extract/")
         sys.exit(1)
-
-    ir_files = sorted(extract_dir.glob("*_ir.json"))
     if not ir_files:
         print("ERR no *_ir.json files in out/extract/")
         sys.exit(1)
@@ -962,7 +964,12 @@ def main() -> None:
         print(f"... {len(ir_files) - args.max_docs} more IR files (use --max-docs)")
 
     print()
-    for line in _format_profile_lines(profile_dir / "profile.json"):
+    profile_path = profile_dir / "profile.json"
+    if not profile_path.exists():   # per-cell: the first listed document's cell
+        cell = cell_of(ir_files[0], "extract") if ir_files else None
+        per_cell = stage_files(env_dir, "profile", "profile.json", cell)
+        profile_path = per_cell[0] if per_cell else profile_path
+    for line in _format_profile_lines(profile_path):
         print(line)
 
     print()

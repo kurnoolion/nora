@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # revhist subcommand
 # ---------------------------------------------------------------------------
 
-def _load_profile(env_dir: Path):
+def _load_profile(env_dir: Path, doc_id: str = ""):
     """Load the profile through the same substitution chain the parse
     stage uses (D-062), so placeholder regex fields like
     ``requirement_id.pattern = "<MNO0>_REQ_<PLAN>_\\d+"`` are resolved
@@ -53,10 +53,17 @@ def _load_profile(env_dir: Path):
     """
     from core.src.profiler.profile_substitute import load_substituted_profile
 
+    from core.src.pipeline.locate import cell_of, stage_files
+
     candidates = [
         env_dir / "corrections" / "profile.json",
         env_dir / "out" / "profile" / "profile.json",
     ]
+    # per-cell builds: the profile of the document's cell, in the build or
+    # the stage store (pipeline/locate.py)
+    irs = stage_files(env_dir, "extract", f"{doc_id}_ir.json") if doc_id else []
+    cell = cell_of(irs[0], "extract") if irs else None
+    candidates += stage_files(env_dir, "profile", "profile.json", cell)
     for p in candidates:
         if p.exists():
             return load_substituted_profile(p, env_dir=env_dir), p
@@ -69,7 +76,10 @@ def _load_profile(env_dir: Path):
 def _load_ir(env_dir: Path, doc_id: str):
     from core.src.models.document import DocumentIR
 
-    p = env_dir / "out" / "extract" / f"{doc_id}_ir.json"
+    from core.src.pipeline.locate import stage_files
+
+    hits = stage_files(env_dir, "extract", f"{doc_id}_ir.json")
+    p = hits[0] if hits else env_dir / "out" / "extract" / f"{doc_id}_ir.json"
     if not p.exists():
         raise FileNotFoundError(
             f"No IR at {p}. Run the extract stage first."
@@ -87,7 +97,7 @@ def cmd_revhist(args: argparse.Namespace) -> int:
     from core.src.parser.structural_parser import GenericStructuralParser
 
     env_dir: Path = args.env_dir
-    profile, profile_path = _load_profile(env_dir)
+    profile, profile_path = _load_profile(env_dir, args.doc)
     rd = profile.revhist_detection
     parser = GenericStructuralParser(profile)
     ir = _load_ir(env_dir, args.doc)
@@ -238,7 +248,7 @@ def cmd_glossary(args: argparse.Namespace) -> int:
     from core.src.models.document import BlockType
 
     env_dir: Path = args.env_dir
-    profile, profile_path = _load_profile(env_dir)
+    profile, profile_path = _load_profile(env_dir, args.doc)
     ir = _load_ir(env_dir, args.doc)
 
     total = len(ir.content_blocks)
@@ -470,7 +480,7 @@ def cmd_references(args: argparse.Namespace) -> int:
     from core.src.parser.structural_parser import GenericStructuralParser
 
     env_dir: Path = args.env_dir
-    profile, profile_path = _load_profile(env_dir)
+    profile, profile_path = _load_profile(env_dir, args.doc)
     ir = _load_ir(env_dir, args.doc)
     parser = GenericStructuralParser(profile)
 

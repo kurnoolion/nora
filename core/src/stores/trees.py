@@ -56,6 +56,9 @@ from urllib.parse import quote
 
 from core.src.models.fingerprint import FINGERPRINT_VERSION, text_fp
 
+from core.src.pipeline.cells import Cell
+from core.src.pipeline.locate import cells as locate_cells, locate
+
 logger = logging.getLogger(__name__)
 
 TREES_ROOT_ENV = "NORA_TREES_ROOT"
@@ -240,22 +243,43 @@ class TreeStore(Protocol):
 
 
 def parse_dir(env_dir_path: Path) -> Path:
+    """The build's own ``out/parse/`` (the legacy flat layout lives here).
+    Per-cell directories go through `parse_cell_dir`."""
     return Path(env_dir_path) / "out" / "parse"
+
+
+def parse_cell_dir(env_dir_path: Path, mno: str, release: str) -> Path:
+    """Where a cell's parse trees are: the build's ``out/parse/<mno>/<release>/``,
+    else the stage store entry its manifest names (``pipeline/locate.py``,
+    stage-graph §10c). A cell with neither gets the build path, which
+    does not exist."""
+    found = locate(env_dir_path, "parse", Cell(mno, release))
+    return found if found is not None else parse_dir(env_dir_path) / mno / release
+
+
+def parse_cells(env_dir_path: Path) -> list[tuple[str, str]]:
+    """Every ``(mno, release)`` with a parse directory, in the build or in
+    the store (unsorted beyond the resolver's order)."""
+    return [(c.mno, c.release) for c in locate_cells(env_dir_path, "parse")]
 
 
 def find_tree(
     env_dir_path: Path, doc_id: str, mno: str = "", release: str = ""
 ) -> "Path | None":
     """Resolve a doc's tree file. Cell-qualified path first, flat legacy
-    path second, recursive search last (first match wins).
+    path second, then a search of every cell (first match wins).
     """
-    root = parse_dir(env_dir_path)
     if mno and release:
-        p = root / mno / release / f"{doc_id}_tree.json"
+        p = parse_cell_dir(env_dir_path, mno, release) / f"{doc_id}_tree.json"
         return p if p.exists() else None
+    root = parse_dir(env_dir_path)
     flat = root / f"{doc_id}_tree.json"
     if flat.exists():
         return flat
+    for m, rel in sorted(parse_cells(env_dir_path)):
+        p = parse_cell_dir(env_dir_path, m, rel) / f"{doc_id}_tree.json"
+        if p.exists():
+            return p
     if root.is_dir():
         for p in root.rglob(f"{doc_id}_tree.json"):
             return p
@@ -306,23 +330,23 @@ class FileTreeStore:
     # -- reads ---------------------------------------------------------
 
     def list_cells(self) -> list[dict]:
-        root = parse_dir(self.env_dir)
         cells: list[dict] = []
-        if not root.is_dir():
-            return cells
-        for mno_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-            for rel_dir in sorted(p for p in mno_dir.iterdir() if p.is_dir()):
-                if any(rel_dir.glob("*_tree.json")):
-                    cells.append({"mno": mno_dir.name, "release": rel_dir.name})
+        for mno, rel in sorted(parse_cells(self.env_dir)):
+            if any(parse_cell_dir(self.env_dir, mno, rel).glob("*_tree.json")):
+                cells.append({"mno": mno, "release": rel})
         return _sort_cells(cells)
 
     def list_docs(self, mno: str = "", release: str = "") -> list[str]:
-        root = parse_dir(self.env_dir)
         if mno and release:
-            root = root / mno / release
-        if not root.is_dir():
-            return []
-        return sorted(p.stem.replace("_tree", "") for p in root.rglob("*_tree.json"))
+            roots = [parse_cell_dir(self.env_dir, mno, release)]
+        else:
+            # the build's own tree (flat legacy layout and per-cell dirs),
+            # plus cells only the store holds
+            roots = [parse_dir(self.env_dir)]
+            roots += [parse_cell_dir(self.env_dir, m, r) for m, r in sorted(parse_cells(self.env_dir))
+                      if not (parse_dir(self.env_dir) / m / r).is_dir()]
+        return sorted(p.stem.replace("_tree", "")
+                      for root in roots if root.is_dir() for p in root.rglob("*_tree.json"))
 
     def find_tree(self, doc_id: str, mno: str = "", release: str = "") -> "Path | None":
         return find_tree(self.env_dir, doc_id, mno, release)

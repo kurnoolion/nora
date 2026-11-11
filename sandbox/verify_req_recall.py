@@ -43,9 +43,14 @@ A tree file missing for an existing IR is itself reported — the document never
 parsed at all.
 
 Usage:
+    python -m sandbox.verify_req_recall --env-dir <env_dir> [--show 20] [--strict]
     python -m sandbox.verify_req_recall --extract <env_dir>/out/extract \
         --parse <env_dir>/out/parse [--profile-root <env_dir>/out/profile] \
         [--show 20] [--strict]
+
+``--env-dir`` finds each cell's extract, parse and profile directories
+through the resolver (``core/src/pipeline/locate.py``): the build's
+``out/``, else the stage store entry its manifest names.
 
 Exit codes: 0 ok/informational · 1 MISSING>0 or unparsed docs (only with
 ``--strict``) · 2 usage. No proprietary content is embedded here; all
@@ -237,14 +242,36 @@ def check_doc(ir_path: Path, tree_path: Path, id_cfg: dict,
             "cross_doc": cross_doc, "tree_reqs": len(req_ids)}
 
 
+def _cells_from_env(env_dir: Path, profile_root: "str | None"
+                    ) -> list[tuple[str, Path, Path, Path]]:
+    """``(key, extract dir, parse dir, profile.json)`` per extract cell of a
+    build, each dir through the resolver (stage-graph §10c)."""
+    from core.src.pipeline.locate import locate, stage_dirs
+
+    out = []
+    for c, ext in stage_dirs(env_dir, "extract"):
+        rel = Path(c.mno) / c.release
+        parse = locate(env_dir, "parse", c) or env_dir / "out" / "parse" / rel
+        if profile_root:
+            prof = Path(profile_root) / rel / "profile.json"
+        else:
+            prof = (locate(env_dir, "profile", c) or env_dir / "out" / "profile" / rel) / "profile.json"
+        out.append((f"{c.mno}/{c.release}", ext, parse, prof))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="verify_req_recall",
         description="Diff extract-visible req-ids against parse-tree requirements.",
     )
-    ap.add_argument("--extract", required=True,
+    ap.add_argument("--env-dir", default=None,
+                    help="NORA build (or a label's nora/ dir): each cell's extract, "
+                         "parse and profile dirs come from the resolver, in the build "
+                         "or the stage store (NORA_STAGES_ROOT); replaces --extract/--parse")
+    ap.add_argument("--extract", default=None,
                     help="NORA extract dir (<env_dir>/out/extract)")
-    ap.add_argument("--parse", required=True,
+    ap.add_argument("--parse", default=None,
                     help="NORA parse dir (<env_dir>/out/parse)")
     ap.add_argument("--profile-root", default=None,
                     help="Materialized profiles root (default: <extract>/../profile)")
@@ -254,26 +281,36 @@ def main(argv: list[str] | None = None) -> int:
                     help="Exit 1 when any doc has MISSING ids or is unparsed")
     args = ap.parse_args(argv)
 
-    extract_dir = Path(args.extract)
-    parse_dir = Path(args.parse)
-    if not extract_dir.is_dir() or not parse_dir.is_dir():
-        print("error: --extract and --parse must be existing directories",
-              file=sys.stderr)
-        return 2
-    profile_root = (Path(args.profile_root) if args.profile_root
-                    else extract_dir.parent / "profile")
+    if args.env_dir:
+        cells = _cells_from_env(Path(args.env_dir), args.profile_root)
+    else:
+        if not args.extract or not args.parse:
+            print("error: give --env-dir, or both --extract and --parse",
+                  file=sys.stderr)
+            return 2
+        extract_dir = Path(args.extract)
+        parse_dir = Path(args.parse)
+        if not extract_dir.is_dir() or not parse_dir.is_dir():
+            print("error: --extract and --parse must be existing directories",
+                  file=sys.stderr)
+            return 2
+        profile_root = (Path(args.profile_root) if args.profile_root
+                        else extract_dir.parent / "profile")
+        cells = []
+        for cell_dir in sorted(p for p in glob.glob(str(extract_dir / "*" / "*"))
+                               if Path(p).is_dir()):
+            cell = Path(cell_dir)
+            mno, rel = cell.parts[-2], cell.parts[-1]
+            cells.append((f"{mno}/{rel}", cell, parse_dir / mno / rel,
+                          profile_root / mno / rel / "profile.json"))
 
     grand = {"docs": 0, "unparsed": 0, "missing": 0, "demoted": 0,
              "table_only": 0, "struck_only": 0, "toc_only": 0,
              "cross_doc": 0, "section_id": 0}
     failing = False
 
-    for cell_dir in sorted(p for p in glob.glob(str(extract_dir / "*" / "*"))
-                           if Path(p).is_dir()):
-        cell = Path(cell_dir)
-        key = "/".join(cell.parts[-2:])   # mno/rel
-        id_cfg = load_id_config(profile_root / cell.parts[-2] / cell.parts[-1]
-                                / "profile.json")
+    for key, cell, cell_tree_dir, profile_path in cells:
+        id_cfg = load_id_config(profile_path)
         if not id_cfg:
             print(f"== {key} == [skip] no materialized profile / empty "
                   f"requirement_id.pattern")
@@ -282,7 +319,6 @@ def main(argv: list[str] | None = None) -> int:
         # Cell-wide id union (field report): resolve body ids against every
         # sibling doc's tree so cross-document citations don't read as
         # per-doc recognition gaps.
-        cell_tree_dir = parse_dir / cell.parts[-2] / cell.parts[-1]
         cell_ids: set[str] = set()
         for tp in sorted(cell_tree_dir.glob("*_tree.json")):
             try:

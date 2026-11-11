@@ -688,3 +688,38 @@ def test_verify_enrich_takes_the_recipe_s_model(host):
         assert host["run"]("verify-enrich", "--yes").returncode == 0
     last = [l for l in (host["root"] / "compose-args.txt").read_text().splitlines() if "--stamp enrich" in l][-1]
     assert "NORA_SIRA_ENRICH_LLM_MODEL=recipe-model" in last
+
+
+# -- stage graph, step 4: host-side reads go through the resolver ------------
+
+def test_taxonomy_held_only_in_the_store_is_found_through_the_manifest(host):
+    """A cell's taxonomy that only the stage store holds (stage-graph §10c):
+    the enrich gate reads its ledger there, the lane gets the store path
+    as the containers mount it, and status counts it."""
+    import shutil
+    from core.src.pipeline.manifest import BuildManifest
+    _to_taxonomy_ok(host)
+    nb = host["nora"] / "b1"
+    store = host["root"] / "stages"
+    entry = store / "taxonomy" / "MNO-A" / "Jan2031" / "fpT"
+    entry.parent.mkdir(parents=True)
+    shutil.move(str(nb / "out" / "taxonomy" / "MNO-A" / "Jan2031"), str(entry))
+    shutil.rmtree(nb / "out" / "taxonomy")
+    BuildManifest(nb / "STAGES.json").record("taxonomy", "MNO-A/Jan2031", "fpT", origin="computed")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + f"STAGES_ROOT={store}\n", encoding="utf-8")
+
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    assert "NORA_SIRA_TAXONOMY_DIR=/data/stages/taxonomy/MNO-A/Jan2031/fpT" in _last_inner(host)
+    st = host["run"]("status").stdout
+    assert "taxonomy     : {'ok': 1, 'failed': 0} cells=1" in st
+    assert "parse dirs   : 1" in st
+
+
+def test_enrich_refuses_a_cell_with_no_taxonomy_anywhere(host):
+    _to_taxonomy_ok(host)
+    import shutil
+    shutil.rmtree(host["nora"] / "b1" / "out" / "taxonomy")
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 1 and "CYC-E060" in r.stderr
