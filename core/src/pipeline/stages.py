@@ -144,6 +144,20 @@ def _write_sources(cell_dir: Path, sources: dict[str, str]) -> None:
     path.write_text(json.dumps(merged, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _seed_from_store(cell_dir: Path, entries: list[Path]) -> bool:
+    """Fill an empty cell directory with private copies of the newest
+    matching store entry, so the stage's own per-unit reuse can apply."""
+    if not entries:
+        return False
+    from core.src.pipeline.stage_store import clone_tree, privatize
+
+    if cell_dir.exists():
+        shutil.rmtree(cell_dir)
+    clone_tree(entries[0], cell_dir)
+    privatize(cell_dir)
+    return True
+
+
 def run_extract(ctx: PipelineContext) -> StageResult:
     """Extract documents into normalized IR."""
     t0 = time.time()
@@ -222,8 +236,8 @@ def run_extract(ctx: PipelineContext) -> StageResult:
             else:
                 cell_prior[cell] = _prior_irs(fps.reuse_sources(stage, cell, "documents"))
                 cell_sources[cell] = {}
-        if cell in cell_skip and out_path.exists():
-            ir_paths.append(str(out_path))
+        if cell in cell_skip:
+            ir_paths.append(str(ctx.stage_input(stage, cell) / out_path.name))
             stats["skipped"] += 1
             continue
         source_fp = _file_sha256(f)
@@ -404,7 +418,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     fps = ctx.fingerprints
     for cell in cells:
         # Cell profile materialized (and substituted) by the profile stage.
-        profile_path = ctx.stage_output("profile", cell) / "profile.json"
+        profile_path = ctx.stage_input("profile", cell) / "profile.json"
         if not profile_path.exists():
             warnings.append(f"PIP-E002: no profile for {cell.mno}/{cell.release} "
                             f"(run the profile stage first)")
@@ -415,7 +429,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
         # decision itself is the stage-graph fingerprint below.
         profile_fp = hashlib.sha256(profile_path.read_bytes()).hexdigest()[:16]
 
-        ir_files = sorted(ctx.stage_output("extract", cell).glob("*_ir.json"))
+        ir_files = sorted(ctx.stage_input("extract", cell).glob("*_ir.json"))
         if not ir_files:
             warnings.append(f"PIP-E002: no IRs for {cell.mno}/{cell.release}")
             continue
@@ -432,7 +446,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
         names = [p.name for p in expected]
         if fps.prepare(stage, cell, cell_fp,
                        complete=lambda v, names=names: all((v / n).exists() for n in names)):
-            tree_paths.extend(str(p) for p in expected)
+            tree_paths.extend(str(ctx.stage_input(stage, cell) / n) for n in names)
             stats["skipped"] += len(expected)
             continue
         cell_failed = 0
@@ -524,7 +538,7 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
     # therefore never match across MNOs or releases (plan codes/numbers aren't
     # globally unique); cross-cell relations are the global graph's job.
     for cell in cells:
-        cell_trees_dir = ctx.stage_output("parse", cell)
+        cell_trees_dir = ctx.stage_input("parse", cell)
         tree_files = sorted(cell_trees_dir.glob("*_tree.json"))
         if not tree_files:
             continue
@@ -713,10 +727,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     # mounted at taxonomy time.
     from core.src.pipeline.cells import Cell
     parse_root = ctx.stage_output("parse")
-    cells = sorted(
-        (Cell(d.parent.name, d.name) for d in parse_root.glob("*/*") if d.is_dir()),
-        key=lambda c: (c.mno, c.release),
-    )
+    cells = sorted(ctx.stage_input_cells("parse"), key=lambda c: (c.mno, c.release))
     cells = [c for c in cells if ctx.cell_in_scope(c.mno, c.release)]
     if not cells:
         return _fail(stage, "PIP-E002",
@@ -750,7 +761,7 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     fps = ctx.fingerprints
 
     for cell in cells:
-        parse_dir = ctx.stage_output("parse", cell)
+        parse_dir = ctx.stage_input("parse", cell)
         tree_files = sorted(parse_dir.glob("*_tree.json"))
         cname = f"{cell.mno}__{cell.release}"
         if not tree_files:
@@ -767,10 +778,18 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
         # `--force` busts it; a degraded cell is never stamped.
         corpus_fp = fps.current(stage, cell)
         if fps.prepare(stage, cell, corpus_fp, complete=lambda v: (v / "taxonomy.json").exists()):
+            held = ctx.stage_input(stage, cell)
             cell_features[cname] = [DocumentFeatures.load_json(f)
-                                    for f in sorted(out_dir.glob("*_features.json"))]
+                                    for f in sorted(held.glob("*_features.json"))]
             n_cells_cached += 1
             continue
+        # The build keeps no copy of a stored taxonomy (stage-graph step 4),
+        # so a cell computing anew starts from the newest store entry with
+        # the same model, code version and prompts: its ledger reuses every
+        # plan whose tree is unchanged. A redo (generation) or a model change
+        # matches nothing and starts empty.
+        if not (out_dir / "extraction_state.json").exists():
+            _seed_from_store(out_dir, fps.reuse_sources(stage, cell, ignore_inputs=True))
 
         state_path = out_dir / "extraction_state.json"
         prev_docs: dict[str, dict] = {}
@@ -887,7 +906,8 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     # Build-level taxonomy: every cell present in the build (in scope or
     # not), consolidated — the graph builder's and the review editor's input.
     build_features: list = []
-    for feat in sorted(base_out.glob("*/*/*_features.json")):
+    for feat in [f for c in ctx.stage_input_cells(stage)
+                 for f in sorted(ctx.stage_input(stage, c).glob("*_features.json"))]:
         try:
             build_features.append(DocumentFeatures.load_json(feat))
         except Exception as e:  # noqa: BLE001 — one unreadable file must not sink the build file
@@ -1001,7 +1021,9 @@ def run_standards(ctx: PipelineContext) -> StageResult:
 
     collector = StandardsReferenceCollector()
     try:
-        index = collector.collect(manifest_dir=resolve_dir, trees_dir=parse_dir)
+        index = collector.collect(manifest_dir=resolve_dir, trees_dir=parse_dir,
+                                  manifest_files=ctx.stage_input_files("resolve", "*_xrefs.json") or None,
+                                  tree_files=ctx.stage_input_files("parse", "*_tree.json") or None)
     except Exception as e:
         return _fail(stage, "STD-E001", f"Reference collection failed: {e}", time.time() - t0)
 
@@ -1071,8 +1093,8 @@ def run_graph(ctx: PipelineContext) -> StageResult:
 
     try:
         graph = builder.build(
-            trees_dir=ctx.stage_output("parse"),
-            manifests_dir=ctx.stage_output("resolve"),
+            trees_dir=ctx.stage_input_files("parse", "*_tree.json"),
+            manifests_dir=ctx.stage_input_files("resolve", "*_xrefs.json"),
             taxonomy_path=taxonomy_path,
             standards_dir=ctx.stage_output("standards"),
         )
@@ -1164,7 +1186,7 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
         builder = VectorStoreBuilder(embedder=embedder, store=store, config=config)
         try:
             build_stats = builder.build(
-                trees_dir=ctx.stage_output("parse", cell),  # this cell's trees only
+                trees_dir=ctx.stage_input("parse", cell),  # this cell's trees only
                 taxonomy_path=taxonomy_path,
                 rebuild=True,
             )

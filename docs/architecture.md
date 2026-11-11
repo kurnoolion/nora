@@ -379,13 +379,18 @@ lane (§6) is not a pipeline stage. The skip flags resolve CLI > env var
 (the wiring env's `STAGES_ROOT`, mounted at `/data/stages`), a per-cell
 stage first looks for its fingerprint in the build's manifest, then in
 the store, `<stages-root>/<stage>/<MNO>/<rel>/<fp>/`; a stored output is
-cloned into the build's `out/<stage>/<MNO>/<rel>/`, and a cell the
-build computes cleanly is cloned into the store, made read-only and
-renamed into place. So a second build, of any stack, on the same cell
-and code computes nothing in the corpus prefix. The build keeps its own
-`out/` (every reader outside the pipeline reads that layout); clones are
-hard links on one mount and copies across mounts. The vector store and
-taxonomy from an image without `NORA_CODE_VERSION` stay out of the store.
+read where it is, and a cell the build computes cleanly moves into the
+store (made read-only, renamed into place, the build's copy removed).
+So a second build, of any stack, on the same cell and code computes
+nothing in the corpus prefix and copies nothing. Every reader, in the
+pipeline and outside it (the store builders, the SIRA adapter, the
+cycle driver, promote, the debug tools), finds an output through the
+resolver `pipeline/locate.py`: the build's `out/` first, else the store
+entry its `STAGES.json` names (step 4). Labels keep their
+`nora/out/<stage>/` layout, assembled by promote from both. The vector
+store and taxonomy from an image without `NORA_CODE_VERSION` stay out
+of the store, in the build. nora-batch mounts the store read-write,
+sira-batch read-only.
 A `.building` marker makes a second producer wait for the first. With
 `NORA_CORPUS_DIR` (the wiring env's `CORPUS_DIR`, mounted read-only at
 `/data/corpus`), the profile bindings and annotations are read from the

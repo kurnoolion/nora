@@ -263,21 +263,6 @@ class StageStore:
             ptmp.unlink(missing_ok=True)   # the output stands; provenance is a record
         return True
 
-    def link_view(self, stage: str, cell: Cell, fp: str, view: Path) -> None:
-        """Make `view` (a build's cell directory) a clone of the stored
-        output, replacing whatever it held."""
-        src = self.path(stage, cell, fp)
-        view.parent.mkdir(parents=True, exist_ok=True)
-        tmp = view.with_name(f".{view.name}.view-{uuid.uuid4().hex[:8]}")
-        clone_tree(src, tmp)
-        old = None
-        if view.exists():
-            old = view.with_name(f".{view.name}.old-{uuid.uuid4().hex[:8]}")
-            os.rename(view, old)
-        os.rename(tmp, view)
-        if old is not None:
-            _remove_tree(old)
-
 
 # -- garbage collection (step 3, slice 4) ------------------------------------
 

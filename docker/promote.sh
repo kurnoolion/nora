@@ -69,6 +69,11 @@ if [ -n "$NORA_BUILD" ]; then
   for d in parse taxonomy; do
     locate_cli "$d" --cells >/dev/null \
       || { echo "cannot read $NORA_BUILD/STAGES.json — refusing (the label would miss stored cells)" >&2; exit 1; }
+    gone="$(locate_cli "$d" --missing)" || {
+      echo "refusing: $NORA_BUILD/STAGES.json names $d output that neither the build nor the stage store holds:" >&2
+      echo "$gone" | sed 's/^/  /' >&2
+      echo "(removed from the store while the build needed it? re-run the stage in this build${STAGES_ROOT:+, or check --stages-root})" >&2
+      exit 1; }
   done
 fi
 mkdir -p "$DEST"

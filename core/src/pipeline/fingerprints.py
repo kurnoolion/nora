@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Callable, Iterable
 from core.src.pipeline.cells import Cell
 from core.src.pipeline.manifest import BuildManifest
 from core.src.pipeline.stage_graph import CORPUS, GLOBAL_KEY, spec_of, tier_of
-from core.src.pipeline.stage_store import privatize
+from core.src.pipeline.stage_store import _remove_tree, privatize
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.src.pipeline.runner import PipelineContext
@@ -237,13 +237,15 @@ class Fingerprinter:
             "externals": self.externals(stage, cell),
         }
 
-    def reuse_sources(self, stage: str, cell: Cell, ignore_external: str) -> list[Path]:
+    def reuse_sources(self, stage: str, cell: Cell, ignore_external: str = "",
+                      ignore_inputs: bool = False) -> list[Path]:
         """Stored outputs of `stage` for `cell` that differ from the current
         run only in the external input `ignore_external`: same code version,
         parameters, inputs and other externals. Newest first. A stage reuses
         parts of them (extract: the IR of a document whose source bytes are
-        unchanged, step 4 slice 4). Empty without the store or with
-        ``--force``."""
+        unchanged, step 4 slice 4; taxonomy, with `ignore_inputs`: the
+        ledger and features of plans whose trees are unchanged, slice 5).
+        Empty without the store or with ``--force``."""
         if self.ctx.force or not self.in_store(stage):
             return []
         store = self.ctx.stage_store
@@ -253,7 +255,8 @@ class Fingerprinter:
         for fp, prov in store.entries(stage, cell):
             ext = {k: v for k, v in (prov.get("externals") or {}).items() if k != ignore_external}
             if (prov.get("code_version") == want["code_version"] and prov.get("params") == want["params"]
-                    and prov.get("inputs") == want["inputs"] and ext == want["externals"]):
+                    and (ignore_inputs or prov.get("inputs") == want["inputs"])
+                    and ext == want["externals"]):
                 out.append(store.path(stage, cell, fp))
         return out
 
@@ -262,31 +265,42 @@ class Fingerprinter:
         """Decide whether `stage` must compute `cell` under `fp`.
 
         Returns True when the output can be reused: this build recorded
-        `fp` for the cell, or the stage store holds `fp` (another build
-        computed it; its output is cloned into this build and recorded,
-        origin ``store``). `complete(view)` is the stage's own check that
-        the cell's directory holds a whole output; without it the
-        directory's presence is enough.
+        `fp` for the cell and holds it (in its own directory, or in the
+        store), or the stage store holds `fp` (another build computed it;
+        it is recorded, origin ``store``, and read from the store through
+        `PipelineContext.stage_input` — nothing is copied into the build,
+        stage-graph step 4). `complete(dir)` is the stage's own check that
+        a directory holds a whole output; without it its presence is
+        enough.
 
-        Returns False when the stage must compute: the cell's directory is
-        made private (no file in it shares an inode with the store or a
-        promoted label) and, with the store, a ``.building`` marker tells
-        other producers this build is on it. Waits first while another
-        build's marker for `fp` is live. `--force` always computes.
+        Returns False when the stage must compute into the build's cell
+        directory: it is made private (a build from before step 4 may hold
+        files linked to the store or a label) and, with the store, a
+        ``.building`` marker tells other producers this build is on it.
+        Waits first while another build's marker for `fp` is live.
+        `--force` always computes.
         """
         view = self.ctx.stage_output(stage, cell)
 
-        def whole() -> bool:
-            return complete(view) if complete is not None else view.is_dir()
+        def whole(d: Path) -> bool:
+            return complete(d) if complete is not None else d.is_dir()
 
         store = self.ctx.stage_store if self.in_store(stage) else None
         if not self.ctx.force:
-            if self.recorded(stage, cell) == fp and whole():
-                return True
+            if self.recorded(stage, cell) == fp:
+                if whole(view):
+                    return True
+                if store is not None and store.has(stage, cell, fp) and whole(store.path(stage, cell, fp)):
+                    if view.exists():
+                        _remove_tree(view)   # an empty or partial dir would shadow the store
+                    return True
             if store is not None and (store.has(stage, cell, fp)
                                       or store.wait_for(stage, cell, fp, self.ctx.build_id)):
-                store.link_view(stage, cell, fp, view)
-                if whole():
+                if whole(store.path(stage, cell, fp)):
+                    # the build's own leftovers (a degraded earlier run) would
+                    # shadow the stored output for every reader
+                    if view.exists():
+                        _remove_tree(view)
                     self.manifest.record(stage, cell_key(stage, cell), fp, origin=ORIGIN_STORE,
                                          **self._provenance(stage, cell))
                     return True
@@ -297,10 +311,11 @@ class Fingerprinter:
 
     def stamp(self, stage: str, cell: Cell | None = None, fp: str | None = None) -> str:
         """Record the current fingerprint (or `fp`) with its provenance and,
-        for a stored stage, put the cell's output into the store. When the
-        store already holds `fp` the stored output wins and replaces this
-        build's copy (first complete result wins), unless the run was
-        forced, which keeps its own output and leaves the store alone."""
+        for a stored stage, move the cell's output into the store: the
+        build keeps no copy (stage-graph step 4). When the store already
+        holds `fp` the stored output wins and this build's is dropped
+        (first complete result wins), unless the run was forced, which
+        keeps its own output in the build and leaves the store alone."""
         fp = fp if fp is not None else self.current(stage, cell)
         provenance = self._provenance(stage, cell)
         origin = ORIGIN_COMPUTED
@@ -310,12 +325,12 @@ class Fingerprinter:
             placed = store.commit(stage, cell, fp, view, dict(
                 provenance, stage=stage, cell=cell_key(stage, cell), fp=fp,
                 tier=tier_of(stage), build=self.ctx.build_id))
-            if not placed:
-                if self.ctx.force:
-                    origin = ORIGIN_FORCED
-                else:
-                    store.link_view(stage, cell, fp, view)
+            if not placed and self.ctx.force:
+                origin = ORIGIN_FORCED
+            else:
+                if not placed:
                     origin = ORIGIN_STORE
+                _remove_tree(view)
             store.release(stage, cell, fp, self.ctx.build_id)
         self.manifest.record(stage, cell_key(stage, cell), fp, origin=origin, **provenance)
         return fp
@@ -373,7 +388,7 @@ class Fingerprinter:
         ann_dir = self.ctx.annotations_dir
         if not ann_dir.is_dir():
             return ABSENT
-        stems = [f.stem[:-len("_ir")] for f in self.ctx.stage_output("extract", cell).glob("*_ir.json")]
+        stems = [f.stem[:-len("_ir")] for f in self.ctx.stage_input("extract", cell).glob("*_ir.json")]
         files = [ann_dir / f"{s}_annotations.json" for s in stems]
         files = [f for f in files if f.is_file()]
         return hash_files(files, rel_to=ann_dir) if files else ABSENT

@@ -264,9 +264,14 @@ CORPUS_DIR=/home/<you>/nora-data/corpus    # profiles.json + annotations/: one p
 
 With `STAGES_ROOT`, a build reuses any extract, profile, parse, resolve
 (and, from a versioned image, taxonomy) output another build on the host
-already computed for the same fingerprint, and puts its own there; the
-build's `out/` keeps a copy either way, so promote and the SIRA lane read
-it as before. `STAGES.json` in the build says, per stage and cell,
+already computed for the same fingerprint, and moves its own there. The
+build keeps no copy (stage graph, step 4): its `out/` holds only what the
+store does not take (the SIRA cells, the vector store, a degraded or
+forced run), and every reader (the pipeline, the SIRA lane, promote, the
+store builders, `cycle.sh status`, the debug tools) finds a stored output
+through the build's `STAGES.json`. nora-batch mounts the store
+read-write and sira-batch read-only, both at `/data/stages`; a build made
+before step 4 keeps its copies and reads as before. `STAGES.json` in the build says, per stage and cell,
 whether the output was `computed`, found in the `store`, or `forced`;
 `./cycle.sh status` counts them. With `CORPUS_DIR`, `start` binds new
 cells in `<corpus>/profiles.json`, the build holds no `profiles.json`,
@@ -277,9 +282,12 @@ copy the active build's `profiles.json` to `<corpus>/`. Rebake the batch
 images with `CODE_VERSION` (below) so taxonomy outputs are shared too.
 
 **Cleaning the store.** The store only grows. `gc` removes the entries
-that no build, label or release set on the host names. Removing an entry
-never breaks a build or a label, because each holds its own copy; the
-next build that needs the output computes it again. Name every stack's
+that no build, label or release set on the host names. A label holds
+hard links, so removing an entry never breaks one. A build holds no copy
+(step 4), so an entry its `STAGES.json` names must be kept: name every
+builds root on the host. A build left off the command loses those
+outputs; `promote.sh` then refuses it, naming the cells, and re-running
+the stage in that build computes them again. Name every stack's
 builds root, labels root and registry; it refuses when given none, or
 when one of them is unreadable (`PIP-E006`), and it warns about a
 `--keep-from` directory that holds no `STAGES.json` (check the path). It is a dry run unless

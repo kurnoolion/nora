@@ -79,7 +79,9 @@ def test_verify_req_recall_env_dir_finds_store_cells(tmp_path, monkeypatch):
     from sandbox.verify_req_recall import _cells_from_env
     env, store = tmp_path / "build", tmp_path / "stages"
     for stage in ("extract", "parse", "profile"):
-        (env / "out" / stage / "mno-a" / "Jan2031").mkdir(parents=True)
+        d = env / "out" / stage / "mno-a" / "Jan2031"
+        d.mkdir(parents=True)
+        (d / "x.json").write_text("{}")
     entry = store / "extract" / "mno-a" / "Apr2031" / "fpE"
     entry.mkdir(parents=True)
     BuildManifest(env / "STAGES.json").record("extract", "mno-a/Apr2031", "fpE", origin="computed")

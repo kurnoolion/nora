@@ -3,7 +3,8 @@
     locate(build, stage, cell) -> Path | None
 
 1. the build's ``out/<stage>/<MNO>/<release>/`` (``out/<stage>/`` for a
-   global stage) when it exists;
+   global stage) when it exists and is not empty (a stage may create the
+   directory before it finds the output stored);
 2. else the stage store entry the build's ``STAGES.json`` names, when the
    store holds it and the entry's origin is not ``forced``;
 3. else None.
@@ -20,6 +21,7 @@ the host-side driver, promote and the runner can call the CLI::
 
     python3 -m core.src.pipeline.locate <build> <stage> [<MNO>/<release>] [--stages-root DIR]
     python3 -m core.src.pipeline.locate <build> <stage> --cells [--stages-root DIR]
+    python3 -m core.src.pipeline.locate <build> <stage> --missing [--stages-root DIR]
 """
 
 from __future__ import annotations
@@ -72,7 +74,7 @@ def locate(build: Path | str, stage: str, cell: Cell | None = None,
     unreadable manifest."""
     build = Path(build)
     own = build / "out" / stage if cell is None else build / "out" / stage / cell.mno / cell.release
-    if own.is_dir():
+    if own.is_dir() and any(own.iterdir()):
         return own
     if cell is None:
         return None
@@ -88,7 +90,8 @@ def cells(build: Path | str, stage: str, stages_root: Path | str | None = None) 
     if own.is_dir():
         for mno in own.iterdir():
             if mno.is_dir():
-                found.update(Cell(mno.name, rel.name) for rel in mno.iterdir() if rel.is_dir())
+                found.update(Cell(mno.name, rel.name) for rel in mno.iterdir()
+                             if rel.is_dir() and any(rel.iterdir()))
     root = _stages_root(stages_root)
     manifest = _manifest(build) if root is not None else None
     if manifest is not None:
@@ -99,6 +102,24 @@ def cells(build: Path | str, stage: str, stages_root: Path | str | None = None) 
             if cell not in found and _from_store(build, stage, cell, root) is not None:
                 found.add(cell)
     return sorted(found)
+
+
+def missing(build: Path | str, stage: str, stages_root: Path | str | None = None) -> list[Cell]:
+    """Cells the build's manifest names for `stage` whose output is in
+    neither the build nor the store: a store entry removed (by GC) while
+    the build still needed it. Promote refuses on any."""
+    build = Path(build)
+    manifest = _manifest(build)
+    if manifest is None:
+        return []
+    out = []
+    for key in manifest.fingerprints(stage):
+        if key == "*" or "/" not in key:
+            continue
+        cell = Cell(*key.split("/", 1))
+        if locate(build, stage, cell, stages_root) is None:
+            out.append(cell)
+    return sorted(out)
 
 
 def stage_dirs(build: Path | str, stage: str, stages_root: Path | str | None = None
@@ -156,10 +177,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("stage")
     ap.add_argument("cell", nargs="?", type=_parse_cell, help="<MNO>/<release>; omit for a global stage")
     ap.add_argument("--cells", action="store_true", help="list the cells the stage has an output for")
+    ap.add_argument("--missing", action="store_true",
+                    help="list the cells the manifest names that have no output anywhere (exit 1 if any)")
     ap.add_argument("--stages-root", type=Path, default=None,
                     help=f"the host's stage store (default: ${STAGES_ROOT_ENV})")
     args = ap.parse_args(argv)
     try:
+        if args.missing:
+            gone = missing(args.build, args.stage, args.stages_root)
+            for c in gone:
+                print(f"{c.mno}/{c.release}")
+            return 1 if gone else 0
         if args.cells:
             for c in cells(args.build, args.stage, args.stages_root):
                 print(f"{c.mno}/{c.release}")

@@ -601,6 +601,7 @@ nora/
 │       ├── test_pipeline_recipes.py                     # Recipes (strand stage-graph, step 3): validation, the committed recipes,
 │       ├── test_pipeline_stage_graph.py                 # Stage graph, fingerprints and the build manifest (strand stage-graph,
 │       ├── test_pipeline_stage_store.py                 # The host's stage store and the corpus root (strand stage-graph, step 2).
+│       ├── test_pipeline_step4_switch.py                # Stage graph step 4, slice 5: the build keeps no copy of a stored output.
 │       ├── test_plan_metadata.py                        # Tests for plan-metadata extraction (`_extract_plan_metadata`).
 │       ├── test_playground_helpers.py                   # Tests for the merged-tab helpers in core/src/web/routes/playground.py:
 │       ├── test_profile_bindings.py                     # Tests for per-cell profile binding (D-DRAFT-7).

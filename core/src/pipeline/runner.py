@@ -182,6 +182,26 @@ class PipelineContext:
             return base / cell.relpath
         return base
 
+    def stage_input(self, stage: str, cell: "Cell | None" = None) -> Path:
+        """Where an earlier stage's output for `cell` is, for a stage that
+        reads it: the build's own directory when present, else the stage
+        store entry this build's manifest names (``pipeline/locate.py``,
+        stage-graph step 4). A stage writes to `stage_output`, never here."""
+        from core.src.pipeline.locate import locate
+        found = locate(self.env_dir, stage, cell, self.stages_root)
+        return found if found is not None else self.stage_output(stage, cell)
+
+    def stage_input_cells(self, stage: str) -> "list[Cell]":
+        """Every cell `stage` has an output for, in the build or the store."""
+        from core.src.pipeline.locate import cells
+        return cells(self.env_dir, stage, self.stages_root)
+
+    def stage_input_files(self, stage: str, pattern: str) -> "list[Path]":
+        """Files matching `pattern` over every cell of `stage` (and the flat
+        legacy ``out/<stage>/``), for the global stages."""
+        from core.src.pipeline.locate import stage_files
+        return stage_files(self.env_dir, stage, pattern, stages_root=self.stages_root)
+
     def cell_in_scope(self, mno: str, release: str) -> bool:
         """True iff `(mno, release)` passes the `--mno`/`--release` scope (D-DRAFT-8).
 

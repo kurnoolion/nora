@@ -139,34 +139,35 @@ variant stage run from an image without a code version (the fingerprint
 would then not see code changes). Global stages (standards, graph, eval)
 stay in the build until a recipe needs them shared (step 4).
 
-**Find, compute, put.** Before a stage writes a cell it computes the
-fingerprint. If the build recorded it, the cell is reused. Else, if the
-store holds it, the stored output is cloned into the build's cell
-directory and recorded with origin `store`. Else the stage computes into
-the build's cell directory, and on a clean completion the output is
-cloned into the store under a temp name, its files made read-only, and
-renamed into place; provenance is written after the rename. A degraded
-run (taxonomy with failures, extract or parse with a failed document) is
-never put in the store; its resumable state stays in the build.
+**Find, compute, put** (as of step 4, §10c). Before a stage writes a
+cell it computes the fingerprint. If the build recorded it, or the store
+holds it, the cell is reused and recorded with origin `store` when it
+came from another build; nothing is copied into the build, and every
+reader finds the output through the build's manifest
+(`pipeline/locate.py`). Else the stage computes into the build's cell
+directory, and on a clean completion the output moves into the store:
+cloned under a temp name, its files made read-only, renamed into place,
+and the build's directory removed; provenance is written after the
+rename. A degraded run (taxonomy with failures, extract or parse with a
+failed document) is never put in the store; its resumable state stays
+in the build, where readers find it first. Steps 2 and 3 cloned stored
+outputs into every build (a copy across the container mounts, about
+342 MB per build); step 4 removed that.
 
-**Clone.** Hard links when the build and the store share a mount (host
-runs), copies otherwise. The batch containers mount the build and the
-store separately, and the kernel refuses a hard link across mounts, so
-on the host the store holds a copy of each stored output. The cost is
-one copy per output per host; an incremental build holds one cell.
-
-**Write-once.** Before a stage writes a cell, every file in the cell's
-directory that shares an inode with another path, or is read-only, is
-replaced by a private copy. So a re-run never edits a stored output, nor
-a promoted label (promote hard-links the build's `out/`).
+**Write-once.** A stored output is read-only and never written: a
+re-run is a new fingerprint. Before a stage writes a cell, every file in
+the build's cell directory that shares an inode with another path, or is
+read-only, is replaced by a private copy, which protects the store and
+labels from a build made before step 4 (whose `out/` holds clones) and
+from a taxonomy cell seeded from the store.
 
 **Concurrent producers.** Two stacks ingesting one release at once would
 both compute parse. The `.building` marker names the build; a second
 producer finding a live marker of another build waits (polling, up to
 `NORA_STAGES_WAIT_SECONDS`, default one hour; an older marker counts as
 abandoned), then takes the stored output or computes it. If both
-finish, the first rename wins; the second clones the winner's output
-into its build and records it. `--force` computes regardless and keeps
+finish, the first rename wins; the second drops its own output and
+records the winner's. `--force` computes regardless and keeps
 its own output; the store keeps the first result (origin `forced`).
 
 **Garbage collection**, by hand, and safe at any time: builds and
@@ -185,7 +186,9 @@ under the stack's builds root (D-319):
   RECIPE.json          # the recipe (§6), frozen at start (step 3)
   CYCLE.json           # the baton and phase log, as today
   STAGES.json          # the manifest: {stage: {"<MNO>/<release>": {fp, origin, provenance}}}
-  out/<stage>/<MNO>/<release>/   # the cell outputs: computed here or cloned from the store
+  out/<stage>/<MNO>/<release>/   # build-held outputs only (step 4): enrich (out/sira), the vector
+                                 # store, graph, taxonomy from an unversioned image, and a degraded
+                                 # or forced run; stored outputs live in the store alone
   prompts/  reports/   # as today
 ```
 
@@ -195,16 +198,16 @@ another shape. A global stage is keyed `*`; its fingerprint carries the
 cell set through its inputs. `origin` says where an entry's output came
 from: `computed`, `store` or `forced`.
 
-**Why the build keeps `out/`.** The 2026-11-08 baseline had builds hold
+**Why the build kept `out/` until step 4.** The 2026-11-08 baseline had builds hold
 manifests only, with the pipeline resolving every path through the
 manifest into the store. A survey for step 2 found about thirty modules
 outside the pipeline that read `<build>/out/<stage>/<cell>/` by layout:
 the SIRA lane, promote, the Trees and History builders, the parse and
 resolve review pages, the request browser, golden eval, the debug CLIs.
 Moving them all to manifest lookups is a cross-module change that adds
-no sharing. The build's cell directories are therefore clones of the
-stored outputs: the pipeline decides through the manifest and the
-store; everything else reads the layout as before.
+no sharing. Steps 2 and 3 therefore kept the build's cell directories
+as clones of the stored outputs. Step 4 (§10c) moved every reader onto
+one resolver instead, and the clones went.
 
 Starting a build: for each stage in order and each cell in scope,
 compute the fingerprint from the inputs' fingerprints already in the
@@ -535,10 +538,20 @@ copied.
    documents from the build's `out/extract/`; it must go through the
    resolver once extract output leaves the build.
 5. The pipeline writes stored stages into the store and stops cloning;
-   a new build's `out/` holds only build-held stages. Before this, the
-   sira-batch container needs the store mounted read-only: the lane
-   reads parse trees through the adapter and, with a taxonomy recipe,
-   the cell's taxonomy dir, and today only nora-batch mounts the store.
+   a new build's `out/` holds only build-held stages (built 2026-11-11).
+   Every input read in the pipeline goes through
+   `PipelineContext.stage_input` (the resolver), the global stages take
+   file lists; `stamp` moves a clean output into the store and removes
+   the build's directory; `prepare` reuses a stored output without a
+   copy and removes leftovers that would shadow it; `link_view` is gone.
+   The resolver ignores an empty build directory (a stage may create
+   one before it finds the output stored). Taxonomy, whose per-plan
+   reuse lived in the build's cell directory, seeds a new fingerprint
+   from the cell's newest store entry with the same model, code version
+   and prompts, so unchanged plans are not asked again; a redo or a
+   model change seeds nothing. sira-batch mounts the store read-only
+   with `NORA_STAGES_ROOT`, since the lane reads parse trees and
+   taxonomy there.
 
 Rejected: a pass that relinks a build's copies to the store after each
 stage (N copies exist until it runs, and every build pays the copy and
@@ -554,8 +567,9 @@ under step 4 a re-run is a new fingerprint and never edits a file.
   is the one kept.
 - A cell's output is reused whole only by fingerprint (the build's
   manifest, then the store); the stage's completeness check guards the
-  reuse, it never grants it. The build's `out/` tree is where outputs
-  are read; a stored output appears there as a clone.
+  reuse, it never grants it. A stored output lives only in the store; a
+  build holds its manifest and the outputs the store does not take, and
+  every reader finds either through the resolver.
 - A stage never writes a file that shares its inode with the store or a
   label.
 - A fingerprint is a function of stage, code version, parameters and

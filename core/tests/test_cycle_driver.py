@@ -52,6 +52,13 @@ echo "fake docker: unexpected args: $*" >&2; exit 1
 '''
 
 
+def _parsed_dir(d: Path) -> Path:
+    """A parsed cell: the resolver treats an empty directory as absent."""
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "doc_tree.json").write_text("{}")
+    return d
+
+
 @pytest.fixture()
 def host(tmp_path: Path):
     """A NORA_ROOT layout plus a fake docker on PATH; returns a runner."""
@@ -235,7 +242,7 @@ def test_parse_and_taxonomy_take_a_cell(host):
     phases = _cycle_json(host, "b1")["phases"]
     assert phases[-1]["phase"] == "parse" and "lane-ingestion-MNO-A-Apr2031-" in phases[-1]["log"]
     # prompts: a partial build (one of two cells parsed) is a NOTE, not a refusal
-    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Apr2031").mkdir(parents=True)
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Apr2031")
     r = host["run"]("prompts", "--yes")
     assert r.returncode == 0, r.stderr + r.stdout
     assert "partial build" in r.stdout
@@ -284,7 +291,7 @@ def _to_parsed(host):
     assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
     assert host["run"]("parse").returncode == 0
     # the fake lane wrote only the log; the real one writes the cell's parse dir
-    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True, exist_ok=True)
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031")
 
 
 def test_prompts_gate_declines_without_yes(host):
@@ -519,7 +526,7 @@ def _prompts_ready(host) -> None:
                 [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
     assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
     assert host["run"]("parse").returncode == 0
-    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True)
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031")
 
 
 def test_prompts_gate_refuses_a_batch_env_without_the_overview_dir(host):
@@ -567,7 +574,7 @@ def _parsed_with(host, recipe: str):
     r = host["run"]("start", "b1", "--seed", "b0", "--recipe", recipe)
     assert r.returncode == 0, r.stderr
     assert host["run"]("parse").returncode == 0
-    (host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True, exist_ok=True)
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031")
     return r
 
 
@@ -750,13 +757,19 @@ def test_promote_assembles_stored_cells_into_the_label_by_hard_link(tmp_path):
         assert got.stat().st_ino == (store / stage / "MNO-A" / "Apr2031" / ("fpP" if stage == "parse" else "fpT") / "f.json").stat().st_ino
     assert "promoted nora taxonomy MNO-A/Apr2031 (from the stage store)" in r.stdout
     assert "WARN" not in r.stdout.replace("WARN: " + str(nb) + "/out/vectorstore", "").replace("WARN: " + str(nb) + "/out/graph", "")
-    # without the stages root the label holds only the build's own cells
+    # without the stages root the stored cells cannot be found: refused, not
+    # a label missing them
     r = subprocess.run(args + ["--label", "l2"], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert not (serve / "l2" / "nora" / "out" / "parse" / "MNO-A" / "Apr2031").exists()
-    assert not (serve / "l2" / "nora" / "out" / "taxonomy").exists()
+    assert r.returncode == 1 and "MNO-A/Apr2031" in r.stderr and not (serve / "l2").exists()
     # an unreadable manifest refuses rather than promote a label missing cells
     (nb / "STAGES.json").write_text("not json")
     r = subprocess.run(args + ["--label", "l3", "--stages-root", str(store)], capture_output=True, text=True)
     assert r.returncode == 1 and "refusing" in r.stderr
     assert not (serve / "l3").exists()
+    # a store entry the build still names, removed (by GC): refused, not a label missing the cell
+    (nb / "STAGES.json").unlink()
+    m2 = BuildManifest(nb / "STAGES.json")
+    m2.record("parse", "MNO-A/Apr2031", "fpP", origin="computed")
+    m2.record("parse", "MNO-A/Oct2031", "fpGone", origin="computed")
+    r = subprocess.run(args + ["--label", "l4", "--stages-root", str(store)], capture_output=True, text=True)
+    assert r.returncode == 1 and "MNO-A/Oct2031" in r.stderr and not (serve / "l4").exists()

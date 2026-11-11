@@ -84,7 +84,7 @@ class TestStageStore:
         store = StageStore(tmp_path / "stages")
         store.commit("parse", CELL, "f1", self._src(tmp_path), {})
         view = tmp_path / "view"
-        store.link_view("parse", CELL, "f1", view)
+        clone_tree(store.path("parse", CELL, "f1"), view)   # a pre-step-4 build's clone
         stored = store.path("parse", CELL, "f1") / "a.json"
         assert (view / "a.json").stat().st_ino == stored.stat().st_ino
         mtime = stored.stat().st_mtime
@@ -188,8 +188,12 @@ class TestSharedStore:
             assert _manifest(b)[st][key]["origin"] == "store"
             assert _manifest(b)[st][key]["fp"] == _manifest(a)[st][key]["fp"]
         tree = "MNO-A_doc_tree.json"
-        assert ((b.env_dir / "out/parse/MNO-A/Feb2026" / tree).read_bytes()
-                == (a.env_dir / "out/parse/MNO-A/Feb2026" / tree).read_bytes())
+        # step 4: neither build keeps a copy; both read the one stored output
+        for ctx in (a, b):
+            assert not ctx.stage_output("parse", CELL).exists()
+        assert b.stage_input("parse", CELL) == a.stage_input("parse", CELL)
+        assert b.stage_input("parse", CELL).parent.parent.parent.parent == stages
+        assert (b.stage_input("parse", CELL) / tree).is_file()
         assert not list(stages.rglob("*.building"))
 
     def test_bindings_and_annotations_come_from_the_corpus_root(self, tmp_path):
@@ -367,7 +371,7 @@ def test_gc_leaves_builds_and_labels_intact(tmp_path):
     store = StageStore(tmp_path / "stages")
     _stored(store, "parse", "aaaa", tmp_path)
     view = tmp_path / "builds" / "b1" / "out" / "parse" / "MNOA" / "Apr2031"
-    store.link_view("parse", GC_CELL, "aaaa", view)
+    clone_tree(store.path("parse", GC_CELL, "aaaa"), view)   # a pre-step-4 build's clone
     (tmp_path / "builds" / "b1" / "STAGES.json").write_text(json.dumps({"version": 1, "stages": {}}))
     rep = ss.gc(store, [tmp_path / "builds"], [], apply=True, now=time.time() + 2 * DAY)
     assert rep.removed == ["parse/MNOA/Apr2031/aaaa"]

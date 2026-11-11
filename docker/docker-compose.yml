@@ -244,6 +244,10 @@ services:
       - ${STORE_ROOT:-${NORA_BUILD_DIR:-./empty}/out/sira}:/data/db   # the build's SIRA cells; optional in registry mode (serve only)
       # sira_lane's adapter step reads the nora build's out/ tree
       - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env   # the build (ingestion wiring env); cycle.sh need_wiring is the check, not :? — compose interpolates every service even for the serve profile
+      # stage graph, step 4: a build's parse trees and taxonomy may be held
+      # only by the stage store; the adapter and the lane read them there
+      # through the build's manifest. Read-only: SIRA never writes stages.
+      - ${STAGES_ROOT:-./empty}:/data/stages:ro
     user: "${JOB_UID:-0}:${JOB_GID:-0}"
     env_file:
       - path: ${SIRA_BATCH_ENV_FILE:-.env.sira-batch}
@@ -252,5 +256,6 @@ services:
         required: false
     environment:
       HOME: /tmp
+      NORA_STAGES_ROOT: ${STAGES_ROOT:+/data/stages}
     extra_hosts:
       - "host.docker.internal:host-gateway"

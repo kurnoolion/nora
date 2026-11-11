@@ -116,7 +116,7 @@
 
 **Why.** Removing an entry costs only a recompute, never an artifact, so the rule can be simple. Refusing on an unreadable source was chosen over skipping it: a skipped source could name anything. A scheduled GC was rejected for now: the host has no record of every stack's roots, so the person running it names them.
 
-**Consequences.** A stack left off the command loses sharing, not data. Nothing calls it automatically. A `--keep-from` directory holding no manifest is warned on, not refused: builds from before step 2 hold none, and refusing would block every stack that has them.
+**Consequences.** A stack left off the command loses sharing, not data; since step 4 (D-DRAFT-14) its builds hold no copies, so they lose stored outputs too, which promote refuses on and a re-run recomputes. Nothing calls it automatically. A `--keep-from` directory holding no manifest is warned on, not refused: builds from before step 2 hold none, and refusing would block every stack that has them.
 
 ### D-DRAFT-13 — 2026-11-10 — A rollback is refused when its label is no longer the active set
 
@@ -136,7 +136,7 @@
 
 **Why.** A relink pass after each stage was rejected: every build still pays the copy and the compare, and N copies exist until it runs. One mount holding the store beside the builds was rejected: hard links stop at one filesystem, so builds on a second host could not share, and compose paths change.
 
-**Consequences.** Labels keep their layout, so serving does not change. Builds from before the change stay readable through their `out/`. A re-run of a stored stage is a new fingerprint, never an edit, so `privatize` goes.
+**Consequences.** Labels keep their layout, so serving does not change. Builds from before the change stay readable through their `out/`. A re-run of a stored stage is a new fingerprint, never an edit; `link_view` goes, `privatize` stays for builds from before the change and for a taxonomy cell seeded from the store. A build depends on its store entries: GC must name its builds root, and promote refuses a cell named by the manifest and held nowhere. sira-batch mounts the store read-only. Taxonomy, whose per-plan reuse lived in the build, seeds a new fingerprint from the newest matching store entry.
 
 ### D-DRAFT-15 — 2026-11-11 — Extract reuses a document's IR by its source digest across store entries
 

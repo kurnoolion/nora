@@ -19,6 +19,13 @@ A = Cell("MNOA", "Apr2031")
 B = Cell("MNOA", "Oct2031")
 
 
+def _own(d: Path) -> Path:
+    """A build-held output directory (an empty one counts as absent)."""
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "x.json").write_text("{}")
+    return d
+
+
 def _stored(root: Path, stage: str, cell: Cell, fp: str) -> Path:
     d = root / stage / cell.mno / cell.release / fp
     d.mkdir(parents=True)
@@ -32,8 +39,7 @@ def _record(build: Path, stage: str, cell: Cell, fp: str, origin: str = "store")
 
 def test_build_out_wins(tmp_path):
     build, root = tmp_path / "b", tmp_path / "s"
-    own = build / "out" / "parse" / A.mno / A.release
-    own.mkdir(parents=True)
+    own = _own(build / "out" / "parse" / A.mno / A.release)
     _stored(root, "parse", A, "fp1")
     _record(build, "parse", A, "fp1")
     assert locate(build, "parse", A, root) == own
@@ -74,14 +80,13 @@ def test_stages_root_from_env(tmp_path, monkeypatch):
 def test_global_stage_reads_build_only(tmp_path):
     build = tmp_path / "b"
     assert locate(build, "graph") is None
-    (build / "out" / "graph").mkdir(parents=True)
+    _own(build / "out" / "graph")
     assert locate(build, "graph") == build / "out" / "graph"
 
 
 def test_unreadable_manifest_raises_only_when_needed(tmp_path):
     build, root = tmp_path / "b", tmp_path / "s"
-    own = build / "out" / "parse" / A.mno / A.release
-    own.mkdir(parents=True)
+    own = _own(build / "out" / "parse" / A.mno / A.release)
     (build / "STAGES.json").write_text("not json")
     assert locate(build, "parse", A, root) == own
     with pytest.raises(PipelineError):
@@ -90,7 +95,7 @@ def test_unreadable_manifest_raises_only_when_needed(tmp_path):
 
 def test_cells_unions_build_and_store(tmp_path):
     build, root = tmp_path / "b", tmp_path / "s"
-    (build / "out" / "parse" / A.mno / A.release).mkdir(parents=True)
+    _own(build / "out" / "parse" / A.mno / A.release)
     _stored(root, "parse", B, "fp2")
     _record(build, "parse", B, "fp2")
     _record(build, "parse", Cell("MNOB", "Apr2031"), "missing")   # not in the store
@@ -144,3 +149,26 @@ def test_stage_files_flat_then_cells_and_cell_of(tmp_path):
     assert stage_files(build, "extract", "*_ir.json", B, root) == [entry / "d2_ir.json"]
     assert stage_files(build, "extract", "*_ir.json", Cell("MNOB", "Apr2031"), root) == []
     assert stage_dirs(build, "extract", root) == [(A, own), (B, entry)]
+
+
+def test_an_empty_build_dir_does_not_shadow_the_store(tmp_path):
+    """A stage may create its cell directory before it finds the output
+    stored; the empty directory must not hide the stored output."""
+    build, root = tmp_path / "b", tmp_path / "s"
+    (build / "out" / "parse" / A.mno / A.release).mkdir(parents=True)
+    entry = _stored(root, "parse", A, "fp1")
+    _record(build, "parse", A, "fp1")
+    assert locate(build, "parse", A, root) == entry
+    assert cells(build, "parse", root) == [A]
+
+
+def test_missing_names_cells_with_no_output_anywhere(tmp_path):
+    from core.src.pipeline.locate import missing
+    build, root = tmp_path / "b", tmp_path / "s"
+    _stored(root, "parse", A, "fp1")
+    _record(build, "parse", A, "fp1")
+    _record(build, "parse", B, "gone")
+    assert missing(build, "parse", root) == [B]
+    assert main([str(build), "parse", "--missing", "--stages-root", str(root)]) == 1
+    _stored(root, "parse", B, "gone")
+    assert missing(build, "parse", root) == []
