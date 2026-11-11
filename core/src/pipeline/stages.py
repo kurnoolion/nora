@@ -87,6 +87,63 @@ def _cell_extract_hints(ctx: PipelineContext) -> dict[tuple[str, str], dict]:
     return out
 
 
+EXTRACT_SOURCES = ".sources.json"   # {ir name: sha256 of its source document}
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _prior_irs(entries: list[Path]) -> dict[str, Path]:
+    """``{"<ir name>:<source sha256>": entry dir}`` over stored extract
+    outputs, newest first wins. An entry without a sources record (stored
+    before step 4 slice 4) offers nothing."""
+    out: dict[str, Path] = {}
+    for entry in entries:
+        try:
+            sources = json.loads((entry / EXTRACT_SOURCES).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for name, digest in sources.items():
+            if (entry / name).is_file():
+                out.setdefault(f"{name}:{digest}", entry)
+    return out
+
+
+def _take_prior_ir(entry: Path, cell_dir: Path, stem: str) -> None:
+    """Clone a stored document's IR and its image directory into the cell.
+    Image paths in the IR are relative to the cell directory, so they hold."""
+    from core.src.pipeline.stage_store import _link_or_copy, clone_tree
+
+    cell_dir.mkdir(parents=True, exist_ok=True)
+    ir = cell_dir / f"{stem}_ir.json"
+    ir.unlink(missing_ok=True)          # an older IR of a changed source
+    _link_or_copy(entry / ir.name, ir)
+    images, dest = entry / "images" / stem, cell_dir / "images" / stem
+    if dest.exists():
+        shutil.rmtree(dest)
+    if images.is_dir():
+        clone_tree(images, dest)
+
+
+def _write_sources(cell_dir: Path, sources: dict[str, str]) -> None:
+    """Record each IR's source digest next to the IRs, so a later entry of
+    the cell can reuse them. Merged with what a resumed run recorded."""
+    if not sources:
+        return
+    path = cell_dir / EXTRACT_SOURCES
+    try:
+        merged = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        merged = {}
+    merged.update(sources)
+    path.write_text(json.dumps(merged, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def run_extract(ctx: PipelineContext) -> StageResult:
     """Extract documents into normalized IR."""
     t0 = time.time()
@@ -108,7 +165,8 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     if not files:
         return _fail(stage, "ENV-E002", f"No documents in {ctx.documents_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "skipped": 0, "blocks": 0, "tables": 0, "failed": 0, "cells_unchanged": 0}
+    stats = {"docs": 0, "skipped": 0, "reused_docs": 0, "blocks": 0, "tables": 0,
+             "failed": 0, "cells_unchanged": 0}
     warnings: list[str] = []
     ir_paths: list[str] = []
 
@@ -142,6 +200,13 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     cell_irs: dict[Cell, list[str]] = {}
     for f, _m, cell in planned:
         cell_irs.setdefault(cell, []).append(f"{f.stem}_ir.json")
+    # Per-document reuse across store entries (stage-graph step 4, slice 4):
+    # a cell whose fingerprint moved because some documents changed takes
+    # the IR of every unchanged document (same source bytes, same code
+    # version, parameters and other inputs) from the cell's newest matching
+    # store entry instead of extracting it again.
+    cell_prior: dict[Cell, dict[str, Path]] = {}
+    cell_sources: dict[Cell, dict[str, str]] = {}
 
     for f, metadata, cell in planned:
         cell_dir = ctx.stage_output(stage, cell)
@@ -154,14 +219,25 @@ def run_extract(ctx: PipelineContext) -> StageResult:
                            complete=lambda v, names=names: all((v / n).exists() for n in names)):
                 cell_skip.add(cell)
                 stats["cells_unchanged"] += 1
+            else:
+                cell_prior[cell] = _prior_irs(fps.reuse_sources(stage, cell, "documents"))
+                cell_sources[cell] = {}
         if cell in cell_skip and out_path.exists():
             ir_paths.append(str(out_path))
             stats["skipped"] += 1
             continue
+        source_fp = _file_sha256(f)
+        cell_sources[cell][out_path.name] = source_fp
         # D-DRAFT-8 skip: reuse an IR that's newer than its source. `--force` overrides.
         if not ctx.force and out_path.exists() and out_path.stat().st_mtime >= f.stat().st_mtime:
             ir_paths.append(str(out_path))
             stats["skipped"] += 1
+            continue
+        prior = cell_prior[cell].get(f"{out_path.name}:{source_fp}")
+        if prior is not None:
+            _take_prior_ir(prior, cell_dir, f.stem)
+            ir_paths.append(str(out_path))
+            stats["reused_docs"] += 1
             continue
         try:
             hints = cell_hints.get(
@@ -204,6 +280,7 @@ def run_extract(ctx: PipelineContext) -> StageResult:
         if cell_failed[cell]:
             fps.forget(stage, cell, fp)
         elif cell not in cell_skip:
+            _write_sources(ctx.stage_output(stage, cell), cell_sources.get(cell, {}))
             fps.stamp(stage, cell, fp)
 
     ctx.state["ir_paths"] = ir_paths

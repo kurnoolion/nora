@@ -171,6 +171,16 @@ class StageStore:
         into place is atomic, so the directory's presence is enough)."""
         return self.path(stage, cell, fp).is_dir()
 
+    def entries(self, stage: str, cell: Cell) -> list[tuple[str, dict]]:
+        """``(fp, provenance)`` of every complete output stored for the
+        cell, newest first (by ``stored_at``)."""
+        d = self.cell_dir(stage, cell)
+        if not d.is_dir():
+            return []
+        out = [(p.stem, self.provenance(stage, cell, p.stem)) for p in d.glob("*.json")
+               if self.has(stage, cell, p.stem)]
+        return sorted(out, key=lambda e: str(e[1].get("stored_at", "")), reverse=True)
+
     def provenance(self, stage: str, cell: Cell, fp: str) -> dict:
         try:
             return json.loads(self.provenance_path(stage, cell, fp).read_text(encoding="utf-8"))

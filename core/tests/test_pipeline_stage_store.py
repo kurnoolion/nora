@@ -417,3 +417,91 @@ def test_gc_cli_dry_run_and_refusal(tmp_path, capsys):
     assert store.has("parse", GC_CELL, "aaaa")
     assert ss.main(["gc", str(tmp_path / "stages")]) == 1
     assert "PIP-E006" in capsys.readouterr().err
+
+
+# -- step 4 slice 4: per-document extract reuse across store entries ----------
+
+XCELL = Cell("MNO-A", "Apr2031")
+
+
+def _fake_extract(calls: list):
+    def extract_document(path, mno, release, doc_type, images_root=None, **_kw):
+        calls.append(Path(path).name)
+        if images_root is not None:
+            img = Path(images_root) / Path(path).stem
+            img.mkdir(parents=True, exist_ok=True)
+            (img / "fig.png").write_bytes(Path(path).read_bytes())
+        return DocumentIR(source_file=Path(path).name, source_format="pdf", mno=mno,
+                          release=release, doc_type="requirement")
+    return extract_document
+
+
+def _xbuild(root: Path, name: str, corpus: Path, stages: Path, docs: dict) -> PipelineContext:
+    env = root / name
+    d = env / "input" / XCELL.mno / XCELL.release
+    d.mkdir(parents=True)
+    for n, body in docs.items():
+        (d / n).write_text(body, encoding="utf-8")
+    ctx = PipelineContext.standalone(env_dir=env)
+    ctx.corpus_dir = corpus
+    ctx.stages_root = stages
+    return ctx
+
+
+class TestExtractReuse:
+    @pytest.fixture(autouse=True)
+    def _fake(self, monkeypatch):
+        self.calls: list = []
+        monkeypatch.setattr("core.src.extraction.registry.extract_document", _fake_extract(self.calls))
+
+    def _run(self, ctx):
+        from core.src.pipeline.stages import run_extract
+        return run_extract(ctx)
+
+    def test_unchanged_documents_come_from_the_previous_entry(self, tmp_path):
+        corpus, stages = _corpus(tmp_path), tmp_path / "stages"
+        a = _xbuild(tmp_path, "a", corpus, stages, {"d1.pdf": "one", "d2.pdf": "two"})
+        ra = self._run(a)
+        assert ra.stats["docs"] == 2 and sorted(self.calls) == ["d1.pdf", "d2.pdf"]
+        fa = _manifest(a)["extract"]["MNO-A/Apr2031"]["fp"]
+        entry_a = StageStore(stages).path("extract", XCELL, fa)
+        assert sorted(json.loads((entry_a / ".sources.json").read_text())) == ["d1_ir.json", "d2_ir.json"]
+
+        self.calls.clear()
+        b = _xbuild(tmp_path, "b", corpus, stages, {"d1.pdf": "one", "d2.pdf": "two, revised"})
+        rb = self._run(b)
+        assert self.calls == ["d2.pdf"]
+        assert rb.stats["reused_docs"] == 1 and rb.stats["docs"] == 1 and rb.status == "OK"
+        fb = _manifest(b)["extract"]["MNO-A/Apr2031"]["fp"]
+        assert fb != fa
+        entry_b = StageStore(stages).path("extract", XCELL, fb)
+        assert (entry_b / "d1_ir.json").read_bytes() == (entry_a / "d1_ir.json").read_bytes()
+        assert (entry_b / "images" / "d1" / "fig.png").read_text() == "one"
+        assert (entry_b / "images" / "d2" / "fig.png").read_text() == "two, revised"
+        assert sorted(json.loads((entry_b / ".sources.json").read_text())) == ["d1_ir.json", "d2_ir.json"]
+        assert (entry_a / "d2_ir.json").exists()          # the earlier entry is untouched
+
+    def test_force_and_entries_without_sources_reuse_nothing(self, tmp_path):
+        corpus, stages = _corpus(tmp_path), tmp_path / "stages"
+        a = _xbuild(tmp_path, "a", corpus, stages, {"d1.pdf": "one", "d2.pdf": "two"})
+        self._run(a)
+        self.calls.clear()
+        b = _xbuild(tmp_path, "b", corpus, stages, {"d1.pdf": "one", "d2.pdf": "changed"})
+        b.force = True
+        assert self._run(b).stats["reused_docs"] == 0 and sorted(self.calls) == ["d1.pdf", "d2.pdf"]
+        # an entry stored before slice 4 has no sources record
+        for p in stages.rglob(".sources.json"):
+            os.chmod(p.parent, 0o755)
+            p.unlink()
+        self.calls.clear()
+        c = _xbuild(tmp_path, "c", corpus, stages, {"d1.pdf": "one", "d2.pdf": "third"})
+        assert self._run(c).stats["reused_docs"] == 0 and sorted(self.calls) == ["d1.pdf", "d2.pdf"]
+
+    def test_a_changed_parameter_reuses_nothing(self, tmp_path, monkeypatch):
+        corpus, stages = _corpus(tmp_path), tmp_path / "stages"
+        a = _xbuild(tmp_path, "a", corpus, stages, {"d1.pdf": "one", "d2.pdf": "two"})
+        self._run(a)
+        self.calls.clear()
+        b = _xbuild(tmp_path, "b", corpus, stages, {"d1.pdf": "one", "d2.pdf": "changed"})
+        monkeypatch.setattr(fpmod, "code_version", lambda stage: "other")
+        assert self._run(b).stats["reused_docs"] == 0 and sorted(self.calls) == ["d1.pdf", "d2.pdf"]

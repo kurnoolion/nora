@@ -138,3 +138,13 @@
 
 **Consequences.** Labels keep their layout, so serving does not change. Builds from before the change stay readable through their `out/`. A re-run of a stored stage is a new fingerprint, never an edit, so `privatize` goes.
 
+### D-DRAFT-15 — 2026-11-11 — Extract reuses a document's IR by its source digest across store entries
+
+**Context.** One changed document gives the cell a new extract fingerprint. Within a build, extract skipped a document whose IR was newer than its source; across builds nothing was reused, so every document was extracted again.
+
+**Decision.** Extract records each IR's source sha256 in `.sources.json`. A cell computing under a new fingerprint takes the IR and images of each unchanged document from the cell's newest store entry whose code version, parameters and other externals are equal. `--force` takes nothing.
+
+**Why.** A per-document store entry was rejected: the cell stays the unit every reader and the manifest know. Matching by modification time across builds was rejected: copies and new checkouts change it while the bytes stay equal.
+
+**Consequences.** Entries stored before the change offer nothing. The taxonomy correction enters the graph and vector store fingerprints; it feeds no per-cell stage, so no stored output moves with it.
+

@@ -237,6 +237,26 @@ class Fingerprinter:
             "externals": self.externals(stage, cell),
         }
 
+    def reuse_sources(self, stage: str, cell: Cell, ignore_external: str) -> list[Path]:
+        """Stored outputs of `stage` for `cell` that differ from the current
+        run only in the external input `ignore_external`: same code version,
+        parameters, inputs and other externals. Newest first. A stage reuses
+        parts of them (extract: the IR of a document whose source bytes are
+        unchanged, step 4 slice 4). Empty without the store or with
+        ``--force``."""
+        if self.ctx.force or not self.in_store(stage):
+            return []
+        store = self.ctx.stage_store
+        want = self._provenance(stage, cell)
+        want["externals"] = {k: v for k, v in want["externals"].items() if k != ignore_external}
+        out = []
+        for fp, prov in store.entries(stage, cell):
+            ext = {k: v for k, v in (prov.get("externals") or {}).items() if k != ignore_external}
+            if (prov.get("code_version") == want["code_version"] and prov.get("params") == want["params"]
+                    and prov.get("inputs") == want["inputs"] and ext == want["externals"]):
+                out.append(store.path(stage, cell, fp))
+        return out
+
     def prepare(self, stage: str, cell: Cell, fp: str,
                 complete: Callable[[Path], bool] | None = None) -> bool:
         """Decide whether `stage` must compute `cell` under `fp`.
@@ -358,6 +378,13 @@ class Fingerprinter:
         files = [f for f in files if f.is_file()]
         return hash_files(files, rel_to=ann_dir) if files else ABSENT
 
+    def _taxonomy_correction(self, cell: Cell | None) -> str:
+        """``corrections/taxonomy.json``, which replaces the build-level
+        taxonomy the graph and vector store stages read (TAX-W002). It feeds
+        no per-cell stage, so no stored output moves with it."""
+        path = self.ctx.correction("taxonomy.json")
+        return hash_files([path], rel_to=path.parent) if path is not None else ABSENT
+
     def _overview_prompt(self, cell: Cell | None) -> str:
         """The MNO's corpus-overview prompt file the taxonomy extractor
         would use (highest version wins)."""
@@ -385,5 +412,6 @@ class Fingerprinter:
         "profile": _profile,
         "annotations": _annotations,
         "overview_prompt": _overview_prompt,
+        "taxonomy_correction": _taxonomy_correction,
         "doc_prompt": _doc_prompt,
     }

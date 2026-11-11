@@ -168,6 +168,19 @@ def _env(tmp_path: Path) -> PipelineContext:
 
 
 class TestFingerprinter:
+    def test_taxonomy_correction_moves_graph_and_vectorstore_only(self, tmp_path):
+        """corrections/taxonomy.json replaces the build-level taxonomy the
+        graph and vector store read (TAX-W002); no per-cell stage reads it."""
+        ctx = _env(tmp_path)
+        fps = ctx.fingerprints
+        stages = ("extract", "parse", "taxonomy")
+        before = {s: fps.current(s, A) for s in stages}
+        g, v = fps.current("graph"), fps.current("vectorstore", A)
+        (tmp_path / "corrections").mkdir(exist_ok=True)
+        (tmp_path / "corrections" / "taxonomy.json").write_text('{"features": []}', encoding="utf-8")
+        assert {s: fps.current(s, A) for s in stages} == before
+        assert fps.current("graph") != g and fps.current("vectorstore", A) != v
+
     def test_documents_external_is_per_cell(self, tmp_path):
         ctx = _env(tmp_path)
         fps = ctx.fingerprints

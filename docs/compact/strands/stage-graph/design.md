@@ -519,7 +519,21 @@ copied.
    refuses before the label directory exists, since labels are never
    reused.
 4. Per-document extract reuse across store entries; check whether a
-   taxonomy correction feeds a stage or only the review pages.
+   taxonomy correction feeds a stage or only the review pages (built
+   2026-11-11). Extract records each IR's source digest in
+   `.sources.json` beside the IRs. A cell computing under a new
+   fingerprint takes the IR (and its images) of every document whose
+   source bytes are unchanged from the cell's newest store entry with the
+   same code version, parameters and other inputs; only changed documents
+   are extracted. Before slice 5 the take is a copy across the container
+   mounts; after it, a link inside the store. The taxonomy correction
+   feeds no per-cell stage: it replaces only the build-level
+   `taxonomy.json` that the graph and vector store stages and the review
+   editor read. It now enters those two stages' fingerprints
+   (`taxonomy_correction`), as the profile correction enters profile's.
+   Found for slice 5: parse's `annotations` external lists the cell's
+   documents from the build's `out/extract/`; it must go through the
+   resolver once extract output leaves the build.
 5. The pipeline writes stored stages into the store and stops cloning;
    a new build's `out/` holds only build-held stages. Before this, the
    sira-batch container needs the store mounted read-only: the lane

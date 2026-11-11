@@ -74,9 +74,10 @@ SPECS: tuple[StageSpec, ...] = (
         "taxonomy", inputs=("parse",), externals=("overview_prompt",),
         params=("model_provider", "model_name", "llm_reasoning"), uses_model=True,
     ),
-    StageSpec("graph", inputs=("parse", "resolve", "taxonomy", "standards")),
+    StageSpec("graph", inputs=("parse", "resolve", "taxonomy", "standards"),
+              externals=("taxonomy_correction",)),
     StageSpec(
-        "vectorstore", inputs=("parse", "taxonomy"),
+        "vectorstore", inputs=("parse", "taxonomy"), externals=("taxonomy_correction",),
         params=("embedding_provider", "embedding_model"), uses_model=True,
     ),
     StageSpec(
