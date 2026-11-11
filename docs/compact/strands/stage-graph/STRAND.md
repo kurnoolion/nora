@@ -20,7 +20,7 @@ retrieval fusion). Today's special case, corpus stages shared and
 enrichment per stack, is the first use; recipes without resolve, with a
 graph or with a vector store are the ones the design must carry without
 another layout change. Doc-first: the design note in `design.md`, two
-rulings, then four implementation steps that each leave the system
+rulings, then seven implementation steps that each leave the system
 working.
 
 ## Notes
@@ -55,3 +55,8 @@ working.
   `--apply`; keeps what any build, label or release set names, recent
   entries and live markers; refuses on an unreadable source. Step 3 is
   code-complete. D-DRAFT-12.
+- 2026-11-11: scope widened. Step 4 (builds hold manifests, not
+  outputs; a resolver for every reader), step 5 (stack A rebuilt on the
+  stage graph with recipe `sira-plain`), step 6 (parallel-build limits);
+  the former step 4 (new unit kinds) becomes step 7. Step 4 goes before
+  step 5. Design §10, §10c.

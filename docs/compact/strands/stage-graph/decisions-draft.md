@@ -127,3 +127,14 @@
 **Why.** Silently rolling back past a newer set loses it from serving with no record on the page. Repairing the stale row automatically was rejected: which row is right after a hand flip is the administrator's call.
 
 **Consequences.** A row left stale by a hand flip keeps a Roll back button that refuses; the fix is in the registry or a new ingest.
+
+### D-DRAFT-14 — 2026-11-11 — Builds hold manifests, not outputs; every reader asks a resolver
+
+**Context.** Builds keep `out/` as clones of stored outputs (D-DRAFT-8). Across the container mounts a clone is a copy: about 342 MB per build, N copies for N parallel builds.
+
+**Decision.** `locate(build, stage, cell)` answers where an output is: the build's `out/` when present, else the store entry the manifest names. Readers outside the pipeline move onto it, promote assembles labels through it, then the pipeline stops cloning. Supersedes D-DRAFT-8.
+
+**Why.** A relink pass after each stage was rejected: every build still pays the copy and the compare, and N copies exist until it runs. One mount holding the store beside the builds was rejected: hard links stop at one filesystem, so builds on a second host could not share, and compose paths change.
+
+**Consequences.** Labels keep their layout, so serving does not change. Builds from before the change stay readable through their `out/`. A re-run of a stored stage is a new fingerprint, never an edit, so `privatize` goes.
+

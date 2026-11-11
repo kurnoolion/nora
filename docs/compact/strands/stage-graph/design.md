@@ -343,7 +343,19 @@ Each step leaves the system working and is landed on its own.
    recorded in provenance, the recipe and fingerprints recorded on the
    release set, the page showing found versus computed. In four slices
    (§10b).
-4. **New unit kinds** when a recipe needs them: graph and vector units
+4. **Builds hold manifests, not outputs** (scope added 2026-11-11, §10c):
+   a resolver answers where a stage's output for a cell is; every reader
+   outside the pipeline asks it; promote assembles labels from the store;
+   the pipeline stops cloning stored outputs into the build. Revises §5's
+   "why the build keeps `out/`" (D-DRAFT-8).
+5. **Stack A on the stage graph** (scope added 2026-11-11): its hand-built
+   setup rebuilt by the cycle driver with recipe `sira-plain`, on the
+   layout of step 4, so both stacks run the same machinery.
+6. **Parallel builds** (scope added 2026-11-11): the limits the store does
+   not solve. `cycle.sh start` writes the corpus bindings without a lock;
+   the runner takes one job at a time; the marker wait defaults to an
+   hour; concurrent enrich runs share one model endpoint.
+7. **New unit kinds** when a recipe needs them: graph and vector units
    in the registry, a serving mode in the store.
 
 ## 10a. Step 2 on the host: migration of what exists (2026-11-09)
@@ -434,6 +446,71 @@ working:
    the same age. Dry run by default. It refuses (`PIP-E006`) with no
    source, a missing one, or an unreadable manifest or registry: a
    source it cannot read could name anything.
+
+## 10c. Step 4: builds hold manifests, not outputs (planned 2026-11-11)
+
+As built in step 2, a build's `out/` holds a clone of every stored
+output it uses. The batch containers mount the builds and the store
+separately, so each clone is a copy: about 342 MB per build on the
+host, extract being 328 MB of it, and N copies for N builds running in
+parallel. Step 4 removes the clone. The store holds the only copy of a
+stored output; a build holds its manifest and the outputs the store
+never takes.
+
+**The resolver.** `locate(build, stage, cell)` returns the directory
+holding a stage's output for a cell (`pipeline/locate.py`, standard
+library only, with a CLI for `cycle.sh`, `promote.sh` and the runner):
+
+1. the build's `out/<stage>/<MNO>/<release>/` when it exists;
+2. else the store entry the manifest names, when the store holds it and
+   the entry's origin is not `forced`;
+3. else none.
+
+The build is asked first so that every build made before step 4 reads
+as today, and so that outputs the store never takes (enrich, graph,
+vector store, taxonomy from an unversioned image, a degraded or forced
+run) stay where they are. A container passes its own stages root
+(`NORA_STAGES_ROOT`); the host passes the wiring env's `STAGES_ROOT`.
+
+**Who changes** (repo survey, 37 files): the pipeline itself (one
+change: inputs through `locate`, stored stages committed by
+fingerprint, `link_view` and `privatize` removed); eight build-time
+consumers (`cycle.sh`, the SIRA adapter, `promote.sh`, the Trees and
+History builders, `FileTreeStore`, the golden release CLI); eight debug
+and audit tools through one helper. Serving reads labels or nothing and
+does not change; labels keep their `nora/out/{parse,taxonomy,graph,
+vectorstore}` layout. Nothing on the host outside the repo reads a
+build's `out/`.
+
+**Per-document reuse in extract.** Today extract skips a document whose
+IR in the build is newer than its source. Without the clone, a cell
+with one changed document gets a new fingerprint; its unchanged IRs are
+hard-linked from the cell's previous store entry. The store is one
+mount in the container, so the links work.
+
+**Promote** builds the label on the host, where the store, the builds
+and the serve roots share one filesystem: stored stages hard-linked from
+the store, build-held stages from the build, the vector store still
+copied.
+
+**Slices**, each leaving the system working:
+
+1. The resolver and its CLI. Every build has `out/` today, so every
+   answer is today's path.
+2. The build-time consumers and the debug tools move onto it, one file
+   at a time.
+3. Promote assembles the label through it.
+4. Per-document extract reuse across store entries; check whether a
+   taxonomy correction feeds a stage or only the review pages.
+5. The pipeline writes stored stages into the store and stops cloning;
+   a new build's `out/` holds only build-held stages.
+
+Rejected: a pass that relinks a build's copies to the store after each
+stage (N copies exist until it runs, and every build pays the copy and
+the compare); one mount holding the store beside the builds (links stop
+at one filesystem, so builds on a second host cannot share; compose and
+`/data/env` paths change). Both keep the privatize-before-write rule;
+under step 4 a re-run is a new fingerprint and never edits a file.
 
 ## 11. Invariants
 

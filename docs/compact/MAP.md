@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-11-08 by regen-map. Do not hand-edit.
+Generated 2026-11-11 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -270,6 +270,7 @@ nora/
 │   │   │   ├── error_codes.py                           # Structured error codes for all pipeline stages.
 │   │   │   ├── fingerprints.py                          # Uniform stage fingerprints (strand stage-graph, D-DRAFT-2).
 │   │   │   ├── generations.py                           # Per-cell generations at the corpus root: how a served cell is redone
+│   │   │   ├── locate.py                                # Where a stage's output for a cell is (strand stage-graph, design §10c).
 │   │   │   ├── manifest.py                              # The build manifest: which fingerprint each stage produced per cell
 │   │   │   ├── recipes.py                               # Recipes: the variant stages a stack builds and their parameters
 │   │   │   ├── report.py                                # Pipeline report generation.
@@ -591,6 +592,7 @@ nora/
 │       ├── test_pipeline_enrich_stage.py                # Enrich as a recorded, driver-side stage (strand stage-graph, step 3, slice 2).
 │       ├── test_pipeline_error_codes.py                 # Every error code the source raises or prints is registered in CODES.
 │       ├── test_pipeline_generations.py                 # Per-cell generations at the corpus root (strand stage-graph, step 3,
+│       ├── test_pipeline_locate.py                      # pipeline/locate.py: where a stage's output for a cell is (stage-graph §10c).
 │       ├── test_pipeline_recipes.py                     # Recipes (strand stage-graph, step 3): validation, the committed recipes,
 │       ├── test_pipeline_stage_graph.py                 # Stage graph, fingerprints and the build manifest (strand stage-graph,
 │       ├── test_pipeline_stage_store.py                 # The host's stage store and the corpus root (strand stage-graph, step 2).
