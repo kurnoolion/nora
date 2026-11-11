@@ -622,7 +622,8 @@ promote)
   [ -n "$LABEL" ] || die 080 "promote needs --label <label>" "./cycle.sh promote --label <YYYY-MM-DD-a> [--host H]"
   require_phase verify-enrich "./cycle.sh verify-enrich (gate) first"
   args=(--serve-root "$SERVE_ROOT" --label "$LABEL" --sira-build "$SB")
-  (( SIRA_ONLY )) || { [ -d "$NB/out" ] && args+=(--nora-build "$NB"); }
+  (( SIRA_ONLY )) || { { [ -d "$NB/out" ] || [ -f "$NB/STAGES.json" ]; } && args+=(--nora-build "$NB"); }
+  [ -z "$STAGES" ] || args+=(--stages-root "$STAGES")
   [ -n "$SCHEME" ] || SCHEME="$(recipe_get prompt_scheme)"   # the recipe's, unless given
   [ -n "$SCHEME" ] && args+=(--scheme "$SCHEME")
   if [ -f "$SERVE_ROOT/$LABEL/MANIFEST.json" ] && grep -q "\"sira_build\": *\"$SB\"" "$SERVE_ROOT/$LABEL/MANIFEST.json"; then

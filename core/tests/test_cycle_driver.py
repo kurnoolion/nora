@@ -723,3 +723,40 @@ def test_enrich_refuses_a_cell_with_no_taxonomy_anywhere(host):
     shutil.rmtree(host["nora"] / "b1" / "out" / "taxonomy")
     r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
     assert r.returncode == 1 and "CYC-E060" in r.stderr
+
+
+def test_promote_assembles_stored_cells_into_the_label_by_hard_link(tmp_path):
+    """Step 4 slice 3: parse and taxonomy cells only the stage store holds
+    are linked into the label at the out/ layout serving reads."""
+    from core.src.pipeline.manifest import BuildManifest
+    nb, store, serve = tmp_path / "build", tmp_path / "stages", tmp_path / "serve"
+    own = nb / "out" / "parse" / "MNO-A" / "Jan2031"
+    own.mkdir(parents=True)
+    (own / "d1_tree.json").write_text("{}")
+    m = BuildManifest(nb / "STAGES.json")
+    for stage, cell, fp in (("parse", "MNO-A/Apr2031", "fpP"), ("taxonomy", "MNO-A/Apr2031", "fpT")):
+        e = store / stage / cell / fp
+        e.mkdir(parents=True)
+        (e / "f.json").write_text(stage)
+        m.record(stage, cell, fp, origin="computed")
+    args = ["bash", str(REPO / "docker" / "promote.sh"), "--serve-root", str(serve), "--nora-build", str(nb)]
+    r = subprocess.run(args + ["--label", "l1", "--stages-root", str(store)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = serve / "l1" / "nora" / "out"
+    assert (out / "parse" / "MNO-A" / "Jan2031" / "d1_tree.json").exists()
+    for stage in ("parse", "taxonomy"):
+        got = out / stage / "MNO-A" / "Apr2031" / "f.json"
+        assert got.read_text() == stage
+        assert got.stat().st_ino == (store / stage / "MNO-A" / "Apr2031" / ("fpP" if stage == "parse" else "fpT") / "f.json").stat().st_ino
+    assert "promoted nora taxonomy MNO-A/Apr2031 (from the stage store)" in r.stdout
+    assert "WARN" not in r.stdout.replace("WARN: " + str(nb) + "/out/vectorstore", "").replace("WARN: " + str(nb) + "/out/graph", "")
+    # without the stages root the label holds only the build's own cells
+    r = subprocess.run(args + ["--label", "l2"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert not (serve / "l2" / "nora" / "out" / "parse" / "MNO-A" / "Apr2031").exists()
+    assert not (serve / "l2" / "nora" / "out" / "taxonomy").exists()
+    # an unreadable manifest refuses rather than promote a label missing cells
+    (nb / "STAGES.json").write_text("not json")
+    r = subprocess.run(args + ["--label", "l3", "--stages-root", str(store)], capture_output=True, text=True)
+    assert r.returncode == 1 and "refusing" in r.stderr
+    assert not (serve / "l3").exists()

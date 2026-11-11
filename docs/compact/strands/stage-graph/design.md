@@ -511,7 +511,13 @@ copied.
    cell, and `parse_audit` writes one report directory per cell.
    Unchanged: `retrieval_debug` (the vector store stays in the build),
    `verify_tables` (it takes a directory, not a build), serving.
-3. Promote assembles the label through it.
+3. Promote assembles the label through it (built 2026-11-11):
+   `promote.sh --stages-root` (passed by `cycle.sh`) links into the label
+   the build's own `out/` stages as before, plus every parse and
+   taxonomy cell only the store holds, from the entry the manifest
+   names, at the label's unchanged layout. An unreadable manifest
+   refuses before the label directory exists, since labels are never
+   reused.
 4. Per-document extract reuse across store entries; check whether a
    taxonomy correction feeds a stage or only the review pages.
 5. The pipeline writes stored stages into the store and stops cloning;

@@ -954,6 +954,14 @@ If the batch used a pinned run name, point the query service at the same
 enrichment run: `NORA_SIRA_DOC_ENRICH_RUN=<run-name>` in `.env.nora-store`,
 then recreate.
 
+With a stage store on the host, pass it: `--stages-root <stages-root>` (the
+wiring env's `STAGES_ROOT`; `cycle.sh promote` passes it). Parse and
+taxonomy cells the build's `out/` lacks are then hard-linked into the label
+from the store entry the build's `STAGES.json` names, at the same
+`nora/out/<stage>/<MNO>/<MMMYYYY>/` layout, so serving reads the label as
+before. The store must be on the serve root's filesystem. An unreadable
+`STAGES.json` refuses before the label directory is created.
+
 First promotion note: `--nora-build` / `--sira-build` accept ANY dir in build
 shape — including pre-docker bare-metal artifacts (an env_dir with
 `out/{vectorstore,graph,taxonomy}`, a db_root with `<MNO>/<MMMYYYY>` cells) —
