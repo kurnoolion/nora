@@ -6,7 +6,7 @@ Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language q
 **Public surface**
 - Entry point: `QueryPipeline(graph, embedder, store, analyzer=None, synthesizer=None, rewriter=None, reranker=None, top_k=10, max_depth=None, max_context_chars=30000, enable_bm25=True, max_distance_threshold=None, enable_grouping=False, top_k_cap=None, cell_stores=None)` (pipeline.py) — `query(query_text, verbose=False, pinned_chunk_ids=None, *, synthesizer=None) -> QueryResponse`. `cell_stores` (D-DRAFT-11, strand `multi-mno-nora`) is a `{(mno, release): store}` map (from `vectorstore.load_cell_stores`) giving one retriever per cell; query-time `_select_cells` routes by the resolved `(mno, release)` scope, then **single cell → its retriever directly; multiple cells → per-cell retrieve, merge, rerank-once** (merge-then-rerank). A single flat `store` normalizes to `{FLAT_CELL: store}` so existing callers are unchanged. Constructor knobs added since the original 6-stage shape: `max_distance_threshold` [D-047], `enable_grouping` [D-049], `top_k_cap` (hard ceiling applied AFTER per-type widening). The `pinned_chunk_ids` parameter on `query()` skips Stages 2–4.7 and synthesizes only from the named chunks — used by the disambiguation user-pick UX (D-049 Step 3c). The keyword-only `synthesizer` parameter overrides Stage 6 for that one call, so a caller can vary the LLM per query (e.g. a per-question reasoning level from the Ask page) while reusing the cached pipeline.
 - Stages (each replaceable by injection):
-  - `LLMQueryAnalyzer`, `MockQueryAnalyzer` (analyzer.py) — Stage 1. `make_query_analyzer(llm_provider=None, decision_provider=None)` selects `DecisionQueryAnalyzer` ([decision](../decision/MODULE.md)) when a decision provider is supplied, else `LLMQueryAnalyzer` when an LLM provider is, else `MockQueryAnalyzer` — NORA's standard configured-model-or-mock posture for query analysis (multi-mno-sira D-DRAFT-9). `make_query_analyzer_from_knob(llm_provider=None, decision_provider=None, cli_value=None)` reads the four-valued `NORA_QUERY_ANALYZER` knob (`rules` | `llm` | `decision` | `confidence-routed`, default `rules`; `env.config.resolve_query_analyzer`) — `confidence-routed` builds `ConfidenceRoutedQueryAnalyzer` with `env.config.resolve_decision_confidence_floor()`, which keeps the model's answer per field only where its calibrated confidence clears the floor. `make_query_analyzer_from_knob` is what `QueryPipeline`'s own default and the sira service use. With the knob unset both land on `MockQueryAnalyzer` — the phase-2 identity gate of strand jev-experimentation. That gate is about which class is built, not about byte-identical output: `MockQueryAnalyzer`'s own output changed in `18e8ff4`, where the cross-doc signal began counting distinct plan ids instead of alias hits (jev-experimentation D-DRAFT-28). **The factory never raises on configuration**: an unknown `NORA_QUERY_ANALYZER`, an invalid `NORA_DECISION_CONFIDENCE_FLOOR`, a `decision` / `confidence-routed` arm with no `NORA_DECISION_PROVIDER` named (the provider default is `""`; `mock` only when named), or a provider that cannot be built each log a warning and build `MockQueryAnalyzer`, so a misconfigured classifier cannot take the query path down. The `env.config` resolvers still raise, for CLI validation. The `llm` arm is **unreachable today**: no caller passes an `LLMProvider`, so it degrades to `rules`. `query_analyzer_arm()` reports the arm the factory actually builds — both read one private planner, `_plan_query_analyzer()`, which returns `(arm, reason)`, and the factory logs the reason as its warning; `systemone` with no base URL also degrades to `rules` (`rules` | `llm` | `decision` | `confidence-routed`), and the nora-store service exposes it as the `/healthz` key `query_analyzer`; that service runs a non-rules analyzer in a worker thread, off the event loop, and leaves the rules path unchanged. On a served stack the knob should stay unset (jev-experimentation D-DRAFT-27): the serving path reads only `mnos` and `releases`. The `decision` import inside the factory is function-local because `decision` imports this module at module level. `MockQueryAnalyzer._extract_releases` captures all named releases (multi-release release-diff support), not just the first. `mno_surface_forms(mno)` lists every written form of an MNO the analyzer recognises (longest first) — read by the golden eval's text check to ignore operator-name-only edits.
+  - `LLMQueryAnalyzer`, `MockQueryAnalyzer` (analyzer.py) — Stage 1. `make_query_analyzer(llm_provider=None, decision_provider=None)` selects `DecisionQueryAnalyzer` ([decision](../decision/MODULE.md)) when a decision provider is supplied, else `LLMQueryAnalyzer` when an LLM provider is, else `MockQueryAnalyzer` — NORA's standard configured-model-or-mock posture for query analysis (multi-mno-sira D-DRAFT-9). `make_query_analyzer_from_knob(llm_provider=None, decision_provider=None, cli_value=None)` reads the four-valued `NORA_QUERY_ANALYZER` knob (`rules` | `llm` | `decision` | `confidence-routed`, default `rules`; `env.config.resolve_query_analyzer`) — `confidence-routed` builds `ConfidenceRoutedQueryAnalyzer` with `env.config.resolve_decision_confidence_floor()`, which keeps the model's answer per field only where its calibrated confidence clears the floor. `make_query_analyzer_from_knob` is what `QueryPipeline`'s own default and the sira service use. With the knob unset both land on `MockQueryAnalyzer` — the phase-2 identity gate of strand jev-experimentation. That gate is about which class is built, not about byte-identical output: `MockQueryAnalyzer`'s own output changed in `18e8ff4`, where the cross-doc signal began counting distinct plan ids instead of alias hits (jev-experimentation D-DRAFT-28). **The factory never raises on configuration**: an unknown `NORA_QUERY_ANALYZER`, an invalid `NORA_DECISION_CONFIDENCE_FLOOR`, a `decision` / `confidence-routed` arm with no `NORA_DECISION_PROVIDER` named (the provider default is `""`; `mock` only when named), or a provider that cannot be built each log a warning and build `MockQueryAnalyzer`, so a misconfigured classifier cannot take the query path down. The `env.config` resolvers still raise, for CLI validation. The `llm` arm is **unreachable today**: no caller passes an `LLMProvider`, so it degrades to `rules`. `query_analyzer_arm()` reports the arm the factory actually builds — both read one private planner, `_plan_query_analyzer()`, which returns `(arm, reason)`, and the factory logs the reason as its warning; `systemone` with no base URL also degrades to `rules` (`rules` | `llm` | `decision` | `confidence-routed`), and the nora-store service exposes it as the `/healthz` key `query_analyzer`; that service runs a non-rules analyzer in a worker thread, off the event loop, and leaves the rules path unchanged. On a served stack the knob should stay unset (jev-experimentation D-DRAFT-27): the serving path reads only `mnos` and `releases`. The `decision` import inside the factory is function-local because `decision` imports this module at module level. `MockQueryAnalyzer._extract_releases` captures all named releases (multi-release release-diff support), not just the first. `mno_surface_forms(mno)` lists every written form of an MNO the analyzer recognises (longest first) — read by the golden eval's text check to ignore operator-name-only edits. `REQ_ID_PATTERN` is the rules' requirement-ID shape (the MNO-A ID format), public so the web id_lookup lane matches the same IDs (strand sira-intent).
   - `MNOReleaseResolver` (resolver.py) — Stage 2
   - `GraphScoper` (graph_scope.py) — Stage 3
   - `QueryRewriter` Protocol (rewriter.py) — `rewrite(query) -> list[str]`. Implementations: `LLMQueryRewriter`, `MockQueryRewriter`. Stage 3.5 (optional pre-retrieval expansion; per-type gate via `_TYPE_REWRITE_ENABLED`). `expand_query(original, rewrites) -> str` concatenates the original + paraphrases for the embedder/BM25.
@@ -95,6 +95,7 @@ _Alphabetical, regenerated by regen-map._
   - `_extract_releases` — method — internal — Extract release references.
   - `_extract_standards` — method — internal — Extract 3GPP spec references.
   - `analyze` — method — pub — Analyze a natural language query into structured intent.
+- `REQ_ID_PATTERN` — constant — pub
 - `_FEATURE_KEYWORDS` — constant — internal
 - `_MNO_ALIASES` — constant — internal
 - `_MNO_ALIAS_PATTERNS` — constant — internal
@@ -172,6 +173,19 @@ _Alphabetical, regenerated by regen-map._
 - `gap_between_top_groups` — function — pub — Distance between the top two groups' scores.
 - `group_chunks_by_hierarchy` — function — pub — Cluster chunks by longest-common hierarchy-path prefix.
 
+`intent.py`
+- `_CHANGE_WORDS` — constant — internal
+- `_COMPARE_WORDS` — constant — internal
+- `_COMPLIANCE_WORDS` — constant — internal
+- `_EXPLAIN_WORDS` — constant — internal
+- `_LIST_WORDS` — constant — internal
+- `_NEGATED_CHANGE` — constant — internal
+- `_RELEASE_WORDS` — constant — internal
+- `_VERDICT_ASK` — constant — internal
+- `classify_intent` — function — pub — The rules intent for ``question``, given the rest of its rules analysis.
+- `is_release_change_question` — function — pub — A release-diff intent, or a one-MNO comparison phrased as a change
+- `release_diff_rule` — function — pub — ``main``'s History routing rule, unchanged: a release-diff intent,
+
 `pipeline.py`
 - `QueryPipeline` — class — pub — End-to-end query pipeline.
   - `__init__` — constructor — internal — Initialize the pipeline.
@@ -223,47 +237,93 @@ _Alphabetical, regenerated by regen-map._
 - `logger` — constant — pub
 
 `release_diff.py`
+- `BATCH_TIMEOUT_ENV` — constant — pub
+- `CONFIG_ENV` — constant — pub
+- `DEFAULT_ANNOTATION_LINES` — constant — pub
+- `DEFAULT_BATCH_TIMEOUT_S` — constant — pub
+- `DEFAULT_CONFIG_PATH` — constant — pub
 - `ENABLED_ENV` — constant — pub
+- `GatewayReplyError` — class — pub — The provider returned a gateway or filter error as the reply's
 - `MAX_BATCH_BYTES_ENV` — constant — pub
+- `MODEL_ENV` — constant — pub
 - `PARALLEL_ENV` — constant — pub
 - `ReleaseDiffConfig` — dataclass — pub
   - `from_env` — classmethod — pub
-- `_CHANGE_WORDS` — constant — internal
+  - `names_for` — method — pub — {label: carrier's name} for one MNO (keys as served, case kept).
+- `SAME_MARKER` — constant — pub
+- `_ANNOUNCE_RE` — constant — internal
+- `_BRACKET_ID_RE` — constant — internal
+- `_BRACKET_VARIANTS` — constant — internal
 - `_CLUSTER_GAP` — constant — internal
+- `_CONTRAST_RE` — constant — internal
+- `_EMPTY_ANNOUNCE_RE` — constant — internal
+- `_GATEWAY_REPLY_RE` — constant — internal
+- `_ID_CAP` — constant — internal
 - `_LATEST` — constant — internal
+- `_MARKER_RE` — constant — internal
 - `_MONTHS` — constant — internal
 - `_MONTH_NAMES` — constant — internal
+- `_NOT_WORD` — constant — internal
+- `_NO_CHANGE_RE` — constant — internal
 - `_PHRASE_RE` — constant — internal
 - `_PREVIOUS` — constant — internal
+- `_PROJECT_ROOT` — constant — internal
 - `_PROMPTS` — constant — internal
-- `_RELEASE_WORDS` — constant — internal
+- `_QUARTER_RE` — constant — internal
 - `_REL_RE` — constant — internal
+- `_SAME_INLINE_RE` — constant — internal
+- `_SAME_LINE_RE` — constant — internal
 - `_SENTENCE_END_RE` — constant — internal
+- `_SENTENCE_SPLIT_RE` — constant — internal
+- `_STRAY_SAME_RE` — constant — internal
 - `_SYSTEM` — constant — internal
 - `_SYSTEM_SENTINEL` — constant — internal
+- `_TAG` — constant — internal
+- `_TOKEN_SPLIT` — constant — internal
+- `_WORDING_LINE_RE` — constant — internal
 - `_WORKING_RE` — constant — internal
 - `_clusters` — function — internal — Phrase matches grouped by proximity: a new group starts after a gap
+- `_compile_rules` — function — internal — (name, pattern, scope) with scope `line` (whole line, anchored) or
+- `_cut_at_announcement` — function — internal — Cut at the model's last announcement of its answer when an id
 - `_drop_repeated_draft` — function — internal — An answer that resumed on the working line may be a draft that the
-- `_first_id` — function — internal — Position of the earliest requirement id, bracket included; -1 when
-- `_ids_in` — function — internal
+- `_first_id` — function — internal — Position of the earliest requirement id (bracket included); the
+- `_ids_in` — function — internal — Ids present in `text`: in their bracketed form `[id]` when the text
+- `_ids_text` — function — internal
+- `_inline_cut` — function — internal — Where the answer resumes on the working line: after the last colon
 - `_item_size` — function — internal
+- `_layout_key` — function — internal — Canonical text without markup tags, punctuation or spacing: equal
+- `_line_delta` — function — internal — Tokens an annotation line gained and lost, canonical, for the
+- `_load_config_file` — function — internal — config/release_diff.json (or `path`): {} when absent or unreadable.
 - `_pair_text` — function — internal
 - `_plan_notes` — function — internal
+- `_quarter_of` — function — internal
 - `_req_text` — function — internal
 - `_strip_once` — function — internal
+- `_triage_notes` — function — internal
 - `_working_cluster` — function — internal — The first group with two distinct phrases; with an anchored opener,
 - `build_batches` — function — pub — Batches per plan and kind, in plan order: pairs, then removed, then
 - `compact_block` — function — pub — Counts only — safe to paste.
-- `is_release_change_question` — function — pub — A release-diff intent, or a one-MNO comparison phrased as a change
+- `display_release` — function — pub — The carrier's own name for a release when configured, with the
+- `drop_stray_marks` — function — pub — Remove a bare `~same` that follows no bracketed id (the model's
 - `log` — constant — pub
+- `looks_like_gateway_reply` — function — pub — A reply that is a gateway's error page or JSON rather than an
 - `looks_like_working_text` — function — pub — A reply that carries the model's own working: a known opener at the
+- `normalize_brackets` — function — pub — Full-width and lenticular brackets around ids become `[ ]`, with the
 - `normalize_release_ref` — function — pub — A human release phrase to ``MMMYYYY``, ``latest``, ``previous`` or
 - `prompt_for` — function — pub — (system, prompt) for one batch; every item in a batch shares the
 - `reassemble` — function — pub — Per-plan sections in plan order: pair batches in batch order, then
 - `resolve_release_pair` — function — pub — (older, newer) from the question's release phrases and the MNO's
+- `split_gateway_reply` — function — pub — (answer part, verdict) for a reply that may carry a gateway's error
+- `strip_annotations` — function — pub — The text without its annotation lines and fragments, and what was
+- `strip_lone_phrases` — function — pub — Drop a working phrase that stands as a sentence of its own
 - `strip_working_text` — function — pub — Drop the working text wherever it sits. Reasoning before the first
 - `synthesize_release_diff` — function — pub — Pack, run, reassemble. `on_partial` receives, per completed batch,
 - `system_prompt` — function — pub
+- `take_same_lines` — function — pub — Remove what the model says about requirements it found unchanged in
+- `triage_ids` — function — pub — Every id a triage note names (bubbles anchor on them).
+- `triage_pairs` — function — pub — A copy of the payload with what the model need not see taken out of
+- `triage_totals` — function — pub
+- `working_marks` — function — pub — What the detector matched, as the list's own words (an `opener:`
 
 `reranker.py`
 - `CrossEncoderReranker` — class — pub — Wraps `sentence_transformers.CrossEncoder` to score (query,
@@ -356,6 +416,7 @@ _Alphabetical, regenerated by regen-map._
   - `cited_percent` — property — pub
   - `uncited_sentences` — property — pub
 - `DocTypeScope` — enum — pub — Which document types to include in retrieval.
+- `Intent` — enum — pub — The answer the asker wants, independent of scope (strand sira-intent).
 - `MNOScope` — dataclass — pub — A resolved MNO + release pair.
 - `QueryIntent` — dataclass — pub — Structured intent extracted from a natural language query.
   - `to_dict` — method — pub
