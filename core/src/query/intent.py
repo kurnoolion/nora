@@ -5,8 +5,10 @@ decision model's confidence is below the floor. Imports only the schema, so
 the rules analyzer stays light.
 
 The ``change`` rule is ``is_release_change_question``, moved here from
-``release_diff`` (which re-exports it) so routing on the rules arm stays
-identical to today.
+``release_diff`` (which re-exports it). It leaves out verdict asks and
+negated changes (D-DRAFT-9), so it routes fewer questions to History than
+``main`` did. ``release_diff_rule`` keeps ``main``'s rule verbatim; History
+routes by it while every intent switch is off.
 """
 
 from __future__ import annotations
@@ -40,6 +42,18 @@ _VERDICT_ASK = re.compile(
 _NEGATED_CHANGE = re.compile(
     r"\b(nothing|no|not|never|hasn't|haven't|didn't|hadn't|wasn't|isn't)\s+(\w+\s+)?chang\w*"
     r"|\bunchang\w*")
+
+
+def release_diff_rule(question: str, intent: QueryIntent) -> bool:
+    """``main``'s History routing rule, unchanged: a release-diff intent,
+    or a one-MNO comparison phrased as a change between releases. Two or
+    more MNOs is a comparison, never a release diff."""
+    if intent.query_type == QueryType.RELEASE_DIFF:
+        return True
+    if len(intent.mnos) >= 2:
+        return False
+    q = (question or "").lower()
+    return bool(_CHANGE_WORDS.search(q) and (_RELEASE_WORDS.search(q) or len(intent.releases) >= 1))
 
 
 def is_release_change_question(question: str, intent: QueryIntent) -> bool:

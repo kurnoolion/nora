@@ -69,6 +69,18 @@ def test_prompts_switch(monkeypatch, value, on):
     assert sira_intent.prompts_enabled() is on
 
 
+@pytest.mark.parametrize("prompts, arm, on", [
+    (None, None, False), ("off", "rules", False),
+    ("on", None, True), (None, "decision", True)])
+def test_intent_routing_switch(monkeypatch, prompts, arm, on):
+    if prompts is not None:
+        monkeypatch.setenv("NORA_SIRA_INTENT_PROMPTS", prompts)
+    if arm is not None:
+        monkeypatch.setenv("NORA_QUERY_ANALYZER", arm)
+        monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
+    assert sira_intent.intent_routing_enabled() is on
+
+
 # ── history_diff_applies ──────────────────────────────────────────────
 
 ON = ReleaseDiffConfig(enabled=True)
@@ -79,8 +91,9 @@ def test_reads_the_passed_intent_not_the_question_text(monkeypatch):
     monkeypatch.setattr(history_lane, "open_history_store", lambda *a, **k: FakeHistory())
     # the model says change for wording the rules miss, and fact for wording they catch
     passed = _qi(PLAIN, Intent.CHANGE)
-    assert history_lane.history_diff_applies(PLAIN, config=ON, intent=passed) is passed
-    assert history_lane.history_diff_applies(QUESTION, config=ON,
+    assert history_lane.history_diff_applies(PLAIN, config=ON, intent=passed,
+                                             intent_routing=True) is passed
+    assert history_lane.history_diff_applies(QUESTION, config=ON, intent_routing=True,
                                              intent=_qi(QUESTION, Intent.FACT)) is None
 
 
@@ -162,6 +175,8 @@ def test_classified_once_and_a_change_goes_to_history(world):
 
 
 def test_a_model_change_label_routes_to_history(world, monkeypatch):
+    monkeypatch.setenv("NORA_QUERY_ANALYZER", "decision")
+    monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
     monkeypatch.setattr(sira_intent, "classify",
                         lambda q: (_qi(q, Intent.CHANGE), {"intent": {"source": "model", "confidence": 0.9}}))
     lanes, _ = _ask(world, PLAIN)
@@ -188,6 +203,22 @@ def test_lane_disabled_goes_to_sira_even_when_strict(world, monkeypatch):
     lanes, _ = _ask(world, QUESTION)
     assert lanes == ["sira"] and world["sira"] == [QUESTION]
     assert world["sira_intent"] is Intent.CHANGE      # SIRA answers with the change prompt
+
+
+VERDICT = "Is it correct that the IMS registration requirement changed in Sep 2031?"
+
+
+def test_switches_off_route_like_main(world):
+    # main's rule sends a verdict ask about a change to History; the rules
+    # intent (compliance) must not change that while every switch is off
+    lanes, _ = _ask(world, VERDICT)
+    assert lanes == ["history"] and world["sira"] == []
+
+
+def test_prompts_on_routes_by_intent(world, monkeypatch):
+    monkeypatch.setenv("NORA_SIRA_INTENT_PROMPTS", "on")
+    lanes, _ = _ask(world, VERDICT)
+    assert lanes == ["sira"] and world["sira"] == [VERDICT]
 
 
 def test_other_questions_go_to_sira(world):

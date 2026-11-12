@@ -33,6 +33,7 @@ from core.src.query.release_diff import (
     resolve_release_pair,
     synthesize_release_diff,
 )
+from core.src.query.intent import release_diff_rule
 from core.src.query.schema import Intent, QueryIntent
 from core.src.stores import open_history_store
 
@@ -83,14 +84,20 @@ def classify(question: str) -> QueryIntent:
 
 def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = None,
                          intent: "QueryIntent | None" = None, strict: bool = False,
+                         intent_routing: bool = False,
                          ) -> "QueryIntent | None":
-    """The intent when this lane should answer: a ``change`` intent, the
-    lane enabled, and a History store configured. None otherwise, and the
-    SIRA lane answers as before.
+    """The intent when this lane should answer: a release-change question,
+    the lane enabled, and a History store configured. None otherwise, and
+    the SIRA lane answers as before.
 
     ``intent`` is what nora-web already computed (strand sira-intent,
-    D-DRAFT-3); without it the rules classify here. On the rules arm
-    ``Intent.CHANGE`` is exactly ``is_release_change_question``.
+    D-DRAFT-3); without it the rules classify here.
+
+    Which questions count as a release change: with ``intent_routing``
+    off (every intent switch off, ``sira_intent.intent_routing_enabled``)
+    ``main``'s rule (``query.intent.release_diff_rule``), so routing is
+    unchanged by default. With it on, a ``change`` intent,
+    which leaves out verdict asks and negated changes (D-DRAFT-9).
 
     ``strict`` (``NORA_SIRA_INTENT_PROMPTS`` on, D-DRAFT-5): a change
     question with the lane enabled but no History store, or one that won't
@@ -100,7 +107,10 @@ def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = 
     if not cfg.enabled:
         return None
     intent = intent if intent is not None else classify(question)
-    if intent.intent is not Intent.CHANGE:
+    if intent_routing:
+        if intent.intent is not Intent.CHANGE:
+            return None
+    elif not release_diff_rule(question, intent):
         return None
     try:
         store = open_history_store()

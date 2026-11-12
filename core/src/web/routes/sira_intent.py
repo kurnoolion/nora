@@ -27,6 +27,14 @@ def prompts_enabled() -> bool:
     return os.getenv(PROMPTS_SWITCH, "").strip().lower() in _ON
 
 
+def intent_routing_enabled() -> bool:
+    """Route History on the ``change`` intent instead of ``main``'s rule:
+    on when ``NORA_SIRA_INTENT_PROMPTS`` is on or ``NORA_QUERY_ANALYZER``
+    serves a model arm. With every switch off, routing matches ``main``."""
+    from core.src.query.analyzer import query_analyzer_arm
+    return prompts_enabled() or query_analyzer_arm() != "rules"
+
+
 @functools.lru_cache(maxsize=1)
 def analyzer():
     """The intent analyzer, built once per process from the knob.

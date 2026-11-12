@@ -1785,7 +1785,8 @@ async def playground_ask_stream(request: Request):
         q_intent, _intent_trace = await asyncio.to_thread(sira_intent.classify, question)
         try:
             history_intent = history_lane.history_diff_applies(
-                question, intent=q_intent, strict=sira_intent.prompts_enabled())
+                question, intent=q_intent, strict=sira_intent.prompts_enabled(),
+                intent_routing=sira_intent.intent_routing_enabled())
         except PipelineError as exc:
             history_error = {"error": f"[{exc.code}] {exc.message}. Release history is not "
                                       "available on this stack; ask about a single release.",

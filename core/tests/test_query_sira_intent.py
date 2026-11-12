@@ -118,3 +118,14 @@ def test_real_change_questions_still_route_to_change():
     for q in ("what changed?", "What changed in the latest release compared to the previous one?",
               "Nothing else matters: what changed in the data retry plan in the latest release?"):
         assert a.analyze(q).intent is Intent.CHANGE, q
+
+
+@pytest.mark.parametrize("question", [
+    "Is it correct that the IMS registration requirement changed in Sep 2031?",
+    "Has the attach timer not changed since the previous release?",
+])
+def test_release_diff_rule_keeps_mains_routing_where_the_change_rule_differs(question):
+    # History routes by main's rule while every intent switch is off.
+    from core.src.query.intent import is_release_change_question, release_diff_rule
+    qi = MockQueryAnalyzer().analyze(question)
+    assert release_diff_rule(question, qi) and not is_release_change_question(question, qi)

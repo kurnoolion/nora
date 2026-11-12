@@ -44,7 +44,7 @@ the asker most wants; the dev set README states this rule. Scope intents and
   - `query_type` is unchanged, and the NORA pipeline is untouched.
   - No wire API carries `QueryIntent`, so nothing else changes shape.
 - **`query/` rules intent classifier:** a regex classifier.
-  - Its `change` rule is today's `is_release_change_question` logic (`query/release_diff.py:150`), so routing on the rules arm is identical to today.
+  - Its `change` rule is `is_release_change_question` (`query/intent.py`), today's logic minus verdict asks and negated changes (D-DRAFT-9). History routes by it only while an intent switch is on (`NORA_SIRA_INTENT_PROMPTS`, or `NORA_QUERY_ANALYZER` serving a model arm). With every switch off, History routes by `release_diff_rule`, `main`'s rule verbatim, so default routing is unchanged.
   - When no rule matches, it returns `other`.
 - **`decision/analyzer.py`:**
   - A separate `INTENT_QUESTION`, generated from the `Intent` enum and glossed by `INTENT_DESCRIPTIONS: dict[Intent, str]`. A test fails if any member has no gloss.
@@ -202,7 +202,7 @@ is not touched in phase 1.
 
 | Switch | Where | Default | Effect |
 |---|---|---|---|
-| `NORA_QUERY_ANALYZER` | nora-web | `rules` | Which classifier decides intent. `rules` reproduces today's routing. |
+| `NORA_QUERY_ANALYZER` | nora-web | `rules` | Which classifier decides intent. `rules` with prompts off keeps today's History routing; a model arm routes History by the `change` intent. |
 | `NORA_DECISION_PROVIDER` / `_BASE_URL` / `_CONFIDENCE_FLOOR` / `_TIMEOUT` | nora-web | unset / unset / 0.50 / 30 s | Kev endpoint, needed for the Kev arms only. A timeout falls back to the rules; `run_local.sh` uses 5 s, since on a 24 GB Mac Kev slowed to 75 s per call while Ollama held qwen3:8b at 32K and a second model (2026-11-08). |
 | `NORA_SIRA_INTENT_PROMPTS` | nora-web | off | Per-intent prompts, plus the §4 error behaviour. |
 | `NORA_ID_LOOKUP` | nora-web | off | A message made only of requirement IDs goes to the `id_lookup` lane (§4 step 0). Off: it goes to SIRA as today. |
