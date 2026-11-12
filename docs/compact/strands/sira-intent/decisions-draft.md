@@ -52,7 +52,7 @@
 - The store is unchanged.
 
 **Why.**
-- Kev answers in about 0.55 s warm (Kev-4B, MLX, measured 2026-11-05), so classifying first costs little. It also lets a later phase steer enrichment and BM25 by intent.
+- Kev answers in about 0.55 s warm (Kev-4B on a local decision server, measured 2026-11-05), so classifying first costs little. It also lets a later phase steer enrichment and BM25 by intent.
 - Rejected: running classification in parallel with SIRA retrieval and discarding the retrieval for `change`. It saves about half a second at the price of a lane decision made after work has started, and it rules out steering retrieval by intent.
 
 **Consequences.**
@@ -90,7 +90,7 @@
 
 **Why.**
 - A SIRA answer to a release-change question, drawn from whatever chunks came back, looks authoritative and isn't. An error that lists the releases tells the user how to rephrase.
-- Disabling the lane is an operator's choice, not a failure.
+- Disabling the lane is an administrator's choice, not a failure.
 - Tying the error to the switch keeps served stacks unchanged until someone opts in.
 - Rejected: silent fallback to SIRA with a "release history not available" note, as too lenient. It can be revisited later.
 
@@ -113,7 +113,7 @@
 - `NORA_SIRA_INTENT_PROMPTS` gates them, default off.
 
 **Why.**
-- Defaults in source are reviewed in PRs; an environment can trial new wording without a code change.
+- Defaults in source are reviewed in PRs; an environment can try new wording without a code change.
 - A per-intent merge means revising one prompt doesn't copy all seven.
 - The hash ties each feedback row and eval run to the exact wording, so a revision's effect can be measured.
 - A loud startup failure beats answering with half a prompt set, or silently using defaults after a path typo.
@@ -125,22 +125,22 @@
 
 **Consequences.**
 - A prompt edit needs a restart.
-- The flag goes on in a served stack only after a golden-eval A/B internally.
+- The flag goes on in a served stack only after a golden-eval A/B there.
 
-### D-DRAFT-7 — 2026-11-05 — Measure intent on a synthetic public dev set; the held-out check on real questions is deferred to internal infra
+### D-DRAFT-7 — 2026-11-05 — Measure intent on a synthetic public dev set; the held-out check on real questions is deferred to a deployment with real traffic
 
 **Context.**
-- The only corpus available off the internal network is the public Verizon ODI docs.
-- Real user questions live in the feedback DB internally.
+- The only corpus available to a development checkout is the public Verizon Open Access docs.
+- Real user questions live in a deployment's feedback DB.
 
 **Decision.**
-- `core/src/eval/intent_set.json`: about 70 synthetic questions, 10 per intent. It follows the `classify_set.json` conventions (MNO placeholders, labels read by a person, never rule output).
+- `core/src/eval/intent_set.json`: 77 synthetic questions, at least 10 per intent. It follows the `classify_set.json` conventions (MNO placeholders, labels read by a person, never rule output).
 - Kev beats the rules when `change` precision and recall are each ≥ 0.9 and overall accuracy is no worse than the rules.
-- A held-out check on real feedback questions (which `lane_config` will now label) runs internally later.
+- A held-out check on real feedback questions (which `lane_config` will now label) runs later, in a deployment.
 
 **Why.**
 - `change` is the only label that moves a question to another lane, so it carries the highest bar. Other labels only shape the answer.
-- Real questions can't leave the internal network.
+- Real questions stay in the deployment that collected them.
 
 **Consequences.**
 - If Kev loses, phase 1 ships the rules intent with the prompts.
@@ -149,7 +149,7 @@
 ### D-DRAFT-8 — 2026-11-07 — Bare requirement IDs get an `id_lookup` lane with no model; IDs inside a question are pinned into the context
 
 **Context.**
-- Users often paste one or more requirement IDs and expect the requirement text back. The manager asked for no synthesis in that case.
+- Users often paste one or more requirement IDs and expect the requirement text back. No synthesis is wanted in that case.
 - When an ID appears inside a question, answers reportedly show the requirements that cite it but not the named one.
 - `req_tree.find_req` already fetches a requirement by ID from the Trees store.
 
@@ -169,7 +169,7 @@
 
 **Consequences.**
 - The classifier dev set drops its bare-ID sample (o03).
-- The ID pattern is Verizon-only until other operators' formats are known.
+- The ID pattern is the MNO-A ID format until other MNOs' formats are known.
 - The pinning fix is built last in phase 1, after reproducing the symptom.
 - The lane sits behind `NORA_ID_LOOKUP`, default off, like the strand's other switches: served stacks change only when someone opts in.
 
@@ -186,21 +186,21 @@
 
 **Why.**
 - Rejected: a new `bug` intent. The answer is the same as for a compliance question (judge a behaviour against the requirements), so a new intent would add a Kev option and a prompt with nothing different to do.
-- The user asked for MEETS / VIOLATES wording, which compliance already uses.
+- MEETS / VIOLATES is the wording wanted, and compliance already uses it.
 
 **Consequences.**
 - The dev set gains six synthetic bug reports (`kb1`–`kb6`, labelled compliance); its labelling rule says so.
 - Kev alone misses most of them, since its option descriptions don't mention bug reports. The confidence routing covers that today.
 
-### D-DRAFT-10 — 2026-11-08 — Compliance keeps its own checklist prompt, separate from the client compliance-tracking plan
+### D-DRAFT-10 — 2026-11-08 — Compliance keeps its own checklist prompt, separate from the planned compliance-tracking work
 
 **Context.**
-- 6cdaa6c switched `compliance` to today's prompt, taking it for the planned client compliance-tracking (diff) system.
-- They are different things: the intent is a user describing a behaviour and asking whether it is allowed; the tracking plan is a client compliance matrix.
+- 6cdaa6c switched `compliance` to today's prompt, taking it for the planned compliance-tracking (diff) system.
+- They are different things: the intent is a user describing a behaviour and asking whether it is allowed; the tracking plan is a compliance matrix.
 
 **Decision.**
 - `compliance` answers with its own prompt: MEETS / VIOLATES / UNCLEAR per governing requirement, then an overall verdict (c932a61 reverts 6cdaa6c).
-- The client compliance matrix is out of this strand (design §9).
+- The compliance matrix is out of this strand (design §9).
 
 **Why.**
 - Today's prompt summarizes requirements; a "is this allowed?" question needs a verdict, which only the checklist gives.
@@ -230,19 +230,19 @@
 ### D-DRAFT-12 — 2026-11-08 — Eval reports are committed under a top-level `reports/` folder, one timestamped folder per run
 
 **Context.**
-- The Kev floor report was made by hand; the user wanted the same report after every evaluation, with time details so runs can be correlated.
+- The Kev floor report was made by hand; the same report is wanted after every evaluation, with time details so runs can be correlated.
 
 **Decision.**
-- `python -m core.src.eval.intent_report` writes `reports/intent/<YYYY-MM-DD-HHMM>_kev-floor_<set_id>/` with `run.json` (numbers plus `meta`: time, git commit and dirty flag, dataset hash, decision endpoint, floor) and a self-contained `report.html`.
+- `python -m core.src.eval.intent_report` writes `reports/intent/<YYYY-MM-DD-HHMM>_kev-floor_<set_id>/` with `run.json` (numbers plus `meta`: time, git commit and dirty flag, dataset hash, decision provider and model (never the endpoint), floor) and a self-contained `report.html`.
 - The project skill `eval-report` prepares the environment, runs it, reports against the previous run and proposes the commit.
 - Only reports on synthetic sets are committed; rows carry sample ids and labels, never question text.
 - New reports follow the same shape under `reports/<report>/`.
 
 **Why.**
-- The user asked for a dedicated top-level folder and a readable slug; reports outlive the strand that made them.
-- Rejected: a comparison tool between runs (the user said not needed); the metadata in each `run.json` is enough to correlate.
+- A dedicated top-level folder and a readable slug: reports outlive the strand that made them.
+- Rejected: a comparison tool between runs (not needed); the metadata in each `run.json` is enough to correlate.
 - The script owns the numbers, so the page text can't drift from them.
 
 **Consequences.**
-- The repo is public: a run on an internal or real-traffic set stays out of it.
+- The repo is public: a run on a non-synthetic or real-traffic set stays out of it.
 - A failed decision call writes nothing, so a report never scores the rules under Kev's name.

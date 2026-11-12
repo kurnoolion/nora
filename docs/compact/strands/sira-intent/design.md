@@ -1,7 +1,7 @@
 # SIRA intent: design
 
-Status: 2026-11-05. All questions settled in a grilling session (Q1–Q25).
-Nothing built yet. Phase 1 is described here; phase 2 is in §9.
+Status: 2026-11-12. All questions settled in a grilling session (Q1–Q25).
+Phase 1 is built, behind default-off switches (§4–§8); phase 2 is in §9.
 
 ## 1. Goal
 
@@ -59,7 +59,7 @@ the asker most wants; the dev set README states this rule. Scope intents and
 ## 4. Flow
 
 0. **Bare requirement IDs → the `id_lookup` lane** (Q12–Q14, added
-   2026-11-07 after a review with the manager).
+   2026-11-07).
    - Applies when the message is nothing but requirement IDs: one or several,
      separated by spaces, commas or new lines.
    - nora-web skips classification, retrieval and synthesis, and fetches each
@@ -79,14 +79,14 @@ the asker most wants; the dev set README states this rule. Scope intents and
      release named that lacks an ID says which releases carry it. Requirement
      text renders through `req_body` (not markdown); the stored answer fences it.
 
-nora-web classifies **once, first**: Kev answers in about 0.55 s warm on a Mac
-with Kev-4B on MLX, and the first call takes about 3.5 s. Then:
+nora-web classifies **once, first**: Kev answers in about 0.55 s warm on a local
+decision server, and the first call takes about 3.5 s. Then:
 
 1. **`intent == change`** → the History lane.
    - `history_lane.classify` stops building its own `MockQueryAnalyzer()`, and `history_diff_applies` reads the intent nora-web computed (Q16).
 2. **History cannot answer** (rules below apply only with `NORA_SIRA_INTENT_PROMPTS` on, Q25):
-   - **Lane disabled in config** (operator's choice) → SIRA with the `change` prompt. No error.
-   - **Lane enabled, but no History store, the store won't open, or only one release for the asked MNO** → an error telling the user what is available, for example "History has only Feb2026 for this operator; ask about one release, or pick another operator". No silent fallback (Q3, Q17).
+   - **Lane disabled in config** (an administrator's choice) → SIRA with the `change` prompt. No error.
+   - **Lane enabled, but no History store, the store won't open, or only one release for the asked MNO** → an error telling the user what is available, for example "History has only Sep2031 for this MNO; ask about one release, or pick another MNO". No silent fallback (Q3, Q17).
    - **With the flag off** → today's behaviour: SIRA answers as before.
    - Built 2026-11-07: `core/src/web/routes/sira_intent.py` (`classify`, run
      once in a thread before any lane; the analyzer is built once per
@@ -106,7 +106,7 @@ with Kev-4B on MLX, and the first call takes about 3.5 s. Then:
    - Reproduce it on the local stack before fixing.
    - Built last in phase 1.
    - Reproduced 2026-11-08 on the local stack ("What does <ID> require?", four
-     Feb2026 IDs): BM25 left the named requirement out of its top 20, or
+     IDs from one release): BM25 left the named requirement out of its top 20, or
      ranked it near the bottom (17 of 20).
    - Built behind `NORA_PIN_NAMED_IDS` (default off): the named requirements
      come from the Trees store and go first in the context, ahead of the
@@ -144,7 +144,7 @@ Prompts will be revised often as the dataset grows, so they have two layers
 - **Content:** every prompt keeps today's `_SELECT_SYNTH_SYSTEM_PROMPT` skeleton (`core/src/web/routes/playground.py:139`): select by meaning, answer from the selected chunks only, cite the exact req_id inline, and say so plainly when nothing answers. Only step 2, the answer shape, changes per intent, as in the §2 table.
   - `other` is today's prompt verbatim.
   - The reasoning-sentinel suffix applies to every prompt, as it does today.
-- **Review:** I draft the prompts and Hanif reviews them.
+- **Review:** the prompts are reviewed in the PR.
 - **Built 2026-11-07:** `core/src/web/sira_intent_prompts.py`. An override
   value is the whole system prompt for that intent (what the file says is
   what the model gets), not just step 2. The prompts are loaded at startup
@@ -160,7 +160,7 @@ Prompts will be revised often as the dataset grows, so they have two layers
 - **Prompt review (2026-11-08):** `list` asks for a one-sentence summary of
   each requirement's content, not its section title. `compliance` keeps its
   checklist prompt (briefly switched to today's prompt after it was mistaken
-  for the client compliance-tracking plan, §9).
+  for the planned compliance-tracking work, §9).
 - **Pasted bug reports (2026-11-08):** users paste a bug description
   (mostly free form: what happens, what was expected) and ask "is this
   valid?", "can you comment on this issue?". That is a `compliance`
@@ -203,7 +203,7 @@ is not touched in phase 1.
 | Switch | Where | Default | Effect |
 |---|---|---|---|
 | `NORA_QUERY_ANALYZER` | nora-web | `rules` | Which classifier decides intent. `rules` with prompts off keeps today's History routing; a model arm routes History by the `change` intent. |
-| `NORA_DECISION_PROVIDER` / `_BASE_URL` / `_CONFIDENCE_FLOOR` / `_TIMEOUT` | nora-web | unset / unset / 0.50 / 30 s | Kev endpoint, needed for the Kev arms only. A timeout falls back to the rules; `run_local.sh` uses 5 s, since on a 24 GB Mac Kev slowed to 75 s per call while Ollama held qwen3:8b at 32K and a second model (2026-11-08). |
+| `NORA_DECISION_PROVIDER` / `_BASE_URL` / `_CONFIDENCE_FLOOR` / `_TIMEOUT` | nora-web | unset / unset / 0.50 / 30 s | Kev endpoint, needed for the Kev arms only. A timeout falls back to the rules; `run_local.sh` uses 5 s, since on a memory-limited local machine Kev slowed to 75 s per call while Ollama held a second large model (2026-11-08). |
 | `NORA_SIRA_INTENT_PROMPTS` | nora-web | off | Per-intent prompts, plus the §4 error behaviour. |
 | `NORA_ID_LOOKUP` | nora-web | off | A message made only of requirement IDs goes to the `id_lookup` lane (§4 step 0). Off: it goes to SIRA as today. |
 | `NORA_PIN_NAMED_IDS` | nora-web | off | Requirement IDs named inside a question go first in the select-synth context, from the Trees store (§4 item 4). |
@@ -222,17 +222,17 @@ switch at a time.
 ## 8. Measurement
 
 **Classification:**
-- **Dev set:** `core/src/eval/intent_set.json`, 77 synthetic questions, at least 10 per intent (compliance includes six pasted bug reports, `kb*`), over the public Verizon ODI docs (Feb2026 and Oct2024).
+- **Dev set:** `core/src/eval/intent_set.json`, 77 synthetic questions, at least 10 per intent (compliance includes six pasted bug reports, `kb*`), over the public Verizon Open Access docs (two releases).
   - It follows the `classify_set.json` conventions: MNO placeholders and no MNO named in the committed file.
   - Labels are human-read intent, never rule output.
-  - I draft the questions and labels; Hanif reviews them before any number is recorded.
+  - Questions and labels are reviewed before any number is recorded.
 - **Harness:** extend `eval.classify_cli` to score intent per arm.
 - **Kev wins (Q1 = C) when both hold:**
   - `change` precision ≥ 0.9 and recall ≥ 0.9;
   - overall intent accuracy is no worse than the rules.
 - **If Kev loses,** phase 1 still ships the rules intent and the prompts.
-- **Where it runs:** locally, rules vs Kev-4B on the Mac at `127.0.0.1:8009`. The head check is verified (`lora=16`, `temperature=2.41`).
-- **Baseline (2026-11-08, labels reviewed by Hanif, no label changed):**
+- **Where it runs:** locally, rules vs Kev-4B on a local decision server at `127.0.0.1:PORT`. The head check is verified (`lora=16`, `temperature=2.41`).
+- **Baseline (2026-11-08, labels reviewed, no label changed):**
 
   | Arm | Accuracy | Change P / R | Change bar |
   |---|---|---|---|
@@ -265,15 +265,15 @@ switch at a time.
   - Steer query enrichment and BM25 by intent, for example a larger top-k for `list` and a smaller one for `fact`.
   - Send intent to the store.
   - Guided by the logged rows and the golden A/B.
-- **Deferred to internal infra:** the held-out check on real feedback questions (dev-set option C).
+- **Deferred to a deployment with real traffic:** the held-out check on real feedback questions (dev-set option C).
 - **Deferred:** a user override control for intent, and multi-label intent.
-- **Not this strand:** tracking the company's compliance status for every
-  requirement of a client (a compliance matrix) is separate planned work. The
+- **Not this strand:** tracking compliance status for every requirement
+  (a compliance matrix) is separate planned work. The
   `compliance` intent here is a user describing a behaviour and asking whether
   it meets the requirements.
 - **Deferred:** requirement-ID patterns for other operators. The rules match
-  `VZ_REQ_\w+_\d+` only (`query/analyzer.py`). Add the AT&T and T-Mobile
-  formats when those operators are ingested, not by guessing (Q17).
+  the MNO-A ID format only (`query/analyzer.py`). Add other MNOs'
+  formats when those MNOs are ingested, not by guessing (Q17).
 - **Not moving to jev:** MNO and release stay with the rules extractors (the
   store's `_multi_cell_query` → `resolve_cells`).
   - They are explicit scope, extracted from what the user wrote, unlike the
@@ -289,11 +289,11 @@ switch at a time.
 
 ## 10. Local stack
 
-`~/work/env_sira/run_local.sh` (outside the repo):
-- Starts Kev-4B on 8009 as well.
-- Sets `NORA_QUERY_ANALYZER=confidence-routed`, `NORA_DECISION_PROVIDER=systemone` and `NORA_DECISION_BASE_URL=http://127.0.0.1:8009` on nora-web.
-- Sets `NORA_SIRA_INTENT_PROMPTS=on` once the prompts exist.
-- `KEV=0` skips Kev, and `stop` stops all three.
+`sandbox/run_local.sh` (settings in its header, usage in `sandbox/README.md`):
+- Starts Kev-4B on `KEV_PORT` as well when `KEV_DIR` is set.
+- Then sets `NORA_QUERY_ANALYZER=confidence-routed`, `NORA_DECISION_PROVIDER=systemone` and `NORA_DECISION_BASE_URL=http://127.0.0.1:$KEV_PORT` on nora-web; without `KEV_DIR` the rules classify.
+- Turns on `NORA_SIRA_INTENT_PROMPTS`, `NORA_ID_LOOKUP` and `NORA_PIN_NAMED_IDS` by default.
+- `stop` stops only the processes the script started (PID file).
 
 ## 11. Tests (outline)
 

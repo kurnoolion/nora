@@ -19,8 +19,8 @@ baseline, and the jev decision model (Kev) through the existing
 confidence routing to the rules. Phase 1 uses it for a select-synth
 answer shape per intent (`NORA_SIRA_INTENT_PROMPTS`, default off) and for
 History-lane routing (`change` → History). Measure Kev against the rules
-on a committed synthetic dev set over the public Verizon ODI docs; a
-held-out check on real feedback questions runs later on internal infra.
+on a committed synthetic dev set over the public Verizon Open Access docs;
+a held-out check on real feedback questions runs later, in a deployment.
 Design: `design.md`.
 
 ## Notes

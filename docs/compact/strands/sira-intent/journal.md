@@ -1,7 +1,7 @@
 ## 2026-11-08 — Bug reports as compliance, floor sweep, repeatable eval report
 
 ### Done this session
-- Compliance keeps its own checklist prompt (MEETS / VIOLATES / UNCLEAR, overall verdict); separate from the client compliance-tracking plan (D-DRAFT-10).
+- Compliance keeps its own checklist prompt (MEETS / VIOLATES / UNCLEAR, overall verdict); separate from the planned compliance-tracking work (D-DRAFT-10).
 - Pasted bug reports asking for a verdict classify as compliance (`_VERDICT_ASK`, checked right after change); negated "nothing changed" is not a release change; six `kb*` dev samples (77 total, labels reviewed) (D-DRAFT-9).
 - Compliance prompt v3 judges the observed device behaviour; local spot-check 4/5 (miss: IMS re-registration case).
 - Reviewed baseline: rules 0.753, Kev alone 0.753, confidence-routed 0.870, change bar met. Floor sweep: plateau 0.40–0.50, floor stays 0.50 (D-DRAFT-11).
@@ -10,10 +10,10 @@
 - Filed #23 (translate a finished answer) and #24 (recall@10/20/30/40 per intent).
 
 ### Next
-- Push + PR (Hanif).
+- Push + PR.
 - #24 recall per intent.
 - Spot-check bug verdicts on the served model.
-- Held-out intent check on real feedback questions (internal infra).
+- Held-out intent check on real feedback questions (in a deployment).
 
 ### Flags
 - Kev alone misses `change` (4/10) and pasted bug reports: those labels follow our own conventions, and the option descriptions don't spell them out. Sharpening the descriptions is a cheap experiment, not done.

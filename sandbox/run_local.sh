@@ -77,8 +77,8 @@ for port in "${PORTS[@]}"; do
   fi
 done
 
-# Kev decision server (strand sira-intent): MLX on Apple Silicon, ~0.5 s per
-# classification warm. Only when KEV_DIR points at a Kev checkout.
+# Kev decision server (strand sira-intent): ~0.5 s per classification warm
+# on a laptop. Only when KEV_DIR points at a Kev checkout.
 KEV=0
 if [ -n "${KEV_DIR:-}" ]; then
   [ -d "$KEV_DIR" ] || { echo "KEV_DIR=$KEV_DIR not found" >&2; exit 1; }
