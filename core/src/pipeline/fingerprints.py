@@ -186,12 +186,28 @@ class Fingerprinter:
                 out[inp] = self.manifest.get(inp, GLOBAL_KEY) or ABSENT
         return out
 
+    #: Process switches the extractors read that change what extract
+    #: produces (`pdf_extractor`, `docling_provider`): a switch that is on
+    #: enters extract's externals; off or unset adds nothing, so no
+    #: fingerprint moves until one is turned on. The Docling model
+    #: directory (`DOCLING_ARTIFACTS`) is a path, the same mount on every
+    #: stack; a model change there is an image or host change.
+    EXTRACT_SWITCHES = ("DOCLING_OCR", "NORA_EXTRACT_TEXT_TABLES")
+
+    @staticmethod
+    def _switch_on(value: str | None) -> bool:
+        return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
     def externals(self, stage: str, cell: Cell | None) -> dict:
         """The stage's external inputs, plus the cell's generation at the
         corpus root when it is above 1 and the stage is variant-side (a
         redo of that cell, `pipeline.generations`); generation 1 adds
         nothing, so no fingerprint moves until a cell is redone."""
         out = {name: self._EXTERNALS[name](self, cell) for name in spec_of(stage).externals}
+        if stage == "extract":
+            on = [k for k in self.EXTRACT_SWITCHES if self._switch_on(os.environ.get(k))]
+            if on:
+                out["extract_switches"] = ",".join(on)
         if cell is not None and spec_of(stage).per_cell and tier_of(stage) != CORPUS:
             from core.src.pipeline.generations import cell_generation
             n = cell_generation(self.ctx.corpus_dir, cell_key(stage, cell))

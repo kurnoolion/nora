@@ -35,7 +35,7 @@ cell (`<MNO>/<release>`) unless marked cross-cell.
 
 | Stage | Inputs | Parameters | Tier | Notes |
 |---|---|---|---|---|
-| `extract` | the cell's documents | per-stage code version | corpus | per cell |
+| `extract` | the cell's documents; the extractor switches `DOCLING_OCR` / `NORA_EXTRACT_TEXT_TABLES` when on | per-stage code version | corpus | per cell |
 | `profile` | the profile binding, the bound profile | per-stage code version | corpus | per cell; materializes the substituted profile |
 | `parse` | `extract`, `profile`, parse corrections | per-stage code version | corpus | per cell |
 | `resolve` | `parse` | per-stage code version | corpus | per cell; always run, cheap |
@@ -643,6 +643,7 @@ stages, every cell of the recipe for variant stages.
 | Change | First stage affected | Cells affected | Cascade |
 |---|---|---|---|
 | new or revised document in a cell | `extract` | that cell | everything |
+| `DOCLING_OCR` or `NORA_EXTRACT_TEXT_TABLES` turned on (or off again) in a batch env file | `extract` | every cell that stack builds | everything |
 | extractor code (a new PDF or DOCX extractor) | `extract` | all | everything |
 | a profile's content | `profile` | the cells bound to it (one release, an MNO, or every MNO on the default) | parse onward |
 | parser code | `parse` | all | resolve, taxonomy, enrich (text-unchanged units reused, §3a), Trees, History |

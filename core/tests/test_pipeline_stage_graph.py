@@ -350,3 +350,23 @@ class TestCodeVersionPins:
             f"produces from the same inputs, bump CODE_VERSION in {package}/__init__.py. "
             f"Then set fixtures/stage_code_hashes.json[{stage!r}] = {json.dumps(actual)}"
         )
+
+
+def test_extract_switches_enter_the_fingerprint_only_when_on(tmp_path, monkeypatch):
+    """DOCLING_OCR and NORA_EXTRACT_TEXT_TABLES change what extract
+    produces: on, they move extract's fingerprint (and so everything
+    downstream); off or unset, nothing moves."""
+    ctx = _env(tmp_path)
+    fps = ctx.fingerprints
+    for k in ("DOCLING_OCR", "NORA_EXTRACT_TEXT_TABLES"):
+        monkeypatch.delenv(k, raising=False)
+    base = fps.current("extract", A)
+    monkeypatch.setenv("DOCLING_OCR", "0")
+    assert fps.current("extract", A) == base
+    monkeypatch.setenv("DOCLING_OCR", "on")
+    ocr = fps.current("extract", A)
+    assert ocr != base
+    monkeypatch.setenv("NORA_EXTRACT_TEXT_TABLES", "1")
+    assert fps.current("extract", A) not in (base, ocr)
+    assert fps.externals("extract", A)["extract_switches"] == "DOCLING_OCR,NORA_EXTRACT_TEXT_TABLES"
+    assert "extract_switches" not in fps.externals("parse", A)

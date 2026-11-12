@@ -167,3 +167,13 @@
 **Why.** Recipe `sira-plain` (per-MNO prompts with an empty block) was rejected for stack A: it changes the prompt as well as dropping taxonomy, so the A/B no longer compares the designed arms. An env-only switch (unsetting the prompt dir by hand) was rejected: the gate and the fingerprint would not know.
 
 **Consequences.** The generic path is one requirement per call, several times slower than batched. `generic` with `taxonomy: true` is invalid.
+
+### D-DRAFT-18 — 2026-11-12 — The extractor switches enter extract's fingerprint when on
+
+**Context.** `DOCLING_OCR` and `NORA_EXTRACT_TEXT_TABLES` change what extract produces and come from a stack's batch env file. Two stacks share the stage store, so a switch on one stack and off on the other would put different outputs under one fingerprint.
+
+**Decision.** A switch that is on enters extract's externals (`extract_switches`); off or unset adds nothing.
+
+**Why.** Adding every switch unconditionally was rejected: it would move every stored extract fingerprint for no change in output. `DOCLING_ARTIFACTS` stays out: it is a path, the same mount on every stack.
+
+**Consequences.** Turning a switch on recomputes extract, and everything after it, for every cell that stack builds; turning it off again finds the earlier entries.
