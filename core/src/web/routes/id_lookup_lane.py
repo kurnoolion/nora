@@ -108,13 +108,22 @@ def answer_markdown(found: dict[str, Any]) -> str:
                                       r.get("release"),
                                       _section(r) and f"Section {_section(r)}") if x)
         head = f"**{r['req_id']}**" + (f" — {r['title']}" if r.get("title") else "")
-        block = [head, meta, "", "```text", (r.get("text") or "").rstrip(), "```"]
+        text = (r.get("text") or "").rstrip()
+        fence = _fence(text)
+        block = [head, meta, "", f"{fence}text", text, fence]
         if e["also_in"]:
             block.append(f"Also in: {', '.join(e['also_in'])}")
         parts.append("\n".join(block))
     if found["not_found"]:
         parts.append("**Not found:** " + ", ".join(found["not_found"]))
     return "\n\n---\n\n".join(parts)
+
+
+def _fence(text: str) -> str:
+    """A backtick fence longer than any backtick run in ``text``, so the
+    text cannot close it early."""
+    longest = max((len(m) for m in re.findall(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
 
 
 def _section(r: dict) -> str:

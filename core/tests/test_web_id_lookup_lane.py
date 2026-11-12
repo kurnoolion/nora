@@ -95,6 +95,18 @@ def test_unknown_ids_are_listed_and_the_answer_text_is_fenced():
     assert f"**Not found:** {C}" in md
 
 
+def test_backticks_in_the_text_stay_inside_the_fence():
+    # A stored answer is re-rendered as markdown (share link, History page):
+    # a ``` line in the text must not close the fence early.
+    from core.src.web.markdown_render import render_markdown
+    text = "line one\n```\n**not bold**\n````\nlast"
+    found = {"entries": [{"req_id": A, "req": _row(A, "Sep2031", text=text), "also_in": []}],
+             "not_found": []}
+    html = str(render_markdown(lane.answer_markdown(found)))
+    assert "<strong>not bold</strong>" not in html and "**not bold**" in html
+    assert "last" in html.split("</code>")[0]
+
+
 def test_lane_output_shape_and_lane_config():
     out = asyncio.run(lane.run_id_lookup_lane(f"{A} {C}", IdMessage((A, C), ""),
                                               env_dir=None, find_req=fake_find_req))
