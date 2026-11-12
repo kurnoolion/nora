@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.src.eval.classify import _fill_placeholders as F  # MNO codes from the alias table, none committed
 from core.src.query.analyzer import MockQueryAnalyzer
 from core.src.query.schema import Intent, QueryIntent
 
@@ -38,10 +39,10 @@ def test_query_intent_defaults_to_other_and_serialises_it():
     ("What are all the band 13 requirements?", Intent.LIST),
     ("Does retrying after 12 minutes comply with the attach requirements?", Intent.COMPLIANCE),
     ("Is a device that ignores reject cause 15 compliant?", Intent.COMPLIANCE),
-    ("What changed in the latest Verizon release?", Intent.CHANGE),
-    ("What is new in the latest VZW release?", Intent.CHANGE),
-    ("Compare Verizon and T-Mobile retry timers", Intent.COMPARE),
-    ("How does the VZW attach retry differ from ATT?", Intent.COMPARE),
+    (F("What changed in the latest {MNO_A} release?"), Intent.CHANGE),
+    (F("What is new in the latest {MNO_A} release?"), Intent.CHANGE),
+    (F("Compare {MNO_A} and {MNO_B} retry timers"), Intent.COMPARE),
+    (F("How does the {MNO_A} attach retry differ from {MNO_C}?"), Intent.COMPARE),
     ("T3402", Intent.OTHER),
 ])
 def test_rules_classify_intent(question, expected):
@@ -50,12 +51,12 @@ def test_rules_classify_intent(question, expected):
 
 @pytest.mark.parametrize("question", [
     "what changed?",
-    "What changed in the latest release of VZW compared to the previous one?",
-    "What is new in the latest VZW release?",
-    "Compare VZW retry timers",
-    "What changed between VZW and TMO latest releases?",
+    F("What changed in the latest release of {MNO_A} compared to the previous one?"),
+    F("What is new in the latest {MNO_A} release?"),
+    F("Compare {MNO_A} retry timers"),
+    F("What changed between {MNO_A} and {MNO_B} latest releases?"),
     "What is the retry timer?",
-    "List the requirements added in Feb2026",
+    "List the requirements added in Mar2031",
     "Explain the delta between releases",
 ])
 def test_change_intent_matches_the_release_change_rule(question):

@@ -21,6 +21,7 @@ from core.src.decision.analyzer import (
     DecisionQueryAnalyzer,
 )
 from core.src.decision.base import DecisionAnswer, DecisionError
+from core.src.eval.classify import _fill_placeholders as F  # MNO codes from the alias table, none committed
 from core.src.query.schema import Intent, QueryType
 
 
@@ -105,7 +106,7 @@ def test_unknown_value_falls_back_to_rules_with_no_confidence_credit():
 
 def test_provider_outage_gives_rules_and_counts_a_fallback():
     a = ConfidenceRoutedQueryAnalyzer(_Down(), 0.5, questions=SIRA_QUESTIONS)
-    qi, trace = a.analyze_with_trace("What changed in the latest VZW release?")
+    qi, trace = a.analyze_with_trace(F("What changed in the latest {MNO_A} release?"))
     assert qi.intent is Intent.CHANGE
     assert trace["intent"] == {"source": "rules", "confidence": None}
     assert a.fallback_count == 1
