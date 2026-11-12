@@ -108,8 +108,11 @@ def test_strict_raises_for_a_missing_or_broken_store(monkeypatch):
     def broken(*a, **k):
         raise OSError("down")
     monkeypatch.setattr(history_lane, "open_history_store", broken)
-    with pytest.raises(PipelineError):
+    assert history_lane.history_diff_applies(QUESTION, config=ON, intent=change) is None
+    with pytest.raises(PipelineError) as e:
         history_lane.history_diff_applies(QUESTION, config=ON, intent=change, strict=True)
+    # A configured store that fails to open is not "not configured".
+    assert e.value.code == "RHD-E005" and "OSError" in e.value.message
 
 
 def test_a_disabled_lane_is_never_an_error(monkeypatch):

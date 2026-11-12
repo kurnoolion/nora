@@ -182,6 +182,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("RHD-E002", "Release {release} is not served for this MNO", "Name a served release, 'latest' or 'previous'; the Ask page lists the served releases"),
     ErrorDef("RHD-E003", "History store not configured on this stack", "Set NORA_HISTORY_URL on nora-web (compose default) or NORA_HISTORY_ROOT; healthz 'stores.history' must not be 'off'"),
     ErrorDef("RHD-E004", "A synthesis batch failed after the fallback: {detail}", "The other batches answered; retry the question or lower NORA_HISTORY_DIFF_PARALLEL if the endpoint rate-limits"),
+    ErrorDef("RHD-E005", "History store failed to open ({detail})", "The store is configured but unreachable or unreadable: check nora-store and healthz 'stores.history'; see nora-web's log"),
     ErrorDef("RHD-I001", "Release-change synthesis cancelled after {done} of {total} batches", "Informational; the plans completed so far are shown"),
 
     # --- Pipeline (PIP) ---

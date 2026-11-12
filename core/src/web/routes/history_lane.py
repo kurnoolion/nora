@@ -101,8 +101,9 @@ def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = 
 
     ``strict`` (``NORA_SIRA_INTENT_PROMPTS`` on, D-DRAFT-5): a change
     question with the lane enabled but no History store, or one that won't
-    open, raises ``PipelineError("RHD-E003")`` instead of returning None.
-    A disabled lane still returns None (an operator's choice, not a failure)."""
+    open, raises ``PipelineError`` instead of returning None: ``RHD-E003``
+    when no store is configured, ``RHD-E005`` when one fails to open.
+    A disabled lane still returns None (an administrator's choice, not a failure)."""
     cfg = config or ReleaseDiffConfig.from_env()
     if not cfg.enabled:
         return None
@@ -114,8 +115,11 @@ def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = 
         return None
     try:
         store = open_history_store()
-    except Exception:                                   # noqa: BLE001 — treated as off
-        store = None
+    except Exception as exc:                            # noqa: BLE001 — treated as off
+        logger.warning("History store failed to open: %s", type(exc).__name__)
+        if strict:
+            raise PipelineError("RHD-E005", {"detail": type(exc).__name__}, cause=exc) from exc
+        return None
     if store is None and strict:
         raise PipelineError("RHD-E003", {})
     return intent if store is not None else None
