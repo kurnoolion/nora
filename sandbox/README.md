@@ -371,11 +371,14 @@ in the UI, they are cosmetic, not a filter.
 ### One-command laptop stack — `run_local.sh` (strand sira-intent)
 
 For a dev loop on one machine: nora-store on `:8040`, nora-web on `:8000`,
-both on a local Ollama model, and Kev on `:8009` when you have it. Logs go
-to `$ENV_DIR/logs/` (`store.log`, `web.log`, `kev.log`).
+both on a local Ollama model, and Kev on `KEV_PORT` when you have it. Logs
+go to `$ENV_DIR/logs/` (`store.log`, `web.log`, `kev.log`). `stop` kills only
+the processes the script started (PIDs in `$ENV_DIR/logs/run_local.pids`);
+start refuses when a port is already taken, e.g. by a compose stack. Override
+ports with `STORE_PORT` / `WEB_PORT` and the venv python with `PYTHON`.
 
     ENV_DIR=~/work/env_sira sandbox/run_local.sh               # rules classify intent
-    ENV_DIR=~/work/env_sira KEV_DIR=~/work/kev sandbox/run_local.sh   # Kev + rules
+    ENV_DIR=~/work/env_sira KEV_DIR=~/work/kev KEV_PORT=PORT sandbox/run_local.sh   # Kev + rules
     ENV_DIR=~/work/env_sira INTENT_PROMPTS=off sandbox/run_local.sh   # today's prompt
     ENV_DIR=~/work/env_sira sandbox/run_local.sh stop
 
