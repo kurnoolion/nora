@@ -3,7 +3,7 @@
 One decision-model pass over a labelled intent set, then every confidence
 floor and confidence bin scored offline. Writes a timestamped folder with
 ``run.json`` (the numbers plus what correlates a run: time, git commit,
-dataset hash, decision endpoint) and ``report.html`` (the charts).
+dataset hash, decision provider and model; never the endpoint) and ``report.html`` (the charts).
 
 Rows carry sample ids and labels only, never query text, so a report is
 safe to commit for a synthetic set.
@@ -182,8 +182,8 @@ def main(argv=None) -> int:
     except DecisionError as e:
         print(f"intent_report: decision call failed, nothing written ({e})", file=sys.stderr)
         return 1
-    decision = {"provider": name, "model": getattr(provider, "model", None),
-                "base_url": os.environ.get("NORA_DECISION_BASE_URL") if name != "mock" else None}
+    # Provider and model only: reports are committed, the endpoint is not.
+    decision = {"provider": name, "model": getattr(provider, "model", None)}
     run = build_run(rows, set_id=json.loads(raw)["set_id"], dataset_sha=hashlib.sha256(raw).hexdigest(),
                     floor=args.floor if args.floor is not None else resolve_decision_confidence_floor(),
                     decision=decision, created_at=datetime.now().replace(microsecond=0), git=_git())

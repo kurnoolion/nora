@@ -8,8 +8,7 @@
   "floor": 0.5,
   "decision": {
    "provider": "systemone",
-   "model": "",
-   "base_url": "http://127.0.0.1:8009"
+   "model": ""
   },
   "git": {
    "commit": "a631700",

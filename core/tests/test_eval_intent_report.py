@@ -141,6 +141,17 @@ def test_cli_end_to_end_on_the_mock_provider(tmp_path, monkeypatch, capsys):
     assert str(folder) in capsys.readouterr().out
 
 
+def test_the_report_records_no_endpoint(tmp_path, monkeypatch):
+    # Reports are committed: provider and model only, never the server address.
+    monkeypatch.setenv("NORA_DECISION_PROVIDER", "mock")
+    monkeypatch.setenv("NORA_DECISION_BASE_URL", "http://decision.example.test:1234/v1")
+    assert ir.main(["--out-root", str(tmp_path)]) == 0
+    (folder,) = tmp_path.iterdir()
+    assert set(json.loads((folder / "run.json").read_text())["meta"]["decision"]) == {"provider", "model"}
+    for f in ("run.json", "report.html"):
+        assert "example.test" not in (folder / f).read_text()
+
+
 def test_cli_refuses_without_a_decision_provider(monkeypatch, tmp_path):
     monkeypatch.delenv("NORA_DECISION_PROVIDER", raising=False)
     assert ir.main(["--out-root", str(tmp_path)]) == 2

@@ -15,7 +15,7 @@ ready, runs it, reads the result back to the user, and proposes the commit.
 
 Each folder holds `report.html` (the charts, open it in a browser) and
 `run.json` (every number plus `meta`: `created_at`, `git.commit`, `git.dirty`,
-`dataset_sha256`, `decision` endpoint and model, `floor`). Rows carry sample
+`dataset_sha256`, `decision` provider and model (never the endpoint), `floor`). Rows carry sample
 ids and labels only, no question text.
 
 ## Procedure
@@ -23,11 +23,11 @@ ids and labels only, no question text.
 ### 1. Check the decision model is up
 
 ```
-curl -s -m 5 http://127.0.0.1:8009/v1/models
+curl -s -m 5 http://127.0.0.1:$KEV_PORT/v1/models
 ```
 
 No answer: ask the user to start Kev (`sandbox/run_local.sh` with `KEV_DIR`
-set starts it), or for the endpoint of the one they want measured. Don't
+and `KEV_PORT` set starts it), or for the endpoint of the one they want measured. Don't
 measure a different model than the user means.
 
 ### 2. Free memory for it
@@ -39,7 +39,7 @@ unload it with `ollama stop <model>` (it reloads on the next question).
 ### 3. Run
 
 ```
-NORA_DECISION_PROVIDER=systemone NORA_DECISION_BASE_URL=http://127.0.0.1:8009 \
+NORA_DECISION_PROVIDER=systemone NORA_DECISION_BASE_URL=http://127.0.0.1:$KEV_PORT \
 NORA_DECISION_TIMEOUT=60 python -m core.src.eval.intent_report
 ```
 
