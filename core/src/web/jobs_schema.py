@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS ingests (
     error TEXT,
     callback_url TEXT,
     redo_of TEXT,
-    stage_origins TEXT
+    stage_origins TEXT,
+    documents_staged INTEGER
 )
 """
 
@@ -113,6 +114,10 @@ INGESTS_ADDED_COLUMNS = (
     # stage's output came from ({stage: "computed" | "store" | "forced"})
     ("redo_of", "TEXT"),
     ("stage_origins", "TEXT"),
+    # stage graph, step 5: 1 when this ingest copied the cell's documents
+    # into the shared requirements dir; only then may abandon or purge
+    # remove them (two stacks share the dir)
+    ("documents_staged", "INTEGER"),
 )
 
 # Ingest states a client is told about (webhook events `ingest.<state>`).

@@ -70,6 +70,10 @@ class RunnerConfig:
     overlay_root: str = ""
     document_extensions: list[str] = field(default_factory=lambda: [".pdf", ".docx", ".xlsx"])
     abandon_removes_documents: bool = True
+    # The registry roots of the other stacks on this host. Their requirements
+    # dir is this one: abandon and purge keep a cell's documents while any of
+    # them serves it (stage graph, step 5).
+    peer_registry_roots: list[str] = field(default_factory=list)
     detached_poll_seconds: float = 5.0
     detached_timeout_seconds: float = 6 * 3600
     # Webhooks: a submit may name a callback_url; the runner posts

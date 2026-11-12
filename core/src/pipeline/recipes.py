@@ -48,8 +48,13 @@ RESERVED_STAGES = ("graph", "vectorstore", "eval")
 #: The parameters each stage takes, with their types.
 PARAMS: dict[str, dict[str, type]] = {
     "taxonomy": {"generation": int, "model": str},
-    "enrich": {"generation": int, "model": str, "prompt_scheme": str, "taxonomy": bool},
+    "enrich": {"generation": int, "model": str, "prompt": str, "prompt_scheme": str, "taxonomy": bool},
 }
+#: `params.enrich.prompt`: `per-mno` (default) — the MNO's
+#: `doc_requirement_<MNO>_*.txt`, batched; `generic` — SIRA's one
+#: document prompt for every MNO (no taxonomy block), the legacy
+#: one-requirement-per-call path: the design of the single-prompt stack.
+ENRICH_PROMPTS = ("per-mno", "generic")
 SERVE_MODES = ("sira",)
 SERVE_UNITS = ("cells", "trees", "history")
 _TOP_KEYS = {"name", "stages", "params", "serve", "note"}
@@ -174,6 +179,11 @@ def parse(data, name_hint: str | None = None) -> Recipe:
         clean[stage] = dict(sorted(ps.items()))
     if clean.get("enrich", {}).get("taxonomy") and "taxonomy" not in ordered:
         raise _bad("params.enrich.taxonomy is true but the recipe does not run taxonomy")
+    prompt = clean.get("enrich", {}).get("prompt", "per-mno")
+    if prompt not in ENRICH_PROMPTS:
+        raise _bad(f"params.enrich.prompt {prompt!r}: one of {', '.join(ENRICH_PROMPTS)}")
+    if prompt == "generic" and clean.get("enrich", {}).get("taxonomy"):
+        raise _bad("params.enrich.prompt generic has no taxonomy block; taxonomy cannot be true")
 
     serve = data.get("serve", {})
     if not isinstance(serve, dict) or set(serve) - {"mode", "units"}:
@@ -229,6 +239,8 @@ def get(recipe: Recipe, key: str) -> str:
         return recipe.prompt_scheme
     if key == "enrich.taxonomy":
         return "1" if recipe.enrich_uses_taxonomy else "0"
+    if key == "enrich.prompt":
+        return str(recipe.param("enrich", "prompt", "per-mno"))
     if key.startswith("has."):
         return "1" if recipe.has(key[4:]) else "0"
     if "." in key:

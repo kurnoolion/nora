@@ -192,6 +192,7 @@ def st_documents(c: Ctx) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     for p in files:
         shutil.copy2(p, dst / p.name)
+    c.db.update_ingest(ing["id"], documents_staged=1)
     c.log(f"documents: {len(files)} file(s) staged into {dst}")
 
 
@@ -206,6 +207,42 @@ def _job_user(env_file: str) -> dict[str, str]:
             continue
         out[var] = str(val)
     return out
+
+
+def _serves(registry_root: str, unit: str) -> bool | None:
+    """Whether the registry under `registry_root` has `unit` in its active
+    cells; None when it cannot be read (a missing registry serves nothing)."""
+    reg = Path(registry_root) / "registry.db"
+    if not reg.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            return con.execute("SELECT 1 FROM active WHERE store='cells' AND unit=?",
+                               (unit,)).fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
+def _documents_kept(c: Ctx, ing: dict) -> str:
+    """Why the cell's documents must stay, or '' when this ingest may remove
+    them: it staged them itself, and no stack on the host serves the cell
+    (the requirements dir is shared by every stack's runner)."""
+    if ing.get("redo_of"):
+        return "a redo's documents belong to the ingest it repeats"
+    if not ing.get("documents_staged"):
+        return "this ingest did not stage them (they were there before it, or it predates the record)"
+    unit = f"{ing['mno']}/{ing['release']}"
+    for name, root in [("this stack", c.cfg.registry_root)] + [
+            (f"the stack at {r}", r) for r in c.cfg.peer_registry_roots]:
+        served = _serves(root, unit)
+        if served is None:
+            return f"the registry of {name} cannot be read"
+        if served:
+            return f"{name} serves this cell"
+    return ""
 
 
 def _registry_has(c: Ctx, sql: str, params: tuple) -> bool:
@@ -715,12 +752,10 @@ def run_purge(c: Ctx) -> None:
     if ing.get("run_ref"):
         _remove_tree(c, "golden run", Path(c.cfg.golden_dir) / "runs" / ing["run_ref"], problems)
     cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
-    if cell.is_dir() and ing.get("redo_of"):
-        c.log("purge: documents kept — a redo's documents belong to the ingest it repeats")
-    elif cell.is_dir():
-        if _registry_has(c, "SELECT 1 FROM active WHERE store='cells' AND unit=?",
-                         (f"{ing['mno']}/{ing['release']}",)):
-            c.log("purge: documents kept — the active set serves this cell")
+    if cell.is_dir():
+        kept = _documents_kept(c, ing)
+        if kept:
+            c.log(f"purge: documents kept — {kept}")
         else:
             _remove_tree(c, "documents", cell, problems)
     if problems:
@@ -755,11 +790,12 @@ def run_abandon(c: Ctx) -> None:
         c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} abandoned")
     else:
         c.log("abandon: no cycle in flight for this ingest")
-    if ing.get("redo_of"):
-        c.log("abandon: documents kept — a redo's documents belong to the ingest it repeats")
-    elif c.cfg.abandon_removes_documents:
-        cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
-        if cell.is_dir():
+    cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
+    if c.cfg.abandon_removes_documents and cell.is_dir():
+        kept = _documents_kept(c, ing)
+        if kept:
+            c.log(f"abandon: documents kept — {kept}")
+        else:
             shutil.rmtree(cell)
             c.log(f"abandon: removed the staged documents under {cell}")
     c.set_state("abandoned", job_id=c.job_id)

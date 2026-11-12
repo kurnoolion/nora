@@ -364,6 +364,15 @@ start)
   # MNO's latest bound cell (a new release of a known MNO); an MNO with no
   # binding at all fails loud — new MNOs are hand-bound.
   inherited="-" pf=""
+  if [ -n "$CORPUS" ]; then
+    # every stack's start reads and rewrites the corpus bindings: hold the
+    # host-wide lock from the read to the write, or a concurrent start on
+    # another stack loses the cells this one binds (stage graph, step 5)
+    command -v flock >/dev/null || die 037 "flock not found (util-linux)" "install util-linux; it locks the shared corpus bindings"
+    exec 9>>"$CORPUS/.bindings.lock"
+    flock -w "${CORPUS_LOCK_WAIT:-300}" 9 || die 037 "another start holds the corpus bindings lock ($CORPUS/.bindings.lock)" "wait for it, then start again"
+    src="$CORPUS/profiles.json"   # re-read under the lock
+  fi
   if [ -n "$SEED" ] || [ -n "$CORPUS" ]; then
     pf="$(mktemp)"; cp "$src" "$pf"; chmod 644 "$pf"
     inherited="$(python3 - "$pf" $(cells) <<'PY'
@@ -401,6 +410,7 @@ PY
       cp "$pf" "$CORPUS/.profiles.json.$$" && mv "$CORPUS/.profiles.json.$$" "$CORPUS/profiles.json"
     fi
     rm -f "$pf"
+    flock -u 9; exec 9>&-
   elif [ -n "$pf" ]; then mv "$pf" "$NB/profiles.json"; elif [ -n "$src" ]; then cp "$src" "$NB/profiles.json"; fi
   cyc init "$CJ" "$BUILD" "$ME" "$images"
   [ -n "$SEED" ] && cyc set "$CJ" seed "$SEED"
@@ -469,9 +479,19 @@ prompts)
   [ "$np" -ge 1 ] || die 040 "no parse dirs in this build" "check the parse log for failed cells; re-run ./cycle.sh parse"
   [ "$np" -ge "$(cells | wc -l)" ] || echo "NOTE: partial build — $np of $(cells | wc -l) staged cells parsed (an incremental cycle holds only its own cell)"
   PD="$HERE/../customizations/prompts"
-  echo "prompt evidence (per MNO found in parse output):"
+  # the recipe decides which prompts the stages read: enrich.prompt=generic
+  # is SIRA's one document prompt for every MNO (no per-MNO prompt, no
+  # taxonomy block); a recipe without taxonomy reads no overview
+  gen=0; has_recipe && [ "$(recipe_get enrich.prompt)" = generic ] && gen=1
+  tax=1; has_recipe && [ "$(recipe_get has.taxonomy)" != 1 ] && tax=0
   missing=0 bad=0 mnos=0
-  for m in $(stage_cells parse | cut -d/ -f1 | sort -u); do
+  if (( gen )); then
+    mnos="$(stage_cells parse | cut -d/ -f1 | sort -u | grep -c . || true)"
+    echo "prompt evidence: recipe $(recipe_get name) enriches with SIRA's generic document prompt (enrich.prompt=generic); per-MNO prompts are not used"
+  else
+    echo "prompt evidence (per MNO found in parse output):"
+  fi
+  for m in $( (( gen )) || stage_cells parse | cut -d/ -f1 | sort -u); do
     mnos=$((mnos+1))
     doc="$(ls "$PD"/doc_requirement_"$m"_v*.txt 2>/dev/null | sort -V | tail -1 || true)"
     ov="$(ls "$PD"/corpus_overview_"$m"_v*.txt 2>/dev/null | sort -V | tail -1 || true)"
@@ -489,7 +509,10 @@ prompts)
   # A refusal, not a warning: without the line the stage runs on generic
   # prompts and says nothing (field-found 2026-11-07).
   nomiss=0
-  for spec in BATCH_ENV_FILE:.env.nora-batch:NORA_TAXONOMY_OVERVIEW_DIR SIRA_BATCH_ENV_FILE:.env.sira-batch:NORA_SIRA_DOC_PROMPT_DIR; do
+  specs=""
+  (( tax )) && specs="BATCH_ENV_FILE:.env.nora-batch:NORA_TAXONOMY_OVERVIEW_DIR"
+  (( gen )) || specs="$specs SIRA_BATCH_ENV_FILE:.env.sira-batch:NORA_SIRA_DOC_PROMPT_DIR"
+  for spec in $specs; do
     IFS=: read -r var def key <<< "$spec"
     ef="$(batch_env_path "$var" "$def")"
     if [ -f "$ef" ] && grep -qE "^$key=/data/env/prompts" "$ef"; then echo "  $key: set in $ef"
@@ -497,7 +520,9 @@ prompts)
   done
   (( nomiss == 0 )) || die 042 "$nomiss batch env file(s) do not point the stages at the published prompts" "add the line(s) above to the file(s) named (README Phase 3), or name the right file in the wiring env"
   gate prompts
-  cp "$PD"/*_v*.txt "$NB/prompts/" 2>/dev/null || true
+  # a generic-prompt recipe publishes no per-MNO prompt: nothing under the
+  # build can then select one (the lane also unsets the prompt dir)
+  if (( gen )); then :; else cp "$PD"/*_v*.txt "$NB/prompts/" 2>/dev/null || true; fi
   cyc_block prompts confirmed <<EOF
 mnos=$mnos missing=$missing misshaped=$bad published=$(ls "$NB/prompts" | wc -l) gate=confirmed_by:$GATE_BY
 EOF
@@ -526,6 +551,7 @@ enrich)
   # the recipe decides whether enrichment reads a taxonomy (no recipe: it does)
   use_tax=1; has_recipe && use_tax="$(recipe_get enrich.taxonomy)"
   emodel="$(recipe_get enrich.model)"
+  eprompt="$(recipe_get enrich.prompt)"   # generic: SIRA's one prompt, the legacy per-req path
   if [ "$use_tax" = 1 ]; then
   require_phase taxonomy "./cycle.sh taxonomy, then status until ok"
   # per-cell ledgers (<taxonomy dir of the cell>/extraction_state.json, in
@@ -546,6 +572,7 @@ enrich)
     local td; td="$(stage_dir taxonomy "$1")"
     if [ "$use_tax" = 1 ]; then e="$e NORA_SIRA_TAXONOMY_DIR=$(ctr_path "${td:-$NB/out/taxonomy/$1}")"; else e="$e -u NORA_SIRA_TAXONOMY_DIR"; fi
     [ -z "$emodel" ] || e="$e NORA_SIRA_ENRICH_LLM_MODEL=$emodel"
+    [ "$eprompt" != generic ] || e="$e -u NORA_SIRA_DOC_PROMPT_DIR"
     echo "$e"
   }
   [ "$(phase_state enrich)" != running ] || die 063 "enrich already running" "./cycle.sh status"

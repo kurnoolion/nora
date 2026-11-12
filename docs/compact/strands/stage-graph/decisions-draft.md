@@ -148,3 +148,22 @@
 
 **Consequences.** Entries stored before the change offer nothing. The taxonomy correction enters the graph and vector store fingerprints; it feeds no per-cell stage, so no stored output moves with it.
 
+### D-DRAFT-16 — 2026-11-11 — Documents belong to the ingest that staged them; the corpus bindings are written under a lock
+
+**Context.** A second stack's runner shares the requirements directory and the corpus `profiles.json`. Abandon removed a cell's documents unconditionally, and purge checked only its own stack's active set; two starts could each rewrite the bindings and lose the other's.
+
+**Decision.** The runner records `documents_staged` when it copies a cell's documents. Abandon and purge remove them only with that record and while no registry on the host (its own and `peer_registry_roots`) serves the cell; an unreadable registry keeps them. `cycle.sh start` holds a host-wide `flock` from reading the bindings to writing them.
+
+**Why.** One requirements directory per stack was rejected: the corpus is one set of documents, and two copies could drift. A marker file inside the cell was rejected: extract's fingerprint hashes every file there.
+
+**Consequences.** An ingest row from before the record keeps its documents on abandon; they are removed by hand. A runner's config must list the other stacks' registries.
+
+### D-DRAFT-17 — 2026-11-11 — Stack A keeps the single-prompt design as recipe `sira-generic`
+
+**Context.** Stack A is the single-prompt arm of an A/B test (`scheme-v1`: SIRA's one document prompt, no taxonomy) against stack B's per-plan prompts with taxonomy (`scheme-v2`). Recipes could only express per-MNO prompts, with or without a taxonomy block.
+
+**Decision.** A recipe parameter `params.enrich.prompt` (`per-mno` default, `generic`). Recipe `sira-generic`: enrich only, `prompt: generic`, `prompt_scheme: scheme-v1`. Under `generic` the prompts gate checks and publishes no per-MNO prompt, the lane unsets `NORA_SIRA_DOC_PROMPT_DIR`, and the enrich fingerprint's `doc_prompt` is `generic`.
+
+**Why.** Recipe `sira-plain` (per-MNO prompts with an empty block) was rejected for stack A: it changes the prompt as well as dropping taxonomy, so the A/B no longer compares the designed arms. An env-only switch (unsetting the prompt dir by hand) was rejected: the gate and the fingerprint would not know.
+
+**Consequences.** The generic path is one requirement per call, several times slower than batched. `generic` with `taxonomy: true` is invalid.

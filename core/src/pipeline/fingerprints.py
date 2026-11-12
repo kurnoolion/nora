@@ -418,6 +418,11 @@ class Fingerprinter:
         ``sandbox.enrich_batching.resolve_doc_prompt``."""
         if cell is None:
             return ABSENT
+        recipe = self.ctx.recipe
+        if recipe is not None and recipe.param("enrich", "prompt", "per-mno") == "generic":
+            # SIRA's own document prompt, baked in the image and pinned by
+            # the enrich parameter sira_ref; no file under the build decides it
+            return "generic"
         d = self._env_dir() / "prompts"
         hits = sorted(d.glob(f"doc_requirement_{cell.mno}_*.txt")) if d.is_dir() else []
         return hash_files([hits[-1]], rel_to=d) if hits else ABSENT

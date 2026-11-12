@@ -569,13 +569,38 @@ or recipe); it has no runner; its release sets carry prompt scheme
 `scheme-v1`. It serves four cells; stack B serves seven.
 
 **Decided (2026-11-11).**
-- Recipe `sira-plain`: enrichment with the document prompts alone.
 - All seven cells, the same set as stack B, so the two recipes can be
   compared cell for cell.
 - A runner for stack A, so both stacks run the same machinery end to
   end: its own unit, jobs database, ingest token and share map.
 - The corpus prefix comes from the shared store: a cell stack B has
   already computed since step 2 costs stack A nothing before enrich.
+
+**The recipe: `sira-generic`** (decided 2026-11-11, after a second
+survey). Stack A was designed as the single-prompt arm of an A/B test:
+its runs enriched with SIRA's one generic document prompt and no
+taxonomy (the doc prompt recorded with its runs has no taxonomy block;
+stack B's has one), and `scheme-v1` names that design (`scheme-v2`: the
+per-plan prompts with taxonomy). The env file's taxonomy directory was
+never read: the generic prompt has no place for it. Today's lane still
+takes that path when it finds no per-MNO prompt, so a recipe parameter
+says so: `params.enrich.prompt = "generic"`. The prompts gate then checks
+and publishes no per-MNO prompt, the lane unsets the prompt directory,
+and the enrich fingerprint names the generic prompt. `sira-generic`
+carries `prompt_scheme: scheme-v1`. `sira-plain` (per-MNO prompts, empty
+taxonomy block) stays as a third arm, unused. The generic path runs one
+requirement per call: expect several times the batched enrichment time.
+
+**Found by the survey.** A second runner shares the requirements
+directory: Abandon removes a cell's documents without asking whether any
+stack serves them, so stack A abandoning an ingest of a release stack B
+serves would delete stack B's documents; and two runners writing the
+corpus `profiles.json` race (step 6). Both guarded (built 2026-11-11):
+the runner records `documents_staged` when it copies a cell's documents,
+and abandon and purge remove them only with that record and while no
+registry on the host (`peer_registry_roots`) serves the cell; `cycle.sh
+start` rewrites the corpus bindings under a host-wide `flock`
+(`CYC-E037` when it is not freed).
 
 **To settle from the host survey.** Whether stack A's `scheme-v1` doc
 prompts carry the placeholders the prompts gate checks

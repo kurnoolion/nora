@@ -242,7 +242,15 @@ env's `NORA_RECIPE`) freezes it in the build as `RECIPE.json`. Then
 `taxonomy` refuses when the recipe runs none (`CYC-E053`), `enrich`
 unsets `NORA_SIRA_TAXONOMY_DIR` when the recipe's enrichment reads no
 taxonomy, and `promote` takes the recipe's scheme unless `--scheme` is
-given. An unknown recipe stops `start` with `CYC-E035`, an invalid one
+given. The enrich `prompt` parameter picks the document prompt:
+`per-mno` (default; the MNO's `doc_requirement_<MNO>_*.txt`, batched) or
+`generic` (SIRA's one prompt for every MNO, no taxonomy block, one
+requirement per call: the single-prompt design, recipe `sira-generic`,
+scheme `scheme-v1`). With `generic` the prompts gate checks no per-MNO
+prompt and no prompt-dir line, publishes no per-MNO prompt, and `enrich`
+unsets `NORA_SIRA_DOC_PROMPT_DIR`; the enrich fingerprint names the
+generic prompt. Expect several times the enrichment time of the batched
+path. An unknown recipe stops `start` with `CYC-E035`, an invalid one
 with `CYC-E036`. Promote copies `RECIPE.json` and `STAGES.json` into the
 label and publish records the recipe's name and digest and the stage
 fingerprints on the release set. `python3 -m core.src.pipeline.recipes
@@ -277,7 +285,10 @@ whether the output was `computed`, found in the `store`, or `forced`;
 cells in `<corpus>/profiles.json`, the build holds no `profiles.json`,
 `--profiles` is refused (`CYC-E028`) and a seed needs no bindings; a
 missing corpus `profiles.json` or store directory stops `start`
-(`CYC-E029`). Set up once: `mkdir -p <stages> <corpus>/annotations` and
+(`CYC-E029`). `start` rewrites `<corpus>/profiles.json` under a host-wide
+lock (`<corpus>/.bindings.lock`), so two stacks starting at once cannot
+lose each other's bindings; it waits up to `CORPUS_LOCK_WAIT` seconds
+(300) and then refuses (`CYC-E037`). Set up once: `mkdir -p <stages> <corpus>/annotations` and
 copy the active build's `profiles.json` to `<corpus>/`. Rebake the batch
 images with `CODE_VERSION` (below) so taxonomy outputs are shared too.
 
@@ -317,8 +328,11 @@ and the gate record; the page then offers **Serve** (the flip) and
    wiring env, requirements dir, the flat labels root, the registry
    serve root, a work dir, the pooled golden dir, the overlay DB, the
    stack's compose project and env file, a staging project and env file,
-   the prompt scheme, `seed_build` = the build the served set came from).
-   The file is gitignored.
+   the prompt scheme, `seed_build` = the build the served set came from,
+   and `peer_registry_roots` = the registry roots of the other stacks on
+   the host, whose runners share the requirements dir: abandon and purge
+   keep a cell's documents while any stack serves it, and remove only
+   documents the ingest staged itself). The file is gitignored.
 2. Share mapping in the ingestion wiring env (`.env.builds`):
    `NORA_SHARE_MAP=\\SERVER\OADocs=/path/to/mount;…` — the Windows
    prefix the team types, and where this host mounts it.

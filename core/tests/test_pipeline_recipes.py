@@ -130,3 +130,35 @@ def test_a_bad_frozen_recipe_fails_loud(tmp_path):
     ctx = _ctx(tmp_path, {"name": "x", "stages": ["parse"]})
     with pytest.raises(R.RecipeError):
         ctx.fingerprints.current("taxonomy", CELL)
+
+
+def test_generic_prompt_param():
+    from core.src.pipeline import recipes as r
+    base = {"name": "x", "stages": ["enrich"], "params": {"enrich": {"prompt": "generic"}}}
+    rec = r.parse(base)
+    assert r.get(rec, "enrich.prompt") == "generic"
+    assert r.get(r.parse({"name": "x", "stages": ["enrich"]}), "enrich.prompt") == "per-mno"
+    with pytest.raises(r.RecipeError, match="one of per-mno, generic"):
+        r.parse({**base, "params": {"enrich": {"prompt": "other"}}})
+    with pytest.raises(r.RecipeError, match="no taxonomy block"):
+        r.parse({"name": "x", "stages": ["taxonomy", "enrich"],
+                 "params": {"enrich": {"prompt": "generic", "taxonomy": True}}})
+    committed = r.load(r.recipe_path(".", "sira-generic"), check_name=True)
+    assert committed.prompt_scheme == "scheme-v1" and not committed.enrich_uses_taxonomy
+
+
+def test_generic_prompt_enters_the_enrich_fingerprint_as_such(tmp_path):
+    """A generic-prompt recipe's enrich fingerprint names the generic
+    prompt, not a per-MNO file a build may still publish."""
+    from core.src.pipeline.cells import Cell
+    from core.src.pipeline.runner import PipelineContext
+    cell = Cell("MNOA", "Apr2031")
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "doc_requirement_MNOA_v02.txt").write_text("{requirements}")
+    ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+    per_mno = ctx.fingerprints.externals("enrich", cell)["doc_prompt"]
+    assert per_mno not in ("generic", "absent")
+    import shutil
+    shutil.copy(R.recipe_path(".", "sira-generic"), tmp_path / "RECIPE.json")
+    ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+    assert ctx.fingerprints.externals("enrich", cell)["doc_prompt"] == "generic"

@@ -65,3 +65,9 @@ working.
   the remaining evidence. Step 5 decided: stack A gets recipe
   `sira-plain`, all seven cells, and a runner (design §10d); a host survey
   comes first.
+- 2026-11-11 (later): stack A's served enrichment reads no taxonomy (its
+  recorded doc prompt has no taxonomy block); it is the single-prompt arm
+  (`scheme-v1`). Recipe `sira-generic` added (`params.enrich.prompt =
+  generic`), D-DRAFT-17. Runner guards for two stacks built: documents
+  belong to the ingest that staged them, corpus bindings under a lock
+  (D-DRAFT-16).

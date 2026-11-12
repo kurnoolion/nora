@@ -94,7 +94,7 @@ def host(tmp_path: Path):
         (d / "doc.pdf").write_bytes(b"%PDF-1.4 fake")
         return d
 
-    return {"root": root, "run": run, "cell": cell, "nora": root / "builds" / "nora"}
+    return {"root": root, "run": run, "cell": cell, "nora": root / "builds" / "nora", "env": env}
 
 
 def _seed_build(host, build: str, cells: list[tuple[str, str]], bindings: list[dict]) -> Path:
@@ -773,3 +773,38 @@ def test_promote_assembles_stored_cells_into_the_label_by_hard_link(tmp_path):
     m2.record("parse", "MNO-A/Oct2031", "fpGone", origin="computed")
     r = subprocess.run(args + ["--label", "l4", "--stages-root", str(store)], capture_output=True, text=True)
     assert r.returncode == 1 and "MNO-A/Oct2031" in r.stderr and not (serve / "l4").exists()
+
+
+def test_start_holds_the_corpus_bindings_lock(host):
+    """Two stacks' starts rewrite the one corpus profiles.json: a start
+    waits for another's lock, and refuses (CYC-E037) when it is not freed."""
+    import fcntl
+    host["cell"]("MNO-A", "Jan2031")
+    corpus = _corpus_wiring(host, [
+        {"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    host["env"]["CORPUS_LOCK_WAIT"] = "1"
+    with open(corpus / ".bindings.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        r = host["run"]("start", "b1")
+        fcntl.flock(held, fcntl.LOCK_UN)
+    assert r.returncode == 1 and "CYC-E037" in r.stderr, r.stderr
+    assert not (host["nora"] / "b1").exists()
+    assert host["run"]("start", "b1").returncode == 0
+
+
+def test_generic_prompt_recipe_publishes_no_per_mno_prompt_and_unsets_the_dir(host):
+    """sira-generic (stack A's single-prompt design, scheme-v1): the prompts
+    gate checks neither per-MNO prompts nor the prompt-dir lines, publishes
+    no per-MNO prompt, and the lane runs with the prompt dir and the
+    taxonomy dir unset, so SIRA takes its generic prompt."""
+    _parsed_with(host, "sira-generic")
+    for name in (".env.nora-batch", ".env.sira-batch"):     # neither line is needed
+        (host["root"] / "env" / name).write_text("", encoding="utf-8")
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "generic document prompt" in r.stdout
+    assert not list((host["nora"] / "b1" / "prompts").glob("doc_requirement_*"))
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    inner = _last_inner(host)
+    assert "-u NORA_SIRA_TAXONOMY_DIR" in inner and "-u NORA_SIRA_DOC_PROMPT_DIR" in inner

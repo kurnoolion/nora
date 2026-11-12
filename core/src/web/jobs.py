@@ -80,6 +80,7 @@ class Ingest:
     callback_url: str | None = None
     redo_of: str | None = None
     stage_origins: str | None = None
+    documents_staged: int | None = None
 
 
 def _now_iso() -> str:

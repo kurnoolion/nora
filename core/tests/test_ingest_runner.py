@@ -1116,3 +1116,59 @@ def test_a_redo_retried_from_documents_skips_the_staging(host):
     job = _run(host["q"].submit("ingest", "t", params={"ingest_id": redo, "retry_from": "documents"}))
     assert r.run_once() == "completed", _run(host["q"].get_meta(job.id)).error_message
     assert any("uses the served cell's documents" in l for l in _run(host["q"].get_logs(job.id)))
+
+
+# -- stage graph, step 5: two stacks share the requirements dir ---------------
+
+def _peer_registry(root: Path, active_units=(), broken: bool = False) -> Path:
+    reg = root / "registry.db"
+    root.mkdir(parents=True, exist_ok=True)
+    if broken:
+        reg.write_text("not a database")
+        return root
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE active(store TEXT, unit TEXT, version INTEGER, label TEXT)")
+    for unit in active_units:
+        con.execute("INSERT INTO active VALUES ('cells', ?, 1, 'peer-label')", (unit,))
+    con.commit(); con.close()
+    return root
+
+
+def test_abandon_keeps_documents_this_ingest_did_not_stage(host):
+    """The cell existed before the ingest (another stack staged it): the
+    documents stage refuses, and abandon must not remove the other stack's
+    documents."""
+    sim = Sim(host["root"])
+    q = host["q"]
+    cell = host["root"] / "requirements/MNO-A/Apr2031"
+    cell.mkdir(parents=True)
+    (cell / "theirs.pdf").write_bytes(b"%PDF other stack")
+    _, ingest_id = _submit_ingest(host)
+    r = _runner(host, sim)
+    assert r.run_once() == "failed"
+    assert not _run(q.get_ingest(ingest_id)).documents_staged
+    ab = _run(q.submit("ingest-abandon", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert (cell / "theirs.pdf").exists()
+    assert any("did not stage them" in l for l in _run(q.get_logs(ab.id)))
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_abandon_and_purge_keep_documents_a_peer_stack_serves(host, broken):
+    sim = Sim(host["root"])
+    q = host["q"]
+    peer = _peer_registry(host["root"] / "peer-registry", ["MNO-A/Apr2031"], broken=broken)
+    host["cfg"].peer_registry_roots = [str(peer)]
+    _, ingest_id = _submit_ingest(host)
+    r = _runner(host, sim)
+    assert r.run_once() == "completed"
+    assert _run(q.get_ingest(ingest_id)).documents_staged == 1
+    ab = _run(q.submit("ingest-abandon", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+    why = "cannot be read" if broken else "serves this cell"
+    assert any(why in l and "documents kept" in l for l in _run(q.get_logs(ab.id)))
+    pj = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+    assert _run(q.get_ingest(ingest_id)).state == "purged"
