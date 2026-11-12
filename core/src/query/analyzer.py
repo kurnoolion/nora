@@ -106,6 +106,8 @@ _SPEC_PATTERN = re.compile(
 # ── Req ID pattern ─────────────────────────────────────────────
 
 _REQ_ID_PATTERN = re.compile(r"VZ_REQ_\w+_\d+")
+# Public name for other modules (web id_lookup lane): the MNO-A ID format.
+REQ_ID_PATTERN = _REQ_ID_PATTERN
 
 # ── Release patterns ───────────────────────────────────────────
 

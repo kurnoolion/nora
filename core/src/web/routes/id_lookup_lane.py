@@ -2,7 +2,7 @@
 
 A message made only of requirement IDs (one or several, separated by
 spaces, commas, semicolons or new lines, optionally with one release such
-as ``Feb2026``) is a lookup, not a question. The lane fetches each ID from
+as ``Mar2031``) is a lookup, not a question. The lane fetches each ID from
 the Trees store (`req_tree.find_req`) and shows its full text: no
 classification, no retrieval, no language model.
 
@@ -20,14 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.src.extraction.release_key import release_order_key
-from core.src.query.analyzer import _REQ_ID_PATTERN  # the rules' ID shape (Verizon-only, design §9)
+from core.src.query.analyzer import REQ_ID_PATTERN  # the rules' ID shape: the MNO-A ID format (design §9)
 from core.src.stores.trees import latest_match, release_sort_key
 
 LANE = "id_lookup"
 ENV_SWITCH = "NORA_ID_LOOKUP"
 
-_ID_RE = re.compile(_REQ_ID_PATTERN.pattern, re.IGNORECASE)
+_ID_RE = re.compile(REQ_ID_PATTERN.pattern, re.IGNORECASE)
 _MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 _RELEASE_RE = re.compile(rf"\b({_MONTHS})\s?(\d{{4}})\b", re.IGNORECASE)
 _SEPARATORS = re.compile(r"[\s,;]*")
