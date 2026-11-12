@@ -117,3 +117,32 @@ def test_a_redo_starts_empty(tax):
     b = env("b", {"PLAN1": "one", "PLAN2": "two, revised"}, "parse-2")
     run_taxonomy(b)
     assert _asked(provider) == ["PLAN1", "PLAN2"]
+
+
+def test_a_run_leaves_no_empty_stage_dirs_in_the_build(tmp_path):
+    """After the stored stages run, their cells live in the store and the
+    build keeps no empty <stage>/<MNO>/<release> skeleton."""
+    from core.src.pipeline.runner import PipelineRunner
+    corpus, stages = _corpus(tmp_path), tmp_path / "stages"
+    a = _build(tmp_path, "build-a", corpus, stages)
+    results = PipelineRunner(a).run(["profile", "parse", "resolve"])
+    assert all(r.ok for r in results), [(r.stage, r.error_message) for r in results]
+    for st in ("profile", "parse", "resolve"):
+        assert not (a.env_dir / "out" / st).exists(), st
+        assert a.stage_input(st, CELL).is_relative_to(stages)
+    # a second run reuses everything and still leaves nothing behind
+    PipelineRunner(a).run(["profile", "parse", "resolve"])
+    assert not (a.env_dir / "out" / "parse").exists()
+
+
+def test_tidy_keeps_a_degraded_cell_and_build_held_stages(tmp_path):
+    corpus, stages = _corpus(tmp_path), tmp_path / "stages"
+    a = _build(tmp_path, "build-a", corpus, stages)
+    held = a.stage_output("parse", CELL)
+    held.mkdir(parents=True)
+    (held / "partial_tree.json").write_text("{}")          # a degraded cell's remains
+    (a.stage_output("parse") / "MNO-X" / "Oct2031").mkdir(parents=True)
+    assert a.fingerprints.tidy("parse") == 2               # the empty cell and its MNO dir
+    assert (held / "partial_tree.json").exists()
+    (a.stage_output("graph") / "sub").mkdir(parents=True)
+    assert a.fingerprints.tidy("graph") == 0               # not a stored stage

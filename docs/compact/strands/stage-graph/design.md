@@ -545,7 +545,9 @@ copied.
    the build's directory; `prepare` reuses a stored output without a
    copy and removes leftovers that would shadow it; `link_view` is gone.
    The resolver ignores an empty build directory (a stage may create
-   one before it finds the output stored). Taxonomy, whose per-plan
+   one before it finds the output stored), and after each stored stage
+   the runner removes the empty directories its cells left (found on
+   the first full build on the host, 2026-11-12). Taxonomy, whose per-plan
    reuse lived in the build's cell directory, seeds a new fingerprint
    from the cell's newest store entry with the same model, code version
    and prompts, so unchanged plans are not asked again; a redo or a

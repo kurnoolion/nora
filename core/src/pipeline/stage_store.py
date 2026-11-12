@@ -131,6 +131,23 @@ def privatize(tree: Path) -> int:
     return n
 
 
+def prune_empty(root: Path) -> int:
+    """Remove every empty directory under `root`, bottom up, and `root`
+    itself when it ends up empty. Returns the number removed. A directory
+    that is not empty, or cannot be removed, is left as it is."""
+    root = Path(root)
+    if not root.is_dir():
+        return 0
+    n = 0
+    for d, _subdirs, _files in os.walk(root, topdown=False):
+        try:
+            os.rmdir(d)
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
 def _remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 

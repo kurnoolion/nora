@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Callable, Iterable
 from core.src.pipeline.cells import Cell
 from core.src.pipeline.manifest import BuildManifest
 from core.src.pipeline.stage_graph import CORPUS, GLOBAL_KEY, spec_of, tier_of
-from core.src.pipeline.stage_store import _remove_tree, privatize
+from core.src.pipeline.stage_store import _remove_tree, privatize, prune_empty
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.src.pipeline.runner import PipelineContext
@@ -275,6 +275,16 @@ class Fingerprinter:
                     and ext == want["externals"]):
                 out.append(store.path(stage, cell, fp))
         return out
+
+    def tidy(self, stage: str) -> int:
+        """After a stored stage has run: remove the empty directories its
+        cells left under the build's ``out/<stage>/`` (the cells moved to
+        the store; their MNO directories and the stage directory stay
+        behind otherwise). A degraded or forced cell keeps its files, and
+        so its directories."""
+        if not self.in_store(stage):
+            return 0
+        return prune_empty(self.ctx.stage_output(stage))
 
     def prepare(self, stage: str, cell: Cell, fp: str,
                 complete: Callable[[Path], bool] | None = None) -> bool:

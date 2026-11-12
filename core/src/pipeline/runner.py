@@ -456,6 +456,10 @@ class PipelineRunner:
                 )
 
             self.results.append(result)
+            try:   # stage graph step 4: no empty cell dirs left in the build
+                self.ctx.fingerprints.tidy(stage_name)
+            except Exception as e:  # noqa: BLE001 — tidying never fails a stage
+                logger.warning(f"tidy {stage_name}: {e}")
 
             # Log result
             status_icon = {"OK": "+", "WARN": "!", "FAIL": "X", "SKIP": "-"}.get(result.status, "?")
