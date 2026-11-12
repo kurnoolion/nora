@@ -177,6 +177,25 @@ def test_stream_answers_an_id_message_from_the_trees_store(world):
     assert row["lane_config"]["not_found"] == [C]
 
 
+def test_stream_stores_the_answer_in_the_real_feedback_store(world, tmp_path):
+    # The FakeFeedback above accepts any lane; the real store validates it.
+    import sqlite3
+    from core.src.web.app import app
+    from core.src.web.feedback_db import FeedbackStore
+
+    store = FeedbackStore(tmp_path / "feedback.db")
+    asyncio.run(store.initialize())
+    app.state.feedback_store = store
+    _ask(world["client"], f"{A}, {C}")
+    with sqlite3.connect(tmp_path / "feedback.db") as db:
+        rows = db.execute("SELECT id, lane, lane_config FROM test_feedback").fetchall()
+    assert len(rows) == 1
+    row_id, lane_name, lc = rows[0]
+    assert lane_name == "id_lookup" and json.loads(lc)["not_found"] == [C]
+    shared = world["client"].get(f"/ask/s/{row_id}")
+    assert shared.status_code == 200 and A in shared.text
+
+
 def test_stream_with_the_team_gate_on(world, monkeypatch):
     import core.src.web.team_mode as tm
     monkeypatch.setattr(tm, "TEAM_MODE", True)
