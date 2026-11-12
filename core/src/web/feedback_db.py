@@ -81,7 +81,7 @@ _MERGED_TAB_COLUMNS: list[tuple[str, str]] = [
 
 # Answer lanes a row may carry: the two retrieval lanes and the release-change
 # lane (strand rel-history), which answers from the History store.
-LANES = ("nora", "sira", "history")
+LANES = ("nora", "sira", "history", "id_lookup")
 
 # Feedback category keys + human-readable labels surfaced on the merged tab.
 # Frozen for the pilot — adding a key here also requires UI work to expose

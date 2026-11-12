@@ -15,6 +15,7 @@ import json
 import logging
 import re
 
+from core.src.query.intent import classify_intent
 from core.src.query.schema import (
     QueryIntent,
     QueryType,
@@ -105,6 +106,8 @@ _SPEC_PATTERN = re.compile(
 # ── Req ID pattern ─────────────────────────────────────────────
 
 _REQ_ID_PATTERN = re.compile(r"VZ_REQ_\w+_\d+")
+# Public name for other modules (web id_lookup lane): the MNO-A ID format.
+REQ_ID_PATTERN = _REQ_ID_PATTERN
 
 # ── Release patterns ───────────────────────────────────────────
 
@@ -151,9 +154,10 @@ class MockQueryAnalyzer:
             likely_features=likely_features,
             plan_ids=plan_ids,
         )
+        intent.intent = classify_intent(query, intent)
 
         logger.info(
-            f"Query analysis: type={query_type.value}, "
+            f"Query analysis: type={query_type.value}, intent={intent.intent.value}, "
             f"mnos={mnos}, features={likely_features}, "
             f"plans={plan_ids}, entities={entities[:3]}"
         )
@@ -463,7 +467,7 @@ Return ONLY valid JSON, no other text."""
             return value
 
 
-def make_query_analyzer(llm_provider=None, decision_provider=None):
+def make_query_analyzer(llm_provider=None, decision_provider=None, questions=None):
     """Select the query analyzer by NORA's standard rule.
 
     Decision provider supplied → ``DecisionQueryAnalyzer`` (decision model
@@ -489,6 +493,8 @@ def make_query_analyzer(llm_provider=None, decision_provider=None):
         decision_provider: An object satisfying the ``DecisionProvider``
             Protocol (has ``decide()``), or ``None``. Takes precedence
             over ``llm_provider`` when both are supplied.
+        questions: The decision questions to ask; ``None`` means the NORA
+            pair. The SIRA path passes ``SIRA_QUESTIONS`` (sira-intent).
 
     Returns:
         A query analyzer with an ``analyze(query) -> QueryIntent`` method.
@@ -499,7 +505,9 @@ def make_query_analyzer(llm_provider=None, decision_provider=None):
         # here would be circular.
         from core.src.decision.analyzer import DecisionQueryAnalyzer
 
-        return DecisionQueryAnalyzer(decision_provider)
+        if questions is None:
+            return DecisionQueryAnalyzer(decision_provider)
+        return DecisionQueryAnalyzer(decision_provider, questions=questions)
     if llm_provider is not None:
         return LLMQueryAnalyzer(llm_provider)
     return MockQueryAnalyzer()
@@ -584,6 +592,7 @@ def make_query_analyzer_from_knob(
     llm_provider=None,
     decision_provider=None,
     cli_value=None,
+    questions=None,
 ):
     """Select the query analyzer from ``NORA_QUERY_ANALYZER``.
 
@@ -613,6 +622,8 @@ def make_query_analyzer_from_knob(
             the arm degrades to ``rules``. ``mock`` is built only when
             named explicitly.
         cli_value: Explicit override, highest precedence.
+        questions: Passed to the decision arms; ``None`` means the NORA
+            pair. The SIRA path passes ``SIRA_QUESTIONS`` (sira-intent).
 
     Returns:
         A query analyzer with an ``analyze(query) -> QueryIntent`` method.
@@ -642,8 +653,14 @@ def make_query_analyzer_from_knob(
                 ConfidenceRoutedQueryAnalyzer,
             )
 
-            return ConfidenceRoutedQueryAnalyzer(decision_provider, floor)
-        return make_query_analyzer(decision_provider=decision_provider)
+            if questions is None:
+                return ConfidenceRoutedQueryAnalyzer(decision_provider, floor)
+            return ConfidenceRoutedQueryAnalyzer(
+                decision_provider, floor, questions=questions
+            )
+        return make_query_analyzer(
+            decision_provider=decision_provider, questions=questions
+        )
 
     return MockQueryAnalyzer()
 

@@ -30,11 +30,11 @@ from core.src.query.release_diff import (
     ReleaseDiffConfig,
     display_release,
     build_batches,
-    is_release_change_question,
     resolve_release_pair,
     synthesize_release_diff,
 )
-from core.src.query.schema import QueryIntent
+from core.src.query.intent import release_diff_rule
+from core.src.query.schema import Intent, QueryIntent
 from core.src.stores import open_history_store
 
 logger = logging.getLogger(__name__)
@@ -82,21 +82,46 @@ def classify(question: str) -> QueryIntent:
     return MockQueryAnalyzer().analyze(question)
 
 
-def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = None
+def history_diff_applies(question: str, *, config: "ReleaseDiffConfig | None" = None,
+                         intent: "QueryIntent | None" = None, strict: bool = False,
+                         intent_routing: bool = False,
                          ) -> "QueryIntent | None":
-    """The intent when this lane should answer: a release-diff question,
+    """The intent when this lane should answer: a release-change question,
     the lane enabled, and a History store configured. None otherwise, and
-    the SIRA lane answers as before."""
+    the SIRA lane answers as before.
+
+    ``intent`` is what nora-web already computed (strand sira-intent,
+    D-DRAFT-3); without it the rules classify here.
+
+    Which questions count as a release change: with ``intent_routing``
+    off (every intent switch off, ``sira_intent.intent_routing_enabled``)
+    ``main``'s rule (``query.intent.release_diff_rule``), so routing is
+    unchanged by default. With it on, a ``change`` intent,
+    which leaves out verdict asks and negated changes (D-DRAFT-9).
+
+    ``strict`` (``NORA_SIRA_INTENT_PROMPTS`` on, D-DRAFT-5): a change
+    question with the lane enabled but no History store, or one that won't
+    open, raises ``PipelineError`` instead of returning None: ``RHD-E003``
+    when no store is configured, ``RHD-E005`` when one fails to open.
+    A disabled lane still returns None (an administrator's choice, not a failure)."""
     cfg = config or ReleaseDiffConfig.from_env()
     if not cfg.enabled:
         return None
-    intent = classify(question)
-    if not is_release_change_question(question, intent):
+    intent = intent if intent is not None else classify(question)
+    if intent_routing:
+        if intent.intent is not Intent.CHANGE:
+            return None
+    elif not release_diff_rule(question, intent):
         return None
     try:
         store = open_history_store()
-    except Exception:                                   # noqa: BLE001 — treated as off
-        store = None
+    except Exception as exc:                            # noqa: BLE001 — treated as off
+        logger.warning("History store failed to open: %s", type(exc).__name__)
+        if strict:
+            raise PipelineError("RHD-E005", {"detail": type(exc).__name__}, cause=exc) from exc
+        return None
+    if store is None and strict:
+        raise PipelineError("RHD-E003", {})
     return intent if store is not None else None
 
 
@@ -328,6 +353,7 @@ async def run_history_lane(
     store = history if history is not None else open_history_store()
     if store is None:
         return coded("RHD-E003")
+    mno, releases = "", []
     try:
         mnos = await asyncio.to_thread(store.list_mnos)
         wanted = [m for m in intent.mnos if m in mnos]
@@ -343,7 +369,13 @@ async def run_history_lane(
         await say(f"History: {mno} {rel_a} → {rel_b}; reading changed requirements…")
         payload = await asyncio.to_thread(store.changed_pairs, mno, rel_a, rel_b)
     except PipelineError as exc:
-        return {"error": f"[{exc.code}] {exc.message}", "error_code": exc.code}
+        msg = f"[{exc.code}] {exc.message}"
+        if exc.code in ("RHD-E001", "RHD-E002") and releases:
+            # say what History has, so the user can rephrase (D-DRAFT-5)
+            names = cfg.names_for(mno)
+            msg += (f". History has {', '.join(display_release(r, names) for r in releases)}"
+                    f" for {mno}; ask about one release, or name a served one.")
+        return {"error": msg, "error_code": exc.code}
     except Exception as exc:                            # noqa: BLE001 — surfaced to the page
         logger.exception("history lane: store call failed")
         return {"error": f"History store call failed: {type(exc).__name__}"}

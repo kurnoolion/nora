@@ -35,6 +35,11 @@ from core.src.llm.openai_provider import (
 from core.src.web.feedback_db import CATEGORIES
 from core.src.web.markdown_render import render_markdown
 from core.src.web.routes import history_lane
+from core.src.web.routes import id_lookup_lane
+from core.src.web.routes import sira_intent
+from core.src.web.sira_intent_prompts import DEFAULT_PROMPTS, prompt_for
+from core.src.query.schema import Intent
+from core.src.pipeline.error_codes import PipelineError
 from core.src.web.team_mode import team_restricted
 from core.src.web.timeline import build_timeline
 
@@ -136,34 +141,20 @@ def _filter_sira_notes(notes: list[str]) -> list[str]:
         return notes
     return [n for n in notes if not n.startswith("rerank disabled")]
 
-_SELECT_SYNTH_SYSTEM_PROMPT = (
-    "You are an expert telecom (3GPP/GSMA) device-requirements analyst. Below "
-    "are candidate requirement chunks retrieved for the user's question, GROUPED "
-    "by operator (MNO) and release. Retrieval is recall-oriented, so MANY chunks "
-    "are NOT relevant.\n\n"
-    "Work in order:\n"
-    "1. SELECT only the chunks that actually answer the question. Judge by "
-    "MEANING, not keyword overlap — telecom terminology varies: e.g. 'SA NR', "
-    "'5G NR standalone' and '5G SA' mean the same thing; 'NR' is the 5G air "
-    "interface; a band may appear as 'n78', 'NR band 78' or 'B78'. A chunk that "
-    "uses different wording can still be the source of truth.\n"
-    "2. ANSWER from the selected chunks only. When the question spans multiple "
-    "operators, compare/contrast them explicitly; use a table when it helps.\n"
-    "3. CITE every requirement you rely on by writing its exact req_id (shown as "
-    "'req_id: <ID>' in each chunk header) inline in your answer. Do not cite "
-    "chunks you judged irrelevant. If the selected chunks don't answer the "
-    "question, say so plainly rather than guessing."
-)
+# Today's select-synth prompt is the `other` default of the per-intent set
+# (strand sira-intent, design §5); the text lives in web/sira_intent_prompts.py.
+_SELECT_SYNTH_SYSTEM_PROMPT = DEFAULT_PROMPTS[Intent.OTHER]
 # Sentinel instruction — appended only for models whose untagged chain-of-thought
 # leaks into the answer (NORA_LLM_REASONING_SENTINEL=1). Models that skip thinking
-# natively (Qwen3, Gemma, …) leave it off and get the clean prompt above.
-if _REASONING_SENTINEL_ENABLED:
-    _SELECT_SYNTH_SYSTEM_PROMPT += (
-        "\n\nOUTPUT FORMAT: You may reason first if needed, but you MUST then "
-        f"print a line containing exactly {_FINAL_ANSWER_MARKER} and put ONLY "
-        f"your final answer (with inline req_id citations) after it. Anything "
-        f"before {_FINAL_ANSWER_MARKER} is discarded and never shown to the user."
-    )
+# natively (Qwen3, Gemma, …) leave it off and get the clean prompt above. It is
+# appended to whichever prompt answers, per-intent ones included.
+_SENTINEL_SUFFIX = (
+    "\n\nOUTPUT FORMAT: You may reason first if needed, but you MUST then "
+    f"print a line containing exactly {_FINAL_ANSWER_MARKER} and put ONLY "
+    f"your final answer (with inline req_id citations) after it. Anything "
+    f"before {_FINAL_ANSWER_MARKER} is discarded and never shown to the user."
+) if _REASONING_SENTINEL_ENABLED else ""
+_SELECT_SYNTH_SYSTEM_PROMPT += _SENTINEL_SUFFIX
 
 
 # ── merged-tab helpers (team-eval-pilot) ──────────────────────────────
@@ -419,6 +410,7 @@ async def _run_sira_lane_for_merged(
     provider_id: str = "",
     mode: str = "",
     model: str = "",
+    intent: "Intent | None" = None,
 ) -> dict[str, Any]:
     """Run SIRA's BM25→rerank pipeline + NORA's synthesizer pinned to
     the SIRA top results, for the merged tab. Returns a standardized
@@ -438,7 +430,7 @@ async def _run_sira_lane_for_merged(
     if _SELECT_SYNTH_ENABLED:
         return await _run_select_synth_lane(
             question, _say, start, label=label, provider_id=provider_id,
-            mode=mode, model=model,
+            mode=mode, model=model, intent=intent,
         )
     await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
@@ -642,6 +634,9 @@ async def _build_merged_response_html(
                 "history_absent": h.get("absent_plans") or [],
                 "history_run": h.get("run") or {},
             })
+        ctx["intent_badge"] = sira_intent.intent_badge(lane, out.get("lane_config"))
+        if lane == id_lookup_lane.LANE:
+            ctx["lookup"] = out.get("lookup") or {}
         lanes_html[lane] = _render_template_to_string(
             request, "test/_answer.html", ctx,
         )
@@ -785,6 +780,7 @@ def _select_synth_extract_citations(answer: str, packed: list[dict[str, Any]]) -
 def _select_synth_synthesize(
     question: str, packed: list[dict[str, Any]], provider_id: str | None = None,
     mode: str | None = None, model: str | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     """One LLM call over all packed chunks: the model selects relevant ones and
     synthesizes. Returns the dict shape the merged template consumes."""
@@ -793,9 +789,10 @@ def _select_synth_synthesize(
     if llm is None or getattr(llm, "_is_mock", False):
         return {"error": "select-synth needs a real LLM (NORA_LLM_* not configured)"}
     context_text = _build_select_synth_context(question, packed)
+    system = system_prompt or _SELECT_SYNTH_SYSTEM_PROMPT
     try:
         answer = llm.complete(
-            prompt=context_text, system=_SELECT_SYNTH_SYSTEM_PROMPT,
+            prompt=context_text, system=system,
             temperature=0.0, max_tokens=_SELECT_SYNTH_MAX_OUTPUT_TOKENS,
         )
     except Exception as exc:  # noqa: BLE001 — surfaced to the UI
@@ -825,9 +822,23 @@ def _select_synth_synthesize(
         "rag_chunks": rag_chunks,
         "rag_chunk_count": len(rag_chunks),
         "llm_model": answering_model(llm) or getattr(llm, "model_name", "") or "",
-        "llm_system_prompt": _SELECT_SYNTH_SYSTEM_PROMPT,
+        "llm_system_prompt": system,
         "llm_context_text": context_text,
     }
+
+
+def _single_release_note(packed: list[dict[str, Any]]) -> str:
+    """"" when some operator has chunks from two or more releases; else the
+    note a change answer carries, naming the releases it drew on."""
+    by_mno: dict[str, set[str]] = {}
+    for c in packed:
+        by_mno.setdefault(c.get("mno") or "", set()).add(c.get("release") or "")
+    if any(len(rels) >= 2 for rels in by_mno.values()):
+        return ""
+    cells = ", ".join(f"{m} {r}".strip() for m, rels in sorted(by_mno.items())
+                      for r in sorted(rels) if m or r) or "a single release"
+    return (f"Release history isn't available here: the matching requirements come from "
+            f"{cells} only, so this answers from that release instead of comparing releases.")
 
 
 async def _run_select_synth_lane(
@@ -836,6 +847,7 @@ async def _run_select_synth_lane(
     provider_id: str = "",
     mode: str = "",
     model: str = "",
+    intent: "Intent | None" = None,
 ) -> dict[str, Any]:
     """select-synth lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
     that selects relevant chunks + synthesizes. Same dict shape as the default
@@ -855,7 +867,23 @@ async def _run_select_synth_lane(
         return {"error": f"SIRA service call failed: {exc}"}
 
     sira_results = sira_result.get("results", []) or []
-    packed = _pack_select_synth(sira_results, _SYNTH_TOKEN_BUDGET)
+    # Requirements named by ID in the question go first, fetched from the
+    # Trees store whatever BM25 returned (strand sira-intent, D-DRAFT-8),
+    # behind NORA_PIN_NAMED_IDS. SIRA's copy of a pinned id is dropped.
+    named, pinned_named = [], []
+    if id_lookup_lane.pin_enabled():
+        from core.src.web.app import config
+        try:
+            named, pinned_named = await asyncio.to_thread(
+                id_lookup_lane.pinned_candidates, config.env_dir_path(), question,
+                text_chars=_SELECT_SYNTH_TEXT_CHARS)
+        except Exception:                                # noqa: BLE001 — pinning is best-effort
+            logger.exception("pinning named requirement ids failed")
+    pinned_keys = {(c["mno"], c["release"], c["req_id"]) for c in pinned_named}
+    rest = [r for r in sira_results
+            if (r.get("mno"), r.get("release"), r.get("req_id")) not in pinned_keys]
+    pinned_tokens = int(sum(len(c["text"]) for c in pinned_named) / _CHARS_PER_TOKEN)
+    packed = pinned_named + _pack_select_synth(rest, max(_SYNTH_TOKEN_BUDGET - pinned_tokens, 0))
     packed_keys = {(p.get("mno"), p.get("req_id")) for p in packed}
     for r in sira_results:
         r["pinned"] = (r.get("mno"), r.get("req_id")) in packed_keys
@@ -865,10 +893,22 @@ async def _run_select_synth_lane(
         f"{n_cells} cell(s); one LLM select+synthesize call…"
     )
 
+    # Per-intent prompt (strand sira-intent, design §5) when the switch is on
+    # and nora-web classified the question; otherwise today's prompt.
+    intent_prompt = prompt_for(intent) if intent is not None and sira_intent.prompts_enabled() else None
+    # A change question needs two releases of one operator in the context.
+    # Without them the change prompt invites invented diffs, so answer with
+    # today's prompt and say so on the answer (spot-check 2026-11-08).
+    change_note = ""
+    if intent_prompt is not None and intent_prompt.intent is Intent.CHANGE:
+        change_note = _single_release_note(packed)
+        if change_note:
+            intent_prompt = prompt_for(Intent.OTHER)
     synth_start = time.time()
     synth_result = await asyncio.to_thread(
         _select_synth_synthesize, question, packed,
         provider_id=provider_id or None, mode=mode or None, model=model or None,
+        system_prompt=(intent_prompt.text + _SENTINEL_SUFFIX) if intent_prompt else None,
     )
     synth_ms = int((time.time() - synth_start) * 1000)
     timings = sira_result.setdefault("timings_ms", {})
@@ -876,6 +916,8 @@ async def _run_select_synth_lane(
         timings["synth_ms"] = synth_ms
 
     synth_error = synth_result.get("error")
+    if change_note and not synth_error:
+        synth_result["answer"] = f"_{change_note}_\n\n{synth_result['answer']}"
     if synth_error:
         await _say(f"select-synth synth error: {synth_error}")
     elapsed_ms = int((time.time() - start) * 1000)
@@ -886,6 +928,17 @@ async def _run_select_synth_lane(
     lane_config = await _snapshot_sira_lane_config()
     lane_config["llm_provider_id"] = provider_id or ""
     lane_config["llm_mode"] = mode or ""
+    if named:
+        sira_ids = {r.get("req_id") for r in sira_results}
+        lane_config["named_ids"] = named
+        lane_config["named_pinned"] = [c["req_id"] for c in pinned_named]
+        lane_config["named_in_sira"] = [i for i in named if i in sira_ids]
+    if change_note:
+        lane_config["change_fallback"] = True
+    if intent_prompt is not None:
+        lane_config["prompt_intent"] = intent_prompt.intent.value
+        lane_config["prompt_source"] = intent_prompt.source
+        lane_config["prompt_hash"] = intent_prompt.hash
     return {
         "result": {} if synth_error else synth_result,
         "sira_result": sira_result,
@@ -1245,6 +1298,8 @@ async def _render_stored_ask(request: Request, row_id: int, template: str):
         # A release-change answer keeps its side-by-side bubbles when
         # re-rendered from the row (the shared page, the History page).
         "bubble_endpoints": _stored_bubble_endpoints(row),
+        "intent_badge": sira_intent.intent_badge(
+            row.get("lane") or "", _decode_json_column(row.get("lane_config"), {})),
     })
 
 
@@ -1707,12 +1762,38 @@ async def playground_ask_stream(request: Request):
     # Release-change questions answer from the History store when the
     # stack serves it (strand rel-history): the history lane takes the
     # SIRA lane's slot, since both answer the same question one way.
+    # A message made only of requirement IDs is a lookup (strand
+    # sira-intent, D-DRAFT-8): the id_lookup lane takes the SIRA slot and
+    # shows each requirement from the Trees store, no model, no retrieval.
+    # Behind NORA_ID_LOOKUP (default off).
+    id_msg = None
+    if "sira" in lanes_checked and id_lookup_lane.enabled():
+        id_msg = id_lookup_lane.parse_id_message(question)
+    if id_msg is not None:
+        lanes_checked = [l for l in lanes_checked if l != "sira"] + [id_lookup_lane.LANE]
+
+    # Classify once, first (strand sira-intent, D-DRAFT-3): the analyzer
+    # NORA_QUERY_ANALYZER picks (rules by default = today's routing). A
+    # `change` intent goes to History; with NORA_SIRA_INTENT_PROMPTS on, a
+    # change question History can't serve is an error, not a SIRA answer.
     run_id = ""
     history_intent = None
+    history_error: "dict | None" = None
+    q_intent = None
+    _intent_trace: dict = {}
     if "sira" in lanes_checked:
-        history_intent = history_lane.history_diff_applies(question)
-    if history_intent is not None:
+        q_intent, _intent_trace = await asyncio.to_thread(sira_intent.classify, question)
+        try:
+            history_intent = history_lane.history_diff_applies(
+                question, intent=q_intent, strict=sira_intent.prompts_enabled(),
+                intent_routing=sira_intent.intent_routing_enabled())
+        except PipelineError as exc:
+            history_error = {"error": f"[{exc.code}] {exc.message}. Release history is not "
+                                      "available on this stack; ask about a single release.",
+                             "error_code": exc.code}
+    if history_intent is not None or history_error is not None:
         lanes_checked = [l for l in lanes_checked if l != "sira"] + [history_lane.LANE]
+    if history_intent is not None:
         run_id = history_lane.new_run_id()
 
     async def _emit_partial(p: dict) -> None:
@@ -1730,7 +1811,17 @@ async def playground_ask_stream(request: Request):
             question, request, label=label,
             emit_progress=_make_emitter("sira"),
             provider_id=provider_id, mode=mode, model=model,
+            intent=q_intent.intent if q_intent is not None else None,
         )
+    if id_msg is not None:
+        from core.src.web.app import config
+        runners[id_lookup_lane.LANE] = id_lookup_lane.run_id_lookup_lane(
+            question, id_msg, env_dir=config.env_dir_path(),
+        )
+    if history_error is not None:
+        async def _history_error() -> dict[str, Any]:
+            return history_error
+        runners[history_lane.LANE] = _history_error()
     if history_intent is not None:
         runners[history_lane.LANE] = history_lane.run_history_lane(
             question, history_intent,
@@ -1774,6 +1865,13 @@ async def playground_ask_stream(request: Request):
 
         # All tasks done — collect results, build final HTML, emit done.
         outputs = {lane: t.result() for lane, t in tasks.items()}
+        # Record the intent on the rows it routed (design §7).
+        if q_intent is not None:
+            fields = sira_intent.lane_fields(q_intent, _intent_trace)
+            for lane in ("sira", history_lane.LANE):
+                lc = (outputs.get(lane) or {}).get("lane_config")
+                if isinstance(lc, dict):
+                    lc.update(fields)
         try:
             html = await _build_merged_response_html(
                 request, question, user_name, outputs,

@@ -143,21 +143,9 @@ def _load_config_file(path: str = "") -> dict:
 
 # ── which questions this answers ──────────────────────────────────────
 
-_CHANGE_WORDS = re.compile(r"\b(chang\w*|differ\w*|diff|delta|updated|new in|added|removed|dropped)\b")
-_RELEASE_WORDS = re.compile(r"\b(release\w*|latest|previous|prior|newest|current version|version\w*)\b")
-
-
-def is_release_change_question(question: str, intent: QueryIntent) -> bool:
-    """A release-diff intent, or a one-MNO comparison phrased as a change
-    between releases ("… compared to the previous one"), which the rules
-    analyzer files under cross-MNO comparison because of "compare".
-    Two or more MNOs is a comparison, never a release diff."""
-    if intent.query_type == QueryType.RELEASE_DIFF:
-        return True
-    if len(intent.mnos) >= 2:
-        return False
-    q = (question or "").lower()
-    return bool(_CHANGE_WORDS.search(q) and (_RELEASE_WORDS.search(q) or len(intent.releases) >= 1))
+# The rule moved to query.intent (strand sira-intent) so the rules analyzer
+# can use it without importing this module; re-exported for callers here.
+from core.src.query.intent import is_release_change_question  # noqa: E402,F401
 
 
 # ── release resolution ────────────────────────────────────────────────

@@ -143,6 +143,29 @@ def test_applies_only_to_release_diff_questions_with_history(monkeypatch):
     assert history_lane.history_diff_applies(QUESTION, config=cfg) is None
 
 
+# Questions main's rule sends to History that the change intent does not
+# (a verdict ask, a negated change).
+MAIN_RULE_ONLY = [
+    "Is it correct that the IMS registration requirement changed in Sep 2031?",
+    "Has the attach timer not changed since the previous release?",
+]
+
+
+@pytest.mark.parametrize("question", MAIN_RULE_ONLY)
+def test_switches_off_keep_mains_routing(monkeypatch, question):
+    monkeypatch.setattr(history_lane, "open_history_store", lambda *a, **k: FakeHistory())
+    cfg = ReleaseDiffConfig(enabled=True)
+    assert history_lane.history_diff_applies(question, config=cfg) is not None
+
+
+@pytest.mark.parametrize("question", MAIN_RULE_ONLY)
+def test_intent_routing_sends_non_change_intents_to_sira(monkeypatch, question):
+    monkeypatch.setattr(history_lane, "open_history_store", lambda *a, **k: FakeHistory())
+    cfg = ReleaseDiffConfig(enabled=True)
+    assert history_lane.history_diff_applies(question, config=cfg, intent_routing=True) is None
+    assert history_lane.history_diff_applies(QUESTION, config=cfg, intent_routing=True) is not None
+
+
 def test_stream_runs_the_history_lane_with_partials_and_a_run_id(world, monkeypatch):
     monkeypatch.setenv("NORA_STACK_NAME", "stack-t")
     c, hist, prov, fb = world["client"], world["hist"], world["prov"], world["fb"]

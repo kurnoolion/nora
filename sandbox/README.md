@@ -27,6 +27,7 @@ repos are gitignored; only the glue code we write is committed.
 | `sira_enrich_inspect.py` | Doc-enrichment inspector CLI — prints the phrases SIRA attached to a given `req_id` (from `best.jsonl` + the latest run's `enrichments.kept.jsonl`), multi-cell, with `--text` / `--trace`; `--failed` inverts it into a triage listing (failed reqs per cell grouped status → plan; local-only, ids redacted before sharing). | ✅ |
 | `verify_tables.py` | Verifies parsed tables are inlined into NORA parse text (fails on any `tables`-field req missing its inline table) and reached the per-cell SIRA corpus, with a cross-check. `--parse` and/or `--db-root`. | ✅ |
 | `run_stack.sh` | Launch one isolated SIRA-service + NORA-web stack (Path-B) from args — own ports, own LLM, own web state DBs — so several can run in parallel to A/B different LLMs / ingestions. `--dry-run` to preview, `--stop <label>` to tear down. | ✅ |
+| `run_local.sh` | One-command laptop stack (macOS tested): nora-store + nora-web on Ollama, plus the Kev decision server for answer intent when `KEV_DIR` is set; the sira-intent switches (`ID_LOOKUP`, `PIN_IDS`, `INTENT_PROMPTS`, `HISTORY_LANE`) on by default. `ENV_DIR=<env> sandbox/run_local.sh [stop]`. | ✅ |
 | `sira_incremental.py` | Content-hash resume helper (`prune` / `commit` / `promote` / `retry-failed` / `heal-torn` / `verify-run`) so a re-parse that changes a doc's text re-enriches it instead of being wrongly skipped by SIRA's doc_id resume. | ✅ |
 | `prompts/doc_requirement_v01.txt` | Telecom-tuned doc-enrichment prompt (replaces SIRA's Wikipedia-tuned `doc_v07.txt`). | ✅ |
 | `prompts/query_requirement_v01.txt` | Mirror query-enrichment prompt. | ✅ |
@@ -366,6 +367,25 @@ Which cells answer a query is decided **per query on the SIRA side**
 (`resolve_cells` over the MNOs/releases detected in the query text) — the
 web env config's `mnos`/`releases` lists only feed the corpus label shown
 in the UI, they are cosmetic, not a filter.
+
+### One-command laptop stack — `run_local.sh` (strand sira-intent)
+
+For a dev loop on one machine: nora-store on `:8040`, nora-web on `:8000`,
+both on a local Ollama model, and Kev on `KEV_PORT` when you have it. Logs
+go to `$ENV_DIR/logs/` (`store.log`, `web.log`, `kev.log`). `stop` kills only
+the processes the script started (PIDs in `$ENV_DIR/logs/run_local.pids`);
+start refuses when a port is already taken, e.g. by a compose stack. Override
+ports with `STORE_PORT` / `WEB_PORT` and the venv python with `PYTHON`.
+
+    ENV_DIR=~/work/env_sira sandbox/run_local.sh               # rules classify intent
+    ENV_DIR=~/work/env_sira KEV_DIR=~/work/kev KEV_PORT=PORT sandbox/run_local.sh   # Kev + rules
+    ENV_DIR=~/work/env_sira INTENT_PROMPTS=off sandbox/run_local.sh   # today's prompt
+    ENV_DIR=~/work/env_sira sandbox/run_local.sh stop
+
+Set Ollama's context length to 32K first (Ollama app → Settings): the
+select-synth budget is 24K tokens, and a 4K context silently drops the system
+prompt and the question. The header of the script lists every setting. Use
+`run_stack.sh` (below) instead to A/B several stacks against served-style LLMs.
 
 ### Parallel A/B stacks — `run_stack.sh` (D-120)
 

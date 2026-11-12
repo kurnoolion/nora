@@ -19,6 +19,8 @@ Separate from [llm](../llm/MODULE.md) deliberately: a different abstraction (typ
 - `QUERY_TYPE_DESCRIPTIONS: dict[QueryType, str]`, `DOC_SCOPE_DESCRIPTIONS: dict[DocTypeScope, str]` (analyzer.py) — one-line glosses per option, keyed by the enum so a new member fails a test rather than silently shipping a bare identifier. Carried as the wire format's `criteria` values. **Load-bearing, not documentation:** measured on `classify-dev-v1` against a live Kev-4B, bare identifiers scored 0.460 and the same options glossed scored 0.760 — the difference between "worse than the rules" and "level with them".
 - `VALUE_KEY_BY_KIND: dict[str, str]` (systemone_provider.py) — which response field carries an answer's value for each `DecisionKind`. The wire format names it after the type (`choice` / `noul` / `score`) rather than using a generic `value`, verified against `kev/api.py` at `1f04cfa`.
 - `QUERY_TYPE_QUESTION`, `DOC_SCOPE_QUESTION`, `CLASSIFICATION_QUESTIONS` (analyzer.py) — the two choice questions sent in one request, options generated from `QueryType` and `DocTypeScope`.
+- `INTENT_DESCRIPTIONS: dict[Intent, str]`, `INTENT_QUESTION`, `SIRA_QUESTIONS` (analyzer.py, strand sira-intent D-DRAFT-2) — the answer-intent choice question, options generated from `Intent` and glossed per member (a test fails on a missing gloss). `SIRA_QUESTIONS` is that one question: the SIRA path asks only intent, and `CLASSIFICATION_QUESTIONS` stays the NORA pair.
+- `questions=` on `DecisionQueryAnalyzer` / `ConfidenceRoutedQueryAnalyzer` (default `CLASSIFICATION_QUESTIONS`), passed through by `query.make_query_analyzer` and `make_query_analyzer_from_knob` — each question names the `QueryIntent` field it resolves (`query_type`, `doc_type_scope`, `intent`), under the same floor and per-field fallback. `analyze_with_trace(query) -> (QueryIntent, trace)` adds, per asked field, `{"source": "model" | "rules", "confidence": float | None}` (the model's own confidence even when the floor routed the field away; `None` when no answer arrived or the provider failed). Returned, not stored, so concurrent requests on one analyzer cannot mix traces; `analyze` is its first element.
 
 Auth: `NORA_DECISION_API_KEY` / `--decision-api-key`, empty by default. Empty omits the `Authorization` header entirely rather than sending a literal `Bearer `, because an open in-corp server is the normal case. The reference Kev server is **open unless `KEV_API_KEY` is set**, so a key on the server with none configured here used to make classification degrade to the rules with a warning and keep serving.
 
@@ -31,7 +33,7 @@ Selected by the four-valued `NORA_QUERY_ANALYZER` knob (`rules` | `llm` | `decis
 **Invariants**
 - **No external egress.** Every decision provider is self-hosted in-corp. `SystemOneDecisionProvider` is the only HTTP transport, and it opens a connection only inside `decide()` — importing this package, or constructing a provider, cannot cause a network call.
 - **Option lists are generated from their enums, never hand-written.** A hand-listed option set is exactly how `LLMQueryAnalyzer`'s prompt came to omit `summarize` and `fact` (design §2.1). Adding a `QueryType` member extends the question with no edit here.
-- **`QueryIntent` is the contract and does not change.** `DecisionQueryAnalyzer` returns the same shape the rule-based analyzer does; a test asserts the field sets match.
+- **`QueryIntent` is the contract; fields are only added, with defaults.** `DecisionQueryAnalyzer` returns the same shape the rule-based analyzer does; a test asserts the field sets match. `intent` (strand sira-intent D-DRAFT-1) is the one addition so far.
 - **A provider failure degrades, never fails.** Any exception from a provider falls back to the rule-based `QueryIntent` whole; an answer that is absent or not a member of its enum falls back **per field**, so one bad answer does not discard a good one. A classifier outage degrades classification; it does not fail the query.
 - **Answers are matched by `question_id`.** Never by list position.
 - **A measurement never gets recorded against an unverified head.** Three gates, because the same silent degradation arrives three ways. `assert_remote_head` covers the server: it asks `/v1/models` what was actually loaded, over the connection the decisions will use, checks the card of the model the decisions name (`classify_cli` passes `--decision-model`), and raises on an unreachable host or a model the server does not list. `assert_decision_head_present` covers local weights where they exist: a GGUF or backbone-only build answers without erroring, so a number recorded against it measures the backbone. `fallback_count` covers the transport mid-run: per-query fallback is the right *serving* behaviour but makes a dead provider look like a successful run with the rule-based numbers — `eval.classify_cli` refuses any non-zero count under a `decision` label. Found the hard way during phase 3: a verified head plus an unreachable server reported the rules baseline, 0.720 / 0.136, as the decision arm's result. The local check was the one that gave false assurance, which is why it is no longer the gate.
@@ -74,11 +76,16 @@ _Alphabetical, regenerated by regen-map._
 - `DecisionQueryAnalyzer` — class — pub — Decision model for the choice fields, regex for the spans.
   - `__init__` — constructor — internal
   - `_count` — staticmethod — internal
-  - `_field` — method — internal — Resolve one field, applying the confidence floor.
+  - `_field` — method — internal — Resolve one field, applying the confidence floor. Returns
   - `analyze` — method — pub — Analyze a query into structured intent.
+  - `analyze_with_trace` — method — pub — ``analyze`` plus, per asked field, who answered it.
   - `coverage` — method — pub — Fraction of this field's answers that came from the model.
+- `INTENT_DESCRIPTIONS` — constant — pub
+- `INTENT_QUESTION` — constant — pub
 - `QUERY_TYPE_DESCRIPTIONS` — constant — pub
 - `QUERY_TYPE_QUESTION` — constant — pub
+- `SIRA_QUESTIONS` — constant — pub
+- `_FIELD_ENUMS` — constant — internal
 - `_coerce` — function — internal — Parse one answer into its enum, returning ``fallback`` when the
 - `logger` — constant — pub
 

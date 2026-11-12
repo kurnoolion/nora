@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-11-11 by regen-map. Do not hand-edit.
+Generated 2026-11-12 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -203,6 +203,11 @@ nora/
 │   │   │   ├── golden_release_cli.py                    # Golden-set release map maintenance (strand golden-eval, release-handling
 │   │   │   ├── golden_report_cli.py                     # Golden run report inspector — expected vs retrieved req_ids per sample.
 │   │   │   ├── golden_runner.py                         # Golden eval runners (FR-38, strand golden-eval).
+│   │   │   ├── intent_eval.py                           # Answer-intent eval (strand sira-intent, design §8).
+│   │   │   ├── intent_report.py                         # Intent confidence report (strand sira-intent, design §8).
+│   │   │   ├── intent_report_template.html
+│   │   │   ├── intent_set.json
+│   │   │   ├── label_review.html
 │   │   │   ├── metrics.py                               # Evaluation metrics for the query pipeline (TDD 9.4).
 │   │   │   ├── prompts/
 │   │   │   │   └── judge_v1.txt
@@ -312,6 +317,7 @@ nora/
 │   │   │   ├── context_builder.py                       # Context assembler (TDD 7.5).
 │   │   │   ├── graph_scope.py                           # Graph scoper (TDD 7.3).
 │   │   │   ├── grouping.py                              # Hierarchy-based chunk grouping (Stage 4.7).
+│   │   │   ├── intent.py                                # Rules intent classifier (strand sira-intent, design §3).
 │   │   │   ├── pipeline.py                              # Query pipeline orchestrator (TDD 7).
 │   │   │   ├── query_cli.py                             # CLI for the query pipeline (PoC Step 10).
 │   │   │   ├── rag_retriever.py                         # Targeted vector RAG retriever (TDD 7.4).
@@ -422,6 +428,7 @@ nora/
 │   │       │   ├── files.py                             # File browser page and routes.
 │   │       │   ├── golden_eval.py                       # Eval Studio — expert one-stop-shop for golden eval samples
 │   │       │   ├── history_lane.py                      # The release-change lane of the Ask page (strand rel-history).
+│   │       │   ├── id_lookup_lane.py                    # The requirement-ID lookup lane of the Ask page (strand sira-intent, D-DRAFT-8).
 │   │       │   ├── ingest.py                            # Self-serve ingestion: the Ingest page and `POST /api/ingest`
 │   │       │   ├── jobs.py                              # Jobs routes -- listing, detail, SSE log streaming, cancel.
 │   │       │   ├── metrics_route.py                     # Metrics page and API routes.
@@ -430,7 +437,9 @@ nora/
 │   │       │   ├── playground.py                        # Test page — multi-section playground for free-form requirement
 │   │       │   ├── query.py                             # Query page and API routes.
 │   │       │   ├── req_browser.py                       # Requirement browser routes — browse, view, and compare requirements.
-│   │       │   └── resolve_review.py                    # Resolve-review routes — table-based cross-reference resolution review UI.
+│   │       │   ├── resolve_review.py                    # Resolve-review routes — table-based cross-reference resolution review UI.
+│   │       │   └── sira_intent.py                       # Answer intent for the SIRA path of the Ask page (strand sira-intent).
+│   │       ├── sira_intent_prompts.py                   # Per-intent select-synth system prompts (strand sira-intent, design §5, D-DRAFT-6).
 │   │       ├── static/
 │   │       │   ├── css/
 │   │       │   │   └── style.css
@@ -521,6 +530,7 @@ nora/
 │   │       │       ├── _feedback_legacy.html
 │   │       │       ├── _feedback_merged.html
 │   │       │       ├── _history_req_bubble.html
+│   │       │       ├── _id_lookup.html
 │   │       │       ├── _ingested.html
 │   │       │       ├── _merged_answer.html
 │   │       │       ├── _req_bubble.html
@@ -546,6 +556,7 @@ nora/
 │       ├── test_cycle_driver.py                         # Tests for docker/cycle.sh — the phase-gated cycle driver.
 │       ├── test_decision.py                             # Tests for the decision-model seam (strand jev-experimentation, phase 2).
 │       ├── test_decision_head_check.py                  # The decision-head verification gate (strand jev-experimentation,
+│       ├── test_decision_sira_intent.py                 # Tests for the SIRA intent question (strand sira-intent, design §3).
 │       ├── test_decision_systemone.py                   # The /v1/systemone HTTP provider (strand jev-experimentation, phase 3).
 │       ├── test_document_ir.py                          # Tests for DocumentIR serialize/deserialize round-trip.
 │       ├── test_docx_extractor_merges.py                # Tests for the DOCX extractor's merged-cell metadata.
@@ -562,6 +573,8 @@ nora/
 │       ├── test_eval_golden_report_cli.py               # Tests for the golden run report inspector CLI.
 │       ├── test_eval_golden_runner.py                   # Tests for golden Stage-1 runner: matching, recall, HTTP error mapping.
 │       ├── test_eval_golden_stage2.py                   # Tests for golden Stage-2 (pin + judge), run report, and batch runner.
+│       ├── test_eval_intent.py                          # Tests for the answer-intent eval (strand sira-intent, design §8).
+│       ├── test_eval_intent_report.py                   # Intent confidence report (strand sira-intent, design §8).
 │       ├── test_eval_release_map.py                     # Tests for the golden set's release map (synthetic labels only).
 │       ├── test_extractor_images_root.py                # images_root redirect — extracted-image artifacts belong in the BUILD
 │       ├── test_feedback_db.py                          # Tests for `core/src/web/feedback_db.py` — Test page Q&A + vote log.
@@ -618,6 +631,7 @@ nora/
 │       ├── test_query_release_diff.py                   # Release-change synthesis (core/src/query/release_diff.py, strand
 │       ├── test_query_reranker.py                       # Tests for `core/src/query/reranker.py` — cross-encoder reranker
 │       ├── test_query_rewriter.py                       # Tests for `core/src/query/rewriter.py` — pre-retrieval query expansion.
+│       ├── test_query_sira_intent.py                    # Tests for the answer-intent dimension (strand sira-intent, design §2–§3).
 │       ├── test_query_threshold.py                      # Tests for the relevance threshold filter in QueryPipeline (Stage 4.5).
 │       ├── test_reference_list.py                       # Tests for reference_list extraction [D-059, D-061].
 │       ├── test_release_key.py                          # Tests for the MMMYYYY release-label convention (D-DRAFT-6).
@@ -661,6 +675,7 @@ nora/
 │       ├── test_web_config_db.py                        # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_eval_studio.py                      # Eval Studio route tests (FR-39): sample CRUD, ground-truth add flows,
 │       ├── test_web_history_lane.py                     # The Ask page's release-change lane (core/src/web/routes/history_lane.py
+│       ├── test_web_id_lookup_lane.py                   # Tests for the requirement-ID lookup lane (strand sira-intent, D-DRAFT-8).
 │       ├── test_web_ingest.py                           # Tests for the Ingest page and API (core/src/web/routes/ingest.py).
 │       ├── test_web_jobs.py                             # Tests for the NORA web job queue.
 │       ├── test_web_markdown_bubbles.py                 # Tests for req-ID bubbles in the web markdown renderer (strand req-id-bubbles).
@@ -672,6 +687,8 @@ nora/
 │       ├── test_web_req_bubbles.py                      # Tests for the req-bubble endpoint and its wiring (strand req-id-bubbles).
 │       ├── test_web_req_tree.py                         # Tests for the shared requirement-tree loader (web/req_tree.py).
 │       ├── test_web_sidebar.py                          # Sidebar nav-label markup (strand collapsible-sidebar).
+│       ├── test_web_sira_intent_prompts.py              # Per-intent select-synth prompts (strand sira-intent, design §5, D-DRAFT-6).
+│       ├── test_web_sira_intent_routing.py              # Change routing on the Ask page (strand sira-intent, design §4, D-DRAFT-3/5).
 │       ├── test_web_timeline.py                         # Tests for the normalized query timeline (`core.src.web.timeline`).
 │       └── test_xlsx_extractor.py                       # Tests for XLSXExtractor (FR-1).
 ├── customizations/
@@ -934,6 +951,12 @@ nora/
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── design.md
 │   │   │   │   └── journal.md
+│   │   │   ├── sira-intent/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   ├── design.md
+│   │   │   │   ├── journal.md
+│   │   │   │   └── kev_floor_report.html
 │   │   │   └── team-operations/
 │   │   │       ├── STRAND.md
 │   │   │       ├── decisions-draft.md
@@ -965,6 +988,11 @@ nora/
 ├── presentations/
 │   ├── create.py                                        # Generate NORA leadership presentation.
 │   └── update.py                                        # Add Human Filter philosophy to NORA presentation.
+├── reports/
+│   └── intent/
+│       └── 2026-11-08-0931_kev-floor_intent-dev-v1/
+│           ├── report.html
+│           └── run.json
 ├── requirements.txt
 ├── sandbox/
 │   ├── EVAL_PREP.md
@@ -983,6 +1011,7 @@ nora/
 │   │   ├── doc_requirement_v01.txt
 │   │   ├── query_requirement_v01.txt
 │   │   └── relevance_requirement_v01.txt
+│   ├── run_local.sh                                     # run_local.sh — one-command local SIRA stack on a laptop (macOS tested):
 │   ├── run_stack.sh                                     # run_stack.sh — launch ONE isolated SIRA-service + NORA-web stack (Path-B),
 │   ├── scan_enrichment_stats.py                         # Sizing scan for the sira-enrichment-pe batch/prompt design.
 │   ├── shim/

@@ -254,6 +254,15 @@ def test_record_qa_legacy_call_leaves_merged_columns_null(store):
         assert row[col] is None, f"{col} should be NULL on legacy insert"
 
 
+@pytest.mark.parametrize("lane", ["nora", "sira", "history", "id_lookup"])
+def test_record_qa_accepts_every_answer_lane(store, lane):
+    _run(store.initialize())
+    row_id = _run(store.record_qa(
+        section="merged", question="q", answer="a", lane=lane,
+    ))
+    assert isinstance(row_id, int)
+
+
 def test_record_qa_rejects_unknown_lane(store):
     _run(store.initialize())
     with pytest.raises(ValueError, match="lane"):

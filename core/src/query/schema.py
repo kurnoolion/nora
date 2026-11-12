@@ -48,6 +48,23 @@ class QueryType(str, Enum):
     GENERAL = "general"
 
 
+class Intent(str, Enum):
+    """The answer the asker wants, independent of scope (strand sira-intent).
+
+    The SIRA path reads this. ``query_type`` stays for the NORA pipeline.
+    Scope is not predicted, because BM25 retrieves whatever scope the
+    question has. ``CHANGE`` routes to the History lane; every other value
+    only shapes the synthesis prompt. ``OTHER`` means today's behaviour.
+    """
+    FACT = "fact"
+    EXPLAIN = "explain"
+    LIST = "list"
+    COMPLIANCE = "compliance"
+    CHANGE = "change"
+    COMPARE = "compare"
+    OTHER = "other"
+
+
 class DocTypeScope(str, Enum):
     """Which document types to include in retrieval."""
     REQUIREMENTS = "requirements"
@@ -74,11 +91,13 @@ class QueryIntent:
     standards_refs: list[str] = field(default_factory=list)
     likely_features: list[str] = field(default_factory=list)
     plan_ids: list[str] = field(default_factory=list)
+    intent: Intent = Intent.OTHER
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["query_type"] = self.query_type.value
         d["doc_type_scope"] = self.doc_type_scope.value
+        d["intent"] = self.intent.value
         return d
 
 

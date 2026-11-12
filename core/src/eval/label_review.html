@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label Review</title>
+<style>
+:root {
+  --bg: #f3efe6; --surface: #fffdf8; --ink: #1c1a16; --muted: #75706518; --soft: #6f6a5f;
+  --line: #e1dacb; --tick: #e4ddcd; --key: #fffdf8; --key-edge: #cfc6b2;
+  --focus: #1c1a16; --stamp-ink: #fffdf8;
+  --c1: #23867a; --c2: #c98a12; --c3: #3f6ea8; --c4: #8b5fa8; --c5: #d2553b; --c6: #3b8a4f; --c7: #7d776b;
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-q: ui-serif, Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14130f; --surface: #1d1b17; --ink: #efe9dc; --soft: #a49d8e;
+    --line: #34312a; --tick: #2c2a24; --key: #24221d; --key-edge: #3d3a32;
+    --focus: #efe9dc; --stamp-ink: #14130f;
+    --c1: #4cc2b2; --c2: #e8b04a; --c3: #74a3e0; --c4: #b58ad6; --c5: #f07c5f; --c6: #6cc283; --c7: #a59f92;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14130f; --surface: #1d1b17; --ink: #efe9dc; --soft: #a49d8e;
+  --line: #34312a; --tick: #2c2a24; --key: #24221d; --key-edge: #3d3a32;
+  --focus: #efe9dc; --stamp-ink: #14130f;
+  --c1: #4cc2b2; --c2: #e8b04a; --c3: #74a3e0; --c4: #b58ad6; --c5: #f07c5f; --c6: #6cc283; --c7: #a59f92;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { font: 15px/1.5 var(--font-ui); min-height: 100vh; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+main { max-width: 860px; margin: 0 auto; padding: 28px 16px 56px; }
+
+/* header */
+.top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand h1 { font: 400 32px/1 var(--font-q); margin: 0; letter-spacing: -0.01em; }
+.brand .set { font: 12px var(--font-mono); color: var(--soft); }
+.actions { display: flex; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+.btn:hover { border-color: var(--soft); }
+.btn.save { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 600; position: relative; }
+.btn.save:disabled { opacity: .35; cursor: default; }
+.btn.save .dot { display: none; position: absolute; top: -4px; right: -4px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--c5); border: 2px solid var(--bg); }
+.btn.save.dirty .dot { display: block; }
+
+/* stats strip */
+.strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line);
+  border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 22px; }
+.stat { background: var(--surface); padding: 10px 14px; }
+.stat .n { font: 600 22px/1.1 var(--font-mono); }
+.stat .l { font-size: 12px; color: var(--soft); }
+.stat.streak .n { display: flex; align-items: center; gap: 6px; }
+.flame { width: 16px; height: 16px; color: var(--c5); opacity: .25; transition: opacity .2s, transform .2s; }
+.streak.hot .flame { opacity: 1; transform: scale(1.15); }
+
+/* tick rail */
+.rail { display: flex; gap: 3px; margin-top: 16px; flex-wrap: wrap; }
+.tick { width: 10px; height: 22px; border-radius: 3px; border: 0; padding: 0; cursor: pointer; background: var(--tick); position: relative; }
+.tick.done { background: var(--tc); }
+.tick.relabel::after { content: ""; position: absolute; left: 2px; right: 2px; top: -6px; height: 3px; border-radius: 2px; background: var(--ink); }
+.tick.here { outline: 2px solid var(--ink); outline-offset: 1px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--soft); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; background: var(--lc); display: inline-block; }
+.legend b { font: 600 12px var(--font-mono); color: var(--ink); }
+
+/* card */
+.stage { position: relative; margin-top: 22px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 26px 28px 22px;
+  position: relative; overflow: hidden; }
+.card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; background: var(--cur, var(--line)); transition: background .2s; }
+.meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--soft); }
+.chip { font: 12px var(--font-mono); border: 1px solid var(--line); border-radius: 99px; padding: 1px 9px; }
+.chip.was { border-color: transparent; background: color-mix(in srgb, var(--wc) 16%, transparent); color: var(--ink); }
+.q { font: 400 clamp(26px, 4.2vw, 38px)/1.2 var(--font-q); margin: 16px 0 22px; letter-spacing: -0.005em; word-break: break-word; }
+.q .ph { font-style: italic; color: var(--c3); }
+.keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.key { display: flex; align-items: center; gap: 10px; border: 1px solid var(--key-edge); border-bottom-width: 3px;
+  background: var(--key); border-radius: 10px; padding: 9px 12px; cursor: pointer; text-align: left;
+  transition: transform .06s, background .15s, border-color .15s; }
+.key:hover { border-color: var(--kc); }
+.key:active { transform: translateY(2px); border-bottom-width: 1px; margin-bottom: 2px; }
+.key .cap { font: 600 12px var(--font-mono); width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--kc) 18%, transparent); color: var(--ink); flex: none; }
+.key .name { font-weight: 500; }
+.key .tag { margin-left: auto; font-size: 11px; color: var(--soft); }
+.key.on { background: var(--kc); border-color: color-mix(in srgb, var(--kc) 70%, black); color: var(--stamp-ink); }
+.key.on .cap { background: color-mix(in srgb, var(--stamp-ink) 25%, transparent); color: var(--stamp-ink); }
+.key.on .tag { color: var(--stamp-ink); opacity: .8; }
+.foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+.status { font-size: 13px; color: var(--soft); min-height: 20px; }
+.status.relabelled { color: var(--c5); font-weight: 600; }
+.status.kept { color: var(--c6); }
+.nav { display: flex; gap: 6px; }
+.hint { margin-top: 14px; font-size: 12px; color: var(--soft); }
+kbd { font: 11px var(--font-mono); border: 1px solid var(--key-edge); border-bottom-width: 2px; border-radius: 4px;
+  padding: 0 5px; background: var(--key); color: var(--ink); }
+
+/* stamp + slide */
+.stamp { position: absolute; right: 26px; top: 22px; font: 600 15px var(--font-mono); letter-spacing: .14em; text-transform: uppercase;
+  color: var(--sc); border: 2px solid var(--sc); border-radius: 6px; padding: 3px 10px; transform: rotate(-8deg) scale(.6);
+  opacity: 0; pointer-events: none; }
+.stamp.go { animation: stamp .45s ease-out forwards; }
+@keyframes stamp { 0% { opacity: 0; transform: rotate(-8deg) scale(1.8); } 35% { opacity: 1; transform: rotate(-8deg) scale(.95); }
+  100% { opacity: 0; transform: rotate(-8deg) scale(1); } }
+.card.in { animation: slidein .28s cubic-bezier(.2,.8,.2,1); }
+@keyframes slidein { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+.card.back { animation: slideback .28s cubic-bezier(.2,.8,.2,1); }
+@keyframes slideback { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
+
+/* rules + empty + done */
+details { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+summary { cursor: pointer; padding: 10px 16px; font-weight: 500; }
+details ol { margin: 0; padding: 0 22px 14px 36px; color: var(--soft); }
+details li { margin: 5px 0; }
+.empty { margin-top: 40px; border: 1.5px dashed var(--key-edge); border-radius: 16px; padding: 48px 24px; text-align: center; }
+.empty h2 { font: 400 34px/1.1 var(--font-q); margin: 0 0 8px; }
+.empty p { color: var(--soft); margin: 6px 0; }
+.empty .btn { margin-top: 16px; }
+.empty code { font: 12px var(--font-mono); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+.done h2 { font: 400 34px/1.1 var(--font-q); margin: 0 0 6px; }
+.done ul { list-style: none; padding: 0; margin: 14px 0; display: grid; gap: 6px; }
+.done li { font: 13px var(--font-mono); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.done .arrow { color: var(--soft); }
+.pill { border-radius: 99px; padding: 0 8px; background: color-mix(in srgb, var(--pc) 18%, transparent); }
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 12px); background: var(--ink); color: var(--bg);
+  padding: 9px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; z-index: 5; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 560px) {
+  .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card { padding: 20px 18px 18px; }
+  .stamp { right: 14px; top: 14px; }
+  .keys { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div class="brand"><h1>Label review</h1><span class="set" id="setid"></span></div>
+    <div class="actions">
+      <button class="btn" id="open">Open JSON…</button>
+      <button class="btn save" id="save" disabled>Save<span class="dot" aria-hidden="true"></span></button>
+    </div>
+  </div>
+
+  <section id="empty" class="empty">
+    <h2>Pick a dataset to review</h2>
+    <p>Open <code>core/src/eval/intent_set.json</code>, or drop it anywhere on this page.</p>
+    <p>In the file picker, <kbd>⌘</kbd><kbd>⇧</kbd><kbd>G</kbd> then paste the path.</p>
+    <button class="btn save" id="open2">Open JSON…</button>
+    <input type="file" id="file" accept=".json" hidden>
+  </section>
+
+  <section id="app" hidden>
+    <div class="strip" role="group" aria-label="Progress">
+      <div class="stat"><div class="n"><span id="done">0</span><span style="color:var(--soft)">/<span id="total">0</span></span></div><div class="l">reviewed</div></div>
+      <div class="stat"><div class="n" id="nchanged">0</div><div class="l">relabelled</div></div>
+      <div class="stat streak" id="streakbox"><div class="n">
+        <svg class="flame" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0c1 3 4 4.5 4 8.5A4 4 0 0 1 4 9c0-2 1-3 1.5-4 .3 1.2.9 2 1.8 2.3C7 5.5 7.4 3 8 0z"/></svg>
+        <span id="streak">0</span></div><div class="l">streak</div></div>
+      <div class="stat"><div class="n"><select id="filter" class="btn" style="padding:2px 6px;font:13px var(--font-ui)" aria-label="Show">
+        <option value="all">all</option><option value="todo">to review</option><option value="changed">relabelled</option></select></div><div class="l">showing</div></div>
+    </div>
+
+    <nav class="rail" id="rail" aria-label="Jump to a question"></nav>
+    <div class="legend" id="legend"></div>
+
+    <div class="stage">
+      <article class="card" id="card" aria-live="polite">
+        <div class="stamp" id="stamp" aria-hidden="true"></div>
+        <div class="meta"><span class="chip" id="sid"></span><span id="pos"></span><span class="chip was" id="was"></span></div>
+        <div class="q" id="query"></div>
+        <div class="keys" id="keys" role="group" aria-label="Choose a label"></div>
+        <div class="foot">
+          <div class="status" id="status"></div>
+          <div class="nav">
+            <button class="btn" id="prev" aria-label="Previous question">←</button>
+            <button class="btn" id="keep">Keep <kbd>⏎</kbd></button>
+            <button class="btn" id="next" aria-label="Skip to next question">→</button>
+          </div>
+        </div>
+      </article>
+      <article class="card done" id="donecard" hidden>
+        <h2 id="donetitle"></h2>
+        <div class="status" id="donesub"></div>
+        <ul id="changes"></ul>
+        <button class="btn save" id="save2">Save to file</button>
+        <button class="btn" id="again">Back to the questions</button>
+      </article>
+    </div>
+    <div class="hint"><kbd>1</kbd>–<kbd>7</kbd> label and next · <kbd>⏎</kbd> keep · <kbd>←</kbd> <kbd>→</kbd> move · <kbd>⌘S</kbd> save</div>
+
+    <details id="rulesbox"><summary>Labelling rules</summary><ol id="rules"></ol></details>
+  </section>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const LABEL_KEYS = ["intent", "query_type", "label"];
+const PALETTE = ["--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c7"];
+let data = null, labelKey = null, labels = [], orig = {}, handle = null, fileName = "dataset.json";
+let loadedText = null;  // the file as opened: Save refuses if the file on disk no longer matches
+let i = 0, reviewed = new Set(), streak = 0, dirty = false, best = 0;
+const $ = id => document.getElementById(id);
+const color = l => `var(${PALETTE[labels.indexOf(l) % PALETTE.length] || "--c7"})`;
+
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), msg.length > 60 ? 5000 : 1700); }
+function setDirty(v) { dirty = v; $("save").classList.toggle("dirty", v); }
+
+function storeKey() { return "label-review:" + (data.set_id || fileName); }
+function loadProgress() {
+  try { const s = JSON.parse(localStorage.getItem(storeKey()) || "{}");
+    reviewed = new Set((s.reviewed || []).filter(id => id in orig)); i = Math.min(s.i || 0, data.samples.length - 1); }
+  catch (e) { reviewed = new Set(); i = 0; }
+}
+function saveProgress() {
+  try { localStorage.setItem(storeKey(), JSON.stringify({ reviewed: [...reviewed], i })); } catch (e) {}
+}
+
+function load(text, name) {
+  const d = JSON.parse(text);
+  if (!Array.isArray(d.samples) || !d.samples.length) throw new Error("This file has no samples array.");
+  labelKey = LABEL_KEYS.find(k => k in d.samples[0]);
+  if (!labelKey) throw new Error("Samples need an intent, query_type or label field.");
+  data = d; fileName = name || fileName; loadedText = text;
+  labels = [];
+  for (const s of d.samples) if (!labels.includes(s[labelKey])) labels.push(s[labelKey]);
+  orig = Object.fromEntries(d.samples.map(s => [s.sample_id, s[labelKey]]));
+  $("setid").textContent = d.set_id || fileName;
+  $("rules").innerHTML = "";
+  for (const r of d.labelling_rules || []) { const li = document.createElement("li"); li.textContent = r; $("rules").append(li); }
+  $("rulesbox").hidden = !(d.labelling_rules || []).length;
+  loadProgress(); streak = 0; setDirty(false);
+  $("empty").hidden = true; $("app").hidden = false; $("save").disabled = false;
+  buildRail(); render("in");
+}
+
+function buildRail() {
+  const rail = $("rail"); rail.innerHTML = "";
+  data.samples.forEach((s, idx) => {
+    const b = document.createElement("button");
+    b.className = "tick"; b.dataset.idx = idx;
+    b.onclick = () => { const dir = idx >= i ? "in" : "back"; i = idx; showCard(); render(dir); };
+    rail.append(b);
+  });
+}
+
+function visible(idx) {
+  const s = data.samples[idx], f = $("filter").value;
+  if (f === "todo") return !reviewed.has(s.sample_id);
+  if (f === "changed") return s[labelKey] !== orig[s.sample_id];
+  return true;
+}
+function step(dir) {
+  for (let j = i + dir; j >= 0 && j < data.samples.length; j += dir) if (visible(j)) { i = j; render(dir > 0 ? "in" : "back"); return true; }
+  return false;
+}
+
+function queryHTML(q) {
+  const esc = q.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return esc.replace(/\{[A-Z_]+\}/g, m => `<span class="ph">${m}</span>`);
+}
+
+function render(motion) {
+  const s = data.samples[i], cur = s[labelKey], was = orig[s.sample_id];
+  const card = $("card");
+  card.style.setProperty("--cur", color(cur));
+  $("sid").textContent = s.sample_id;
+  $("pos").textContent = `${i + 1} of ${data.samples.length}`;
+  const wasEl = $("was");
+  wasEl.hidden = cur === was;
+  wasEl.textContent = `was ${was}`; wasEl.style.setProperty("--wc", color(was));
+  $("query").innerHTML = queryHTML(s.query);
+
+  const box = $("keys"); box.innerHTML = "";
+  labels.forEach((l, k) => {
+    const b = document.createElement("button");
+    b.className = "key" + (l === cur ? " on" : "");
+    b.style.setProperty("--kc", color(l));
+    b.setAttribute("aria-pressed", l === cur);
+    b.innerHTML = `<span class="cap">${k + 1}</span><span class="name"></span>` +
+      (l === was && l !== cur ? `<span class="tag">original</span>` : "");
+    b.querySelector(".name").textContent = l;
+    b.onclick = () => choose(l);
+    box.append(b);
+  });
+
+  const st = $("status");
+  if (!reviewed.has(s.sample_id)) { st.className = "status"; st.textContent = "Not reviewed yet"; }
+  else if (cur !== was) { st.className = "status relabelled"; st.textContent = `Relabelled ${was} → ${cur}`; }
+  else { st.className = "status kept"; st.textContent = "✓ Label kept"; }
+
+  // stats
+  const done = data.samples.filter(x => reviewed.has(x.sample_id)).length;
+  $("done").textContent = done; $("total").textContent = data.samples.length;
+  $("nchanged").textContent = data.samples.filter(x => x[labelKey] !== orig[x.sample_id]).length;
+  $("streak").textContent = streak;
+  $("streakbox").classList.toggle("hot", streak >= 5);
+
+  // rail
+  [...$("rail").children].forEach((t, idx) => {
+    const x = data.samples[idx], r = reviewed.has(x.sample_id);
+    t.className = "tick" + (r ? " done" : "") + (x[labelKey] !== orig[x.sample_id] ? " relabel" : "") + (idx === i ? " here" : "");
+    t.style.setProperty("--tc", color(x[labelKey]));
+    t.setAttribute("aria-label", `${x.sample_id}, ${x[labelKey]}${r ? ", reviewed" : ""}`);
+  });
+
+  // legend with live counts
+  const lg = $("legend"); lg.innerHTML = "";
+  labels.forEach(l => {
+    const n = data.samples.filter(x => x[labelKey] === l).length;
+    const sp = document.createElement("span"); sp.style.setProperty("--lc", color(l));
+    sp.innerHTML = `<i></i><span></span><b>${n}</b>`; sp.children[1].textContent = l; lg.append(sp);
+  });
+
+  if (motion) { card.classList.remove("in", "back"); void card.offsetWidth; card.classList.add(motion); }
+  saveProgress();
+}
+
+function stamp(l) {
+  const el = $("stamp"); el.textContent = l; el.style.setProperty("--sc", color(l));
+  el.classList.remove("go"); void el.offsetWidth; el.classList.add("go");
+}
+
+function choose(l) {
+  const s = data.samples[i];
+  if (s[labelKey] !== l) { s[labelKey] = l; setDirty(true); }
+  stamp(l);
+  advance();
+}
+function advance() {
+  const s = data.samples[i], fresh = !reviewed.has(s.sample_id);
+  reviewed.add(s.sample_id);
+  if (fresh) { streak++; best = Math.max(best, streak); }
+  if (fresh && streak > 0 && streak % 10 === 0) toast(`${streak} in a row`);
+  const all = data.samples.every(x => reviewed.has(x.sample_id));
+  setTimeout(() => {
+    if (all && fresh) { showDone(); return; }
+    if (!step(1)) render();
+  }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 160);
+}
+
+function showCard() { $("donecard").hidden = true; $("card").hidden = false; }
+function showDone() {
+  render();
+  const changed = data.samples.filter(x => x[labelKey] !== orig[x.sample_id]);
+  $("donetitle").textContent = `All ${data.samples.length} reviewed`;
+  $("donesub").textContent = changed.length
+    ? `${changed.length} relabelled · best streak ${best}. Save to write them to the file.`
+    : `No labels changed · best streak ${best}.`;
+  const ul = $("changes"); ul.innerHTML = "";
+  for (const x of changed) {
+    const li = document.createElement("li");
+    li.innerHTML = `<b></b><span class="pill a"></span><span class="arrow">→</span><span class="pill b"></span>`;
+    li.children[0].textContent = x.sample_id;
+    li.children[1].textContent = orig[x.sample_id]; li.children[1].style.setProperty("--pc", color(orig[x.sample_id]));
+    li.children[3].textContent = x[labelKey]; li.children[3].style.setProperty("--pc", color(x[labelKey]));
+    ul.append(li);
+  }
+  $("card").hidden = true; $("donecard").hidden = false;
+}
+
+// Keep the file's own layout: one sample per line, a blank line between groups.
+function serialize(d) {
+  const lines = ["{"];
+  const keys = Object.keys(d);
+  keys.forEach((k, n) => {
+    const last = n === keys.length - 1, comma = last ? "" : ",";
+    if (k === "samples") {
+      lines.push(`  "samples": [`);
+      let prev = null;
+      d.samples.forEach((s, m) => {
+        const grp = String(s.sample_id || "").replace(/\d+$/, "");
+        if (prev !== null && grp !== prev) lines.push("");
+        prev = grp;
+        const body = Object.keys(s).map(f => `${JSON.stringify(f)}: ${JSON.stringify(s[f])}`).join(", ");
+        lines.push(`    {${body}}` + (m < d.samples.length - 1 ? "," : ""));
+      });
+      lines.push("  ]" + comma);
+    } else if (Array.isArray(d[k]) && d[k].every(x => typeof x === "string")) {
+      lines.push(`  ${JSON.stringify(k)}: [`);
+      d[k].forEach((x, m) => lines.push("    " + JSON.stringify(x) + (m < d[k].length - 1 ? "," : "")));
+      lines.push("  ]" + comma);
+    } else {
+      lines.push(`  ${JSON.stringify(k)}: ${JSON.stringify(d[k])}${comma}`);
+    }
+  });
+  lines.push("}");
+  return lines.join("\n") + "\n";
+}
+
+async function save() {
+  if (!data) return;
+  const text = serialize(data);
+  JSON.parse(text);  // never write a broken file
+  try {
+    if (handle && handle.createWritable) {
+      const onDisk = await (await handle.getFile()).text();
+      if (loadedText !== null && onDisk !== loadedText) {
+        toast("Not saved: " + handle.name + " changed on disk since you opened it. Reopen it, then redo your changes.");
+        return;
+      }
+      const w = await handle.createWritable(); await w.write(text); await w.close();
+      loadedText = text; setDirty(false); toast("Saved to " + handle.name); return;
+    }
+  } catch (e) { toast("Couldn't write the file, so it's downloading instead"); }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  a.download = fileName; a.click(); setDirty(false);
+}
+
+async function openFile() {
+  if (window.showOpenFilePicker) {
+    try {
+      [handle] = await showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
+      const f = await handle.getFile(); load(await f.text(), f.name); return;
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      toast(e.message); return;
+    }
+  }
+  $("file").click();
+}
+$("file").onchange = async e => { const f = e.target.files[0]; if (!f) return; handle = null;
+  try { load(await f.text(), f.name); } catch (err) { toast(err.message); } };
+$("open").onclick = openFile; $("open2").onclick = openFile;
+$("save").onclick = save; $("save2").onclick = save;
+$("again").onclick = () => { showCard(); render("back"); };
+$("prev").onclick = () => step(-1);
+$("next").onclick = () => { streak = 0; step(1); };
+$("keep").onclick = () => { stamp(data.samples[i][labelKey]); advance(); };
+$("filter").onchange = () => { showCard(); if (!visible(i)) { if (!step(1) && !step(-1)) render(); } else render(); };
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", async e => { e.preventDefault();
+  const item = [...e.dataTransfer.items].find(x => x.kind === "file"); if (!item) return;
+  handle = item.getAsFileSystemHandle ? await item.getAsFileSystemHandle() : null;
+  const f = item.getAsFile();
+  try { load(await f.text(), f.name); } catch (err) { toast(err.message); } });
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); return; }
+  if (!data || e.target.tagName === "SELECT" || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!$("donecard").hidden) { if (e.key === "ArrowLeft") { showCard(); render("back"); } return; }
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= labels.length) choose(labels[n - 1]);
+  else if (e.key === "Enter" && e.target.tagName !== "BUTTON") { stamp(data.samples[i][labelKey]); advance(); }
+  else if (e.key === "ArrowRight") { streak = 0; step(1); }
+  else if (e.key === "ArrowLeft") step(-1);
+});
+window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+</script>
+</body>
+</html>

@@ -37,6 +37,13 @@ Strand jev-experimentation, phase 1.
         --decision-base-url http://127.0.0.1:PORT/v1 \
         --decision-model kev-latest \
         --confidence-floor 0.5
+
+    # answer intent (strand sira-intent): the same arms against
+    # intent_set.json; the decision arms ask only the SIRA intent question
+    python -m core.src.eval.classify_cli --target intent --arm rules
+    python -m core.src.eval.classify_cli --target intent \
+        --arm confidence-routed --decision-provider systemone \
+        --decision-base-url http://127.0.0.1:PORT
 """
 
 from __future__ import annotations
@@ -67,6 +74,11 @@ from core.src.eval.classify import (
     DEFAULT_SET_PATH,
     load_classify_set,
     run_classify,
+)
+from core.src.eval.intent_eval import (
+    DEFAULT_INTENT_SET_PATH,
+    load_intent_set,
+    run_intent,
 )
 from core.src.query.analyzer import (
     LLMQueryAnalyzer,
@@ -141,6 +153,8 @@ def _build_decision_arm(args):
     answers are used, not whether the server is serving a head.
     """
     from core.src.decision.analyzer import (
+        CLASSIFICATION_QUESTIONS,
+        SIRA_QUESTIONS,
         ConfidenceRoutedQueryAnalyzer,
         DecisionQueryAnalyzer,
     )
@@ -195,13 +209,19 @@ def _build_decision_arm(args):
             f"T={float(card.get('temperature')):.2f}"
         )
 
+    questions = (
+        SIRA_QUESTIONS if getattr(args, "target", "query_type") == "intent"
+        else CLASSIFICATION_QUESTIONS
+    )
     if args.arm == "confidence-routed":
         floor = resolve_decision_confidence_floor(
             cli_value=args.confidence_floor
         )
-        return ConfidenceRoutedQueryAnalyzer(provider, floor), provider
+        return ConfidenceRoutedQueryAnalyzer(
+            provider, floor, questions=questions
+        ), provider
 
-    return DecisionQueryAnalyzer(provider), provider
+    return DecisionQueryAnalyzer(provider, questions=questions), provider
 
 
 def _routing_summary(analyzer) -> dict:
@@ -286,8 +306,19 @@ def main(argv=None) -> int:
         ),
     )
     parser.add_argument(
+        "--target", choices=["query_type", "intent"], default="query_type",
+        help=(
+            "query_type = the NORA fields against classify_set.json "
+            "(default); intent = the SIRA answer intent against "
+            "intent_set.json (strand sira-intent)"
+        ),
+    )
+    parser.add_argument(
         "--set", dest="set_path", type=Path, default=None,
-        help=f"labelled set JSON (default: {DEFAULT_SET_PATH})",
+        help=(
+            f"labelled set JSON (default: {DEFAULT_SET_PATH}, or "
+            f"{DEFAULT_INTENT_SET_PATH} with --target intent)"
+        ),
     )
     parser.add_argument(
         "--repeat", type=int, default=1,
@@ -342,10 +373,14 @@ def main(argv=None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    samples = load_classify_set(args.set_path)
-    payload = json.loads(
-        (args.set_path or DEFAULT_SET_PATH).read_text(encoding="utf-8")
+    intent_target = args.target == "intent"
+    if intent_target and args.arm == "llm":
+        parser.error("--target intent supports the rules and decision arms")
+    set_path = args.set_path or (
+        DEFAULT_INTENT_SET_PATH if intent_target else DEFAULT_SET_PATH
     )
+    samples = (load_intent_set if intent_target else load_classify_set)(set_path)
+    payload = json.loads(set_path.read_text(encoding="utf-8"))
     try:
         analyzer, model_identity = _build_analyzer(args)
     except DecisionError as e:
@@ -354,13 +389,18 @@ def main(argv=None) -> int:
         # a stack trace.
         print(f"error: {e}", file=sys.stderr)
         return 2
-    report = run_classify(
-        analyzer,
-        samples,
-        repeats=args.repeat,
-        arm=args.arm,
-        set_id=payload.get("set_id", ""),
-    )
+    if intent_target:
+        report = run_intent(
+            analyzer, samples, arm=args.arm, set_id=payload.get("set_id", ""),
+        )
+    else:
+        report = run_classify(
+            analyzer,
+            samples,
+            repeats=args.repeat,
+            arm=args.arm,
+            set_id=payload.get("set_id", ""),
+        )
 
     fallbacks = getattr(analyzer, "fallback_count", 0)
     if fallbacks and args.arm in ("decision", "confidence-routed"):
@@ -378,19 +418,26 @@ def main(argv=None) -> int:
         )
         return 2
 
-    print(
-        f"arm={report.arm} model={model_identity} set={report.set_id} "
-        f"profile={report.profile} n={len(report.results)} "
-        f"repeats={report.repeats}"
-    )
-    print(
-        f"accuracy={report.accuracy:.3f} "
-        f"weighted_cost={report.weighted_cost:.3f} "
-        f"scope_accuracy={report.scope_accuracy:.3f} "
-        f"deterministic={report.deterministic} "
-        f"p50={report.latency_p50_ms:.1f}ms "
-        f"p95={report.latency_p95_ms:.1f}ms"
-    )
+    if intent_target:
+        print(
+            f"arm={report.arm} model={model_identity} set={report.set_id} "
+            f"n={len(report.results)}"
+        )
+        print(report.summary_text())
+    else:
+        print(
+            f"arm={report.arm} model={model_identity} set={report.set_id} "
+            f"profile={report.profile} n={len(report.results)} "
+            f"repeats={report.repeats}"
+        )
+        print(
+            f"accuracy={report.accuracy:.3f} "
+            f"weighted_cost={report.weighted_cost:.3f} "
+            f"scope_accuracy={report.scope_accuracy:.3f} "
+            f"deterministic={report.deterministic} "
+            f"p50={report.latency_p50_ms:.1f}ms "
+            f"p95={report.latency_p95_ms:.1f}ms"
+        )
     print()
     print(report.matrix_text())
 

@@ -9,6 +9,7 @@
     {% elif row.lane == 'sira' %}
       <span class="badge bg-primary">SIRA</span>
     {% endif %}
+    {% if intent_badge %}<span class="badge rounded-pill text-bg-light border" title="Answer intent">{{ intent_badge }}</span>{% endif %}
     <span class="text-muted small">
       asked by <strong>{{ row.user_name or "anonymous" }}</strong>
       · {{ row.timestamp }}

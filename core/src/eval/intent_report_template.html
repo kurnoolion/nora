@@ -1,0 +1,216 @@
+<meta charset="utf-8">
+<title>Kev Confidence Floor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one reading column; three charts stacked on a shared confidence axis story. */
+:root {
+  --bg: #f7f8f6; --surface: #fcfcfb; --fg: #16181a; --fg2: #50545a; --muted: #8a8f95;
+  --grid: #e3e6e3; --band: #e9efe9; --series-1: #2a78d6; --series-2: #eb6834; --ref: #6b7076;
+  --font-display: ui-serif, Georgia, "Times New Roman", serif; --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141615; --surface: #1a1c1b; --fg: #eeefec; --fg2: #c0c3be; --muted: #8d918c;
+  --grid: #2b2f2d; --band: #1f2a22; --series-1: #3987e5; --series-2: #d95926; --ref: #9a9f99; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #141615; --surface: #1a1c1b; --fg: #eeefec; --fg2: #c0c3be; --muted: #8d918c;
+  --grid: #2b2f2d; --band: #1f2a22; --series-1: #3987e5; --series-2: #d95926; --ref: #9a9f99; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+main { max-width: 860px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 36px; }
+header { display: grid; gap: 10px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg2); }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: clamp(28px, 5vw, 40px); line-height: 1.1; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-weight: 500; font-size: 22px; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 65ch; color: var(--fg2); }
+.lede { color: var(--fg); font-size: 16px; }
+.stats { display: flex; flex-wrap: wrap; gap: 28px; }
+.stat { display: grid; gap: 2px; }
+.stat b { font-family: var(--font-mono); font-weight: 500; font-size: 26px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 13px; color: var(--fg2); }
+section { display: grid; gap: 12px; }
+.chart { background: var(--surface); border: 1px solid var(--grid); border-radius: 6px; padding: 16px 12px 8px; position: relative; min-width: 0; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--fg2); padding: 0 6px 8px; }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.legend i.sq { height: 10px; width: 10px; }
+.legend i.dash { background: none; border-top: 2px dashed var(--ref); height: 0; }
+svg text { font-family: var(--font-mono); font-size: 11px; fill: var(--fg2); }
+svg .lbl { fill: var(--fg); font-weight: 500; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font-size: 12px; font-family: var(--font-mono);
+  padding: 6px 8px; border-radius: 4px; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); }
+.hit { fill: transparent; cursor: default; }
+.hit:focus-visible { outline: 2px solid var(--series-1); }
+details { font-size: 14px; }
+summary { cursor: pointer; color: var(--fg2); }
+summary:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+.tw { overflow-x: auto; margin-top: 10px; }
+table { border-collapse: collapse; font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { padding: 4px 14px 4px 0; text-align: right; border-bottom: 1px solid var(--grid); }
+th { color: var(--fg2); font-weight: 500; }
+td:first-child, th:first-child { text-align: left; }
+footer p { font-size: 13px; }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow" id="eyebrow"></div>
+    <h1>Where should Kev's confidence floor sit?</h1>
+    <p class="lede">Confidence-routed classification uses Kev's intent when its confidence reaches the floor, and the rules otherwise. Each chart below comes from one Kev pass over the dev set, scored at every floor.</p>
+    <div class="stats">
+      <div class="stat"><b id="s-best"></b><span id="s-best-l"></span></div>
+      <div class="stat"><b id="s-base"></b><span id="s-base-l"></span></div>
+      <div class="stat"><b id="s-bar"></b><span>floors that meet the change bar</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>Accuracy against the floor</h2>
+    <p id="p1"></p>
+    <div class="chart" id="c1">
+      <div class="legend"><span><i style="background:var(--series-1)"></i>confidence-routed</span><span><i class="dash"></i><span id="ref-l"></span></span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How many questions Kev decides</h2>
+    <p id="p2"></p>
+    <div class="chart" id="c2"></div>
+  </section>
+
+  <section>
+    <h2>Is Kev right when it is confident?</h2>
+    <p id="p3"></p>
+    <div class="chart" id="c3">
+      <div class="legend"><span><i class="sq" style="background:var(--series-1)"></i>Kev accuracy</span><span><i class="sq" style="background:var(--series-2)"></i>rules accuracy</span></div>
+    </div>
+  </section>
+
+  <details>
+    <summary>Show the numbers as tables</summary>
+    <div class="tw" id="t1"></div>
+    <div class="tw" id="t2"></div>
+  </details>
+
+  <footer><p id="foot"></p></footer>
+</main>
+
+<script>
+const RUN = /*__RUN__*/null;
+const M = RUN.meta, S = RUN.summary, N = M.n;
+const SWEEP = RUN.sweep.map(s => [s.floor, s.accuracy, s.change_precision, s.change_recall, s.model_decides, s.change_bar]);
+const fl = b => b.lo === 0 ? "<" + b.hi.toFixed(1) : b.hi === 1 ? "≥" + b.lo.toFixed(1) : b.lo.toFixed(1) + "–" + b.hi.toFixed(1);
+const BINS = RUN.bins.map(b => [fl(b), b.n, b.model_accuracy, b.rules_accuracy, b.lo]);
+const fx = f => f.toFixed(2), pct = a => Math.round(a * 100) + "%";
+const $ = id => document.getElementById(id), set = (id, t) => { $(id).textContent = t; };
+const XMAX = Math.max(...SWEEP.map(d => d[0])), CUR = S.at_current;
+const when = M.created_at.replace("T", " ");
+
+set("eyebrow", `sira-intent · ${M.set_id} · ${N} questions · ${when}`);
+set("s-best", S.best_accuracy.toFixed(3));
+set("s-best-l", S.plateau[0] === S.plateau[1] ? `best accuracy, floor ${fx(S.plateau[0])}` : `best accuracy, floors ${fx(S.plateau[0])}–${fx(S.plateau[1])}`);
+const sameBase = S.rules_accuracy !== null && S.rules_accuracy === S.model_accuracy;
+set("s-base", (S.rules_accuracy ?? S.model_accuracy).toFixed(3));
+set("s-base-l", sameBase ? "rules alone, and Kev alone" : S.rules_accuracy !== null ? `rules alone (Kev alone ${S.model_accuracy.toFixed(3)})` : "Kev alone");
+set("s-bar", S.change_bar_from === null ? "none" : fx(S.change_bar_from) + "+");
+set("ref-l", sameBase ? `rules alone · Kev alone (${S.rules_accuracy.toFixed(3)})` : `rules alone (${(S.rules_accuracy ?? 0).toFixed(3)})`);
+set("p1", `Too low and Kev's unsure guesses get through; too high and the rules decide everything. ${S.change_bar_from === null ? "No floor meets the change bar (change precision and recall both at least 0.9)." : "The shaded part meets the change bar (change precision and recall both at least 0.9)."} The floor in use is ${fx(M.floor)}: accuracy ${CUR.accuracy.toFixed(3)} there.`);
+set("p2", `Questions whose Kev confidence reaches each floor, out of ${N}. At ${fx(CUR.floor)}, Kev decides ${CUR.model_decides} and the rules ${N - CUR.model_decides}.`);
+const above = RUN.bins.filter(b => S.crossover !== null && b.lo >= S.crossover);
+set("p3", S.crossover === null ? "Accuracy by Kev's confidence, Kev against the rules on the same questions. Kev never beats the rules from some confidence upward on this run." :
+  `Accuracy by Kev's confidence, Kev against the rules on the same questions. From ${S.crossover.toFixed(1)} up, Kev is right ${pct(Math.min(...above.map(b => b.model_accuracy)))}–${pct(Math.max(...above.map(b => b.model_accuracy)))} of the time and at least matches the rules in every bin; below that, the rules do better somewhere. The floor belongs near that crossover.`);
+$("foot").innerHTML = "";
+$("foot").append(`Run ${when}, git ${M.git.commit ?? "unknown"}${M.git.dirty ? " (uncommitted changes)" : ""}, dataset sha256 ${M.dataset_sha256.slice(0, 12)}, decision ${M.decision.provider}${M.decision.model ? " / " + M.decision.model : ""}. With ${N} questions one question moves accuracy by ${(1 / N).toFixed(3)}, so the plateau matters more than the single best point.`);
+const NS = "http://www.w3.org/2000/svg";
+const el = (t, a = {}, p) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); if (p) p.appendChild(e); return e; };
+const txt = (s, a, p) => { const e = el("text", a, p); e.textContent = s; return e; };
+function tipper(box) {
+  const t = document.createElement("div"); t.className = "tip"; t.hidden = true; box.appendChild(t);
+  return { show(html, x, y) { t.innerHTML = html; t.style.left = x + "px"; t.style.top = y + "px"; t.hidden = false; }, hide() { t.hidden = true; } };
+}
+function frame(box, H) {
+  const W = 800, m = { l: 48, r: 16, t: 12, b: 34 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, box);
+  return { svg, W, H, m, iw: W - m.l - m.r, ih: H - m.t - m.b };
+}
+function place(box, svg, sx, sy) { // svg coords -> box pixel coords
+  const r = svg.getBoundingClientRect(), b = box.getBoundingClientRect(), k = r.width / 800;
+  return [r.left - b.left + sx * k, r.top - b.top + sy * k];
+}
+
+// Chart 1: accuracy vs floor
+(() => {
+  const box = document.getElementById("c1"), F = frame(box, 300), { svg, m, iw, ih } = F;
+  svg.setAttribute("aria-label", `Line chart: confidence-routed accuracy by floor, best ${S.best_accuracy.toFixed(3)}`);
+  const accs = SWEEP.map(d => d[1]), y0 = Math.floor((Math.min(...accs) - .03) * 50) / 50, y1 = Math.ceil((Math.max(...accs) + .02) * 50) / 50;
+  const x = f => m.l + f / XMAX * iw, y = a => m.t + (1 - (a - y0) / (y1 - y0)) * ih;
+  if (S.change_bar_from !== null) { el("rect", { x: x(S.change_bar_from), y: m.t, width: x(XMAX) - x(S.change_bar_from), height: ih, fill: "var(--band)" }, svg);
+    txt("change bar met", { x: x(XMAX) - 6, y: m.t + 14, "text-anchor": "end" }, svg); }
+  const step = (y1 - y0) > .2 ? .05 : .02, ticks = []; for (let a = Math.ceil(y0 / step) * step; a <= y1 + 1e-9; a += step) ticks.push(+a.toFixed(2));
+  for (const a of ticks) { el("line", { x1: m.l, x2: m.l + iw, y1: y(a), y2: y(a), stroke: "var(--grid)" }, svg); txt(a.toFixed(2), { x: m.l - 8, y: y(a) + 4, "text-anchor": "end" }, svg); }
+  for (let f = 0; f <= XMAX + 1e-9; f += .1) txt(f.toFixed(1), { x: x(f), y: m.t + ih + 18, "text-anchor": "middle" }, svg);
+  txt("confidence floor", { x: m.l + iw / 2, y: m.t + ih + 32, "text-anchor": "middle" }, svg);
+  if (S.rules_accuracy !== null) el("line", { x1: m.l, x2: m.l + iw, y1: y(S.rules_accuracy), y2: y(S.rules_accuracy), stroke: "var(--ref)", "stroke-width": 1.5, "stroke-dasharray": "5 4" }, svg);
+  el("line", { x1: x(M.floor), x2: x(M.floor), y1: m.t, y2: m.t + ih, stroke: "var(--fg2)", "stroke-width": 1, "stroke-dasharray": "2 3" }, svg);
+  txt("in use " + fx(M.floor), { x: x(M.floor) + 5, y: m.t + ih - 8, class: "lbl" }, svg);
+  el("path", { d: SWEEP.map((d, i) => (i ? "L" : "M") + x(d[0]) + " " + y(d[1])).join(""), fill: "none", stroke: "var(--series-1)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+  const tip = tipper(box);
+  SWEEP.forEach(d => {
+    el("circle", { cx: x(d[0]), cy: y(d[1]), r: 4, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    const h = el("circle", { cx: x(d[0]), cy: y(d[1]), r: 14, class: "hit", tabindex: 0 }, svg);
+    const on = () => { const [px, py] = place(box, svg, x(d[0]), y(d[1])); tip.show(`floor ${fx(d[0])} · accuracy ${d[1].toFixed(3)}<br>change P ${fx(d[2])} R ${fx(d[3])} · Kev decides ${d[4]}/${N}`, px, py); };
+    h.addEventListener("mouseenter", on); h.addEventListener("focus", on); h.addEventListener("mouseleave", tip.hide); h.addEventListener("blur", tip.hide);
+  });
+  txt(S.best_accuracy.toFixed(3), { x: x(S.plateau[0]), y: y(S.best_accuracy) - 10, "text-anchor": "middle", class: "lbl" }, svg);
+})();
+
+// Chart 2: questions decided by Kev
+(() => {
+  const box = document.getElementById("c2"), F = frame(box, 200), { svg, m, iw, ih } = F;
+  svg.setAttribute("aria-label", "Bar chart: questions decided by Kev at each floor");
+  const top4 = Math.ceil(N / 20) * 20, x = f => m.l + f / XMAX * iw, y = n => m.t + (1 - n / top4) * ih, bw = 22;
+  for (let n = 0; n <= top4; n += top4 / 4) { el("line", { x1: m.l, x2: m.l + iw, y1: y(n), y2: y(n), stroke: "var(--grid)" }, svg); txt(n, { x: m.l - 8, y: y(n) + 4, "text-anchor": "end" }, svg); }
+  for (let f = 0; f <= XMAX + 1e-9; f += .1) txt(f.toFixed(1), { x: x(f), y: m.t + ih + 18, "text-anchor": "middle" }, svg);
+  txt("confidence floor", { x: m.l + iw / 2, y: m.t + ih + 32, "text-anchor": "middle" }, svg);
+  const tip = tipper(box);
+  SWEEP.forEach(d => {
+    const top = y(d[4]), h = Math.max(0, y(0) - top), r = Math.min(4, h / 2);
+    if (h > 0) el("path", { d: `M${x(d[0]) - bw / 2} ${y(0)}V${top + r}q0 -${r} ${r} -${r}h${bw - 2 * r}q${r} 0 ${r} ${r}V${y(0)}Z`, fill: "var(--series-1)", opacity: d[0] === CUR.floor ? 1 : .55 }, svg);
+    const hit = el("rect", { x: x(d[0]) - 16, y: m.t, width: 32, height: ih, class: "hit", tabindex: 0 }, svg);
+    const on = () => { const [px, py] = place(box, svg, x(d[0]), top); tip.show(`floor ${fx(d[0])}: Kev ${d[4]} · rules ${N - d[4]}`, px, py); };
+    hit.addEventListener("mouseenter", on); hit.addEventListener("focus", on); hit.addEventListener("mouseleave", tip.hide); hit.addEventListener("blur", tip.hide);
+  });
+  txt(CUR.model_decides, { x: x(CUR.floor), y: y(CUR.model_decides) - 6, "text-anchor": "middle", class: "lbl" }, svg);
+  txt(SWEEP[0][4], { x: x(SWEEP[0][0]), y: y(SWEEP[0][4]) - 6, "text-anchor": "middle", class: "lbl" }, svg);
+})();
+
+// Chart 3: accuracy by confidence bin
+(() => {
+  const box = document.getElementById("c3"), F = frame(box, 280), { svg, m, iw, ih } = F;
+  svg.setAttribute("aria-label", "Grouped bar chart: Kev and rules accuracy by Kev confidence bin");
+  const g = iw / BINS.length, bw = Math.min(26, g / 2 - 6), y = a => m.t + (1 - a) * ih;
+  for (const a of [0, .25, .5, .75, 1]) { el("line", { x1: m.l, x2: m.l + iw, y1: y(a), y2: y(a), stroke: "var(--grid)" }, svg); txt(Math.round(a * 100) + "%", { x: m.l - 8, y: y(a) + 4, "text-anchor": "end" }, svg); }
+  const tip = tipper(box);
+  const bar = (cx, a, fill) => { const top = y(a), h = y(0) - top, r = Math.min(4, h / 2);
+    el("path", { d: `M${cx - bw / 2} ${y(0)}V${top + r}q0 -${r} ${r} -${r}h${bw - 2 * r}q${r} 0 ${r} ${r}V${y(0)}Z`, fill }, svg); };
+  BINS.forEach((b, i) => {
+    const cx = m.l + g * i + g / 2;
+    bar(cx - bw / 2 - 1, b[2], "var(--series-1)"); bar(cx + bw / 2 + 1, b[3], "var(--series-2)");
+    txt(b[0], { x: cx, y: m.t + ih + 16, "text-anchor": "middle" }, svg);
+    txt("n=" + b[1], { x: cx, y: m.t + ih + 30, "text-anchor": "middle", style: "fill:var(--muted)" }, svg);
+    const hit = el("rect", { x: m.l + g * i, y: m.t, width: g, height: ih, class: "hit", tabindex: 0 }, svg);
+    const on = () => { const [px, py] = place(box, svg, cx, y(Math.max(b[2], b[3]))); tip.show(`confidence ${b[0]} · ${b[1]} questions<br>Kev ${Math.round(b[2] * 100)}% · rules ${Math.round(b[3] * 100)}%`, px, py); };
+    hit.addEventListener("mouseenter", on); hit.addEventListener("focus", on); hit.addEventListener("mouseleave", tip.hide); hit.addEventListener("blur", tip.hide);
+  });
+  const ci = BINS.findIndex(b => S.crossover !== null && b[4] === S.crossover);
+  if (ci > 0) { const xs = m.l + g * ci; el("line", { x1: xs, x2: xs, y1: m.t, y2: m.t + ih, stroke: "var(--fg2)", "stroke-dasharray": "2 3" }, svg);
+    txt(S.crossover.toFixed(1), { x: xs + 5, y: m.t + 12, class: "lbl" }, svg); }
+})();
+
+// Tables
+document.getElementById("t1").innerHTML = "<table><tr><th>floor</th><th>accuracy</th><th>change P</th><th>change R</th><th>Kev decides</th></tr>" +
+  SWEEP.map(d => `<tr><td>${fx(d[0])}</td><td>${d[1].toFixed(3)}</td><td>${fx(d[2])}</td><td>${fx(d[3])}</td><td>${d[4]}/${N}</td></tr>`).join("") + "</table>";
+document.getElementById("t2").innerHTML = "<table><tr><th>Kev confidence</th><th>questions</th><th>Kev accuracy</th><th>rules accuracy</th></tr>" +
+  BINS.map(b => `<tr><td>${b[0]}</td><td>${b[1]}</td><td>${Math.round(b[2] * 100)}%</td><td>${Math.round(b[3] * 100)}%</td></tr>`).join("") + "</table>";
+</script>

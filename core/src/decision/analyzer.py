@@ -25,7 +25,7 @@ from dataclasses import replace
 
 from core.src.decision.base import DecisionQuestion
 from core.src.query.analyzer import MockQueryAnalyzer
-from core.src.query.schema import DocTypeScope, QueryIntent, QueryType
+from core.src.query.schema import DocTypeScope, Intent, QueryIntent, QueryType
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,52 @@ CLASSIFICATION_QUESTIONS: tuple[DecisionQuestion, ...] = (
 state is the mechanism the wire format exists for, so two round trips
 would waste it."""
 
+INTENT_DESCRIPTIONS: dict[Intent, str] = {
+    Intent.FACT:
+        "Asks for one specific value or statement: a timer value, a "
+        "default, a count, a cause code.",
+    Intent.EXPLAIN:
+        "Asks how or why something works, or for an overview, explanation "
+        "or summary of a topic.",
+    Intent.LIST:
+        "Asks for every item of a kind, e.g. 'list all requirements for X' "
+        "or 'which requirements cover Y'.",
+    Intent.COMPLIANCE:
+        "Asks whether a described device behaviour or implementation meets "
+        "the requirements.",
+    Intent.CHANGE:
+        "Asks what changed between releases or versions of the same "
+        "operator's documents: added, removed or modified.",
+    Intent.COMPARE:
+        "Compares two or more things side by side: operators, plans, "
+        "features, or an operator against a standard.",
+    Intent.OTHER:
+        "Anything that fits none of the other categories.",
+}
+"""One gloss per `Intent` (strand sira-intent). Load-bearing for the same
+reason as `QUERY_TYPE_DESCRIPTIONS`; a test asserts every member has one."""
+
+INTENT_QUESTION = DecisionQuestion(
+    question_id="intent",
+    kind="choice",
+    question=(
+        "What kind of answer does the asker want? Pick the single best "
+        "match; ignore which operator or document it is about."
+    ),
+    options=tuple(i.value for i in Intent),
+    descriptions=tuple(INTENT_DESCRIPTIONS[i] for i in Intent),
+)
+
+SIRA_QUESTIONS: tuple[DecisionQuestion, ...] = (INTENT_QUESTION,)
+"""What the SIRA path asks (sira-intent D-DRAFT-2): intent only. The served
+stack reads neither NORA question, so asking them would be wasted work."""
+
+_FIELD_ENUMS = {
+    "query_type": QueryType,
+    "doc_type_scope": DocTypeScope,
+    "intent": Intent,
+}
+
 
 class DecisionQueryAnalyzer:
     """Decision model for the choice fields, regex for the spans.
@@ -127,8 +173,12 @@ class DecisionQueryAnalyzer:
     outage degrades classification; it does not fail the query.
     """
 
-    def __init__(self, provider, fallback=None, confidence_floor=0.0) -> None:
+    def __init__(self, provider, fallback=None, confidence_floor=0.0,
+                 questions=CLASSIFICATION_QUESTIONS) -> None:
         self._provider = provider
+        self.questions = tuple(questions)
+        """The questions sent per query; each names a `QueryIntent` field.
+        Default the NORA pair; the SIRA path passes `SIRA_QUESTIONS`."""
         self._fallback = fallback or MockQueryAnalyzer()
         self.confidence_floor = float(confidence_floor)
         """Answers below this calibrated confidence are discarded in
@@ -170,39 +220,58 @@ class DecisionQueryAnalyzer:
             query: Raw user query. Also the decision model's ``state``.
 
         Returns:
-            A ``QueryIntent``. Same shape the rule-based analyzer returns —
-            ``QueryIntent`` is the contract and does not change.
+            A ``QueryIntent``, the same shape the rule-based analyzer
+            returns. Fields are only added, with defaults.
+        """
+        return self.analyze_with_trace(query)[0]
+
+    def analyze_with_trace(self, query: str) -> tuple[QueryIntent, dict]:
+        """``analyze`` plus, per asked field, who answered it.
+
+        The trace is ``{question_id: {"source": "model" | "rules",
+        "confidence": float | None}}``; confidence is the model's own,
+        reported even when the floor routed the field to the rules, and
+        ``None`` when no answer arrived. Returned rather than stored, so
+        concurrent requests on one analyzer cannot mix traces.
         """
         self.call_count += 1
         base = self._fallback.analyze(query)
         try:
-            answers = self._provider.decide(query, CLASSIFICATION_QUESTIONS)
+            answers = self._provider.decide(query, self.questions)
         except Exception as e:  # provider is third-party code
             self.fallback_count += 1
             logger.warning(
                 "Decision provider failed (%s) — falling back to "
                 "rule-based classification", e,
             )
-            return base
+            return base, {
+                q.question_id: {"source": "rules", "confidence": None}
+                for q in self.questions
+            }
 
         by_id = {a.question_id: a for a in answers}
-        query_type = self._field(
-            "query_type", by_id, QueryType, base.query_type
-        )
-        doc_type_scope = self._field(
-            "doc_type_scope", by_id, DocTypeScope, base.doc_type_scope
-        )
+        updates, trace = {}, {}
+        for q in self.questions:
+            qid = q.question_id
+            value, from_model = self._field(
+                qid, by_id, _FIELD_ENUMS[qid], getattr(base, qid)
+            )
+            updates[qid] = value
+            answer = by_id.get(qid)
+            trace[qid] = {
+                "source": "model" if from_model else "rules",
+                "confidence": answer.confidence if answer is not None else None,
+            }
         logger.info(
-            "Decision analysis: type=%s scope=%s model=%s",
-            query_type.value, doc_type_scope.value,
+            "Decision analysis: %s model=%s",
+            " ".join(f"{k}={v.value}" for k, v in updates.items()),
             getattr(self._provider, "model", "?"),
         )
-        return replace(
-            base, query_type=query_type, doc_type_scope=doc_type_scope
-        )
+        return replace(base, **updates), trace
 
     def _field(self, question_id, by_id, enum_cls, fallback):
-        """Resolve one field, applying the confidence floor.
+        """Resolve one field, applying the confidence floor. Returns
+        ``(value, from_model)``.
 
         Three ways the rule-based value wins: no answer arrived, the
         answer's confidence is below the floor, or the answer is not a
@@ -217,13 +286,13 @@ class DecisionQueryAnalyzer:
                 question_id, answer.confidence, self.confidence_floor,
             )
             self._count(self.routed_to_rules, question_id)
-            return fallback
+            return fallback, False
         value = _coerce(answer, enum_cls, None)
         if value is None:
             self._count(self.routed_to_rules, question_id)
-            return fallback
+            return fallback, False
         self._count(self.routed_to_model, question_id)
-        return value
+        return value, True
 
     def coverage(self, question_id: str) -> float:
         """Fraction of this field's answers that came from the model.
@@ -266,9 +335,11 @@ class ConfidenceRoutedQueryAnalyzer(DecisionQueryAnalyzer):
     threshold.
     """
 
-    def __init__(self, provider, confidence_floor, fallback=None) -> None:
+    def __init__(self, provider, confidence_floor, fallback=None,
+                 questions=CLASSIFICATION_QUESTIONS) -> None:
         super().__init__(
-            provider, fallback=fallback, confidence_floor=confidence_floor
+            provider, fallback=fallback, confidence_floor=confidence_floor,
+            questions=questions,
         )
 
 

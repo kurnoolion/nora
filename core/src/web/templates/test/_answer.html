@@ -83,6 +83,8 @@
        {% if row_id %}data-share-path="{{ root_path }}/ask/s/{{ row_id }}" data-lane="{{ lane or '' }}"{% endif %}>
     <div class="text-muted small mb-2">
       <strong>Q:</strong> {{ question }}
+      {# Answer intent (strand sira-intent, design §7): read-only, no override. #}
+      {% if intent_badge %}<span class="badge rounded-pill text-bg-light border ms-1" title="Answer intent">{{ intent_badge }}</span>{% endif %}
     </div>
 
     {# Failure alerts stay above the fold — they explain a missing or
@@ -110,7 +112,11 @@
         <div class="alert alert-warning py-2 small mb-2">{{ history_run.failed }} batch(es) failed after the fallback (RHD-E004); their requirement ids are listed in place.</div>
       {% endif %}
     {% endif %}
+    {% if lookup is defined and lookup %}
+      {% include "test/_id_lookup.html" %}
+    {% else %}
     <div class="answer-body" style="line-height: 1.5;">{{ answer | md_bubbles(bubble_req_ids, root_path, bubble_endpoints | default(none)) }}</div>
+    {% endif %}
 
     {# Where the time went. Above the engineering-details fold on
        purpose — latency is the everyday user's question, not an
