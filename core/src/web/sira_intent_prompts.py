@@ -180,9 +180,16 @@ def load_prompts(env_dir: "Path | None" = None, env: "dict | None" = None
 _LOADED: "dict[Intent, IntentPrompt] | None" = None
 
 
-def load_at_startup(env_dir: "Path | None") -> None:
-    """Load once and log each intent's source and hash. Raises on a bad file."""
+def load_at_startup(env_dir: "Path | None", *, enabled: bool = True) -> None:
+    """Load once and log each intent's source and hash. Raises on a bad file.
+
+    ``enabled`` is the ``NORA_SIRA_INTENT_PROMPTS`` switch. Off, the override
+    is never used, so it is not read: a bad or missing file cannot stop
+    startup. Turning the switch on needs a restart to load it."""
     global _LOADED
+    if not enabled:
+        logger.info("SIRA intent prompts: off (NORA_SIRA_INTENT_PROMPTS); override not read")
+        return
     prompts, path = load_prompts(env_dir)
     _LOADED = prompts
     logger.info("SIRA intent prompts: %s; %s", f"override {path}" if path else "defaults only",

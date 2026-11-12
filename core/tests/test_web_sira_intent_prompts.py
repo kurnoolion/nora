@@ -110,6 +110,24 @@ def test_startup_load_feeds_prompt_for(tmp_path, monkeypatch, caplog):
     assert f"list=override:{_h('LIST PROMPT')}" in caplog.text and f"other=default:{TODAY_HASH}" in caplog.text
 
 
+def test_switch_off_startup_ignores_a_bad_or_missing_override(tmp_path, monkeypatch, caplog):
+    # With prompts off the override is never used, so it must not stop nora-web.
+    monkeypatch.setattr(sp, "_LOADED", None)
+    (tmp_path / sp.ENV_DIR_FILE).write_text("{not json")
+    monkeypatch.setenv(sp.FILE_ENV, str(tmp_path / "typo.json"))
+    with caplog.at_level("INFO"):
+        sp.load_at_startup(tmp_path, enabled=False)
+    assert sp.prompt_for(Intent.LIST).source == "default"
+    assert "off" in caplog.text and "not read" in caplog.text
+
+
+def test_switch_on_startup_still_fails_on_a_bad_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "_LOADED", None)
+    (tmp_path / sp.ENV_DIR_FILE).write_text("{not json")
+    with pytest.raises(ValueError):
+        sp.load_at_startup(tmp_path, enabled=True)
+
+
 # ── the select-synth lane ─────────────────────────────────────────────
 
 @pytest.fixture()
