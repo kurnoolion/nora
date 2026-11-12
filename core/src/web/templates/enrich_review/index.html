@@ -111,7 +111,7 @@
   function releasesFor(mno) {
     return cells.filter(c => c.mno === mno).map(c => c.release);
   }
-  const cellName = () => $("sel-mno").value + "__" + $("sel-release").value;
+  const cellName = () => $("sel-mno").value + "/" + $("sel-release").value;
 
   $("sel-mno").addEventListener("change", () => {
     opt($("sel-release"), releasesFor($("sel-mno").value), "select…");

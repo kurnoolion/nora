@@ -39,6 +39,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"IRN-E002: cannot open jobs DB {cfg.jobs_db}: {exc}", file=sys.stderr)
         return 2
     if args.check:
+        bad = cfg.template_values()
+        if bad:
+            print(f"IRN-E003: config values still look like the template: {', '.join(bad)}", file=sys.stderr)
+            return 2
         print(f"ok: runner {cfg.runner_name}; jobs DB {cfg.jobs_db}; builds root {cfg.nora_builds_root}")
         return 0
     runner = Runner(cfg, db=db)

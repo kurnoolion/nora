@@ -454,7 +454,7 @@ def _two_release_rows():
 
 def test_row_key():
     assert golden_runner.row_key(
-        {"req_id": "R-1", "mno": "m", "release": "Jan2026"}) == "R-1@m__Jan2026"
+        {"req_id": "R-1", "mno": "m", "release": "Jan2026"}) == "R-1@m/Jan2026"
     assert golden_runner.row_key({"req_id": "R-1"}) == "R-1"
 
 
@@ -464,7 +464,7 @@ def test_stage1_keeps_both_releases_of_one_id(monkeypatch):
     r = golden_runner.run_stage1(_sample(), "http://127.0.0.1:1")
     assert r.retrieved_req_ids == ["REQ_FOO_0001"]
     assert r.retrieved_row_keys == [
-        "REQ_FOO_0001@m__Apr2026", "REQ_FOO_0001@m__Jan2026"]
+        "REQ_FOO_0001@m/Apr2026", "REQ_FOO_0001@m/Jan2026"]
     assert r.to_dict()["retrieved_row_keys"] == r.retrieved_row_keys
 
 

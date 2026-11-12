@@ -12,6 +12,7 @@ Generated 2026-11-12 by regen-map. Do not hand-edit.
 | [eval](../../core/src/eval/MODULE.md) | Evaluation framework for the query pipeline. |
 | [extraction](../../core/src/extraction/MODULE.md) | Format-aware content extraction. |
 | [graph](../../core/src/graph/MODULE.md) | Unified Knowledge Graph construction (TDD §5.8, D-002). |
+| [ingest_runner](../../core/src/ingest_runner/MODULE.md) | The host-side runner behind self-serve ingestion (strand self-serve-ingestion, D-DRAFT-1): a long-lived process on the build host, run as the build user, that claims `ingest*` jobs from the web's jobs database and executes them the way the runbook does by hand — the cycle driver's verbs for one cell, the converter, publish, a staging store, Stage 1 of the golden eval, the gate record — then the flip, the rollback and the abandon on request. |
 | [llm](../../core/src/llm/MODULE.md) | LLM abstraction layer. |
 | [models](../../core/src/models/MODULE.md) | Shared document intermediate representation. |
 | [parser](../../core/src/parser/MODULE.md) | Generic, profile-driven structural parser. |
@@ -37,6 +38,7 @@ flowchart TD
     m_eval[eval]
     m_extraction[extraction]
     m_graph[graph]
+    m_ingest_runner[ingest_runner]
     m_llm[llm]
     m_models[models]
     m_parser[parser]
@@ -51,6 +53,7 @@ flowchart TD
     m_taxonomy[taxonomy]
     m_vectorstore[vectorstore]
     m_web[web]
+
     m_corrections --> m_env
     m_corrections --> m_profiler
     m_corrections --> m_taxonomy
@@ -58,8 +61,8 @@ flowchart TD
     m_eval --> m_decision
     m_eval --> m_env
     m_eval --> m_extraction
-    m_eval --> m_graph
     m_eval --> m_llm
+    m_eval --> m_pipeline
     m_eval --> m_query
     m_eval --> m_vectorstore
     m_extraction --> m_models
@@ -67,19 +70,22 @@ flowchart TD
     m_graph --> m_resolver
     m_graph --> m_standards
     m_graph --> m_taxonomy
+    m_ingest_runner --> m_web
     m_llm --> m_env
     m_llm --> m_pipeline
     m_parser --> m_extraction
     m_parser --> m_models
+    m_parser --> m_pipeline
     m_parser --> m_profiler
-    m_pipeline --> m_corrections
     m_pipeline --> m_env
     m_pipeline --> m_eval
     m_pipeline --> m_extraction
     m_pipeline --> m_graph
     m_pipeline --> m_llm
+    m_pipeline --> m_models
     m_pipeline --> m_parser
     m_pipeline --> m_profiler
+    m_pipeline --> m_query
     m_pipeline --> m_resolver
     m_pipeline --> m_standards
     m_pipeline --> m_taxonomy
@@ -91,6 +97,7 @@ flowchart TD
     m_profiler --> m_extraction
     m_profiler --> m_llm
     m_profiler --> m_models
+    m_profiler --> m_pipeline
     m_query --> m_decision
     m_query --> m_env
     m_query --> m_graph
@@ -113,6 +120,7 @@ flowchart TD
     m_taxonomy --> m_pipeline
     m_vectorstore --> m_env
     m_vectorstore --> m_parser
+    m_vectorstore --> m_pipeline
     m_web --> m_corrections
     m_web --> m_env
     m_web --> m_eval
@@ -121,9 +129,12 @@ flowchart TD
     m_web --> m_models
     m_web --> m_parser
     m_web --> m_pipeline
+    m_web --> m_profiler
     m_web --> m_query
     m_web --> m_resolver
     m_web --> m_stores
+    m_web --> m_taxonomy
+    m_web --> m_vectorstore
 ```
 
 ## Project File Structure
@@ -151,7 +162,9 @@ nora/
 │   └── share-back.md
 ├── config/
 │   ├── env.json
+│   ├── ingest_runner.example.json
 │   ├── llm.json
+│   ├── release_diff.json
 │   ├── retrieval.json
 │   └── web.json
 ├── core/
@@ -219,6 +232,17 @@ nora/
 │   │   │   ├── builder.py                               # Knowledge Graph builder (TDD 5.8).
 │   │   │   ├── graph_cli.py                             # CLI entry point for Knowledge Graph construction (TDD 5.8).
 │   │   │   └── schema.py                                # Knowledge Graph schema definitions (TDD 6.1–6.2).
+│   │   ├── ingest_runner/                               # The host-side runner behind self-serve ingestion (strand self-serve-ingestion, D-DRAFT-1): a long-lived process on the build host, run as the build user, that claims `ingest*` jobs from the web's jobs database and executes them the way the runbook does by hand — the cycle driver's verbs for one cell, the converter, publish, a staging store, Stage 1 of the golden eval, the gate record — then the flip, the rollback and the abandon on request.
+│   │   │   ├── MODULE.md
+│   │   │   ├── __init__.py                              # Host-side runner for self-serve ingestion.
+│   │   │   ├── config.py                                # Runner configuration (`config/ingest_runner.json`).
+│   │   │   ├── db.py                                    # The runner's view of the web's jobs database (stdlib `sqlite3`).
+│   │   │   ├── execute.py                               # Running host commands with their output streamed line by line.
+│   │   │   ├── ingest_runner_cli.py                     # CLI: `python -m core.src.ingest_runner.ingest_runner_cli --config config/ingest_runner.json`
+│   │   │   ├── plan.py                                  # The stages of one self-serve ingest, and the flip, rollback and
+│   │   │   ├── runner.py                                # The runner loop: claim one job at a time, heartbeat while it runs,
+│   │   │   ├── verdict.py                               # The eval gate rule (strand design §6, D-DRAFT-4).
+│   │   │   └── webhook.py                               # Webhook delivery for ingest state changes (standard library).
 │   │   ├── llm/                                         # LLM abstraction layer.
 │   │   │   ├── MODULE.md
 │   │   │   ├── __init__.py                              # LLM providers.
@@ -253,9 +277,16 @@ nora/
 │   │   │   ├── __init__.py
 │   │   │   ├── cells.py                                 # (MNO, release) cell primitives for the NORA pipeline (D-DRAFT-6).
 │   │   │   ├── error_codes.py                           # Structured error codes for all pipeline stages.
+│   │   │   ├── fingerprints.py                          # Uniform stage fingerprints (strand stage-graph, D-DRAFT-2).
+│   │   │   ├── generations.py                           # Per-cell generations at the corpus root: how a served cell is redone
+│   │   │   ├── locate.py                                # Where a stage's output for a cell is (strand stage-graph, design §10c).
+│   │   │   ├── manifest.py                              # The build manifest: which fingerprint each stage produced per cell
+│   │   │   ├── recipes.py                               # Recipes: the variant stages a stack builds and their parameters
 │   │   │   ├── report.py                                # Pipeline report generation.
 │   │   │   ├── run_cli.py                               # CLI entry point for the pipeline runner.
 │   │   │   ├── runner.py                                # Pipeline orchestrator.
+│   │   │   ├── stage_graph.py                           # The stage graph as data (strand stage-graph, D-DRAFT-1).
+│   │   │   ├── stage_store.py                           # The host's stage store: write-once outputs by fingerprint (strand
 │   │   │   └── stages.py                                # Pipeline stage functions.
 │   │   ├── profile_miner/                               # Convert human-supplied parse corrections (from the Web UI Review tab) into proposed `DocumentProfile` regex patches.
 │   │   │   ├── MODULE.md
@@ -379,6 +410,7 @@ nora/
 │   │       ├── enrich_report.py                         # Enrichment-review exports: the label × category pivot report and the
 │   │       ├── feedback_db.py                           # Test-page feedback store — async SQLite log of question / answer /
 │   │       ├── jobs.py                                  # Job queue for NORA pipeline execution tracking.
+│   │       ├── jobs_schema.py                           # The jobs database schema, shared by the web and the ingest runner.
 │   │       ├── markdown_render.py                       # Markdown → HTML rendering for LLM-synthesized answers.
 │   │       ├── metrics.py                               # Metrics persistence store for NORA observability.
 │   │       ├── middleware.py                            # Request timing middleware for NORA Web UI.
@@ -397,6 +429,7 @@ nora/
 │   │       │   ├── golden_eval.py                       # Eval Studio — expert one-stop-shop for golden eval samples
 │   │       │   ├── history_lane.py                      # The release-change lane of the Ask page (strand rel-history).
 │   │       │   ├── id_lookup_lane.py                    # The requirement-ID lookup lane of the Ask page (strand sira-intent, D-DRAFT-8).
+│   │       │   ├── ingest.py                            # Self-serve ingestion: the Ingest page and `POST /api/ingest`
 │   │       │   ├── jobs.py                              # Jobs routes -- listing, detail, SSE log streaming, cancel.
 │   │       │   ├── metrics_route.py                     # Metrics page and API routes.
 │   │       │   ├── parse_review.py                      # Parse routes — Summary landing + per-doc Review.
@@ -413,6 +446,7 @@ nora/
 │   │       │   ├── js/
 │   │       │   │   ├── app.js
 │   │       │   │   ├── parse_review.js
+│   │       │   │   ├── release_change.js
 │   │       │   │   ├── req_browser.js
 │   │       │   │   └── resolve_review.js
 │   │       │   └── vendor/
@@ -462,6 +496,8 @@ nora/
 │   │       │   │   ├── _status_result.html
 │   │       │   │   └── index.html
 │   │       │   ├── files.html
+│   │       │   ├── ingest.html
+│   │       │   ├── ingest_detail.html
 │   │       │   ├── job_detail.html
 │   │       │   ├── jobs.html
 │   │       │   ├── metrics.html
@@ -473,6 +509,7 @@ nora/
 │   │       │   │   ├── dashboard_jobs.html
 │   │       │   │   ├── dashboard_status.html
 │   │       │   │   ├── file_listing.html
+│   │       │   │   ├── ingest_state.html
 │   │       │   │   ├── jobs_table.html
 │   │       │   │   ├── metrics_resource.html
 │   │       │   │   └── query_result.html
@@ -492,6 +529,7 @@ nora/
 │   │       │       ├── _feedback_ack.html
 │   │       │       ├── _feedback_legacy.html
 │   │       │       ├── _feedback_merged.html
+│   │       │       ├── _history_req_bubble.html
 │   │       │       ├── _id_lookup.html
 │   │       │       ├── _ingested.html
 │   │       │       ├── _merged_answer.html
@@ -505,6 +543,8 @@ nora/
 │   └── tests/
 │       ├── __init__.py
 │       ├── conftest.py                                  # Shared pytest fixtures.
+│       ├── fixtures/
+│       │   └── stage_code_hashes.json
 │       ├── test_apply_profile_patch.py                  # Tests for the profile_patch → corrections-profile merger.
 │       ├── test_ask_reasoning.py                        # Per-question provider + Fast/Think mode on the Ask page (Phase 1).
 │       ├── test_bm25_index.py                           # Unit tests for BM25 sparse retrieval (`bm25_index.py`).
@@ -513,6 +553,7 @@ nora/
 │       ├── test_chunk_builder_definitions.py            # Tests for FR-35 [D-032] inline definition expansion in chunk_builder.
 │       ├── test_chunk_builder_hierarchy.py              # Tests for hierarchy path prefixing in chunk text and metadata.
 │       ├── test_chunk_builder_subsections.py            # Tests for parent-chunk augmentation with child titles.
+│       ├── test_cycle_driver.py                         # Tests for docker/cycle.sh — the phase-gated cycle driver.
 │       ├── test_decision.py                             # Tests for the decision-model seam (strand jev-experimentation, phase 2).
 │       ├── test_decision_head_check.py                  # The decision-head verification gate (strand jev-experimentation,
 │       ├── test_decision_sira_intent.py                 # Tests for the SIRA intent question (strand sira-intent, design §3).
@@ -540,6 +581,7 @@ nora/
 │       ├── test_glossary_skip_from_rag.py               # Tests for Phase 5 of the generic-rules pivot — skip glossary from RAG.
 │       ├── test_graph.py                                # Tests for the Knowledge Graph construction (Step 8).
 │       ├── test_hf_source.py                            # Tests for HuggingFaceSource — fully mocked, no network.
+│       ├── test_ingest_runner.py                        # Tests for core/src/ingest_runner — the host-side self-serve ingest runner.
 │       ├── test_integration_oa_corpus.py                # Integration test: extract → profile → parse against the 5 Verizon OA PDFs.
 │       ├── test_last_run_req_id.py                      # Tests for ``RequirementIdPattern.anchor`` extraction modes.
 │       ├── test_layout_fusion.py                        # Extractor fusion of a LayoutProvider's tables/figures into the pymupdf text
@@ -564,7 +606,15 @@ nora/
 │       ├── test_pdf_extractor_text_tables.py            # Guards for the opt-in text-strategy (borderless) table detection.
 │       ├── test_pipeline.py                             # Pipeline smoke tests — extract, profile, and parse real PDFs.
 │       ├── test_pipeline_cells.py                       # Tests for the pipeline (MNO, release) cell substrate (D-DRAFT-6).
+│       ├── test_pipeline_enrich_stage.py                # Enrich as a recorded, driver-side stage (strand stage-graph, step 3, slice 2).
 │       ├── test_pipeline_error_codes.py                 # Every error code the source raises or prints is registered in CODES.
+│       ├── test_pipeline_generations.py                 # Per-cell generations at the corpus root (strand stage-graph, step 3,
+│       ├── test_pipeline_locate.py                      # pipeline/locate.py: where a stage's output for a cell is (stage-graph §10c).
+│       ├── test_pipeline_locate_readers.py              # Build-time readers find parse output the build no longer holds
+│       ├── test_pipeline_recipes.py                     # Recipes (strand stage-graph, step 3): validation, the committed recipes,
+│       ├── test_pipeline_stage_graph.py                 # Stage graph, fingerprints and the build manifest (strand stage-graph,
+│       ├── test_pipeline_stage_store.py                 # The host's stage store and the corpus root (strand stage-graph, step 2).
+│       ├── test_pipeline_step4_switch.py                # Stage graph step 4, slice 5: the build keeps no copy of a stored output.
 │       ├── test_plan_metadata.py                        # Tests for plan-metadata extraction (`_extract_plan_metadata`).
 │       ├── test_playground_helpers.py                   # Tests for the merged-tab helpers in core/src/web/routes/playground.py:
 │       ├── test_profile_bindings.py                     # Tests for per-cell profile binding (D-DRAFT-7).
@@ -626,11 +676,13 @@ nora/
 │       ├── test_web_eval_studio.py                      # Eval Studio route tests (FR-39): sample CRUD, ground-truth add flows,
 │       ├── test_web_history_lane.py                     # The Ask page's release-change lane (core/src/web/routes/history_lane.py
 │       ├── test_web_id_lookup_lane.py                   # Tests for the requirement-ID lookup lane (strand sira-intent, D-DRAFT-8).
+│       ├── test_web_ingest.py                           # Tests for the Ingest page and API (core/src/web/routes/ingest.py).
 │       ├── test_web_jobs.py                             # Tests for the NORA web job queue.
 │       ├── test_web_markdown_bubbles.py                 # Tests for req-ID bubbles in the web markdown renderer (strand req-id-bubbles).
 │       ├── test_web_markdown_render.py                  # Tests for the web markdown renderer.
 │       ├── test_web_path_mapper.py                      # Tests for the web path mapper module.
 │       ├── test_web_playground.py                       # Tests for the Test-page corpus-label helper.
+│       ├── test_web_release_change_js.py                # Browser check of `static/js/release_change.js` over a rendered answer.
 │       ├── test_web_req_body.py                         # Tests for the requirement-body renderer behind the Ask-page bubble
 │       ├── test_web_req_bubbles.py                      # Tests for the req-bubble endpoint and its wiring (strand req-id-bubbles).
 │       ├── test_web_req_tree.py                         # Tests for the shared requirement-tree loader (web/req_tree.py).
@@ -655,8 +707,11 @@ nora/
 │   │   ├── bs_cf29e619.json
 │   │   ├── bs_d7a2c81f.json
 │   │   └── vzw_oa_profile.json
-│   └── prompts/
-│       └── README.md
+│   ├── prompts/
+│   │   └── README.md
+│   └── recipes/
+│       ├── sira-plain.json
+│       └── sira-taxonomy.json
 ├── docker/
 │   ├── README.md
 │   ├── cycle.sh                                         # cycle.sh — phase-gated driver for one ingest cycle (README "Ingest a new
@@ -667,6 +722,7 @@ nora/
 │   ├── env.nora-store.example
 │   ├── env.nora-web.example
 │   ├── env.sira-batch.example
+│   ├── ingest-runner.service.example
 │   ├── ingest.sh                                        # ingest.sh — quoting-proof launcher for containerized pipeline lane runs.
 │   ├── nora.Dockerfile
 │   ├── prep-offline.sh                                  # prep-offline.sh — HOST-side prep for OFFLINE=1 docker builds.
@@ -809,6 +865,11 @@ nora/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
 │   │   │   │   │   └── journal.md
+│   │   │   │   ├── rel-history/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── design.md
+│   │   │   │   │   └── journal.md
 │   │   │   │   ├── req-bubble-metadata/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
@@ -828,6 +889,11 @@ nora/
 │   │   │   │   ├── section-handling/
 │   │   │   │   │   ├── STRAND.md
 │   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   └── journal.md
+│   │   │   │   ├── self-serve-ingestion/
+│   │   │   │   │   ├── STRAND.md
+│   │   │   │   │   ├── decisions-draft.md
+│   │   │   │   │   ├── design.md
 │   │   │   │   │   └── journal.md
 │   │   │   │   ├── sira-enrichment-pe/
 │   │   │   │   │   ├── STRAND.md
@@ -880,7 +946,7 @@ nora/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   └── journal.md
-│   │   │   ├── rel-history/
+│   │   │   ├── stage-graph/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── design.md
@@ -900,7 +966,8 @@ nora/
 │   ├── golden-eval-guide.md
 │   ├── ingestion-guide.md
 │   ├── provisioning-checklist.md
-│   └── redaction-rules.md
+│   ├── redaction-rules.md
+│   └── self-serve-ingestion-guide.md
 ├── experiments/
 │   ├── image-analysis/
 │   │   ├── README.md

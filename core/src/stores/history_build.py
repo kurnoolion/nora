@@ -49,7 +49,7 @@ from core.src.stores.trees import (
     SqliteTreeStore,
     TreeStore,
     open_tree_store,
-    parse_dir,
+    parse_cell_dir,
     source_fingerprint,
 )
 
@@ -107,7 +107,7 @@ def _source(store: TreeStore, env_dir: Path, mno: str, rel: str) -> str:
     if isinstance(store, SqliteTreeStore):
         return store.cell_meta(mno, rel).get("source_fingerprint", "")
     if isinstance(store, FileTreeStore):
-        return source_fingerprint(sorted((parse_dir(env_dir) / mno / rel)
+        return source_fingerprint(sorted(parse_cell_dir(env_dir, mno, rel)
                                          .glob("*_tree.json")))
     return ""
 

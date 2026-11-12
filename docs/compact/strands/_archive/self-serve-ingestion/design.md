@@ -1,6 +1,6 @@
 # Self-serve ingestion — design
 
-Status: 2026-11-03, rulings settled (§9) and the host facts folded in.
+Status: 2026-11-06. One spelling of a cell everywhere, `<MNO>/<release>` (D-DRAFT-10), the SIRA cells inside the build (D-DRAFT-9) and one wiring variable, `NORA_BUILD_DIR` (D-DRAFT-11), are built; `publish migrate-units` rewrites each stack's registry rows once. Earlier: 2026-11-03, rulings settled (§9) and the host facts folded in.
 Built and tested: the cycle driver changes of §7
 (`core/tests/test_cycle_driver.py`), the jobs schema and the runner of §4
 (`core/tests/test_ingest_runner.py`), the page and the API of §5 with
@@ -90,13 +90,13 @@ no pipeline logic.
 | # | Stage | Command (host) | Reuse | On failure |
 |---|---|---|---|---|
 | 1 | stage documents | copy `<share>/<folder>/*` to `requirements/<mno>/<release>/`; refuse if the cell exists | — | job fails before anything runs |
-| 2 | open build | `cycle.sh start <build> --seed <prev>` | seed copies the previous build's `out/` (all cells) and takes its profile bindings, adding the new cell bound to the profile of the MNO's latest bound cell | CYC-E021 (cycle in flight): refused at submit; here only on a race. CYC-E026/E027: bad seed, MNO without a binding |
-| 3 | parse | `cycle.sh parse --skip-standards` | the lane skips every cell whose IR and tree are newer than the source (D-DRAFT-8 keys), so only the new cell is parsed | failed cells named in the log; Retry re-runs the verb |
-| 4 | taxonomy | `cycle.sh taxonomy` | the ledger keeps every plan whose tree sha is unchanged; only the new release's plans are extracted | the verb's own retry: Retry re-runs it for failed docs |
-| 5 | enrich | `cycle.sh enrich --cell <mno>__<release>` | the SIRA db-root holds the new cell only; nothing else is enriched | Retry runs `--retry-failed`; a verify FAIL stops here |
+| 2 | open build | `cycle.sh start <build> --seed <prev>` | seed takes the previous build's profile bindings, adding the new cell bound to the profile of the MNO's latest bound cell; nothing is copied (every stage is per cell since the taxonomy became per release) | CYC-E021 (cycle in flight): a failed or cancelled ingest still holds the baton; the page names it, Retry or Abandon it first. CYC-E026/E027: bad seed, MNO without a binding |
+| 3 | parse | `cycle.sh parse --cell <mno>/<release> --skip-standards` | the lane runs that cell alone | failed cells named in the log; Retry re-runs the verb |
+| 4 | taxonomy | `cycle.sh taxonomy --cell <mno>/<release>` | one taxonomy per release (D-DRAFT-8), derived from the cell's own trees into `out/taxonomy/<mno>/<release>/`; the enrichment lane reads that directory | the verb's own retry: Retry re-runs it for failed plans |
+| 5 | enrich | `cycle.sh enrich --cell <mno>/<release>` | the build's `out/sira/` holds the new cell only (the SIRA cells are the build's last stage dir, ruling 2026-11-06); nothing else is enriched | Retry runs `--retry-failed`; a verify FAIL stops here |
 | 6 | verify | `cycle.sh verify-enrich --yes` | — | FAIL lines → job fails with the CYC block; Retry goes back to 5 |
 | 7 | promote | `cycle.sh promote --label <label> --scheme <scheme>` (local, no `--host`) | the flat label is the converter's input | — |
-| 8 | convert | `cell_db_convert --label <serve>/<label> --cells <mno>__<release> --out <work>/cells --verify 25` | one cell | CNV code in the log |
+| 8 | convert | `cell_db_convert --label <serve>/<label> --cells <mno>/<release> --out <work>/cells --verify 25` | one cell; first, if the cell's `best.jsonl` dangles after a resumed enrichment, `sira_incremental promote` (field-found on the first retry) | CNV code in the log |
 | 9 | publish | `publish publish --serve-root --label --cells-src <work>/cells --env-dir <build> --prompt-scheme` | every other unit is inherited from the active set; Trees are reused by fingerprint; History of this MNO is rebuilt | PUB code; nothing is visible to the stack |
 | 10 | eval | staging store up with `SERVE_RELEASE_SET=<label>`; `golden_cli --stage 1 --stack-url <staging> --stack-label <label> --allow-map-mismatch`; store down | — | GEV-E: job fails; the set stays staged |
 | 11 | gate | verdict by the rule in §6; `publish gate --kind golden-stage1 --verdict pass|fail --run-ref <run-id>` | — | a `fail` verdict leaves the set staged and the page says why; Serve is disabled |
@@ -114,13 +114,34 @@ rollback job runs `publish rollback --to <previous label> --store-url`.
 Both are small; they run through the same runner so the web still starts
 no container.
 
-### Retry and abandon
+### Retry, abandon and purge
 
 Retry re-enqueues the ingest from its failed stage: every verb is
 resumable and artifact-checked, so re-running it is safe. Abandon runs
-`cycle.sh abandon --note` (frees the baton; build dirs stay for the
-administrator to remove) and marks the ingest abandoned. A staged but
-unflipped set is harmless and is cleaned by `publish gc` later.
+`cycle.sh abandon --note` (frees the baton; the build stays for
+diagnosis) and marks the ingest abandoned. A staged but unflipped set is
+harmless and is cleaned by `publish gc` later.
+
+Purge (2026-11-07) is the fourth verb, for a dead ingest: `abandoned`,
+`rolled_back`, `failed` or `cancelled`, never `served` or `staged`
+(abandon a staged one first). A runner job (`ingest-purge`) removes
+every artifact of the ingest, by its record rather than by walking
+trees: the baton if the build still holds it (`cycle.sh abandon`), the
+release set through `publish purge` (the registry refuses an active
+one, `REG-E009`; the flip log keeps the label), the promoted snapshot,
+the work dir, the build and a separate SIRA tree, the golden run, and
+the documents unless the active set serves that cell. Each removal is
+logged; one that fails (ownership, a busy mount) fails the job with the
+list and leaves the state unchanged, and every step tolerates what is
+already gone, so the purge is re-run after the fix. The row stays,
+state `purged`, so the page still shows that the attempt happened. The
+page offers Purge in the allowed states to the administrator only (the
+admin cookie, in every deployment — Purge deletes, so the team's token
+does not carry it; 2026-11-08); the API is `POST /api/ingest/{id}/purge`,
+403 for the team's token. Without it, a dead ingest left six things
+behind that an administrator had to find by hand, and a cleanup that
+removed the build but not the snapshot produced the same-day label
+collision the promote step now sidesteps.
 
 ### Cancel
 
@@ -147,10 +168,11 @@ Responsibilities, and only these:
   heartbeat as "runner not responding" with the service name to restart.
   The DB files are owned by the host user who runs the stacks, with
   owner-only write, so the runner runs as that user (the same user runs
-  the cycles today). One ingest at a time is also what the cycle driver
-  enforces: `start` refuses while `ACTIVE` points at a build that is
-  neither promoted nor abandoned, so the web's "no ingest queued or
-  running" check has the driver as its backstop.
+  the cycles today). Submits queue and the runner takes them oldest
+  first; one cycle at a time is what the driver enforces: `start`
+  refuses while `ACTIVE` points at a build that is neither promoted nor
+  abandoned, so a failed ingest that still holds the baton blocks the
+  queue until it is retried or abandoned, and the page names it.
 - **Execute** the stage table of §3 as subprocesses, in the repo
   checkout the runner was started from (the same commit the images were
   built from; the runner records both, as `start` records image ids).
@@ -229,12 +251,16 @@ configured the surface is closed.
 | `POST /api/ingest/{id}/flip` · `/rollback` · `/retry` · `/abandon` | enqueue the matching job; each refused unless the state allows it |
 
 **Validation at submit**, in the web, before a job exists: the share
-path maps and exists and holds at least one `pdf`/`docx`/`xlsx`; the MNO
-is among the served cells (store healthz); the release is a valid
-`MMMYYYY` and not already served or staged for that MNO; no ingest is
-queued or running; the runner's heartbeat is fresh (else the page says
-the runner is down and does not accept). Counts and types are shown
-before Start.
+path has the shape of a UNC path (the runner maps it and counts the
+documents at its first stage, since the host mount is its, not the
+web's); the MNO is among the served cells (store healthz); the release
+is a valid `MMMYYYY` and not already served, staged, queued or running
+for that MNO. Submits queue (ruling 2026-11-06): the page shows each
+queued ingest's position and the runner takes them oldest first, one
+cycle at a time; a failed or cancelled ingest that opened a build is
+named as holding the cycle until it is retried or abandoned. The
+runner's last-seen time is shown, not enforced: a submit with the runner
+down waits until it is back.
 
 **Team-mode gate**: `/ingest` and `/api/ingest` join `_TEAM_ALLOWED`;
 the strand's tests run with the gate on. Fully self-service means a
@@ -292,17 +318,21 @@ Built 2026-11-03:
 - `--yes` on `prompts` and `verify-enrich`: skips the prompt and records
   the confirmation as `<user> (auto)` in CYCLE.json and the CYC block.
   The evidence lines are still printed, so the job log carries them.
-- `start --seed <prev-build>`: copies `<prev>/out/{extract,profile,parse,resolve,taxonomy}`
-  into the new build with `cp -a --reflink=auto`. A copy, not hard links:
-  the taxonomy ledger, the profile stage and resolve rewrite their files
-  in place, and shared inodes would corrupt the seed build, which is the
-  served one. The seed's `profiles.json` is the default binding source
-  (`--profiles` still wins); every cell it does not cover is bound to the
-  profile of that MNO's latest bound release, recorded in the CYC block
-  as `inherited=<cell><-<release>`. CYC-E026 for a bad or unparsed seed,
-  CYC-E027 for a cell of an MNO with no binding to inherit; both fail
-  before anything is created. Without `--seed` nothing changes: bindings
-  are still chosen, not inherited.
+- `start --seed <prev-build>`: takes the seed's `profiles.json` as the
+  default binding source (`--profiles` still wins) and binds every cell it
+  does not cover to the profile of that MNO's latest bound release,
+  recorded in the CYC block as `inherited=<cell><-<release>`. Nothing is
+  copied (2026-11-06: with the taxonomy per release, every stage is per
+  cell and a build holds only the cells it parsed; the earlier copy of
+  the previous build's `out/` is gone). CYC-E026 for a seed without
+  bindings, CYC-E027 for a cell of an MNO with no binding to inherit;
+  both fail before anything is created. Without `--seed` nothing changes:
+  bindings are still chosen, not inherited.
+- `parse --cell` and `taxonomy --cell`: the lane runs one cell
+  (`--mno`/`--release`); the enrich verb sets `NORA_SIRA_TAXONOMY_DIR` to
+  the cell's taxonomy directory on the lane's command line; `prompts`
+  notes a partial build instead of refusing it; `status` and the enrich
+  precondition read the per-cell ledgers.
 - The detached phase's container id is recorded with the phase entry in
   CYCLE.json and shown by `status`, so an administrator can stop a
   runaway phase by name.

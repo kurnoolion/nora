@@ -224,13 +224,14 @@ def main() -> None:
 
     env_dir = Path(args.env_dir).expanduser().resolve()
     trees_dir = env_dir / "out" / "parse"
-    if not trees_dir.exists():
-        raise SystemExit(f"trees directory not found: {trees_dir}")
 
     out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else env_dir / "reports" / "audit"
 
     pattern = f"{args.doc}*_tree.json" if args.doc else "*_tree.json"
-    tree_paths = sorted(trees_dir.glob(pattern))
+    from core.src.pipeline.locate import cell_of, stage_files
+
+    # flat legacy trees, then every cell's (in the build or the stage store)
+    tree_paths = stage_files(env_dir, "parse", pattern)
     if not tree_paths:
         raise SystemExit(f"no parsed trees match {pattern} in {trees_dir}")
 
@@ -245,7 +246,10 @@ def main() -> None:
         rows = _audit_doc(tree_path)
         counts = _summarize(rows)
         out_name = tree_path.stem.replace("_tree", "") + "_audit.csv"
-        out_path = out_dir / out_name
+        cell = cell_of(tree_path, "parse")
+        # per-cell trees: one subdir per cell, so a document in two releases
+        # does not overwrite its own report
+        out_path = out_dir / cell.mno / cell.release / out_name if cell else out_dir / out_name
         _write_csv(rows, out_path)
         print(
             f"  {tree_path.stem:<25} → {out_path.name:<25}  "

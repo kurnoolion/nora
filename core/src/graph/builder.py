@@ -76,16 +76,16 @@ class KnowledgeGraphBuilder:
 
     def build(
         self,
-        trees_dir: Path,
-        manifests_dir: Path,
+        trees_dir: "Path | list[Path]",
+        manifests_dir: "Path | list[Path]",
         taxonomy_path: Path,
         standards_dir: Path,
     ) -> nx.DiGraph:
         """Build the full knowledge graph.
 
         Args:
-            trees_dir: Directory with *_tree.json files
-            manifests_dir: Directory with *_xrefs.json files
+            trees_dir: Directory with *_tree.json files, or the files
+            manifests_dir: Directory with *_xrefs.json files, or the files
             taxonomy_path: Path to taxonomy.json
             standards_dir: Directory with reference_index.json and TS_*/Rel-*/
         """
@@ -118,21 +118,25 @@ class KnowledgeGraphBuilder:
 
     # ── Data loading ──────────────────────────────────────────────
 
-    def _load_trees(self, trees_dir: Path) -> list[dict]:
+    def _load_trees(self, trees_dir: "Path | list[Path]") -> list[dict]:
         trees = []
         # rglob: per-cell layout nests trees at out/parse/<mno>/<rel>/ (D-DRAFT-6);
-        # recursive find also matches the legacy flat layout.
-        for path in sorted(trees_dir.rglob("*_tree.json")):
+        # recursive find also matches the legacy flat layout. A list is the
+        # files themselves (the pipeline's, found in the build or the store).
+        paths = trees_dir if isinstance(trees_dir, list) else sorted(trees_dir.rglob("*_tree.json"))
+        for path in paths:
             with open(path, "r", encoding="utf-8") as f:
                 trees.append(json.load(f))
         logger.info(f"Loaded {len(trees)} parsed trees from {trees_dir}")
         return trees
 
-    def _load_manifests(self, manifests_dir: Path) -> dict[str, dict]:
+    def _load_manifests(self, manifests_dir: "Path | list[Path]") -> dict[str, dict]:
         """Load manifests keyed by plan_id."""
         manifests = {}
         # rglob: per-cell resolve nests manifests at out/resolve/<mno>/<rel>/ (D-DRAFT-10).
-        for path in sorted(manifests_dir.rglob("*_xrefs.json")):
+        paths = (manifests_dir if isinstance(manifests_dir, list)
+                 else sorted(manifests_dir.rglob("*_xrefs.json")))
+        for path in paths:
             with open(path, "r", encoding="utf-8") as f:
                 m = json.load(f)
                 manifests[m["plan_id"]] = m

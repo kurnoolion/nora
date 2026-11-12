@@ -36,7 +36,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells, parse_cell_dirname
+from sandbox.sira_cells import CellKey, cell_dir as _cell_dir, cell_dirname, enumerate_cells, parse_cell_dirname
 
 
 def cell_config_root(db_root: Path) -> Path:
@@ -86,11 +86,10 @@ def ensure_cell_data_config(
     else:
         text = f"name: {cell_name}\n" + text
     if config_root is not None:
-        out_dir = Path(config_root) / "data"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out = out_dir / f"{cell_name}.yaml"
+        out = Path(config_root) / "data" / f"{cell_name}.yaml"
     else:
         out = cfg_dir / f"{cell_name}.yaml"
+    out.parent.mkdir(parents=True, exist_ok=True)   # `<mno>/<release>.yaml` nests one level
     out.write_text(text, encoding="utf-8")
     return out
 
@@ -231,9 +230,9 @@ def verify_cells(
     for i, cell in enumerate(cells):
         if i:
             print()
-        cell_dir = db_root / cell_dirname(cell)
+        cell_dir = _cell_dir(db_root, cell)
         if not (cell_dir / "runs" / "doc-enrich" / run_name).is_dir():
-            print(f"verify-run: {cell_dir.name}: no run dir for "
+            print(f"verify-run: {cell_dirname(cell)}: no run dir for "
                   f"'{run_name}' — skipping")
             verdicts["skipped"] = verdicts.get("skipped", 0) + 1
             continue

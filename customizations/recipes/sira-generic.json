@@ -1,0 +1,9 @@
+{
+  "name": "sira-generic",
+  "note": "SIRA enrichment with its one generic document prompt for every MNO, one requirement per call, no taxonomy: the single-prompt arm (prompt scheme scheme-v1).",
+  "stages": ["enrich"],
+  "params": {
+    "enrich": {"prompt": "generic", "prompt_scheme": "scheme-v1", "generation": 1}
+  },
+  "serve": {"mode": "sira", "units": ["cells", "trees", "history"]}
+}

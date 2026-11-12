@@ -1,8 +1,8 @@
 # self-serve-ingestion
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-11-03
-**Landed:**
+**Landed:** 2026-11-08
 **Assignees:** kurnoolion
 **Target modules:** web, pipeline, stores, eval (plus the host-side runner under docker/)
 **Active phase:**
@@ -23,3 +23,8 @@ ingested by hand.
 
 ## Notes
 
+- 2026-11-07 — scope widened: **Purge**, the fourth ingest verb. A dead
+  ingest (abandoned, rolled back, failed, cancelled) left six things
+  behind that an administrator had to find by hand; Purge removes them
+  all by the ingest record and never touches the serving set.
+- Landed on 2026-11-08 with 19 promoted decisions: D-304, D-305, D-306, D-307, D-308, D-309, D-310, D-311, D-312, D-313, D-314, D-315, D-316, D-317, D-318, D-319, D-320, D-321, D-322

@@ -1,0 +1,22 @@
+{
+  "extract": {
+    "sha256": "33a070243c35ebd5",
+    "version": "1"
+  },
+  "parse": {
+    "sha256": "54e9d7f723b94960",
+    "version": "1"
+  },
+  "profile": {
+    "sha256": "f939d59e5fcf8769",
+    "version": "1"
+  },
+  "resolve": {
+    "sha256": "c73ddcf82c994132",
+    "version": "1"
+  },
+  "standards": {
+    "sha256": "f69c66c3eb98ba67",
+    "version": "1"
+  }
+}

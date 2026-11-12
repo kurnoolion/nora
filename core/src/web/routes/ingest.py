@@ -25,7 +25,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 
 from core.src.web import team_mode as tm
 from core.src.web.jobs import Ingest, JobQueue
-from core.src.web.jobs_schema import INGEST_STAGES, RETRY_FROM
+from core.src.stores.cells import parse_cell_dirname
+from core.src.web.jobs_schema import INGEST_STAGES, PURGEABLE_STATES, RETRY_FROM
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ def _runner_status(runners: list[dict]) -> dict[str, Any]:
             "text": text, "runners": runners}
 
 
-def _ingest_view(ing: Ingest) -> dict[str, Any]:
+def _ingest_view(ing: Ingest, admin: bool = False) -> dict[str, Any]:
     d = ing.__dict__.copy()
     st = ing.state
     d["can_flip"] = st == "staged" and ing.verdict == "pass"
@@ -109,7 +110,17 @@ def _ingest_view(ing: Ingest) -> dict[str, Any]:
     d["can_retry"] = st == "failed" and bool(ing.stage)
     d["retry_from"] = RETRY_FROM.get(ing.stage or "", ing.stage) if d["can_retry"] else None
     d["can_abandon"] = st in ("failed", "cancelled", "staged")
+    d["can_purge"] = st in PURGEABLE_STATES and admin   # the administrator's action: it deletes
+    d["purgeable"] = st in PURGEABLE_STATES
     d["can_cancel"] = st in ("queued", "running")
+    # stage graph, step 3: run the cell's model stages again (a new
+    # generation of the cell); the corpus prefix is found, not recomputed
+    d["can_redo"] = st == "served"
+    try:
+        d["origins"] = json.loads(ing.stage_origins) if ing.stage_origins else {}
+    except ValueError:
+        d["origins"] = {}
+    d["queue_position"] = None
     d["stages"] = [{"name": s, "hint": STAGE_HINTS.get(s, ""),
                     "done": _stage_done(ing, s), "current": ing.stage == s and st == "running"}
                    for s in INGEST_STAGES]
@@ -137,7 +148,7 @@ def _callback_ok(url: str) -> bool:
 async def validate_request(job_queue: JobQueue, mno: str, release: str, source: str,
                            callback_url: str = "") -> str | None:
     """The reason a request is refused, or None. Order: shape, served MNO,
-    cell free, one ingest at a time."""
+    cell free. Submits queue; the runner runs one at a time."""
     if not _MNO_RE.match(mno):
         return "MNO must be the cell name as served (letters, digits, dashes; upper case)"
     if not _REL_RE.match(release):
@@ -149,18 +160,31 @@ async def validate_request(job_queue: JobQueue, mno: str, release: str, source: 
     cells = await served_cells()
     if cells is None:
         return "the serving store cannot be asked which MNOs it serves; try again or tell the administrator"
-    mnos = {c.split("__", 1)[0].upper() for c in cells}
+    served = {ck for ck in (parse_cell_dirname(c) for c in cells) if ck}
+    mnos = {m.upper() for m, _ in served}
     if mno.upper() not in mnos:
         return f"{mno} is not a served MNO (a new MNO's first release is ingested by the administrator)"
-    if f"{mno}__{release}".upper() in {c.upper() for c in cells}:
+    if (mno.upper(), release) in {(m.upper(), r) for m, r in served}:
         return f"{mno} {release} is already served"
     for ing in await job_queue.list_ingests(limit=500):
         if ing.state in _TAKEN_STATES and ing.mno.upper() == mno.upper() and ing.release == release:
             return f"{mno} {release} is already {ing.state} (ingest {ing.id[:8]})"
-    for ing in await job_queue.list_ingests(limit=500):
-        if ing.state in ("queued", "running"):
-            return f"another ingest is {ing.state} ({ing.mno} {ing.release}); one at a time"
+    # Submits queue: the runner takes them in order, one cycle at a time.
     return None
+
+
+def queue_positions(ingests: list[Ingest]) -> dict[str, int]:
+    """1-based position of every queued ingest, oldest first."""
+    queued = sorted((i for i in ingests if i.state == "queued"), key=lambda i: i.created_at)
+    return {i.id: n for n, i in enumerate(queued, start=1)}
+
+
+def blocking_ingests(ingests: list[Ingest]) -> list[Ingest]:
+    """Failed or cancelled ingests that opened a build and were not
+    abandoned: their cycle may still hold the driver's baton, and the
+    next queued ingest fails at `start` until they are retried or
+    abandoned."""
+    return [i for i in ingests if i.state in ("failed", "cancelled") and i.build]
 
 
 # -- pages ------------------------------------------------------------------------------
@@ -173,10 +197,11 @@ async def ingest_page(request: Request):
     job_queue: JobQueue = request.app.state.job_queue
     ingests = await job_queue.list_ingests(limit=50)
     cells = await served_cells()
-    mnos = sorted({c.split("__", 1)[0] for c in cells}) if cells else []
+    mnos = sorted({ck[0] for ck in (parse_cell_dirname(c) for c in cells) if ck}) if cells else []
     return _template_response(request, "ingest.html", {
         "locked": False,
-        "ingests": [_ingest_view(i) for i in ingests],
+        "ingests": _views(ingests, tm.is_ingest_admin(request)),
+        "blocking": [_ingest_view(i) for i in blocking_ingests(ingests)],
         "mnos": mnos,
         "store_reachable": cells is not None,
         "runner": _runner_status(await job_queue.list_runners()),
@@ -194,11 +219,24 @@ async def ingest_detail_page(request: Request, ingest_id: str):
     if ing is None:
         return RedirectResponse(f"{_root(request)}/ingest?error=no+such+ingest", status_code=303)
     job = await job_queue.get_meta(ing.job_id) if ing.job_id else None
+    view = _ingest_view(ing, tm.is_ingest_admin(request))
+    if ing.state == "queued":
+        view["queue_position"] = queue_positions(await job_queue.list_ingests(limit=500)).get(ing.id)
     return _template_response(request, "ingest_detail.html", {
-        "ing": _ingest_view(ing), "job": job,
+        "ing": view, "job": job,
         "runner": _runner_status(await job_queue.list_runners()),
         "error": request.query_params.get("error", ""),
     })
+
+
+def _views(ingests: list[Ingest], admin: bool = False) -> list[dict[str, Any]]:
+    pos = queue_positions(ingests)
+    out = []
+    for i in ingests:
+        v = _ingest_view(i, admin)
+        v["queue_position"] = pos.get(i.id)
+        out.append(v)
+    return out
 
 
 def _root(request: Request) -> str:
@@ -230,7 +268,9 @@ async def api_list(request: Request):
     if not tm.is_ingest_user(request):
         return _forbidden(request)
     job_queue: JobQueue = request.app.state.job_queue
-    return JSONResponse({"ingests": [_ingest_view(i) for i in await job_queue.list_ingests(limit=100)],
+    ingests = await job_queue.list_ingests(limit=100)
+    return JSONResponse({"ingests": _views(ingests),
+                         "blocking": [i.id for i in blocking_ingests(ingests)],
                          "runner": _runner_status(await job_queue.list_runners())})
 
 
@@ -263,7 +303,9 @@ async def api_submit(request: Request):
                                  stages=list(INGEST_STAGES), params={"ingest_id": ing.id})
     await job_queue.update_ingest(ing.id, job_id=job.id)
     if _wants_json(request):
-        return JSONResponse({"ingest_id": ing.id, "job_id": job.id, "state": "queued"}, status_code=202)
+        position = queue_positions(await job_queue.list_ingests(limit=500)).get(ing.id)
+        return JSONResponse({"ingest_id": ing.id, "job_id": job.id, "state": "queued",
+                             "queue_position": position}, status_code=202)
     return RedirectResponse(f"{_root(request)}/ingest/{ing.id}", status_code=303)
 
 
@@ -276,7 +318,7 @@ async def api_get(request: Request, ingest_id: str):
     if ing is None:
         return JSONResponse({"error": "no such ingest"}, status_code=404)
     job = await job_queue.get_meta(ing.job_id) if ing.job_id else None
-    return JSONResponse({"ingest": _ingest_view(ing),
+    return JSONResponse({"ingest": _ingest_view(ing, tm.is_ingest_admin(request)),
                          "job": {"id": job.id, "status": job.status, "current_stage": job.current_stage,
                                  "progress": job.progress, "heartbeat_at": job.heartbeat_at,
                                  "error_message": job.error_message} if job else None})
@@ -308,7 +350,7 @@ async def api_events(request: Request, ingest_id: str):
                    job.current_stage if job else None)
             if key != last:
                 last = key
-                view = _ingest_view(ing)
+                view = _ingest_view(ing, tm.is_ingest_admin(request))
                 view["job"] = {"id": job.id, "status": job.status, "current_stage": job.current_stage,
                                "progress": job.progress} if job else None
                 yield f"event: state\ndata: {json.dumps(view)}\n\n"
@@ -334,9 +376,10 @@ async def _action(request: Request, ingest_id: str, action: str):
     ing = await job_queue.get_ingest(ingest_id)
     if ing is None:
         return JSONResponse({"error": "no such ingest"}, status_code=404)
-    view = _ingest_view(ing)
+    view = _ingest_view(ing, tm.is_ingest_admin(request))
     by = (await _body(request)).get("submitted_by", "") or "anonymous"
     error = None
+    status = 409
     job = None
     if action == "flip":
         if not view["can_flip"]:
@@ -364,6 +407,35 @@ async def _action(request: Request, ingest_id: str, action: str):
         else:
             job = await job_queue.submit("ingest-abandon", by, environment=f"ingest:{ing.mno}/{ing.release}",
                                          params={"ingest_id": ing.id})
+    elif action == "purge":
+        if not tm.is_ingest_admin(request):
+            error = "purge is the administrator's action (admin cookie); abandon is yours"
+            status = 403
+        elif not view["can_purge"]:
+            error = f"cannot purge: state {ing.state} (abandon a staged ingest first)"
+        else:
+            job = await job_queue.submit("ingest-purge", by, environment=f"ingest:{ing.mno}/{ing.release}",
+                                         params={"ingest_id": ing.id})
+    elif action == "redo":
+        body = await _body(request)
+        busy = [i for i in await job_queue.list_ingests(limit=500)
+                if i.mno == ing.mno and i.release == ing.release and i.state in ("queued", "running", "staged")]
+        if not view["can_redo"]:
+            error = f"only a served ingest can be redone: state {ing.state}"
+        elif busy:
+            error = f"{ing.mno} {ing.release} already has ingest {busy[0].id[:8]} {busy[0].state}"
+        else:
+            note = (str(body.get("note") or "").strip() or f"redo of {ing.id[:8]}")[:500]
+            redo = await job_queue.create_ingest(mno=ing.mno, release=ing.release, source=ing.source,
+                                                 submitted_by=by, note=note, redo_of=ing.id)
+            job = await job_queue.submit("ingest", by, environment=f"ingest:{ing.mno}/{ing.release}",
+                                         stages=list(INGEST_STAGES),
+                                         params={"ingest_id": redo.id, "redo": True})
+            await job_queue.update_ingest(redo.id, job_id=job.id)
+            if _wants_json(request):
+                return JSONResponse({"ingest_id": redo.id, "job_id": job.id, "action": action,
+                                     "redo_of": ing.id}, status_code=202)
+            return RedirectResponse(f"{_root(request)}/ingest/{redo.id}", status_code=303)
     elif action == "cancel":
         if not view["can_cancel"] or not ing.job_id:
             error = f"nothing to cancel: state {ing.state}"
@@ -375,7 +447,7 @@ async def _action(request: Request, ingest_id: str, action: str):
         error = f"unknown action {action}"
     if error:
         if _wants_json(request):
-            return JSONResponse({"error": error}, status_code=409)
+            return JSONResponse({"error": error}, status_code=status)
         return RedirectResponse(f"{_root(request)}/ingest/{ing.id}?error={httpx.QueryParams({'e': error})['e']}",
                                 status_code=303)
     if job is not None:
@@ -404,6 +476,18 @@ async def api_retry(request: Request, ingest_id: str):
 @router.post("/api/ingest/{ingest_id}/abandon")
 async def api_abandon(request: Request, ingest_id: str):
     return await _action(request, ingest_id, "abandon")
+
+
+@router.post("/api/ingest/{ingest_id}/purge")
+async def api_purge(request: Request, ingest_id: str):
+    return await _action(request, ingest_id, "purge")
+
+
+@router.post("/api/ingest/{ingest_id}/redo")
+async def api_redo(request: Request, ingest_id: str):
+    """Run a served cell's model stages again as a new ingest (a new
+    generation of the cell); the original stays served until the redo is."""
+    return await _action(request, ingest_id, "redo")
 
 
 @router.post("/api/ingest/{ingest_id}/cancel")

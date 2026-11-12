@@ -1,0 +1,9 @@
+{
+  "name": "sira-plain",
+  "note": "SIRA enrichment with the document prompts alone: no taxonomy stage, no taxonomy block.",
+  "stages": ["enrich"],
+  "params": {
+    "enrich": {"generation": 1}
+  },
+  "serve": {"mode": "sira", "units": ["cells", "trees", "history"]}
+}

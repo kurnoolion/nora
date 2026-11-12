@@ -96,6 +96,13 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("TAX-W005", "Ledger present but no unit is cacheable", "Every stored tree hash is stale — parse trees regenerated since the last taxonomy run; full-corpus re-extract follows"),
     ErrorDef("TAX-W006", "Overview fingerprint changed — {count} cached extractions discarded", "Full-corpus re-extract follows; if the overview files were not deliberately edited, check NORA_TAXONOMY_OVERVIEW_DIR in the wiring env"),
     ErrorDef("TAX-I001", "{cached} cached / {extract} to extract (of {total} units)", "Launch-time extraction plan; an unexpectedly large extract count can be stopped before LLM cost accrues"),
+    ErrorDef("TAX-W007", "{cell} has no parse trees — taxonomy skipped for that cell", "Run the parse stage for the cell (or narrow --mno/--release) before taxonomy"),
+    ErrorDef("TAX-W008", "Unreadable features file {file}: {reason}", "The build-level taxonomy skips it; re-run the taxonomy stage for that cell to rewrite it"),
+
+    # --- Ingest runner (IRN) — the host-side self-serve ingest service's own codes
+    ErrorDef("IRN-E001", "Runner config error: {reason}", "Fix config/ingest_runner.json (see config/ingest_runner.example.json)"),
+    ErrorDef("IRN-E002", "Cannot open the jobs DB {path}: {reason}", "Check jobs_db in the runner config and that the build user can write the web state dir"),
+    ErrorDef("IRN-E003", "Config values still look like the template: {keys}", "Replace every /path/to and <...> placeholder in config/ingest_runner.json"),
 
     # --- Standards (STD) ---
     ErrorDef("STD-E001", "Failed to download spec {spec}: {reason}", "Check network connectivity and 3GPP FTP availability"),
@@ -177,6 +184,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("REG-E006", "Unit {unit} listed twice in one release set", "A unit has one version per set; check the base set and the sources"),
     ErrorDef("REG-E007", "Unknown release set {label}", "See `publish status` for the sets in this registry"),
     ErrorDef("REG-E008", "Bad gate / flip argument: {detail}", "Kinds: golden-stage1, golden-stage2, manual; verdicts: pass, fail, waived; flip modes: staged, expedited, override"),
+    ErrorDef("REG-E009", "Release set {label} is active", "An active set is never purged; flip or roll back to another set first"),
     # release-change answers from the History store (strand rel-history)
     ErrorDef("RHD-E001", "Fewer than two served releases for this MNO ({count})", "Release-change questions need two releases in the History store; publish the next release first"),
     ErrorDef("RHD-E002", "Release {release} is not served for this MNO", "Name a served release, 'latest' or 'previous'; the Ask page lists the served releases"),
@@ -188,8 +196,14 @@ _DEFS: list[ErrorDef] = [
     # --- Pipeline (PIP) ---
     ErrorDef("PIP-E001", "Stage {stage} failed: {reason}", "Check stage-specific error above"),
     ErrorDef("PIP-E002", "Required input missing for stage {stage}: {path}", "Run preceding stages first"),
-    ErrorDef("PIP-E003", "No profile bound for {cells}", "Add bindings to <env_dir>/profiles.json, or pass --profile"),
+    ErrorDef("PIP-E003", "No profile bound for {cells}", "Add bindings to profiles.json (the corpus root when NORA_CORPUS_DIR is set, else <env_dir>), or pass --profile"),
     ErrorDef("PIP-W001", "Stage {stage} skipped: {reason}", "May affect downstream stages"),
+    ErrorDef("PIP-W002", "Stage {stage} {cell}: input {input} has no recorded fingerprint in this build", "The input was built before the build had a manifest, or in another build; the fingerprint records it as absent"),
+    ErrorDef("PIP-E004", "Build manifest unreadable: {path} ({reason})", "Fix or remove <env_dir>/STAGES.json; every stage then recomputes its fingerprints"),
+    ErrorDef("RCP-E001", "Recipe unreadable: {path} ({reason})", "Fix the JSON under customizations/recipes/ (or the build's RECIPE.json)"),
+    ErrorDef("RCP-E002", "Recipe invalid: {reason}", "Recipes name variant stages only (taxonomy, enrich) with their known params; see core/src/pipeline/recipes.py"),
+    ErrorDef("PIP-E005", "Stage store unwritable: {path} ({reason})", "Check NORA_STAGES_ROOT: it must exist and be writable by the build user; unset it to run without the store"),
+    ErrorDef("PIP-E006", "Stage store GC refused: {reason}", "Name every builds root, labels root and registry on the host (--keep-from, --registry); fix or remove an unreadable manifest first"),
 
     # --- Environment (ENV) ---
     ErrorDef("ENV-E001", "Document root does not exist: {path}", "Create directory or check path"),

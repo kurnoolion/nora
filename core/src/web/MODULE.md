@@ -21,10 +21,10 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - `load_config(path=None) -> WebConfig` — resolves env_dir (web.json > $ENV_DIR > env.json) and per-DB overrides (CLI / env var > env.json > computed default) in one call
   - `DEFAULT_CONFIG_PATH`, `DEFAULT_ENV_JSON_PATH` — module-level constants pointing at `config/web.json` and `config/env.json`
 - Jobs (jobs.py, jobs_schema.py):
-  - `Job` dataclass — id, job_type (`pipeline | query | eval | ingest | ingest-flip | ingest-rollback | ingest-abandon`), status, pipeline/query fields, progress, log_lines, result, error; `params` (JSON request of a runner job), `runner`, `heartbeat_at` (who claimed an `ingest*` job and when it last reported alive)
-  - `Ingest` dataclass — one self-serve ingest across its jobs: mno, release, source, note, submitted_by, state (`queued | running | staged | served | rolled_back | failed | cancelled | abandoned`), stage, build, label, run_ref, recall_avg, baseline, verdict, verdict_detail, previous_label, flipped_at, rolled_back_at, error
+  - `Job` dataclass — id, job_type (`pipeline | query | eval | ingest | ingest-flip | ingest-rollback | ingest-abandon | ingest-purge`), status, pipeline/query fields, progress, log_lines, result, error; `params` (JSON request of a runner job), `runner`, `heartbeat_at` (who claimed an `ingest*` job and when it last reported alive)
+  - `Ingest` dataclass — one self-serve ingest across its jobs: mno, release, source, note, submitted_by, state (`queued | running | staged | served | rolled_back | failed | cancelled | abandoned | purged`), stage, build, label, run_ref, recall_avg, baseline, verdict, verdict_detail, previous_label, flipped_at, rolled_back_at, error, callback_url, redo_of (the served ingest a redo repeats), stage_origins (JSON `{stage: computed | store | forced}`, written by the runner), documents_staged (1 when this ingest copied the cell's documents; abandon and purge remove only those; additive column)
   - `JobQueue(db_path)` — aiosqlite-backed queue; `init_db()` (applies `jobs_schema.ensure_schema`: additive `ALTER TABLE` for the runner columns, the `ingests` table), submit (`params=`) / update (`runner`, `heartbeat_at` allowed) / list / cancel / load / append-log; `create_ingest`, `get_ingest`, `list_ingests`, `update_ingest`; `list_runners` (the `runners` table: when each ingest runner last polled and what it ran)
-  - `jobs_schema` — standard-library module holding the DDL, `JOBS_ADDED_COLUMNS` / `INGESTS_ADDED_COLUMNS`, `INGEST_STATES`, `NOTIFY_STATES`, `INGEST_STAGES`, `RETRY_FROM`, `RUNNER_JOB_TYPES` and `ensure_schema(con)`; imported by [ingest_runner](../ingest_runner/MODULE.md), which opens the same file on the host. The web never runs an `ingest*` job in-process.
+  - `jobs_schema` — standard-library module holding the DDL, `JOBS_ADDED_COLUMNS` / `INGESTS_ADDED_COLUMNS`, `INGEST_STATES`, `PURGEABLE_STATES`, `NOTIFY_STATES`, `INGEST_STAGES`, `RETRY_FROM`, `RUNNER_JOB_TYPES` and `ensure_schema(con)`; imported by [ingest_runner](../ingest_runner/MODULE.md), which opens the same file on the host. The web never runs an `ingest*` job in-process.
 - Metrics (metrics.py):
   - `MetricRecord` — timestamp, category (`request | llm | pipeline | resource | eval`), name, value, unit, tags
   - `MetricsStore(db_path)` — aiosqlite store with indexes on category / name / timestamp; `init_db()`, `record()`, query helpers
@@ -81,7 +81,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - `PathMapper(mappings)` (path_mapper.py) — `to_linux()`, `to_windows()`; translates Windows UNC paths to Linux mount points
 - `ResourceSampler` (resource_sampler.py) — background task sampling CPU / memory / disk / GPU via `/proc` and `nvidia-smi` (no `psutil` dependency)
 - Routers (routes/): dashboard, environments, pipeline, jobs, ingest (self-serve ingestion, below), query, corrections, files, metrics_route, parse_review (Parse page — corpus summary landing plus the per-doc post-parse 3-pane **Review** view), req_browser (Requirement Browser), resolve_review (Resolve Review UI), playground (Test/Ask page — `POST /api/test/ask` (optional `provider` + `mode` form fields, validated by `_form_provider` / `_form_mode`: `provider` names an entry from the `config/llm.json` roster, `mode` is the asker's Fast/Think choice — fast suppresses thinking using the selected entry's declared `reasoning_control` wire form (`reasoning_effort: "none"` or `chat_template_kwargs: {"enable_thinking": false}`; there is no form that works on every endpoint), think sends no reasoning field at all so the deployment's own behaviour applies. The asker still sees exactly two states: only the wire form varies, and it varies per endpoint, not per user choice — D-216 rejected exposing effort levels here. Empty means the provider's declared `default_mode`. Every synthesis path on the page honours both; unknown values degrade rather than failing the question, and a mode on a provider declaring no reasoning mechanism is ignored with a warning. Recorded on `lane_config` as `llm_provider_id` / `llm_mode` beside `llm_model`, so an answer is attributable to a (provider, mode, model) triple. With no roster configured the controls are not rendered at all — the pre-roster page unchanged. An optional `model` form field (`_form_model`) picks a model on the selected provider; `_build_llm_from_env_or_default` honours it only if `model_discovery.allowed_models(entry)` lists it (cache read, never a fetch), else the entry's default with a warning; the fallback entry always uses its own default. `GET /api/test/providers/{provider_id}/models` returns `{models, default, discovered}` for the Model select (404 for an id not in the roster; team-gate allowlisted via `/api/test`)), `POST /api/test/synthesize-group` for D-049 disambiguation user-pick path, (team gate: for a gated member `/api/test/ask` runs only `section=merged`, lanes forced to SIRA, and refuses every other section — the default `requirement_bot` included — before dispatch; `synthesize-group`, a NORA-pipeline re-run, is refused outright. Field-found: the override sat inside the merged branch, so a POST without `section` reached the NORA lane), `POST /api/test/ask-stream` (SSE path of the merged form: same form fields as `/api/test/ask`, emits per-lane `progress` events and heartbeats, then `done` with the rendered merged answer; accepts only `section=merged`, else 400; team-gated like `/api/test/ask` — gated requests run the SIRA lane only), `POST /api/test/feedback`, `GET /api/req/{req_id}` (strand req-id-bubbles — read-only requirement fragment behind the answer bubbles; resolves through the shared `req_tree.find_req` + `latest_match`, 404 when the id is not in the parse layer; team-gate allowlisted so shared answers stay readable for gated experts); strands ask-page-ux/ask-history [D-208, D-209]: `GET /ask/s/{row_id}` read-only shared-answer snapshot of a stored ask (normal user view ONLY — engineering internals are not persisted at ask time, D-209; retroactively shareable, no schema change) + body-only `GET /api/ask/s/{row_id}` (the history detail pane reuses the shared markup via `_shared_body.html` so the two surfaces cannot drift) + `GET /ask/history` (browser-localStorage question history — server-side history REJECTED, D-208: optional free-text `user_name` makes it spoofable/merged-anonymous; stale entries 404 and offer removal). All three paths are team-gate allowlisted — shared answers are team-safe by D-209's normal-view-only constraint), config_route (Config page — `GET /config`, `POST /api/config/save`; D-053) — each mounted via `app.include_router`
-- Ingest (routes/ingest.py; strand self-serve-ingestion, design §5). Every route requires `is_ingest_user` (page: locked notice; API: 403, or a 303 back to the page for a form post). `GET /ingest` — the form (served MNOs from the store's healthz `cells`, release `MMMYYYY`, share path, name, note), the list of ingests, the runner's last-seen line (`runners` table). `POST /api/ingest` — JSON or form `{source, mno, release, note?, submitted_by?, callback_url?}`; `validate_request` refuses in order: MNO shape, release shape, source not a UNC path, `callback_url` not http(s), store unreachable, MNO not served, cell already served, cell already queued/running/staged/served, another ingest queued or running (one at a time); 400 `{error}` (API) or a redirect with `?error=` (form); on success a `queued` `ingests` row plus an `ingest` job with `params.ingest_id` and the twelve `INGEST_STAGES`, 202 `{ingest_id, job_id, state}` or a 303 to the detail page. `GET /ingest/{id}` — stage chips (`STAGE_HINTS`), the gate verdict with its detail, the buttons the state allows, the job's log through the existing `/api/jobs/{id}/stream`. `GET /api/ingest`, `GET /api/ingest/{id}` — JSON views (`_ingest_view`: the row plus `can_flip` (staged and pass), `can_rollback` (served with a previous label), `can_retry` (failed; `retry_from` per `RETRY_FROM`), `can_abandon` (failed, cancelled, staged), `can_cancel` (queued, running), `stages`). `GET /api/ingest/{id}/events` — server-sent events: `state` (the JSON view plus the job's status) on every change, `done` once no job of the ingest runs; a client that holds the connection needs no polling. `callback_url`, when given, is posted to by the runner on each state change (signed; host allowlist in the runner config) — the push path for people (a chat or mail bridge) and systems. `POST /api/ingest/{id}/{flip|rollback|retry|abandon|cancel}` — enqueue the matching `ingest-*` job (retry: an `ingest` job with `retry_from`, the row back to `queued`; cancel: `JobQueue.cancel` on the current job), 202 or 409 `{error}` when the state does not allow it, 404 for no such ingest. `served_cells()` is the healthz client (None when the store cannot be asked; tests replace it).
+- Ingest (routes/ingest.py; strand self-serve-ingestion, design §5). Every route requires `is_ingest_user` / `is_ingest_admin` (page: locked notice; API: 403, or a 303 back to the page for a form post). `GET /ingest` — the form (served MNOs from the store's healthz `cells`, release `MMMYYYY`, share path, name, note), the list of ingests, the runner's last-seen line (`runners` table). `POST /api/ingest` — JSON or form `{source, mno, release, note?, submitted_by?, callback_url?}`; `validate_request` refuses in order: MNO shape, release shape, source not a UNC path, `callback_url` not http(s), store unreachable, MNO not served, cell already served, cell already queued/running/staged/served; 400 `{error}` (API) or a redirect with `?error=` (form); on success a `queued` `ingests` row plus an `ingest` job with `params.ingest_id` and the twelve `INGEST_STAGES`, 202 `{ingest_id, job_id, state, queue_position}` or a 303 to the detail page. Submits queue (`queue_positions`, oldest first; the runner claims in that order), one cycle runs at a time; `blocking_ingests` names failed or cancelled ingests that opened a build and were not abandoned, since their cycle may hold the driver's baton and the next queued ingest then fails at `start` — the page shows them in a warning, the list API as `blocking`. `GET /ingest/{id}` — stage chips (`STAGE_HINTS`), the gate verdict with its detail, the buttons the state allows, the job's log through the existing `/api/jobs/{id}/stream`. `GET /api/ingest`, `GET /api/ingest/{id}` — JSON views (`_ingest_view`: the row plus `can_flip` (staged and pass), `can_rollback` (served with a previous label), `can_retry` (failed; `retry_from` per `RETRY_FROM`), `can_abandon` (failed, cancelled, staged), `can_cancel` (queued, running), `can_redo` (served), `origins` (the parsed `stage_origins`), `stages`). The detail page shows a found/computed badge per recorded stage and links a redo to its original. `GET /api/ingest/{id}/events` — server-sent events: `state` (the JSON view plus the job's status) on every change, `done` once no job of the ingest runs; a client that holds the connection needs no polling. `callback_url`, when given, is posted to by the runner on each state change (signed; host allowlist in the runner config) — the push path for people (a chat or mail bridge) and systems. `POST /api/ingest/{id}/redo` (stage graph, step 3) — for a served ingest only, and only when no ingest of that cell is queued, running or staged: a new `ingests` row for the same cell and source with `redo_of` set and `note` `redo of <id>` (or the body's note), and an `ingest` job with `params.redo`; 202 `{ingest_id, job_id, action, redo_of}` or a 303 to the new ingest's page; the original stays served. `POST /api/ingest/{id}/{flip|rollback|retry|abandon|cancel}` — enqueue the matching `ingest-*` job (retry: an `ingest` job with `retry_from`, the row back to `queued`; cancel: `JobQueue.cancel` on the current job), 202 or 409 `{error}` when the state does not allow it, 404 for no such ingest. `served_cells()` is the healthz client (None when the store cannot be asked; tests replace it). `POST /api/ingest/{id}/purge` is the administrator's (`is_ingest_admin`: the admin cookie, in every deployment, since it deletes; 403 for the ingest token, which sees no button) and enqueues `ingest-purge` for an `abandoned | rolled_back | failed | cancelled` ingest (`purgeable`; `can_purge` = purgeable and administrator; 409 otherwise, a staged one is abandoned first); the runner removes every artifact and sets `purged`, a terminal state that does not take the cell.
 - `model_discovery` (model_discovery.py) — in-process per-provider cache of `llm.list_models()` results for `model_discovery_ttl_s`. `models_for(entry)` fetches when stale and keeps the last good list when a refresh fails (a failed attempt is retried once per TTL, not per request); `allowed_models(entry)` reads the cache only. The entry's configured `model` is always present in both. The Model select shows the list unfiltered — no filtering of embedding/reranker models.
 - Templates: `ingest.html`, `ingest_detail.html`, `partials/ingest_state.html` (self-serve ingestion); the sidebar has an Ingest entry (`nav_ingest`).
 - App state (set up in `lifespan`): `app.state.job_queue`, `app.state.metrics`, `app.state.feedback_store`, `app.state.path_mapper`, `app.state.config_store` (ConfigStore | None — None when `--config-db` is unset), `app.state.query_pipeline` (cached after first build; saving via `/api/config/save` sets it back to None so the next query rebuilds with the new resolved values).
@@ -122,7 +122,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - **`/config` page + ConfigStore as the user-editing surface for the resolver chain** [D-053]: the page renders LLM and Retrieval knobs grouped by category (Features / Values / Tunable parameters) per `CONFIG_SECTIONS`. New `kind="dict_by_query_type"` schema field renders a per-`QueryType` table editor (used by `bm25_weight_by_type` today; pattern generalizes to the rest of Phase 4-migrate's per-type maps). Opt-in: when `--config-db` is unset, the page renders read-only with a notice and the resolver chain falls through to JSON files / defaults. See [`../query/RETRIEVAL.md`](../query/RETRIEVAL.md) §14 for the full configuration model.
 
 **Non-goals**
-- No multi-user auth / RBAC in v1. The team-mode gate (FR-41) is one shared admin token that unlocks the full app, not per-user identity or roles. Production deployment runs behind an authenticating reverse proxy (D-016); when in-app authn is added, it's a distinct cross-cutting change, not a router plugin.
+- No multi-user auth / RBAC in v1. The gates are shared tokens, not per-user identity: the team-mode admin token unlocks the full app (FR-41), the ingest token opens the self-serve ingestion surface (FR-47), and the one deleting action there (Purge) needs the admin token — a two-token split, still no roles or users. Production deployment runs behind an authenticating reverse proxy (D-016); when in-app authn is added, it's a distinct cross-cutting change, not a router plugin.
 - Not a deployment platform. Production deployment (systemd / container / proxy config) is the user's responsibility; app only exposes the right ASGI entrypoint.
 - No WebSocket real-time — SSE is sufficient for unidirectional log streaming; WS adds reconnect complexity we don't need.
 - No external cache service — no Redis, no memcached. Durable state is SQLite + filesystem. The in-process caches that exist hold derived state only and rebuild on demand: `model_discovery._cache` (per-provider model lists, TTL), `playground._INGESTED_CACHE` (corpus inventory, mtime fingerprint + TTL), and `app.state.query_pipeline` (cleared on config save). A restart loses nothing but warm-up time.
@@ -252,27 +252,45 @@ _Alphabetical, regenerated by regen-map._
 - `logger` — constant — pub
 
 `jobs.py`
+- `Ingest` — dataclass — pub — One self-serve ingest across its jobs; the row the Ingest page shows.
 - `Job` — dataclass — pub
 - `JobQueue` — class — pub
   - `__init__` — constructor — internal
   - `append_log` — method — pub
   - `cancel` — method — pub
   - `cleanup_old` — method — pub
+  - `create_ingest` — method — pub
   - `get` — method — pub
+  - `get_ingest` — method — pub
   - `get_logs` — method — pub
   - `get_logs_with_numbers` — method — pub
   - `get_meta` — method — pub — Get job metadata without loading log lines.
   - `init_db` — method — pub
+  - `list_ingests` — method — pub
   - `list_jobs` — method — pub
+  - `list_runners` — method — pub — Every runner that ever polled: name, seen_at, job_id.
   - `submit` — method — pub
+  - `update_ingest` — method — pub — Set columns of an ingest row; unknown names are ignored.
   - `update_status` — method — pub
-- `_IDX_JOBS_CREATED` — constant — internal
-- `_IDX_JOBS_STATUS` — constant — internal
-- `_IDX_LOGS_JOB` — constant — internal
-- `_JOBS_SCHEMA` — constant — internal
-- `_LOGS_SCHEMA` — constant — internal
 - `_now_iso` — function — internal
+- `_row_to_ingest` — function — internal
 - `_row_to_job` — function — internal
+
+`jobs_schema.py`
+- `INDEXES` — constant — pub
+- `INGESTS_ADDED_COLUMNS` — constant — pub
+- `INGESTS_SCHEMA` — constant — pub
+- `INGEST_STAGES` — constant — pub
+- `INGEST_STATES` — constant — pub
+- `JOBS_ADDED_COLUMNS` — constant — pub
+- `JOBS_SCHEMA` — constant — pub
+- `LOGS_SCHEMA` — constant — pub
+- `NOTIFY_STATES` — constant — pub
+- `PURGEABLE_STATES` — constant — pub
+- `RETRY_FROM` — constant — pub
+- `RUNNERS_SCHEMA` — constant — pub
+- `RUNNER_JOB_TYPES` — constant — pub
+- `ensure_schema` — function — pub — Create the tables and indexes; add the columns an older `jobs`
 
 `markdown_render.py`
 - `_DANGEROUS_TAG_OPEN_RE` — constant — internal
@@ -293,7 +311,7 @@ _Alphabetical, regenerated by regen-map._
   - `handle_starttag` — method — pub
   - `result` — method — pub
 - `_bubble_html` — function — internal — One collapsed badge + the panel its click expands. The panel body is
-- `_linkify_req_ids` — function — internal
+- `_linkify_req_ids` — function — internal — `endpoints` ({req_id: url}) sends a bubble to another route than the
 - `_render_pipe_table` — function — internal — Build a table from `render_table_markdown`'s pipe output.
 - `_render_prose` — function — internal — Corpus prose: escaped, newlines preserved by the class's `pre-wrap`.
 - `_render_segment` — function — internal — Pass 2 over a table-HTML-free segment: group contiguous pipe-table
@@ -343,6 +361,7 @@ _Alphabetical, regenerated by regen-map._
 - `_reset_cache` — function — internal — Test hook.
 - `_with_default` — function — internal
 - `allowed_models` — function — pub — Models the answer path may use for `entry`. Cache only — never fetches.
+- `has_entry` — function — pub — Whether discovery has run for `entry` in this process (hit or miss).
 - `logger` — constant — pub
 - `models_for` — function — pub — `(models, discovered)` for one roster entry, fetching when stale.
 
@@ -427,7 +446,7 @@ _Alphabetical, regenerated by regen-map._
 - `_LABELED_OPS` — constant — internal
 - `_SIRA_URLS` — constant — internal
 - `_TABLE_PAGE` — constant — internal
-- `_cell_mno_release` — function — internal
+- `_cell_mno_release` — function — internal — `(mno, release)` of a cell name: `<mno>/<release>`, or the older
 - `_pending_ctx` — function — internal — Pending = the label VIEW's overlay content differs from what its
 - `_row_view` — function — internal — Merge a service row with the CURRENT overlay entry into template
 - `_service_get` — function — internal — GET from the primary nora-store; service errors surface as 502.
@@ -565,6 +584,46 @@ _Alphabetical, regenerated by regen-map._
 - `pin_enabled` — function — pub — The ``NORA_PIN_NAMED_IDS`` switch, read per request; default off.
 - `pinned_candidates` — function — pub — The question's named IDs and, for each one found in the Trees store,
 - `run_id_lookup_lane` — function — pub — The lane output in the merged tab's shape (`result`, `elapsed_ms`,
+
+`routes/ingest.py`
+- `STAGE_HINTS` — constant — pub
+- `_MNO_RE` — constant — internal
+- `_REL_RE` — constant — internal
+- `_RUNNER_FRESH_SECONDS` — constant — internal
+- `_TAKEN_STATES` — constant — internal
+- `_TERMINAL_JOB` — constant — internal
+- `_UNC_RE` — constant — internal
+- `_action` — function — internal
+- `_body` — function — internal
+- `_callback_ok` — function — internal
+- `_forbidden` — function — internal
+- `_ingest_view` — function — internal
+- `_now_iso` — function — internal
+- `_root` — function — internal
+- `_runner_status` — function — internal
+- `_stage_done` — function — internal
+- `_store_url` — function — internal
+- `_views` — function — internal
+- `_wants_json` — function — internal
+- `api_abandon` — function — pub
+- `api_cancel` — function — pub
+- `api_events` — function — pub — Server-sent events for one ingest: `state` on every change of
+- `api_flip` — function — pub
+- `api_get` — function — pub
+- `api_list` — function — pub
+- `api_purge` — function — pub
+- `api_redo` — function — pub — Run a served cell's model stages again as a new ingest (a new
+- `api_retry` — function — pub
+- `api_rollback` — function — pub
+- `api_submit` — function — pub — Enqueue one ingest. JSON or form: `source` (share path), `mno`,
+- `blocking_ingests` — function — pub — Failed or cancelled ingests that opened a build and were not
+- `ingest_detail_page` — function — pub
+- `ingest_page` — function — pub
+- `logger` — constant — pub
+- `queue_positions` — function — pub — 1-based position of every queued ingest, oldest first.
+- `router` — constant — pub
+- `served_cells` — function — pub — `<mno>__<release>` of every served cell, from the store's healthz;
+- `validate_request` — function — pub — The reason a request is refused, or None. Order: shape, served MNO,
 
 `routes/jobs.py`
 - `TERMINAL_STATUSES` — constant — pub
@@ -768,10 +827,15 @@ _Alphabetical, regenerated by regen-map._
 - `ADMIN_COOKIE` — constant — pub
 - `ADMIN_TOKEN` — constant — pub
 - `ENV_ADMIN_TOKEN` — constant — pub
+- `ENV_INGEST_TOKEN` — constant — pub
 - `ENV_TEAM_MODE` — constant — pub
+- `INGEST_COOKIE` — constant — pub
+- `INGEST_TOKEN` — constant — pub
 - `TEAM_MODE` — constant — pub
 - `_TEAM_ALLOWED` — constant — internal
 - `is_admin` — function — pub — True when the request may see the full app: gate off (everyone), or a
+- `is_ingest_admin` — function — pub — True when the request holds a valid admin cookie. Independent of team
+- `is_ingest_user` — function — pub — True when the request holds the ingest cookie (the requirements
 - `path_allowed_for_team` — function — pub — Whitelist check for the gated surface. `/` is NOT allowed — gated members
 - `team_restricted` — function — pub — True when this request is a gated team member (no admin cookie).
 
@@ -784,8 +848,8 @@ _Alphabetical, regenerated by regen-map._
 <!-- END:STRUCTURE -->
 
 **Depends on**
-[env](../env/MODULE.md), [llm](../llm/MODULE.md) (`model_discovery` imports `llm.list_models`; `playground.py` already imports `llm.openai_provider` without the edge being declared — adding it once covers both), [models](../models/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md), [query](../query/MODULE.md), [resolver](../resolver/MODULE.md), [corrections](../corrections/MODULE.md), [eval](../eval/MODULE.md) (eval-invocation routes; Eval Studio consumes `golden.py` schema/loaders — edge declared at strand golden-eval design time, closing the asymmetry with eval's Depended-on-by), [extraction](../extraction/MODULE.md) (`release_key.release_order_key` — release ordering in req_tree.py, playground.py and enrich_review.py), [stores](../stores/MODULE.md) (`open_overlay_store` / `OverlayStore` + `overlay_ops` — the enrichment overlay store's backend and edit semantics, strand corp-db-layer S3/S6; `open_tree_store` / `TreeStore` — req_tree.py's backend, S4; `open_history_store`, `clients.store_backend_kind` — health reporting, S6); release-change lane: `query.release_diff`, `query.analyzer.MockQueryAnalyzer`, `stores.open_history_store`.
-**nora-store service** — two edges. Code import: routes/enrich_review.py imports `allowed_labels` from `core.src.store_service.enrich_overlay` (a re-export of `core.src.stores.overlay_ops`; stdlib-only, so the import carries no service dependencies); enrich_overlay_store.py imports `overlay_ops` directly. Runtime edge over HTTP (`NORA_STORE_URL`; the enrichment-review and golden-eval surfaces read `NORA_STORE_URLS` — comma-separated, first = primary/read authority — falling back to `NORA_STORE_URL`, then the loopback default; an empty value counts as unset and blank entries are dropped, field-found: an empty `NORA_STORE_URLS=` line once emptied the Apply list) — the Test page's SIRA retrieval lane, the corpus inventory's `GET /cells` (D-DRAFT-14 docker-distro), and the enrichment-review proxied reads + `POST /cells/<cell>/reload` (Apply). Degrades gracefully when unreachable (review page: report export degrades, scorecard requires it).
+[env](../env/MODULE.md), [llm](../llm/MODULE.md) (`model_discovery` imports `llm.list_models`; `playground.py` already imports `llm.openai_provider` without the edge being declared — adding it once covers both), [models](../models/MODULE.md), [parser](../parser/MODULE.md), [pipeline](../pipeline/MODULE.md), [query](../query/MODULE.md), [resolver](../resolver/MODULE.md), [corrections](../corrections/MODULE.md), [eval](../eval/MODULE.md) (eval-invocation routes; Eval Studio consumes `golden.py` schema/loaders — edge declared at strand golden-eval design time, closing the asymmetry with eval's Depended-on-by), [extraction](../extraction/MODULE.md) (`release_key.release_order_key` — release ordering in req_tree.py, playground.py and enrich_review.py), [stores](../stores/MODULE.md) (`open_overlay_store` / `OverlayStore` + `overlay_ops` — the enrichment overlay store's backend and edit semantics, strand corp-db-layer S3/S6, and `overlay_ops.allowed_labels` in enrich_review.py; `open_tree_store` / `TreeStore` — req_tree.py's backend, S4; `open_history_store`, `clients.store_backend_kind` — health reporting, S6), [vectorstore](../vectorstore/MODULE.md) (lazy, routes/query.py and routes/playground.py), [taxonomy](../taxonomy/MODULE.md) and [profiler](../profiler/MODULE.md) (routes/corrections.py); release-change lane: `query.release_diff`, `query.analyzer.MockQueryAnalyzer`, `stores.open_history_store`.
+**nora-store service** — a runtime edge only (no web file imports `core.src.store_service`; `allowed_labels` comes from `core.src.stores.overlay_ops` directly, drift-check 2026-11-08). Over HTTP (`NORA_STORE_URL`; the enrichment-review and golden-eval surfaces read `NORA_STORE_URLS` — comma-separated, first = primary/read authority — falling back to `NORA_STORE_URL`, then the loopback default; an empty value counts as unset and blank entries are dropped, field-found: an empty `NORA_STORE_URLS=` line once emptied the Apply list) — the Test page's SIRA retrieval lane, the corpus inventory's `GET /cells` (D-DRAFT-14 docker-distro), and the enrichment-review proxied reads + `POST /cells/<cell>/reload` (Apply). Degrades gracefully when unreachable (review page: report export degrades, scorecard requires it).
 
 **Depended on by**
 [ingest_runner](../ingest_runner/MODULE.md) (`jobs_schema` only: the DDL, the job types, the ingest states). Otherwise top of the stack.

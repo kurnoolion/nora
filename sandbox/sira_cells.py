@@ -10,6 +10,7 @@ from __future__ import annotations
 from core.src.stores.cells import (  # noqa: F401
     RELEASE_RE,
     CellKey,
+    cell_dir,
     cell_dirname,
     enumerate_cells,
     is_valid_release,
@@ -19,6 +20,6 @@ from core.src.stores.cells import (  # noqa: F401
 )
 
 __all__ = [
-    "RELEASE_RE", "CellKey", "cell_dirname", "enumerate_cells",
+    "RELEASE_RE", "CellKey", "cell_dir", "cell_dirname", "enumerate_cells",
     "is_valid_release", "latest_release", "order_key", "parse_cell_dirname",
 ]

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -94,10 +95,20 @@ class Sim:
             nb = nb_root / build
             (nb / "reports").mkdir(parents=True)
             (nb / "CYCLE.json").write_text(json.dumps({"build": build, "phases": []}))
+            (nb / "profiles.json").write_text('{"bindings": [], "default": null}')  # as cycle.sh without a corpus root
+            if "--recipe" in args:   # as cycle.sh: freeze the named recipe into the build
+                name = args[args.index("--recipe") + 1]
+                src = Path(__file__).resolve().parents[2] / "customizations/recipes" / f"{name}.json"
+                (nb / "RECIPE.json").write_text(src.read_text())
             (self.root / "builds/ACTIVE").write_text(build)
             return Result(0, [f"CYC build={build} phase=start status=ok"])
         build = (self.root / "builds/ACTIVE").read_text().strip()
         nb = nb_root / build
+        if verb == "parse" and "--cell" in args:   # the manifest the real lane writes
+            key = args[args.index("--cell") + 1]
+            (nb / "STAGES.json").write_text(json.dumps({"version": 1, "stages": {
+                s: {key: {"fp": f"{s}-fp", "origin": "store" if s != "parse" else "computed"}}
+                for s in ("extract", "profile", "parse", "resolve")}}))
         if verb in ("parse", "taxonomy", "enrich"):
             log = nb / "reports" / f"{verb}.log"
             rc = 1 if self.fail_phase == verb else 0
@@ -124,6 +135,15 @@ class Sim:
                           ["GEV ...", f"Run artifacts: /data/env/eval/golden/runs/{self.run_id}"])
         if "publish flip" in text:
             return Result(0, [json.dumps({"from_label": "old-label", "label": "x"})])
+        if "publish purge" in text:
+            label = args[args.index("--label") + 1]
+            con = sqlite3.connect(self.root / "registry/registry.db")
+            if con.execute("SELECT 1 FROM active WHERE label=?", (label,)).fetchone():
+                con.close()
+                return Result(1, [f"[REG-E009] release set {label!r} is active"])
+            con.execute("DELETE FROM release_set WHERE label=?", (label,))
+            con.commit(); con.close()
+            return Result(0, [json.dumps({"label": label, "removed": ["cells/x@v1"], "freed_bytes": 10})])
         if "golden_release_cli advance" in text:
             return Result(0, ["s1 -> carried over", "s2 -> REVIEW", "wrote release map v3"])
         return Result(0, ["ok"])
@@ -189,9 +209,11 @@ def test_config_build_roots_follow_cycle_sh_rules(host):
     root = host["root"]
     assert cfg.nora_builds_root == root / "builds/nora"
     assert cfg.active_file == root / "builds/ACTIVE"
-    cfg.cycle_env = {"NORA_BUILDS_NORA_ROOT": "/other/nb"}
+    assert cfg.sira_build_dir("b1") == root / "builds/nora/b1/out/sira"
+    cfg.cycle_env = {"NORA_BUILDS_NORA_ROOT": "/other/nb", "NORA_BUILDS_SIRA_ROOT": "/other/sira"}
     assert cfg.nora_builds_root == Path("/other/nb")
     assert cfg.active_file == Path("/other/nb/ACTIVE")
+    assert cfg.sira_build_dir("b1") == Path("/other/sira/b1")
 
 
 # -- db --------------------------------------------------------------------------------------
@@ -273,14 +295,15 @@ def test_ingest_happy_path(host):
     assert sorted(p.name for p in cell.iterdir()) == ["spec.pdf"]
     cmds = sim.cmds()
     assert any(c.endswith(f"cycle.sh start {ing.build} --seed seed0") for c in cmds)
-    assert any("cycle.sh parse --skip-standards" in c for c in cmds)
+    assert any("cycle.sh parse --cell MNO-A/Apr2031 --skip-standards" in c for c in cmds)
     assert any("cycle.sh prompts --yes" in c for c in cmds)
-    assert any("cycle.sh enrich --cell MNO-A__Apr2031" in c and "--retry-failed" not in c for c in cmds)
+    assert any("cycle.sh taxonomy --cell MNO-A/Apr2031" in c for c in cmds)
+    assert any("cycle.sh enrich --cell MNO-A/Apr2031" in c and "--retry-failed" not in c for c in cmds)
     assert any("cycle.sh verify-enrich --yes" in c for c in cmds)
     assert any(f"cycle.sh promote --label {ing.label} --scheme v9" in c for c in cmds)
     conv_argv = next(a for a, _ in sim.calls if "sandbox.cell_db_convert" in a)
     conv = " ".join(conv_argv)
-    assert "--cells MNO-A__Apr2031" in conv and "--verify 25" in conv
+    assert "--cells MNO-A/Apr2031" in conv and "--verify 25" in conv
     assert "-p" not in conv_argv and "sira-batch" in conv_argv   # builds wiring, no stack project
     pub = next(c for c in cmds if "publish publish" in c)
     assert "-p stackp" in pub and f"--cells-src /data/work/{ing.label}/cells" in pub and "--prompt-scheme v9" in pub
@@ -294,6 +317,191 @@ def test_ingest_happy_path(host):
     logs = _run(q.get_logs(job_id))
     assert any(l.startswith("[1/12] documents") for l in logs)
     assert any("gate: pass" in l and "seeds it" in l for l in logs)
+
+
+def test_one_shots_carry_the_runners_job_user(host, monkeypatch):
+    """Every compose one-shot gets JOB_UID/JOB_GID = the runner's own ids
+    unless the env file names them (compose's default is root, and a
+    staging or serving env has no job user)."""
+    import os
+    monkeypatch.delenv("JOB_UID", raising=False)
+    monkeypatch.delenv("JOB_GID", raising=False)
+    (host["root"] / "docker/.env.stack").write_text("STORE_PORT=8040\nJOB_UID=4242\nJOB_GID=4243\n")
+    sim = Sim(host["root"])
+    _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "completed"
+    composes = [(a, e) for a, e in sim.calls if a[:2] == ["docker", "compose"]]
+    assert composes
+    for argv, env in composes:
+        env_file = argv[argv.index("--env-file") + 1]
+        if env_file.endswith(".env.stack"):
+            assert "JOB_UID" not in env and "JOB_GID" not in env, argv  # the env file's values stand
+        else:
+            assert env["JOB_UID"] == str(os.getuid()) and env["JOB_GID"] == str(os.getgid()), argv
+    evals = [a for a, _ in composes if "golden_cli" in " ".join(a)]
+    assert evals and evals[0][evals[0].index("--env-file") + 1].endswith(".env.stage")
+
+
+def _registry(host, sets=(), active=()):
+    reg = host["root"] / "registry/registry.db"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE IF NOT EXISTS release_set(label TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
+    con.execute("CREATE TABLE IF NOT EXISTS active(store TEXT, unit TEXT, version INTEGER, label TEXT)")
+    con.execute("DELETE FROM active")
+    for lab in sets:
+        con.execute("INSERT OR IGNORE INTO release_set VALUES (?, 'x')", (lab,))
+    for lab, unit in active:
+        con.execute("INSERT INTO active VALUES ('cells', ?, 1, ?)", (unit, lab))
+    con.commit(); con.close()
+    return reg
+
+
+def test_purge_removes_every_artifact_of_a_dead_ingest(host, monkeypatch):
+    """Purge: baton released if held, release set removed (never an active
+    one), snapshot, work dir, build, golden run and documents gone; a
+    removal that fails fails the job and leaves the state, and a re-run
+    finishes. Documents stay when the active set serves the cell."""
+    sim = Sim(host["root"])
+    q = host["q"]
+    r = _runner(host, sim)
+    job_id, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    build, label = ing.build, ing.label
+    # the artifacts a staged ingest leaves (the Sim made the build and the golden run)
+    (host["root"] / "labels" / label).mkdir(parents=True)
+    (host["root"] / "work" / label / "cells").mkdir(parents=True)
+    _registry(host, sets=[label, "old-label"], active=[("old-label", "MNO-A/Jan2031")])
+    assert (host["root"] / "builds/nora" / build).is_dir()
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+    run_dir = host["root"] / "golden/runs" / ing.run_ref
+    assert run_dir.is_dir()
+    # staged is not purgeable: abandon first
+    sim.calls.clear()
+    pj0 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "failed"
+    assert "abandon a staged one first" in _run(q.get_meta(pj0.id)).error_message
+    assert _run(q.get_ingest(ingest_id)).state == "staged"
+    _run(q.update_ingest(ingest_id, state="rolled_back"))
+    # one removal fails → job failed, state unchanged, the rest done
+    real_rmtree = shutil.rmtree
+
+    def flaky(path, *a, **k):
+        if str(path).endswith(f"labels/{label}"):
+            raise PermissionError(13, "Permission denied")
+        return real_rmtree(path, *a, **k)
+    monkeypatch.setattr(plan.shutil, "rmtree", flaky)
+    sim.calls.clear()
+    pj = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "failed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.state == "rolled_back"
+    msg = _run(q.get_meta(pj.id)).error_message
+    assert "purge incomplete" in msg and "promoted snapshot" in msg
+    assert any("publish purge --serve-root /data/serve --label " + label in c for c in sim.cmds())
+    assert not (host["root"] / "builds/nora" / build).exists()          # the others went
+    assert not (host["root"] / "work" / label).exists()
+    assert not run_dir.exists()
+    assert not (host["root"] / "requirements/MNO-A/Apr2031").exists()    # cell not active → documents removed
+    assert (host["root"] / "labels" / label).exists()
+    # re-run after the fix: the gone parts are logged as absent, the state moves
+    monkeypatch.setattr(plan.shutil, "rmtree", real_rmtree)
+    sim.calls.clear()
+    pj2 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.state == "purged" and ing.build == build and ing.label == label   # the row keeps its history
+    assert not (host["root"] / "labels" / label).exists()
+    logs = _run(q.get_logs(pj2.id))
+    assert any("no release set" in l for l in logs) and any("build absent" in l for l in logs)
+    assert not any("publish purge" in c for c in sim.cmds())             # registry step skipped: set already gone
+    # a purged ingest does not take the cell: the same release resubmits
+    from core.src.web.routes.ingest import _TAKEN_STATES
+    assert "purged" not in _TAKEN_STATES
+    # documents are kept when the active set serves the cell; an active label is refused by the registry
+    job2, ingest2 = _submit_ingest(host, release="Jul2031")
+    assert r.run_once() == "completed"
+    ing2 = _run(q.get_ingest(ingest2))
+    _registry(host, sets=[ing2.label], active=[(ing2.label, "MNO-A/Jul2031")])
+    _run(q.update_ingest(ingest2, state="rolled_back"))
+    sim.calls.clear()
+    pj3 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest2}))
+    assert r.run_once() == "failed"
+    assert "REG-E009" in _run(q.get_meta(pj3.id)).error_message
+    assert _run(q.get_ingest(ingest2)).state == "rolled_back"
+    assert (host["root"] / "requirements/MNO-A/Jul2031").is_dir()
+    # a row that shares its label or build with a live ingest is refused before anything is touched:
+    # after a by-hand cleanup the same-day number restarted and a later ingest reused the names
+    dup = _run(q.create_ingest(mno="MNO-A", release="Jul2031", source="\\\\S\\x", submitted_by="t"))
+    _run(q.update_ingest(dup.id, state="abandoned", label=ing2.label, build=ing2.build))
+    _run(q.update_ingest(ingest2, state="staged"))
+    (host["root"] / "labels" / ing2.label).mkdir(parents=True, exist_ok=True)
+    sim.calls.clear()
+    pjd = _run(q.submit("ingest-purge", "t", params={"ingest_id": dup.id}))
+    assert r.run_once() == "failed"
+    msg = _run(q.get_meta(pjd.id)).error_message
+    assert "purge refused" in msg and ingest2[:8] in msg and "staged" in msg
+    assert _run(q.get_ingest(dup.id)).state == "abandoned"
+    assert (host["root"] / "labels" / ing2.label).is_dir() and (host["root"] / "builds/nora" / ing2.build).is_dir()
+    assert not sim.calls or not any("publish purge" in c for c in sim.cmds())
+    # once the live row is dead too, the duplicate purges (and takes the shared artifacts with it)
+    _run(q.update_ingest(ingest2, state="abandoned"))
+    _registry(host, sets=[], active=[])
+    sim.calls.clear()
+    pjd2 = _run(q.submit("ingest-purge", "t", params={"ingest_id": dup.id}))
+    assert r.run_once() == "completed"
+    assert _run(q.get_ingest(dup.id)).state == "purged"
+    assert not (host["root"] / "labels" / ing2.label).exists()
+    # the baton: a failed ingest that still holds the cycle is abandoned on the way
+    job3, ingest3 = _submit_ingest(host, release="Oct2031")
+    assert r.run_once() == "completed"
+    ing3 = _run(q.get_ingest(ingest3))
+    (host["root"] / "builds/ACTIVE").write_text(ing3.build)
+    _run(q.update_ingest(ingest3, state="failed", label=None))
+    sim.calls.clear()
+    pj4 = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest3}))
+    assert r.run_once() == "completed"
+    assert any("cycle.sh abandon --note" in c for c in sim.cmds())
+    assert not (host["root"] / "builds/ACTIVE").exists()
+    assert _run(q.get_ingest(ingest3)).state == "purged"
+
+
+def test_same_day_labels_skip_taken_names(host):
+    """A removed build does not free its label: the build id skips a name a
+    promoted snapshot or a registry release set still carries, and promote
+    moves to a free label when the one chosen at start is taken by then."""
+    import sqlite3
+    sim = Sim(host["root"])
+    q = host["q"]
+    day = __import__("datetime").datetime.now(__import__("datetime").UTC).strftime("%Y%m%d")
+    prefix = f"Apr2031-MNO-A-{day}-"
+    # an earlier (cleaned-up) ingest left its snapshot under labels/ and its
+    # release set in the registry; the build directory is gone
+    (host["root"] / "labels" / f"{prefix}1").mkdir(parents=True)
+    reg = host["root"] / "registry" / "registry.db"
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE release_set(label TEXT PRIMARY KEY, created_at TEXT NOT NULL)")
+    con.execute("INSERT INTO release_set VALUES (?, 'x')", (f"{prefix}2",))
+    con.commit(); con.close()
+    job_id, ingest_id = _submit_ingest(host)
+    r = _runner(host, sim)
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.build == f"{prefix}3" and ing.label == ing.build
+    assert any(f"cycle.sh start {prefix}3 --seed seed0" in c for c in sim.cmds())
+    # the label chosen at start is taken by promote time (a snapshot appeared):
+    # promote picks the next free label and records it; the build keeps its name
+    (host["root"] / "labels" / f"{prefix}3").mkdir()
+    sim.calls.clear()
+    _submit_ingest(host, ingest_id=ingest_id, retry_from="promote")
+    assert r.run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.build == f"{prefix}3" and ing.label == f"{prefix}4"
+    cmds = sim.cmds()
+    assert any(f"promote --label {prefix}4" in c for c in cmds)
+    assert any(f"publish stage --serve-root /data/serve --label {prefix}4" in c or f"--label {prefix}4" in c for c in cmds)
+    assert any("is taken by an earlier snapshot" in l for l in _run(q.get_logs(ing.job_id)))
 
 
 def test_ingest_fails_at_a_detached_phase_and_retries(host):
@@ -314,7 +522,7 @@ def test_ingest_fails_at_a_detached_phase_and_retries(host):
     assert r.run_once() == "completed"
     cmds = sim.cmds()
     assert not any("cycle.sh start" in c or "cycle.sh parse" in c for c in cmds)
-    assert any("cycle.sh enrich --cell MNO-A__Apr2031 --retry-failed" in c for c in cmds)
+    assert any("cycle.sh enrich --cell MNO-A/Apr2031 --retry-failed" in c for c in cmds)
     ing = _run(q.get_ingest(ingest_id))
     assert ing.state == "staged" and ing.verdict == "pass" and ing.job_id == job2
 
@@ -422,6 +630,127 @@ def test_flip_rollback_abandon(host):
     rb2 = _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest2}))
     assert r.run_once() == "failed"
     assert "nothing to roll back" in _run(q.get_meta(rb2.id)).error_message
+    # the served build's directory was removed (the ingest was cleaned up by hand):
+    # the next ingest falls back to the configured seed instead of a missing --seed
+    import shutil
+    shutil.rmtree(host["root"] / "builds/nora" / build)
+    sim.calls.clear()
+    job3, ingest3 = _submit_ingest(host, release="Oct2031")
+    assert r.run_once() == "completed"
+    assert any("--seed seed0" in c for c in sim.cmds())
+    assert any(f"{build} is gone from the builds root" in l for l in _run(q.get_logs(job3)))
+
+
+def _served_build_without_bindings(host) -> tuple["Sim", "Runner", str]:
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    build = _run(host["q"].get_ingest(ingest_id)).build
+    _run(host["q"].submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    (host["root"] / "builds/nora" / build / "profiles.json").unlink()   # a purged remnant
+    sim.calls.clear()
+    return sim, r, build
+
+
+def test_served_build_without_bindings_is_not_a_seed(host):
+    sim, r, build = _served_build_without_bindings(host)
+    job, _ = _submit_ingest(host, release="Jul2031")
+    assert r.run_once() == "completed"
+    assert any("--seed seed0" in c for c in sim.cmds())
+    assert any(f"{build} holds no profiles.json" in l for l in _run(host["q"].get_logs(job)))
+
+
+def test_with_a_corpus_root_any_served_build_seeds(host):
+    wiring = Path(host["cfg"].builds_wiring)
+    wiring.parent.mkdir(parents=True, exist_ok=True)
+    wiring.write_text((wiring.read_text() if wiring.exists() else "") + "CORPUS_DIR=/srv/corpus\n")
+    sim, r, build = _served_build_without_bindings(host)
+    _submit_ingest(host, release="Jul2031")
+    assert r.run_once() == "completed"
+    assert any(f"--seed {build}" in c for c in sim.cmds())
+
+
+def test_rollback_refused_when_a_later_set_is_active(host):
+    """A row stays `served` after a later flip (from the page or by hand);
+    rolling it back would drop the newer set too."""
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    q = host["q"]
+    _run(q.submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    reg = host["root"] / "registry/registry.db"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE IF NOT EXISTS active(store TEXT, unit TEXT, version INTEGER, label TEXT)")
+    con.execute("DELETE FROM active")
+    con.execute("INSERT INTO active VALUES ('cells', 'MNO-A/Apr2031', 2, 'hand-flipped-label')")
+    con.commit(); con.close()
+    sim.calls.clear()
+    rb = _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "failed"
+    assert "no longer the active set (hand-flipped-label is)" in _run(q.get_meta(rb.id)).error_message
+    assert not any("publish rollback" in c for c in sim.cmds())
+    assert _run(q.get_ingest(ingest_id)).state == "served"
+    # the same row, active again, rolls back
+    con = sqlite3.connect(reg)
+    con.execute("UPDATE active SET label=?", (_run(q.get_ingest(ingest_id)).label,))
+    con.commit(); con.close()
+    _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert _run(q.get_ingest(ingest_id)).state == "rolled_back"
+
+
+def _stack_env(host, text: str) -> None:
+    env = Path(host["cfg"].stack_env)
+    env.parent.mkdir(parents=True, exist_ok=True)
+    env.write_text(text)
+
+
+def test_stack_recipe_reaches_start_and_steers_the_run(host):
+    """NORA_RECIPE in the stack's serving env is passed to `cycle.sh start`;
+    a recipe without taxonomy skips that stage; a recipe's scheme wins over
+    the runner config's and reaches promote, publish and the eval."""
+    _stack_env(host, "NORA_RECIPE=sira-plain\n")
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    cmds = sim.cmds()
+    build = _run(host["q"].get_ingest(ingest_id)).build
+    assert any(c.endswith(f"cycle.sh start {build} --seed seed0 --recipe sira-plain") for c in cmds)
+    assert not any("cycle.sh taxonomy" in c for c in cmds)
+    assert any("recipe sira-plain runs none; skipped" in l for l in _run(host["q"].get_logs(job)))
+    assert any("cycle.sh enrich --cell MNO-A/Apr2031" in c for c in cmds)
+    # the scheme: sira-plain names none, so the runner config's (v9) is used
+    assert any("--prompt-scheme v9" in c for c in cmds)
+
+
+def test_recipe_scheme_wins_over_the_config(host):
+    import uuid
+    name = f"test-{uuid.uuid4().hex[:8]}"
+    path = Path(__file__).resolve().parents[2] / "customizations/recipes" / f"{name}.json"
+    path.write_text(json.dumps({"name": name, "stages": ["taxonomy", "enrich"],
+                                "params": {"enrich": {"taxonomy": True, "prompt_scheme": "from-recipe"}}}))
+    try:
+        _stack_env(host, f"NORA_RECIPE={name}\n")
+        sim = Sim(host["root"])
+        r = _runner(host, sim)
+        job, _ = _submit_ingest(host)
+        assert r.run_once() == "completed"
+        cmds = sim.cmds()
+        assert any("cycle.sh taxonomy --cell MNO-A/Apr2031" in c for c in cmds)
+        assert any("--scheme from-recipe" in c for c in cmds)
+        assert any("--prompt-scheme from-recipe" in c for c in cmds)
+        assert any("--sira-prompt-scheme from-recipe" in c for c in cmds)
+        assert not any(" v9" in c for c in cmds)
+        logs = _run(host["q"].get_logs(job))
+        assert sum("using the recipe's" in l for l in logs) == 1
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def test_documents_stage_refusals(host):
@@ -605,3 +934,241 @@ def test_ingest_webhook_failure_and_unlisted_host(host):
     assert r.run_once() == "completed"
     assert post.calls == []
     assert any("not an allowed host" in l for l in _run(q.get_logs(job2.id)))
+
+
+def test_config_defaults_wiring_env_and_check_refuses_template(host, tmp_path, capsys):
+    cfg = host["cfg"]
+    assert cfg.cycle_env["NORA_BUILDS_WIRING"] == cfg.builds_wiring
+    explicit = RunnerConfig.from_dict({**{k: getattr(cfg, k) for k in RunnerConfig.REQUIRED},
+                                       "cycle_env": {"NORA_BUILDS_WIRING": "/elsewhere"}})
+    assert explicit.cycle_env["NORA_BUILDS_WIRING"] == "/elsewhere"
+    assert cfg.template_values() == []
+    bad = RunnerConfig.from_dict({**{k: getattr(cfg, k) for k in RunnerConfig.REQUIRED},
+                                  "seed_build": "<the build the served set came from>",
+                                  "golden_dir": "/path/to/golden",
+                                  "cycle_env": {"NORA_ROOT": "/path/to/root"}})
+    assert sorted(bad.template_values()) == ["cycle_env", "golden_dir", "seed_build"]
+    cfgp = tmp_path / "ingest_runner.json"
+    data = {k: getattr(cfg, k) for k in RunnerConfig.REQUIRED}
+    data["registry_root"] = "/path/to/serve-root"
+    cfgp.write_text(json.dumps(data))
+    assert cli_main(["--config", str(cfgp), "--check"]) == 2
+    err = capsys.readouterr().err
+    assert "IRN-E003" in err and "registry_root" in err
+
+
+# -- the dangling best.jsonl after a resumed enrichment ------------------------------------------
+
+def _sira_cell(host, build: str, cell: str, dangling: bool) -> Path:
+    enr = host["root"] / "builds/nora" / build / "out" / "sira" / cell / "enrichments" / "doc"
+    enr.mkdir(parents=True, exist_ok=True)
+    if dangling:
+        (enr / "best.jsonl").symlink_to(f"{build}.jsonl")   # target never written
+    else:
+        (enr / f"{build}.jsonl").write_text("{}\n")
+        (enr / "best.jsonl").symlink_to(f"{build}.jsonl")
+    return enr
+
+
+def test_convert_promotes_a_dangling_best_link(host):
+    sim = Sim(host["root"])
+    orig_cycle = sim._cycle
+
+    def cycle_with_sira(args):
+        res = orig_cycle(args)
+        if args[0] == "enrich":
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            _sira_cell(host, build, "MNO-A/Apr2031", dangling=True)
+        return res
+    sim._cycle = cycle_with_sira
+    orig_compose = sim._compose
+
+    def compose_with_promote(args, env):
+        text = " ".join(args)
+        if "sira_incremental promote" in text:
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            enr = host["root"] / "builds/nora" / build / "out" / "sira" / "MNO-A/Apr2031" / "enrichments" / "doc"
+            (enr / f"{build}.jsonl").write_text("{}\n")
+            return Result(0, ["wrote 1 docs", "linked best.jsonl"])
+        return orig_compose(args, env)
+    sim._compose = compose_with_promote
+    job_id, ingest_id = _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "completed"
+    cmds = sim.cmds()
+    promote = next(c for c in cmds if "sira_incremental promote" in c)
+    assert "--dataset /data/db/MNO-A/Apr2031" in promote and "--run-name" in promote and "sira-batch" in promote
+    assert cmds.index(promote) < cmds.index(next(c for c in cmds if "cell_db_convert" in c))
+    assert any("best.jsonl dangles" in l for l in _run(host["q"].get_logs(job_id)))
+
+
+def test_convert_leaves_a_healthy_best_link_alone(host):
+    sim = Sim(host["root"])
+    orig_cycle = sim._cycle
+
+    def cycle_with_sira(args):
+        res = orig_cycle(args)
+        if args[0] == "enrich":
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            _sira_cell(host, build, "MNO-A/Apr2031", dangling=False)
+        return res
+    sim._cycle = cycle_with_sira
+    job_id, ingest_id = _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "completed"
+    assert not any("sira_incremental" in c for c in sim.cmds())
+
+
+def test_convert_fails_when_promote_does_not_heal(host):
+    sim = Sim(host["root"])
+    orig_cycle = sim._cycle
+
+    def cycle_with_sira(args):
+        res = orig_cycle(args)
+        if args[0] == "enrich":
+            build = (host["root"] / "builds/ACTIVE").read_text().strip()
+            _sira_cell(host, build, "MNO-A/Apr2031", dangling=True)
+        return res
+    sim._cycle = cycle_with_sira   # promote "succeeds" but writes nothing
+    job_id, ingest_id = _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "failed"
+    ing = _run(host["q"].get_ingest(ingest_id))
+    assert ing.stage == "convert" and "still dangles" in ing.error
+
+
+
+# -- stage graph, step 3: redo of a served cell, stage origins ---------------------------
+
+def _served(host) -> tuple["Sim", "Runner", str]:
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    _run(host["q"].submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    return sim, r, ingest_id
+
+
+def _redo(host, orig_id: str) -> tuple[str, str]:
+    q = host["q"]
+    orig = _run(q.get_ingest(orig_id))
+    ing = _run(q.create_ingest(mno=orig.mno, release=orig.release, source=orig.source,
+                               submitted_by="req team", redo_of=orig_id))
+    job = _run(q.submit("ingest", "req team", params={"ingest_id": ing.id, "redo": True}))
+    _run(q.update_ingest(ing.id, job_id=job.id))
+    return job.id, ing.id
+
+
+def _corpus(host) -> Path:
+    corpus = host["root"] / "corpus"
+    corpus.mkdir(exist_ok=True)
+    wiring = Path(host["cfg"].builds_wiring)
+    wiring.parent.mkdir(parents=True, exist_ok=True)
+    wiring.write_text((wiring.read_text() if wiring.exists() else "") + f"CORPUS_DIR={corpus}\n")
+    return corpus
+
+
+def test_origins_reach_the_ingest_row(host):
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _job, ingest_id = _submit_ingest(host)
+    assert r.run_once() == "completed"
+    origins = json.loads(_run(host["q"].get_ingest(ingest_id)).stage_origins)
+    assert origins == {"extract": "store", "profile": "store", "parse": "computed", "resolve": "store"}
+
+
+def test_redo_bumps_the_generation_and_runs_from_start(host):
+    corpus = _corpus(host)
+    sim, r, orig = _served(host)
+    sim.calls.clear()
+    job, redo = _redo(host, orig)
+    assert r.run_once() == "completed", _run(host["q"].get_meta(job)).error_message
+    gens = json.loads((corpus / "generations.json").read_text())["cells"]
+    assert gens["MNO-A/Apr2031"]["generation"] == 2 and gens["MNO-A/Apr2031"]["by"] == "req team"
+    cmds = sim.cmds()
+    assert any("cycle.sh start" in c for c in cmds) and any("cycle.sh enrich" in c for c in cmds)
+    assert not any("--retry-failed" in c for c in cmds)
+    logs = _run(host["q"].get_logs(job))
+    assert not any("staged into" in l for l in logs)   # no documents stage: the served cell's are used
+    assert any("is now generation 2" in l for l in logs)
+    ing = _run(host["q"].get_ingest(redo))
+    assert ing.state == "staged" and ing.build and ing.build != _run(host["q"].get_ingest(orig)).build
+    # abandoning the redo keeps the documents: they are the served cell's
+    _run(host["q"].submit("ingest-abandon", "t", params={"ingest_id": redo}))
+    assert r.run_once() == "completed"
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+
+
+def test_redo_needs_the_corpus_root_and_a_redo_row(host):
+    sim, r, orig = _served(host)
+    job, _redo_id = _redo(host, orig)
+    assert r.run_once() == "failed"
+    assert "needs the corpus root" in _run(host["q"].get_meta(job)).error_message
+    job2 = _run(host["q"].submit("ingest", "t", params={"ingest_id": orig, "redo": True}))
+    assert r.run_once() == "failed"
+    assert "made by the Redo action" in _run(host["q"].get_meta(job2.id)).error_message
+
+
+def test_a_redo_retried_from_documents_skips_the_staging(host):
+    _corpus(host)
+    sim, r, orig = _served(host)
+    _job, redo = _redo(host, orig)
+    _run(host["q"].update_ingest(redo, state="failed", stage="documents"))
+    _run(host["q"].cancel(_job))
+    job = _run(host["q"].submit("ingest", "t", params={"ingest_id": redo, "retry_from": "documents"}))
+    assert r.run_once() == "completed", _run(host["q"].get_meta(job.id)).error_message
+    assert any("uses the served cell's documents" in l for l in _run(host["q"].get_logs(job.id)))
+
+
+# -- stage graph, step 5: two stacks share the requirements dir ---------------
+
+def _peer_registry(root: Path, active_units=(), broken: bool = False) -> Path:
+    reg = root / "registry.db"
+    root.mkdir(parents=True, exist_ok=True)
+    if broken:
+        reg.write_text("not a database")
+        return root
+    con = sqlite3.connect(reg)
+    con.execute("CREATE TABLE active(store TEXT, unit TEXT, version INTEGER, label TEXT)")
+    for unit in active_units:
+        con.execute("INSERT INTO active VALUES ('cells', ?, 1, 'peer-label')", (unit,))
+    con.commit(); con.close()
+    return root
+
+
+def test_abandon_keeps_documents_this_ingest_did_not_stage(host):
+    """The cell existed before the ingest (another stack staged it): the
+    documents stage refuses, and abandon must not remove the other stack's
+    documents."""
+    sim = Sim(host["root"])
+    q = host["q"]
+    cell = host["root"] / "requirements/MNO-A/Apr2031"
+    cell.mkdir(parents=True)
+    (cell / "theirs.pdf").write_bytes(b"%PDF other stack")
+    _, ingest_id = _submit_ingest(host)
+    r = _runner(host, sim)
+    assert r.run_once() == "failed"
+    assert not _run(q.get_ingest(ingest_id)).documents_staged
+    ab = _run(q.submit("ingest-abandon", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert (cell / "theirs.pdf").exists()
+    assert any("did not stage them" in l for l in _run(q.get_logs(ab.id)))
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_abandon_and_purge_keep_documents_a_peer_stack_serves(host, broken):
+    sim = Sim(host["root"])
+    q = host["q"]
+    peer = _peer_registry(host["root"] / "peer-registry", ["MNO-A/Apr2031"], broken=broken)
+    host["cfg"].peer_registry_roots = [str(peer)]
+    _, ingest_id = _submit_ingest(host)
+    r = _runner(host, sim)
+    assert r.run_once() == "completed"
+    assert _run(q.get_ingest(ingest_id)).documents_staged == 1
+    ab = _run(q.submit("ingest-abandon", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+    why = "cannot be read" if broken else "serves this cell"
+    assert any(why in l and "documents kept" in l for l in _run(q.get_logs(ab.id)))
+    pj = _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
+    assert _run(q.get_ingest(ingest_id)).state == "purged"

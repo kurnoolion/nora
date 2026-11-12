@@ -5,7 +5,7 @@
 #   serve/<label>/
 #   ├── MANIFEST.json          # which builds + git sha + timestamp
 #   ├── nora/out/{vectorstore,graph,taxonomy,parse}/  # env_dir-SHAPED: mount as /data/env
-#   └── sira/<MNO>__<MMMYYYY>/...                     # cells: mount as /data/db
+#   └── sira/<MNO>/<MMMYYYY>/...                      # cells: mount as /data/db
 #
 # parse is part of the serve-set: the web app reads out/parse/ trees at
 # SERVE time (Eval Studio ground-truth picker, req-browser) — a label
@@ -22,8 +22,14 @@
 # Usage:
 #   ./promote.sh --serve-root <nora-data>/serve --label <label> \
 #       [--nora-build <nora-builds/X>] [--sira-build <sira-builds/Y>] \
-#       [--scheme <sira-prompt-scheme>]
+#       [--scheme <sira-prompt-scheme>] [--stages-root <stage store>]
 # At least one of --nora-build / --sira-build is required.
+# --stages-root names the host's stage store (the wiring env's STAGES_ROOT;
+#   cycle.sh passes it). parse and taxonomy cells come from the build's
+#   out/ when it has them, else from the store entry the build's
+#   STAGES.json names (pipeline/locate.py, stage-graph §10c): both are
+#   hard-linked into the label, which keeps the out/ layout, so serving
+#   reads it unchanged. The store must be on the serve root's filesystem.
 # --scheme records the SIRA enrichment-prompt scheme (e.g. scheme-v1 /
 #   scheme-v2) in the label MANIFEST so the serving healthz — and through
 #   it every eval run's StackStamp — can attribute served data to the
@@ -32,7 +38,7 @@
 # (--include-parse is accepted as a no-op — parse is in the default set.)
 set -euo pipefail
 
-SERVE_ROOT="" LABEL="" NORA_BUILD="" SIRA_BUILD="" SCHEME=""
+SERVE_ROOT="" LABEL="" NORA_BUILD="" SIRA_BUILD="" SCHEME="" STAGES_ROOT=""
 while (( $# > 0 )); do
   case "$1" in
     --serve-root)    SERVE_ROOT="$2"; shift 2;;
@@ -40,6 +46,7 @@ while (( $# > 0 )); do
     --nora-build)    NORA_BUILD="$2"; shift 2;;
     --sira-build)    SIRA_BUILD="$2"; shift 2;;
     --scheme)        SCHEME="$2"; shift 2;;
+    --stages-root)   STAGES_ROOT="$2"; shift 2;;
     --include-parse) shift;;   # no-op: parse is in the default serve-set
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
@@ -51,14 +58,32 @@ if [ -n "$SIRA_BUILD" ] && [ -z "$SCHEME" ]; then
        "sira_prompt_scheme (labels are immutable; it cannot be filled in later)" >&2
 fi
 
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+locate_cli() { ( cd "$REPO" && python3 -m core.src.pipeline.locate "$NORA_BUILD" "$@" ${STAGES_ROOT:+--stages-root "$STAGES_ROOT"} ); }
+
 DEST="$SERVE_ROOT/$LABEL"
 [ -e "$DEST" ] && { echo "refusing: $DEST already exists (labels are immutable; pick a new one)" >&2; exit 1; }
+# read the manifest before the label exists: a refusal must not leave a
+# half-made label behind (labels are never reused)
+if [ -n "$NORA_BUILD" ]; then
+  for d in parse taxonomy; do
+    locate_cli "$d" --cells >/dev/null \
+      || { echo "cannot read $NORA_BUILD/STAGES.json — refusing (the label would miss stored cells)" >&2; exit 1; }
+    gone="$(locate_cli "$d" --missing)" || {
+      echo "refusing: $NORA_BUILD/STAGES.json names $d output that neither the build nor the stage store holds:" >&2
+      echo "$gone" | sed 's/^/  /' >&2
+      echo "(removed from the store while the build needed it? re-run the stage in this build${STAGES_ROOT:+, or check --stages-root})" >&2
+      exit 1; }
+  done
+fi
 mkdir -p "$DEST"
 
 promoted_nora="" promoted_sira=""
 if [ -n "$NORA_BUILD" ]; then
-  [ -d "$NORA_BUILD/out" ] || { echo "not a nora build (no out/): $NORA_BUILD" >&2; exit 1; }
+  [ -d "$NORA_BUILD/out" ] || [ -f "$NORA_BUILD/STAGES.json" ] \
+    || { echo "not a nora build (no out/, no STAGES.json): $NORA_BUILD" >&2; exit 1; }
   for d in vectorstore graph taxonomy parse; do
+    found=0
     if [ -d "$NORA_BUILD/out/$d" ]; then
       mkdir -p "$DEST/nora/out"
       if [ "$d" = vectorstore ]; then
@@ -70,22 +95,41 @@ if [ -n "$NORA_BUILD" ]; then
         cp -al "$NORA_BUILD/out/$d" "$DEST/nora/out/$d"
         echo "promoted nora out/$d"
       fi
-    else
-      echo "WARN: $NORA_BUILD/out/$d missing — skipped"
+      found=1
     fi
+    # per-cell stages: cells only the stage store holds, by the build's manifest
+    if [ "$d" = parse ] || [ "$d" = taxonomy ]; then
+      cells="$(locate_cli "$d" --cells)" || { echo "cannot read $NORA_BUILD/STAGES.json — refusing (the label would miss stored cells)" >&2; exit 1; }
+      for c in $cells; do
+        [ -d "$NORA_BUILD/out/$d/$c" ] && continue
+        src="$(locate_cli "$d" "$c")" || { echo "$d $c: listed but not found" >&2; exit 1; }
+        mkdir -p "$DEST/nora/out/$d/${c%/*}"
+        cp -al "$src" "$DEST/nora/out/$d/$c"
+        echo "promoted nora $d $c (from the stage store)"
+        found=1
+      done
+    fi
+    (( found )) || echo "WARN: $NORA_BUILD/out/$d missing — skipped"
+  done
+  # the build's recipe and stage manifest travel with the label: publish
+  # records them on the release set (stage graph, step 3)
+  for f in RECIPE.json STAGES.json; do
+    [ -f "$NORA_BUILD/$f" ] && { mkdir -p "$DEST/nora"; cp "$NORA_BUILD/$f" "$DEST/nora/$f"; echo "promoted nora $f"; }
   done
   promoted_nora="$(cd "$NORA_BUILD" && pwd)"
 fi
 if [ -n "$SIRA_BUILD" ]; then
   found=0
-  for cell in "$SIRA_BUILD"/*__*/; do
-    [ -d "$cell" ] || continue
-    mkdir -p "$DEST/sira"
-    cp -al "$cell" "$DEST/sira/$(basename "$cell")"
-    echo "promoted sira cell $(basename "$cell")"
+  # cells are <MNO>/<MMMYYYY>/ (since 2026-11-06); a build from before holds <MNO>__<MMMYYYY>/
+  for cell in "$SIRA_BUILD"/*/*/ "$SIRA_BUILD"/*__*/; do
+    [ -d "$cell" ] && [ -f "$cell/raw/metadata.json" ] || continue
+    rel="${cell#"$SIRA_BUILD"/}"; rel="${rel%/}"
+    mkdir -p "$DEST/sira/$(dirname "$rel")"
+    cp -al "$cell" "$DEST/sira/$rel"
+    echo "promoted sira cell $rel"
     found=1
   done
-  (( found )) || { echo "no <MNO>__<MMMYYYY> cells under $SIRA_BUILD" >&2; exit 1; }
+  (( found )) || { echo "no <MNO>/<MMMYYYY> cells under $SIRA_BUILD" >&2; exit 1; }
   [ -f "$SIRA_BUILD/SOURCE.json" ] && cp -al "$SIRA_BUILD/SOURCE.json" "$DEST/sira/SOURCE.json"
   promoted_sira="$(cd "$SIRA_BUILD" && pwd)"
 fi
@@ -112,5 +156,5 @@ done
 echo ""
 echo "promoted -> $DEST"
 echo "point the stack .env at it and restart:"
-[ -n "$promoted_nora" ] && echo "  NORA_ENV_DIR=$DEST/nora"
-[ -n "$promoted_sira" ] && echo "  STORE_ROOT=$DEST/sira"
+if [ -n "$promoted_nora" ]; then echo "  NORA_ENV_DIR=$DEST/nora"; fi
+if [ -n "$promoted_sira" ]; then echo "  STORE_ROOT=$DEST/sira"; fi

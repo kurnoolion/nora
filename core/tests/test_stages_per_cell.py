@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from core.src.models.document import DocumentIR
+from core.src.pipeline.cells import Cell
 from core.src.pipeline.runner import PipelineContext
 from core.src.pipeline.stages import run_parse, run_profile, run_resolve, run_taxonomy
 from core.src.parser.structural_parser import Requirement, RequirementTree
@@ -26,19 +27,16 @@ def _seed_env(env: Path) -> Path:
         d = env / "input" / mno / rel
         d.mkdir(parents=True, exist_ok=True)
         (d / "doc.pdf").write_text("x", encoding="utf-8")
-    # a minimal profile + a binding manifest pointing every cell at it
-    prof = env / "prof.json"
-    DocumentProfile(profile_name="test").save_json(prof)
+    # a minimal profile per MNO + a binding manifest pointing each MNO at its own
+    # (the stage-graph fingerprint of a cell's profile is the BOUND profile
+    # after substitution, so a profile edit is made at the source)
+    bindings = []
+    for m, _ in CELLS:
+        prof = env / f"prof_{m}.json"
+        DocumentProfile(profile_name=f"test-{m}").save_json(prof)
+        bindings.append({"mno": m, "release": "*", "profile": str(prof)})
     (env / "profiles.json").write_text(
-        json.dumps(
-            {
-                "bindings": [
-                    {"mno": m, "release": "*", "profile": str(prof)} for m, _ in CELLS
-                ],
-                "default": None,
-            }
-        ),
-        encoding="utf-8",
+        json.dumps({"bindings": bindings, "default": None}), encoding="utf-8",
     )
     return env
 
@@ -113,13 +111,40 @@ class TestIncrementalSkip:
     def test_profile_change_reparses_only_that_cell(self, tmp_path):
         ctx = self._prep(tmp_path)
         run_parse(ctx)
-        # mutate MNO-A's materialized profile -> its fingerprint flips
-        pj = tmp_path / "out" / "profile" / "MNO-A" / "Feb2026" / "profile.json"
+        # edit MNO-A's bound profile -> the profile stage re-materializes it
+        # under a new fingerprint -> parse's input fingerprint flips for A only
+        pj = tmp_path / "prof_MNO-A.json"
+        data = json.loads(pj.read_text(encoding="utf-8"))
+        data["profile_name"] = "changed"
+        pj.write_text(json.dumps(data), encoding="utf-8")
+        run_profile(ctx)
+        r = run_parse(ctx)
+        assert r.stats["docs"] == 1 and r.stats["skipped"] == 1  # A re-parsed, B skipped
+
+    def test_parse_rerun_without_profile_stage_sees_recorded_profile(self, tmp_path):
+        """A source-profile edit reaches parse through the profile stage:
+        the manifest records the profile stage's fingerprint, and parse
+        reads that record. Running parse alone after the edit reuses the
+        cell (the pipeline runs profile before parse)."""
+        ctx = self._prep(tmp_path)
+        run_parse(ctx)
+        pj = tmp_path / "prof_MNO-A.json"
         data = json.loads(pj.read_text(encoding="utf-8"))
         data["profile_name"] = "changed"
         pj.write_text(json.dumps(data), encoding="utf-8")
         r = run_parse(ctx)
-        assert r.stats["docs"] == 1 and r.stats["skipped"] == 1  # A re-parsed, B skipped
+        assert r.stats["docs"] == 0 and r.stats["skipped"] == 2
+
+    def test_manifest_records_parse_per_cell(self, tmp_path):
+        from core.src.pipeline.manifest import MANIFEST_NAME
+        ctx = self._prep(tmp_path)
+        run_parse(ctx)
+        m = json.loads((tmp_path / MANIFEST_NAME).read_text(encoding="utf-8"))
+        assert set(m["stages"]["parse"]) == {f"{a}/{b}" for a, b in CELLS}
+        assert set(m["stages"]["profile"]) == {f"{a}/{b}" for a, b in CELLS}
+        entry = m["stages"]["parse"]["MNO-A/Feb2026"]
+        assert entry["inputs"]["profile"] == m["stages"]["profile"]["MNO-A/Feb2026"]["fp"]
+        assert entry["code_version"] == "1" and entry["inputs"]["extract"] == "absent"
 
 
 class TestCellScopeInStages:
@@ -187,7 +212,9 @@ class _ScriptedProvider:
 
 
 class TestTaxonomyCache:
-    """D-DRAFT-9 — global taxonomy corpus-fingerprint cache."""
+    """D-DRAFT-9 — per-cell taxonomy fingerprint cache (per release since
+    strand self-serve-ingestion: a cell's fingerprint covers its own trees
+    and the overview files)."""
 
     def _seed_tree(self, env: Path, mno: str, rel: str, plan: str) -> None:
         _seed_plan_tree(env, mno, rel, plan)
@@ -211,6 +238,28 @@ class TestTaxonomyCache:
         run_taxonomy(ctx)
         ctx.force = True
         assert run_taxonomy(ctx).stats["source"] == "derived"
+
+    def test_overview_dir_reaches_the_extractor(self, tmp_path, monkeypatch):
+        """Regression: the stage hashed the overview files but stopped passing
+        the directory to `FeatureExtractor` on 2026-11-06, so the prompt
+        context never reached the model in pipeline runs."""
+        import core.src.taxonomy.extractor as ex
+        seen: list = []
+        real = ex.FeatureExtractor
+
+        class Recording(real):
+            def __init__(self, llm, overview_dir=None):
+                seen.append(overview_dir)
+                super().__init__(llm, overview_dir=overview_dir)
+
+        monkeypatch.setattr(ex, "FeatureExtractor", Recording)
+        self._seed_tree(tmp_path, "MNO-A", "Feb2026", "PLANX")
+        ov_dir = tmp_path / "overviews"
+        ov_dir.mkdir()
+        monkeypatch.setenv("NORA_TAXONOMY_OVERVIEW_DIR", str(ov_dir))
+        ctx = PipelineContext.standalone(env_dir=tmp_path, model_provider="mock")
+        assert run_taxonomy(ctx).stats["source"] == "derived"
+        assert seen == [str(ov_dir)]
 
     def test_overview_change_busts_cache(self, tmp_path, monkeypatch):
         """Corpus-overview files are prompt inputs — adding or editing one
@@ -245,19 +294,53 @@ class TestTaxonomyResilience:
         assert _release_sort_key("Dec2025") < _release_sort_key("Jan2026")
         assert _release_sort_key("not-a-release") == "not-a-release"
 
-    def test_newest_release_wins(self, tmp_path, monkeypatch):
-        """Same plan in two releases → only the chronologically newest
-        release's copy is extracted; the older one is superseded. Jul2026
-        vs Mar2026 pins the MMMYYYY parse — plain string comparison would
-        pick Mar2026 ('J' < 'M')."""
-        _seed_plan_tree(tmp_path, "MNO-A", "Mar2026", "PLANX")
+    def test_each_release_has_its_own_taxonomy(self, tmp_path, monkeypatch):
+        """Same plan in two releases → extracted once per release, each into
+        its own cell directory; no release supersedes another (strand
+        self-serve-ingestion: a release is enriched against the taxonomy
+        of its own text)."""
+        _seed_plan_tree(tmp_path, "MNO-A", "Apr2026", "PLANX")
         _seed_plan_tree(tmp_path, "MNO-A", "Jul2026", "PLANX")
         prov = _ScriptedProvider()
         res = run_taxonomy(self._ctx(tmp_path, monkeypatch, prov))
         assert res.status == "OK", res
-        assert res.stats["docs"] == 1 and res.stats["superseded"] == 1
-        assert len(prov.prompts) == 1
+        assert res.stats["docs"] == 2 and res.stats["superseded"] == 0 and res.stats["cells"] == 2
+        assert len(prov.prompts) == 2
+        assert sum("Release: Jul2026" in p for p in prov.prompts) == 1
+        assert sum("Release: Apr2026" in p for p in prov.prompts) == 1
+        out = tmp_path / "out" / "taxonomy"
+        assert (out / "MNO-A" / "Apr2026" / "PLANX_features.json").is_file()
+        assert (out / "MNO-A" / "Jul2026" / "PLANX_features.json").is_file()
+        assert (out / "MNO-A" / "Jul2026" / "taxonomy.json").is_file()
+        assert (out / "taxonomy.json").is_file()   # build-level, over both cells
+
+    def test_unset_overview_dir_warns_when_extracting(self, tmp_path, monkeypatch):
+        """No NORA_TAXONOMY_OVERVIEW_DIR at all used to pass silently; it is
+        TAX-W003 now (the cycle driver's enrich gate refuses on it). A run
+        served wholly from cache extracts nothing and says nothing."""
+        monkeypatch.delenv("NORA_TAXONOMY_OVERVIEW_DIR", raising=False)
+        _seed_plan_tree(tmp_path, "MNO-A", "Apr2026", "PLANX")
+        ctx = self._ctx(tmp_path, monkeypatch, _ScriptedProvider())
+        res = run_taxonomy(ctx)
+        assert any(w.startswith("TAX-W003") and "not set" in w for w in res.warnings)
+        res = run_taxonomy(ctx)
+        assert res.stats["source"] == "cache"
+        assert not any(w.startswith("TAX-W003") for w in res.warnings)
+
+    def test_scope_narrows_to_one_cell(self, tmp_path, monkeypatch):
+        """--mno/--release restrict the stage to that cell; other cells'
+        directories are neither derived nor touched."""
+        _seed_plan_tree(tmp_path, "MNO-A", "Apr2026", "PLANX")
+        _seed_plan_tree(tmp_path, "MNO-A", "Jul2026", "PLANY")
+        prov = _ScriptedProvider()
+        ctx = self._ctx(tmp_path, monkeypatch, prov)
+        ctx.scope_mnos = ["MNO-A"]
+        ctx.scope_releases = ["Jul2026"]
+        res = run_taxonomy(ctx)
+        assert res.status == "OK", res
+        assert res.stats["cells"] == 1 and res.stats["docs"] == 1
         assert "Release: Jul2026" in prov.prompts[0]
+        assert not (tmp_path / "out" / "taxonomy" / "MNO-A" / "Apr2026").exists()
 
     def test_same_plan_different_mnos_both_kept(self, tmp_path, monkeypatch):
         """Dedup keys on (MNO, plan_id) — a shared plan_id across MNOs is
@@ -276,20 +359,25 @@ class TestTaxonomyResilience:
         prov = _ScriptedProvider(fail_plans={"PLANB"})
         ctx = self._ctx(tmp_path, monkeypatch, prov)
         out = tmp_path / "out" / "taxonomy"
+        cell_a = out / "MNO-A" / "R2026Q1"
+        cell_b = out / "MNO-B" / "R2026Q1"
 
         r1 = run_taxonomy(ctx)
         assert r1.status == "WARN" and r1.stats["failed"] == 1
         assert r1.stats["docs"] == 1
         assert any("TAX-W004" in w for w in r1.warnings)
         assert (out / "taxonomy.json").is_file()          # degraded but usable
-        assert (out / "PLANA_features.json").is_file()
-        assert not (out / "PLANB_features.json").exists() # no empty success
+        assert (cell_a / "PLANA_features.json").is_file() and (cell_a / "taxonomy.json").is_file()
+        assert not (cell_b / "PLANB_features.json").exists() # no empty success
+        fps = ctx.fingerprints   # the clean cell is stamped, the degraded one is not
+        assert fps.recorded("taxonomy", Cell("MNO-A", "R2026Q1")) is not None
+        assert fps.recorded("taxonomy", Cell("MNO-B", "R2026Q1")) is None
 
         prov.fail_plans.clear()                           # endpoint recovered
         r2 = run_taxonomy(ctx)
         assert r2.status == "OK"
-        assert r2.stats["docs"] == 1 and r2.stats["cached_docs"] == 1
-        assert (out / "PLANB_features.json").is_file()
+        assert r2.stats["docs"] == 1 and r2.stats["cells_cached"] == 1
+        assert (cell_b / "PLANB_features.json").is_file()
 
         r3 = run_taxonomy(ctx)
         assert r3.stats["source"] == "cache"
@@ -302,7 +390,7 @@ class TestTaxonomyResilience:
         res = run_taxonomy(self._ctx(tmp_path, monkeypatch, prov))
         assert res.status == "FAIL"
         state = json.loads(
-            (tmp_path / "out" / "taxonomy" / "extraction_state.json")
+            (tmp_path / "out" / "taxonomy" / "MNO-A" / "R2026Q1" / "extraction_state.json")
             .read_text(encoding="utf-8"))
         (entry,) = state["docs"].values()
         assert entry["status"] == "failed"
@@ -310,7 +398,7 @@ class TestTaxonomyResilience:
     def test_stale_features_files_cleaned(self, tmp_path, monkeypatch):
         """Leftover per-plan files with no matching selected plan (e.g. empty
         files from pre-fail-soft crashed runs) are removed on re-derive."""
-        out = tmp_path / "out" / "taxonomy"
+        out = tmp_path / "out" / "taxonomy" / "MNO-A" / "R2026Q1"
         out.mkdir(parents=True)
         (out / "GHOST_features.json").write_text("{}", encoding="utf-8")
         _seed_plan_tree(tmp_path, "MNO-A", "R2026Q1", "PLANA")
@@ -338,7 +426,7 @@ class TestTaxonomyMultiPlan:
         res = run_taxonomy(self._ctx(tmp_path, monkeypatch, prov))
         assert res.status == "OK", res
         assert res.stats["docs"] == 2
-        out = tmp_path / "out" / "taxonomy"
+        out = tmp_path / "out" / "taxonomy" / "MNO-B" / "Jul2026"
         assert (out / "PLANA_features.json").is_file()
         assert (out / "PLANB_features.json").is_file()
         assert not (out / "_features.json").exists()
@@ -346,10 +434,9 @@ class TestTaxonomyMultiPlan:
         assert any("Plan ID: PLANA" in p and "Plan ID: PLANB" not in p
                    for p in prov.prompts)
 
-    def test_multiplan_cross_release_newest_wins(self, tmp_path, monkeypatch):
-        """Different file names across releases mean file-level selection
-        can't dedupe (empty tree plan_id) — unit-level supersession must
-        pick each plan's newest-release copy."""
+    def test_multiplan_each_release_extracted(self, tmp_path, monkeypatch):
+        """The same two chapter-plans in two releases → four extractions,
+        two per cell; releases do not supersede each other."""
         _seed_multiplan_tree(tmp_path, "MNO-B", "Mar2026", "doc_mar",
                              ["PLANA", "PLANB"])
         _seed_multiplan_tree(tmp_path, "MNO-B", "Jul2026", "doc_jul",
@@ -357,9 +444,20 @@ class TestTaxonomyMultiPlan:
         prov = _ScriptedProvider()
         res = run_taxonomy(self._ctx(tmp_path, monkeypatch, prov))
         assert res.status == "OK", res
-        assert res.stats["docs"] == 2 and res.stats["superseded"] == 2
-        assert len(prov.prompts) == 2
-        assert all("Release: Jul2026" in p for p in prov.prompts)
+        assert res.stats["docs"] == 4 and res.stats["superseded"] == 0
+        assert len(prov.prompts) == 4
+        assert sum("Release: Jul2026" in p for p in prov.prompts) == 2
+
+    def test_same_plan_twice_in_one_release_keeps_the_later_file(self, tmp_path, monkeypatch):
+        """Within a cell the output is one file per plan: a plan carried by
+        two documents of the same release is extracted once, from the
+        later file name, and counted as superseded."""
+        _seed_multiplan_tree(tmp_path, "MNO-B", "Jul2026", "a_doc", ["PLANA"])
+        _seed_multiplan_tree(tmp_path, "MNO-B", "Jul2026", "b_doc", ["PLANA"])
+        prov = _ScriptedProvider()
+        res = run_taxonomy(self._ctx(tmp_path, monkeypatch, prov))
+        assert res.status == "OK", res
+        assert res.stats["docs"] == 1 and res.stats["superseded"] == 1
 
     def test_multiplan_per_plan_retry(self, tmp_path, monkeypatch):
         """One chapter-plan fails → only that plan retries on re-run; the
@@ -374,7 +472,7 @@ class TestTaxonomyMultiPlan:
         prov.fail_plans.clear()
         r2 = run_taxonomy(ctx)
         assert r2.status == "OK"
-        assert r2.stats["docs"] == 1 and r2.stats["cached_docs"] == 1
+        assert r2.stats["docs"] == 1 and r2.stats["cached_docs"] == 1   # the sibling plan, same cell
         assert run_taxonomy(ctx).stats["source"] == "cache"
 
 
@@ -500,12 +598,13 @@ class TestTaxonomyLedgerCompleteness:
 
     def test_retry_with_cached_tail_persists_full_ledger(self, tmp_path, monkeypatch):
         # PLANA sorts before PLANB; fail PLANA first so the retry's only
-        # extraction happens BEFORE the cached unit.
+        # extraction happens BEFORE the cached unit. Both plans in ONE cell:
+        # the ledger is per cell now.
         _seed_plan_tree(tmp_path, "MNO-A", "R2026Q1", "PLANA")
-        _seed_plan_tree(tmp_path, "MNO-B", "R2026Q1", "PLANB")
+        _seed_plan_tree(tmp_path, "MNO-A", "R2026Q1", "PLANB")
         prov = _ScriptedProvider(fail_plans={"PLANA"})
         ctx = self._ctx(tmp_path, monkeypatch, prov)
-        state = tmp_path / "out" / "taxonomy" / "extraction_state.json"
+        state = tmp_path / "out" / "taxonomy" / "MNO-A" / "R2026Q1" / "extraction_state.json"
 
         r1 = run_taxonomy(ctx)
         assert r1.status == "WARN" and r1.stats["failed"] == 1

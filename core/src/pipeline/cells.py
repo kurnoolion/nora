@@ -23,8 +23,11 @@ from core.src.extraction.release_key import is_valid_release, release_order_key
 
 # D-DRAFT-6 stage classification. The union is the full STAGE_NAMES set
 # (a test guards that this partition stays exhaustive + disjoint).
-PER_CELL_STAGES = frozenset({"extract", "profile", "parse", "resolve", "vectorstore"})
-GLOBAL_STAGES = frozenset({"taxonomy", "standards", "graph", "eval"})
+# taxonomy became per cell on 2026-11-06 (strand self-serve-ingestion): a
+# release's taxonomy is derived from its own trees, no cross-release
+# supersession, so a build can hold one cell.
+PER_CELL_STAGES = frozenset({"extract", "profile", "parse", "resolve", "taxonomy", "vectorstore"})
+GLOBAL_STAGES = frozenset({"standards", "graph", "eval"})
 
 
 class Cell(NamedTuple):

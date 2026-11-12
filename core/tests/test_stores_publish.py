@@ -22,6 +22,7 @@ from core.src.stores.registry import (
     REGISTRY_ENV,
     RELEASE_SET_ENV,
     Registry,
+    RegistryError,
     history_fingerprint,
     registry_path,
     registry_store_paths,
@@ -136,12 +137,12 @@ def test_first_publish_stages_every_unit_and_builds_history(world):
         sha, n = pub.sha256_file(root / m.file)
         assert (sha, n) == (m.sha256, m.bytes)
     # Cells identity = the cell DB's source_fingerprint, schema recorded
-    assert ms[("cells", f"{MNO_A}__{R1}")].fingerprint == "fp-a1"
-    assert ms[("cells", f"{MNO_A}__{R1}")].schema_version == "2"
+    assert ms[("cells", f"{MNO_A}/{R1}")].fingerprint == "fp-a1"
+    assert ms[("cells", f"{MNO_A}/{R1}")].schema_version == "2"
     # History identity = hash of its Trees members' fingerprints, and the
     # built DB's meta.source carries exactly those
-    trees_fps = {R1: ms[("trees", f"{MNO_A}__{R1}")].fingerprint,
-                 R2: ms[("trees", f"{MNO_A}__{R2}")].fingerprint}
+    trees_fps = {R1: ms[("trees", f"{MNO_A}/{R1}")].fingerprint,
+                 R2: ms[("trees", f"{MNO_A}/{R2}")].fingerprint}
     h = ms[("history", MNO_A)]
     assert h.fingerprint == history_fingerprint(trees_fps)
     assert json.loads(history_meta(root / h.file)["source"]) == trees_fps
@@ -158,12 +159,12 @@ def test_canonical_form_version_is_part_of_unit_identity(world):
     do_publish(world, "set-1", base="none")
     make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1", fpv="v3")
     out = do_publish(world, "set-2")
-    assert f"cells/{MNO_A}__{R1}@v2" in out["new_units"]
+    assert f"cells/{MNO_A}/{R1}@v2" in out["new_units"]
     reg = Registry(registry_path(world["root"]))
-    rows = reg.versions("cells", f"{MNO_A}__{R1}")
+    rows = reg.versions("cells", f"{MNO_A}/{R1}")
     assert [(r.version, r.fingerprint_version) for r in rows] == [(1, "v2"), (2, "v3")]
-    assert reg.find_version("cells", f"{MNO_A}__{R1}", "fp-a1", "2", fingerprint_version="v2").version == 1
-    assert reg.find_version("cells", f"{MNO_A}__{R1}", "fp-a1", "2").version == 2   # any version: newest
+    assert reg.find_version("cells", f"{MNO_A}/{R1}", "fp-a1", "2", fingerprint_version="v2").version == 1
+    assert reg.find_version("cells", f"{MNO_A}/{R1}", "fp-a1", "2").version == 2   # any version: newest
 
 
 def test_registry_adds_the_fingerprint_version_column_to_an_older_file(tmp_path):
@@ -209,7 +210,7 @@ def test_changed_cell_gets_v2_and_only_that(world):
     assert out["stores"]["trees"] == {"new": 0, "reused": 3}
     assert out["stores"]["history"] == {"new": 0, "reused": 2}
     ms = members(world["root"], "set-2")
-    assert ms[f"cells/{MNO_A}__{R1}"] == 2
+    assert ms[f"cells/{MNO_A}/{R1}"] == 2
     assert f"cell-{MNO_A}-{R1}-v2.db" in files(world["root"], "cells")
     assert f"cell-{MNO_A}-{R1}-v1.db" in files(world["root"], "cells")   # v1 stays
 
@@ -219,7 +220,7 @@ def test_same_source_newer_schema_is_new_content(world):
     make_cell_db(world["cells"] / f"cell-{MNO_B}-{R1}.db", MNO_B, R1, "fp-b1", schema="3")
     out = do_publish(world, "set-2", base="none")
     assert out["stores"]["cells"] == {"new": 1, "reused": 2}
-    assert members(world["root"], "set-2")[f"cells/{MNO_B}__{R1}"] == 2
+    assert members(world["root"], "set-2")[f"cells/{MNO_B}/{R1}"] == 2
 
 
 def test_changed_trees_rebuild_history_for_that_mno_only(world):
@@ -231,7 +232,7 @@ def test_changed_trees_rebuild_history_for_that_mno_only(world):
     assert out["stores"]["history"] == {"new": 1, "reused": 1}
     assert out["history_rebuilt"] == [MNO_A]
     ms = members(world["root"], "set-2")
-    assert ms[f"trees/{MNO_A}__{R2}"] == 2 and ms[f"trees/{MNO_A}__{R1}"] == 1
+    assert ms[f"trees/{MNO_A}/{R2}"] == 2 and ms[f"trees/{MNO_A}/{R1}"] == 1
     assert ms[f"history/{MNO_A}"] == 2 and ms[f"history/{MNO_B}"] == 1
     # the rebuilt History sees the new requirement in its latest release
     reg = Registry(registry_path(world["root"]))
@@ -249,13 +250,13 @@ def test_partial_publish_inherits_the_rest_from_the_base_set(world):
     pub.flip(world["root"], "set-1")
     make_cell_db(world["cells"] / f"cell-{MNO_B}-{R1}.db", MNO_B, R1, "fp-b1-NEW")
     # only one cell named; Trees/History not supplied at all
-    out = do_publish(world, "set-2", cells_filter=[f"{MNO_B}__{R1}"], env_dir="")
+    out = do_publish(world, "set-2", cells_filter=[f"{MNO_B}/{R1}"], env_dir="")
     assert out["base"] == "set-1"
     assert out["stores"] == {"cells": {"new": 1, "reused": 2},
                              "trees": {"new": 0, "reused": 3},
                              "history": {"new": 0, "reused": 2}}
     ms = members(world["root"], "set-2")
-    assert len(ms) == 8 and ms[f"cells/{MNO_B}__{R1}"] == 2
+    assert len(ms) == 8 and ms[f"cells/{MNO_B}/{R1}"] == 2
 
 
 def test_duplicate_label_and_unknown_base_are_refused(world):
@@ -274,15 +275,15 @@ def test_unpaired_units_are_warned_not_refused(world):
     (world["cells"] / f"cell-{MNO_B}-{R1}.db").unlink()
     out = do_publish(world, "set-1", base="none")
     assert out["warnings"] == [
-        f"trees/{MNO_B}__{R2}: no cells unit in the set (parse output without a SIRA cell)",
-        f"trees/{MNO_B}__{R1}: no cells unit in the set (parse output without a SIRA cell)"]
+        f"trees/{MNO_B}/{R2}: no cells unit in the set (parse output without a SIRA cell)",
+        f"trees/{MNO_B}/{R1}: no cells unit in the set (parse output without a SIRA cell)"]
     assert out["stores"]["cells"] == {"new": 2, "reused": 0}
     assert out["stores"]["trees"] == {"new": 4, "reused": 0}
     make_cell_db(world["cells"] / f"cell-{MNO_B}-{R1}.db", MNO_B, R1, "fp-b1")
     out = do_publish(world, "set-2", base="none", env_dir="")
-    assert out["warnings"] == [f"cells/{MNO_A}__{R2}: no trees unit in the set",
-                               f"cells/{MNO_A}__{R1}: no trees unit in the set",
-                               f"cells/{MNO_B}__{R1}: no trees unit in the set"]
+    assert out["warnings"] == [f"cells/{MNO_A}/{R2}: no trees unit in the set",
+                               f"cells/{MNO_A}/{R1}: no trees unit in the set",
+                               f"cells/{MNO_B}/{R1}: no trees unit in the set"]
 
 
 def test_nothing_to_publish(world):
@@ -404,7 +405,7 @@ def test_flip_and_rollback_are_one_transaction_each(world, monkeypatch):
     do_publish(world, "set-2")
     pub.gate(root, "set-2", "golden-stage1", "pass")
     res = pub.flip(root, "set-2")
-    assert res["from_label"] == "set-1" and res["changed"] == [f"cells/{MNO_A}__{R1}"]
+    assert res["from_label"] == "set-1" and res["changed"] == [f"cells/{MNO_A}/{R1}"]
     reg = Registry(registry_path(root))
     assert reg.active_label() == "set-2"
 
@@ -437,7 +438,7 @@ def test_flip_and_rollback_are_one_transaction_each(world, monkeypatch):
     assert res["kind"] == "rollback" and res["from_label"] == "set-2"
     assert reg.active_label() == "set-1"
     assert reg.flips()[0]["mode"] == "expedited"
-    assert {r["unit"]: r["version"] for r in reg.active() if r["store"] == "cells"}[f"{MNO_A}__{R1}"] == 1
+    assert {r["unit"]: r["version"] for r in reg.active() if r["store"] == "cells"}[f"{MNO_A}/{R1}"] == 1
 
 
 def test_rollback_target_must_have_served(world):
@@ -492,7 +493,7 @@ def test_verify_serving_compares_healthz_with_registry(world, monkeypatch):
         pub.rollback(root, "set-1", store_url="http://127.0.0.1:1")
     assert ei.value.code == "PUB-E008" and "registry_label=other" in ei.value.message
     fake_http.label = "set-1"
-    fake_http.versions = {**want, "cells": {**want["cells"], f"{MNO_A}__{R1}": {"version": 9}}}
+    fake_http.versions = {**want, "cells": {**want["cells"], f"{MNO_A}/{R1}": {"version": 9}}}
     with pytest.raises(PipelineError) as ei:
         pub.rollback(root, "set-1", store_url="http://127.0.0.1:1")
     assert "1 wrong" in ei.value.message
@@ -500,6 +501,52 @@ def test_verify_serving_compares_healthz_with_registry(world, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # gc
+
+def test_purge_removes_a_dead_set_and_only_its_files(world):
+    """`purge` deletes one set's rows and the version files no other set or
+    the active set references; an active set is refused; the flip log keeps
+    a purged label so `served_before` still knows it."""
+    root = world["root"]
+    do_publish(world, "set-1", base="none")
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1-v2")
+    do_publish(world, "set-2", base="none")                      # shares every unit but one with set-1
+    pub.gate(root, "set-2", "manual", "waived")
+    pub.flip(root, "set-2")
+    cell = f"cells/{MNO_A}/{R1}"
+    before = files(root, "cells")
+    with pytest.raises(RegistryError) as exc:
+        pub.purge(root, "set-2")
+    assert exc.value.code == "REG-E009" and files(root, "cells") == before
+    plan = pub.purge(root, "set-1", dry_run=True)
+    assert plan["dry_run"] and plan["removed"] == [f"{cell}@v1"] and files(root, "cells") == before
+    reg = Registry(registry_path(root))
+    assert reg.release_set("set-1") is not None                  # a dry run changes nothing
+    out = pub.purge(root, "set-1")
+    assert out["removed"] == [f"{cell}@v1"] and out["freed_bytes"] > 0 and not out["served_before"]
+    assert f"cell-{MNO_A}-{R1}-v1.db" not in files(root, "cells")
+    assert f"cell-{MNO_A}-{R1}-v2.db" in files(root, "cells")   # set-2's version stays
+    reg = Registry(registry_path(root))
+    assert reg.release_set("set-1") is None and reg.gates("set-1") == []
+    with pytest.raises(RegistryError):
+        reg.members("set-1")
+    v1 = reg.get_version("cells", f"{MNO_A}/{R1}", 1)
+    assert v1 is not None and v1.removed_at                      # the row stays, marked removed
+    assert len(reg.members("set-2")) == 8                        # the shared units are untouched
+    with pytest.raises(RegistryError) as exc:
+        pub.purge(root, "set-1")
+    assert exc.value.code == "REG-E007"
+    # a set that served and was rolled back can be purged; its flips remain history
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1-v3")
+    do_publish(world, "set-3", base="none")
+    pub.gate(root, "set-3", "manual", "waived")
+    pub.flip(root, "set-3")
+    pub.rollback(root, "set-2")
+    out = pub.purge(root, "set-3")
+    assert out["removed"] == [f"{cell}@v3"] and out["served_before"]
+    reg = Registry(registry_path(root))
+    assert reg.served_before("set-3") and reg.active_label() == "set-2"
+    assert pub.main(["purge", "--serve-root", str(root), "--label", "set-3"]) == 1   # unknown now
+
 
 def test_gc_keeps_active_plus_n_and_flip_targets(world):
     root = world["root"]
@@ -509,7 +556,7 @@ def test_gc_keeps_active_plus_n_and_flip_targets(world):
         do_publish(world, f"set-{i}", base="none")
     pub.gate(root, "set-3", "manual", "waived")
     pub.flip(root, "set-3")
-    cell = f"cells/{MNO_A}__{R1}"
+    cell = f"cells/{MNO_A}/{R1}"
     before = files(root, "cells")
     assert len(before) == 6                                   # 4 versions of one cell + 2
 
@@ -526,7 +573,7 @@ def test_gc_keeps_active_plus_n_and_flip_targets(world):
     assert f"cell-{MNO_A}-{R1}-v3.db" in files(root, "cells")
     assert f"cell-{MNO_A}-{R1}-v4.db" in files(root, "cells")
     reg = Registry(registry_path(root))
-    v1 = reg.get_version("cells", f"{MNO_A}__{R1}", 1)
+    v1 = reg.get_version("cells", f"{MNO_A}/{R1}", 1)
     assert v1 is not None and v1.removed_at                   # row stays
     assert len(reg.members("set-1")) == 8                     # provenance intact
     # a removed version is not reused by a later publish of the same content
@@ -623,18 +670,88 @@ def test_exclude_drops_a_unit_built_or_inherited_and_history_follows(world):
     without the release."""
     write_parse(world["env"], MNO_B, R2, "docB", [_req("REQ_B_9", section="1")])
     out = do_publish(world, "set-1", base="none")
-    assert f"trees/{MNO_B}__{R2}: no cells unit in the set (parse output without a SIRA cell)" in out["warnings"]
-    assert f"trees/{MNO_B}__{R2}" in members(world["root"], "set-1")
+    assert f"trees/{MNO_B}/{R2}: no cells unit in the set (parse output without a SIRA cell)" in out["warnings"]
+    assert f"trees/{MNO_B}/{R2}" in members(world["root"], "set-1")
     # a dry run shows the plan without writing
-    out = do_publish(world, "set-2", base="set-1", exclude=[f"{MNO_B}__{R2}"], dry_run=True)
-    assert out["excluded"] == [f"trees/{MNO_B}__{R2}"] and out["history_rebuilt"] == [MNO_B]
-    out = do_publish(world, "set-2", base="set-1", exclude=[f"{MNO_B}__{R2}"])
-    assert out["warnings"] == [] and out["excluded"] == [f"trees/{MNO_B}__{R2}"]
+    out = do_publish(world, "set-2", base="set-1", exclude=[f"{MNO_B}/{R2}"], dry_run=True)
+    assert out["excluded"] == [f"trees/{MNO_B}/{R2}"] and out["history_rebuilt"] == [MNO_B]
+    out = do_publish(world, "set-2", base="set-1", exclude=[f"{MNO_B}/{R2}"])
+    assert out["warnings"] == [] and out["excluded"] == [f"trees/{MNO_B}/{R2}"]
     assert out["history_rebuilt"] == [MNO_B]
     ms = members(world["root"], "set-2")
-    assert f"trees/{MNO_B}__{R2}" not in ms and ms[f"history/{MNO_B}"] == 2
+    assert f"trees/{MNO_B}/{R2}" not in ms and ms[f"history/{MNO_B}"] == 2
     from core.src.stores.history import SqliteHistoryStore
     reg = Registry(registry_path(world["root"]))
     h = next(m for m in reg.members("set-2") if m.key == ("history", MNO_B))
     assert SqliteHistoryStore(db_paths=[world["root"] / h.file]).releases(MNO_B) == [R1]
 
+
+def test_migrate_units_cli_takes_serve_root(tmp_path):
+    """`publish migrate-units --serve-root R [--dry-run]` (field-found: the
+    subcommand shipped without --serve-root)."""
+    from core.src.stores.publish import main as pub_main
+    from core.src.stores.registry import Registry, registry_path
+    reg = Registry(registry_path(tmp_path), read_only=False)
+    reg.ensure()
+    con = reg.begin_write()
+    con.execute("INSERT INTO store_version(store, unit, version, fingerprint, file, sha256, bytes, schema_version, "
+                "fingerprint_version, staged_at, staged_by) VALUES ('cells','mno-a__Jan2031',1,'fp','f.db','s',1,'2','1','t','u')")
+    con.execute("INSERT INTO active(store, unit, version, label, since) VALUES ('cells','mno-a__Jan2031',1,'L','t')")
+    reg.commit_write(con)
+    assert pub_main(["migrate-units", "--serve-root", str(tmp_path), "--dry-run"]) == 0
+    assert pub_main(["migrate-units", "--serve-root", str(tmp_path)]) == 0
+    assert pub_main(["migrate-units", "--serve-root", str(tmp_path), "--dry-run"]) == 0
+    rows = [r[0] for r in reg._connect().execute("SELECT unit FROM active")]
+    assert rows == ["mno-a/Jan2031"]
+
+
+
+# ---------------------------------------------------------------------------
+# stage graph, step 3: how a set was built
+
+def test_release_set_records_the_recipe_and_stage_fingerprints(world):
+    env = world["env"]
+    (env / "RECIPE.json").write_text(json.dumps({
+        "name": "r-tax", "stages": ["taxonomy", "enrich"],
+        "params": {"enrich": {"taxonomy": True, "prompt_scheme": "scheme-r"}}}))
+    (env / "STAGES.json").write_text(json.dumps({"version": 1, "stages": {
+        "parse": {f"{MNO_A}/{R1}": {"fp": "p1", "origin": "store"}},
+        "taxonomy": {f"{MNO_A}/{R1}": {"fp": "t1", "origin": "computed"}}}}))
+    do_publish(world, "set-r", base="none")
+    rs = Registry(registry_path(world["root"])).release_set("set-r")
+    from core.src.pipeline.recipes import load
+    assert rs["recipe"] == "r-tax" and rs["recipe_digest"] == load(env / "RECIPE.json").digest
+    assert rs["prompt_scheme"] == "scheme-r"                        # from the recipe
+    assert json.loads(rs["stage_fps"]) == {"parse": {f"{MNO_A}/{R1}": "p1"},
+                                           "taxonomy": {f"{MNO_A}/{R1}": "t1"}}
+    make_cell_db(world["cells"] / f"cell-{MNO_A}-{R1}.db", MNO_A, R1, "fp-a1-new")
+    do_publish(world, "set-r2", prompt_scheme="given")              # an explicit scheme wins
+    assert Registry(registry_path(world["root"])).release_set("set-r2")["prompt_scheme"] == "given"
+
+
+def test_release_set_without_a_recipe_records_empty_values(world):
+    do_publish(world, "set-plain", base="none")
+    rs = Registry(registry_path(world["root"])).release_set("set-plain")
+    assert (rs["recipe"], rs["recipe_digest"], rs["stage_fps"], rs["prompt_scheme"]) == ("", "", "", "")
+
+
+def test_a_bad_recipe_in_the_label_fails_the_publish(world):
+    (world["env"] / "RECIPE.json").write_text(json.dumps({"name": "x", "stages": ["parse"]}))
+    from core.src.pipeline.error_codes import PipelineError
+    with pytest.raises(PipelineError) as e:
+        do_publish(world, "set-bad", base="none")
+    assert e.value.code == "RCP-E002"
+    assert Registry(registry_path(world["root"])).release_set("set-bad") is None
+
+
+def test_registry_adds_the_recipe_columns_to_an_older_file(world):
+    import sqlite3
+    do_publish(world, "set-old", base="none")
+    path = registry_path(world["root"])
+    con = sqlite3.connect(path)
+    for col in ("recipe", "recipe_digest", "stage_fps"):
+        con.execute(f"ALTER TABLE release_set DROP COLUMN {col}")
+    con.commit(); con.close()
+    Registry(path, read_only=False).ensure()
+    rs = Registry(path).release_set("set-old")
+    assert (rs["recipe"], rs["recipe_digest"], rs["stage_fps"]) == ("", "", "")

@@ -70,6 +70,10 @@ class RunnerConfig:
     overlay_root: str = ""
     document_extensions: list[str] = field(default_factory=lambda: [".pdf", ".docx", ".xlsx"])
     abandon_removes_documents: bool = True
+    # The registry roots of the other stacks on this host. Their requirements
+    # dir is this one: abandon and purge keep a cell's documents while any of
+    # them serves it (stage graph, step 5).
+    peer_registry_roots: list[str] = field(default_factory=list)
     detached_poll_seconds: float = 5.0
     detached_timeout_seconds: float = 6 * 3600
     # Webhooks: a submit may name a callback_url; the runner posts
@@ -98,7 +102,23 @@ class RunnerConfig:
         cfg = cls(**kwargs, share_mappings=mappings)
         if not cfg.runner_name:
             cfg.runner_name = socket.gethostname()
+        # cycle.sh reads the wiring env from NORA_BUILDS_WIRING; the runner
+        # already knows the file, so the layout env need not repeat it.
+        cfg.cycle_env = dict(cfg.cycle_env)
+        cfg.cycle_env.setdefault("NORA_BUILDS_WIRING", cfg.builds_wiring)
         return cfg
+
+    def template_values(self) -> list[str]:
+        """Keys whose value still looks like the example config's
+        placeholder (`/path/to/…`, `<…>`): `--check` refuses them."""
+        bad: list[str] = []
+        for k, v in self.__dict__.items():
+            vals = list(v.values()) if isinstance(v, dict) else (v if isinstance(v, list) else [v])
+            for x in vals:
+                if isinstance(x, str) and ("/path/to" in x or ("<" in x and ">" in x)):
+                    bad.append(k)
+                    break
+        return bad
 
     @classmethod
     def load(cls, path: str | Path) -> "RunnerConfig":
@@ -146,6 +166,15 @@ class RunnerConfig:
 
     def build_dir(self, build: str) -> Path:
         return self.nora_builds_root / build
+
+    def sira_build_dir(self, build: str) -> Path:
+        """The build's SIRA cells: `<build>/out/sira/` (the build's last
+        stage dir), or `<NORA_BUILDS_SIRA_ROOT>/<build>` when that older
+        layout is kept — the same rule as `cycle.sh`."""
+        env = self.cycle_env
+        if env.get("NORA_BUILDS_SIRA_ROOT"):
+            return Path(env["NORA_BUILDS_SIRA_ROOT"]) / build
+        return self.build_dir(build) / "out" / "sira"
 
     def resolve_source(self, source: str) -> Path:
         """Map a submitted share path (UNC, or a host path under a mapped

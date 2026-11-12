@@ -21,6 +21,7 @@ DISPATCH = {
     "ingest-flip": plan.run_flip,
     "ingest-rollback": plan.run_rollback,
     "ingest-abandon": plan.run_abandon,
+    "ingest-purge": plan.run_purge,
 }
 
 
@@ -133,4 +134,6 @@ def _summary(job_type: str, ing: dict) -> str:
         return f"{ing.get('label')} served (previous {ing.get('previous_label') or '-'})"
     if job_type == "ingest-rollback":
         return f"rolled back to {ing.get('previous_label')}"
+    if job_type == "ingest-purge":
+        return f"{ing.get('mno')}/{ing.get('release')} purged (build {ing.get('build') or '-'}, label {ing.get('label') or '-'})"
     return f"{ing.get('mno')}/{ing.get('release')} abandoned"

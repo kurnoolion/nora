@@ -230,6 +230,13 @@ def main() -> None:
              "Pass --no-skip-standards to FORCE on. Default: resolver chain decides.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
+    parser.add_argument(
+        "--stamp", default=None, choices=["enrich"],
+        help="Record a driver-side stage's fingerprint for every in-scope cell "
+             "it completed (enrich: the SIRA cells under <env_dir>/out/sira) in "
+             "STAGES.json, then exit. Run by cycle.sh after verify-enrich "
+             "(stage graph, step 3). Honours --mno / --release.",
+    )
 
     args = parser.parse_args()
     if args.lane:
@@ -334,6 +341,15 @@ def main() -> None:
     ctx.scope_mnos = _csv(args.mno)
     ctx.scope_releases = _csv(args.release)
     ctx.force = args.force
+    if args.stamp:
+        from core.src.pipeline.stages import stamp_driver_stage
+        result = stamp_driver_stage(ctx, args.stamp)
+        print(f"STAMP {result.stage}: {result.status} {result.stats}")
+        for w in result.warnings:
+            print(f"  {w}")
+        if result.error_message:
+            print(f"  {result.error_code}: {result.error_message}")
+        sys.exit(0 if result.ok else 1)
     # Resolve the effective LLM model: --model > NORA_LLM_MODEL >
     # config/llm.json > env-config > "auto". run_cli previously set model_name
     # straight from args.model and never called resolve_llm_model, so the

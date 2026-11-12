@@ -28,6 +28,10 @@ REGISTRY_ENV = "NORA_STORE_REGISTRY"
 RELEASE_SET_ENV = "NORA_STORE_RELEASE_SET"
 REGISTRY_NAME = "registry.db"
 SCHEMA_VERSION = "1"
+#: Added to release_set by `ensure` (stage graph, step 3): the recipe's
+#: name and digest and the build's stage fingerprints (JSON), '' when the
+#: build had none. Readers tolerate their absence.
+RELEASE_SET_RECIPE_COLUMNS = ("recipe", "recipe_digest", "stage_fps")
 
 STORES = ("cells", "trees", "history")
 GATE_KINDS = ("golden-stage1", "golden-stage2", "manual")
@@ -152,13 +156,36 @@ def now_iso() -> str:
 
 
 def unit_name(mno: str, release: str = "") -> str:
-    """Cells / Trees units are ``<mno>__<release>``; History units ``<mno>``."""
-    return f"{mno}__{release}" if release else mno
+    """Cells / Trees units are ``<mno>/<release>``; History units ``<mno>``.
+    (``<mno>__<release>`` before 2026-11-06; ``publish migrate-units``
+    rewrites a registry's rows.)"""
+    return f"{mno}/{release}" if release else mno
 
 
 def split_unit(unit: str) -> tuple[str, str]:
-    mno, _, rel = unit.partition("__")
+    """``(mno, release)`` of a Cells/Trees unit; ``(mno, "")`` for History.
+    Reads both spellings."""
+    if "/" in unit:
+        mno, _, rel = unit.partition("/")
+    else:
+        mno, _, rel = unit.partition("__")
     return mno, rel
+
+
+_UNIT_TABLES = ("store_version", "release_set_member", "active")
+
+
+def migrate_unit_names(con: sqlite3.Connection) -> dict[str, int]:
+    """Rewrite ``<mno>__<release>`` units to ``<mno>/<release>`` in every
+    table that names units. Idempotent; returns rows changed per table.
+    Run inside ``begin_write`` by ``publish migrate-units``."""
+    out: dict[str, int] = {}
+    for table in _UNIT_TABLES:
+        cur = con.execute(
+            f"UPDATE {table} SET unit = replace(unit, '__', '/') "
+            f"WHERE store IN ('cells', 'trees') AND instr(unit, '__') > 0")
+        out[table] = cur.rowcount
+    return out
 
 
 def history_fingerprint(trees_fps: dict[str, str]) -> str:
@@ -223,6 +250,11 @@ class Registry:
             if "fingerprint_version" not in cols:
                 con.execute("ALTER TABLE store_version ADD COLUMN fingerprint_version "
                             "TEXT NOT NULL DEFAULT ''")
+            # stage graph, step 3: how a set was built (additive, as above)
+            rs_cols = {r[1] for r in con.execute("PRAGMA table_info(release_set)")}
+            for col in RELEASE_SET_RECIPE_COLUMNS:
+                if col not in rs_cols:
+                    con.execute(f"ALTER TABLE release_set ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
             found = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if found is None:
                 con.execute("INSERT INTO meta(key, value) VALUES ('schema_version', ?)",
@@ -344,6 +376,7 @@ class Registry:
                            versions: "dict[tuple[str, str], int] | None" = None,
                            created_by: str = "", note: str = "",
                            code_version: str = "", prompt_scheme: str = "",
+                           recipe: str = "", recipe_digest: str = "", stage_fps: str = "",
                            at: str = "") -> list[StoreVersion]:
         """Inside an open write (``begin_write``): insert the new
         ``store_version`` rows (version numbers from ``versions``, else
@@ -374,8 +407,9 @@ class Registry:
             seen.add(m.key)
         con.execute(
             "INSERT INTO release_set(label, created_at, created_by, note, code_version, "
-            "prompt_scheme) VALUES (?,?,?,?,?,?)",
-            (label, at, created_by, note, code_version, prompt_scheme))
+            "prompt_scheme, recipe, recipe_digest, stage_fps) VALUES (?,?,?,?,?,?,?,?,?)",
+            (label, at, created_by, note, code_version, prompt_scheme,
+             recipe, recipe_digest, stage_fps))
         con.executemany(
             "INSERT INTO release_set_member(label, store, unit, version) VALUES (?,?,?,?)",
             [(label, m.store, m.unit, m.version) for m in members])
@@ -577,6 +611,43 @@ class Registry:
                 continue
         return [v for v in self.versions() if not v.removed_at
                 and (v.store, v.unit, v.version) not in keep_versions]
+
+    def purge_plan(self, label: str) -> list[StoreVersion]:
+        """The set's members that would belong to no other set and are not
+        active once the set is gone (``purge_release_set`` removes the rows;
+        the caller removes these files and calls ``mark_removed``). Refuses
+        an unknown or an active set."""
+        if self.release_set(label) is None:
+            raise RegistryError("REG-E007", f"unknown release set {label!r}")
+        if any(r["label"] == label for r in self.active()):
+            raise RegistryError("REG-E009", f"release set {label!r} is active")
+        keep: set[tuple[str, str, int]] = {
+            (r["store"], r["unit"], int(r["version"])) for r in self.active()}
+        con = self._connect()
+        try:
+            keep.update((r["store"], r["unit"], int(r["version"])) for r in con.execute(
+                "SELECT store, unit, version FROM release_set_member WHERE label<>?", (label,)))
+        finally:
+            con.close()
+        return [m for m in self.members(label)
+                if not m.removed_at and (m.store, m.unit, m.version) not in keep]
+
+    def purge_release_set(self, label: str) -> list[StoreVersion]:
+        """Delete the set's rows (members, gate runs, the set) in one
+        transaction and return ``purge_plan(label)`` as computed before.
+        Flip rows keep the label: history is never rewritten, and
+        ``served_before`` still answers for it. Never an active set."""
+        plan = self.purge_plan(label)
+        con = self._connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("DELETE FROM release_set_member WHERE label=?", (label,))
+            con.execute("DELETE FROM gate_run WHERE label=?", (label,))
+            con.execute("DELETE FROM release_set WHERE label=?", (label,))
+            con.execute("COMMIT")
+        finally:
+            con.close()
+        return plan
 
     def mark_removed(self, store: str, unit: str, version: int, at: str = "") -> None:
         con = self._connect()

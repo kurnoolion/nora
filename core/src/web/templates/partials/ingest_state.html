@@ -1,8 +1,10 @@
 {% if i.state == 'running' %}<span class="badge bg-primary"><span class="spinner-border spinner-border-sm me-1" role="status"></span>running{% if i.stage %}: {{ i.stage }}{% endif %}</span>
-{% elif i.state == 'queued' %}<span class="badge bg-secondary">queued</span>
+{% elif i.state == 'queued' %}<span class="badge bg-secondary">queued{% if i.queue_position %} #{{ i.queue_position }}{% endif %}</span>
 {% elif i.state == 'staged' %}<span class="badge bg-info text-dark">staged</span>
 {% elif i.state == 'served' %}<span class="badge bg-success">served</span>
 {% elif i.state == 'rolled_back' %}<span class="badge bg-warning text-dark">rolled back</span>
 {% elif i.state == 'failed' %}<span class="badge bg-danger">failed{% if i.stage %} at {{ i.stage }}{% endif %}</span>
 {% elif i.state == 'cancelled' %}<span class="badge bg-warning text-dark">cancelled</span>
+{% elif i.state == 'abandoned' %}<span class="badge bg-secondary">abandoned</span>
+{% elif i.state == 'purged' %}<span class="badge bg-dark">purged</span>
 {% else %}<span class="badge bg-secondary">{{ i.state }}</span>{% endif %}

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -22,12 +23,13 @@ from typing import Callable
 from core.src.ingest_runner import verdict as V
 from core.src.ingest_runner.config import (
     CTR_CORRECTIONS, CTR_ENV, CTR_LABELS, CTR_SERVE, CTR_WORK, ConfigError, RunnerConfig,
+    read_env_value,
 )
 from core.src.ingest_runner import webhook
 from core.src.ingest_runner.config import webhook_host_allowed
 from core.src.ingest_runner.db import RunnerDB, now_iso
 from core.src.ingest_runner.execute import CommandError, Exec, Result
-from core.src.web.jobs_schema import INGEST_STAGES as STAGES, NOTIFY_STATES, RETRY_FROM  # noqa: F401
+from core.src.web.jobs_schema import INGEST_STAGES as STAGES, NOTIFY_STATES, PURGEABLE_STATES, RETRY_FROM  # noqa: F401
 
 _CELL_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{0,30}$")
 _REL_RE = re.compile(r"^[A-Z][a-z]{2}\d{4}$")
@@ -64,7 +66,8 @@ class Ctx:
 
     @property
     def cell(self) -> str:
-        return f"{self.ingest['mno']}__{self.ingest['release']}"
+        """The cell's name, `<mno>/<release>` (one spelling everywhere)."""
+        return f"{self.ingest['mno']}/{self.ingest['release']}"
 
     def log(self, line: str) -> None:
         self.db.append_log(self.job_id, line)
@@ -85,7 +88,7 @@ class Ctx:
     def compose(self, project: str, env_file: str, *args: str,
                 extra_env: dict[str, str] | None = None, what: str = "",
                 quiet: bool = False) -> Result:
-        env = {**os.environ, **(extra_env or {})}
+        env = {**os.environ, **_job_user(env_file), **(extra_env or {})}
         proj = ["-p", project] if project else []
         return self.run(["docker", "compose", *proj, "--env-file", env_file, *args],
                         env=env, cwd=self.cfg.docker_dir, what=what, quiet=quiet)
@@ -168,6 +171,9 @@ class Ctx:
 
 def st_documents(c: Ctx) -> None:
     ing = c.ingest
+    if ing.get("redo_of"):
+        c.log(f"documents: a redo of {str(ing['redo_of'])[:8]} uses the served cell's documents")
+        return
     if not _CELL_RE.match(ing["mno"]) or not _REL_RE.match(ing["release"]):
         raise StageError(f"bad cell coordinates {ing['mno']}/{ing['release']}")
     try:
@@ -186,33 +192,160 @@ def st_documents(c: Ctx) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     for p in files:
         shutil.copy2(p, dst / p.name)
+    c.db.update_ingest(ing["id"], documents_staged=1)
     c.log(f"documents: {len(files)} file(s) staged into {dst}")
 
 
-def _next_build_id(c: Ctx) -> str:
-    ing = c.ingest
-    day = datetime.now(UTC).strftime("%Y%m%d")
-    prefix = f"{ing['release']}-{ing['mno']}-{day}-"
-    root = c.cfg.nora_builds_root
+def _job_user(env_file: str) -> dict[str, str]:
+    """JOB_UID/JOB_GID for a one-shot: the runner's own identity unless the
+    shell or the env file sets them. compose's `user:` defaults to 0:0, and a
+    serving or staging env has no reason to carry the job user — without
+    this, eval runs and registry writes land root-owned on the host."""
+    out: dict[str, str] = {}
+    for var, val in (("JOB_UID", os.getuid()), ("JOB_GID", os.getgid())):
+        if os.environ.get(var) or read_env_value(env_file, var):
+            continue
+        out[var] = str(val)
+    return out
+
+
+def _serves(registry_root: str, unit: str) -> bool | None:
+    """Whether the registry under `registry_root` has `unit` in its active
+    cells; None when it cannot be read (a missing registry serves nothing)."""
+    reg = Path(registry_root) / "registry.db"
+    if not reg.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            return con.execute("SELECT 1 FROM active WHERE store='cells' AND unit=?",
+                               (unit,)).fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
+def _documents_kept(c: Ctx, ing: dict) -> str:
+    """Why the cell's documents must stay, or '' when this ingest may remove
+    them: it staged them itself, and no stack on the host serves the cell
+    (the requirements dir is shared by every stack's runner)."""
+    if ing.get("redo_of"):
+        return "a redo's documents belong to the ingest it repeats"
+    if not ing.get("documents_staged"):
+        return "this ingest did not stage them (they were there before it, or it predates the record)"
+    unit = f"{ing['mno']}/{ing['release']}"
+    for name, root in [("this stack", c.cfg.registry_root)] + [
+            (f"the stack at {r}", r) for r in c.cfg.peer_registry_roots]:
+        served = _serves(root, unit)
+        if served is None:
+            return f"the registry of {name} cannot be read"
+        if served:
+            return f"{name} serves this cell"
+    return ""
+
+
+def _registry_has(c: Ctx, sql: str, params: tuple) -> bool:
+    """One read-only existence query against the registry, if there is one."""
+    reg = Path(c.cfg.registry_root) / "registry.db"
+    if not reg.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            return con.execute(sql, params).fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+
+
+def _label_taken(c: Ctx, name: str) -> bool:
+    """A label is taken when a promoted snapshot or a registry release set
+    carries it (labels are immutable). The registry is read if present."""
+    if (Path(c.cfg.labels_root) / name).exists():
+        return True
+    return _registry_has(c, "SELECT 1 FROM release_set WHERE label=?", (name,))
+
+
+def _next_free(c: Ctx, prefix: str, *, builds: bool) -> str:
+    """The smallest <prefix><n> that is neither a build (when asked) nor a label."""
     n = 1
-    if root.is_dir():
-        n += sum(1 for p in root.iterdir() if p.name.startswith(prefix))
+    while (builds and c.cfg.build_dir(f"{prefix}{n}").exists()) or _label_taken(c, f"{prefix}{n}"):
+        n += 1
     return f"{prefix}{n}"
 
 
+def _label_prefix(c: Ctx) -> str:
+    ing = c.ingest
+    day = datetime.now(UTC).strftime("%Y%m%d")
+    return f"{ing['release']}-{ing['mno']}-{day}-"
+
+
+def _next_build_id(c: Ctx) -> str:
+    """Build id = label: the first same-day sequence number no build, promoted
+    snapshot or release set carries (a removed build does not free its label)."""
+    return _next_free(c, _label_prefix(c), builds=True)
+
+
+def _corpus_bindings(c: Ctx) -> bool:
+    """True when the wiring env names a corpus root: the bindings live
+    there and a seed build needs none of its own (stage graph, step 2)."""
+    return bool(read_env_value(c.cfg.builds_wiring, "CORPUS_DIR"))
+
+
+def _stack_recipe(c: Ctx) -> str:
+    """The recipe the stack serves: `NORA_RECIPE` in its serving env ('' = none)."""
+    return read_env_value(c.cfg.stack_env, "NORA_RECIPE")
+
+
+def _build_recipe(c: Ctx):
+    """The recipe frozen in the ingest's build, or None."""
+    from core.src.pipeline.recipes import RecipeError, load_frozen
+    if not c.build:
+        return None
+    try:
+        return load_frozen(c.cfg.build_dir(c.build))
+    except RecipeError as exc:
+        raise StageError(str(exc))
+
+
+def _scheme(c: Ctx) -> str:
+    """The prompt scheme: the build's recipe's when it names one, else the
+    runner config's. A disagreement is logged once; the recipe wins."""
+    r = _build_recipe(c)
+    scheme = (r.prompt_scheme if r else "") or c.cfg.prompt_scheme
+    if r and r.prompt_scheme and c.cfg.prompt_scheme and r.prompt_scheme != c.cfg.prompt_scheme \
+            and not c.notes.get("scheme_logged"):
+        c.notes["scheme_logged"] = True
+        c.log(f"scheme: recipe {r.name} names {r.prompt_scheme}, the runner config {c.cfg.prompt_scheme}; using the recipe's")
+    return scheme
+
+
 def st_start(c: Ctx) -> None:
-    seed = c.db.last_served_build() or c.cfg.seed_build
+    seed = c.db.last_served_build() or ""
+    fallback = f"seeding from the configured {c.cfg.seed_build or '-'}"
+    if seed and not c.cfg.build_dir(seed).is_dir():
+        c.log(f"start: last served build {seed} is gone from the builds root; {fallback}")
+        seed = ""
+    elif seed and not _corpus_bindings(c) and not (c.cfg.build_dir(seed) / "profiles.json").is_file():
+        # a purged or hand-cleaned build can stay on disk without its bindings;
+        # cycle.sh start would refuse it for want of bindings
+        c.log(f"start: last served build {seed} holds no profiles.json; {fallback}")
+        seed = ""
+    seed = seed or c.cfg.seed_build
     if not seed:
         raise StageError("no seed build: set seed_build in the runner config for the first ingest")
     c.build = _next_build_id(c)
     c.label = c.build
     c.db.update_ingest(c.ingest["id"], build=c.build, label=c.label)
-    c.cycle("start", c.build, "--seed", seed)
-    c.log(f"start: build {c.build} seeded from {seed}")
+    recipe = _stack_recipe(c)
+    c.cycle("start", c.build, "--seed", seed, *(["--recipe", recipe] if recipe else []))
+    c.log(f"start: build {c.build} seeded from {seed}" + (f", recipe {recipe}" if recipe else ""))
 
 
 def st_parse(c: Ctx) -> None:
-    c.cycle("parse", "--skip-standards")
+    c.cycle("parse", "--cell", c.cell, "--skip-standards")
     c.wait_detached("parse")
 
 
@@ -221,7 +354,11 @@ def st_prompts(c: Ctx) -> None:
 
 
 def st_taxonomy(c: Ctx) -> None:
-    c.cycle("taxonomy")
+    r = _build_recipe(c)
+    if r and not r.has("taxonomy"):
+        c.log(f"taxonomy: recipe {r.name} runs none; skipped")
+        return
+    c.cycle("taxonomy", "--cell", c.cell)
     c.wait_detached("taxonomy")
 
 
@@ -238,9 +375,16 @@ def st_verify(c: Ctx) -> None:
 
 
 def st_promote(c: Ctx) -> None:
+    if _label_taken(c, c.label):
+        # same-day re-ingest after a cleanup: the build is ours, the label is
+        # not (an older snapshot or release set still carries it)
+        new = _next_free(c, _label_prefix(c), builds=False)
+        c.log(f"promote: label {c.label} is taken by an earlier snapshot or release set; using {new}")
+        c.label = new
+        c.db.update_ingest(c.ingest["id"], label=new)
     args = ["promote", "--label", c.label]
-    if c.cfg.prompt_scheme:
-        args += ["--scheme", c.cfg.prompt_scheme]
+    if _scheme(c):
+        args += ["--scheme", _scheme(c)]
     c.cycle(*args)
 
 
@@ -248,7 +392,35 @@ def _work_cells(c: Ctx) -> str:
     return f"{CTR_WORK}/{c.label}/cells"
 
 
+def _run_name(c: Ctx) -> str:
+    cj = c.cfg.build_dir(c.build) / "CYCLE.json"
+    try:
+        return str(json.loads(cj.read_text(encoding="utf-8")).get("run_name") or c.build)
+    except (OSError, json.JSONDecodeError):
+        return c.build
+
+
+def heal_best_link(c: Ctx) -> None:
+    """A resumed enrichment that found every document already enriched
+    leaves `enrichments/doc/best.jsonl` as a dangling link (SIRA skips
+    the apply block but still re-points the link; field-found on the
+    first retry). `sira_incremental promote` writes the missing file;
+    run it when the link dangles, before the converter trips CNV-011."""
+    best = c.cfg.sira_build_dir(c.build) / c.ingest["mno"] / c.ingest["release"] / "enrichments" / "doc" / "best.jsonl"
+    if not os.path.islink(best) or os.path.exists(best):
+        return
+    run = _run_name(c)
+    c.log(f"enrich: best.jsonl dangles in {c.cell} (resumed run) — promoting run {run}")
+    c.batch_oneshot("", c.cfg.builds_wiring, "sira-batch",
+                    ["python", "-m", "sandbox.sira_incremental", "promote",
+                     "--dataset", f"/data/db/{c.cell}", "--run-name", run],
+                    mounts=[], what="sira_incremental promote")
+    if os.path.islink(best) and not os.path.exists(best):
+        raise StageError(f"best.jsonl still dangles in {c.cell} after promote — pin the run by hand (CNV-011)")
+
+
 def st_convert(c: Ctx) -> None:
+    heal_best_link(c)
     Path(c.cfg.work_dir, c.label).mkdir(parents=True, exist_ok=True)
     cmd = ["python", "-m", "sandbox.cell_db_convert", "--label", f"{CTR_LABELS}/{c.label}",
            "--cells", c.cell, "--out", _work_cells(c), "--verify", str(c.cfg.verify_n), "--force"]
@@ -267,8 +439,8 @@ def st_publish(c: Ctx) -> None:
     cmd = ["python", "-m", "core.src.stores.publish", "publish", "--serve-root", CTR_SERVE,
            "--label", c.label, "--cells-src", _work_cells(c),
            "--env-dir", f"{CTR_LABELS}/{c.label}/nora"]
-    if c.cfg.prompt_scheme:
-        cmd += ["--prompt-scheme", c.cfg.prompt_scheme]
+    if _scheme(c):
+        cmd += ["--prompt-scheme", _scheme(c)]
     c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
                     mounts=_publish_mounts(c), what="publish publish")
 
@@ -320,11 +492,12 @@ def st_eval(c: Ctx) -> None:
         cmd = ["python", "-m", "core.src.eval.golden_cli", "--env-dir", CTR_ENV,
                "--stack-url", c.cfg.staging_store_url, "--stack-label", c.label,
                "--stage", "1", "--allow-map-mismatch"]
-        if c.cfg.prompt_scheme:
-            cmd += ["--sira-prompt-scheme", c.cfg.prompt_scheme]
+        if _scheme(c):
+            cmd += ["--sira-prompt-scheme", _scheme(c)]
         res = c.ex.run(["docker", "compose", "-p", c.cfg.staging_project, "--env-file", c.cfg.staging_env,
                         "--profile", "ingest", "run", "--rm", "-T", "nora-batch", *cmd],
-                       env={**os.environ, **stage_env}, cwd=c.cfg.docker_dir, on_line=c.log)
+                       env={**os.environ, **_job_user(c.cfg.staging_env), **stage_env},
+                       cwd=c.cfg.docker_dir, on_line=c.log)
         run_ref = ""
         for line in res.lines:
             m = re.search(r"Run artifacts:\s*(\S+)", line)
@@ -372,10 +545,52 @@ STAGE_FNS = {
 }
 
 
+def _record_origins(c: Ctx) -> None:
+    """Copy where each stage's output for the ingest's cell came from
+    (`computed`, `store`, `forced`; the build's STAGES.json) onto the
+    ingest row, for the Ingest page. Best effort: a page detail."""
+    if not c.build:
+        return
+    try:
+        data = json.loads((c.cfg.build_dir(c.build) / "STAGES.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    key = f"{c.ingest['mno']}/{c.ingest['release']}"
+    origins = {stage: e.get("origin", "computed")
+               for stage, cells in (data.get("stages") or {}).items()
+               for k, e in cells.items() if k == key}
+    if origins:
+        c.db.update_ingest(c.ingest["id"], stage_origins=json.dumps(origins, sort_keys=True))
+
+
+def _start_redo(c: Ctx) -> None:
+    """A redo of a served cell: bump the cell's generation at the corpus
+    root, so every variant stage of that cell gets a new fingerprint and
+    is computed again; the corpus prefix is found as before."""
+    corpus = read_env_value(c.cfg.builds_wiring, "CORPUS_DIR")
+    if not corpus:
+        raise StageError("a redo needs the corpus root (CORPUS_DIR in the ingestion wiring env)")
+    from core.src.pipeline.generations import bump
+    try:
+        n = bump(corpus, f"{c.ingest['mno']}/{c.ingest['release']}",
+                 by=str(c.job.get("submitted_by") or c.cfg.runner_name),
+                 note=f"redo of ingest {str(c.ingest.get('redo_of') or '')[:8]}")
+    except (OSError, ValueError) as exc:
+        raise StageError(f"redo: generation not bumped: {exc}")
+    c.log(f"redo: {c.ingest['mno']}/{c.ingest['release']} is now generation {n}; its variant stages run again")
+
+
 def run_ingest(c: Ctx) -> None:
-    """Run the stages from the start, or from `params.retry_from`."""
-    retry_from = (c.job.get("params") or {}).get("retry_from") or ""
-    if retry_from:
+    """Run the stages from the start, from `params.retry_from`, or, for a
+    redo (`params.redo`), from `start` after bumping the cell's generation."""
+    params = c.job.get("params") or {}
+    retry_from = params.get("retry_from") or ""
+    if params.get("redo"):
+        if not c.ingest.get("redo_of"):
+            raise StageError("a redo job needs an ingest made by the Redo action")
+        _start_redo(c)
+        retry_from = "start"
+    elif retry_from:
         if retry_from not in STAGES:
             raise StageError(f"unknown retry stage {retry_from!r}")
         c.build = c.ingest.get("build") or ""
@@ -395,6 +610,8 @@ def run_ingest(c: Ctx) -> None:
         c.db.update_ingest(c.ingest["id"], stage=name)
         c.log(f"[{idx + 1}/{total}] {name}")
         STAGE_FNS[name](c)
+        if name in ("parse", "taxonomy", "verify"):
+            _record_origins(c)
     c.set_state("staged", stage=None)
 
 
@@ -437,10 +654,33 @@ def run_flip(c: Ctx) -> None:
         c.log(f"WARN: release map not advanced: {exc} — run `golden_release_cli advance` by hand")
 
 
+def _active_label(c: Ctx) -> str:
+    """The registry's active release set ('' when unknown, none or mixed)."""
+    reg = Path(c.cfg.registry_root) / "registry.db"
+    if not reg.is_file():
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            labels = {r[0] for r in con.execute("SELECT DISTINCT label FROM active")}
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return ""
+    return labels.pop() if len(labels) == 1 else ""
+
+
 def run_rollback(c: Ctx) -> None:
     ing = c.ingest
     if ing.get("state") != "served" or not ing.get("previous_label"):
         raise StageError(f"ingest is {ing.get('state')} (previous label {ing.get('previous_label') or '-'}): nothing to roll back to")
+    # A later flip (from this page or by hand) leaves this row `served` while
+    # another set is active; rolling back to this row's previous label would
+    # drop that newer set as well.
+    active = _active_label(c)
+    if active and active != ing.get("label"):
+        raise StageError(f"{ing.get('label')} is no longer the active set ({active} is): rolling back to "
+                         f"{ing['previous_label']} would drop {active} too; roll back by hand if that is meant")
     cmd = ["python", "-m", "core.src.stores.publish", "rollback", "--serve-root", CTR_SERVE,
            "--to", ing["previous_label"], "--store-url", c.cfg.store_url]
     c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
@@ -448,6 +688,96 @@ def run_rollback(c: Ctx) -> None:
     c.set_state("rolled_back", rolled_back_at=now_iso(), job_id=c.job_id)
     c.log(f"rollback: {ing['previous_label']} is active again; the release map still names "
           f"{ing['release']} for {ing['mno']} — golden runs pass --allow-map-mismatch until the next flip")
+
+
+def _remove_tree(c: Ctx, what: str, path: Path, problems: list[str]) -> None:
+    if not path.exists() and not path.is_symlink():
+        c.log(f"purge: {what} absent ({path})")
+        return
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except OSError as exc:
+        problems.append(f"{what} {path}: {exc.strerror or exc}")
+        return
+    c.log(f"purge: removed {what} ({path})")
+
+
+def run_purge(c: Ctx) -> None:
+    """Remove every artifact of a dead ingest: the cycle baton if it still
+    holds it, its release set (never an active one), promoted snapshot, work
+    dir, build (and SIRA tree), golden run, and its documents unless the
+    active set serves that cell. Each removal is logged; one that fails
+    (ownership, a busy mount) fails the job with the list and leaves the
+    state unchanged, so the purge is re-run after the fix — every step
+    tolerates what is already gone. The ingest row stays, state `purged`."""
+    ing = c.ingest
+    if ing.get("state") not in PURGEABLE_STATES:
+        raise StageError(f"ingest is {ing.get('state')}: only {', '.join(PURGEABLE_STATES)} ingests can be purged"
+                         " (abandon a staged one first)")
+    build = ing.get("build") or ""
+    label = ing.get("label") or ""
+    # Purge removes by name. Another row that carries the same label or build
+    # and is not itself dead (or purged) owns those artifacts now: refuse before
+    # touching anything. The registry's own guard protects only the active set.
+    shared = [r for r in c.db.ingests_sharing(ing["id"], label, build)
+              if r["state"] not in (*PURGEABLE_STATES, "purged")]
+    if shared:
+        who = ", ".join(f"{r['id'][:8]} ({r['state']})" for r in shared)
+        raise StageError(f"purge refused: label {label or '-'} / build {build or '-'} is also carried by ingest "
+                         f"{who}; nothing removed — a row that shares its names with a live ingest is left as it is")
+    problems: list[str] = []
+    active = c.cfg.active_file
+    if build and active.is_file() and active.read_text(encoding="utf-8").strip() == build:
+        c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} purged")
+        c.log("purge: the cycle baton was this build's; abandoned")
+    if label and _registry_has(c, "SELECT 1 FROM release_set WHERE label=?", (label,)):
+        cmd = ["python", "-m", "core.src.stores.publish", "purge", "--serve-root", CTR_SERVE, "--label", label]
+        res = c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
+                              mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish purge")
+        c.log(f"purge: release set {label} removed from the registry" + _purge_summary(res))
+    elif label:
+        c.log(f"purge: no release set {label} in the registry")
+    if label:
+        _remove_tree(c, "promoted snapshot", Path(c.cfg.labels_root) / label, problems)
+        _remove_tree(c, "work dir", Path(c.cfg.work_dir) / label, problems)
+    if build:
+        bdir = c.cfg.build_dir(build)
+        sdir = c.cfg.sira_build_dir(build)
+        if not sdir.is_relative_to(bdir):
+            _remove_tree(c, "SIRA build", sdir, problems)
+        _remove_tree(c, "build", bdir, problems)
+    if ing.get("run_ref"):
+        _remove_tree(c, "golden run", Path(c.cfg.golden_dir) / "runs" / ing["run_ref"], problems)
+    cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
+    if cell.is_dir():
+        kept = _documents_kept(c, ing)
+        if kept:
+            c.log(f"purge: documents kept — {kept}")
+        else:
+            _remove_tree(c, "documents", cell, problems)
+    if problems:
+        raise StageError("purge incomplete: " + "; ".join(problems)
+                         + " — fix the ownership or remove by hand, then purge again")
+    c.set_state("purged", job_id=c.job_id)
+
+
+def _purge_summary(res: Result) -> str:
+    for line in res.lines:
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            return f" ({len(d.get('removed') or [])} orphaned version file(s) removed)"
+    try:
+        d = json.loads("\n".join(res.lines))
+        return f" ({len(d.get('removed') or [])} orphaned version file(s) removed)"
+    except ValueError:
+        return ""
 
 
 def run_abandon(c: Ctx) -> None:
@@ -460,9 +790,12 @@ def run_abandon(c: Ctx) -> None:
         c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} abandoned")
     else:
         c.log("abandon: no cycle in flight for this ingest")
-    if c.cfg.abandon_removes_documents:
-        cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
-        if cell.is_dir():
+    cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
+    if c.cfg.abandon_removes_documents and cell.is_dir():
+        kept = _documents_kept(c, ing)
+        if kept:
+            c.log(f"abandon: documents kept — {kept}")
+        else:
             shutil.rmtree(cell)
             c.log(f"abandon: removed the staged documents under {cell}")
     c.set_state("abandoned", job_id=c.job_id)

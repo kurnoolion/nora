@@ -26,7 +26,7 @@ Conventions in this document:
 - Hosts and ports are written as placeholders: `host:PORT`, `<serve-root>`,
   `<env-dir>`. No deployment value appears here.
 - MNOs are written `MNO-A`, `MNO-B`; releases as `<MMMYYYY>` or `<rel>`;
-  a cell (one MNO at one release) as `<mno>__<rel>`.
+  a cell (one MNO at one release) as `<mno>/<rel>`.
 - "Administrator" is the person operating NORA. "Operator" is reserved for
   a mobile network operator (MNO).
 - Code paths are repo-relative. CLIs are `python -m <module>`.
@@ -62,7 +62,7 @@ as such and collected in §27.
 | `.../publish-design.md` | The registry and the publish pipeline. | Superseded by §17 and §21. |
 | `.../converter-design.md` | Flat SIRA cell to cell DB. | Superseded by §12–§13. |
 | `docker/README.md` | Images, host layout, runbooks. | Stays as the runbook. Part II cites it; it does not repeat it. |
-| `docs/ingestion-guide.md`, `docs/golden-eval-guide.md`, `docs/enrichment-review-guide.md` | Procedures for the three human loops. | Stay as procedures. Part IV gives the flows they implement. |
+| `docs/ingestion-guide.md`, `docs/golden-eval-guide.md`, `docs/enrichment-review-guide.md`, `docs/self-serve-ingestion-guide.md` | Procedures for the human loops (the last one is the requirements team's page for a new release of a served MNO, §28). | Stay as procedures. Part IV gives the flows they implement. |
 | `core/src/<module>/MODULE.md` | Per-module contracts. | Stay authoritative for signatures. This document cites them. |
 
 ### 1.2 How to read it
@@ -86,7 +86,7 @@ flowchart LR
     nb["nora-batch<br/>pipeline stages"]
     envdir[("env dir<br/>out/parse, out/taxonomy, reports, prompts")]
     sb["sira-batch<br/>SIRA lane"]
-    cells[("SIRA cell dirs<br/>&lt;db-root&gt;/&lt;mno&gt;__&lt;rel&gt;/")]
+    cells[("SIRA cell dirs<br/>&lt;db-root&gt;/&lt;mno&gt;/&lt;rel&gt;/")]
     src --> nb --> envdir
     envdir --> sb --> cells
   end
@@ -125,8 +125,10 @@ flowchart LR
 into the build artifacts: parsed requirement trees per cell, a feature
 taxonomy, per-MNO prompts, and the SIRA enrichment per cell (a keyword
 index plus language-model phrases per requirement). Everything the build
-plane writes lives under one env dir per build and one SIRA db-root per
-build. A build can be rerun or discarded without touching serving.
+plane writes lives under one env dir per build; the SIRA cells are that
+build's last stage directory, `out/sira/<MNO>/<MMMYYYY>/` (since
+2026-11-06; before, a twin SIRA db-root per build). A build can be rerun
+or discarded without touching serving.
 
 **Publish plane.** One-shot containers on the serving host turn build
 artifacts into the four store files a stack serves (§3) and record them
@@ -191,7 +193,7 @@ a new file or a new version.
 | 2 | Profile bindings and profiles | `profiles.json`; `customizations/profiles/*.json` (committed) | `<env-dir>/profiles.json`; image | humans | nora-batch `profile` | yes (edited per cycle) | §11 |
 | 3 | Build artifacts | per-stage JSON under the env dir: `out/extract`, `out/profile`, `out/parse` (requirement trees), `out/resolve`, `out/taxonomy`, `reports/` | `<env-dir>/out/<stage>/[<MNO>/<rel>/]` | nora-batch | sira-batch adapter, trees/history builders, nora-web (dev fallback) | per build only | §11 |
 | 4 | Per-MNO SIRA prompts | `doc_requirement_<MNO>_vNN.txt` | `<env-dir>/prompts/` | humans (derived with a playbook) | sira-batch | yes (new version = new file) | §12 |
-| 5 | SIRA cell directories | `raw/corpus.jsonl`, `raw/fingerprints.jsonl`, `index/best` (bm25x), `runs/doc-enrich/<run>/`, `enrichments/doc/` | `<db-root>/<mno>__<rel>/` | sira-batch | converter, nora-store (flat dev mode) | per run (append-only runs) | §12 |
+| 5 | SIRA cell directories | `raw/corpus.jsonl`, `raw/fingerprints.jsonl`, `index/best` (bm25x), `runs/doc-enrich/<run>/`, `enrichments/doc/` | `<db-root>/<mno>/<rel>/` | sira-batch | converter, nora-store (flat dev mode) | per run (append-only runs) | §12 |
 | 6 | Flat label | hard-linked snapshot of 3 and 5 plus `MANIFEST.json` | `serve/<label>/{nora,sira}/` | `docker/promote.sh` | converter, publish | no | §12 |
 | 7 | **Cells store** | `cell-<mno>-<rel>-vN.db` (SQLite, schema 2): corpus rows, raw SIRA phrases, vanilla index blobs | `<serve-root>/cells/` | publish (via converter) | nora-store | no | §13 |
 | 8 | **Trees store** | `trees-<mno>-<rel>-vN.db` (SQLite): the parsed requirement tree per cell | `<serve-root>/trees/` | publish (via `trees_build`) | nora-store; nora-web through `/stores/trees/v1` | no | §14 |
@@ -298,10 +300,10 @@ profiles. The compose project name is the stack name.
 
 | Service | Profiles | Lifetime | User | Mounts (host → container) | Env files | Fixed environment |
 |---|---|---|---|---|---|---|
-| **nora-store** | serve, dev | daemon, `restart: unless-stopped` | `SERVE_UID:SERVE_GID` | `STORE_ROOT` → `/data/db` (optional in registry mode); `SERVE_REGISTRY_ROOT` → `/data/serve` **ro**; `CORRECTIONS_DIR` → `/data/corrections` **rw** (Overlay authority); `NORA_ENV_DIR` → `/data/env` ro; `TREES_ROOT`, `HISTORY_ROOT` → `/data/trees`, `/data/history` ro (dev/test) | `.env.nora-store`, `.env.secrets` | `NORA_STORE_ROOT`, `NORA_STORE_CORRECTIONS_ROOT`, `NORA_ENV_DIR`; `NORA_TREES_ROOT` / `NORA_HISTORY_ROOT` / `NORA_STORE_REGISTRY` set only when the host var is set; `NORA_STORE_RELEASE_SET`; `HOME=/tmp`; `HF_HUB_OFFLINE=1` |
-| **nora-web** | serve, dev | daemon | `SERVE_UID:SERVE_GID` | `NORA_ENV_DIR` → `/data/env` rw; `WEB_STATE_DIR` → `/data/web-state`; `FEEDBACK_DIR` → `/data/feedback` (pooled); `CORRECTIONS_DIR` → `/data/corrections` (dev fallback only); `GOLDEN_DIR` → `/data/env/eval/golden` (pooled, shadows the env dir) | `.env.nora-web`, `.env.secrets` | `ENV_DIR`; `NORA_{JOBS,METRICS,CONFIG}_DB` under web-state; `NORA_FEEDBACK_DB`; `NORA_CORRECTIONS_ROOT`; `NORA_STORE_URL`; `NORA_{OVERLAY,TREES,HISTORY}_URL` (interpolated from the wiring env; default this stack's nora-store) |
-| **nora-batch** | ingest, dev | one-shot (`compose run --rm`) | `JOB_UID:JOB_GID` | `NORA_ENV_DIR` → `/data/env`; `REQUIREMENTS_DIR` → `/data/requirements` ro; `STORE_ROOT` → `/data/db`; `MODELS_DIR` → `/data/models` (docling artifacts); `GOLDEN_DIR` → `/data/env/eval/golden` | `.env.nora-batch`, `.env.secrets` | `ENV_DIR`, `NORA_REQUIREMENTS_DIR`, `DOCLING_ARTIFACTS`, `HF_HUB_OFFLINE=1`, `HOME=/tmp` |
-| **sira-batch** | ingest, dev | one-shot | `JOB_UID:JOB_GID` | `STORE_ROOT` → `/data/db`; `NORA_ENV_DIR` → `/data/env` | `.env.sira-batch`, `.env.secrets` | `HOME=/tmp` |
+| **nora-store** | serve, dev | daemon, `restart: unless-stopped` | `SERVE_UID:SERVE_GID` | `STORE_ROOT` → `/data/db` (optional in registry mode); `SERVE_REGISTRY_ROOT` → `/data/serve` **ro**; `CORRECTIONS_DIR` → `/data/corrections` **rw** (Overlay authority); `/data/env` ro: `NORA_ENV_DIR` or `NORA_BUILD_DIR` when set, else an empty dir (the Trees fallback; unused in registry mode); `TREES_ROOT`, `HISTORY_ROOT` → `/data/trees`, `/data/history` ro (dev/test) | `.env.nora-store`, `.env.secrets` | `NORA_STORE_ROOT`, `NORA_STORE_CORRECTIONS_ROOT`, `NORA_ENV_DIR`; `NORA_TREES_ROOT` / `NORA_HISTORY_ROOT` / `NORA_STORE_REGISTRY` set only when the host var is set; `NORA_STORE_RELEASE_SET`; `HOME=/tmp`; `HF_HUB_OFFLINE=1` |
+| **nora-web** | serve, dev | daemon | `SERVE_UID:SERVE_GID` | `/data/env` rw: `NORA_ENV_DIR` or `NORA_BUILD_DIR` when set, else an empty dir (a serving stack sets neither — the store URLs carry Trees and the Overlay; the parse/resolve review pages are dev tooling); `WEB_STATE_DIR` → `/data/web-state`; `FEEDBACK_DIR` → `/data/feedback` (pooled); `CORRECTIONS_DIR` → `/data/corrections` (dev fallback only); `GOLDEN_DIR` → `/data/env/eval/golden` (pooled, shadows the env dir) | `.env.nora-web`, `.env.secrets` | `ENV_DIR`; `NORA_{JOBS,METRICS,CONFIG}_DB` under web-state; `NORA_FEEDBACK_DB`; `NORA_CORRECTIONS_ROOT`; `NORA_STORE_URL`; `NORA_{OVERLAY,TREES,HISTORY}_URL` (interpolated from the wiring env; default this stack's nora-store) |
+| **nora-batch** | ingest, dev | one-shot (`compose run --rm`) | `JOB_UID:JOB_GID` | `NORA_BUILD_DIR` → `/data/env` (or `NORA_ENV_DIR`); `REQUIREMENTS_DIR` → `/data/requirements` ro; `NORA_BUILD_DIR/out/sira` → `/data/db` (or `STORE_ROOT`); `MODELS_DIR` → `/data/models` (docling artifacts); `GOLDEN_DIR` → `/data/env/eval/golden` | `.env.nora-batch`, `.env.secrets` | `ENV_DIR`, `NORA_REQUIREMENTS_DIR`, `DOCLING_ARTIFACTS`, `HF_HUB_OFFLINE=1`, `HOME=/tmp` |
+| **sira-batch** | ingest, dev | one-shot | `JOB_UID:JOB_GID` | `NORA_BUILD_DIR/out/sira` → `/data/db` (or `STORE_ROOT`); `NORA_BUILD_DIR` → `/data/env` (or `NORA_ENV_DIR`) | `.env.sira-batch`, `.env.secrets` | `HOME=/tmp` |
 
 Rules the file encodes:
 
@@ -347,26 +349,74 @@ the runner executes in that order and stops at the first failure unless
 
 | # | Stage | Scope | Reads | Writes | Reuse rule | In current builds |
 |---|---|---|---|---|---|---|
-| 1 | `extract` | per cell | every supported file under `input/<MNO>/<rel>/` (or `NORA_REQUIREMENTS_DIR`); profile hints | `out/extract/<MNO>/<rel>/<stem>_ir.json` + `images/` | skipped when the IR is newer than its source | on |
+| 1 | `extract` | per cell | every supported file under `input/<MNO>/<rel>/` (or `NORA_REQUIREMENTS_DIR`); profile hints | `out/extract/<MNO>/<rel>/<stem>_ir.json` + `images/` | the cell is reused when its stage fingerprint is unchanged (documents, extractor code version); within a cell an IR newer than its source is reused | on |
 | 2 | `profile` | per cell | `<env-dir>/profiles.json` bindings (or `--profile`, or `corrections/profile.json`) | `out/profile/<MNO>/<rel>/profile.json` | always; a cell with no binding fails `PIP-E003` | on |
-| 3 | `parse` | per cell | the IRs; `annotations/<doc>_annotations.json` | `out/parse/<MNO>/<rel>/<doc>_tree.json`; `reports/parse_log/`, `reports/parse_summary.json` | skipped when the tree is newer than the IR **and** its `profile_fingerprint` matches | on |
+| 3 | `parse` | per cell | the IRs; `annotations/<doc>_annotations.json` | `out/parse/<MNO>/<rel>/<doc>_tree.json`; `reports/parse_log/`, `reports/parse_summary.json` | the cell is reused when its stage fingerprint is unchanged (parser code version, the cell's extract and profile fingerprints, its annotations) and every tree is present | on |
 | 4 | `resolve` | per cell | the cell's trees | `out/resolve/<MNO>/<rel>/<plan>_xrefs.json` | always recomputed | on |
 | 5 | `standards` | global | all resolve manifests, parse trees | `out/standards/reference_index.json`, per-spec sections | — | **runs unless `--skip-standards`**; needs network, so skipped in practice |
-| 6 | `taxonomy` | global | every cell's trees (newest release wins per MNO and plan); optional overview texts | `out/taxonomy/taxonomy.json`, `<plan>_features.json`, `extraction_state.json` ledger, `.corpus_fingerprint` | per-plan ledger keyed on tree sha; fail-soft per plan; `corrections/taxonomy.json` short-circuits | off by `config/llm.json` `skip_taxonomy`; run explicitly by the cycle driver |
+| 6 | `taxonomy` | per cell | the cell's trees; the MNO's overview text | `out/taxonomy/<MNO>/<rel>/taxonomy.json`, `<plan>_features.json`, `extraction_state.json` ledger; build-level `out/taxonomy/taxonomy.json` | the cell is reused when its stage fingerprint is unchanged (model, code version, the cell's parse fingerprint, the overview); per-plan ledger keyed on tree sha; fail-soft per plan; `corrections/taxonomy.json` replaces the build-level file | off by `config/llm.json` `skip_taxonomy`; run explicitly by the cycle driver |
 | 7 | `graph` | global | parse, resolve, taxonomy, standards | `out/graph/knowledge_graph.json` | — | off (`skip_graph`) |
 | 8 | `vectorstore` | per cell | the cell's trees | Chroma under `out/vectorstore/<MNO>/<rel>/` | always rebuilt | not run (the `nora` lane is never invoked) |
 | 9 | `eval` | global | xlsx in `eval/` | `out/eval/report.json` | — | not run |
+
+Every stage records a **fingerprint** per cell in the build manifest
+`<env-dir>/STAGES.json` when it completes the cell cleanly (strand
+stage-graph, step 1): `sha256(stage, code version, parameters, the
+inputs' fingerprints, the external inputs)[:16]`. The graph of stages,
+inputs and parameters is data in `core/src/pipeline/stage_graph.py`.
+Corpus-tier stages (extract, profile, parse, resolve, standards: no
+model call) hash their package's own `CODE_VERSION`; variant-tier stages
+(taxonomy, graph, vectorstore, eval) hash the image's `NORA_CODE_VERSION`.
+The reuse rules above read the manifest; `--force` ignores it; a cell
+with a failed document is not recorded, so it runs again next time.
 
 Lane aliases: `ingestion` = stages 1–5, `nora` = stages 6–9. The SIRA
 lane (§6) is not a pipeline stage. The skip flags resolve CLI > env var
 > `config/llm.json` > env config. Every run writes
 `reports/report_<ts>.txt`.
 
-There is no manifest for a build. The reuse rules above are the state:
-file mtimes, the tree's profile fingerprint, and the taxonomy ledger.
-Reuse works within one env dir; the cycle driver (§5.2) creates a new env
-dir per cycle, so across cycles only taxonomy is seeded (by copying the
-previous `out/taxonomy`). §20 spells out the consequence.
+**The stage store** (step 2, optional per host). With `NORA_STAGES_ROOT`
+(the wiring env's `STAGES_ROOT`, mounted at `/data/stages`), a per-cell
+stage first looks for its fingerprint in the build's manifest, then in
+the store, `<stages-root>/<stage>/<MNO>/<rel>/<fp>/`; a stored output is
+read where it is, and a cell the build computes cleanly moves into the
+store (made read-only, renamed into place, the build's copy removed).
+So a second build, of any stack, on the same cell and code computes
+nothing in the corpus prefix and copies nothing. Every reader, in the
+pipeline and outside it (the store builders, the SIRA adapter, the
+cycle driver, promote, the debug tools), finds an output through the
+resolver `pipeline/locate.py`: the build's `out/` first, else the store
+entry its `STAGES.json` names (step 4). Labels keep their
+`nora/out/<stage>/` layout, assembled by promote from both. The vector
+store and taxonomy from an image without `NORA_CODE_VERSION` stay out
+of the store, in the build. nora-batch mounts the store read-write,
+sira-batch read-only.
+A `.building` marker makes a second producer wait for the first. With
+`NORA_CORPUS_DIR` (the wiring env's `CORPUS_DIR`, mounted read-only at
+`/data/corpus`), the profile bindings and annotations are read from the
+corpus root, shared by every stack. The manifest records each entry's
+origin: `computed`, `store` or `forced`. `stage_store gc` (by hand; dry
+run unless `--apply`) removes the entries no build manifest, label
+manifest or release set's `stage_fps` on the host names, keeping recent
+entries and those under a live marker; it refuses (`PIP-E006`) without a
+source to keep from or with an unreadable one.
+
+**Recipes** (step 3). A stack's recipe (`NORA_RECIPE` in its serving
+env; `customizations/recipes/<name>.json`) names the variant stages it
+builds and their parameters. The cycle driver freezes it in the build as
+`RECIPE.json`; the taxonomy fingerprint carries the recipe's taxonomy
+parameters (`generation` among them); the driver skips taxonomy and
+unsets the SIRA taxonomy directory for a recipe without one; the release
+set records the recipe's name and digest and the build's stage
+fingerprints (§21). Enrichment is a driver-side stage: `verify-enrich`
+records its fingerprint per cell (the cell's parse and, per the recipe,
+taxonomy fingerprints, the MNO's published document prompt, the lane's
+model, the SIRA revision, the recipe's enrich parameters); its outputs
+stay in the build. A served cell is redone from the Ingest page: the
+runner bumps the cell's generation in `<corpus>/generations.json`, which
+enters that cell's variant fingerprints only, and runs a new ingest from
+`start`; the page shows per stage whether the output was found or
+computed.
 
 ### 5.2 Drivers
 
@@ -379,7 +429,7 @@ previous `out/taxonomy`). §20 spells out the consequence.
 
 | CLI | Input | Output | Verify |
 |---|---|---|---|
-| `python -m core.src.stores.trees_build --env-dir D --out O [--cells M__R,…] [--force]` | `out/parse/<mno>/<rel>/*_tree.json` | one `trees-<mno>-<rel>.db` per cell, temp name then rename | SQLite store vs file store must agree on `list_docs`, every `load_tree`, every `reqs_for_plan`, ~50 sampled `find_req` |
+| `python -m core.src.stores.trees_build --env-dir D --out O [--cells M/R,…] [--force]` | `out/parse/<mno>/<rel>/*_tree.json` | one `trees-<mno>-<rel>.db` per cell, temp name then rename | SQLite store vs file store must agree on `list_docs`, every `load_tree`, every `reqs_for_plan`, ~50 sampled `find_req` |
 | `python -m core.src.stores.history_build --env-dir D [--trees-root T] --out O [--mno M,…] [--release R,…] [--exclude R,…] [--force]` | the Trees store (SQLite root, else parse trees) across an MNO's releases: all of them, or `--release`'s list, or all but `--exclude`'s (a stray parse directory is otherwise a release); the report shows documents per release | one `history-<mno>.db` per MNO | release list equals the Trees store's; self-diff of the latest release empty; requirement counts match; sampled latest versions carry the tree's `text_fp` |
 
 Both print counts only, never requirement text, and carry error codes
@@ -397,6 +447,7 @@ cycle script does.
 | `flip --label L [--mode staged\|expedited\|override] [--force --reason TEXT] [--note] [--store-url URL]` | Refuses without a passing gate rule and a present file per member; `--force` records a waived manual gate; `active` := the set, one transaction; with `--store-url`, reloads the store and verifies healthz. | `PUB-E004` no passing gate, `PUB-E005` member file missing, `PUB-E008` serving verification failed |
 | `rollback --to L [--force] [--note] [--store-url URL]` | A `kind=rollback`, `expedited` flip to a set that served before. | `PUB-E009` never served |
 | `gc --keep N [--dry-run]` | Removes files of versions outside the protected set (active, last N sets, last N flip targets); rows stay with `removed_at`; orphan files reported, not deleted. | — |
+| `purge --label L [--dry-run]` | Removes one release set that is not active — its rows (members, gate runs, the set) and the files of the versions no other set or the active set references; rows stay with `removed_at`, the flip log keeps the label. The self-serve runner's Purge calls it. | `REG-E009` set is active; `REG-E007` unknown set |
 | `status [--label L]` | Active set, versions, gates, flips as JSON. | `PUB-E010` registry unusable |
 
 Registry errors `REG-E001..E008` surface through the same CLI. Output is
@@ -423,7 +474,7 @@ enrichment language model at scale.
 flowchart LR
   parse[("out/parse/&lt;mno&gt;/&lt;rel&gt;/*_tree.json")]
   adapter["adapter<br/>sandbox.adapter.nora_to_beir --multi-cell"]
-  raw[("&lt;db-root&gt;/&lt;mno&gt;__&lt;rel&gt;/raw/<br/>corpus.jsonl · fingerprints.jsonl · metadata.json")]
+  raw[("&lt;db-root&gt;/&lt;mno&gt;/&lt;rel&gt;/raw/<br/>corpus.jsonl · fingerprints.jsonl · metadata.json")]
   multi["sandbox.sira_multi<br/>stages prepare, bm25, enrich_corpus<br/>(SIRA run_pipeline.py per cell)"]
   idx[("index/best<br/>vanilla bm25x")]
   runs[("runs/doc-enrich/&lt;run&gt;/<br/>trace · enrichments.kept.jsonl · config.json")]
@@ -506,7 +557,7 @@ flowchart TB
   mode -->|yes| reg["index mode forced to cell-db<br/>resolve registry: active set,<br/>or NORA_STORE_RELEASE_SET"]
   mode -->|no| idx{NORA_STORE_INDEX}
   idx -->|cell-db| cdb["load every cell-*.db under NORA_STORE_ROOT"]
-  idx -->|flat| flat["load every &lt;mno&gt;__&lt;rel&gt;/ under NORA_STORE_ROOT:<br/>corpus.jsonl, index/best, phrases, fingerprints"]
+  idx -->|flat| flat["load every &lt;mno&gt;/&lt;rel&gt;/ under NORA_STORE_ROOT:<br/>corpus.jsonl, index/best, phrases, fingerprints"]
   reg --> cdb2["load the resolved Cells files"]
   cdb --> sweep
   cdb2 --> sweep
@@ -522,7 +573,7 @@ Three modes, one code path after load:
 |---|---|---|---|---|
 | registry | `NORA_STORE_REGISTRY` (compose sets it from `SERVE_REGISTRY_ROOT`) | the registry's `active` rows, or the set named by `NORA_STORE_RELEASE_SET` (a staging store) | `POST /registry/reload` swaps only units whose file changed | every served stack |
 | cell-db | `NORA_STORE_INDEX=cell-db` | every `cell-*.db` under `NORA_STORE_ROOT` | per-cell `POST /cells/{cell}/reload` | dev, converter testing |
-| flat | default when neither is set | every `<mno>__<rel>/` directory under `NORA_STORE_ROOT` | per-cell reload re-reads the directory | the build machine's dev stack |
+| flat | default when neither is set | every `<mno>/<rel>/` directory under `NORA_STORE_ROOT` | per-cell reload re-reads the directory | the build machine's dev stack |
 
 In every mode the Overlay backend is chosen the same way: `NORA_OVERLAY_URL`
 (a peer, read-only), else `NORA_OVERLAY_DB` (SQLite, this store is the
@@ -750,7 +801,7 @@ come from the corpus row in context.
 ### 10.2 Unit names
 
 A **unit** is what publish versions: one cell for Cells and Trees
-(`<mno>__<rel>`), one MNO for History (`<mno>`). The publish CLI reads a
+(`<mno>/<rel>`), one MNO for History (`<mno>`). The publish CLI reads a
 unit's identity from its file's `meta`, never from the file name. File
 names in a serving root are `cells/cell-<mno>-<rel>-vN.db`,
 `trees/trees-<mno>-<rel>-vN.db`, `history/history-<mno>-vN.db`.
@@ -773,6 +824,7 @@ lane reads `out/parse` from here and writes to its own db-root (§12).
 ```
 <env-dir>/
 ├── profiles.json                        # cell → profile binding (copied forward per cycle)
+├── STAGES.json                          # build manifest: stage → cell → fingerprint, with provenance
 ├── prompts/                             # per-MNO SIRA document prompts, doc_requirement_<MNO>_vNN.txt
 ├── annotations/<doc>_annotations.json   # reviewer removals applied at parse
 ├── corrections/{profile,taxonomy}.json  # overrides for those two stages (not the Overlay)
@@ -783,7 +835,7 @@ lane reads `out/parse` from here and writes to its own db-root (§12).
 │   ├── parse/<MNO>/<rel>/<doc>_tree.json         # the requirement trees: input to SIRA, Trees, History, Eval Studio
 │   ├── resolve/<MNO>/<rel>/<plan>_xrefs.json
 │   ├── standards/ · graph/ · vectorstore/<MNO>/<rel>/ · eval/   # off or not run in current builds
-│   └── taxonomy/taxonomy.json, <plan>_features.json, extraction_state.json, .corpus_fingerprint
+│   └── taxonomy/<MNO>/<rel>/taxonomy.json, <plan>_features.json, extraction_state.json; taxonomy/taxonomy.json (build-level)
 ├── reports/                             # parse_log/, parse_summary.json, report_<ts>.txt, lane-*.log, CYC-*.txt
 ├── state/                               # web DBs when the web runs against this env dir directly (dev)
 └── eval/golden/                         # shadowed by the pooled GOLDEN_DIR mount in served stacks
@@ -804,7 +856,7 @@ every consumer that needs a field not yet a column reads it from there.
 <db-root>/
 ├── SOURCE.json                                   # env dir, git sha, adapter stamp
 ├── .hydra-configs/data/<cell>.yaml               # per-cell SIRA config written by sira_multi
-└── <mno>__<rel>/
+└── <mno>/<rel>/
     ├── raw/
     │   ├── corpus.jsonl        # one row per requirement (+ doc:/section: rows); _id, title, text with context
     │   ├── fingerprints.jsonl  # _id → text_fp
@@ -833,7 +885,7 @@ scheme, git sha) at the root and in each subdirectory:
 serve/<label>/
 ├── MANIFEST.json
 ├── nora/out/{parse,taxonomy,graph}/   # hard links; vectorstore copied when present
-└── sira/<mno>__<rel>/ … , SOURCE.json  # hard links; cell-dbs/ is NOT carried
+└── sira/<mno>/<rel>/ … , SOURCE.json  # hard links; cell-dbs/ is NOT carried
 ```
 
 `docker/serve-push.sh` moves it to the serving host (rsync, checksum
@@ -1201,7 +1253,7 @@ erDiagram
   release_set ||--o{ flip : "target of"
   store_version {
     TEXT store PK "cells | trees | history"
-    TEXT unit PK "mno__release, or mno for history"
+    TEXT unit PK "mno/release, or mno for history"
     INTEGER version PK "per-unit counter"
     TEXT fingerprint "content identity (source_fingerprint; history: hash of its Trees inputs)"
     TEXT file "relative path under the serving root"
@@ -1339,12 +1391,13 @@ that change what the system does, not tuning knobs.
 | Variable | Meaning |
 |---|---|
 | `STACK_NAME` | compose project; the stack's name in metrics and baselines |
-| `NORA_ENV_DIR` | the build or label env dir mounted at `/data/env` |
+| `NORA_BUILD_DIR` | ingestion wiring only: the build mounted at `/data/env`, its `out/sira` at `/data/db` (since 2026-11-06; `cycle.sh start` rewrites it per cycle). A serving stack's env has no build line: its `/data/env` is an empty dir (since 2026-11-07) |
+| `NORA_ENV_DIR` | optional override of the `/data/env` mount (an older layout) |
 | `SERVE_REGISTRY_ROOT` | the serving root; sets registry mode on nora-store |
 | `SERVE_RELEASE_SET` | a staged set for a staging store |
 | `CORRECTIONS_DIR` | holds `overlay.db` and the JSON backup |
 | `WEB_STATE_DIR`, `FEEDBACK_DIR`, `GOLDEN_DIR` | web DBs; pooled feedback; pooled golden set |
-| `STORE_ROOT`, `TREES_ROOT`, `HISTORY_ROOT` | dev/test only: flat cells or cell DBs; pre-built Trees and History directories |
+| `STORE_ROOT`, `TREES_ROOT`, `HISTORY_ROOT` | dev/test only: an override of the `/data/db` mount (flat cells or cell DBs); pre-built Trees and History directories |
 | `REQUIREMENTS_DIR`, `MODELS_DIR` | build inputs; docling artifacts |
 | `NORA_OVERLAY_URL`, `NORA_TREES_URL`, `NORA_HISTORY_URL` | nora-web's store clients; default this stack's nora-store; another stack's nora-store to share its Overlay |
 | `STORE_PORT`, `NORA_WEB_PORT`, `SERVE_UID`, `SERVE_GID`, `JOB_UID`, `JOB_GID`, `IMAGE_PREFIX`, `IMAGE_TAG`, `OFFLINE`, `SIRA_REF`, `*_ENV_FILE` | ports, users, images, env-file names |
@@ -1414,11 +1467,11 @@ sequenceDiagram
   participant NB as nora-batch
   participant SB as sira-batch
   participant ENV as env dir (new build)
-  participant DB as SIRA db-root (new build)
+  participant DB as <build>/out/sira (the build's SIRA cells)
   participant SH as serving host
 
   IA->>CY: start <build> --profiles <prev-build>
-  CY->>ENV: create, copy profiles.json, repoint .env.builds, take the baton
+  CY->>ENV: create, bind the new cell (build or corpus profiles.json), repoint .env.builds, take the baton
   IA->>SH: stage source docs under requirements/<MNO>/<rel>/
   IA->>CY: parse [--skip-standards]
   CY->>NB: run_cli --lane ingestion (all cells)
@@ -1443,22 +1496,24 @@ What each phase reuses, as built:
 
 | Phase | Reused from the previous cycle | Redone |
 |---|---|---|
-| parse | with `start --seed <prev>`: the previous build's `out/{extract,profile,parse,resolve,taxonomy}` are copied in, and the lane skips every tree that is newer than its source with the same profile fingerprint. Without `--seed`: nothing, `parse` runs every cell | the new cell; without `--seed`, every cell |
-| taxonomy | the seeded ledger keeps every plan whose tree sha is unchanged | plans of the new release, and any plan the newest release now supersedes |
-| enrich | nothing on the build side: the SIRA db-root is per build, and an incremental cycle enriches only the new cell (`enrich --cell`) | the new cell; a full cycle, every cell |
+| parse | nothing is copied: the stage is per cell, and `parse --cell` runs the new cell alone (`--mno`/`--release` on the lane); with the stage store, a cell another build already parsed under the same fingerprint is taken from the store (§5.1) | the new cell; a full cycle, every cell not in the store |
+| taxonomy | nothing: since 2026-11-06 a release's taxonomy is derived from its own trees under `out/taxonomy/<mno>/<rel>/`, `taxonomy --cell` runs the new cell alone | the new cell's plans, once per release (no cross-release supersession) |
+| enrich | nothing on the build side: the SIRA cells are the build's own `out/sira/`, and an incremental cycle enriches only the new cell (`enrich --cell`) | the new cell; a full cycle, every cell |
 | publish (§21) | every unit whose `source_fingerprint` and schema match a live version, by content, regardless of build; units the build did not produce are inherited from the active set | only cells whose corpus or phrases changed; History for MNOs whose Trees changed |
 
 A full cycle (no `--seed`) rebuilds everything, which is expensive but
 correct: unchanged cells produce byte-identical corpus and phrases only
 if the enrichment is deterministic, which a language model is not, so a
 re-enriched unchanged cell publishes as a new version with a new
-fingerprint. The incremental cycle avoids that by not enriching the
-unchanged cells at all: `start --seed` copies the previous build's
-outputs (a copy, not hard links, since the stages rewrite their ledgers
-in place), takes its profile bindings and binds the new cell to the
-profile of its MNO's latest bound release, and the SIRA build holds the
-new cell alone; publish inherits the rest. §28 runs this cycle from the
-web.
+fingerprint. The incremental cycle avoids that by touching the unchanged
+cells not at all: every build-plane stage is per cell (the taxonomy
+became per release on 2026-11-06, so a release is enriched against the
+taxonomy of its own text and no stage needs the rest of the corpus),
+`start --seed` takes the previous build's profile bindings (or, with a
+corpus root, the corpus `profiles.json`) and binds the new cell to the
+profile of its MNO's latest bound release, and the build
+holds the new cell alone on both sides; publish inherits the rest. §28
+runs this cycle from the web.
 
 Artifacts after the flow: the build's env dir and db-root on the build
 machine; `serve/<label>/` on both hosts; nothing in any serving root yet.
@@ -1935,8 +1990,8 @@ the opposite from the design.
 - **The flat promote does not carry cell DBs** (`cell-dbs/` is not
   linked). Served stacks do not need them, since publish converts from
   the flat cells; the lane's `--index cell-db` output is for dev.
-- **Taxonomy seeding without `--seed` is manual** (copy the previous
-  `out/taxonomy`).
+- **A full cycle re-derives every cell's taxonomy** (no cache carries
+  across builds; the cost is one LLM call per plan per release).
 
 ### Publish plane
 
@@ -2015,7 +2070,7 @@ sequenceDiagram
   participant S as serving nora-store
 
   T->>W: POST /api/ingest {source, mno, release}
-  W->>W: validate: shape, MNO served, cell free, one at a time
+  W->>W: validate: shape, MNO served, cell free; submits queue
   W->>J: ingests row (queued) + job ingest {ingest_id}
   R->>J: claim (one guarded UPDATE); heartbeat while running
   R->>R: copy documents to requirements/<MNO>/<rel>/
@@ -2081,11 +2136,28 @@ says so. The administrator can still flip by hand with a waiver
 `queued → running → staged` (gate recorded, pass or fail) `| failed |
 cancelled`; `staged → served` (Serve); `served → rolled_back` (Roll
 back); `failed → queued` (Retry, from the failed stage, or from enrich
-for a verify failure) `| abandoned`; `cancelled | staged → abandoned`.
+for a verify failure) `| abandoned`; `cancelled | staged → abandoned`;
+`abandoned | rolled_back | failed | cancelled → purged` (Purge).
 Cancel takes effect between stages and while a detached phase is
 followed; the cycle in flight is then left for Abandon, which runs
-`cycle.sh abandon` and removes the staged copy of the documents. One
-ingest at a time, as the cycle driver enforces with its baton. Out of
+`cycle.sh abandon` and removes the staged copy of the documents but
+keeps the build for diagnosis. Purge is the deliberate second step for
+a dead ingest and the administrator's action (admin cookie; the team's
+token sees no button and gets 403): the runner releases the baton if the build still holds
+it, removes the release set through `publish purge` (never an active
+one), then the promoted snapshot, the work dir, the build (and a
+separate SIRA tree), the golden run, and the documents unless the
+active set serves that cell. Every removal is logged; one that fails
+fails the job with the list and leaves the state, so a purge is re-run
+after the fix — each step tolerates what is already gone. The ingest
+row stays as history. A staged set is never purged directly: Abandon
+first. A row whose label or build another live ingest also carries is
+refused before anything is touched: purge removes by name, and names
+restart after a by-hand cleanup. A purged label is not reused: the same-day sequence number
+skips names a snapshot or release set still carries.
+Submits queue, oldest first; one cycle runs at a time, as the driver
+enforces with its baton, and a failed ingest that still holds it is
+named on the page until it is retried or abandoned. Out of
 scope: a new MNO (first release by hand: profile choice, prompt
 derivation), cross-host promote, a Windows-side skill (a thin client
 over `POST /api/ingest`, later).
@@ -2096,7 +2168,7 @@ over `POST /api/ingest`, later).
 |---|---|
 | **active** | the registry rows that say which version of each unit a stack serves; always one set's members after a flip |
 | **authority (Overlay)** | the nora-store whose Overlay backend is opened read-write; the only writer |
-| **cell** | one MNO at one release: `<mno>__<rel>`; the unit of retrieval, of Cells and Trees |
+| **cell** | one MNO at one release: `<mno>/<rel>`; the unit of retrieval, of Cells and Trees |
 | **Cells store** | per-cell SQLite with corpus rows, raw SIRA phrases and the vanilla index blobs (schema 2) |
 | **composition** | folding the Overlay onto a cell's SIRA phrases at load, then enriching the in-memory index |
 | **effective set** | the phrases that reach the index for one requirement after the fold |

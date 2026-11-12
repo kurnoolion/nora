@@ -1062,7 +1062,8 @@ def verify_cell(dataset_dir: Path, run_name: str,
     `heal_run_dir` / `retry_failed_in_run` per cell."""
     run_dir = dataset_dir / "runs" / "doc-enrich" / run_name
     rep = verify_run(dataset_dir, run_name)
-    print(f"verify-run: {dataset_dir.name}/runs/doc-enrich/{run_name}")
+    _label = dataset_dir.name if "__" in dataset_dir.name else f"{dataset_dir.parent.name}/{dataset_dir.name}"
+    print(f"verify-run: {_label}/runs/doc-enrich/{run_name}")
 
     b = rep["batches"]
     if b is None:

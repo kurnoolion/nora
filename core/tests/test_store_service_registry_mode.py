@@ -111,13 +111,13 @@ def test_serves_the_active_set(world):
     assert hz["ok"] is True and hz["mode"] == "multi-cell" and hz["index_mode"] == "cell-db"
     assert hz["registry_label"] == "set-1" and hz["serve_label"] == "set-1"
     assert hz["registry_release_set"] == ""
-    assert _versions(hz, "cells") == {f"{MNO_A}__{R1}": 1, f"{MNO_A}__{R2}": 1, f"{MNO_B}__{R1}": 1}
+    assert _versions(hz, "cells") == {f"{MNO_A}/{R1}": 1, f"{MNO_A}/{R2}": 1, f"{MNO_B}/{R1}": 1}
     assert _versions(hz, "trees") == _versions(hz, "cells")
     assert _versions(hz, "history") == {MNO_A: 1, MNO_B: 1}
-    assert hz["registry_versions"]["cells"][f"{MNO_A}__{R1}"]["fingerprint"] == "fp-a1"
+    assert hz["registry_versions"]["cells"][f"{MNO_A}/{R1}"]["fingerprint"] == "fp-a1"
     # identity keys come from the cell DBs' meta, as in cell-db mode
-    assert hz["data_fingerprint_cells"] == {f"{MNO_A}__{R1}": "fp-a1", f"{MNO_A}__{R2}": "fp-a2",
-                                            f"{MNO_B}__{R1}": "fp-b1"}
+    assert hz["data_fingerprint_cells"] == {f"{MNO_A}/{R1}": "fp-a1", f"{MNO_A}/{R2}": "fp-a2",
+                                            f"{MNO_B}/{R1}": "fp-b1"}
     assert hz["stores"] == {"overlay": "local", "trees": "local", "history": "local"}
     cells = world["client"].get("/stores/trees/v1/cells").json()
     assert [(c["mno"], c["release"]) for c in cells] == [A1, A2, B1]
@@ -144,15 +144,15 @@ def test_reload_swaps_only_changed_units(world):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["registry_label"] == "set-2" and body["errors"] == [] and body["removed"] == []
-    assert body["changed"] == {"cells": [f"{MNO_A}__{R1}"], "trees": [f"{MNO_B}__{R1}"],
+    assert body["changed"] == {"cells": [f"{MNO_A}/{R1}"], "trees": [f"{MNO_B}/{R1}"],
                                "history": [MNO_B]}
     assert svc._cells[A1].db_path.endswith("-v2.db")
     assert svc._cells[A2].loaded_at == loaded_at[A2] and svc._cells[B1].loaded_at == loaded_at[B1]
     assert world["applied"] == [A1]                         # recomposed the changed cell only
     hz = world["client"].get("/healthz").json()
-    assert _versions(hz, "cells")[f"{MNO_A}__{R1}"] == 2 and _versions(hz, "trees")[f"{MNO_B}__{R1}"] == 2
+    assert _versions(hz, "cells")[f"{MNO_A}/{R1}"] == 2 and _versions(hz, "trees")[f"{MNO_B}/{R1}"] == 2
     assert _versions(hz, "history") == {MNO_A: 1, MNO_B: 2}
-    assert hz["data_fingerprint_cells"][f"{MNO_A}__{R1}"] == "fp-a1-NEW"
+    assert hz["data_fingerprint_cells"][f"{MNO_A}/{R1}"] == "fp-a1-NEW"
     # the reopened Trees store serves the new file
     assert any(n["req_id"] == "REQ_B_2" for n in
                world["client"].get("/stores/trees/v1/find", params={"req_id": "REQ_B_2"}).json())
@@ -165,7 +165,7 @@ def test_reload_swaps_only_changed_units(world):
     pub.rollback(world["root"], "set-1")
     body = world["client"].post("/registry/reload").json()
     assert body["registry_label"] == "set-1"
-    assert body["changed"]["cells"] == [f"{MNO_A}__{R1}"] and svc._cells[A1].db_path.endswith("-v1.db")
+    assert body["changed"]["cells"] == [f"{MNO_A}/{R1}"] and svc._cells[A1].db_path.endswith("-v1.db")
     assert _versions(world["client"].get("/healthz").json(), "history") == {MNO_A: 1, MNO_B: 1}
 
 
@@ -188,7 +188,7 @@ def test_reload_reports_unopened_stores_as_unchanged(world):
     _flip(world, "set-2")
     body = world["client"].post("/registry/reload").json()
     # Trees was opened above, so its change is reported; History never was
-    assert body["changed"] == {"cells": [], "trees": [f"{MNO_B}__{R1}"], "history": []}
+    assert body["changed"] == {"cells": [], "trees": [f"{MNO_B}/{R1}"], "history": []}
     assert world["client"].get("/stores/history/v1/mnos").json() == [MNO_A, MNO_B]
     body = world["client"].post("/registry/reload").json()
     assert body["changed"] == {"cells": [], "trees": [], "history": []}
@@ -200,14 +200,14 @@ def test_reload_drops_cells_that_left_the_set(world):
     svc._load_cells()
     svc._label_cells[(A2, "lbl")] = svc._cells[A2]
     # a set built from scratch with one cell only
-    _publish(world, "set-3", base="none", cells_filter=[f"{MNO_B}__{R1}"])
+    _publish(world, "set-3", base="none", cells_filter=[f"{MNO_B}/{R1}"])
     _flip(world, "set-3")
     body = world["client"].post("/registry/reload").json()
-    assert body["removed"] == [f"{MNO_A}__{R2}", f"{MNO_A}__{R1}"]
-    assert body["changed"]["cells"] == [] and body["cells"] == [f"{MNO_B}__{R1}"]
+    assert body["removed"] == [f"{MNO_A}/{R2}", f"{MNO_A}/{R1}"]
+    assert body["changed"]["cells"] == [] and body["cells"] == [f"{MNO_B}/{R1}"]
     assert sorted(svc._cells) == [B1] and svc._label_cells == {}
     hz = world["client"].get("/healthz").json()
-    assert list(hz["registry_versions"]["cells"]) == [f"{MNO_B}__{R1}"]
+    assert list(hz["registry_versions"]["cells"]) == [f"{MNO_B}/{R1}"]
     assert [(c["mno"], c["release"]) for c in world["client"].get("/stores/trees/v1/cells").json()] == [B1]
 
 
@@ -221,7 +221,7 @@ def test_release_set_mode_serves_a_staged_set(world, monkeypatch):
     assert svc._cells[A1].db_path.endswith("-v2.db")
     hz = world["client"].get("/healthz").json()
     assert hz["registry_label"] == "set-2" and hz["registry_release_set"] == "set-2"
-    assert hz["data_fingerprint_cells"][f"{MNO_A}__{R1}"] == "fp-a1-STAGED"
+    assert hz["data_fingerprint_cells"][f"{MNO_A}/{R1}"] == "fp-a1-STAGED"
     body = world["client"].post("/registry/reload").json()
     assert body["release_set"] == "set-2" and body["changed"]["cells"] == []
 

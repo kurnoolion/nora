@@ -39,7 +39,12 @@ import sys
 from pathlib import Path
 
 from sandbox.enrich_batching import plan_of
-from sandbox.sira_cells import cell_dirname, enumerate_cells
+from sandbox.sira_cells import cell_dir as _cell_dir_of, cell_dirname, enumerate_cells
+
+
+def _cell_label(cell_dir: Path) -> str:
+    """`<mno>/<release>` for a nested cell dir; the dir name for a flat one."""
+    return cell_dir.name if "__" in cell_dir.name else f"{cell_dir.parent.name}/{cell_dir.name}"
 
 
 def _row_doc_id(row: dict) -> str | None:
@@ -126,7 +131,7 @@ def inspect_cell(
     if not (corpus_row or best or run_phrases):
         return False
 
-    print(f"\n=== cell: {cell_dir.name} ===")
+    print(f"\n=== cell: {_cell_label(cell_dir)} ===")
     print(f"req_id: {req_id}")
     if corpus_row is not None:
         title = corpus_row.get("title", "")
@@ -187,7 +192,7 @@ def list_failed_cell(cell_dir: Path, *, run: str | None, limit: int) -> int:
     capped id lists). Returns the number of failed rows."""
     run_dir = (cell_dir / "runs" / "doc-enrich" / run) if run else latest_run_dir(cell_dir)
     if run_dir is None or not run_dir.is_dir():
-        print(f"\n=== cell: {cell_dir.name} — no doc-enrich run"
+        print(f"\n=== cell: {_cell_label(cell_dir)} — no doc-enrich run"
               + (f" named {run!r}" if run else "") + " ===")
         return 0
 
@@ -205,7 +210,7 @@ def list_failed_cell(cell_dir: Path, *, run: str | None, limit: int) -> int:
                     continue
                 failed.append((did, status))
 
-    print(f"\n=== cell: {cell_dir.name} (run {run_dir.name}) ===")
+    print(f"\n=== cell: {_cell_label(cell_dir)} (run {run_dir.name}) ===")
     if n_skipped:
         print(f"(+{n_skipped} skipped_* row(s) — coarse chunks excluded "
               f"by build policy, not listed)")
@@ -421,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        cell_dirs = [db_root / cell_dirname(c) for c in cells]
+        cell_dirs = [_cell_dir_of(db_root, c) for c in cells]
 
     if args.failed:
         print("NOTE: listing carries proprietary req ids / plan codes — "

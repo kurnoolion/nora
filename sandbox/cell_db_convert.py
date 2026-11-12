@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.src.models.fingerprint import FINGERPRINT_VERSION
-from sandbox.sira_cells import CellKey, cell_dirname, enumerate_cells
+from sandbox.sira_cells import CellKey, cell_dir, cell_dirname, enumerate_cells, parse_cell_dirname
 from core.src.stores.overlay import open_overlay_store
 from core.src.store_service.enrich_overlay import (
     allowed_labels,
@@ -515,14 +515,15 @@ def convert(db_root: Path, out_dir: Path, *, cells_filter: list[str] | None = No
     cells = enumerate_cells(db_root)
     if cells_filter:
         wanted = set(cells_filter)
-        cells = [c for c in cells if cell_dirname(c) in wanted]
+        wanted_keys = {parse_cell_dirname(w) for w in wanted}
+        cells = [c for c in cells if c in wanted_keys]
     if not cells:
         raise ConvertError("CNV-009", f"no cells found under {db_root}")
 
     # Pass 1: load everything (peers must exist before overlay verdicts).
     loaded: dict[CellKey, CellData] = {}
     for cell in cells:
-        loaded[cell] = _load_cell(db_root / cell_dirname(cell), cell,
+        loaded[cell] = _load_cell(cell_dir(db_root, cell), cell,
                                   enrich_run, use_latest)
     # Pass 2: fold + enrich.
     for cd in loaded.values():

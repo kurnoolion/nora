@@ -78,6 +78,9 @@ class Ingest:
     rolled_back_at: str | None = None
     error: str | None = None
     callback_url: str | None = None
+    redo_of: str | None = None
+    stage_origins: str | None = None
+    documents_staged: int | None = None
 
 
 def _now_iso() -> str:
@@ -298,22 +301,24 @@ class JobQueue:
     async def create_ingest(
         self, *, mno: str, release: str, source: str, submitted_by: str,
         note: str = "", job_id: str | None = None, callback_url: str | None = None,
+        redo_of: str | None = None,
     ) -> Ingest:
         now = _now_iso()
         ing = Ingest(
             id=str(uuid.uuid4()), job_id=job_id, mno=mno, release=release,
             source=source, note=note, submitted_by=submitted_by,
             created_at=now, updated_at=now, callback_url=callback_url or None,
+            redo_of=redo_of or None,
         )
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """INSERT INTO ingests
                    (id, job_id, mno, release, source, note, submitted_by,
-                    created_at, updated_at, state, callback_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    created_at, updated_at, state, callback_url, redo_of)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (ing.id, ing.job_id, ing.mno, ing.release, ing.source,
                  ing.note, ing.submitted_by, ing.created_at, ing.updated_at,
-                 ing.state, ing.callback_url),
+                 ing.state, ing.callback_url, ing.redo_of),
             )
             await db.commit()
         return ing

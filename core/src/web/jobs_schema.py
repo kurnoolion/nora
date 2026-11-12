@@ -77,7 +77,10 @@ CREATE TABLE IF NOT EXISTS ingests (
     flipped_at TEXT,
     rolled_back_at TEXT,
     error TEXT,
-    callback_url TEXT
+    callback_url TEXT,
+    redo_of TEXT,
+    stage_origins TEXT,
+    documents_staged INTEGER
 )
 """
 
@@ -107,22 +110,32 @@ JOBS_ADDED_COLUMNS = (
 )
 INGESTS_ADDED_COLUMNS = (
     ("callback_url", "TEXT"),
+    # stage graph, step 3: the served ingest a redo repeats, and where each
+    # stage's output came from ({stage: "computed" | "store" | "forced"})
+    ("redo_of", "TEXT"),
+    ("stage_origins", "TEXT"),
+    # stage graph, step 5: 1 when this ingest copied the cell's documents
+    # into the shared requirements dir; only then may abandon or purge
+    # remove them (two stacks share the dir)
+    ("documents_staged", "INTEGER"),
 )
 
 # Ingest states a client is told about (webhook events `ingest.<state>`).
-NOTIFY_STATES = ("running", "staged", "served", "rolled_back", "failed", "cancelled", "abandoned")
+NOTIFY_STATES = ("running", "staged", "served", "rolled_back", "failed", "cancelled", "abandoned", "purged")
 
 # The ingest lifecycle. `queued` → `running` → `staged` (gate passed or
 # failed; the verdict says which) | `failed` | `cancelled`; `staged` →
 # `served` (flip); `served` → `rolled_back`; `failed` → `running` (retry)
-# | `abandoned`.
+# | `abandoned`; `abandoned | rolled_back | failed | cancelled` → `purged`
+# (every artifact of the ingest removed; the row stays as history).
 INGEST_STATES = (
     "queued", "running", "staged", "served", "rolled_back",
-    "failed", "cancelled", "abandoned",
+    "failed", "cancelled", "abandoned", "purged",
 )
+PURGEABLE_STATES = ("abandoned", "rolled_back", "failed", "cancelled")
 
 # Job types the runner claims; the web never runs these in-process.
-RUNNER_JOB_TYPES = ("ingest", "ingest-flip", "ingest-rollback", "ingest-abandon")
+RUNNER_JOB_TYPES = ("ingest", "ingest-flip", "ingest-rollback", "ingest-abandon", "ingest-purge")
 
 # The stages of an `ingest` job, in order (the runner runs them, the
 # page shows them), and the stage a failed one is retried from.

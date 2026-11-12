@@ -66,13 +66,21 @@ def is_admin(request: Request) -> bool:
     return bool(ADMIN_TOKEN) and request.cookies.get(ADMIN_COOKIE, "") == ADMIN_TOKEN
 
 
+def is_ingest_admin(request: Request) -> bool:
+    """True when the request holds a valid admin cookie. Independent of team
+    mode (unlike `is_admin`, which opens to everyone with the gate off): the
+    administrator's ingest actions — Purge — need the cookie in every
+    deployment, because they delete."""
+    return bool(ADMIN_TOKEN) and request.cookies.get(ADMIN_COOKIE, "") == ADMIN_TOKEN
+
+
 def is_ingest_user(request: Request) -> bool:
     """True when the request holds the ingest cookie (the requirements
     team's token) or a valid admin cookie. Independent of team mode: the
     ingest surface is token-gated in every deployment."""
     if INGEST_TOKEN and request.cookies.get(INGEST_COOKIE, "") == INGEST_TOKEN:
         return True
-    return bool(ADMIN_TOKEN) and request.cookies.get(ADMIN_COOKIE, "") == ADMIN_TOKEN
+    return is_ingest_admin(request)
 
 
 def team_restricted(request: Request) -> bool:

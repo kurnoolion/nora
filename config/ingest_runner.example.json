@@ -7,7 +7,6 @@
   "cycle_env": {
     "NORA_ROOT": "/srv/nora",
     "NORA_BUILDS_NORA_ROOT": "/path/to/nora-builds",
-    "NORA_BUILDS_SIRA_ROOT": "/path/to/sira-builds",
     "NORA_REQUIREMENTS_DIR": "/path/to/requirements",
     "NORA_SERVE_ROOT": "/path/to/labels",
     "NORA_BUILDS_WIRING": "/path/to/env/.env.builds"
@@ -26,6 +25,7 @@
   "staging_store_url": "http://nora-store:8040",
   "prompt_scheme": "",
   "seed_build": "<the build the served set came from>",
+  "peer_registry_roots": [],
   "eval_tolerance": 0.03,
   "verify_n": 25,
   "poll_seconds": 5,

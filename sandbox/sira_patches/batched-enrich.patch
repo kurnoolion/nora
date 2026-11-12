@@ -16,10 +16,10 @@
 +    # NORA batched-enrich: per-MNO doc prompt resolution. When
 +    # NORA_SIRA_DOC_PROMPT_DIR is set, pick the highest-version
 +    # doc_requirement_<MNO>_*.txt for this cell's MNO (data.name is
-+    # "<MNO>__<Release>"); fall back to the config's prompt file.
++    # "<MNO>/<Release>", or "<MNO>__<Release>"); fall back to the config's prompt file.
 +    _prompt_dir = os.getenv("NORA_SIRA_DOC_PROMPT_DIR", "")
 +    if _prompt_dir:
-+        _mno = str(cfg.data.name).split("__", 1)[0]
++        _mno = str(cfg.data.name).replace("__", "/").split("/", 1)[0]
 +        _per_mno = enrich_batching.resolve_doc_prompt(_prompt_dir, _mno)
 +        if _per_mno:
 +            logger.info("Per-MNO doc prompt: %s", _per_mno)

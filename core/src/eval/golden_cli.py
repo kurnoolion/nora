@@ -171,7 +171,9 @@ def main(argv: list[str] | None = None) -> int:
             "Empty sends no reasoning field at all. Recorded on the run "
             "stamp and printed as rsn= on the identity line, but NOT a "
             "comparability key — pooling runs at different levels stays "
-            "the analyst's call."
+            "the analyst's call. The Ask page's two modes map here: "
+            "'none' = Fast, '' = Think (on an endpoint that takes "
+            "reasoning_effort)."
         ),
     )
     parser.add_argument("--judge-model", default=None,

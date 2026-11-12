@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,16 @@ from core.src.pipeline.cells import Cell, enumerate_input_cells, is_per_cell_sta
 from core.src.pipeline.stages import STAGE_FUNCS, StageResult
 
 logger = logging.getLogger(__name__)
+
+#: The host's stage store and corpus root (strand stage-graph, step 2);
+#: unset or empty runs without them.
+STAGES_ROOT_ENV = "NORA_STAGES_ROOT"
+CORPUS_DIR_ENV = "NORA_CORPUS_DIR"
+
+
+def _env_path(name: str) -> Path | None:
+    value = os.getenv(name, "").strip()
+    return Path(value).expanduser() if value else None
 
 
 @dataclass
@@ -74,6 +85,89 @@ class PipelineContext:
     # Accumulated state between stages (paths, intermediate data)
     state: dict = field(default_factory=dict)
 
+    # The build directory (strand stage-graph): holds STAGES.json, the
+    # build manifest. Set by the factories; derived from `stage_dirs` when
+    # a caller constructs the context directly.
+    build_dir: Path | None = None
+
+    # Step 2 of the stage graph. `stages_root` is the host's stage store
+    # (NORA_STAGES_ROOT): outputs found there are reused, outputs completed
+    # here are put there; None runs without it. `corpus_dir` is the corpus
+    # root (NORA_CORPUS_DIR): the profile bindings and the user annotations
+    # are read there instead of from the build; None reads the build.
+    stages_root: Path | None = None
+    corpus_dir: Path | None = None
+
+    # The driver-side enrich stage's parameters (step 3, slice 2): the
+    # SIRA lane's model and the SIRA clone's revision. The cycle driver
+    # passes both when it stamps enrich; read from the environment.
+    enrich_model: str = field(default_factory=lambda: os.getenv("NORA_SIRA_ENRICH_LLM_MODEL", "").strip())
+    sira_ref: str = field(default_factory=lambda: os.getenv("SIRA_REF", "").strip())
+
+    @property
+    def env_dir(self) -> Path:
+        """The build / environment directory (`<env_dir>`)."""
+        if self.build_dir is not None:
+            return self.build_dir
+        # <env_dir>/out/<stage> -> <env_dir>
+        return next(iter(self.stage_dirs.values())).parent.parent
+
+    @property
+    def fingerprints(self):
+        """The build's `Fingerprinter` over `<env_dir>/STAGES.json` (lazy)."""
+        fp = self.state.get("_fingerprinter")
+        if fp is None:
+            from core.src.pipeline.fingerprints import Fingerprinter
+            from core.src.pipeline.manifest import MANIFEST_NAME, BuildManifest
+            fp = Fingerprinter(self, BuildManifest(self.env_dir / MANIFEST_NAME))
+            self.state["_fingerprinter"] = fp
+        return fp
+
+    @property
+    def build_id(self) -> str:
+        """The build's name (its directory name), as recorded in the store."""
+        return self.env_dir.name
+
+    @property
+    def bindings_dir(self) -> Path:
+        """Where `profiles.json` is read: the corpus root, else the build."""
+        return self.corpus_dir if self.corpus_dir is not None else self.env_dir
+
+    @property
+    def annotations_dir(self) -> Path:
+        """The user annotations (D-061) the parse stage applies."""
+        return (self.corpus_dir if self.corpus_dir is not None else self.env_dir) / "annotations"
+
+    @property
+    def stage_store(self):
+        """The host's `StageStore`, or None without `stages_root` (lazy)."""
+        if self.stages_root is None:
+            return None
+        store = self.state.get("_stage_store")
+        if store is None:
+            from core.src.pipeline.stage_store import StageStore
+            store = StageStore(self.stages_root)
+            self.state["_stage_store"] = store
+        return store
+
+    @property
+    def recipe(self):
+        """The recipe frozen in the build (``<env_dir>/RECIPE.json``), or
+        None for a build started without one (lazy; RCP-E001/E002 on a bad file)."""
+        if "_recipe" not in self.state:
+            from core.src.pipeline.recipes import load_frozen
+            self.state["_recipe"] = load_frozen(self.env_dir)
+        return self.state["_recipe"]
+
+    def profile_override(self) -> str | None:
+        """The single-profile override applied to every cell, if any:
+        `--profile` (CLI) first, else `corrections/profile.json`."""
+        override = self.state.get("profile_path")
+        if override:
+            return str(override)
+        correction = self.correction("profile.json")
+        return str(correction) if correction else None
+
     def stage_output(self, stage: str, cell: "Cell | None" = None) -> Path:
         """Get the output directory for a stage.
 
@@ -87,6 +181,26 @@ class PipelineContext:
         if cell is not None and is_per_cell_stage(stage):
             return base / cell.relpath
         return base
+
+    def stage_input(self, stage: str, cell: "Cell | None" = None) -> Path:
+        """Where an earlier stage's output for `cell` is, for a stage that
+        reads it: the build's own directory when present, else the stage
+        store entry this build's manifest names (``pipeline/locate.py``,
+        stage-graph step 4). A stage writes to `stage_output`, never here."""
+        from core.src.pipeline.locate import locate
+        found = locate(self.env_dir, stage, cell, self.stages_root)
+        return found if found is not None else self.stage_output(stage, cell)
+
+    def stage_input_cells(self, stage: str) -> "list[Cell]":
+        """Every cell `stage` has an output for, in the build or the store."""
+        from core.src.pipeline.locate import cells
+        return cells(self.env_dir, stage, self.stages_root)
+
+    def stage_input_files(self, stage: str, pattern: str) -> "list[Path]":
+        """Files matching `pattern` over every cell of `stage` (and the flat
+        legacy ``out/<stage>/``), for the global stages."""
+        from core.src.pipeline.locate import stage_files
+        return stage_files(self.env_dir, stage, pattern, stages_root=self.stages_root)
 
     def cell_in_scope(self, mno: str, release: str) -> bool:
         """True iff `(mno, release)` passes the `--mno`/`--release` scope (D-DRAFT-8).
@@ -239,6 +353,7 @@ class PipelineContext:
             eval_dir=env.eval_path(),
             verbose=False,
             stage_dirs=stage_dirs,
+            build_dir=env.env_dir_path,
             model_provider=env.model_provider,
             model_name=env.model_name,
             model_timeout=env.model_timeout,
@@ -249,6 +364,8 @@ class PipelineContext:
             mnos=env.mnos,
             releases=env.releases,
             standards_source=env.standards_source,
+            stages_root=_env_path(STAGES_ROOT_ENV),
+            corpus_dir=_env_path(CORPUS_DIR_ENV),
         )
 
     @classmethod
@@ -278,6 +395,7 @@ class PipelineContext:
             eval_dir=env_dir / "eval",
             verbose=False,
             stage_dirs=stage_dirs,
+            build_dir=env_dir,
             model_provider=model_provider,
             model_name=model_name,
             model_timeout=model_timeout,
@@ -286,6 +404,8 @@ class PipelineContext:
             ),
             embedding_model=resolve_embedding_model(embedding_model or None),
             standards_source=standards_source,
+            stages_root=_env_path(STAGES_ROOT_ENV),
+            corpus_dir=_env_path(CORPUS_DIR_ENV),
         )
         if profile_path:
             ctx.state["profile_path"] = str(profile_path)

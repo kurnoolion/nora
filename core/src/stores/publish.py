@@ -59,6 +59,7 @@ from urllib.parse import quote
 
 from core.src.models.fingerprint import FINGERPRINT_VERSION
 from core.src.pipeline.error_codes import PipelineError
+from core.src.stores.cells import parse_cell_dirname
 from core.src.stores.registry import (
     FLIP_MODES,
     GATE_KINDS,
@@ -69,6 +70,7 @@ from core.src.stores.registry import (
     RegistryError,
     StoreVersion,
     history_fingerprint,
+    migrate_unit_names,
     now_iso,
     registry_path,
     split_unit,
@@ -378,6 +380,34 @@ def plan_release_set(reg: Registry, label: str, *, cells: list[UnitSource],
 # ---------------------------------------------------------------------------
 # publish
 
+def build_record(env_dir: "str | Path") -> dict:
+    """How the set's build was made (stage graph, step 3), from the files
+    promote copies into the label: ``RECIPE.json`` (name, digest, scheme)
+    and ``STAGES.json`` (``{stage: {cell: fp}}`` as compact JSON). Every
+    value is '' when the file is absent; a bad recipe fails the publish."""
+    out = {"recipe": "", "recipe_digest": "", "prompt_scheme": "", "stage_fps": ""}
+    if not env_dir:
+        return out
+    from core.src.pipeline.recipes import RECIPE_FILE, RecipeError, load
+    d = Path(env_dir)
+    if (d / RECIPE_FILE).is_file():
+        try:
+            r = load(d / RECIPE_FILE)
+        except RecipeError as e:
+            raise PipelineError("RCP-E002", {"reason": str(e)}) from e
+        out.update(recipe=r.name, recipe_digest=r.digest, prompt_scheme=r.prompt_scheme)
+    stages = d / "STAGES.json"
+    if stages.is_file():
+        try:
+            data = json.loads(stages.read_text(encoding="utf-8")).get("stages", {})
+            fps = {s: {k: e.get("fp", "") for k, e in sorted(cells.items())}
+                   for s, cells in sorted(data.items())}
+            out["stage_fps"] = json.dumps(fps, sort_keys=True, separators=(",", ":"))
+        except (OSError, ValueError, AttributeError):
+            out["stage_fps"] = ""   # a record, not a gate: an unreadable manifest is left out
+    return out
+
+
 def code_version() -> str:
     """The build's code version: the image-baked NORA_CODE_VERSION, else
     git for source runs, else '' (a container without .git)."""
@@ -443,7 +473,7 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
         cells = scan_units("cells", cells_src) if cells_src else []
         trees = scan_units("trees", trees_src) if trees_src else []
         if cells_filter:
-            wanted = set(cells_filter)
+            wanted = {unit_name(*ck) if (ck := parse_cell_dirname(c)) else c for c in cells_filter}
             cells = [c for c in cells if c.unit in wanted]
             trees = [t for t in trees if t.unit in wanted]
         ex = set(exclude or ())
@@ -476,11 +506,14 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
                 new_units.append(NewUnit(p.source.store, p.source.unit, p.source.fingerprint,
                                          p.rel_file, sha, n, p.source.schema_version,
                                          p.source.fingerprint_version))
+            built = build_record(env_dir)
             reg.record_release_set(
                 con, label, new_units, plan.reused,
                 versions={(p.source.store, p.source.unit): p.version for p in plan.new},
                 created_by=_user(), note=note, code_version=code_version(),
-                prompt_scheme=prompt_scheme)
+                prompt_scheme=prompt_scheme or built["prompt_scheme"],
+                recipe=built["recipe"], recipe_digest=built["recipe_digest"],
+                stage_fps=built["stage_fps"])
             reg.commit_write(con)
         except BaseException:
             reg.rollback_write(con)
@@ -625,6 +658,28 @@ def gc(serve_root: "str | Path", keep: int, *, dry_run: bool = False,
             "protected_labels": sorted(reg.protected_labels(keep)), "orphan_files": sorted(orphans)}
 
 
+def purge(serve_root: "str | Path", label: str, *, dry_run: bool = False,
+          transfer: "Transfer | None" = None) -> dict:
+    """Remove one release set that is not active: its rows, then the files
+    of the versions no other set or the active set still references (rows
+    stay with ``removed_at`` set, as after ``gc``). The flip log keeps the
+    label. For a dead ingest's set; the retention rule stays ``gc``'s."""
+    root = Path(serve_root)
+    reg = Registry(registry_path(root), read_only=False)
+    transfer = transfer or LocalTransfer(root)
+    victims = reg.purge_plan(label) if dry_run else reg.purge_release_set(label)
+    removed: list[str] = []
+    freed = 0
+    for v in victims:
+        if not dry_run:
+            transfer.remove(v.file)
+            reg.mark_removed(v.store, v.unit, v.version)
+        removed.append(f"{v.store}/{v.unit}@v{v.version}")
+        freed += v.bytes
+    return {"label": label, "dry_run": dry_run, "removed": removed, "freed_bytes": freed,
+            "served_before": reg.served_before(label)}
+
+
 def status(serve_root: "str | Path", label: str = "") -> dict:
     reg = Registry(registry_path(serve_root), read_only=True)
     out: dict = {"registry": str(reg.path), "active_label": reg.active_label(),
@@ -654,6 +709,31 @@ def _add_root(ap: argparse.ArgumentParser) -> None:
                     help="serving root; the registry is <root>/registry.db")
 
 
+def migrate_units(serve_root: "str | Path", dry_run: bool = False) -> dict:
+    """One-shot: rewrite the registry's unit names to ``<mno>/<release>``
+    (2026-11-06). Counts the rows that still carry the old spelling; with
+    ``dry_run`` nothing is written. Serving keeps working either way (the
+    store parses both spellings); after the rewrite reload the store."""
+    reg = Registry(registry_path(serve_root), read_only=dry_run)
+    if dry_run:
+        con = reg._connect()
+        try:
+            pending = {t: con.execute(
+                f"SELECT count(*) FROM {t} WHERE store IN ('cells','trees') AND instr(unit, '__') > 0"
+            ).fetchone()[0] for t in ("store_version", "release_set_member", "active")}
+        finally:
+            con.close()
+        return {"dry_run": True, "pending": pending}
+    con = reg.begin_write()
+    try:
+        changed = migrate_unit_names(con)
+        reg.commit_write(con)
+    except Exception:
+        reg.rollback_write(con)
+        raise
+    return {"changed": changed, "active_label": reg.active_label()}
+
+
 def main(argv: "list[str] | None" = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m core.src.stores.publish",
                                  description="Publish store versions into a serving root.")
@@ -667,7 +747,7 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--env-dir", default="", help="build Trees from this env dir's parse output")
     p.add_argument("--sira-root", default="", help="build Cells from these flat SIRA cells (needs bm25x)")
     p.add_argument("--enrich-run", default="", help="pinned doc-enrich run for --sira-root")
-    p.add_argument("--cells", default="", help="comma-separated <mno>__<release> filter")
+    p.add_argument("--cells", default="", help="comma-separated <mno>/<release> filter")
     p.add_argument("--exclude", default="",
                    help="comma-separated <mno>__<release> units the set must not carry, "
                         "built or inherited (drops a stray release; History follows)")
@@ -706,6 +786,15 @@ def main(argv: "list[str] | None" = None) -> int:
     c.add_argument("--keep", type=int, required=True, help="release sets (and flips) to keep")
     c.add_argument("--dry-run", action="store_true")
 
+    pg = sub.add_parser("purge", help="remove a release set that is not active, and the files only it referenced")
+    _add_root(pg)
+    pg.add_argument("--label", required=True)
+    pg.add_argument("--dry-run", action="store_true")
+
+    mu = sub.add_parser("migrate-units", help="rewrite <mno>__<release> units to <mno>/<release> (one-shot, idempotent)")
+    _add_root(mu)
+    mu.add_argument("--dry-run", action="store_true")
+
     s = sub.add_parser("status", help="registry summary")
     _add_root(s)
     s.add_argument("--label", default="")
@@ -733,6 +822,10 @@ def main(argv: "list[str] | None" = None) -> int:
                            store_url=args.store_url)
         elif args.cmd == "gc":
             out = gc(args.serve_root, args.keep, dry_run=args.dry_run)
+        elif args.cmd == "purge":
+            out = purge(args.serve_root, args.label, dry_run=args.dry_run)
+        elif args.cmd == "migrate-units":
+            out = migrate_units(args.serve_root, dry_run=args.dry_run)
         else:
             out = status(args.serve_root, args.label)
     except PipelineError as exc:

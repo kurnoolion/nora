@@ -305,6 +305,17 @@ class TestDecisionQueryAnalyzer:
         )
         assert intent.query_type is QueryType.SUMMARIZE
 
+    def test_rules_analyzer_reads_compact_and_spaced_releases(self):
+        """The release labels are `MMMYYYY`; a query typed that way names
+        that release (it fell through to the latest when the pattern needed a
+        space). Spaced, full-month and year-first forms still match."""
+        a = MockQueryAnalyzer()
+        assert a.analyze("eSIM requirements in Apr2031").releases == ["Apr2031"]
+        assert a.analyze("eSIM requirements in Apr 2031").releases == ["Apr 2031"]
+        assert a.analyze("what changed from October 2031 to Jan2032?").releases == ["October 2031", "Jan2032"]
+        assert a.analyze("the 2031-apr release").releases == ["2031-apr"]
+        assert a.analyze("about 12031 things").releases == []
+
     def test_queryintent_contract_unchanged(self):
         """QueryIntent is the contract and does not change (design §7) —
         the decision analyzer returns the same shape the rules do."""

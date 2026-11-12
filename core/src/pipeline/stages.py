@@ -65,14 +65,8 @@ def _cell_extract_hints(ctx: PipelineContext) -> dict[tuple[str, str], dict]:
         from core.src.profiler.profile_schema import DocumentProfile
     except ImportError:
         return out
-    override = ctx.state.get("profile_path")
-    if not override:
-        corr = ctx.correction("profile.json")
-        if corr:
-            override = str(corr)
-    env_dir = ctx.stage_output("extract").parent.parent
     try:
-        bindings = load_profile_bindings(env_dir, override=override)
+        bindings = load_profile_bindings(ctx.bindings_dir, override=ctx.profile_override())
     except Exception:
         return out
     for cell in ctx.input_cells():
@@ -91,6 +85,77 @@ def _cell_extract_hints(ctx: PipelineContext) -> dict[tuple[str, str], dict]:
         except Exception:
             continue
     return out
+
+
+EXTRACT_SOURCES = ".sources.json"   # {ir name: sha256 of its source document}
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _prior_irs(entries: list[Path]) -> dict[str, Path]:
+    """``{"<ir name>:<source sha256>": entry dir}`` over stored extract
+    outputs, newest first wins. An entry without a sources record (stored
+    before step 4 slice 4) offers nothing."""
+    out: dict[str, Path] = {}
+    for entry in entries:
+        try:
+            sources = json.loads((entry / EXTRACT_SOURCES).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for name, digest in sources.items():
+            if (entry / name).is_file():
+                out.setdefault(f"{name}:{digest}", entry)
+    return out
+
+
+def _take_prior_ir(entry: Path, cell_dir: Path, stem: str) -> None:
+    """Clone a stored document's IR and its image directory into the cell.
+    Image paths in the IR are relative to the cell directory, so they hold."""
+    from core.src.pipeline.stage_store import _link_or_copy, clone_tree
+
+    cell_dir.mkdir(parents=True, exist_ok=True)
+    ir = cell_dir / f"{stem}_ir.json"
+    ir.unlink(missing_ok=True)          # an older IR of a changed source
+    _link_or_copy(entry / ir.name, ir)
+    images, dest = entry / "images" / stem, cell_dir / "images" / stem
+    if dest.exists():
+        shutil.rmtree(dest)
+    if images.is_dir():
+        clone_tree(images, dest)
+
+
+def _write_sources(cell_dir: Path, sources: dict[str, str]) -> None:
+    """Record each IR's source digest next to the IRs, so a later entry of
+    the cell can reuse them. Merged with what a resumed run recorded."""
+    if not sources:
+        return
+    path = cell_dir / EXTRACT_SOURCES
+    try:
+        merged = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        merged = {}
+    merged.update(sources)
+    path.write_text(json.dumps(merged, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _seed_from_store(cell_dir: Path, entries: list[Path]) -> bool:
+    """Fill an empty cell directory with private copies of the newest
+    matching store entry, so the stage's own per-unit reuse can apply."""
+    if not entries:
+        return False
+    from core.src.pipeline.stage_store import clone_tree, privatize
+
+    if cell_dir.exists():
+        shutil.rmtree(cell_dir)
+    clone_tree(entries[0], cell_dir)
+    privatize(cell_dir)
+    return True
 
 
 def run_extract(ctx: PipelineContext) -> StageResult:
@@ -114,7 +179,8 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     if not files:
         return _fail(stage, "ENV-E002", f"No documents in {ctx.documents_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "skipped": 0, "blocks": 0, "tables": 0, "failed": 0}
+    stats = {"docs": 0, "skipped": 0, "reused_docs": 0, "blocks": 0, "tables": 0,
+             "failed": 0, "cells_unchanged": 0}
     warnings: list[str] = []
     ir_paths: list[str] = []
 
@@ -124,6 +190,16 @@ def run_extract(ctx: PipelineContext) -> StageResult:
     cell_hints = _cell_extract_hints(ctx)
     tt_env = _text_table_detection_enabled()
 
+    # Stage-graph fingerprints (strand stage-graph): a cell whose documents
+    # and extractor code version are unchanged since its recorded fingerprint
+    # is reused whole, from this build or from the host's stage store; a
+    # cell with any failed document is not stamped.
+    fps = ctx.fingerprints
+    cell_fp: dict[Cell, str] = {}
+    cell_failed: dict[Cell, int] = {}
+    cell_skip: set[Cell] = set()
+
+    planned: list[tuple[Path, dict, Cell]] = []
     for f in files:
         # infer_metadata_from_path enforces the MMMYYYY cell convention
         # fail-loud (EXT-E004); a mis-named release dir aborts the stage here.
@@ -134,12 +210,48 @@ def run_extract(ctx: PipelineContext) -> StageResult:
         if not ctx.cell_in_scope(metadata["mno"], metadata["release"]):
             continue
         # D-DRAFT-6: route each IR to its (mno, release) cell directory.
-        cell_dir = ctx.stage_output(stage, Cell(metadata["mno"], metadata["release"]))
+        planned.append((f, metadata, Cell(metadata["mno"], metadata["release"])))
+    cell_irs: dict[Cell, list[str]] = {}
+    for f, _m, cell in planned:
+        cell_irs.setdefault(cell, []).append(f"{f.stem}_ir.json")
+    # Per-document reuse across store entries (stage-graph step 4, slice 4):
+    # a cell whose fingerprint moved because some documents changed takes
+    # the IR of every unchanged document (same source bytes, same code
+    # version, parameters and other inputs) from the cell's newest matching
+    # store entry instead of extracting it again.
+    cell_prior: dict[Cell, dict[str, Path]] = {}
+    cell_sources: dict[Cell, dict[str, str]] = {}
+
+    for f, metadata, cell in planned:
+        cell_dir = ctx.stage_output(stage, cell)
         out_path = cell_dir / f"{f.stem}_ir.json"
+        if cell not in cell_fp:
+            cell_fp[cell] = fps.current(stage, cell)
+            cell_failed[cell] = 0
+            names = cell_irs[cell]
+            if fps.prepare(stage, cell, cell_fp[cell],
+                           complete=lambda v, names=names: all((v / n).exists() for n in names)):
+                cell_skip.add(cell)
+                stats["cells_unchanged"] += 1
+            else:
+                cell_prior[cell] = _prior_irs(fps.reuse_sources(stage, cell, "documents"))
+                cell_sources[cell] = {}
+        if cell in cell_skip:
+            ir_paths.append(str(ctx.stage_input(stage, cell) / out_path.name))
+            stats["skipped"] += 1
+            continue
+        source_fp = _file_sha256(f)
+        cell_sources[cell][out_path.name] = source_fp
         # D-DRAFT-8 skip: reuse an IR that's newer than its source. `--force` overrides.
         if not ctx.force and out_path.exists() and out_path.stat().st_mtime >= f.stat().st_mtime:
             ir_paths.append(str(out_path))
             stats["skipped"] += 1
+            continue
+        prior = cell_prior[cell].get(f"{out_path.name}:{source_fp}")
+        if prior is not None:
+            _take_prior_ir(prior, cell_dir, f.stem)
+            ir_paths.append(str(out_path))
+            stats["reused_docs"] += 1
             continue
         try:
             hints = cell_hints.get(
@@ -175,7 +287,15 @@ def run_extract(ctx: PipelineContext) -> StageResult:
                 warnings.append(f"EXT-W001: Low blocks ({ir.block_count}) in {f.name}")
         except Exception as e:
             stats["failed"] += 1
+            cell_failed[cell] += 1
             warnings.append(f"EXT-E001: {f.name}: {e}")
+
+    for cell, fp in cell_fp.items():
+        if cell_failed[cell]:
+            fps.forget(stage, cell, fp)
+        elif cell not in cell_skip:
+            _write_sources(ctx.stage_output(stage, cell), cell_sources.get(cell, {}))
+            fps.stamp(stage, cell, fp)
 
     ctx.state["ir_paths"] = ir_paths
     elapsed = time.time() - t0
@@ -208,11 +328,7 @@ def run_profile(ctx: PipelineContext) -> StageResult:
 
     # `--profile` (CLI) or corrections/profile.json act as a single-profile
     # override applied to every cell (single-MNO back-compat / wildcard).
-    override = ctx.state.get("profile_path")
-    if not override:
-        correction = ctx.correction("profile.json")
-        if correction:
-            override = str(correction)
+    override = ctx.profile_override()
 
     try:
         from core.src.env.profile_bindings import load_profile_bindings
@@ -222,7 +338,7 @@ def run_profile(ctx: PipelineContext) -> StageResult:
 
     # <env_dir>/out/profile -> <env_dir>
     env_dir = ctx.stage_output(stage).parent.parent
-    bindings = load_profile_bindings(env_dir, override=override)
+    bindings = load_profile_bindings(ctx.bindings_dir, override=override)
 
     # Coverage check — fail loud listing every uncovered cell at once.
     uncovered = bindings.uncovered(cells)
@@ -233,20 +349,28 @@ def run_profile(ctx: PipelineContext) -> StageResult:
                      f"<env_dir>/profiles.json (or pass --profile).",
                      time.time() - t0)
 
-    stats = {"cells": 0}
+    stats = {"cells": 0, "reused": 0}
+    fps = ctx.fingerprints
     for cell in cells:
         profile_path = bindings.resolve(cell.mno, cell.release)
         if not Path(profile_path).exists():
             return _fail(stage, "PIP-E002",
                          f"Bound profile not found for {cell.mno}/{cell.release}: "
                          f"{profile_path}", time.time() - t0)
+        stats["cells"] += 1
+        # stage-graph: the fingerprint carries the substituted profile's
+        # content, so an unchanged one is reused (this build or the store)
+        cell_fp = fps.current(stage, cell)
+        if fps.prepare(stage, cell, cell_fp, complete=lambda v: (v / "profile.json").exists()):
+            stats["reused"] += 1
+            continue
         # Substitute placeholders ONCE here; parse reads the materialized
         # profile raw (already substituted).
         profile = load_substituted_profile(Path(profile_path), env_dir=env_dir)
         cell_out = ctx.stage_output(stage, cell)
         cell_out.mkdir(parents=True, exist_ok=True)
         profile.save_json(cell_out / "profile.json")
-        stats["cells"] += 1
+        fps.stamp(stage, cell, cell_fp)
 
     return StageResult(stage=stage, status="OK",
                        elapsed_seconds=time.time() - t0, stats=stats)
@@ -289,40 +413,46 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     # ctx.stage_output("parse") == <env_dir>/out/parse → parent.parent == <env_dir>
     _env_dir = ctx.stage_output(stage).parent.parent
     log_dir = _env_dir / "reports" / "parse_log"
-    annotations_dir = _env_dir / "annotations"
+    annotations_dir = ctx.annotations_dir
 
+    fps = ctx.fingerprints
     for cell in cells:
         # Cell profile materialized (and substituted) by the profile stage.
-        profile_path = ctx.stage_output("profile", cell) / "profile.json"
+        profile_path = ctx.stage_input("profile", cell) / "profile.json"
         if not profile_path.exists():
             warnings.append(f"PIP-E002: no profile for {cell.mno}/{cell.release} "
                             f"(run the profile stage first)")
             continue
         profile = DocumentProfile.load_json(profile_path)
         parser = GenericStructuralParser(profile)
-        # D-DRAFT-8: fingerprint of the (already-substituted) cell profile —
-        # a changed profile/mapping flips it and forces a re-parse.
+        # Stamped on every tree for the review UI (D-DRAFT-8); the skip
+        # decision itself is the stage-graph fingerprint below.
         profile_fp = hashlib.sha256(profile_path.read_bytes()).hexdigest()[:16]
 
-        ir_files = sorted(ctx.stage_output("extract", cell).glob("*_ir.json"))
+        ir_files = sorted(ctx.stage_input("extract", cell).glob("*_ir.json"))
         if not ir_files:
             warnings.append(f"PIP-E002: no IRs for {cell.mno}/{cell.release}")
             continue
         cell_out = ctx.stage_output(stage, cell)
         cell_out.mkdir(parents=True, exist_ok=True)
 
+        # Stage-graph skip (strand stage-graph): the cell is reused whole when
+        # its fingerprint (parser code version, the cell's extract and
+        # profile fingerprints, its annotations) equals the recorded one and
+        # every tree is present. `--force` overrides. A cell with a failed
+        # document is parsed again next run (not stamped).
+        cell_fp = fps.current(stage, cell)
+        expected = [cell_out / (f.stem.replace("_ir", "_tree") + ".json") for f in ir_files]
+        names = [p.name for p in expected]
+        if fps.prepare(stage, cell, cell_fp,
+                       complete=lambda v, names=names: all((v / n).exists() for n in names)):
+            tree_paths.extend(str(ctx.stage_input(stage, cell) / n) for n in names)
+            stats["skipped"] += len(expected)
+            continue
+        cell_failed = 0
+
         for f in ir_files:
             out_path = cell_out / (f.stem.replace("_ir", "_tree") + ".json")
-            # D-DRAFT-8 skip: reuse an up-to-date tree (newer than its IR) whose
-            # stamped fingerprint matches the current profile. `--force` overrides.
-            if not ctx.force and out_path.exists() and out_path.stat().st_mtime >= f.stat().st_mtime:
-                try:
-                    if RequirementTree.load_json(out_path).profile_fingerprint == profile_fp:
-                        tree_paths.append(str(out_path))
-                        stats["skipped"] += 1
-                        continue
-                except Exception:
-                    pass  # unreadable/old tree — fall through and re-parse
             try:
                 doc = DocumentIR.load_json(f)
                 # D-061: apply user `remove` annotations to the IR before parse.
@@ -352,7 +482,12 @@ def run_parse(ctx: PipelineContext) -> StageResult:
                 if tree.parse_summary is not None:
                     per_doc_summaries.append(tree.parse_summary)
             except Exception as e:
+                cell_failed += 1
                 warnings.append(f"PRS-E001: {f.name}: {e}")
+        if cell_failed:
+            fps.forget(stage, cell, cell_fp)
+        else:
+            fps.stamp(stage, cell, cell_fp)
 
     # Consolidated parse summary — feeds the Parse Review Summary tab.
     if per_doc_summaries:
@@ -403,11 +538,15 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
     # therefore never match across MNOs or releases (plan codes/numbers aren't
     # globally unique); cross-cell relations are the global graph's job.
     for cell in cells:
-        cell_trees_dir = ctx.stage_output("parse", cell)
+        cell_trees_dir = ctx.stage_input("parse", cell)
         tree_files = sorted(cell_trees_dir.glob("*_tree.json"))
         if not tree_files:
             continue
         n_trees += len(tree_files)
+        cell_fp = ctx.fingerprints.current(stage, cell)
+        if ctx.fingerprints.prepare(stage, cell, cell_fp,
+                                    complete=lambda v: any(v.glob("*_xrefs.json"))):
+            continue   # stage-graph: reused from this build or the store
         trees = [RequirementTree.load_json(f) for f in tree_files]
         manifests = CrossReferenceResolver(trees).resolve_all()
         cell_out = ctx.stage_output(stage, cell)
@@ -419,6 +558,7 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
             stats["cross_plan"] += s.resolved_cross_plan
             stats["standards"] += s.resolved_standards
             stats["unresolved"] += s.broken_internal
+        ctx.fingerprints.stamp(stage, cell, cell_fp)   # stage-graph
 
     if n_trees == 0:
         return _fail(stage, "PIP-E002",
@@ -435,34 +575,6 @@ def run_resolve(ctx: PipelineContext) -> StageResult:
 # ---------------------------------------------------------------------------
 # Stage 5: taxonomy
 # ---------------------------------------------------------------------------
-
-def _corpus_fingerprint(
-    tree_files: list[Path], parse_dir: Path,
-    overview_files: list[Path] | None = None,
-) -> str:
-    """Hash of the contributing tree set (D-DRAFT-9).
-
-    Captures additions, removals, and edits — each tree's path (relative to
-    `parse_dir`, so it's cell-stable) plus a hash of its bytes. A change in
-    any tree flips the fingerprint and busts the taxonomy cache.
-
-    Per-MNO corpus-overview files (strand sira-enrichment-pe) are prompt
-    inputs, so they participate too: adding, editing, or removing one
-    busts the cache without requiring `--force`.
-    """
-    h = hashlib.sha256()
-    for f in sorted(tree_files):
-        try:
-            rel = f.relative_to(parse_dir).as_posix()
-        except ValueError:
-            rel = f.name
-        h.update(rel.encode("utf-8"))
-        h.update(hashlib.sha256(f.read_bytes()).digest())
-    for f in sorted(overview_files or []):
-        h.update(f.name.encode("utf-8"))
-        h.update(hashlib.sha256(f.read_bytes()).digest())
-    return h.hexdigest()[:16]
-
 
 _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -569,37 +681,38 @@ def _load_taxonomy_ledger(state_path, prompt_fp: str) -> dict:
 
 
 def run_taxonomy(ctx: PipelineContext) -> StageResult:
-    """Extract feature taxonomy from parsed trees.
+    """Extract the feature taxonomy of each in-scope cell from its parsed trees.
 
-    The unit of extraction is a PLAN, not a file: multi-plan trees (one
-    doc whose chapters are each a plan) are split via split_tree_by_plan
-    into per-plan subtrees, and units are deduped by (MNO, plan_id) with
-    the newest release winning.
+    Per cell (strand self-serve-ingestion, 2026-11-06): every `(MNO,
+    release)` cell derives its own taxonomy under
+    `out/taxonomy/<mno>/<rel>/` — per-plan `<plan_id>_features.json`, the
+    cell's `taxonomy.json`, its `extraction_state.json` ledger; the cell's stage fingerprint lives
+    in the build manifest (`STAGES.json`). Releases no longer supersede each other: a
+    plan published in two releases is extracted once per release, so each
+    release is enriched against the taxonomy of its own text and a build
+    can hold one cell without the rest of the corpus. The unit of
+    extraction is still a PLAN (multi-plan trees are split via
+    split_tree_by_plan); within a cell a plan appearing in two documents
+    keeps the later file. A build-level `out/taxonomy/taxonomy.json` is
+    consolidated over every cell present in the build (for the graph
+    builder and the review editor); a `corrections/taxonomy.json` replaces
+    that build-level file only (TAX-W002) — per-cell extraction still runs.
 
     Resilient by design: extraction is per-plan fail-soft (a flaky LLM
     call or unparseable response marks that plan failed and the run
-    continues), per-plan resumable (extraction_state.json records each
-    unit's status + source-tree hash; unchanged OK units are skipped on
-    re-run), and failed units retry automatically on the next run —
-    "re-run the same command" is the retry mechanism. The stage
-    fingerprint is stamped only on a zero-failure run so a degraded run
-    can never cache-lock itself.
+    continues), per-plan resumable (the cell's ledger records each unit's
+    status + source-tree hash; unchanged OK units are skipped on re-run),
+    and failed units retry automatically on the next run — "re-run the
+    same command" is the retry mechanism. A cell's fingerprint is stamped
+    in the manifest only on a zero-failure run so a degraded cell can never
+    cache-lock itself; a cell whose fingerprint (model, code version, parse
+    fingerprint, overview prompt) is unchanged is served from its output
+    (`stats.source == "cache"` when every cell was).
     """
     t0 = time.time()
     stage = "taxonomy"
-    out_dir = ctx.stage_output(stage)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check for correction override
-    correction = ctx.correction("taxonomy.json")
-    if correction:
-        shutil.copy2(correction, out_dir / "taxonomy.json")
-        ctx.state["taxonomy_path"] = str(out_dir / "taxonomy.json")
-        return StageResult(
-            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
-            stats={"source": "correction", "path": str(correction)},
-            warnings=["TAX-W002: Using correction file for taxonomy"],
-        )
+    base_out = ctx.stage_output(stage)
+    base_out.mkdir(parents=True, exist_ok=True)
 
     try:
         from core.src.parser.structural_parser import RequirementTree
@@ -609,20 +722,17 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
     except ImportError as e:
         return _fail(stage, "TAX-E001", f"Import error: {e}", time.time() - t0)
 
-    parse_dir = ctx.stage_output("parse")
-    # rglob: taxonomy is a GLOBAL stage — it derives ONE union feature set
-    # over every cell's trees (D-DRAFT-9), so it reads nested per-cell trees.
-    tree_files = sorted(parse_dir.rglob("*_tree.json"))
-    if not tree_files:
-        return _fail(stage, "PIP-E002", f"No tree files in {parse_dir}", time.time() - t0)
-    # Newest release wins per (MNO, plan_id) — older copies are never sent
-    # to the LLM (they'd only be overwritten in the flat output layout).
-    selected, n_superseded = _select_newest_trees(tree_files, parse_dir)
+    # The cells are the parse output's cell directories (what the stage
+    # reads), narrowed by --mno/--release; the input dir need not be
+    # mounted at taxonomy time.
+    from core.src.pipeline.cells import Cell
+    parse_root = ctx.stage_output("parse")
+    cells = sorted(ctx.stage_input_cells("parse"), key=lambda c: (c.mno, c.release))
+    cells = [c for c in cells if ctx.cell_in_scope(c.mno, c.release)]
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"No per-cell parse output under {parse_root}", time.time() - t0)
 
-    # D-DRAFT-9: corpus-fingerprint cache. The taxonomy is LLM-derived,
-    # expensive, and non-deterministic across runs — so re-derive the (global,
-    # union) taxonomy only when the contributing tree set changed; otherwise
-    # reuse the cached taxonomy.json. `--force` busts the cache.
     # Optional per-MNO corpus-overview prompt context (strand
     # sira-enrichment-pe). Files: corpus_overview_<MNO>_<version>.txt.
     overview_dir = os.getenv("NORA_TAXONOMY_OVERVIEW_DIR", "").strip()
@@ -634,174 +744,257 @@ def run_taxonomy(ctx: PipelineContext) -> StageResult:
                 f"TAX-W003: NORA_TAXONOMY_OVERVIEW_DIR={overview_dir} has no "
                 "corpus_overview_*.txt files — extracting without corpus context"
             )
-
-    taxonomy_path = out_dir / "taxonomy.json"
-    fp_path = out_dir / ".corpus_fingerprint"
-    corpus_fp = _corpus_fingerprint([f for f, _ in selected], parse_dir, overview_files)
-    if (not ctx.force and taxonomy_path.exists() and fp_path.exists()
-            and fp_path.read_text(encoding="utf-8").strip() == corpus_fp):
-        ctx.state["taxonomy_path"] = str(taxonomy_path)
-        return StageResult(
-            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
-            stats={"source": "cache", "trees": len(selected)},
-        )
-
     # Prompt inputs participate in per-doc reuse: an overview edit must
-    # invalidate every cached extraction, not just the stage fingerprint.
+    # invalidate every cached extraction, not just the cell fingerprint.
     ph = hashlib.sha256()
     for f in overview_files:
         ph.update(f.name.encode("utf-8"))
         ph.update(hashlib.sha256(f.read_bytes()).digest())
     prompt_fp = ph.hexdigest()[:16]
 
-    state_path = out_dir / "extraction_state.json"
-    prev_docs: dict[str, dict] = {}
-    if not ctx.force and state_path.exists():
-        prev_docs = _load_taxonomy_ledger(state_path, prompt_fp)
-
-    # Split multi-plan trees (one doc, chapter-per-plan) into per-plan
-    # extraction units, then dedupe units by (MNO, plan_id) with newest
-    # release winning. This second, unit-level supersession pass is needed
-    # because a chapter-per-plan doc has an empty tree-level plan_id, so
-    # file-level selection can't dedupe its plans across releases.
-    best_unit: dict[tuple[str, str], tuple[str, str, str, object]] = {}
-    n_unit_superseded = 0
-    for f, _pid in selected:
-        try:
-            rel_key = f.relative_to(parse_dir).as_posix()
-        except ValueError:
-            rel_key = f.name
-        tree_sha = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
-        subs = split_tree_by_plan(RequirementTree.load_json(f))
-        for sub in subs:
-            # Ledger key: per-file for single-plan trees, per-(file, plan)
-            # for split multi-plan trees — each plan fails/resumes/retries
-            # independently.
-            lkey = f"{rel_key}#{sub.plan_id}" if len(subs) > 1 else rel_key
-            ukey = (sub.mno, sub.plan_id)
-            rkey = _release_sort_key(sub.release)
-            cur = best_unit.get(ukey)
-            if cur is None or (rkey, lkey) > (cur[0], cur[1]):
-                if cur is not None:
-                    n_unit_superseded += 1
-                best_unit[ukey] = (rkey, lkey, tree_sha, sub)
-            else:
-                n_unit_superseded += 1
-    units = sorted(best_unit.values(), key=lambda u: u[1])
-    n_superseded += n_unit_superseded
-
-    # Drop per-plan outputs that no longer correspond to a selected plan
-    # (removed plans, empty files from failed runs pre-dating fail-soft,
-    # or a multi-plan doc's old empty-prefix "_features.json").
-    expected = {f"{u[3].plan_id}_features.json" for u in units}
-    for stale in out_dir.glob("*_features.json"):
-        if stale.name not in expected:
-            stale.unlink()
-
-    # Create LLM provider (extraction runs at temperature=0 — see
-    # FeatureExtractor — for reproducible feature mappings).
-    llm = ctx.create_llm_provider()
-    extractor = FeatureExtractor(llm, overview_dir=overview_dir or None)
-    all_doc_features = []
-    new_docs: dict[str, dict] = {}
-    n_extracted = n_cached = 0
+    extractor = None
+    warnings: list[str] = []
+    n_extracted = n_cached = n_superseded = 0
+    n_cells_derived = n_cells_cached = n_cells_skipped = 0
     failures: list[str] = []
+    cell_features: dict[str, list] = {}   # cell dirname -> DocumentFeatures
+    fps = ctx.fingerprints
 
-    def _save_state() -> None:
-        # Written after every unit so a hard kill (docker stop, OOM) still
-        # leaves a resumable state file behind.
-        state_path.write_text(
-            json.dumps({"prompt_fp": prompt_fp, "docs": new_docs}, indent=2),
-            encoding="utf-8",
-        )
-
-    # Launch-time visibility (field-found: a fully stale ledger meant a
-    # full-corpus LLM re-extract whose only tell arrived hours in): say
-    # up front how much of the plan is cache vs LLM work, so an operator
-    # can stop an unexpectedly large run in minute one.
-    cached_lkeys = _cached_unit_keys(units, prev_docs, out_dir)
-    n_to_extract = len(units) - len(cached_lkeys)
-    logger.info(
-        f"TAX-I001: {len(cached_lkeys)} cached / {n_to_extract} to extract "
-        f"(of {len(units)} units)"
-    )
-    if units and not cached_lkeys and prev_docs:
-        logger.warning(
-            f"TAX-W005: ledger present but NO unit is cacheable — every "
-            f"stored tree hash is stale (parse trees regenerated since the "
-            f"last taxonomy run?). Full-corpus re-extract of {len(units)} "
-            f"units follows."
-        )
-
-    for _rkey, lkey, tree_sha, sub in units:
-        feat_path = out_dir / f"{sub.plan_id}_features.json"
-        if lkey in cached_lkeys:
-            all_doc_features.append(DocumentFeatures.load_json(feat_path))
-            new_docs[lkey] = prev_docs[lkey]
-            n_cached += 1
+    for cell in cells:
+        parse_dir = ctx.stage_input("parse", cell)
+        tree_files = sorted(parse_dir.glob("*_tree.json"))
+        cname = f"{cell.mno}__{cell.release}"
+        if not tree_files:
+            warnings.append(f"TAX-W007: {cname} has no parse trees — taxonomy skipped for that cell")
+            n_cells_skipped += 1
             continue
-        try:
-            doc_features = extractor.extract(sub)
-        except Exception as e:
-            logger.warning(f"TAX-E001: extraction failed for {sub.plan_id}: {e}")
-            feat_path.unlink(missing_ok=True)
-            new_docs[lkey] = {
-                "status": "failed", "tree_sha": tree_sha, "error": str(e)[:200],
-            }
-            failures.append(sub.plan_id)
+        out_dir = ctx.stage_output(stage, cell)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        taxonomy_path = out_dir / "taxonomy.json"
+        # Stage-graph cache (strand stage-graph, replacing the D-DRAFT-9
+        # `.corpus_fingerprint`): the cell's fingerprint covers the taxonomy
+        # code version, the model, the cell's parse fingerprint and its
+        # MNO's overview prompt. An unchanged cell is served from its output;
+        # `--force` busts it; a degraded cell is never stamped.
+        corpus_fp = fps.current(stage, cell)
+        if fps.prepare(stage, cell, corpus_fp, complete=lambda v: (v / "taxonomy.json").exists()):
+            held = ctx.stage_input(stage, cell)
+            cell_features[cname] = [DocumentFeatures.load_json(f)
+                                    for f in sorted(held.glob("*_features.json"))]
+            n_cells_cached += 1
+            continue
+        # The build keeps no copy of a stored taxonomy (stage-graph step 4),
+        # so a cell computing anew starts from the newest store entry with
+        # the same model, code version and prompts: its ledger reuses every
+        # plan whose tree is unchanged. A redo (generation) or a model change
+        # matches nothing and starts empty.
+        if not (out_dir / "extraction_state.json").exists():
+            _seed_from_store(out_dir, fps.reuse_sources(stage, cell, ignore_inputs=True))
+
+        state_path = out_dir / "extraction_state.json"
+        prev_docs: dict[str, dict] = {}
+        if not ctx.force and state_path.exists():
+            prev_docs = _load_taxonomy_ledger(state_path, prompt_fp)
+
+        # Split multi-plan trees (one doc, chapter-per-plan) into per-plan
+        # extraction units. Within a cell a plan appearing in two documents
+        # keeps the later file (the output layout is one file per plan);
+        # across releases nothing supersedes anything any more.
+        best_unit: dict[str, tuple[str, str, object]] = {}
+        n_cell_superseded = 0
+        for f in tree_files:
+            lkey_base = f.name
+            tree_sha = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+            subs = split_tree_by_plan(RequirementTree.load_json(f))
+            for sub in subs:
+                lkey = f"{lkey_base}#{sub.plan_id}" if len(subs) > 1 else lkey_base
+                if sub.plan_id in best_unit:
+                    n_cell_superseded += 1
+                best_unit[sub.plan_id] = (lkey, tree_sha, sub)
+        units = sorted(best_unit.values(), key=lambda u: u[0])
+        n_superseded += n_cell_superseded
+
+        expected = {f"{u[2].plan_id}_features.json" for u in units}
+        for stale in out_dir.glob("*_features.json"):
+            if stale.name not in expected:
+                stale.unlink()
+
+        unit_rows = [("", lkey, sha, sub) for lkey, sha, sub in units]
+        cached_lkeys = _cached_unit_keys(unit_rows, prev_docs, out_dir)
+        n_to_extract = len(units) - len(cached_lkeys)
+        logger.info(f"TAX-I001: {cname}: {len(cached_lkeys)} cached / {n_to_extract} to extract "
+                    f"(of {len(units)} units)")
+        if units and not cached_lkeys and prev_docs:
+            logger.warning(
+                f"TAX-W005: {cname}: ledger present but NO unit is cacheable — every "
+                f"stored tree hash is stale (parse trees regenerated since the "
+                f"last taxonomy run?). Full re-extract of {len(units)} units follows."
+            )
+
+        if n_to_extract and extractor is None:
+            if not overview_dir:
+                # the unset case used to pass silently (field-found 2026-11-07: a
+                # wiring env that named no batch env file); the cycle driver's
+                # enrich gate refuses on this code
+                warnings.append(
+                    "TAX-W003: NORA_TAXONOMY_OVERVIEW_DIR is not set — extracting "
+                    "without corpus-overview context")
+                logger.warning(warnings[-1])
+            provider = ctx.create_llm_provider()
+            # The overview dir reaches the extractor here (it was dropped
+            # when this construction moved into the cell loop on 2026-11-06).
+            extractor = FeatureExtractor(provider, overview_dir=overview_dir or None)
+
+        new_docs: dict[str, dict] = {}
+        doc_features_here: list = []
+        cell_failures: list[str] = []
+
+        def _save_state() -> None:
+            # Written after every unit so a hard kill (docker stop, OOM) still
+            # leaves a resumable state file behind.
+            state_path.write_text(
+                json.dumps({"prompt_fp": prompt_fp, "docs": new_docs}, indent=2),
+                encoding="utf-8",
+            )
+
+        for lkey, tree_sha, sub in units:
+            feat_path = out_dir / f"{sub.plan_id}_features.json"
+            if lkey in cached_lkeys:
+                doc_features_here.append(DocumentFeatures.load_json(feat_path))
+                new_docs[lkey] = prev_docs[lkey]
+                n_cached += 1
+                continue
+            try:
+                doc_features = extractor.extract(sub)
+            except Exception as e:
+                logger.warning(f"TAX-E001: extraction failed for {sub.plan_id}: {e}")
+                feat_path.unlink(missing_ok=True)
+                new_docs[lkey] = {"status": "failed", "tree_sha": tree_sha, "error": str(e)[:200]}
+                cell_failures.append(sub.plan_id)
+                _save_state()
+                continue
+            doc_features.save_json(feat_path)
+            doc_features_here.append(doc_features)
+            new_docs[lkey] = {"status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name}
+            n_extracted += 1
             _save_state()
-            continue
-        doc_features.save_json(feat_path)
-        all_doc_features.append(doc_features)
-        new_docs[lkey] = {
-            "status": "ok", "tree_sha": tree_sha, "features_file": feat_path.name,
-        }
-        n_extracted += 1
-        _save_state()
+        if units:
+            _save_state()   # the complete ledger, cached tail included
 
-    # Persist the COMPLETE ledger once the loop ends. The in-loop saves
-    # fire only on extraction/failure events, so a run whose tail units
-    # are cached would otherwise leave a ledger truncated at its last
-    # extraction (field-found: a one-plan retry shrank a 267-entry
-    # ledger to 178 — the cached entries after the retried unit never
-    # reached disk, scheduling them for silent re-extraction).
-    if units:
-        _save_state()
+        failures.extend(cell_failures)
+        if doc_features_here:
+            TaxonomyConsolidator().consolidate(doc_features_here).save_json(taxonomy_path)
+            cell_features[cname] = doc_features_here
+        if cell_failures:
+            fps.forget(stage, cell, corpus_fp)   # a degraded cell never cache-locks itself
+        elif doc_features_here:
+            fps.stamp(stage, cell, corpus_fp)
+        n_cells_derived += 1
 
-    if not all_doc_features:
+    if not cell_features and failures:
         return _fail(
             stage, "TAX-E001",
-            f"All {len(units)} extractions failed — LLM endpoint down? "
+            f"All {len(failures)} extractions failed — LLM endpoint down? "
             "Re-run the taxonomy stage to retry.",
             time.time() - t0,
         )
+    if not cell_features:
+        return _fail(stage, "PIP-E002",
+                     f"No tree files under {ctx.stage_output('parse')} for the in-scope cells",
+                     time.time() - t0)
 
-    consolidator = TaxonomyConsolidator()
-    taxonomy = consolidator.consolidate(all_doc_features)
-    taxonomy.save_json(taxonomy_path)
+    # Build-level taxonomy: every cell present in the build (in scope or
+    # not), consolidated — the graph builder's and the review editor's input.
+    build_features: list = []
+    for feat in [f for c in ctx.stage_input_cells(stage)
+                 for f in sorted(ctx.stage_input(stage, c).glob("*_features.json"))]:
+        try:
+            build_features.append(DocumentFeatures.load_json(feat))
+        except Exception as e:  # noqa: BLE001 — one unreadable file must not sink the build file
+            logger.warning(f"TAX-W008: unreadable features file {feat.name}: {e}")
+    build_path = base_out / "taxonomy.json"
+    correction = ctx.correction("taxonomy.json")
+    if correction:
+        shutil.copy2(correction, build_path)
+        warnings.append("TAX-W002: Using correction file for the build-level taxonomy")
+    elif build_features:
+        TaxonomyConsolidator().consolidate(build_features).save_json(build_path)
+    ctx.state["taxonomy_path"] = str(build_path)
 
-    warnings: list[str] = []
     if failures:
         warnings.append(
-            f"TAX-W004: {len(failures)} of {len(units)} plans failed "
-            f"extraction — re-run the taxonomy stage to retry "
-            f"(details in {state_path.name})"
+            f"TAX-W004: {len(failures)} plan(s) failed extraction — re-run the "
+            f"taxonomy stage to retry (details in each cell's extraction_state.json)"
         )
-        # A degraded run must never cache-lock itself.
-        fp_path.unlink(missing_ok=True)
-    else:
-        # D-DRAFT-9: stamp the corpus fingerprint so an unchanged re-run hits cache.
-        fp_path.write_text(corpus_fp, encoding="utf-8")
-
-    ctx.state["taxonomy_path"] = str(taxonomy_path)
+    n_features = 0
+    try:
+        from core.src.taxonomy.schema import FeatureTaxonomy
+        if build_path.exists():
+            n_features = len(FeatureTaxonomy.load_json(build_path).features)
+    except Exception:  # noqa: BLE001 — a count, not a result
+        pass
     stats = {
-        "features": len(taxonomy.features), "docs": n_extracted,
+        "cells": len(cell_features), "cells_cached": n_cells_cached,
+        "cells_skipped": n_cells_skipped,
+        "features": n_features, "docs": n_extracted,
         "cached_docs": n_cached, "failed": len(failures),
-        "superseded": n_superseded, "source": "derived",
+        "superseded": n_superseded,
+        "source": "cache" if (n_cells_cached and not n_cells_derived) else "derived",
     }
-    return StageResult(stage=stage, status="WARN" if failures else "OK",
+    return StageResult(stage=stage, status="WARN" if (failures or n_cells_skipped) else "OK",
                        elapsed_seconds=time.time() - t0, stats=stats,
                        warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Driver-side stages (stage graph, step 3, slice 2)
+# ---------------------------------------------------------------------------
+
+def _sira_cells(ctx: PipelineContext) -> list[Cell]:
+    """The SIRA cells the enrich lane completed in this build:
+    ``<env_dir>/out/sira/<MNO>/<release>/`` holding ``raw/metadata.json``
+    (promote's completeness test), narrowed by --mno / --release."""
+    root = ctx.env_dir / "out" / "sira"
+    cells = [Cell(d.parent.name, d.name) for d in sorted(root.glob("*/*"))
+             if (d / "raw" / "metadata.json").is_file()] if root.is_dir() else []
+    return [c for c in cells if ctx.cell_in_scope(c.mno, c.release)]
+
+
+def stamp_driver_stage(ctx: PipelineContext, stage: str) -> StageResult:
+    """Record a driver-side stage's fingerprint per completed cell.
+
+    The cycle driver runs the stage itself (enrich: the SIRA lane) and calls
+    this after its gate (``verify-enrich``). The fingerprint follows the one
+    rule: the stage's code version, its parameters (``enrich_model``,
+    ``sira_ref`` and the recipe's enrich parameters), the cell's parse and,
+    when the recipe says enrich reads it, taxonomy fingerprints, and the
+    MNO's published document prompt. Enrich outputs are not put in the
+    stage store. A cell whose recorded fingerprint is current is left as it is.
+    """
+    t0 = time.time()
+    if stage != "enrich":
+        return _fail(stage, "PIP-E001", f"no driver-side stage {stage!r}", time.time() - t0)
+    cells = _sira_cells(ctx)
+    if not cells:
+        return _fail(stage, "PIP-E002",
+                     f"no completed SIRA cell under {ctx.env_dir / 'out' / 'sira'} in scope",
+                     time.time() - t0)
+    fps = ctx.fingerprints
+    stats = {"cells": len(cells), "stamped": 0, "unchanged": 0}
+    warnings: list[str] = []
+    for cell in cells:
+        fp = fps.current(stage, cell)
+        if fps.recorded(stage, cell) == fp:
+            stats["unchanged"] += 1
+            continue
+        for inp, value in fps.input_fps(stage, cell).items():
+            if value == "absent":
+                warnings.append(f"PIP-W002: {stage} {cell.mno}/{cell.release}: input {inp} "
+                                "has no recorded fingerprint in this build")
+        fps.stamp(stage, cell, fp)
+        stats["stamped"] += 1
+    return StageResult(stage=stage, status="WARN" if warnings else "OK",
+                       elapsed_seconds=time.time() - t0, stats=stats, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -828,7 +1021,9 @@ def run_standards(ctx: PipelineContext) -> StageResult:
 
     collector = StandardsReferenceCollector()
     try:
-        index = collector.collect(manifest_dir=resolve_dir, trees_dir=parse_dir)
+        index = collector.collect(manifest_dir=resolve_dir, trees_dir=parse_dir,
+                                  manifest_files=ctx.stage_input_files("resolve", "*_xrefs.json") or None,
+                                  tree_files=ctx.stage_input_files("parse", "*_tree.json") or None)
     except Exception as e:
         return _fail(stage, "STD-E001", f"Reference collection failed: {e}", time.time() - t0)
 
@@ -869,6 +1064,10 @@ def run_standards(ctx: PipelineContext) -> StageResult:
             warnings.append(f"STD-E002: {label}: {e}")
             stats["failed"] += 1
 
+    if stats["failed"] == 0:
+        ctx.fingerprints.stamp(stage)   # stage-graph: one global output
+    else:
+        ctx.fingerprints.forget(stage)
     return StageResult(stage=stage, status="WARN" if stats["failed"] > 0 else "OK",
                        elapsed_seconds=time.time() - t0, stats=stats, warnings=warnings)
 
@@ -894,8 +1093,8 @@ def run_graph(ctx: PipelineContext) -> StageResult:
 
     try:
         graph = builder.build(
-            trees_dir=ctx.stage_output("parse"),
-            manifests_dir=ctx.stage_output("resolve"),
+            trees_dir=ctx.stage_input_files("parse", "*_tree.json"),
+            manifests_dir=ctx.stage_input_files("resolve", "*_xrefs.json"),
             taxonomy_path=taxonomy_path,
             standards_dir=ctx.stage_output("standards"),
         )
@@ -911,6 +1110,7 @@ def run_graph(ctx: PipelineContext) -> StageResult:
     graph_stats.save_json(out_dir / "graph_stats.json")
 
     ctx.state["graph_path"] = str(graph_path)
+    ctx.fingerprints.stamp(stage)   # stage-graph: one global output
 
     # Connected components
     cc = nx.number_weakly_connected_components(graph)
@@ -986,7 +1186,7 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
         builder = VectorStoreBuilder(embedder=embedder, store=store, config=config)
         try:
             build_stats = builder.build(
-                trees_dir=ctx.stage_output("parse", cell),  # this cell's trees only
+                trees_dir=ctx.stage_input("parse", cell),  # this cell's trees only
                 taxonomy_path=taxonomy_path,
                 rebuild=True,
             )
@@ -996,6 +1196,7 @@ def run_vectorstore(ctx: PipelineContext) -> StageResult:
                          time.time() - t0)
         config.save_json(cell_out / "config.json")
         build_stats.save_json(cell_out / "build_stats.json")
+        ctx.fingerprints.stamp(stage, cell)   # stage-graph
         total_chunks += build_stats.total_chunks
         model = build_stats.embedding_model
 
@@ -1114,6 +1315,7 @@ def run_eval(ctx: PipelineContext) -> StageResult:
     report_path = out_dir / "report.json"
     with open(report_path, "w") as f:
         json.dump(report.to_dict(), f, indent=2)
+    ctx.fingerprints.stamp(stage)   # stage-graph: one global output
 
     stats = {
         "questions": len(questions),

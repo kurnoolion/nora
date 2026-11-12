@@ -11,6 +11,7 @@ profile inheritance, the gates) is the real script.
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import stat
@@ -25,9 +26,11 @@ CYCLE = REPO / "docker" / "cycle.sh"
 FAKE_DOCKER = r'''#!/usr/bin/env bash
 # fake docker for cycle.sh tests
 if [ "$1" = image ] && [ "$2" = inspect ]; then
+  echo "$5" >> "$NORA_ROOT/inspected.txt"   # the image name the driver asked about
   echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; exit 0
 fi
 if [ "$1" = compose ]; then
+  echo "$*" >> "$NORA_ROOT/compose-args.txt"
   envfile=""; inner=""; detached=0
   while (( $# > 0 )); do
     case "$1" in
@@ -38,13 +41,22 @@ if [ "$1" = compose ]; then
     esac
   done
   envdir="$(grep '^NORA_ENV_DIR=' "$envfile" | cut -d= -f2-)"
+  echo "WEB_STATE_DIR=${WEB_STATE_DIR:-} FEEDBACK_DIR=${FEEDBACK_DIR:-} CORRECTIONS_DIR=${CORRECTIONS_DIR:-}" >> "$NORA_ROOT/compose-env.txt"
+  echo "JOB_UID=${JOB_UID:-} JOB_GID=${JOB_GID:-}" >> "$NORA_ROOT/compose-user.txt"
   log="$(printf '%s' "$inner" | grep -oE '> /data/env/reports/[^ ]+' | head -1 | sed 's#^> /data/env#'"$envdir"'#')"
-  if [ -n "$log" ]; then mkdir -p "$(dirname "$log")"; { echo "fake phase ran"; echo "CYC-EXIT rc=0"; } > "$log"; fi
+  if [ -n "$log" ]; then mkdir -p "$(dirname "$log")"; { echo "INNER: $inner"; echo "fake phase ran"; echo "CYC-EXIT rc=0"; } > "$log"; fi
   (( detached )) && echo "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
   exit 0
 fi
 echo "fake docker: unexpected args: $*" >&2; exit 1
 '''
+
+
+def _parsed_dir(d: Path) -> Path:
+    """A parsed cell: the resolver treats an empty directory as absent."""
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "doc_tree.json").write_text("{}")
+    return d
 
 
 @pytest.fixture()
@@ -57,6 +69,9 @@ def host(tmp_path: Path):
     (root / "env").mkdir()
     wiring = root / "env" / ".env.builds"
     wiring.write_text("NORA_ENV_DIR=/nowhere\nSTORE_ROOT=/nowhere\n", encoding="utf-8")
+    # the batch env files the prompts gate checks (README Phase 3)
+    (root / "env" / ".env.nora-batch").write_text("NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts\n", encoding="utf-8")
+    (root / "env" / ".env.sira-batch").write_text("NORA_SIRA_DOC_PROMPT_DIR=/data/env/prompts\n", encoding="utf-8")
     bindir = tmp_path / "bin"
     bindir.mkdir()
     fake = bindir / "docker"
@@ -79,7 +94,7 @@ def host(tmp_path: Path):
         (d / "doc.pdf").write_bytes(b"%PDF-1.4 fake")
         return d
 
-    return {"root": root, "run": run, "cell": cell, "nora": root / "builds" / "nora"}
+    return {"root": root, "run": run, "cell": cell, "nora": root / "builds" / "nora", "env": env}
 
 
 def _seed_build(host, build: str, cells: list[tuple[str, str]], bindings: list[dict]) -> Path:
@@ -114,7 +129,12 @@ def test_start_plain_records_no_seed(host):
     host["cell"]("MNO-A", "Jan2031")
     r = host["run"]("start", "b1")
     assert r.returncode == 0, r.stderr
-    assert "seed=- seeded=- inherited=-" in r.stdout
+    # the SIRA cells are the build's last stage dir, and the wiring env points there
+    sira = host["nora"] / "b1" / "out" / "sira"
+    assert sira.is_dir() and not (host["root"] / "builds" / "sira" / "b1").exists()
+    env_text = (host["root"] / "env" / ".env.builds").read_text()
+    assert f"NORA_BUILD_DIR={host['nora'] / 'b1'}" in env_text and f"STORE_ROOT={sira}" in env_text
+    assert "seed=- inherited=-" in r.stdout
     assert "no profiles.json" in r.stdout  # the deliberate NOTE, unchanged
     assert (host["root"] / "builds" / "ACTIVE").read_text().strip() == "b1"
     assert "seed" not in _cycle_json(host, "b1")
@@ -122,7 +142,7 @@ def test_start_plain_records_no_seed(host):
 
 # -- start --seed --------------------------------------------------------------
 
-def test_start_seed_copies_outputs_and_inherits_binding(host):
+def test_start_seed_inherits_binding_and_copies_nothing(host):
     host["cell"]("MNO-A", "Jan2031")
     host["cell"]("MNO-A", "Apr2031")  # the new release of a known MNO
     prev = _seed_build(host, "b0", [("MNO-A", "Jan2031")],
@@ -130,13 +150,10 @@ def test_start_seed_copies_outputs_and_inherits_binding(host):
     r = host["run"]("start", "b1", "--seed", "b0")
     assert r.returncode == 0, r.stderr
     nb = host["nora"] / "b1"
-    # outputs copied, not linked: a different inode, same bytes
-    src = prev / "out" / "taxonomy" / "extraction_state.json"
-    dst = nb / "out" / "taxonomy" / "extraction_state.json"
-    assert dst.read_bytes() == src.read_bytes()
-    assert dst.stat().st_ino != src.stat().st_ino
-    assert (nb / "out" / "parse" / "MNO-A" / "Jan2031" / "doc_tree.json").exists()
-    assert (nb / "out" / "extract" / "MNO-A" / "Jan2031" / "doc_ir.json").exists()
+    # every stage is per cell: nothing of the previous build's out/ is copied
+    # (out/sira is the build's own empty SIRA dir, created by start)
+    assert sorted(p.name for p in (nb / "out").iterdir()) == ["sira"]
+    assert (prev / "out" / "parse" / "MNO-A" / "Jan2031" / "doc_tree.json").exists()
     # the new cell is bound to the MNO's latest bound release's profile
     pb = json.loads((nb / "profiles.json").read_text(encoding="utf-8"))
     added = [b for b in pb["bindings"] if b["release"] == "Apr2031"]
@@ -146,7 +163,7 @@ def test_start_seed_copies_outputs_and_inherits_binding(host):
     assert len(json.loads((prev / "profiles.json").read_text())["bindings"]) == 1
     # recorded
     assert _cycle_json(host, "b1")["seed"] == "b0"
-    assert "seed=b0 seeded=extract,parse,taxonomy inherited=MNO-A__Apr2031<-Jan2031" in r.stdout
+    assert "seed=b0 inherited=MNO-A/Apr2031<-Jan2031" in r.stdout
 
 
 def test_start_seed_picks_latest_release_binding(host):
@@ -184,8 +201,22 @@ def test_start_seed_new_mno_fails_loud_and_leaves_nothing(host):
     assert r.returncode == 1
     assert "CYC-E027" in r.stderr and "MNO-B" in r.stderr
     assert not (host["nora"] / "b1").exists()
-    assert not (host["root"] / "builds" / "sira" / "b1").exists()
     assert not (host["root"] / "builds" / "ACTIVE").exists()
+
+
+def test_sira_root_override_keeps_the_old_twin_layout(host):
+    host["cell"]("MNO-A", "Jan2031")
+    import os
+    env_extra = {"NORA_BUILDS_SIRA_ROOT": str(host["root"] / "sira-twins")}
+    orig = host["run"]
+    import subprocess
+    r = subprocess.run(["bash", str(CYCLE), "start", "b1"], cwd=str(host["root"]),
+                       env={**os.environ, "PATH": f"{host['root'].parent / 'bin'}:{os.environ['PATH']}",
+                            "NORA_ROOT": str(host["root"]), **env_extra},
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (host["root"] / "sira-twins" / "b1").is_dir()
+    assert not (host["nora"] / "b1" / "out" / "sira").exists()
 
 
 def test_start_seed_unknown_build_fails(host):
@@ -194,6 +225,31 @@ def test_start_seed_unknown_build_fails(host):
     assert r.returncode == 1
     assert "CYC-E026" in r.stderr
     assert not (host["nora"] / "b1").exists()
+
+
+def test_parse_and_taxonomy_take_a_cell(host):
+    """`--cell` narrows the lane to one (MNO, release); the detached log is
+    tagged with the cell, and an unknown cell fails loud."""
+    host["cell"]("MNO-A", "Jan2031")
+    host["cell"]("MNO-A", "Apr2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    r = host["run"]("parse", "--cell", "MNO-B/Jan2031")
+    assert r.returncode == 1 and "CYC-E032" in r.stderr
+    r = host["run"]("parse", "--cell", "MNO-A/Apr2031", "--skip-standards")
+    assert r.returncode == 0, r.stderr
+    phases = _cycle_json(host, "b1")["phases"]
+    assert phases[-1]["phase"] == "parse" and "lane-ingestion-MNO-A-Apr2031-" in phases[-1]["log"]
+    # prompts: a partial build (one of two cells parsed) is a NOTE, not a refusal
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Apr2031")
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "partial build" in r.stdout
+    r = host["run"]("taxonomy", "--cell", "MNO-A/Apr2031")
+    assert r.returncode == 0, r.stderr
+    phases = _cycle_json(host, "b1")["phases"]
+    assert phases[-1]["phase"] == "taxonomy" and "stage-taxonomy-MNO-A-Apr2031-" in phases[-1]["log"]
 
 
 def test_start_seed_explicit_profiles_wins(host, tmp_path):
@@ -234,6 +290,8 @@ def _to_parsed(host):
                 [{"mno": "MNO-A", "release": "Jan2031", "profile": "customizations/profiles/p1.json"}])
     assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
     assert host["run"]("parse").returncode == 0
+    # the fake lane wrote only the log; the real one writes the cell's parse dir
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031")
 
 
 def test_prompts_gate_declines_without_yes(host):
@@ -263,3 +321,490 @@ def test_prompts_gate_typed_yes_records_user(host):
     assert r.returncode == 0, r.stderr + r.stdout
     last = _cycle_json(host, "b1")["phases"][-1]
     assert last["status"] == "confirmed" and not last["by"].endswith("(auto)")
+
+
+def test_start_writes_the_build_var_and_rewrites_older_lines(host):
+    """One line names the build (NORA_BUILD_DIR); an older env's
+    NORA_ENV_DIR= line is rewritten to agree, a missing STORE_ROOT= is not
+    added (the compose file derives /data/db from the build dir)."""
+    host["cell"]("MNO-A", "Jan2031")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text("NORA_ENV_DIR=/old\nOTHER=1\n", encoding="utf-8")   # older layout, no build var
+    r = host["run"]("start", "b1")
+    assert r.returncode == 0, r.stderr
+    lines = wiring.read_text().splitlines()
+    assert lines[0] == f"NORA_ENV_DIR={host['nora'] / 'b1'}" and "OTHER=1" in lines
+    assert f"NORA_BUILD_DIR={host['nora'] / 'b1'}" in lines
+    assert not any(l.startswith("STORE_ROOT=") for l in lines)
+    # the next verb's need_wiring passes
+    r = host["run"]("parse")
+    assert r.returncode == 1 and "CYC-E030" in r.stderr   # profiles missing, not wiring (E004)
+    # a hand edit that makes an older line disagree is refused
+    wiring.write_text(wiring.read_text().replace(f"NORA_ENV_DIR={host['nora'] / 'b1'}", "NORA_ENV_DIR=/elsewhere"))
+    r = host["run"]("parse")
+    assert r.returncode == 1 and "CYC-E004" in r.stderr and "disagrees" in r.stderr
+
+
+def _to_taxonomy_ok(host, cell=("MNO-A", "Jan2031")):
+    """Through start, parse, prompts and taxonomy with a clean per-cell ledger."""
+    _to_parsed(host)
+    assert host["run"]("prompts", "--yes").returncode == 0
+    assert host["run"]("taxonomy").returncode == 0
+    tx = host["nora"] / "b1" / "out" / "taxonomy" / cell[0] / cell[1]
+    tx.mkdir(parents=True, exist_ok=True)
+    (tx / "extraction_state.json").write_text(json.dumps({"prompt_fp": "x", "docs": {"d": {"status": "ok"}}}))
+
+
+def test_enrich_cell_log_name_and_retry_flags(host):
+    """The detached log is named with the cell's dashes (no slash in a file
+    name); a retry re-queues failed rows batched, and --single adds the
+    one-request-per-call mode (D-178) only when asked."""
+    _to_taxonomy_ok(host)
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    log = Path(_cycle_json(host, "b1")["phases"][-1]["log"])
+    assert log.name.startswith("enrich-MNO-A-Jan2031-") and "/" not in log.name
+    inner = log.read_text().splitlines()[0]
+    assert "--only MNO-A/Jan2031" in inner and "--retry-failed" not in inner and "--max-reqs" not in inner
+    assert "NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/MNO-A/Jan2031" in inner
+    # retry: batched
+    log.write_text("CYC-EXIT rc=1\n")   # the first run failed
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031", "--retry-failed")
+    assert r.returncode == 0, r.stderr
+    inner = Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+    assert "--retry-failed" in inner and "--max-reqs" not in inner
+    # retry, single-request mode on request
+    Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=1\n")
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031", "--retry-failed", "--single")
+    assert r.returncode == 0, r.stderr
+    inner = Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+    assert "--retry-failed --max-reqs 1" in inner
+    # the older spelling of the cell is accepted
+    Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=1\n")
+    r = host["run"]("enrich", "--cell", "MNO-A__Jan2031")
+    assert r.returncode == 0, r.stderr
+    assert "--only MNO-A/Jan2031" in Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+
+
+def test_serving_only_variables_get_a_placeholder_for_one_shots(host):
+    """compose interpolates every service: the serving-only :? mounts resolve
+    for an ingest one-shot without the wiring env carrying them. A value in
+    the wiring env or the shell wins over the placeholder."""
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    r = host["run"]("parse", "--skip-standards")
+    assert r.returncode == 0, r.stderr
+    seen = (host["root"] / "compose-env.txt").read_text().strip().splitlines()[-1]
+    empty = str(CYCLE.parent / "empty")
+    assert seen == f"WEB_STATE_DIR={empty} FEEDBACK_DIR={empty} CORRECTIONS_DIR={empty}"
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "WEB_STATE_DIR=/srv/web-state\n")
+    r = host["run"]("parse", "--skip-standards")
+    assert r.returncode == 0, r.stderr
+    seen = (host["root"] / "compose-env.txt").read_text().strip().splitlines()[-1]
+    assert seen == f"WEB_STATE_DIR= FEEDBACK_DIR={empty} CORRECTIONS_DIR={empty}"  # compose reads it from the env file, not the shell
+
+
+def test_one_shots_run_as_the_caller_unless_a_job_user_is_named(host):
+    """JOB_UID/JOB_GID default to the caller's ids; a value in the wiring env
+    (or the shell) is left to compose."""
+    import os
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    assert host["run"]("parse", "--skip-standards").returncode == 0
+    seen = (host["root"] / "compose-user.txt").read_text().strip().splitlines()[-1]
+    assert seen == f"JOB_UID={os.getuid()} JOB_GID={os.getgid()}"
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "JOB_UID=4242\nJOB_GID=4243\n")
+    assert host["run"]("parse", "--skip-standards").returncode == 0
+    seen = (host["root"] / "compose-user.txt").read_text().strip().splitlines()[-1]
+    assert seen == "JOB_UID= JOB_GID="
+
+
+def test_start_inspects_the_images_the_wiring_env_names(host):
+    """The recorded image ids are those of the tag and prefix compose will
+    run (IMAGE_TAG / IMAGE_PREFIX in the wiring env), not a fixed `:dev`."""
+    host["cell"]("MNO-A", "Jan2031")
+    assert host["run"]("start", "b0").returncode == 0
+    seen = (host["root"] / "inspected.txt").read_text().split()
+    assert seen[-2:] == ["local/nora-batch:dev", "local/sira-batch:dev"]
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + 'IMAGE_TAG="v9"\nIMAGE_PREFIX=reg.example.test/nora\n')
+    (host["root"] / "builds" / "ACTIVE").unlink()
+    assert host["run"]("start", "b1").returncode == 0
+    seen = (host["root"] / "inspected.txt").read_text().split()
+    assert seen[-2:] == ["reg.example.test/nora/nora-batch:v9", "reg.example.test/nora/sira-batch:v9"]
+
+
+
+# -- stage graph, step 2: the corpus root and the stage store ----------------
+
+def _corpus_wiring(host, bindings: list[dict] | None, stages: bool = True) -> Path:
+    """Name a corpus root (and a stage store) in the wiring env."""
+    corpus = host["root"] / "corpus"
+    corpus.mkdir(exist_ok=True)
+    if bindings is not None:
+        (corpus / "profiles.json").write_text(
+            json.dumps({"bindings": bindings, "default": None}), encoding="utf-8")
+    store = host["root"] / "stages"
+    if stages:
+        store.mkdir(exist_ok=True)
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + f"CORPUS_DIR={corpus}\nSTAGES_ROOT={store}\n", encoding="utf-8")
+    return corpus
+
+
+def test_corpus_start_binds_at_the_corpus_root_and_not_in_the_build(host):
+    host["cell"]("MNO-A", "Jan2031")
+    host["cell"]("MNO-A", "Apr2031")
+    corpus = _corpus_wiring(host, [
+        {"mno": "MNO-A", "release": "Jan2031", "profile": "customizations/profiles/p1.json"}])
+    # a seed without bindings (a purged remnant) is fine: the corpus binds
+    (host["nora"] / "b0").mkdir()
+    r = host["run"]("start", "b1", "--seed", "b0")
+    assert r.returncode == 0, r.stderr
+    assert not (host["nora"] / "b1" / "profiles.json").exists()
+    pb = json.loads((corpus / "profiles.json").read_text(encoding="utf-8"))
+    assert {"mno": "MNO-A", "release": "Apr2031", "profile": "customizations/profiles/p1.json"} in pb["bindings"]
+    assert "profiles=corpus stages=store" in r.stdout
+    assert "inherited=MNO-A/Apr2031<-Jan2031" in r.stdout
+    assert not list(corpus.glob(".profiles.json.*"))
+    # parse checks the corpus bindings, status names them
+    r = host["run"]("parse", "--cell", "MNO-A/Apr2031")
+    assert r.returncode == 0, r.stderr
+    r = host["run"]("status")
+    assert f"bindings     : {corpus / 'profiles.json'}" in r.stdout
+    assert f"stage store  : {host['root'] / 'stages'}" in r.stdout
+
+
+def test_corpus_start_leaves_a_covered_corpus_file_alone(host):
+    host["cell"]("MNO-A", "Jan2031")
+    corpus = _corpus_wiring(host, [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    before = (corpus / "profiles.json").read_bytes()
+    r = host["run"]("start", "b1")
+    assert r.returncode == 0, r.stderr
+    assert (corpus / "profiles.json").read_bytes() == before
+
+
+def test_corpus_start_refuses_profiles_and_missing_roots(host, tmp_path):
+    host["cell"]("MNO-A", "Jan2031")
+    _corpus_wiring(host, None)
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E029" in r.stderr and "corpus root" in r.stderr
+    (host["root"] / "corpus" / "profiles.json").write_text(json.dumps({"bindings": [
+        {"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}]}), encoding="utf-8")
+    other = tmp_path / "other.json"
+    other.write_text("{}", encoding="utf-8")
+    r = host["run"]("start", "b1", "--profiles", str(other))
+    assert r.returncode == 1 and "CYC-E028" in r.stderr
+    (host["root"] / "stages").rmdir()
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E029" in r.stderr and "stage store" in r.stderr
+    assert not (host["nora"] / "b1").exists()
+
+
+def test_corpus_new_mno_fails_loud_and_leaves_the_corpus_file(host):
+    host["cell"]("MNO-A", "Jan2031")
+    host["cell"]("MNO-B", "Jan2031")
+    corpus = _corpus_wiring(host, [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    before = (corpus / "profiles.json").read_bytes()
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E027" in r.stderr
+    assert (corpus / "profiles.json").read_bytes() == before
+    assert not (host["nora"] / "b1").exists()
+
+
+# -- the prompts gate checks the batch env files compose reads ----------------
+
+def _prompts_ready(host) -> None:
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    assert host["run"]("start", "b1", "--seed", "b0").returncode == 0
+    assert host["run"]("parse").returncode == 0
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031")
+
+
+def test_prompts_gate_refuses_a_batch_env_without_the_overview_dir(host):
+    _prompts_ready(host)
+    (host["root"] / "env" / ".env.nora-batch").write_text("OTHER=1\n", encoding="utf-8")
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 1 and "CYC-E042" in r.stderr
+    assert "MISSING: NORA_TAXONOMY_OVERVIEW_DIR" in r.stdout
+
+
+def test_prompts_gate_reads_the_batch_env_the_wiring_names(host, tmp_path):
+    _prompts_ready(host)
+    (host["root"] / "env" / ".env.nora-batch").write_text("OTHER=1\n", encoding="utf-8")
+    named = tmp_path / "stack-batch.env"
+    named.write_text("NORA_TAXONOMY_OVERVIEW_DIR=/data/env/prompts\n", encoding="utf-8")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + f"BATCH_ENV_FILE={named}\n", encoding="utf-8")
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert f"NORA_TAXONOMY_OVERVIEW_DIR: set in {named}" in r.stdout
+
+
+# -- recipes (stage graph, step 3) --------------------------------------------
+
+import contextlib
+import uuid
+
+
+@contextlib.contextmanager
+def _temp_recipe(body: dict):
+    """A recipe file under customizations/recipes for one test, always removed."""
+    name = f"test-{uuid.uuid4().hex[:8]}"
+    path = REPO / "customizations" / "recipes" / f"{name}.json"
+    path.write_text(json.dumps(dict(body, name=body.get("name", name))), encoding="utf-8")
+    try:
+        yield name
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def _parsed_with(host, recipe: str):
+    host["cell"]("MNO-A", "Jan2031")
+    _seed_build(host, "b0", [("MNO-A", "Jan2031")],
+                [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    r = host["run"]("start", "b1", "--seed", "b0", "--recipe", recipe)
+    assert r.returncode == 0, r.stderr
+    assert host["run"]("parse").returncode == 0
+    _parsed_dir(host["nora"] / "b1" / "out" / "parse" / "MNO-A" / "Jan2031")
+    return r
+
+
+def _last_inner(host) -> str:
+    return Path(_cycle_json(host, "b1")["phases"][-1]["log"]).read_text().splitlines()[0]
+
+
+def test_start_freezes_the_recipe_and_status_shows_it(host):
+    r = _parsed_with(host, "sira-taxonomy")
+    nb = host["nora"] / "b1"
+    assert json.loads((nb / "RECIPE.json").read_text())["name"] == "sira-taxonomy"
+    assert not (nb / "RECIPE.json").stat().st_mode & 0o222
+    assert _cycle_json(host, "b1")["recipe"] == "sira-taxonomy"
+    assert "recipe=sira-taxonomy" in r.stdout
+    assert "recipe sira-taxonomy: stages=taxonomy,enrich" in host["run"]("status").stdout
+
+
+def test_start_takes_the_wiring_recipe_and_refuses_unknown_or_invalid(host):
+    host["cell"]("MNO-A", "Jan2031")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "RECIPE=no-such-recipe\n", encoding="utf-8")
+    r = host["run"]("start", "b1")
+    assert r.returncode == 1 and "CYC-E035" in r.stderr and "sira-plain" in r.stderr
+    with _temp_recipe({"stages": ["parse"]}) as bad:
+        r = host["run"]("start", "b1", "--recipe", bad)
+        assert r.returncode == 1 and "CYC-E036" in r.stderr and "corpus prefix" in r.stderr
+    assert not (host["nora"] / "b1").exists()
+    wiring.write_text(wiring.read_text().replace("no-such-recipe", "sira-plain"), encoding="utf-8")
+    assert host["run"]("start", "b1").returncode == 0
+    assert json.loads((host["nora"] / "b1" / "RECIPE.json").read_text())["name"] == "sira-plain"
+
+
+def test_plain_recipe_skips_taxonomy_and_enriches_without_it(host):
+    _parsed_with(host, "sira-plain")
+    r = host["run"]("taxonomy")
+    assert r.returncode == 1 and "CYC-E053" in r.stderr
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 1 and "phase 'prompts'" in r.stderr       # the gate still applies
+    assert host["run"]("prompts", "--yes").returncode == 0
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    inner = _last_inner(host)
+    assert "env -u NORA_SIRA_TAXONOMY_DIR python -m sandbox.sira_lane" in inner
+    assert "NORA_SIRA_TAXONOMY_DIR=" not in inner
+
+
+def test_recipe_models_and_scheme_reach_the_phases(host):
+    body = {"stages": ["taxonomy", "enrich"],
+            "params": {"taxonomy": {"model": "tax-model"},
+                       "enrich": {"model": "enr-model", "prompt_scheme": "scheme-x", "taxonomy": True}}}
+    with _temp_recipe(body) as name:
+        _parsed_with(host, name)
+        assert host["run"]("prompts", "--yes").returncode == 0
+        assert host["run"]("taxonomy").returncode == 0
+        assert "--model tax-model" in _last_inner(host)
+        tx = host["nora"] / "b1" / "out" / "taxonomy" / "MNO-A" / "Jan2031"
+        tx.mkdir(parents=True, exist_ok=True)
+        (tx / "extraction_state.json").write_text(json.dumps({"prompt_fp": "x", "docs": {"d": {"status": "ok"}}}))
+        assert host["run"]("enrich", "--cell", "MNO-A/Jan2031").returncode == 0
+        inner = _last_inner(host)
+        assert ("env NORA_SIRA_TAXONOMY_DIR=/data/env/out/taxonomy/MNO-A/Jan2031 "
+                "NORA_SIRA_ENRICH_LLM_MODEL=enr-model python") in inner
+
+
+def test_promote_carries_the_recipe_and_the_manifest_into_the_label(tmp_path):
+    nb = tmp_path / "build"
+    (nb / "out" / "parse" / "MNO-A" / "Jan2031").mkdir(parents=True)
+    (nb / "RECIPE.json").write_text('{"name": "sira-plain"}')
+    (nb / "STAGES.json").write_text('{"version": 1, "stages": {}}')
+    serve = tmp_path / "serve"
+    r = subprocess.run(["bash", str(REPO / "docker" / "promote.sh"), "--serve-root", str(serve),
+                        "--label", "lbl-1", "--nora-build", str(nb)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    for f in ("RECIPE.json", "STAGES.json"):
+        assert (serve / "lbl-1" / "nora" / f).read_text() == (nb / f).read_text()
+    # a build without them promotes as before
+    nb2 = tmp_path / "build2"
+    (nb2 / "out" / "parse").mkdir(parents=True)
+    r = subprocess.run(["bash", str(REPO / "docker" / "promote.sh"), "--serve-root", str(serve),
+                        "--label", "lbl-2", "--nora-build", str(nb2)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert not (serve / "lbl-2" / "nora" / "RECIPE.json").exists()
+
+
+
+def test_verify_enrich_stamps_enrich_with_the_lane_s_model_and_revision(host):
+    """After the verify passes, verify-enrich records the enrich fingerprints
+    in a nora-batch one-shot: the model from the sira-batch env file (or the
+    recipe), the SIRA revision from the wiring env (or the compose pin)."""
+    _to_taxonomy_ok(host)
+    (host["root"] / "env" / ".env.sira-batch").write_text(
+        "NORA_SIRA_DOC_PROMPT_DIR=/data/env/prompts\nNORA_SIRA_ENRICH_LLM_MODEL=env-model\n")
+    assert host["run"]("enrich", "--cell", "MNO-A/Jan2031").returncode == 0
+    Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=0\n")
+    r = host["run"]("verify-enrich", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    stamp = [l for l in (host["root"] / "compose-args.txt").read_text().splitlines() if "--stamp enrich" in l]
+    assert len(stamp) == 1
+    pin = re.search(r"SIRA_REF:-([0-9a-f]+)", (REPO / "docker" / "docker-compose.yml").read_text()).group(1)
+    assert f"-e NORA_SIRA_ENRICH_LLM_MODEL=env-model -e SIRA_REF={pin} nora-batch" in stamp[0]
+    assert "enrich_stamped=0" in r.stdout          # the fake container stamps nothing
+    # the wiring env's revision wins over the pin
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + "SIRA_REF=abc123\n")
+    r = host["run"]("verify-enrich", "--yes")
+    assert r.returncode == 0
+    last = [l for l in (host["root"] / "compose-args.txt").read_text().splitlines() if "--stamp enrich" in l][-1]
+    assert "SIRA_REF=abc123" in last
+
+
+def test_verify_enrich_takes_the_recipe_s_model(host):
+    body = {"stages": ["enrich"], "params": {"enrich": {"model": "recipe-model"}}}
+    with _temp_recipe(body) as name:
+        _parsed_with(host, name)
+        assert host["run"]("prompts", "--yes").returncode == 0
+        assert host["run"]("enrich", "--cell", "MNO-A/Jan2031").returncode == 0
+        Path(_cycle_json(host, "b1")["phases"][-1]["log"]).write_text("CYC-EXIT rc=0\n")
+        assert host["run"]("verify-enrich", "--yes").returncode == 0
+    last = [l for l in (host["root"] / "compose-args.txt").read_text().splitlines() if "--stamp enrich" in l][-1]
+    assert "NORA_SIRA_ENRICH_LLM_MODEL=recipe-model" in last
+
+
+# -- stage graph, step 4: host-side reads go through the resolver ------------
+
+def test_taxonomy_held_only_in_the_store_is_found_through_the_manifest(host):
+    """A cell's taxonomy that only the stage store holds (stage-graph §10c):
+    the enrich gate reads its ledger there, the lane gets the store path
+    as the containers mount it, and status counts it."""
+    import shutil
+    from core.src.pipeline.manifest import BuildManifest
+    _to_taxonomy_ok(host)
+    nb = host["nora"] / "b1"
+    store = host["root"] / "stages"
+    entry = store / "taxonomy" / "MNO-A" / "Jan2031" / "fpT"
+    entry.parent.mkdir(parents=True)
+    shutil.move(str(nb / "out" / "taxonomy" / "MNO-A" / "Jan2031"), str(entry))
+    shutil.rmtree(nb / "out" / "taxonomy")
+    BuildManifest(nb / "STAGES.json").record("taxonomy", "MNO-A/Jan2031", "fpT", origin="computed")
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + f"STAGES_ROOT={store}\n", encoding="utf-8")
+
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    assert "NORA_SIRA_TAXONOMY_DIR=/data/stages/taxonomy/MNO-A/Jan2031/fpT" in _last_inner(host)
+    st = host["run"]("status").stdout
+    assert "taxonomy     : {'ok': 1, 'failed': 0} cells=1" in st
+    assert "parse dirs   : 1" in st
+
+
+def test_enrich_refuses_a_cell_with_no_taxonomy_anywhere(host):
+    _to_taxonomy_ok(host)
+    import shutil
+    shutil.rmtree(host["nora"] / "b1" / "out" / "taxonomy")
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 1 and "CYC-E060" in r.stderr
+
+
+def test_promote_assembles_stored_cells_into_the_label_by_hard_link(tmp_path):
+    """Step 4 slice 3: parse and taxonomy cells only the stage store holds
+    are linked into the label at the out/ layout serving reads."""
+    from core.src.pipeline.manifest import BuildManifest
+    nb, store, serve = tmp_path / "build", tmp_path / "stages", tmp_path / "serve"
+    own = nb / "out" / "parse" / "MNO-A" / "Jan2031"
+    own.mkdir(parents=True)
+    (own / "d1_tree.json").write_text("{}")
+    m = BuildManifest(nb / "STAGES.json")
+    for stage, cell, fp in (("parse", "MNO-A/Apr2031", "fpP"), ("taxonomy", "MNO-A/Apr2031", "fpT")):
+        e = store / stage / cell / fp
+        e.mkdir(parents=True)
+        (e / "f.json").write_text(stage)
+        m.record(stage, cell, fp, origin="computed")
+    args = ["bash", str(REPO / "docker" / "promote.sh"), "--serve-root", str(serve), "--nora-build", str(nb)]
+    r = subprocess.run(args + ["--label", "l1", "--stages-root", str(store)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = serve / "l1" / "nora" / "out"
+    assert (out / "parse" / "MNO-A" / "Jan2031" / "d1_tree.json").exists()
+    for stage in ("parse", "taxonomy"):
+        got = out / stage / "MNO-A" / "Apr2031" / "f.json"
+        assert got.read_text() == stage
+        assert got.stat().st_ino == (store / stage / "MNO-A" / "Apr2031" / ("fpP" if stage == "parse" else "fpT") / "f.json").stat().st_ino
+    assert "promoted nora taxonomy MNO-A/Apr2031 (from the stage store)" in r.stdout
+    assert "WARN" not in r.stdout.replace("WARN: " + str(nb) + "/out/vectorstore", "").replace("WARN: " + str(nb) + "/out/graph", "")
+    # without the stages root the stored cells cannot be found: refused, not
+    # a label missing them
+    r = subprocess.run(args + ["--label", "l2"], capture_output=True, text=True)
+    assert r.returncode == 1 and "MNO-A/Apr2031" in r.stderr and not (serve / "l2").exists()
+    # an unreadable manifest refuses rather than promote a label missing cells
+    (nb / "STAGES.json").write_text("not json")
+    r = subprocess.run(args + ["--label", "l3", "--stages-root", str(store)], capture_output=True, text=True)
+    assert r.returncode == 1 and "refusing" in r.stderr
+    assert not (serve / "l3").exists()
+    # a store entry the build still names, removed (by GC): refused, not a label missing the cell
+    (nb / "STAGES.json").unlink()
+    m2 = BuildManifest(nb / "STAGES.json")
+    m2.record("parse", "MNO-A/Apr2031", "fpP", origin="computed")
+    m2.record("parse", "MNO-A/Oct2031", "fpGone", origin="computed")
+    r = subprocess.run(args + ["--label", "l4", "--stages-root", str(store)], capture_output=True, text=True)
+    assert r.returncode == 1 and "MNO-A/Oct2031" in r.stderr and not (serve / "l4").exists()
+
+
+def test_start_holds_the_corpus_bindings_lock(host):
+    """Two stacks' starts rewrite the one corpus profiles.json: a start
+    waits for another's lock, and refuses (CYC-E037) when it is not freed."""
+    import fcntl
+    host["cell"]("MNO-A", "Jan2031")
+    corpus = _corpus_wiring(host, [
+        {"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    host["env"]["CORPUS_LOCK_WAIT"] = "1"
+    with open(corpus / ".bindings.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        r = host["run"]("start", "b1")
+        fcntl.flock(held, fcntl.LOCK_UN)
+    assert r.returncode == 1 and "CYC-E037" in r.stderr, r.stderr
+    assert not (host["nora"] / "b1").exists()
+    assert host["run"]("start", "b1").returncode == 0
+
+
+def test_generic_prompt_recipe_publishes_no_per_mno_prompt_and_unsets_the_dir(host):
+    """sira-generic (stack A's single-prompt design, scheme-v1): the prompts
+    gate checks neither per-MNO prompts nor the prompt-dir lines, publishes
+    no per-MNO prompt, and the lane runs with the prompt dir and the
+    taxonomy dir unset, so SIRA takes its generic prompt."""
+    _parsed_with(host, "sira-generic")
+    for name in (".env.nora-batch", ".env.sira-batch"):     # neither line is needed
+        (host["root"] / "env" / name).write_text("", encoding="utf-8")
+    r = host["run"]("prompts", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "generic document prompt" in r.stdout
+    assert not list((host["nora"] / "b1" / "prompts").glob("doc_requirement_*"))
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    inner = _last_inner(host)
+    assert "-u NORA_SIRA_TAXONOMY_DIR" in inner and "-u NORA_SIRA_DOC_PROMPT_DIR" in inner

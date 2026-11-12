@@ -10,7 +10,9 @@ go there when you need to run a phase by hand or understand a flag.
 
 Companion guides: `docs/golden-eval-guide.md` (the eval you run before
 flipping production), `docs/enrichment-review-guide.md` (what domain
-experts do with the served result).
+experts do with the served result), `docs/self-serve-ingestion-guide.md`
+(how the requirements team ingests a new release of a served MNO from
+the web page; the page runs this guide's cycle on one cell).
 
 ## Who does what
 
@@ -20,6 +22,7 @@ experts do with the served result).
 | Eval operator | serving host | golden evals; keeps `<nora-data>/eval-baselines/<stack>.txt` current |
 | Architect | both (sudo) | image rebakes, profile-binding commits, migrations |
 | Domain experts | web only | enrichment review, Eval Studio |
+| Requirements team | web only | a new release of a served MNO, from the Ingest page (`docs/self-serve-ingestion-guide.md`); Serve and Roll back |
 
 Exactly **one cycle is in flight at a time**. The driver enforces it
 (`cycle.sh start` refuses while another cycle is open) — if you hit
@@ -41,7 +44,7 @@ that refusal, talk to the owner it names rather than working around it.
   share as `/srv/nora/requirements/<MNO>/<MMMYYYY>/` (Windows-side
   members drop them there directly). One directory per MNO × release
   — the directory name IS the cell name the rest of the cycle uses,
-  spelled `<MNO>__<MMMYYYY>` (e.g. a new release for an existing MNO is
+  spelled `<MNO>/<MMMYYYY>` (e.g. a new release for an existing MNO is
   one new directory beside the old ones).
 - Ingest images rebaked for the code you intend to run. The images
   carry the lane code; the architect rebakes them when code changed.
@@ -53,7 +56,7 @@ Layout you will see on the build machine (`NORA_ROOT=/srv/nora`):
 /srv/nora/
 ├── requirements/<MNO>/<MMMYYYY>/   # source docs (NAS share, read here)
 ├── builds/nora/<build-id>/         # env dir: out/, prompts/, reports/, CYCLE.json
-├── builds/sira/<build-id>/         # SIRA cells: <MNO>__<MMMYYYY>/
+│   └── out/sira/<MNO>/<MMMYYYY>/  #   the SIRA cells, the build's last stage dir
 ├── builds/ACTIVE                   # the baton: name of the cycle in flight
 ├── serve/<label>/                  # flat labels: the converter's input (also on the serving host)
 ├── serve-<stack>/                  # serving host only: registry.db + cells/ trees/ history/ (what a stack serves)
@@ -67,10 +70,10 @@ All commands below run from the checkout's `docker/` directory.
 | # | Phase | Command | Gate | "Done" looks like |
 |---|---|---|---|---|
 | 0 | open the cycle | `./cycle.sh start <build-id> --profiles <prev-build-id>` | — | CYC start block; `next: parse` |
-| 1 | parse | `./cycle.sh parse` | — | `status` shows `parse ok`, parse dirs = cells |
+| 1 | parse | `./cycle.sh parse` (or `--cell <MNO>/<MMMYYYY>` for one) | — | `status` shows `parse ok`, parse dirs = cells (or the one cell) |
 | 2 | derive prompts | Cline playbook (new MNOs only) | — | prompt files committed by the architect |
 | 3 | publish prompts | `./cycle.sh prompts` | **yes** | CYC prompts block, `missing=0 misshaped=0` |
-| 4 | taxonomy | `./cycle.sh taxonomy` (repeat until `failed=0`) | — | `status` shows `taxonomy ok`, ledger `failed: 0` |
+| 4 | taxonomy | `./cycle.sh taxonomy` (or `--cell …`; repeat until `failed=0`) | — | `status` shows `taxonomy ok`, ledgers `failed: 0` |
 | 5 | enrich | `./cycle.sh enrich` | — | `status` shows `enrich ok` |
 | 5v | verify | `./cycle.sh verify-enrich` | **yes** | verify PASS, CYC block `verify_rc=0` |
 | 6 | promote + push | `./cycle.sh promote --label <label> --host <serving-host> --scheme <scheme>` | — | `pushed -> <host>:.../serve/<label>`; baton free |
@@ -155,38 +158,23 @@ into `builds/nora/<build>/prompts/`, which the containers read.
 ./cycle.sh status                   # taxonomy ok AND ledger {'ok': N, 'failed': 0}
 ```
 
-One global stage over every cell. Sporadic LLM/server errors are
-expected and non-fatal: the run records failed docs and continues.
-**Re-running `taxonomy` is the retry** — it re-attempts only the
-failed docs. Repeat until the ledger shows `failed: 0`; `enrich`
-refuses otherwise (`CYC-E061`). If the same docs stay failed across
-three runs, escalate with the CYC block and the `TAX-` codes from the
-log; do not paste the log itself (it names documents).
+One taxonomy per cell (since 2026-11-06): each release's plans are
+extracted from that release's own trees into
+`out/taxonomy/<MNO>/<MMMYYYY>/`, with its own ledger and cache; releases
+do not share or supersede each other's features. `--cell` runs one
+cell and leaves the rest untouched, which is what an incremental cycle
+does. Sporadic LLM/server errors are expected and non-fatal: the run
+records failed plans and continues. **Re-running `taxonomy` is the
+retry** — it re-attempts only the failed plans. Repeat until `status`
+sums the ledgers to `failed: 0`; `enrich` refuses otherwise
+(`CYC-E061`). If the same plans stay failed across three runs, escalate
+with the CYC block and the `TAX-` codes from the log; do not paste the
+log itself (it names documents).
 
-Expect `features=` ≈ the number of distinct plans across all MNOs
-(newest release wins per plan), not plans × releases.
-
-**Seeding (optional — skips re-extracting unchanged plans):** a fresh
-build starts with a cold taxonomy cache, so every plan re-extracts
-even when only one release changed. After `parse` is ok and before the
-first `taxonomy` run, copy the previous build's taxonomy output in:
-
-```bash
-cp -r builds/nora/<prev-build>/out/taxonomy builds/nora/<build>/out/
-./cycle.sh taxonomy
-```
-
-The stage validates the seed itself — every cached plan carries a
-content hash of the tree it was extracted from, the prompt files are
-hashed too, and the stage-level fingerprint is only stamped on
-zero-failure runs — so a stale or wrong seed costs nothing: those
-plans simply re-extract. Only plans whose winning tree changed (the
-new release's plans, typically) hit the LLM. The stage stats show
-whether the seed took: expect `cached` ≈ plans untouched by the new
-release, `extracted` ≈ plans it added or changed. Use a plain
-`cp -r`, never a hardlink copy (`cp -al`) — the stage rewrites the
-ledger in place, and hardlinks would corrupt the previous build's
-copy. `--force` ignores the seed entirely.
+Expect `features=` ≈ plans × releases in the build, and per cell ≈
+that release's distinct plans. There is no seeding step any more: a
+cell's taxonomy is derived once, in the build that parsed it, and the
+cost is one LLM call per plan.
 
 ### 5. Enrich
 
@@ -203,8 +191,9 @@ by document: an interrupted or partially failed run is continued by
 Targeted forms:
 
 ```bash
-./cycle.sh enrich --cell <MNO>__<MMMYYYY>            # one cell (e.g. inspect the smallest first)
-./cycle.sh enrich --cell <MNO>__<MMMYYYY> --retry-failed   # evict genuine failures, solo LLM calls, re-verify
+./cycle.sh enrich --cell <MNO>/<MMMYYYY>            # one cell (e.g. inspect the smallest first)
+./cycle.sh enrich --cell <MNO>/<MMMYYYY> --retry-failed   # evict genuine failures, resume batched, re-verify
+./cycle.sh enrich --cell <MNO>/<MMMYYYY> --retry-failed --single   # rows that keep failing: one request per call (D-178)
 ```
 
 After a hard interruption (host reboot, killed container) the runbook's
@@ -341,7 +330,7 @@ directly; it is not used for served stacks.
 ## Multiple operators
 
 The env dir belongs to the **build, not the operator**:
-`builds/nora/<build-id>` (with its `builds/sira/<build-id>` twin) is
+`builds/nora/<build-id>` (its SIRA cells inside, under `out/sira/`) is
 created by `cycle.sh start`, named by the build id, and shared by the
 whole group. The setgid tree + `umask 002` + per-operator `JOB_UID` /
 `JOB_GID` exist precisely so that any group member can re-run,

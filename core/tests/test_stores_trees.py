@@ -208,7 +208,7 @@ def test_db_schema_and_meta(stores):
     _, _, env, out = stores
     db = out / "trees-mno-a-Jan2031.db"
     meta = read_meta(db)
-    assert meta["schema_version"] == "1" and meta["cell"] == "mno-a__Jan2031"
+    assert meta["schema_version"] == "1" and meta["cell"] == "mno-a/Jan2031"
     assert meta["n_docs"] == "2" and meta["n_nodes"] == "10"
     assert len(meta["source_fingerprint"]) == 64 and meta["created_at"]
     con = sqlite3.connect(db)
@@ -241,10 +241,10 @@ class TestBuilder:
         env, out = tmp_path / "env", tmp_path / "trees"
         _corpus(env)
         assert trees_build.main(["--env-dir", str(env), "--out", str(out),
-                                 "--cells", "mno-b__Jan2031"]) == 0
+                                 "--cells", "mno-b/Jan2031"]) == 0
         assert [p.name for p in out.glob("*.db")] == ["trees-mno-b-Jan2031.db"]
         assert trees_build.main(["--env-dir", str(env), "--out", str(out),
-                                 "--cells", "mno-b__Apr2031"]) == 1
+                                 "--cells", "mno-b/Apr2031"]) == 1
         assert "TRS-E003" in capsys.readouterr().err
 
     def test_no_parse_trees(self, tmp_path, capsys):
@@ -270,7 +270,7 @@ class TestBuilder:
         (nested / "docN_tree.json").write_text(
             json.dumps(_tree("P", "", [])), encoding="utf-8")
         assert trees_build.main(["--env-dir", str(env), "--out", str(out),
-                                 "--cells", "mno-b__Jan2031"]) == 1
+                                 "--cells", "mno-b/Jan2031"]) == 1
         assert "TRS-E005" in capsys.readouterr().err
         assert list(out.iterdir()) == []
 

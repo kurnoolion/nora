@@ -32,6 +32,9 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+        # the code version baked as NORA_CODE_VERSION (healthz, release sets,
+        # variant-stage fingerprints): CODE_VERSION=$(git rev-parse --short HEAD)
+        CODE_VERSION: ${CODE_VERSION:-}
     image: ${IMAGE_PREFIX:-local}/nora-store:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
     # Serve containers default to root (0:0 — today's behavior). Set
@@ -46,7 +49,7 @@ services:
     volumes:
       # Cells: flat cell dirs or cell-*.db files. Optional once
       # SERVE_REGISTRY_ROOT is set (registry mode resolves the files itself).
-      - ${STORE_ROOT:-./empty}:/data/db
+      - ${STORE_ROOT:-${NORA_BUILD_DIR:-./empty}/out/sira}:/data/db
       # Publish registry (corp-db-layer 4b): registry.db + versioned store
       # files, written by core.src.stores.publish on the host; read-only here.
       - ${SERVE_REGISTRY_ROOT:-./empty}:/data/serve:ro
@@ -55,11 +58,11 @@ services:
       # over /stores/overlay/v1 and applies them at cell load (POST
       # /cells/<cell>/reload re-applies). Read-write mount, therefore.
       - ${CORRECTIONS_DIR:?set CORRECTIONS_DIR in .env}:/data/corrections
-      # parse trees for the Trees store (/stores/trees/v1): the Requirement
-      # Browser, /api/req and the Eval Studio picker read them from here
-      # once nora-web sets NORA_TREES_URL. Read-only: nora-store never
-      # writes under the env dir.
-      - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env:ro
+      # parse trees for the Trees store (/stores/trees/v1) — the dev
+      # fallback only: a registry-mode stack serves Trees from the registry
+      # and mounts nothing here (unset = an empty dir; since 2026-11-07 a
+      # serving stack's env carries no build line). Read-only either way.
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env:ro
       # Pre-built SQLite stores, optional: set TREES_ROOT / HISTORY_ROOT in
       # the wiring .env. Unset mounts an empty dir and leaves the matching
       # NORA_*_ROOT empty, so the store falls back (Trees: the parse trees
@@ -103,6 +106,9 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+        # the code version baked as NORA_CODE_VERSION (healthz, release sets,
+        # variant-stage fingerprints): CODE_VERSION=$(git rev-parse --short HEAD)
+        CODE_VERSION: ${CODE_VERSION:-}
     image: ${IMAGE_PREFIX:-local}/nora-web:${IMAGE_TAG:-dev}
     profiles: ["serve", "dev"]
     # See nora-store: default 0:0 is today's behavior; set SERVE_UID and
@@ -112,7 +118,10 @@ services:
     ports:
       - "${NORA_WEB_PORT:-8000}:8000"
     volumes:
-      - ${NORA_ENV_DIR:?set NORA_ENV_DIR in .env}:/data/env
+      # the build dir — the dev fallback for the parse/resolve review pages
+      # and the Trees fallback; a serving stack sets the store URLs and
+      # mounts nothing here (unset = an empty dir; since 2026-11-07)
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env
       - ${WEB_STATE_DIR:?set WEB_STATE_DIR in .env}:/data/web-state
       - ${FEEDBACK_DIR:?set FEEDBACK_DIR in .env}:/data/feedback   # pooled across stacks (D-120)
       # enrichment-corrections overlay — the dev FALLBACK (local backend).
@@ -124,7 +133,7 @@ services:
       # golden eval set (FR-38) — pooled across stacks and durable across
       # promote labels: shadows <env>/eval/golden so samples/runs never live
       # inside a promoted snapshot. Default keeps single-build setups as-is.
-      - ${GOLDEN_DIR:-${NORA_ENV_DIR}/eval/golden}:/data/env/eval/golden
+      - ${GOLDEN_DIR:-${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}/eval/golden}:/data/env/eval/golden
     env_file:
       - path: ${WEB_ENV_FILE:-.env.nora-web}
         required: false
@@ -174,16 +183,24 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+        # the code version baked as NORA_CODE_VERSION (healthz, release sets,
+        # variant-stage fingerprints): CODE_VERSION=$(git rev-parse --short HEAD)
+        CODE_VERSION: ${CODE_VERSION:-}
     image: ${IMAGE_PREFIX:-local}/nora-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
-      - ${NORA_ENV_DIR:?}:/data/env
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env   # the build (ingestion wiring env); cycle.sh need_wiring is the check, not :? — compose interpolates every service even for the serve profile
       - ${REQUIREMENTS_DIR:?set REQUIREMENTS_DIR in .env}:/data/requirements:ro
-      - ${STORE_ROOT:-./empty}:/data/db   # optional in registry mode (serve only)
+      - ${STORE_ROOT:-${NORA_BUILD_DIR:-./empty}/out/sira}:/data/db   # the build's SIRA cells; optional in registry mode (serve only)
       - ${MODELS_DIR:?set MODELS_DIR in .env}:/data/models
       # golden eval set — same pooled mount as nora-web, so the batch CLI
       # (core.src.eval.golden_cli) reads/writes the same samples + runs
-      - ${GOLDEN_DIR:-${NORA_ENV_DIR}/eval/golden}:/data/env/eval/golden
+      - ${GOLDEN_DIR:-${NORA_ENV_DIR:-${NORA_BUILD_DIR}}/eval/golden}:/data/env/eval/golden
+      # stage graph, step 2: the host's stage store (outputs shared by every
+      # build of every stack) and the corpus root (profile bindings, user
+      # annotations). Both optional: unset runs as before.
+      - ${STAGES_ROOT:-./empty}:/data/stages
+      - ${CORPUS_DIR:-./empty}:/data/corpus:ro
     # Run ingest jobs as the calling user so build artifacts on the mounts
     # aren't root-owned on the host (set JOB_UID/JOB_GID in the wiring env:
     # JOB_UID=1000 / `id -u`). Default 0 = root (current behavior).
@@ -196,6 +213,8 @@ services:
     environment:
       ENV_DIR: /data/env
       NORA_REQUIREMENTS_DIR: /data/requirements
+      NORA_STAGES_ROOT: ${STAGES_ROOT:+/data/stages}
+      NORA_CORPUS_DIR: ${CORPUS_DIR:+/data/corpus}
       DOCLING_ARTIFACTS: /data/models/docling
       HF_HUB_OFFLINE: "1"
       # non-root has no home in the image; libs that write caches need one
@@ -216,12 +235,19 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+        # the code version baked as NORA_CODE_VERSION (healthz, release sets,
+        # variant-stage fingerprints): CODE_VERSION=$(git rev-parse --short HEAD)
+        CODE_VERSION: ${CODE_VERSION:-}
     image: ${IMAGE_PREFIX:-local}/sira-batch:${IMAGE_TAG:-dev}
     profiles: ["ingest", "dev"]
     volumes:
-      - ${STORE_ROOT:-./empty}:/data/db   # optional in registry mode (serve only)
+      - ${STORE_ROOT:-${NORA_BUILD_DIR:-./empty}/out/sira}:/data/db   # the build's SIRA cells; optional in registry mode (serve only)
       # sira_lane's adapter step reads the nora build's out/ tree
-      - ${NORA_ENV_DIR:?}:/data/env
+      - ${NORA_ENV_DIR:-${NORA_BUILD_DIR:-./empty}}:/data/env   # the build (ingestion wiring env); cycle.sh need_wiring is the check, not :? — compose interpolates every service even for the serve profile
+      # stage graph, step 4: a build's parse trees and taxonomy may be held
+      # only by the stage store; the adapter and the lane read them there
+      # through the build's manifest. Read-only: SIRA never writes stages.
+      - ${STAGES_ROOT:-./empty}:/data/stages:ro
     user: "${JOB_UID:-0}:${JOB_GID:-0}"
     env_file:
       - path: ${SIRA_BATCH_ENV_FILE:-.env.sira-batch}
@@ -230,5 +256,6 @@ services:
         required: false
     environment:
       HOME: /tmp
+      NORA_STAGES_ROOT: ${STAGES_ROOT:+/data/stages}
     extra_hosts:
       - "host.docker.internal:host-gateway"
