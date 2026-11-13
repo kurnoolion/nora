@@ -68,3 +68,71 @@ def test_line_reads_back_sira_rows_only():
     assert silver_recall.line("sira", None) is None
     assert silver_recall.line("history", {"silver_recall": sr}) is None
     assert silver_recall.line("nora", {"silver_recall": sr}) is None
+
+
+def test_rank_falls_back_to_list_position():
+    out = silver_recall.compute([{"req_id": "A"}, {"req_id": "B"}], [], ["B"])
+    assert out["recall"] == {"2": 1.0}
+
+
+# The select-synth lane stores the numbers on lane_config (design §4).
+import asyncio  # noqa: E402
+
+import pytest  # noqa: E402
+
+from core.src.web.routes import playground  # noqa: E402
+
+_FETCHED = [{"req_id": f"REQ_{i:04d}", "rank": i, "mno": "mno-w", "release": "Sep2031",
+             "text": f"placeholder body {i}"} for i in range(1, 16)]
+
+
+@pytest.fixture()
+def lane(monkeypatch):
+    from core.src.web.routes import query
+
+    reply = {"text": "answer citing REQ_0003 and REQ_0012"}
+
+    class LLM:
+        model = "m"
+
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+            if isinstance(reply["text"], Exception):
+                raise reply["text"]
+            return reply["text"]
+
+    async def store(*a, **k):
+        return {"results": [dict(r) for r in _FETCHED]}
+
+    async def snap():
+        return {}
+
+    async def say(msg):
+        pass
+
+    monkeypatch.delenv("NORA_PIN_NAMED_IDS", raising=False)
+    monkeypatch.setattr(query, "_build_llm_from_env_or_default", lambda **k: LLM())
+    monkeypatch.setattr(playground, "_call_store_query", store)
+    monkeypatch.setattr(playground, "_snapshot_sira_lane_config", snap)
+
+    def run():
+        return asyncio.run(playground._run_select_synth_lane("a question", say, 0.0))
+
+    return run, reply
+
+
+def test_lane_config_carries_silver_recall_after_an_answer(lane):
+    run, _ = lane
+    out = run()
+    assert out["cited_ids"] == ["REQ_0003", "REQ_0012"]
+    sr = out["lane_config"]["silver_recall"]
+    assert sr["recall"] == {"10": 0.5, "15": 1.0}
+    assert sr["cited"] == 2 and sr["outside"] == 0 and sr["fetched"] == 15
+    assert sr["packed"] == 15
+
+
+def test_no_silver_recall_on_synth_error(lane):
+    run, reply = lane
+    reply["text"] = RuntimeError("model down")
+    out = run()
+    assert out["synth_error"]
+    assert "silver_recall" not in out["lane_config"]
