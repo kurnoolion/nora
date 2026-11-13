@@ -214,3 +214,38 @@ just scoring inputs).
 contributor to eval-pass wall-clock AND the eval-pilot strand has
 enough ground-truth scoring data to retune `NORA_SIRA_PIN_*` against
 the new score distribution.
+
+## `legacy-refusal.patch`
+
+### What it does
+
+Gives the one-request-per-call document enrichment (`_enrich_one` in
+`scripts/add_doc_index_adapter.py`, the path a prompt without
+`{requirements}` takes, e.g. recipe `sira-generic`) the permanent-refusal
+handling the batched path has (`enrich_batching.run_batched`). Without
+it, a refused row was recorded as benign `no_phrases` and the verify gate
+passed it.
+
+- The primary endpoint's answer starts with a refusal marker and carries
+  no JSON (`llm_refusal.is_permanent_refusal`): with a fallback endpoint
+  configured, the same prompt goes there once and the row is tagged
+  `"llm": "fallback"`; without one, the row is recorded `llm_refused`.
+- A fallback that refuses too, or errors, is recorded `llm_refused` or
+  `error`. Neither is benign for `verify-run`.
+
+Applied after `batched-enrich.patch` (it uses that patch's
+`enrich_batching` import). Sentinel: `NORA legacy-refusal`.
+
+### Env vars (the batched path's, in the sira-batch env file)
+
+| Variable | Purpose | When unset |
+|---|---|---|
+| `NORA_LLM_REFUSAL_MARKERS` | `\|\|`-separated refusal prefixes (deployment-specific; never committed) | no refusal detection: as before |
+| `NORA_SIRA_ENRICH_FALLBACK_LLM_URL` | fallback `/v1` base URL | refused rows recorded `llm_refused` |
+| `NORA_SIRA_ENRICH_FALLBACK_LLM_MODEL` | fallback model | the primary model name |
+| `NORA_SIRA_ENRICH_FALLBACK_LLM_REASONING(_CONTROL)` | the fallback's reasoning fields | `NORA_LLM_FALLBACK_REASONING` |
+
+To re-run rows a refusal cost before the patch: `./cycle.sh enrich --cell
+<cell> --retry-failed` re-queues `no_phrases` rows (refused ones among
+them); rows recorded `llm_refused` after the patch need `sandbox.sira_lane`
+`--retry-failed --include-refused` (`cycle.sh` does not pass that flag).

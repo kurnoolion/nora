@@ -114,6 +114,13 @@ apply_patch \
     "NORA_SIRA_SKIP_UPDATE_BEST" \
     "scripts/add_doc_index_adapter.py"
 
+# After batched-enrich (it builds on that patch's enrich_batching import):
+# the one-request-per-call path gets the same permanent-refusal handling.
+apply_patch \
+    "$REPO_ROOT/sandbox/sira_patches/legacy-refusal.patch" \
+    "NORA legacy-refusal" \
+    "scripts/add_doc_index_adapter.py"
+
 echo
 echo "OK — installed 3 hydra configs + 3 prompts into $SIRA_CLONE/scripts/configs/"
 echo "     plus patches under sandbox/sira_patches/ (idempotent — re-run any time)."

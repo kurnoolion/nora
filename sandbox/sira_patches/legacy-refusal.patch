@@ -1,0 +1,123 @@
+diff --git a/scripts/add_doc_index_adapter.py b/scripts/add_doc_index_adapter.py
+index 9eba4c0..75739b4 100644
+--- a/scripts/add_doc_index_adapter.py
++++ b/scripts/add_doc_index_adapter.py
+@@ -247,6 +247,36 @@ async def enrich_corpus(cfg: DictConfig) -> None:
+     sem = asyncio.Semaphore(enrich_cfg.concurrency)
+ 
+     stats = {"proposed": 0, "kept": 0, "filtered": 0, "errors": 0}
++
++    # NORA legacy-refusal: the one-request-per-call path handles a permanent
++    # refusal the way the batched path does (enrich_batching.run_batched):
++    # a marker-prefixed non-answer goes once to the fallback endpoint when
++    # one is configured, else the row is recorded llm_refused, which the
++    # verify gate does not count as benign. Same env as the batched path.
++    _lr_markers = enrich_batching.parse_markers(
++        os.environ.get("NORA_LLM_REFUSAL_MARKERS", "")
++    )
++    _lr_fb_url = os.getenv("NORA_SIRA_ENRICH_FALLBACK_LLM_URL", "").rstrip("/")
++    _lr_fb_model = os.getenv("NORA_SIRA_ENRICH_FALLBACK_LLM_MODEL", "")
++
++    async def _lr_fallback(
++        session: aiohttp.ClientSession, doc_text: str
++    ) -> tuple[str, list[str]]:
++        prompt = prompt_template.format(
++            doc_text=doc_text[: enrich_cfg.max_doc_chars], max_n=max_n
++        )
++        payload: dict = {
++            "model": _lr_fb_model or model,
++            "messages": [{"role": "user", "content": prompt}],
++            "max_tokens": enrich_cfg.doc_max_tokens,
++            "temperature": enrich_cfg.temperature,
++        }
++        payload.update(enrich_batching.fallback_reasoning_fields(
++            os.environ, "NORA_SIRA_ENRICH_FALLBACK_LLM_"))
++        data = await post_chat(session, f"{_lr_fb_url}/chat/completions", payload)
++        raw = data["choices"][0]["message"]["content"] or ""
++        return raw, parse_phrases(raw)
++
+     enriched_count = 0
+     failed_count = 0
+     done_count = 0
+@@ -300,6 +330,57 @@ async def enrich_corpus(cfg: DictConfig) -> None:
+                 )
+                 return
+ 
++            _llm_tag: dict = {}
++            if (not phrases and _lr_markers
++                    and enrich_batching.is_permanent_refusal(raw_response, _lr_markers)):
++                if not _lr_fb_url:
++                    logger.warning("permanent refusal for %s, no fallback LLM "
++                                   "configured — recorded llm_refused", doc_id)
++                    stats["errors"] += 1
++                    failed_count += 1
++                    done_count += 1
++                    await _write_line(
++                        trace_failed_file,
++                        json.dumps(
++                            {"doc_id": doc_id, "status": "llm_refused",
++                             "ms": int((time.time() - t0_doc) * 1000)},
++                            ensure_ascii=False,
++                        ),
++                    )
++                    return
++                _llm_tag = {"llm": "fallback"}
++                try:
++                    raw_response, phrases = await _lr_fallback(session, doc_text)
++                except Exception as e:
++                    logger.warning("fallback LLM error for %s: %s", doc_id, e)
++                    stats["errors"] += 1
++                    failed_count += 1
++                    done_count += 1
++                    await _write_line(
++                        trace_failed_file,
++                        json.dumps(
++                            {"doc_id": doc_id, "status": "error", "error": str(e),
++                             "llm": "fallback",
++                             "ms": int((time.time() - t0_doc) * 1000)},
++                            ensure_ascii=False,
++                        ),
++                    )
++                    return
++                if not phrases and enrich_batching.is_permanent_refusal(
++                        raw_response, _lr_markers):
++                    stats["errors"] += 1
++                    failed_count += 1
++                    done_count += 1
++                    await _write_line(
++                        trace_failed_file,
++                        json.dumps(
++                            {"doc_id": doc_id, "status": "llm_refused", "llm": "fallback",
++                             "ms": int((time.time() - t0_doc) * 1000)},
++                            ensure_ascii=False,
++                        ),
++                    )
++                    return
++
+             ms_elapsed = int((time.time() - t0_doc) * 1000)
+             done_count += 1
+             if done_count % 1000 == 0:
+@@ -321,6 +402,7 @@ async def enrich_corpus(cfg: DictConfig) -> None:
+                             "status": "no_phrases",
+                             "raw_response": raw_response,
+                             "ms": ms_elapsed,
++                            **_llm_tag,
+                         },
+                         ensure_ascii=False,
+                     ),
+@@ -360,6 +442,7 @@ async def enrich_corpus(cfg: DictConfig) -> None:
+                             "kept": kept,
+                             "filter_stats": filter_stats_dict,
+                             "ms": ms_elapsed,
++                            **_llm_tag,
+                         },
+                         ensure_ascii=False,
+                     ),
+@@ -376,6 +459,7 @@ async def enrich_corpus(cfg: DictConfig) -> None:
+                             "proposed": phrases,
+                             "filter_stats": filter_stats_dict,
+                             "ms": ms_elapsed,
++                            **_llm_tag,
+                         },
+                         ensure_ascii=False,
+                     ),

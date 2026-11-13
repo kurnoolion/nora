@@ -1059,6 +1059,7 @@ nora/
 │   ├── test_verify_tables.py                            # Tests for the verify_tables helper.
 │   ├── tests/
 │   │   ├── test_adapter_fingerprints.py                 # The adapter writes one fingerprint per requirement row, beside corpus.jsonl.
+│   │   ├── test_legacy_refusal_patch.py                 # legacy-refusal.patch: the one-request-per-call enrich path handles a
 │   │   ├── test_sira_enrich_concurrency.py              # The SIRA enrich config takes its concurrency from NORA_SIRA_ENRICH_CONCURRENCY
 │   │   └── test_sira_incremental.py                     # Tests for sandbox/sira_incremental.py — content-hash-aware
 │   ├── verify_req_recall.py                             # verify_req_recall — diff req-ids visible at extract time against the ids

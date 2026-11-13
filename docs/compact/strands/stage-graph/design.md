@@ -605,6 +605,13 @@ and the enrich fingerprint names the generic prompt. `sira-generic`
 carries `prompt_scheme: scheme-v1`. `sira-plain` (per-MNO prompts, empty
 taxonomy block) stays as a third arm, unused. The generic path runs one
 requirement per call: expect several times the batched enrichment time.
+Found in the first enriched cell (2026-11-13): that path had no refusal
+handling, so a row the gateway refused was recorded as a benign
+`no_phrases` (27 of 4,303), while stack B's batched path sends it to the
+fallback model. `legacy-refusal.patch` gives it the batched path's rule
+(fallback once, else `llm_refused`), so the two arms treat refusals
+alike; stack A's sira env file carries the same refusal and fallback
+lines as stack B's.
 
 **Found by the survey.** A second runner shares the requirements
 directory: Abandon removes a cell's documents without asking whether any
