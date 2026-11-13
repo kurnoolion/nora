@@ -27,7 +27,8 @@ def _k_steps(fetched: int) -> list[int]:
 def compute(results: list[dict], packed: Iterable, cited_ids: Iterable[str]) -> "dict | None":
     """Silver recall for one answer, or None when nothing was cited.
 
-    `results` is SIRA's fetched list with its `rank` field; `packed` the SIRA
+    `results` is SIRA's fetched list with its `rank` field (list position
+    when absent); `packed` the SIRA
     results that made it into the LLM context; `cited_ids` the requirement
     ids the answer cited. A req_id fetched twice (two cells) keeps its better
     rank; a cited id not fetched at all counts as outside."""
@@ -35,9 +36,9 @@ def compute(results: list[dict], packed: Iterable, cited_ids: Iterable[str]) -> 
     if not cited:
         return None
     best: dict[str, int] = {}
-    for r in results:
-        rid, rank = r["req_id"], r["rank"]
-        if rid not in best or rank < best[rid]:
+    for pos, r in enumerate(results, 1):
+        rid, rank = r.get("req_id"), r.get("rank") or pos
+        if rid and (rid not in best or rank < best[rid]):
             best[rid] = rank
     ranks = [best[c] for c in cited if c in best]
     recall = {str(k): round(sum(1 for r in ranks if r <= k) / len(cited), 4)

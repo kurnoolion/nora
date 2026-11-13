@@ -31,12 +31,13 @@ New `core/src/web/routes/silver_recall.py`, pure functions, no I/O (same pattern
 - `compute(results, packed, cited_ids) -> dict | None`: returns `None` when nothing was cited. Otherwise
   `{"recall": {"10": 0.4, "20": 0.6, "30": 0.6, "40": 0.8}, "cited": 5, "outside": 1, "fetched": 40, "packed": 31}`.
   Recall values rounded to 4 places.
-- `line(lane_config) -> dict | None`: reads `silver_recall` back from a stored `lane_config` for the templates; `None` for other lanes, older rows, or no citations.
+- `line(lane, lane_config) -> dict | None`: reads `silver_recall` back from a stored `lane_config` for the templates; `None` for other lanes, older rows, or no citations. Takes `lane` like `sira_intent.intent_badge`, since `lane_config` does not carry it.
+- A result without a `rank` field ranks by its list position.
 
 ## 4. Flow
 
 1. `_run_select_synth_lane` (playground.py) already has `sira_results`, `packed` and the synth result.
-2. After synthesis succeeds, it calls `silver_recall.compute(sira_results, <SIRA results in packed>, cited_ids)` and sets `lane_config["silver_recall"]` when the result isn't `None`.
+2. After synthesis succeeds, it calls `silver_recall.compute(sira_results, packed[len(pinned_named):], cited_ids)` (the packed list minus the named-ID pins) and sets `lane_config["silver_recall"]` when the result isn't `None`.
 3. The ask-stream route records the row as today. `lane_config` is already persisted, so no extra write.
 4. Templates read it back through `silver_recall.line(...)`, the same way `intent_badge` is read today.
 
