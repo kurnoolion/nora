@@ -358,3 +358,23 @@ def test_share_sits_in_the_header_beside_asked_by(world, monkeypatch):
     _, html = _ask(world, PLAIN)
     header = html[: html.index('class="row g-3"')]
     assert "askCopyShare(this, '/ask/s/" in header
+def test_the_card_links_a_prefilled_issue_when_configured(world, monkeypatch):
+    monkeypatch.setenv("NORA_ISSUE_URL", "https://git.example.test/org/repo/issues/new")
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    _, html = _ask(world, PLAIN)
+    assert 'href="https://git.example.test/org/repo/issues/new?title=Answer+issue' in html
+    header = html[: html.index('class="row g-3"')]
+    assert header.count(">Report issue</a>") == 1 == html.count(">Report issue</a>")  # beside Share only
+    assert header.index("askCopyShare(") < header.index(">Report issue</a>")
+    assert "btn btn-sm btn-danger" in header
+    # The share link is path-only; the browser adds its origin (askIssueLink),
+    # so the server's view of the host never reaches the issue.
+    assert "askIssueLink(this, '/ask/s/" in header
+    assert "Link%3A+%2Fask%2Fs%2F" in html and "testserver" not in html
+
+
+def test_no_issue_link_by_default(world, monkeypatch):
+    monkeypatch.delenv("NORA_ISSUE_URL", raising=False)
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    _, html = _ask(world, PLAIN)
+    assert "Report issue" not in html

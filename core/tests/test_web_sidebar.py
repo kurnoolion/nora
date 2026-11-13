@@ -24,7 +24,7 @@ _WRAPPED = re.compile(r'<span class="nav-label">.*?</span>', re.S)
 def _sidebar_links(team: bool) -> list[str]:
     html = templates.get_template("base.html").render(
         root_path="",
-        request=SimpleNamespace(cookies={}),
+        request=SimpleNamespace(cookies={}, url=SimpleNamespace(path="/")),
         is_team_restricted=lambda _req: team,
     )
     body = _SIDEBAR.search(html)
