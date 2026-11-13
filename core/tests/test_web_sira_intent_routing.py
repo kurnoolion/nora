@@ -351,3 +351,10 @@ def test_the_timeline_names_the_expansion_and_answer_models(world, monkeypatch):
     _, html = _ask(world, PLAIN)
     assert 'title="Query expansion model">m-expand</span>' in html
     assert 'title="Answer model">m-answer</span>' in html
+
+
+def test_share_sits_in_the_header_beside_asked_by(world, monkeypatch):
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    _, html = _ask(world, PLAIN)
+    header = html[: html.index('class="row g-3"')]
+    assert "askCopyShare(this, '/ask/s/" in header

@@ -8,6 +8,7 @@
    Context:
      question      — the question the user asked (shown once, above)
      user_name     — optional asker name (small annotation in header)
+     share_rows    — dict[lane -> stored row id]; a Share button per row
      lanes_html    — dict[lane_name -> rendered _answer.html string]
                      keys present iff that lane was checked
 #}
@@ -16,9 +17,20 @@
     <span>
       <strong>Q:</strong> {{ question }}
     </span>
-    {% if user_name %}
-      <span class="small text-muted">asked by <strong>{{ user_name }}</strong></span>
-    {% endif %}
+    <span class="d-flex align-items-center gap-2">
+      {% if user_name %}
+        <span class="small text-muted">asked by <strong>{{ user_name }}</strong></span>
+      {% endif %}
+      {# Share up top too (the card's own Share sits under the answer).
+         One per stored lane row; named by lane when more than one. #}
+      {% for lane, rid in (share_rows or {}).items() %}
+        <button type="button" class="btn btn-sm btn-outline-primary py-0"
+                onclick="askCopyShare(this, '{{ root_path }}/ask/s/{{ rid }}')"
+                title="Copy a link to this question and answer">
+          <i class="bi bi-share me-1"></i>Share{% if share_rows|length > 1 %} {{ lane|upper }}{% endif %}
+        </button>
+      {% endfor %}
+    </span>
   </div>
 
   <div class="row g-3">
