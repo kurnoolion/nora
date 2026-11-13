@@ -1248,3 +1248,31 @@ def test_purge_removes_the_rebased_sets_too(host):
     assert r.run_once() == "completed"
     purged = [c.split("--label ")[1] for c in sim.cmds() if "publish purge" in c]
     assert purged == [label, f"{label}-r1", f"{label}-r2"]          # not -rx, not another ingest's
+
+
+def test_serve_waits_for_the_stacks_serve_lock(host):
+    """Two ingests of one stack never flip at once: Serve takes the stack's
+    serve lock (and the gate its staging lock), waiting while another
+    worker holds it."""
+    import fcntl
+    import threading
+    q = host["q"]
+    _, ingest_id = _submit_ingest(host)
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    assert r.run_once() == "completed"
+    locks = Path(host["cfg"].work_dir) / ".locks"
+    assert (locks / "staging.lock").exists()                 # the gate ran under it
+    fh = open(locks / "serve.lock", "a")
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    fj = _run(q.submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    done = []
+    t = threading.Thread(target=lambda: done.append(r.run_once()))
+    t.start()
+    t.join(1.0)
+    assert t.is_alive() and not any("publish flip" in c for c in sim.cmds())
+    fcntl.flock(fh, fcntl.LOCK_UN)
+    fh.close()
+    t.join(10)
+    assert done == ["completed"]
+    assert any("waiting for the stack's serve lock" in l for l in _run(q.get_logs(fj.id)))

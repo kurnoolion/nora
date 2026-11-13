@@ -681,13 +681,24 @@ of a second ingest of the same cell.
    `NORA_BUILD_DIR` from the shell, which overrides the wiring env file, so
    the file's line no longer decides which build a one-shot sees. In that
    mode `start` registers the build under `<root>/ACTIVE.d/` instead of
-   refusing; `abandon` removes it there.
+   refusing; `abandon` removes it there. Built 2026-11-13: `ACTIVE.d`
+   sits beside `ACTIVE`; every compose call goes through `dc`, which sets
+   `NORA_BUILD_DIR`, `NORA_ENV_DIR` and `STORE_ROOT` for the build in the
+   shell (in both modes); `CYC-E005` names a build that is not open. The
+   runner starts using it in slice 4.
 3. **Short sections run one at a time.** The staging gate (bring up,
    eval, bring down) and serve (flip, release-map advance) take a
    stack-wide `flock`; they are minutes against hours of enrichment.
    Enrich runs take one of `NORA_ENRICH_SLOTS` host-wide slots (a
    `flock` on one of N files under the stage store), so the endpoint sees
-   at most N runs times their concurrency; default N = 2.
+   at most N runs times their concurrency; default N = 2. Built
+   2026-11-13: the slot is taken inside the detached enrich container
+   (the store is mounted there read-only; `flock` works on a read-only
+   file, across containers on one host) and held for the run;
+   `<stages-root>/.enrich-slots/<i>` (GC skips dot directories); no
+   store or no `flock` in the image: no slot; `CYC-E038` for a bad
+   count. The runner's locks are `<work>/.locks/staging.lock` (the
+   gate) and `serve.lock` (flip, rollback, and a rebase inside a flip).
 4. **Several jobs at once.** The runner gains `max_parallel_ingests`
    (default 1, today's behaviour): that many workers, each claiming one
    ingest job. A new ingest waits while another ingest of the **same MNO**

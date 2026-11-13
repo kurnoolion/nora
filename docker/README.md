@@ -209,7 +209,19 @@ hash), so nothing needs `--force` bookkeeping.
 `taxonomy` / `enrich [--cell C] [--retry-failed [--single]]` / `verify-enrich` /
 `promote --label L [--host H]` / `abandon`). It runs exactly the commands
 below, records one cycle at a time in `<builds>/ACTIVE` +
-`<build>/CYCLE.json` (with each detached phase's container id), checks
+`<build>/CYCLE.json` (with each detached phase's container id). With
+`NORA_CYCLE_BUILD=<build>` in the environment (per-build mode; the ingest
+runner sets it) every verb acts on that build, each build is its own open
+cycle under `<builds>/ACTIVE.d/` so several run at once, and the wiring
+env file is not rewritten: each compose call takes the build's
+`NORA_BUILD_DIR`, `NORA_ENV_DIR` and `STORE_ROOT` from the shell, which
+compose prefers to the file (`CYC-E005`: the named build is not open).
+Hand cycles without the variable keep the one baton. With a stage store,
+each `enrich` run first takes one of `NORA_ENRICH_SLOTS` host-wide slots
+(wiring env or shell, default 2; `<stages-root>/.enrich-slots/`, held by
+the enrich container for its whole run), so at most that many enrich runs
+of all stacks call the model endpoint at once; the log says when a run
+waits for a slot. It checks
 each phase's artifacts before the next, and emits a paste-safe `CYC`
 block per phase under `<build>/reports/`. Image snapshot/rebake (0.1–0.2)
 and Phase 2 stay manual. `prompts` refuses (`CYC-E042`) when the batch env

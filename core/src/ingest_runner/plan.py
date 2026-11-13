@@ -9,6 +9,8 @@ the phase log, exactly as `cycle.sh status` reads them.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -499,7 +501,32 @@ def _wait_healthz(c: Ctx, url: str, timeout: float = 300.0) -> None:
         c.sleep(3)
 
 
+@contextlib.contextmanager
+def _stack_lock(c: Ctx, name: str):
+    """A stack-wide lock (stage graph step 6) for a short section that two
+    ingests must not run at once: the staging gate (one staging store per
+    stack) and serving (flip, rollback, release-map advance). A file under
+    the work dir, held with flock; every runner worker of the stack uses it."""
+    d = Path(c.cfg.work_dir) / ".locks"
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / f"{name}.lock", "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            c.log(f"waiting for the stack's {name} lock (another ingest holds it)")
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def st_eval(c: Ctx) -> None:
+    with _stack_lock(c, "staging"):
+        _eval(c)
+
+
+def _eval(c: Ctx) -> None:
     stage_env = {"SERVE_RELEASE_SET": c.label}
     c.compose(c.cfg.staging_project, c.cfg.staging_env, "--profile", "serve", "up", "-d", "nora-store",
               extra_env=stage_env, what="staging store up")
@@ -686,6 +713,11 @@ def _rebase(c: Ctx, set_label: str) -> str:
 
 
 def run_flip(c: Ctx) -> None:
+    with _stack_lock(c, "serve"):
+        _flip(c)
+
+
+def _flip(c: Ctx) -> None:
     ing = c.ingest
     if ing.get("state") != "staged" or ing.get("verdict") != "pass":
         raise StageError(f"ingest is {ing.get('state')} with verdict {ing.get('verdict') or '-'}: not flippable")
@@ -735,6 +767,11 @@ def _active_label(c: Ctx) -> str:
 
 
 def run_rollback(c: Ctx) -> None:
+    with _stack_lock(c, "serve"):
+        _rollback(c)
+
+
+def _rollback(c: Ctx) -> None:
     ing = c.ingest
     if ing.get("state") != "served" or not ing.get("previous_label"):
         raise StageError(f"ingest is {ing.get('state')} (previous label {ing.get('previous_label') or '-'}): nothing to roll back to")

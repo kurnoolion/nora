@@ -8,7 +8,10 @@
 #   * a baton — ONE cycle in flight at a time, recorded in
 #     <builds>/ACTIVE + <build>/CYCLE.json (owner, phase log, run name,
 #     image ids); `start` refuses while a cycle is neither promoted nor
-#     abandoned;
+#     abandoned. With NORA_CYCLE_BUILD=<build> (per-build mode, set by the
+#     ingest runner) each build is its own open cycle under <builds>/ACTIVE.d/,
+#     several at once, and the wiring env file is never rewritten: every
+#     compose call takes the build's paths from the shell;
 #   * artifact-checked preconditions — each verb checks its predecessor's
 #     OUTPUT (parse dirs, taxonomy ledger, verify exit), not just the
 #     recorded state, and fails loud with a CYC-E code + one-line fix;
@@ -220,9 +223,22 @@ PY
 # to the nora build root when that root is overridden (keeps the baton
 # inside the tree the builds actually live in).
 if [ -n "${NORA_BUILDS_NORA_ROOT:-}" ]; then ACTIVE="$NROOT/ACTIVE"; else ACTIVE="$BUILDS/ACTIVE"; fi
+# Per-build mode (stage graph step 6: several cycles in flight on one stack).
+# NORA_CYCLE_BUILD names the build every verb acts on (the ingest runner sets
+# it); the build is registered under ACTIVE.d/ instead of holding the one
+# baton, and the wiring env file is never rewritten: every compose call gets
+# the build's paths from the shell (dc), which compose prefers to the file.
+# Unset: one cycle at a time through ACTIVE, as before (hand cycles).
+PER_BUILD="${NORA_CYCLE_BUILD:-}"
+ACTIVE_D="${ACTIVE}.d"   # beside the one baton
 resolve_build() {
+  if [ -n "$PER_BUILD" ]; then
+    BUILD="$PER_BUILD"
+    [ -f "$ACTIVE_D/$BUILD" ] || die 005 "build $BUILD is not an open cycle ($ACTIVE_D/$BUILD missing)" "start it with NORA_CYCLE_BUILD=$BUILD ./cycle.sh start $BUILD"
+  else
   [ -f "$ACTIVE" ] || die 001 "no cycle in flight ($ACTIVE missing)" "./cycle.sh start <build-id>"
   BUILD="$(cat "$ACTIVE")"
+  fi
   NB="$NROOT/$BUILD"; SB="$(sira_dir "$BUILD")"; CJ="$NB/CYCLE.json"
   [ -f "$CJ" ] || die 002 "ACTIVE names $BUILD but $CJ is missing" "restore CYCLE.json or rm $ACTIVE and start over"
   OWNER="$(cyc get "$CJ" owner)"
@@ -253,6 +269,7 @@ require_phase() {  # require_phase <phase> <fix-hint>
 need_wiring() {
   [ -f "$WIRING" ] || die 003 "no builds wiring env ($ENV_ROOT/.env.builds or docker/.env.builds)" \
     "copy a stack env to .env.builds (README Phase 0) — all seven path vars present"
+  [ -z "$PER_BUILD" ] || return 0    # per-build: the shell, not the file, names the build (dc)
   grep -q "^NORA_BUILD_DIR=$NB\$" "$WIRING" \
     || die 004 "wiring env does not point at build $BUILD" "./cycle.sh start rewrote it; check $WIRING for a later manual edit"
   for kv in "NORA_ENV_DIR=$NB" "STORE_ROOT=$SB"; do   # an older env that still carries them must agree
@@ -261,10 +278,27 @@ need_wiring() {
       || die 004 "wiring env's $k disagrees with NORA_BUILD_DIR for build $BUILD" "remove the $k= line (NORA_BUILD_DIR is enough) or ./cycle.sh start again"
   done
 }
+dc() {  # dc <compose args...>: docker compose for this build, its paths from the shell
+  ( cd "$HERE" && NORA_BUILD_DIR="$NB" NORA_ENV_DIR="$NB" STORE_ROOT="$SB" \
+      docker compose --env-file "$WIRING" "$@" )
+}
+slot_prefix() {  # the shell, run inside the enrich container, that takes a host-wide enrich slot
+  # Stage graph step 6: every stack's enrich runs share one model endpoint.
+  # A run holds one of NORA_ENRICH_SLOTS (default 2) flock slots under the
+  # stage store for its whole life, so at most that many runs (each at its
+  # own NORA_SIRA_ENRICH_CONCURRENCY) call the endpoint at once. Without a
+  # stage store, or without flock in the image, no slot is taken.
+  [ -n "$STAGES" ] || return 0
+  local n="${NORA_ENRICH_SLOTS:-$(wiring_var NORA_ENRICH_SLOTS)}"; n="${n:-2}"
+  echo "$n" | grep -qE '^[1-9][0-9]*$' || die 038 "NORA_ENRICH_SLOTS=$n is not a positive number" "set it in the wiring env (default 2)"
+  mkdir -p "$STAGES/.enrich-slots"
+  local i; for i in $(seq 1 "$n"); do : >> "$STAGES/.enrich-slots/$i"; done
+  printf '%s' "if command -v flock >/dev/null; then s=; while [ -z \"\$s\" ]; do for i in \$(seq 1 $n); do exec 9</data/stages/.enrich-slots/\$i; if flock -n 9; then s=\$i; break; fi; exec 9<&-; done; [ -n \"\$s\" ] || { echo \"waiting for an enrich slot (all $n in use)\"; sleep 30; }; done; echo \"enrich slot \$s of $n\"; else echo \"no flock in the image: enrich slots not taken\"; fi; "
+}
 detach() {  # detach <phase> <service> <log-in-container> <inner command...>
   local phase="$1" svc="$2" clog="$3"; shift 3
   local inner="mkdir -p /data/env/reports && ( $* ) > $clog 2>&1; echo \"CYC-EXIT rc=\$?\" >> $clog"
-  local cid; cid="$( cd "$HERE" && docker compose --env-file "$WIRING" --profile ingest run -d --rm -T "$svc" sh -c "$inner" )"
+  local cid; cid="$( dc --profile ingest run -d --rm -T "$svc" sh -c "$inner" )"
   local hlog="$NB/reports/$(basename "$clog")"
   cyc phase "$CJ" "$phase" running "$ME" "$hlog" "$cid"
   echo "$phase: detached — log $hlog  container ${cid:0:12}"
@@ -306,7 +340,8 @@ case "$VERB" in
 start)
   [ -n "$BUILD" ] || usage
   echo "$BUILD" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$' || die 020 "bad build-id '$BUILD'" "letters/digits/._- only"
-  if [ -f "$ACTIVE" ]; then
+  [ -z "$PER_BUILD" ] || [ "$PER_BUILD" = "$BUILD" ] || die 020 "NORA_CYCLE_BUILD=$PER_BUILD but start names $BUILD" "name the same build in both"
+  if [ -z "$PER_BUILD" ] && [ -f "$ACTIVE" ]; then
     prev="$(cat "$ACTIVE")"; pst="$(cyc get "$NROOT/$prev/CYCLE.json" status 2>/dev/null || echo unknown)"
     [ "$pst" = promoted ] || [ "$pst" = abandoned ] \
       || die 021 "cycle '$prev' is still in flight (status=$pst, owner=$(cyc get "$NROOT/$prev/CYCLE.json" owner))" \
@@ -422,12 +457,16 @@ PY
   # (NORA_BUILD_DIR; the compose file derives /data/env and /data/db from
   # it); the older NORA_ENV_DIR= / STORE_ROOT= lines are rewritten when a
   # host env still carries them, never added.
+  if [ -n "$PER_BUILD" ]; then
+    mkdir -p "$ACTIVE_D" && echo "$ME" > "$ACTIVE_D/$BUILD"   # one open cycle among several
+  else
   if grep -q "^NORA_BUILD_DIR=" "$WIRING"; then sed -i "s|^NORA_BUILD_DIR=.*|NORA_BUILD_DIR=$NB|" "$WIRING"; else printf '%s\n' "NORA_BUILD_DIR=$NB" >> "$WIRING"; fi
   for kv in "NORA_ENV_DIR=$NB" "STORE_ROOT=$SB"; do
     k="${kv%%=*}"
     grep -q "^$k=" "$WIRING" && sed -i "s|^$k=.*|$kv|" "$WIRING"
   done
   echo "$BUILD" > "$ACTIVE"
+  fi
   n=$(cells | wc -l)
   cyc_block start ok <<EOF
 cells=$n profiles=$([ -n "$CORPUS" ] && echo corpus || { [ -f "$NB/profiles.json" ] && echo present || echo MISSING; }) stages=$([ -n "$STAGES" ] && echo store || echo off) wiring=$WIRING
@@ -601,6 +640,8 @@ enrich)
     inner="${inner}python -m sandbox.sira_multi --verify --db-root /data/db --run-name $RUN"
   fi
   tag="${CELL:-ALL}"; tag="${tag//\//-}"
+  slot_prefix >/dev/null               # checks NORA_ENRICH_SLOTS here (die cannot leave a $( ))
+  inner="$(slot_prefix)$inner"
   detach enrich sira-batch "/data/env/reports/enrich-$tag-$TS.log" "$inner"
   echo "  resume/retry: same verb (same run name $RUN); one cell: --cell <MNO>/<MMMYYYY>; failures: --retry-failed [--single]"
   ;;
@@ -611,7 +652,7 @@ verify-enrich)
   [ "$es" = ok ] || [ "$es" = failed ] || die 069 "phase 'enrich' is $es" "./cycle.sh enrich, then status until it finishes"
   out="$NB/reports/verify-enrich-$TS.txt"
   set +e
-  ( cd "$HERE" && docker compose --env-file "$WIRING" --profile ingest run --rm -T sira-batch \
+  ( dc --profile ingest run --rm -T sira-batch \
       python -m sandbox.sira_multi --verify --db-root /data/db --run-name "$RUN" ) | tee "$out"
   rc=${PIPESTATUS[0]}; set -e
   fails=$(grep -c 'FAIL' "$out" || true); warns=$(grep -c 'WARN' "$out" || true)
@@ -631,7 +672,7 @@ EOF
   sref="$(wiring_var SIRA_REF)"
   [ -n "$sref" ] || sref="$({ grep -oE 'SIRA_REF:-[0-9a-f]+' "$HERE/docker-compose.yml" || true; } | head -1 | cut -d- -f2)"
   set +e
-  ( cd "$HERE" && docker compose --env-file "$WIRING" --profile ingest run --rm -T \
+  ( dc --profile ingest run --rm -T \
       -e NORA_SIRA_ENRICH_LLM_MODEL="$emodel" -e SIRA_REF="$sref" nora-batch \
       python -m core.src.pipeline.run_cli --env-dir /data/env --stamp enrich ) | tee -a "$out"
   src=${PIPESTATUS[0]}; set -e
@@ -665,7 +706,7 @@ promote)
   fi
   cyc phase "$CJ" promote promoted "$ME"
   cyc set "$CJ" status promoted; cyc set "$CJ" label "$LABEL"
-  rm -f "$ACTIVE"
+  if [ -n "$PER_BUILD" ]; then rm -f "$ACTIVE_D/$BUILD"; else rm -f "$ACTIVE"; fi
   cyc_block promote ok <<EOF
 label=$LABEL pushed_to=$pushed scheme=${SCHEME:--} sira_only=$SIRA_ONLY run_name=$RUN
 EOF
@@ -677,7 +718,7 @@ abandon)
   resolve_build
   cyc phase "$CJ" abandon abandoned "$ME"
   cyc set "$CJ" status abandoned; [ -n "$NOTE" ] && cyc set "$CJ" abandon_note "$NOTE"
-  rm -f "$ACTIVE"
+  if [ -n "$PER_BUILD" ]; then rm -f "$ACTIVE_D/$BUILD"; else rm -f "$ACTIVE"; fi
   cyc_block abandon ok <<EOF
 note=${NOTE:--} (build dirs kept on disk; GC by hand)
 EOF

@@ -40,7 +40,10 @@ if [ "$1" = compose ]; then
       *) shift;;
     esac
   done
-  envdir="$(grep '^NORA_ENV_DIR=' "$envfile" | cut -d= -f2-)"
+  # compose's precedence: the shell over the env file, NORA_ENV_DIR over NORA_BUILD_DIR
+  envdir="${NORA_ENV_DIR:-$(grep '^NORA_ENV_DIR=' "$envfile" | cut -d= -f2-)}"
+  [ -n "$envdir" ] || envdir="${NORA_BUILD_DIR:-$(grep '^NORA_BUILD_DIR=' "$envfile" | cut -d= -f2-)}"
+  echo "$envdir" >> "$NORA_ROOT/compose-builds.txt"
   echo "WEB_STATE_DIR=${WEB_STATE_DIR:-} FEEDBACK_DIR=${FEEDBACK_DIR:-} CORRECTIONS_DIR=${CORRECTIONS_DIR:-}" >> "$NORA_ROOT/compose-env.txt"
   echo "JOB_UID=${JOB_UID:-} JOB_GID=${JOB_GID:-}" >> "$NORA_ROOT/compose-user.txt"
   log="$(printf '%s' "$inner" | grep -oE '> /data/env/reports/[^ ]+' | head -1 | sed 's#^> /data/env#'"$envdir"'#')"
@@ -808,3 +811,90 @@ def test_generic_prompt_recipe_publishes_no_per_mno_prompt_and_unsets_the_dir(ho
     assert r.returncode == 0, r.stderr
     inner = _last_inner(host)
     assert "-u NORA_SIRA_TAXONOMY_DIR" in inner and "-u NORA_SIRA_DOC_PROMPT_DIR" in inner
+
+
+# -- stage graph step 6: several cycles in flight on one stack -------------------
+
+def test_per_build_mode_runs_two_cycles_without_touching_the_wiring_file(host):
+    host["cell"]("MNO-A", "Jan2031")
+    host["cell"]("MNO-B", "Jan2031")
+    _corpus_wiring(host, [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"},
+                          {"mno": "MNO-B", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    wiring = host["root"] / "env" / ".env.builds"
+    before = wiring.read_text()
+    for b in ("b1", "b2"):
+        host["env"]["NORA_CYCLE_BUILD"] = b
+        r = host["run"]("start", b)
+        assert r.returncode == 0, r.stderr
+    assert wiring.read_text() == before                    # never rewritten
+    baton = host["root"] / "builds" / "ACTIVE"
+    assert not baton.exists()                               # no single baton taken
+    assert sorted(p.name for p in Path(f"{baton}.d").iterdir()) == ["b1", "b2"]
+    # each verb acts on the build it names; compose sees that build's paths
+    builds = host["root"] / "compose-builds.txt"
+    for b, cell in (("b1", "MNO-A/Jan2031"), ("b2", "MNO-B/Jan2031")):
+        host["env"]["NORA_CYCLE_BUILD"] = b
+        r = host["run"]("parse", "--cell", cell)
+        assert r.returncode == 0, r.stderr
+        assert builds.read_text().splitlines()[-1] == str(host["nora"] / b)
+        assert f"lane-ingestion-{cell.replace('/', '-')}" in _cycle_json(host, b)["phases"][-1]["log"]
+    # abandoning one closes only that one
+    host["env"]["NORA_CYCLE_BUILD"] = "b1"
+    assert host["run"]("abandon").returncode == 0
+    assert sorted(p.name for p in Path(f"{baton}.d").iterdir()) == ["b2"]
+    r = host["run"]("status")
+    assert r.returncode == 1 and "CYC-E005" in r.stderr
+    # a hand cycle still uses the one baton beside them
+    del host["env"]["NORA_CYCLE_BUILD"]
+    r = host["run"]("start", "b3")
+    assert r.returncode == 0, r.stderr
+    assert baton.read_text().strip() == "b3"
+    assert "NORA_BUILD_DIR=" + str(host["nora"] / "b3") in wiring.read_text()
+
+
+def test_per_build_start_must_name_the_same_build(host):
+    host["cell"]("MNO-A", "Jan2031")
+    _corpus_wiring(host, [{"mno": "MNO-A", "release": "*", "profile": "customizations/profiles/p1.json"}])
+    host["env"]["NORA_CYCLE_BUILD"] = "b1"
+    r = host["run"]("start", "b2")
+    assert r.returncode == 1 and "CYC-E020" in r.stderr
+
+
+
+def test_enrich_takes_a_host_wide_slot_inside_the_container(host, tmp_path):
+    """The enrich command starts by taking one of NORA_ENRICH_SLOTS flock
+    slots under the stage store; with every slot held it waits, and takes
+    the first one freed."""
+    import fcntl
+    import time
+    _to_taxonomy_ok(host)
+    store = host["root"] / "stages"
+    store.mkdir(exist_ok=True)
+    wiring = host["root"] / "env" / ".env.builds"
+    wiring.write_text(wiring.read_text() + f"STAGES_ROOT={store}\nNORA_ENRICH_SLOTS=2\n", encoding="utf-8")
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 0, r.stderr
+    inner = _last_inner(host).split("( ", 1)[1]           # the command inside the detach wrapper
+    assert inner.startswith("if command -v flock") and "seq 1 2" in inner
+    assert sorted(p.name for p in (store / ".enrich-slots").iterdir()) == ["1", "2"]
+    # run the slot shell for real, against the host's slot files
+    snippet = inner.split('; else echo "no flock', 1)[0] + "; fi"
+    snippet = snippet.replace("/data/stages", str(store))
+    held = [open(store / ".enrich-slots" / n) for n in ("1", "2")]
+    for fh in held:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    snippet = snippet.replace("sleep 30", "sleep 0.2")
+    p = subprocess.Popen(["sh", "-c", snippet], stdout=subprocess.PIPE, text=True)
+    time.sleep(0.6)
+    assert p.poll() is None                       # both slots held: it waits
+    fcntl.flock(held[1], fcntl.LOCK_UN)
+    out, _ = p.communicate(timeout=10)
+    assert "waiting for an enrich slot (all 2 in use)" in out and "enrich slot 2 of 2" in out
+    for fh in held:
+        fh.close()
+    # a bad count stops the verb
+    wiring.write_text(wiring.read_text().replace("NORA_ENRICH_SLOTS=2", "NORA_ENRICH_SLOTS=zero"))
+    log = Path(_cycle_json(host, "b1")["phases"][-1]["log"])
+    log.write_text("CYC-EXIT rc=0\n")
+    r = host["run"]("enrich", "--cell", "MNO-A/Jan2031")
+    assert r.returncode == 1 and "CYC-E038" in r.stderr
