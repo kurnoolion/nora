@@ -783,6 +783,29 @@ def _select_synth_extract_citations(answer: str, packed: list[dict[str, Any]]) -
     return out
 
 
+def _clean_working_text(answer: str, ids: list[str]) -> tuple[str, list[str], int]:
+    """The answer without the model's own working, when it opens with it.
+
+    Some models write their reasoning as plain prose (no `<think>` tags)
+    and skip the final-answer marker, so `_strip_reasoning` has nothing to
+    cut on and the card opens with "Okay, let's tackle this question…". The
+    History lane's detector (`query.release_diff`) handles that shape; it is
+    applied here only when the reply OPENS with a reasoning opener, so a
+    genuine answer that happens to contain one of its phrases is never cut.
+    The cut is anchored on the requirement ids the answer cites. Returns
+    `(answer, marks, cut_chars)`; marks name what matched without quoting
+    the reply, for the log and lane_config."""
+    from core.src.query.release_diff import strip_working_text, working_marks
+
+    marks = working_marks(answer or "")
+    if not any(m.startswith("opener:") for m in marks):
+        return answer, [], 0
+    cleaned = strip_working_text(answer, ids).strip()
+    if not cleaned or cleaned == (answer or "").strip():
+        return answer, marks, 0
+    return cleaned, marks, len(answer) - len(cleaned)
+
+
 def _select_synth_synthesize(
     question: str, packed: list[dict[str, Any]], provider_id: str | None = None,
     mode: str | None = None, model: str | None = None,
@@ -804,6 +827,10 @@ def _select_synth_synthesize(
     except Exception as exc:  # noqa: BLE001 — surfaced to the UI
         logger.exception("select-synth LLM synthesis failed")
         return {"error": f"LLM synthesis failed: {exc}"}
+    answer, wt_marks, wt_cut = _clean_working_text(
+        answer, [c.get("req_id") for c in packed if c.get("req_id")])
+    if wt_marks:
+        logger.info("select-synth working text: marks=%s cut_chars=%d", ",".join(wt_marks), wt_cut)
     cites = _select_synth_extract_citations(answer, packed)
     # Provenance epilogue — same stamp as LLMSynthesizer's; names the
     # fallback model when a refused call was rerouted.
@@ -830,6 +857,7 @@ def _select_synth_synthesize(
         "llm_model": answering_model(llm) or getattr(llm, "model_name", "") or "",
         "llm_system_prompt": system,
         "llm_context_text": context_text,
+        "working_text": {"marks": wt_marks, "cut_chars": wt_cut} if wt_marks else None,
     }
 
 
@@ -941,6 +969,10 @@ async def _run_select_synth_lane(
         lane_config["named_in_sira"] = [i for i in named if i in sira_ids]
     if change_note:
         lane_config["change_fallback"] = True
+    wt = synth_result.get("working_text") if not synth_error else None
+    if wt:
+        lane_config["working_text_marks"] = wt["marks"]
+        lane_config["working_text_cut_chars"] = wt["cut_chars"]
     if intent_prompt is not None:
         lane_config["prompt_intent"] = intent_prompt.intent.value
         lane_config["prompt_source"] = intent_prompt.source

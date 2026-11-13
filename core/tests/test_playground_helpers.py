@@ -654,3 +654,51 @@ def test_select_synth_answer_carries_epilogue(monkeypatch):
     assert out["llm_model"] == "model-foo"
     # Citations extracted from the pre-epilogue answer.
     assert [c["req_id"] for c in out["citations"]] == ["REQ_FOO_0001"]
+
+
+# ── select-synth: reasoning written as plain prose ──────────────────
+
+_LEAK = ("Okay, let's tackle this user question about the retry interval. The user wants to "
+         "know if retrying every 10 seconds is allowed. I need to check REQ_FOO_0001. "
+         "Let me look at the timer.\n\n"
+         "VIOLATES — attach retries must be at least 30 seconds apart [REQ_FOO_0001].")
+
+
+def _synth(monkeypatch, reply: str):
+    import core.src.web.routes.playground as pg
+    import core.src.web.routes.query as query_routes
+
+    class _LLM:
+        model = "model-foo"
+
+        def complete(self, prompt, system="", temperature=0.0, max_tokens=4096):
+            return reply
+
+    monkeypatch.setattr(query_routes, "_build_llm_from_env_or_default",
+                        lambda provider_id=None, mode=None, model=None: _LLM())
+    return pg._select_synth_synthesize(
+        "retry every 10 s?", [{"req_id": "REQ_FOO_0001", "text": "Retry at least 30 s apart.",
+                               "mno": "mno-a"}])
+
+
+def test_select_synth_cuts_reasoning_that_opens_the_answer(monkeypatch):
+    out = _synth(monkeypatch, _LEAK)
+    assert out["answer"].startswith("VIOLATES — attach retries")
+    assert "let's tackle" not in out["answer"] and "The user wants" not in out["answer"]
+    assert [c["req_id"] for c in out["citations"]] == ["REQ_FOO_0001"]
+    wt = out["working_text"]
+    assert "opener:okay" in wt["marks"] and wt["cut_chars"] > 100
+
+
+def test_select_synth_leaves_a_genuine_answer_alone(monkeypatch):
+    """Phrases the detector knows, but no reasoning opener: untouched."""
+    good = ("Retries must be at least 30 seconds apart [REQ_FOO_0001]; the interval appears "
+            "identical across releases, as required.")
+    out = _synth(monkeypatch, good)
+    assert out["answer"].startswith(good) and out["working_text"] is None
+
+
+def test_select_synth_keeps_the_reply_when_the_cut_would_leave_nothing(monkeypatch):
+    import core.src.web.routes.playground as pg
+    only = "Okay, let me think. I need to check the requirement."
+    assert pg._clean_working_text(only, [])[0].strip() != ""
