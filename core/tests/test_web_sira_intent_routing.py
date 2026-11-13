@@ -323,3 +323,13 @@ def test_no_scope_badge_without_cells(world, monkeypatch):
     monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
     _, html = _ask(world, PLAIN)
     assert 'title="Searched (MNO/release)"' not in html
+
+
+def test_progress_rows_can_be_hidden(world):
+    # Bootstrap's d-flex is display:flex !important, which beats the inline
+    # display:none and the JS that hides the lanes an ask does not run.
+    import re
+    html = world["client"].get("/test").text
+    for lane in ("nora", "sira", "history"):
+        tag = re.search(rf'<div id="progress-row-{lane}"[^>]*>', html).group(0)
+        assert "d-flex" not in tag, tag
