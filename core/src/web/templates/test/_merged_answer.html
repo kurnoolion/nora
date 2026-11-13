@@ -9,6 +9,8 @@
      question      — the question the user asked (shown once, above)
      user_name     — optional asker name (small annotation in header)
      share_rows    — dict[lane -> stored row id]; a Share button per row
+     issue_urls    — dict[lane -> prefilled issue link]; Report issue beside
+                     that lane's Share (web/issue_link.py; absent when off)
      lanes_html    — dict[lane_name -> rendered _answer.html string]
                      keys present iff that lane was checked
 #}
@@ -29,6 +31,10 @@
                 title="Copy a link to this question and answer">
           <i class="bi bi-share me-1"></i>Share{% if share_rows|length > 1 %} {{ lane|upper }}{% endif %}
         </button>
+        {% if (issue_urls or {}).get(lane) %}
+          <a class="btn btn-sm btn-danger py-0" href="{{ issue_urls[lane] }}" target="_blank" rel="noopener"
+             title="Open a prefilled issue for this answer"><i class="bi bi-bug me-1"></i>Report issue{% if share_rows|length > 1 %} {{ lane|upper }}{% endif %}</a>
+        {% endif %}
       {% endfor %}
     </span>
   </div>
