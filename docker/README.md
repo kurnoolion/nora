@@ -344,7 +344,11 @@ and the gate record; the page then offers **Serve** (the flip) and
    and `peer_registry_roots` = the registry roots of the other stacks on
    the host, whose runners share the requirements dir: abandon and purge
    keep a cell's documents while any stack serves it, and remove only
-   documents the ingest staged itself). The file is gitignored.
+   documents the ingest staged itself; `max_parallel_ingests` = how many
+   ingests run at once, default 1 — above 1, one per MNO at a time, each in
+   its own build, the gate and Serve taken one at a time, and a set made
+   stale by another ingest's Serve re-published and re-gated
+   automatically). The file is gitignored.
 2. Share mapping in the ingestion wiring env (`.env.builds`):
    `NORA_SHARE_MAP=\\SERVER\OADocs=/path/to/mount;…` — the Windows
    prefix the team types, and where this host mounts it.

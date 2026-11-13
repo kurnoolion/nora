@@ -70,6 +70,11 @@ class RunnerConfig:
     overlay_root: str = ""
     document_extensions: list[str] = field(default_factory=lambda: [".pdf", ".docx", ".xlsx"])
     abandon_removes_documents: bool = True
+    # Stage graph step 6: ingests run at once on this stack. 1 (default) is
+    # one at a time through the cycle driver's single baton, as before; more
+    # starts that many workers, runs every cycle in per-build mode
+    # (NORA_CYCLE_BUILD) and keeps one ingest per MNO in flight.
+    max_parallel_ingests: int = 1
     # The registry roots of the other stacks on this host. Their requirements
     # dir is this one: abandon and purge keep a cell's documents while any of
     # them serves it (stage graph, step 5).
@@ -155,6 +160,21 @@ class RunnerConfig:
             return Path(env["NORA_BUILDS_NORA_ROOT"])
         root = Path(env.get("NORA_BUILDS_ROOT") or (Path(env.get("NORA_ROOT", "/srv/nora")) / "builds"))
         return root / "nora"
+
+    @property
+    def per_build(self) -> bool:
+        """Cycles run in per-build mode (several at once)."""
+        return int(self.max_parallel_ingests or 1) > 1
+
+    def cycle_open(self, build: str) -> bool:
+        """Whether `build` holds an open cycle: the one baton, or (per-build
+        mode) its entry under ACTIVE.d beside it."""
+        if not build:
+            return False
+        a = self.active_file
+        if a.is_file() and a.read_text(encoding="utf-8").strip() == build:
+            return True
+        return (a.parent / f"{a.name}.d" / build).is_file()
 
     @property
     def active_file(self) -> Path:

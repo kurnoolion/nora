@@ -84,6 +84,8 @@ class Ctx:
 
     def cycle(self, *verb_args: str) -> Result:
         env = {**os.environ, **self.cfg.cycle_env}
+        if self.cfg.per_build and self.build:
+            env["NORA_CYCLE_BUILD"] = self.build    # several cycles in flight (step 6)
         return self.run([str(Path(self.cfg.docker_dir) / "cycle.sh"), *verb_args],
                         env=env, cwd=self.cfg.docker_dir, what=f"cycle.sh {verb_args[0]}")
 
@@ -354,11 +356,13 @@ def st_start(c: Ctx) -> None:
     seed = seed or c.cfg.seed_build
     if not seed:
         raise StageError("no seed build: set seed_build in the runner config for the first ingest")
-    c.build = _next_build_id(c)
-    c.label = c.build
-    c.db.update_ingest(c.ingest["id"], build=c.build, label=c.label)
-    recipe = _stack_recipe(c)
-    c.cycle("start", c.build, "--seed", seed, *(["--recipe", recipe] if recipe else []))
+    # two workers must not pick the same next build id
+    with _stack_lock(c, "start"):
+        c.build = _next_build_id(c)
+        c.label = c.build
+        c.db.update_ingest(c.ingest["id"], build=c.build, label=c.label)
+        recipe = _stack_recipe(c)
+        c.cycle("start", c.build, "--seed", seed, *(["--recipe", recipe] if recipe else []))
     c.log(f"start: build {c.build} seeded from {seed}" + (f", recipe {recipe}" if recipe else ""))
 
 
@@ -830,8 +834,8 @@ def run_purge(c: Ctx) -> None:
         raise StageError(f"purge refused: label {label or '-'} / build {build or '-'} is also carried by ingest "
                          f"{who}; nothing removed — a row that shares its names with a live ingest is left as it is")
     problems: list[str] = []
-    active = c.cfg.active_file
-    if build and active.is_file() and active.read_text(encoding="utf-8").strip() == build:
+    if c.cfg.cycle_open(build):
+        c.build = build
         c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} purged")
         c.log("purge: the cycle baton was this build's; abandoned")
     # the ingest's own set, and every set Serve rebased it into (<label>-r<n>)
@@ -891,8 +895,8 @@ def run_abandon(c: Ctx) -> None:
     if ing.get("state") not in ("failed", "cancelled", "staged"):
         raise StageError(f"ingest is {ing.get('state')}: only failed, cancelled or staged ingests can be abandoned")
     build = ing.get("build") or ""
-    active = c.cfg.active_file
-    if build and active.is_file() and active.read_text(encoding="utf-8").strip() == build:
+    if c.cfg.cycle_open(build):
+        c.build = build
         c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} abandoned")
     else:
         c.log("abandon: no cycle in flight for this ingest")

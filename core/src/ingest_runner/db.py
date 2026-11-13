@@ -35,17 +35,31 @@ class RunnerDB:
 
     # -- jobs -----------------------------------------------------------------
 
-    def claim_next(self, runner: str, job_types: tuple[str, ...] = RUNNER_JOB_TYPES) -> dict | None:
+    def claim_next(self, runner: str, job_types: tuple[str, ...] = RUNNER_JOB_TYPES,
+                   one_per_mno: bool = False) -> dict | None:
         """Claim the oldest submitted job of the given types; None if none.
-        One UPDATE guarded by the status, so two runners never claim one job."""
+        One UPDATE guarded by the status, so two runners never claim one job.
+        With `one_per_mno` (several ingests at once, stage graph step 6) an
+        `ingest` job is passed over while another ingest of its MNO is in
+        flight: running, staged, or claimed by a worker. The choice and the
+        claim are one write transaction, so two workers cannot both take
+        releases of one MNO."""
         marks = ",".join("?" * len(job_types))
         now = now_iso()
         con = self._connect()
         try:
-            row = con.execute(
-                f"SELECT id FROM jobs WHERE status = 'submitted' AND job_type IN ({marks}) "
-                f"ORDER BY created_at LIMIT 1", job_types).fetchone()
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute(
+                f"SELECT id, job_type, params FROM jobs WHERE status = 'submitted' AND job_type IN ({marks}) "
+                f"ORDER BY created_at", job_types).fetchall()
+            row = None
+            for cand in rows:
+                if one_per_mno and cand["job_type"] == "ingest" and self._mno_busy(con, cand["params"]):
+                    continue
+                row = cand
+                break
             if row is None:
+                con.execute("ROLLBACK")
                 return None
             cur = con.execute(
                 "UPDATE jobs SET status = 'running', runner = ?, started_at = ?, heartbeat_at = ? "
@@ -59,6 +73,33 @@ class RunnerDB:
         d = dict(job)
         d["params"] = json.loads(d["params"]) if d.get("params") else {}
         return d
+
+    @staticmethod
+    def _mno_busy(con, params_json: str | None) -> bool:
+        """Another ingest of this job's MNO is in flight: its state is running
+        or staged, or an ingest job of it is already claimed."""
+        try:
+            ingest_id = (json.loads(params_json) if params_json else {}).get("ingest_id") or ""
+        except ValueError:
+            return False
+        me = con.execute("SELECT mno FROM ingests WHERE id = ?", (ingest_id,)).fetchone()
+        if me is None:
+            return False
+        busy = con.execute(
+            "SELECT 1 FROM ingests WHERE mno = ? AND id != ? AND state IN ('running', 'staged') LIMIT 1",
+            (me["mno"], ingest_id)).fetchone()
+        if busy is not None:
+            return True
+        for j in con.execute("SELECT params FROM jobs WHERE status = 'running' AND job_type = 'ingest'"):
+            try:
+                other = (json.loads(j["params"]) if j["params"] else {}).get("ingest_id") or ""
+            except ValueError:
+                continue
+            if other and other != ingest_id:
+                o = con.execute("SELECT mno FROM ingests WHERE id = ?", (other,)).fetchone()
+                if o is not None and o["mno"] == me["mno"]:
+                    return True
+        return False
 
     def heartbeat(self, job_id: str) -> None:
         con = self._connect()

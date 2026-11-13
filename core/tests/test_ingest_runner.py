@@ -87,9 +87,10 @@ class Sim:
         self.gev_error = gev_error
         self.run_id = "20310101T000000-lbl"
 
-    def _cycle(self, args: list[str]) -> Result:
+    def _cycle(self, args: list[str], env: dict | None = None) -> Result:
         verb = args[0]
         nb_root = self.root / "builds/nora"
+        per_build = (env or {}).get("NORA_CYCLE_BUILD", "")   # cycle.sh per-build mode
         if verb == "start":
             build = args[1]
             nb = nb_root / build
@@ -100,9 +101,13 @@ class Sim:
                 name = args[args.index("--recipe") + 1]
                 src = Path(__file__).resolve().parents[2] / "customizations/recipes" / f"{name}.json"
                 (nb / "RECIPE.json").write_text(src.read_text())
-            (self.root / "builds/ACTIVE").write_text(build)
+            if per_build:
+                (self.root / "builds/ACTIVE.d").mkdir(exist_ok=True)
+                (self.root / "builds/ACTIVE.d" / build).write_text("runner")
+            else:
+                (self.root / "builds/ACTIVE").write_text(build)
             return Result(0, [f"CYC build={build} phase=start status=ok"])
-        build = (self.root / "builds/ACTIVE").read_text().strip()
+        build = per_build or (self.root / "builds/ACTIVE").read_text().strip()
         nb = nb_root / build
         if verb == "parse" and "--cell" in args:   # the manifest the real lane writes
             key = args[args.index("--cell") + 1]
@@ -118,7 +123,10 @@ class Sim:
             (nb / "CYCLE.json").write_text(json.dumps(cj))
             return Result(0, [f"{verb}: detached — log {log}"])
         if verb == "abandon":
-            (self.root / "builds/ACTIVE").unlink()
+            if per_build:
+                (self.root / "builds/ACTIVE.d" / build).unlink()
+            else:
+                (self.root / "builds/ACTIVE").unlink()
             return Result(0, ["abandoned"])
         return Result(0, [f"{verb} ok"])
 
@@ -151,7 +159,7 @@ class Sim:
     def run(self, argv, *, env=None, cwd=None, on_line=None, stdin=None) -> Result:
         self.calls.append((list(argv), dict(env or {})))
         if argv[0].endswith("cycle.sh"):
-            res = self._cycle(argv[1:])
+            res = self._cycle(argv[1:], env)
         elif argv[:2] == ["docker", "compose"]:
             res = self._compose(argv[2:], env or {})
         else:
@@ -974,8 +982,8 @@ def test_convert_promotes_a_dangling_best_link(host):
     sim = Sim(host["root"])
     orig_cycle = sim._cycle
 
-    def cycle_with_sira(args):
-        res = orig_cycle(args)
+    def cycle_with_sira(args, env=None):
+        res = orig_cycle(args, env)
         if args[0] == "enrich":
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
             _sira_cell(host, build, "MNO-A/Apr2031", dangling=True)
@@ -1005,8 +1013,8 @@ def test_convert_leaves_a_healthy_best_link_alone(host):
     sim = Sim(host["root"])
     orig_cycle = sim._cycle
 
-    def cycle_with_sira(args):
-        res = orig_cycle(args)
+    def cycle_with_sira(args, env=None):
+        res = orig_cycle(args, env)
         if args[0] == "enrich":
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
             _sira_cell(host, build, "MNO-A/Apr2031", dangling=False)
@@ -1021,8 +1029,8 @@ def test_convert_fails_when_promote_does_not_heal(host):
     sim = Sim(host["root"])
     orig_cycle = sim._cycle
 
-    def cycle_with_sira(args):
-        res = orig_cycle(args)
+    def cycle_with_sira(args, env=None):
+        res = orig_cycle(args, env)
         if args[0] == "enrich":
             build = (host["root"] / "builds/ACTIVE").read_text().strip()
             _sira_cell(host, build, "MNO-A/Apr2031", dangling=True)
@@ -1276,3 +1284,84 @@ def test_serve_waits_for_the_stacks_serve_lock(host):
     t.join(10)
     assert done == ["completed"]
     assert any("waiting for the stack's serve lock" in l for l in _run(q.get_logs(fj.id)))
+
+
+# -- stage graph step 6, slice 4: several ingests at once, one per MNO ---------
+
+def test_claim_keeps_one_ingest_per_mno_in_flight(host):
+    q = host["q"]
+    db = RunnerDB(host["cfg"].jobs_db)
+    _, a1 = _submit_ingest(host, mno="MNO-A", release="Apr2031")
+    _, a2 = _submit_ingest(host, mno="MNO-A", release="Oct2031")
+    _, b1 = _submit_ingest(host, mno="MNO-B", release="Apr2031")
+    first = db.claim_next("w1", one_per_mno=True)
+    second = db.claim_next("w2", one_per_mno=True)
+    assert first["params"]["ingest_id"] == a1 and second["params"]["ingest_id"] == b1   # a2 passed over
+    assert db.claim_next("w3", one_per_mno=True) is None
+    # a staged ingest of the MNO still holds it; a served one frees it
+    db.finish_job(first["id"], "completed")
+    _run(q.update_ingest(a1, state="staged"))
+    assert db.claim_next("w3", one_per_mno=True) is None
+    _run(q.update_ingest(a1, state="served"))
+    assert db.claim_next("w3", one_per_mno=True)["params"]["ingest_id"] == a2
+    # without the rule (one worker): strict submission order, as before
+    _, a3 = _submit_ingest(host, mno="MNO-A", release="Jan2031")
+    assert db.claim_next("w4")["params"]["ingest_id"] == a3
+
+
+def test_parallel_runner_runs_each_cycle_in_per_build_mode(host):
+    q = host["q"]
+    host["cfg"].max_parallel_ingests = 3
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    _, ingest_id = _submit_ingest(host)
+    assert r.run_once("w1") == "completed"
+    build = _run(q.get_ingest(ingest_id)).build
+    cycles = [(a, e) for a, e in sim.calls if a[0].endswith("cycle.sh")]
+    assert cycles and all(e.get("NORA_CYCLE_BUILD") == build for _, e in cycles)
+    assert (host["root"] / "builds/ACTIVE.d" / build).is_file()
+    assert not (host["root"] / "builds/ACTIVE").exists()
+    assert (Path(host["cfg"].work_dir) / ".locks" / "start.lock").exists()
+    # abandon finds the open per-build cycle and closes it
+    ab = _run(q.submit("ingest-abandon", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once("w1") == "completed", _run(q.get_meta(ab.id)).error_message
+    assert not (host["root"] / "builds/ACTIVE.d" / build).exists()
+    assert any(a[1] == "abandon" and e.get("NORA_CYCLE_BUILD") == build
+               for a, e in sim.calls if a[0].endswith("cycle.sh"))
+
+
+def test_one_worker_keeps_the_single_baton(host):
+    sim = Sim(host["root"])
+    _submit_ingest(host)
+    assert _runner(host, sim).run_once() == "completed"
+    assert all("NORA_CYCLE_BUILD" not in e for a, e in sim.calls if a[0].endswith("cycle.sh"))
+
+
+
+def test_run_forever_runs_two_mnos_at_once(host):
+    """Two workers take two MNOs' ingests side by side; both reach staged."""
+    import threading
+    import time as _time
+    q = host["q"]
+    host["cfg"].max_parallel_ingests = 2
+    host["cfg"].poll_seconds = 0.05
+    r = Runner(host["cfg"], db=RunnerDB(host["cfg"].jobs_db), ex=Sim(host["root"]),
+               sleep=_time.sleep, healthz=lambda url: True)
+    _, a = _submit_ingest(host, mno="MNO-A")
+    _, b = _submit_ingest(host, mno="MNO-B")
+    t = threading.Thread(target=r.run_forever, daemon=True)
+    t.start()
+    deadline = _time.monotonic() + 20
+    while _time.monotonic() < deadline:
+        if all(_run(q.get_ingest(i)).state == "staged" for i in (a, b)):
+            break
+        _time.sleep(0.1)
+    r.stop()
+    t.join(5)
+    assert [_run(q.get_ingest(i)).state for i in (a, b)] == ["staged", "staged"]
+    builds = {_run(q.get_ingest(i)).build for i in (a, b)}
+    assert len(builds) == 2                                   # each its own build
+    con = sqlite3.connect(host["cfg"].jobs_db)
+    names = {row[0] for row in con.execute("SELECT name FROM runners")}
+    con.close()
+    assert {f"{host['cfg'].runner_name}#1", f"{host['cfg'].runner_name}#2"} <= names

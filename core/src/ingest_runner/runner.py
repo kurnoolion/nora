@@ -102,28 +102,44 @@ class Runner:
 
     # -- the loop ------------------------------------------------------------------------
 
-    def run_once(self) -> str | None:
-        """Claim and run one job; None when the queue holds none."""
-        job = self.db.claim_next(self.cfg.runner_name)
-        self.db.seen(self.cfg.runner_name, job["id"] if job else None)
+    def run_once(self, worker: str = "") -> str | None:
+        """Claim and run one job; None when the queue holds none. `worker`
+        names this worker in the runners table when there are several."""
+        name = worker or self.cfg.runner_name
+        job = self.db.claim_next(name, one_per_mno=self.cfg.per_build)
+        self.db.seen(name, job["id"] if job else None)
         if job is None:
             return None
-        logger.info("claimed %s %s", job["job_type"], job["id"])
+        logger.info("%s claimed %s %s", name, job["job_type"], job["id"])
         try:
             return self.run_job(job)
         finally:
-            self.db.seen(self.cfg.runner_name, None)
+            self.db.seen(name, None)
 
-    def run_forever(self) -> None:
-        logger.info("ingest runner %s polling %s every %.0fs", self.cfg.runner_name,
-                    self.cfg.jobs_db, self.cfg.poll_seconds)
+    def _loop(self, worker: str = "") -> None:
         while not self._stop.is_set():
             try:
-                if self.run_once() is None:
+                if self.run_once(worker) is None:
                     self.sleep(self.cfg.poll_seconds)
             except Exception:  # noqa: BLE001
                 logger.exception("runner loop error; continuing")
                 self.sleep(self.cfg.poll_seconds)
+
+    def run_forever(self) -> None:
+        n = max(1, int(self.cfg.max_parallel_ingests or 1))
+        logger.info("ingest runner %s polling %s every %.0fs with %d worker(s)", self.cfg.runner_name,
+                    self.cfg.jobs_db, self.cfg.poll_seconds, n)
+        if n == 1:
+            self._loop()
+            return
+        # several ingests at once (stage graph step 6): one thread per worker,
+        # each claiming its own jobs; the per-MNO rule lives in the claim
+        workers = [threading.Thread(target=self._loop, args=(f"{self.cfg.runner_name}#{i + 1}",),
+                                    name=f"worker-{i + 1}", daemon=True) for i in range(n)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
 
 
 def _summary(job_type: str, ing: dict) -> str:

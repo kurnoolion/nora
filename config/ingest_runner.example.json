@@ -26,6 +26,7 @@
   "prompt_scheme": "",
   "seed_build": "<the build the served set came from>",
   "peer_registry_roots": [],
+  "max_parallel_ingests": 1,
   "eval_tolerance": 0.03,
   "verify_n": 25,
   "poll_seconds": 5,

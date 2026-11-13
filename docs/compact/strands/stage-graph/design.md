@@ -704,7 +704,11 @@ of a second ingest of the same cell.
    ingest job. A new ingest waits while another ingest of the **same MNO**
    is in flight (one release per MNO at a time: History is per MNO, and
    two would make each other stale every time). Flip, rollback, abandon,
-   purge and redo jobs keep their own rules.
+   purge and redo jobs keep their own rules. Built 2026-11-13: worker
+   threads in one runner process (`<name>#<n>`); the MNO rule is checked
+   inside the claim's write transaction (an ingest of the MNO running,
+   staged, or claimed); the next build id and `cycle.sh start` under the
+   stack's `start` lock; abandon and purge close a per-build cycle.
 5. **The page.** The Ingest page shows every running ingest and the
    queue by MNO; the "one cycle at a time" text and the blocking-ingest
    warning follow the new rule.
