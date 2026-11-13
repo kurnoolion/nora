@@ -1450,7 +1450,9 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
         #    happens inside the retrieve closure — D-DRAFT-10 call 4).
         t0 = time.time()
         raw_phrases: list[str] = []
+        expand_model: str | None = None   # shown beside Expand in the web timeline
         if _QUERY_ENRICH_ENABLED and _query_prompt_template:
+            expand_model = _SHIM_MODEL or "sira-shim"   # what _llm_call sends
             try:
                 prompt = _query_prompt_template.format(doc_text=req.query, max_n=4)
                 raw = await _llm_call(
@@ -1518,6 +1520,7 @@ async def _multi_cell_query(req: "_SiraQueryRequest", top_k: int) -> dict[str, A
         "candidates_reranked": len(pool),
         "results": out,
         "timings_ms": timings,
+        "expand_model": expand_model,
         "notes": notes,
     }
 

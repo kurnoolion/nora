@@ -621,6 +621,8 @@ async def _build_merged_response_html(
                 "sira_mode": out["sira_result"].get("mode"),
                 "sira_resolved_cells": out["sira_result"].get("resolved_cells"),
                 "sira_unresolved": out["sira_result"].get("unresolved"),
+                # The store's own expansion model (not the picker's).
+                "sira_expand_model": out["sira_result"].get("expand_model"),
                 "synth_error": out["synth_error"],
                 "candidate_count": 0,
             })
