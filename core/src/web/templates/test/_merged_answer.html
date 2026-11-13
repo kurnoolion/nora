@@ -24,7 +24,7 @@
       {# Share up top too (the card's own Share sits under the answer).
          One per stored lane row; named by lane when more than one. #}
       {% for lane, rid in (share_rows or {}).items() %}
-        <button type="button" class="btn btn-sm btn-outline-primary py-0"
+        <button type="button" class="btn btn-sm btn-primary py-0"
                 onclick="askCopyShare(this, '{{ root_path }}/ask/s/{{ rid }}')"
                 title="Copy a link to this question and answer">
           <i class="bi bi-share me-1"></i>Share{% if share_rows|length > 1 %} {{ lane|upper }}{% endif %}
