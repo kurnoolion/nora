@@ -711,7 +711,10 @@ of a second ingest of the same cell.
    stack's `start` lock; abandon and purge close a per-build cycle.
 5. **The page.** The Ingest page shows every running ingest and the
    queue by MNO; the "one cycle at a time" text and the blocking-ingest
-   warning follow the new rule.
+   warning follow the new rule. Built 2026-11-13: the web tells parallel
+   mode from the runners table (fresh `<name>#<n>` workers), so it needs
+   no setting of its own; the self-serve guide says what a waiting or
+   rebased ingest looks like.
 
 Rejected: serializing publish (a set can stay staged for days before
 anyone serves it, so staleness appears at serve time whatever the publish

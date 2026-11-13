@@ -425,3 +425,26 @@ def test_redo_under_the_team_mode_gate(web, monkeypatch):
     r = TestClient(app).post(f"/api/ingest/{served}/redo", headers=JSON, follow_redirects=False)
     assert r.status_code in (302, 303, 403)
     assert len(_run(web["q"].list_ingests(limit=50))) == 2
+
+
+def test_page_follows_parallel_workers(web):
+    """With the runner's workers reporting (<name>#<n>), the page says how many
+    run at once, drops the blocking warning, and names what a queued ingest
+    of a busy MNO waits for (stage graph step 6)."""
+    from core.src.ingest_runner.db import RunnerDB
+    db = RunnerDB(web["q"]._db_path)
+    failed = _ingest(web, "failed", build="b-old")
+    running = _ingest(web, "running", build="b-a")
+    queued = _ingest(web, "queued")
+    c = _client()
+    page = c.get("/ingest").text
+    assert "may still hold the cycle" in page                       # one worker: the baton warning
+    for n in (1, 2, 3):
+        db.seen(f"host-1#{n}", "job-1" if n == 1 else None)
+    page = c.get("/ingest").text
+    assert "may still hold the cycle" not in page
+    assert "up to 3 ingests run at once, one per MNO" in page and "3 workers, 1 running a job" in page
+    api = c.get("/api/ingest", headers=JSON).json()
+    assert api["runner"]["parallel"] is True and api["blocking"] == []
+    assert queued in api["waiting"] and "(running)" in api["waiting"][queued]
+    assert "Waits for MNO-A Apr2031 (running)" in c.get(f"/ingest/{queued}").text

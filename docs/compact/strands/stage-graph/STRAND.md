@@ -71,3 +71,10 @@ working.
   generic`), D-DRAFT-17. Runner guards for two stacks built: documents
   belong to the ingest that staged them, corpus bindings under a lock
   (D-DRAFT-16).
+- 2026-11-13: step 6 parallel ingestion built in five slices (§10e): a set
+  serves only on the set it was built on, Serve rebases a stale one
+  (D-DRAFT-19); per-build cycles; enrich slots and the stack's gate and
+  serve locks; runner workers with one ingest per MNO; the page. Off until
+  a runner config sets `max_parallel_ingests` above 1. Refusal handling
+  for the generic enrich path and enrich concurrency per stack landed for
+  stack A's phase 4, which is running.

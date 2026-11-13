@@ -42,7 +42,7 @@
                         <label class="form-label">Shared folder with the release's documents</label>
                         <input type="text" class="form-control font-monospace" name="source" required
                                placeholder="\\SERVER\Share\MNO\Release" autocomplete="off">
-                        <div class="form-text">The folder's path as you see it in Windows. Every .pdf, .docx and .xlsx in it is taken. Submits queue; one ingest runs at a time.</div>
+                        <div class="form-text">The folder's path as you see it in Windows. Every .pdf, .docx and .xlsx in it is taken. Submits queue; {% if runner.parallel %}up to {{ runner.workers }} ingests run at once, one per MNO{% else %}one ingest runs at a time{% endif %}.</div>
                     </div>
                     <div class="row">
                         <div class="col-6 mb-3">
@@ -96,7 +96,7 @@
                     <tbody>
                     {% for i in ingests %}
                         <tr style="cursor: pointer;" onclick="window.location='{{ root_path }}/ingest/{{ i.id }}'">
-                            <td>{% include "partials/ingest_state.html" %}</td>
+                            <td>{% include "partials/ingest_state.html" %}{% if waiting and waiting.get(i.id) %}<div class="small text-muted">waits for {{ waiting[i.id] }}</div>{% endif %}</td>
                             <td>{{ i.mno }}</td>
                             <td>{{ i.release }}</td>
                             <td>{% if i.verdict == 'pass' %}<span class="badge bg-success">pass</span>{% elif i.verdict == 'fail' %}<span class="badge bg-danger">fail</span>{% else %}-{% endif %}</td>

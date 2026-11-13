@@ -25,10 +25,18 @@ the design is `docs/architecture.md` §28.
 2. Paste the folder's path as Windows shows it, `\\SERVER\Share\…`.
 3. Pick the MNO; type the release as `MMMYYYY` (for example `Apr2031`);
    type your name; a note if you like.
-4. Submit. The page answers with a queue position. Submits queue, and
-   one ingest runs at a time, so a position above 1 means waiting for
-   the one before yours. A release that is already served, or already
-   queued, running or staged, is refused with a message saying so.
+4. Submit. The page answers with a queue position. Submits queue. The
+   Runner box says how many ingests run at once: with one, a position
+   above 1 means waiting for the ones before yours; with several, each
+   MNO has one ingest in flight at a time, so a release of an MNO whose
+   last ingest is still running or staged waits until that one is
+   served, abandoned or failed (the list says "waits for …"). A release
+   that is already served, or already queued, running or staged, is
+   refused with a message saying so.
+5. When several run at once, another MNO's ingest may be served while
+   yours is staged. Serve then publishes yours again on the new served
+   set and runs the check again before serving it: a few minutes more,
+   and the page shows the new label.
 
 ## What you see
 
@@ -82,8 +90,10 @@ and they can serve with a recorded waiver if the failure is understood.
   Windows share path, the release is not `MMMYYYY`, the MNO is not
   served, or the release is already there. Fix the field and submit
   again.
-- **A failed ingest ahead of yours.** The page names it; the queue moves
-  once it is retried or abandoned. Ask its owner, or the administrator.
+- **A failed ingest ahead of yours** (one ingest at a time only). The
+  page names it; the queue moves once it is retried or abandoned. Ask
+  its owner, or the administrator. With several at once, a failed ingest
+  holds nothing back.
 - **Abandon.** A failed or cancelled ingest, or a staged one you do not
   want, can be abandoned: the cycle is closed and the staged copy of the
   documents is removed. Its build stays for the administrator to look

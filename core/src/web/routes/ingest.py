@@ -85,9 +85,27 @@ def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _age(r: dict) -> float:
+    try:
+        seen = datetime.strptime(r["seen_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+        return (datetime.now(UTC) - seen).total_seconds()
+    except (KeyError, ValueError):
+        return float("inf")
+
+
 def _runner_status(runners: list[dict]) -> dict[str, Any]:
     if not runners:
-        return {"state": "never", "text": "no runner has reported yet", "runners": []}
+        return {"state": "never", "text": "no runner has reported yet", "runners": [],
+                "parallel": False, "workers": 0}
+    # Several ingests at once (stage graph step 6): the runner's workers
+    # report as <name>#<n>; fresh ones mean the stack runs in parallel.
+    fresh = [r for r in runners if _age(r) <= _RUNNER_FRESH_SECONDS]
+    workers = [r for r in fresh if "#" in str(r.get("name", ""))]
+    if workers:
+        busy = sum(1 for r in workers if r.get("job_id"))
+        return {"state": "busy" if busy else "idle", "runners": runners, "parallel": True,
+                "workers": len(workers),
+                "text": f"{len(workers)} workers, {busy} running a job; one ingest per MNO at a time"}
     newest = runners[0]
     try:
         seen = datetime.strptime(newest["seen_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
@@ -99,7 +117,7 @@ def _runner_status(runners: list[dict]) -> dict[str, Any]:
     text = (f"{newest['name']} {'running a job' if busy else 'idle'}, seen {int(age)}s ago" if fresh
             else f"{newest['name']} not seen for {int(age) if age != float('inf') else '?'}s — jobs wait until it is back")
     return {"state": "busy" if (fresh and busy) else ("idle" if fresh else "stale"),
-            "text": text, "runners": runners}
+            "text": text, "runners": runners, "parallel": False, "workers": 1 if fresh else 0}
 
 
 def _ingest_view(ing: Ingest, admin: bool = False) -> dict[str, Any]:
@@ -148,7 +166,8 @@ def _callback_ok(url: str) -> bool:
 async def validate_request(job_queue: JobQueue, mno: str, release: str, source: str,
                            callback_url: str = "") -> str | None:
     """The reason a request is refused, or None. Order: shape, served MNO,
-    cell free. Submits queue; the runner runs one at a time."""
+    cell free. Submits queue; the runner runs one at a time, or, with
+    parallel workers, one per MNO at a time."""
     if not _MNO_RE.match(mno):
         return "MNO must be the cell name as served (letters, digits, dashes; upper case)"
     if not _REL_RE.match(release):
@@ -169,7 +188,8 @@ async def validate_request(job_queue: JobQueue, mno: str, release: str, source: 
     for ing in await job_queue.list_ingests(limit=500):
         if ing.state in _TAKEN_STATES and ing.mno.upper() == mno.upper() and ing.release == release:
             return f"{mno} {release} is already {ing.state} (ingest {ing.id[:8]})"
-    # Submits queue: the runner takes them in order, one cycle at a time.
+    # Submits queue: the runner takes them in order (one per MNO at a time
+    # when it runs several at once).
     return None
 
 
@@ -179,12 +199,33 @@ def queue_positions(ingests: list[Ingest]) -> dict[str, int]:
     return {i.id: n for n, i in enumerate(queued, start=1)}
 
 
-def blocking_ingests(ingests: list[Ingest]) -> list[Ingest]:
+def blocking_ingests(ingests: list[Ingest], parallel: bool = False) -> list[Ingest]:
     """Failed or cancelled ingests that opened a build and were not
     abandoned: their cycle may still hold the driver's baton, and the
     next queued ingest fails at `start` until they are retried or
-    abandoned."""
+    abandoned. With parallel workers each ingest holds only its own
+    cycle, so none blocks the queue."""
+    if parallel:
+        return []
     return [i for i in ingests if i.state in ("failed", "cancelled") and i.build]
+
+
+def waiting_for(ingests: list[Ingest], parallel: bool) -> dict[str, str]:
+    """With parallel workers, `{queued ingest id: what it waits for}`: an
+    ingest of the same MNO that is running or staged (one per MNO at a
+    time; it waits until that one is served, abandoned or failed)."""
+    if not parallel:
+        return {}
+    inflight: dict[str, Ingest] = {}
+    for i in ingests:
+        if i.state in ("running", "staged"):
+            inflight.setdefault(i.mno.upper(), i)
+    out: dict[str, str] = {}
+    for i in ingests:
+        other = inflight.get(i.mno.upper())
+        if i.state == "queued" and other is not None and other.id != i.id:
+            out[i.id] = f"{other.mno} {other.release} ({other.state})"
+    return out
 
 
 # -- pages ------------------------------------------------------------------------------
@@ -198,13 +239,15 @@ async def ingest_page(request: Request):
     ingests = await job_queue.list_ingests(limit=50)
     cells = await served_cells()
     mnos = sorted({ck[0] for ck in (parse_cell_dirname(c) for c in cells) if ck}) if cells else []
+    runner = _runner_status(await job_queue.list_runners())
     return _template_response(request, "ingest.html", {
         "locked": False,
         "ingests": _views(ingests, tm.is_ingest_admin(request)),
-        "blocking": [_ingest_view(i) for i in blocking_ingests(ingests)],
+        "blocking": [_ingest_view(i) for i in blocking_ingests(ingests, runner["parallel"])],
+        "waiting": waiting_for(ingests, runner["parallel"]),
         "mnos": mnos,
         "store_reachable": cells is not None,
-        "runner": _runner_status(await job_queue.list_runners()),
+        "runner": runner,
         "error": request.query_params.get("error", ""),
     })
 
@@ -220,11 +263,14 @@ async def ingest_detail_page(request: Request, ingest_id: str):
         return RedirectResponse(f"{_root(request)}/ingest?error=no+such+ingest", status_code=303)
     job = await job_queue.get_meta(ing.job_id) if ing.job_id else None
     view = _ingest_view(ing, tm.is_ingest_admin(request))
+    runner = _runner_status(await job_queue.list_runners())
     if ing.state == "queued":
-        view["queue_position"] = queue_positions(await job_queue.list_ingests(limit=500)).get(ing.id)
+        everyone = await job_queue.list_ingests(limit=500)
+        view["queue_position"] = queue_positions(everyone).get(ing.id)
+        view["waiting_for"] = waiting_for(everyone, runner["parallel"]).get(ing.id)
     return _template_response(request, "ingest_detail.html", {
         "ing": view, "job": job,
-        "runner": _runner_status(await job_queue.list_runners()),
+        "runner": runner,
         "error": request.query_params.get("error", ""),
     })
 
@@ -269,9 +315,11 @@ async def api_list(request: Request):
         return _forbidden(request)
     job_queue: JobQueue = request.app.state.job_queue
     ingests = await job_queue.list_ingests(limit=100)
+    runner = _runner_status(await job_queue.list_runners())
     return JSONResponse({"ingests": _views(ingests),
-                         "blocking": [i.id for i in blocking_ingests(ingests)],
-                         "runner": _runner_status(await job_queue.list_runners())})
+                         "blocking": [i.id for i in blocking_ingests(ingests, runner["parallel"])],
+                         "waiting": waiting_for(ingests, runner["parallel"]),
+                         "runner": runner})
 
 
 @router.post("/api/ingest")

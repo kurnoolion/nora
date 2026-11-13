@@ -8,6 +8,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h4 class="mb-1">{{ ing.mno }} {{ ing.release }} {% include "partials/ingest_state.html" %}</h4>
+        {% if ing.waiting_for %}<div class="small text-muted">Waits for {{ ing.waiting_for }}: one ingest per MNO runs at a time.</div>{% endif %}
         <small class="text-muted font-monospace">{{ ing.id }}{% if ing.label %} · label {{ ing.label }}{% endif %}</small>
     </div>
     <div>
