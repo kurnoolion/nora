@@ -523,6 +523,7 @@ async def _build_merged_response_html(
     `_answer.html` pre-rendering, and the outer two-column container."""
     feedback_store = request.app.state.feedback_store
     lanes_html: dict[str, str] = {}
+    share_rows: dict[str, int] = {}   # lane -> stored row id, for header Share
 
     for lane, out in outputs.items():
         if "error" in out:
@@ -558,6 +559,8 @@ async def _build_merged_response_html(
                 "FeedbackStore.record_qa failed for %s row: %s", lane, exc,
             )
 
+        if row_id:
+            share_rows[lane] = row_id
         ctx: dict[str, Any] = {
             "row_id": row_id,
             "question": question,
@@ -621,6 +624,8 @@ async def _build_merged_response_html(
                 "sira_mode": out["sira_result"].get("mode"),
                 "sira_resolved_cells": out["sira_result"].get("resolved_cells"),
                 "sira_unresolved": out["sira_result"].get("unresolved"),
+                # The store's own expansion model (not the picker's).
+                "sira_expand_model": out["sira_result"].get("expand_model"),
                 "synth_error": out["synth_error"],
                 "candidate_count": 0,
             })
@@ -646,6 +651,7 @@ async def _build_merged_response_html(
             "question": question,
             "user_name": user_name,
             "lanes_html": lanes_html,
+            "share_rows": share_rows,
         },
     )
 

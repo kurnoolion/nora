@@ -333,3 +333,28 @@ def test_progress_rows_can_be_hidden(world):
     for lane in ("nora", "sira", "history"):
         tag = re.search(rf'<div id="progress-row-{lane}"[^>]*>', html).group(0)
         assert "d-flex" not in tag, tag
+
+
+def test_the_timeline_names_the_expansion_and_answer_models(world, monkeypatch):
+    def sira_timed(question, request, **kw):
+        async def run():
+            out = await _sira_ok(question, request, **kw)
+            out["elapsed_ms"] = 1000
+            out["sira_result"] = {"timings_ms": {"expand_ms": 600, "search_ms": 10,
+                                                 "synth_ms": 300},
+                                  "expand_model": "m-expand"}
+            out["result"]["llm_model"] = "m-answer"
+            return out
+        return run()
+
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", sira_timed)
+    _, html = _ask(world, PLAIN)
+    assert 'title="Query expansion model">m-expand</span>' in html
+    assert 'title="Answer model">m-answer</span>' in html
+
+
+def test_share_sits_in_the_header_beside_asked_by(world, monkeypatch):
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    _, html = _ask(world, PLAIN)
+    header = html[: html.index('class="row g-3"')]
+    assert "askCopyShare(this, '/ask/s/" in header
