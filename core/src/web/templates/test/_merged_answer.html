@@ -33,6 +33,8 @@
         </button>
         {% if (issue_urls or {}).get(lane) %}
           <a class="btn btn-sm btn-danger py-0" href="{{ issue_urls[lane] }}" target="_blank" rel="noopener"
+             onclick="askIssueLink(this, '{{ root_path }}/ask/s/{{ rid }}')"
+             onauxclick="askIssueLink(this, '{{ root_path }}/ask/s/{{ rid }}')"
              title="Open a prefilled issue for this answer"><i class="bi bi-bug me-1"></i>Report issue{% if share_rows|length > 1 %} {{ lane|upper }}{% endif %}</a>
         {% endif %}
       {% endfor %}

@@ -522,6 +522,7 @@ async def _build_merged_response_html(
     `/api/test/ask-stream` (final SSE event payload). Handles per-lane
     `test_feedback` row insertion, per-lane context building, per-lane
     `_answer.html` pre-rendering, and the outer two-column container."""
+    from core.src.web.app import config
     feedback_store = request.app.state.feedback_store
     lanes_html: dict[str, str] = {}
     share_rows: dict[str, int] = {}   # lane -> stored row id, for header Share
@@ -645,7 +646,7 @@ async def _build_merged_response_html(
         # Prefilled "Report issue" link (opt-in, NORA_ISSUE_URL).
         issue_urls[lane] = issue_url(
             row_id=row_id, lane=lane, intent=ctx["intent_badge"], question=question,
-            share_url=f"{str(request.base_url).rstrip('/')}/ask/s/{row_id}",
+            share_path=f"{config.root_path}/ask/s/{row_id}",
             cells=(out.get("sira_result") or {}).get("resolved_cells") or (),
             model=result.get("llm_model") or "")
         if lane == id_lookup_lane.LANE:

@@ -11,7 +11,7 @@ def _q(url):
 
 
 def _url(**kw):
-    args = dict(row_id=7, lane="sira", share_url="http://host.example.test/ask/s/7",
+    args = dict(row_id=7, lane="sira", share_path="/ask/s/7",
                 intent="compare", question="secret question text",
                 cells=["CELL_A/R1"], model="m-answer")
     args.update(kw)
@@ -41,7 +41,7 @@ def test_default_prefill_carries_metadata_and_no_content(monkeypatch):
     q = _q(url)
     assert q["title"] == "Answer issue: row 7" and q["labels"] == "bug"
     body = q["body"]
-    for part in ("http://host.example.test/ask/s/7", "Row: 7", "Lane: sira", "Intent: compare"):
+    for part in ("Link: /ask/s/7\n", "Row: 7", "Lane: sira", "Intent: compare"):
         assert part in body
     for secret in ("secret question text", "CELL_A/R1", "m-answer"):
         assert secret not in body

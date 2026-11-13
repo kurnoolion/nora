@@ -48,15 +48,18 @@ def page_issue_url(path: str) -> str:
     return _with_query(base, f"Issue: {path}", body)
 
 
-def issue_url(*, row_id: "int | None", lane: str, share_url: str, intent: str = "",
+def issue_url(*, row_id: "int | None", lane: str, share_path: str, intent: str = "",
               question: str = "", cells: Iterable[str] = (), model: str = "") -> str:
     """The prefilled new-issue URL for one stored answer, or "" when the
-    switch is unset, the URL is not http(s), or the answer was not stored."""
+    switch is unset, the URL is not http(s), or the answer was not stored.
+    The body names the share link by path only: the browser puts its own
+    origin in front on click (askIssueLink), so no host the server sees
+    behind a proxy reaches the issue."""
     base = _base()
     if not base or not row_id:
         return ""
     lines = ["## What is wrong?", "", "<!-- What did you expect, and what did you get? -->", "",
-             "## Answer", "", f"- Link: {share_url}", f"- Row: {row_id}", f"- Lane: {lane}"]
+             "## Answer", "", f"- Link: {share_path}", f"- Row: {row_id}", f"- Lane: {lane}"]
     if intent:
         lines.append(f"- Intent: {intent}")
     if os.getenv(ENV_CONTEXT, "").strip().lower() in ("on", "true", "1"):

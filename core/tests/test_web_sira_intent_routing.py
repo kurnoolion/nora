@@ -367,6 +367,10 @@ def test_the_card_links_a_prefilled_issue_when_configured(world, monkeypatch):
     assert header.count(">Report issue</a>") == 1 == html.count(">Report issue</a>")  # beside Share only
     assert header.index("askCopyShare(") < header.index(">Report issue</a>")
     assert "btn btn-sm btn-danger" in header
+    # The share link is path-only; the browser adds its origin (askIssueLink),
+    # so the server's view of the host never reaches the issue.
+    assert "askIssueLink(this, '/ask/s/" in header
+    assert "Link%3A+%2Fask%2Fs%2F" in html and "testserver" not in html
 
 
 def test_no_issue_link_by_default(world, monkeypatch):
