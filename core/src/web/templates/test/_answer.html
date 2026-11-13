@@ -85,6 +85,9 @@
       <strong>Q:</strong> {{ question }}
       {# Answer intent (strand sira-intent, design §7): read-only, no override. #}
       {% if intent_badge %}<span class="badge rounded-pill text-bg-light border ms-1" title="Answer intent">{{ intent_badge }}</span>{% endif %}
+      {# Scope SIRA searched (FR-multi-5), up top so it is seen with the intent. #}
+      {% for c in sira_resolved_cells or [] %}<span class="badge rounded-pill bg-info text-dark ms-1" title="Searched (MNO/release)">{{ c }}</span>{% endfor %}
+      {% for u in sira_unresolved or [] %}<span class="badge rounded-pill bg-warning text-dark ms-1" title="Named in the question but not ingested">{{ u[0] }}{% if u[1] != '*' %} / {{ u[1] }}{% endif %}</span>{% endfor %}
     </div>
 
     {# Failure alerts stay above the fold — they explain a missing or
