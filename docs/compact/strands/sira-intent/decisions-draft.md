@@ -246,3 +246,67 @@
 **Consequences.**
 - The repo is public: a run on a non-synthetic or real-traffic set stays out of it.
 - A failed decision call writes nothing, so a report never scores the rules under Kev's name.
+
+### D-DRAFT-13 — 2026-11-12 — With every intent switch off, History routing is main's rule; the `change` intent routes only behind a switch (amends D-DRAFT-5, D-DRAFT-9)
+
+**Context.**
+- PR review: on `main`, any question the rules analyzer marks `RELEASE_DIFF` goes to History. The branch routed only the `change` intent, and `is_release_change_question` excludes verdict asks and negated changes (D-DRAFT-9), so with every switch off some questions moved from History to SIRA. The PR description, design.md and web MODULE.md claimed routing was unchanged.
+
+**Decision.**
+- `release_diff_rule` keeps `main`'s rule verbatim and decides when every intent switch is off.
+- The `change` intent decides History routing only when `NORA_SIRA_INTENT_PROMPTS` is on or `NORA_QUERY_ANALYZER` serves a model arm (`sira_intent.intent_routing_enabled`, passed to `history_diff_applies` as `intent_routing`).
+
+**Why.**
+- "Off by default" must hold: a served stack that turns nothing on behaves as `main`.
+- Rejected: keep the new routing and correct the claim in the three docs (the review's fallback). It would change served behaviour without opt-in.
+
+**Consequences.**
+- Two routing rules live side by side until the switches become the default; tests cover the review's two examples both ways.
+
+### D-DRAFT-14 — 2026-11-12 — Under strict mode, a History store that fails to open raises RHD-E005, not RHD-E003 (amends D-DRAFT-5)
+
+**Context.**
+- PR review: under strict mode (D-DRAFT-5), a store that fails to open was reported as RHD-E003 "History store not configured".
+
+**Decision.**
+- New `RHD-E005` "History store failed to open ({detail})". `history_diff_applies` logs the failure and raises it under strict mode; the detail is the exception class name only. Non-strict still returns `None` (SIRA answers).
+
+**Why.**
+- "Not configured" sends the administrator to the config when the store is configured and broken.
+- The exception class says enough to start; the message could carry paths, so it stays in the log.
+- Rejected: reuse RHD-E003 with a different detail (one code for two causes).
+
+**Consequences.**
+- One more error code in `pipeline/error_codes.py` and web MODULE.md.
+
+### D-DRAFT-15 — 2026-11-12 — `sandbox/run_local.sh stop` kills only the processes the script started
+
+**Context.**
+- PR review: `stop` killed whatever listened on the three ports, which include the compose stack's defaults. On a host running compose, uvicorn then failed to bind and the health loop reported success against the compose stack.
+
+**Decision.**
+- Start records its PIDs in `$ENV_DIR/logs/run_local.pids`; `stop` kills those PIDs and their children only.
+- Start refuses a port already in use and fails when its own processes die.
+- `PYTHON`, `STORE_PORT`, `WEB_PORT` overrides; `KEV_PORT` required with `KEV_DIR` (no concrete port in the script).
+
+**Why.**
+- A sandbox script must never stop another stack's processes or trust another listener's health answer.
+- Rejected: keep killing by port (the reported failure).
+
+**Consequences.**
+- A stale PID file after a crash is harmless: stop skips PIDs that no longer exist.
+
+### D-DRAFT-16 — 2026-11-12 — regen-map on this branch covers only the files the branch changed
+
+**Context.**
+- A full regen-map also rewrote Structure sections for web files main had changed (jobs, team_mode, model_discovery, ingest…), drift unrelated to this strand.
+
+**Decision.**
+- Regenerate Structure only for the files this branch changed, plus the MAP.md file tree entries for its new files. Leave other drift for main.
+
+**Why.**
+- Keeps the PR diff to this strand's work; reviewing unrelated Structure churn costs the reviewer and invites merge conflicts.
+- Rejected: full regen on the branch.
+
+**Consequences.**
+- Structure drift in files this branch did not touch remains until a regen on main.
