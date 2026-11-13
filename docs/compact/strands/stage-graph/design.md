@@ -355,9 +355,22 @@ Each step leaves the system working and is landed on its own.
    setup rebuilt by the cycle driver with recipe `sira-plain`, on the
    layout of step 4, so both stacks run the same machinery.
 6. **Parallel builds** (scope added 2026-11-11): the limits the store does
-   not solve. `cycle.sh start` writes the corpus bindings without a lock;
-   the runner takes one job at a time; the marker wait defaults to an
-   hour; concurrent enrich runs share one model endpoint.
+   not solve. `cycle.sh start` writes the corpus bindings without a lock
+   (locked since 2026-11-11, `CYC-E037`); the runner takes one job at a
+   time; the marker wait defaults to an hour; concurrent enrich runs
+   share one model endpoint. **Endpoint capacity** (2026-11-13): the
+   calls a stack keeps in flight are an operational setting, never a
+   fingerprint or a recipe parameter (they change how fast, not what is
+   produced; a run that overloads the endpoint fails the verify gate
+   rather than producing a different output). They are set per stack:
+   `NORA_SIRA_ENRICH_CONCURRENCY` (the one-request-per-call path, default
+   4) and `NORA_SIRA_BATCH_CONCURRENCY` (batched, default 2), in each
+   stack's sira-batch env file. The load on the endpoint is their sum
+   over every enrich run going at once, plus the webs' Ask traffic, and
+   nothing caps that sum today. Step 6 treats the endpoint as a host
+   budget: either the stacks' shares are set to fit it, or a host-wide
+   limiter hands out slots to every enrich run, as the bindings lock does
+   for the corpus.
 7. **New unit kinds** when a recipe needs them: graph and vector units
    in the registry, a serving mode in the store.
 

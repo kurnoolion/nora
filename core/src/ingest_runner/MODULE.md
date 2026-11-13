@@ -45,7 +45,7 @@ The host-side runner behind self-serve ingestion (strand self-serve-ingestion, D
 - No Stage 2 of the golden eval; it stays the experts' tool.
 
 **Depends on**
-[web](../web/MODULE.md) (`jobs_schema` only — the DDL and the job types). Runtime: `docker/cycle.sh`, the compose file and the stack and staging env files, the batch and store images.
+[web](../web/MODULE.md) (`jobs_schema` only — the DDL and the job types), [pipeline](../pipeline/MODULE.md) (`recipes.load_frozen` for the build's prompt scheme, `generations.bump` for a redo; both standard library only and imported at call time, so the host-side runner still needs nothing from `requirements.txt`). Runtime: `docker/cycle.sh`, the compose file and the stack and staging env files, the batch and store images.
 
 **Depended on by**
 None — a leaf service. The web reads what it writes (the `ingests` table and the job rows and logs).

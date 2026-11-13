@@ -39,7 +39,12 @@ defaults:
 # on bigger backends. Note: this YAML override is applied AFTER
 # Hydra CLI overrides, so editing here is the right place to tune —
 # CLI `++enrich.concurrency=N` is silently re-stomped by this file.
-concurrency: 4
+# Per stack, without an image rebuild: NORA_SIRA_ENRICH_CONCURRENCY in the
+# sira-batch env file (the one-request-per-call document enrichment) or
+# the store's env (query enrichment at serving). Unset = 4. It changes how
+# many calls are in flight, never what they return, so it enters no stage
+# fingerprint; every stack's value draws on the same model endpoint.
+concurrency: ${oc.decode:${oc.env:NORA_SIRA_ENRICH_CONCURRENCY,4}}
 
 doc_prompt_file: configs/enrich/prompts/doc_requirement_v01.txt
 query_prompt_file: configs/enrich/prompts/query_requirement_v01.txt

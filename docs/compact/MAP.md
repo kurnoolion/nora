@@ -70,6 +70,7 @@ flowchart TD
     m_graph --> m_resolver
     m_graph --> m_standards
     m_graph --> m_taxonomy
+    m_ingest_runner --> m_pipeline
     m_ingest_runner --> m_web
     m_llm --> m_env
     m_llm --> m_pipeline
@@ -1058,6 +1059,7 @@ nora/
 │   ├── test_verify_tables.py                            # Tests for the verify_tables helper.
 │   ├── tests/
 │   │   ├── test_adapter_fingerprints.py                 # The adapter writes one fingerprint per requirement row, beside corpus.jsonl.
+│   │   ├── test_sira_enrich_concurrency.py              # The SIRA enrich config takes its concurrency from NORA_SIRA_ENRICH_CONCURRENCY
 │   │   └── test_sira_incremental.py                     # Tests for sandbox/sira_incremental.py — content-hash-aware
 │   ├── verify_req_recall.py                             # verify_req_recall — diff req-ids visible at extract time against the ids
 │   └── verify_tables.py                                 # verify_tables — confirm parsed tables are inlined into NORA parse text and
