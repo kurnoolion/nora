@@ -177,3 +177,13 @@
 **Why.** Adding every switch unconditionally was rejected: it would move every stored extract fingerprint for no change in output. `DOCLING_ARTIFACTS` stays out: it is a path, the same mount on every stack.
 
 **Consequences.** Turning a switch on recomputes extract, and everything after it, for every cell that stack builds; turning it off again finds the earlier entries.
+
+### D-DRAFT-19 — 2026-11-13 — A release set serves only on the set it was built on; Serve rebases a stale one
+
+**Context.** `publish` builds a set from the active set plus the new cell; `flip` replaces the active set whole. With two ingests in flight on one stack, the second to be served would drop the first's cell.
+
+**Decision.** A release set records its base. `flip` refuses a set whose base is no longer active (`PUB-E011`), checked inside the flip transaction. The runner's Serve then publishes the same units on the active set as `<label>-r<n>`, gates it, and serves it; one release per MNO is in flight at a time.
+
+**Why.** Serializing publish was rejected: a set can stay staged for days, so staleness appears at serve time whatever the publish order. Carrying the first gate over to the rebased set was rejected: the set differs, and the gate is minutes.
+
+**Consequences.** A served ingest may serve `<label>-r<n>` rather than its label; rollback and purge follow `release_set`. `--allow-stale` exists for a knowing hand flip.

@@ -513,7 +513,7 @@ def publish(serve_root: "str | Path", label: str, *, cells_src: str = "",
                 created_by=_user(), note=note, code_version=code_version(),
                 prompt_scheme=prompt_scheme or built["prompt_scheme"],
                 recipe=built["recipe"], recipe_digest=built["recipe_digest"],
-                stage_fps=built["stage_fps"])
+                stage_fps=built["stage_fps"], base_label=base_label)
             reg.commit_write(con)
         except BaseException:
             reg.rollback_write(con)
@@ -548,7 +548,7 @@ def _check_files(reg: Registry, label: str, members: list[StoreVersion]) -> None
 
 def flip(serve_root: "str | Path", label: str, *, mode: str = "staged", note: str = "",
          force: bool = False, reason: str = "", store_url: str = "",
-         kind: str = "flip") -> dict:
+         kind: str = "flip", allow_stale: bool = False) -> dict:
     """Step 4 (+5 with ``store_url``): refuse without a passing gate unless
     forced (which records a waived manual gate with the reason), write
     ``active`` and the flip row in one transaction, then optionally reload
@@ -575,7 +575,22 @@ def flip(serve_root: "str | Path", label: str, *, mode: str = "staged", note: st
         if not reg.served_before(label) and not force:
             raise PipelineError("PUB-E009", {"label": label})
         mode = "expedited"
-    result = reg.flip(label, kind=kind, mode=mode, by=_user(), note=note)
+    # A set built on another set serves only while that set is active
+    # (stage graph, step 6): otherwise it would drop whatever was served
+    # since. A rollback restores a known set and is not checked; a set
+    # recorded before the base column, or published with no base, neither.
+    expect = None
+    if kind == "flip" and not allow_stale:
+        base = (reg.release_set(label) or {}).get("base_label")
+        expect = base or None
+    try:
+        result = reg.flip(label, kind=kind, mode=mode, by=_user(), note=note,
+                          expect_active=expect)
+    except RegistryError as exc:
+        if exc.code != "REG-E010":
+            raise
+        raise PipelineError("PUB-E011", {"label": label, "base": expect,
+                                         "active": reg.active_label() or "none"}) from exc
     result["members"] = {f"{m.store}/{m.unit}": m.version for m in members}
     if store_url:
         result["verify"] = verify_serving(reg, label, store_url)
@@ -773,6 +788,9 @@ def main(argv: "list[str] | None" = None) -> int:
     f.add_argument("--reason", default="", help="why the gate is waived (required with --force)")
     f.add_argument("--note", default="")
     f.add_argument("--store-url", default="", help="nora-store base URL to reload and verify")
+    f.add_argument("--allow-stale", action="store_true",
+                   help="flip even when the set was built on a set that is no longer active "
+                        "(drops whatever was served since)")
 
     r = sub.add_parser("rollback", help="re-activate a previously served release set")
     _add_root(r)
@@ -814,7 +832,8 @@ def main(argv: "list[str] | None" = None) -> int:
                                    run_ref=args.run_ref, note=args.note)}
         elif args.cmd == "flip":
             out = flip(args.serve_root, args.label, mode=args.mode, note=args.note,
-                       force=args.force, reason=args.reason, store_url=args.store_url)
+                       force=args.force, reason=args.reason, store_url=args.store_url,
+                       allow_stale=args.allow_stale)
             out["rollback"] = (f"python -m core.src.stores.publish rollback --serve-root "
                                f"{args.serve_root} --to {out['from_label'] or '<label>'}")
         elif args.cmd == "rollback":

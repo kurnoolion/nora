@@ -1172,3 +1172,79 @@ def test_abandon_and_purge_keep_documents_a_peer_stack_serves(host, broken):
     assert r.run_once() == "completed"
     assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
     assert _run(q.get_ingest(ingest_id)).state == "purged"
+
+
+# -- stage graph, step 6: Serve rebases a set that another ingest made stale ---
+
+class StaleSim(Sim):
+    """`publish flip` of the ingest's own label answers PUB-E011 (another
+    ingest was served since it was published); any other label flips."""
+
+    def __init__(self, root, stale: set[str], **kw):
+        super().__init__(root, **kw)
+        self.stale = stale
+
+    def _compose(self, args, env):
+        text = " ".join(args)
+        if "publish flip" in text:
+            label = args[args.index("--label") + 1]
+            if label in self.stale:
+                return Result(1, [f"[PUB-E011] Release set {label} was built on old-label, "
+                                  "but the active set is other-ingest"])
+        return super()._compose(args, env)
+
+
+def test_serve_rebases_a_stale_set_regates_and_serves_it(host):
+    q = host["q"]
+    _, ingest_id = _submit_ingest(host)
+    sim = Sim(host["root"])
+    assert _runner(host, sim).run_once() == "completed"
+    label = _run(q.get_ingest(ingest_id)).label
+    _registry(host, sets=[label, "other-ingest"], active=[("other-ingest", "MNO-B/Apr2031")])
+    sim = StaleSim(host["root"], stale={label})
+    r = _runner(host, sim)
+    fj = _run(q.submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed", _run(q.get_meta(fj.id)).error_message
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.state == "served" and ing.release_set == f"{label}-r1" and ing.label == label
+    cmds = sim.cmds()
+    rebase = next(c for c in cmds if f"--label {label}-r1 --cells-src /data/work/{label}/cells" in c)
+    assert "--base other-ingest" in rebase and f"--env-dir /data/labels/{label}/nora" in rebase
+    assert any("golden_cli" in c and f"--stack-label {label}-r1" in c for c in cmds)
+    assert any(f"publish gate --serve-root /data/serve --label {label}-r1" in c for c in cmds)
+    assert any(f"publish flip --serve-root /data/serve --label {label}-r1" in c for c in cmds)
+    # rollback follows the set that serves, not the label
+    _registry(host, sets=[label, f"{label}-r1", "other-ingest"], active=[(f"{label}-r1", "MNO-A/Apr2031")])
+    rb = _run(q.submit("ingest-rollback", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed", _run(q.get_meta(rb.id)).error_message
+
+
+def test_a_rebased_set_that_fails_its_gate_stays_staged(host):
+    q = host["q"]
+    _, ingest_id = _submit_ingest(host)
+    assert _runner(host, Sim(host["root"])).run_once() == "completed"
+    label = _run(q.get_ingest(ingest_id)).label
+    _registry(host, sets=[label, "other-ingest"], active=[("other-ingest", "MNO-B/Apr2031")])
+    r = _runner(host, StaleSim(host["root"], stale={label}, golden_recall=0.10))
+    fj = _run(q.submit("ingest-flip", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "failed"
+    assert "did not pass the gate" in _run(q.get_meta(fj.id)).error_message
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.state == "staged" and ing.verdict == "fail" and ing.release_set == f"{label}-r1"
+
+
+def test_purge_removes_the_rebased_sets_too(host):
+    q = host["q"]
+    _, ingest_id = _submit_ingest(host)
+    sim = Sim(host["root"])
+    r = _runner(host, sim)
+    assert r.run_once() == "completed"
+    label = _run(q.get_ingest(ingest_id)).label
+    _registry(host, sets=[label, f"{label}-r1", f"{label}-r2", f"{label}-rx", "old-label"],
+              active=[("old-label", "MNO-A/Jan2031")])
+    _run(q.update_ingest(ingest_id, state="rolled_back"))
+    sim.calls.clear()
+    _run(q.submit("ingest-purge", "t", params={"ingest_id": ingest_id}))
+    assert r.run_once() == "completed"
+    purged = [c.split("--label ")[1] for c in sim.cmds() if "publish purge" in c]
+    assert purged == [label, f"{label}-r1", f"{label}-r2"]          # not -rx, not another ingest's

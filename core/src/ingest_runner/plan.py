@@ -245,6 +245,22 @@ def _documents_kept(c: Ctx, ing: dict) -> str:
     return ""
 
 
+def _registry_labels(c: Ctx, prefix: str) -> list[str]:
+    """Release-set labels `<prefix><n>` in the registry (n digits only)."""
+    reg = Path(c.cfg.registry_root) / "registry.db"
+    if not reg.is_file():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            rows = [r[0] for r in con.execute("SELECT label FROM release_set")]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+    return sorted(r for r in rows if r.startswith(prefix) and r[len(prefix):].isdigit())
+
+
 def _registry_has(c: Ctx, sql: str, params: tuple) -> bool:
     """One read-only existence query against the registry, if there is one."""
     reg = Path(c.cfg.registry_root) / "registry.db"
@@ -628,19 +644,67 @@ def _publish_json(res: Result) -> dict:
         return {}
 
 
+REBASE_ATTEMPTS = 3
+
+
+def _served_set(ing: dict) -> str:
+    """The release set this ingest serves (or would): its rebased set when
+    Serve rebased it, else its label."""
+    return ing.get("release_set") or ing.get("label") or ""
+
+
+def _rebase(c: Ctx, set_label: str) -> str:
+    """Publish this ingest's units again on the active set (stage graph,
+    step 6: another ingest was served since this one was published), gate
+    the new set like the first, and return its label. Units are reused by
+    fingerprint; History is rebuilt when the active set changed the MNO."""
+    ing = c.ingest
+    label = ing["label"]
+    c.build = ing.get("build") or ""    # the recipe's prompt scheme comes from the build
+    active = _active_label(c)
+    new = _next_free(c, f"{label}-r", builds=False)
+    c.log(f"flip: {set_label} was built on a set that is no longer active ({active or 'none'} is); "
+          f"publishing it again on {active or 'none'} as {new}")
+    cmd = ["python", "-m", "core.src.stores.publish", "publish", "--serve-root", CTR_SERVE,
+           "--label", new, "--cells-src", f"{CTR_WORK}/{label}/cells",
+           "--env-dir", f"{CTR_LABELS}/{label}/nora", "--base", active or "none"]
+    if _scheme(c):
+        cmd += ["--prompt-scheme", _scheme(c)]
+    c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
+                    mounts=_publish_mounts(c), what="publish publish (rebase)")
+    c.db.update_ingest(ing["id"], release_set=new)
+    ing["release_set"] = new
+    c.label = new                       # the set the gate stages and records
+    st_eval(c)
+    st_gate(c)
+    row = c.db.get_ingest(ing["id"]) or {}
+    if row.get("verdict") != "pass":
+        c.set_state("staged", job_id=c.job_id)
+        raise StageError(f"the rebased set {new} did not pass the gate ({row.get('verdict_detail') or '-'}); "
+                         "it is staged, not served")
+    return new
+
+
 def run_flip(c: Ctx) -> None:
     ing = c.ingest
     if ing.get("state") != "staged" or ing.get("verdict") != "pass":
         raise StageError(f"ingest is {ing.get('state')} with verdict {ing.get('verdict') or '-'}: not flippable")
-    label = ing["label"]
-    cmd = ["python", "-m", "core.src.stores.publish", "flip", "--serve-root", CTR_SERVE,
-           "--label", label, "--store-url", c.cfg.store_url]
-    res = c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
-                          mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish flip")
+    set_label = _served_set(ing)
+    for attempt in range(REBASE_ATTEMPTS):
+        cmd = ["python", "-m", "core.src.stores.publish", "flip", "--serve-root", CTR_SERVE,
+               "--label", set_label, "--store-url", c.cfg.store_url]
+        try:
+            res = c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
+                                  mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish flip")
+            break
+        except CommandError as exc:
+            if not any("PUB-E011" in line for line in exc.result.lines) or attempt == REBASE_ATTEMPTS - 1:
+                raise
+            set_label = _rebase(c, set_label)
     out = _publish_json(res)
     previous = out.get("from_label") or None
     c.set_state("served", previous_label=previous, flipped_at=now_iso(), job_id=c.job_id)
-    c.log(f"flip: {label} is active (previous: {previous or '-'})")
+    c.log(f"flip: {set_label} is active (previous: {previous or '-'})")
     # the release map follows the flip; the new build holds the parse trees advance checks
     adv = ["python", "-m", "core.src.eval.golden_release_cli", "advance", "--env-dir", CTR_ENV,
            "--mno", ing["mno"], "--release", ing["release"], "--by", c.cfg.runner_name, "--yes"]
@@ -678,8 +742,8 @@ def run_rollback(c: Ctx) -> None:
     # another set is active; rolling back to this row's previous label would
     # drop that newer set as well.
     active = _active_label(c)
-    if active and active != ing.get("label"):
-        raise StageError(f"{ing.get('label')} is no longer the active set ({active} is): rolling back to "
+    if active and active != _served_set(ing):
+        raise StageError(f"{_served_set(ing)} is no longer the active set ({active} is): rolling back to "
                          f"{ing['previous_label']} would drop {active} too; roll back by hand if that is meant")
     cmd = ["python", "-m", "core.src.stores.publish", "rollback", "--serve-root", CTR_SERVE,
            "--to", ing["previous_label"], "--store-url", c.cfg.store_url]
@@ -733,13 +797,18 @@ def run_purge(c: Ctx) -> None:
     if build and active.is_file() and active.read_text(encoding="utf-8").strip() == build:
         c.cycle("abandon", "--note", f"self-serve ingest {ing['id']} purged")
         c.log("purge: the cycle baton was this build's; abandoned")
-    if label and _registry_has(c, "SELECT 1 FROM release_set WHERE label=?", (label,)):
-        cmd = ["python", "-m", "core.src.stores.publish", "purge", "--serve-root", CTR_SERVE, "--label", label]
-        res = c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
-                              mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish purge")
-        c.log(f"purge: release set {label} removed from the registry" + _purge_summary(res))
-    elif label:
-        c.log(f"purge: no release set {label} in the registry")
+    # the ingest's own set, and every set Serve rebased it into (<label>-r<n>)
+    sets = [label] if label else []
+    if label:
+        sets += _registry_labels(c, f"{label}-r")
+    for name in sets:
+        if _registry_has(c, "SELECT 1 FROM release_set WHERE label=?", (name,)):
+            cmd = ["python", "-m", "core.src.stores.publish", "purge", "--serve-root", CTR_SERVE, "--label", name]
+            res = c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
+                                  mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish purge")
+            c.log(f"purge: release set {name} removed from the registry" + _purge_summary(res))
+        elif name == label:
+            c.log(f"purge: no release set {label} in the registry")
     if label:
         _remove_tree(c, "promoted snapshot", Path(c.cfg.labels_root) / label, problems)
         _remove_tree(c, "work dir", Path(c.cfg.work_dir) / label, problems)

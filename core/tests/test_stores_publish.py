@@ -755,3 +755,62 @@ def test_registry_adds_the_recipe_columns_to_an_older_file(world):
     Registry(path, read_only=False).ensure()
     rs = Registry(path).release_set("set-old")
     assert (rs["recipe"], rs["recipe_digest"], rs["stage_fps"]) == ("", "", "")
+
+
+# ---------------------------------------------------------------------------
+# stage graph, step 6: a set built on a set that is no longer active never serves
+
+def _new_cell(w, tmp: Path, mno: str, rel: str, fp: str) -> str:
+    d = tmp / f"cells-{fp}"
+    make_cell_db(d / f"cell-{mno}-{rel}.db", mno, rel, fp)
+    return str(d)
+
+
+def test_a_stale_set_is_refused_and_a_rebased_one_serves(world, tmp_path):
+    root = world["root"]
+    do_publish(world, "a0", base="none")
+    pub.gate(root, "a0", "golden-stage1", "pass")
+    pub.flip(root, "a0")
+    # two ingests published on the same active set
+    do_publish(world, "x", cells_src=_new_cell(world, tmp_path, MNO_A, "Oct2031", "fp-x"))
+    do_publish(world, "y", cells_src=_new_cell(world, tmp_path, MNO_B, "Oct2031", "fp-y"))
+    reg = Registry(registry_path(root))
+    assert reg.release_set("x")["base_label"] == "a0" == reg.release_set("y")["base_label"]
+    for lab in ("x", "y"):
+        pub.gate(root, lab, "golden-stage1", "pass")
+    pub.flip(root, "x")
+    with pytest.raises(PipelineError) as ei:
+        pub.flip(root, "y")                                   # would drop x's cell
+    assert ei.value.code == "PUB-E011" and "a0" in ei.value.message and "x" in ei.value.message
+    assert reg.active_label() == "x"
+    # rebased: the same units on the active set, gated, served; both cells kept
+    do_publish(world, "y-r2", cells_src=_new_cell(world, tmp_path, MNO_B, "Oct2031", "fp-y"),
+               base="x")
+    pub.gate(root, "y-r2", "golden-stage1", "pass")
+    pub.flip(root, "y-r2")
+    served = {m.unit for m in reg.members("y-r2") if m.store == "cells"}
+    assert {f"{MNO_A}/Oct2031", f"{MNO_B}/Oct2031"} <= served
+    # a rollback restores a known set and is not checked
+    pub.rollback(root, "x")
+    assert reg.active_label() == "x"
+
+
+def test_allow_stale_and_old_sets_are_not_checked(world, tmp_path):
+    root = world["root"]
+    do_publish(world, "a0", base="none")
+    pub.gate(root, "a0", "golden-stage1", "pass")
+    pub.flip(root, "a0")
+    do_publish(world, "x", cells_src=_new_cell(world, tmp_path, MNO_A, "Oct2031", "fp-x"))
+    do_publish(world, "y", cells_src=_new_cell(world, tmp_path, MNO_B, "Oct2031", "fp-y"))
+    for lab in ("x", "y"):
+        pub.gate(root, lab, "golden-stage1", "pass")
+    pub.flip(root, "x")
+    pub.flip(root, "y", allow_stale=True)                     # by hand, knowingly
+    reg = Registry(registry_path(root))
+    assert reg.active_label() == "y"
+    # a set recorded before the column has no base: never checked
+    con = sqlite3.connect(registry_path(root))
+    con.execute("UPDATE release_set SET base_label=NULL WHERE label='x'")
+    con.commit(); con.close()
+    pub.flip(root, "x")
+    assert reg.active_label() == "x"

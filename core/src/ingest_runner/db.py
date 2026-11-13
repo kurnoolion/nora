@@ -145,7 +145,7 @@ class RunnerDB:
     def update_ingest(self, ingest_id: str, **cols: object) -> None:
         allowed = {"job_id", "state", "stage", "build", "label", "run_ref", "recall_avg",
                    "baseline", "verdict", "verdict_detail", "previous_label", "flipped_at",
-                   "rolled_back_at", "error", "stage_origins", "documents_staged"}
+                   "rolled_back_at", "error", "stage_origins", "documents_staged", "release_set"}
         sets, params = ["updated_at = ?"], [now_iso()]
         for k, v in cols.items():
             if k in allowed:

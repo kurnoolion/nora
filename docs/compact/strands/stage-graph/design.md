@@ -631,6 +631,79 @@ where the scheme is named (the recipe has a `prompt_scheme` parameter);
 which batch image tag stack A's cycles run (its wiring env names none,
 and the `dev` images predate step 4); the enrichment time per cell.
 
+## 10e. Step 6: parallel ingestion on one stack (planned 2026-11-13)
+
+Goal: several releases ingested on one stack at once (for example one per
+MNO), each in its own build, each served when its gate passes, none
+losing another's cell.
+
+**What serializes ingestion today** (read from the code):
+1. **The baton.** `cycle.sh` keeps one `ACTIVE` build per builds root;
+   `start` refuses while one is in flight, and every verb finds its build
+   through `ACTIVE`.
+2. **The wiring env's `NORA_BUILD_DIR`.** `start` rewrites that one line,
+   and compose derives `/data/env` and `/data/db` from it: two builds in
+   flight would point every one-shot at the last one started.
+3. **The runner** claims one job at a time. The claim itself is one
+   guarded `UPDATE`, so several runner processes never take one job.
+4. **Publish and flip.** `publish` builds a set from the registry's
+   active set at that moment plus the new cell's units; `flip` makes the
+   whole set active. The base is not recorded. Two ingests published
+   against one active set A0 give A0+X and A0+Y; serving the second drops
+   X. This is the one that loses data.
+5. **The staging gate.** One staging store project per stack, brought up
+   and down by each ingest's eval.
+6. **The model endpoint.** Each enrich run keeps its configured number of
+   calls in flight; nothing caps the sum (§10, step 6).
+
+Already safe: the stage store (a building marker per fingerprint; two
+builds of one cell compute it once), the corpus bindings (host lock), a
+cell's documents (owned by the ingest that staged them), the web's refusal
+of a second ingest of the same cell.
+
+**Design, in slices, each leaving the system working:**
+
+1. **A stale set never serves.** The release set records its base
+   (`base_label`, additive column). `flip` refuses a set whose base is no
+   longer the active set (`PUB-E010`), naming both; a rollback is
+   unaffected. The runner's Serve, on that refusal, publishes the same
+   units again on the current active set (`publish --base <active>`, a new
+   label `<label>-r<n>`; units are reused by fingerprint, History is
+   rebuilt when the other set changed the same MNO), runs the gate on the
+   new set, and serves it when the gate passes. This slice alone also
+   protects hand flips today. Built 2026-11-13: `PUB-E011` /
+   `REG-E010`, `flip --allow-stale` for a knowing hand flip; the ingest
+   records the served set in `release_set`, which rollback and purge
+   follow.
+2. **A build named, not found.** `cycle.sh` takes the build from
+   `NORA_CYCLE_BUILD` when set (the runner always sets it), else from
+   `ACTIVE` (hand cycles, unchanged). Every compose call gets
+   `NORA_BUILD_DIR` from the shell, which overrides the wiring env file, so
+   the file's line no longer decides which build a one-shot sees. In that
+   mode `start` registers the build under `<root>/ACTIVE.d/` instead of
+   refusing; `abandon` removes it there.
+3. **Short sections run one at a time.** The staging gate (bring up,
+   eval, bring down) and serve (flip, release-map advance) take a
+   stack-wide `flock`; they are minutes against hours of enrichment.
+   Enrich runs take one of `NORA_ENRICH_SLOTS` host-wide slots (a
+   `flock` on one of N files under the stage store), so the endpoint sees
+   at most N runs times their concurrency; default N = 2.
+4. **Several jobs at once.** The runner gains `max_parallel_ingests`
+   (default 1, today's behaviour): that many workers, each claiming one
+   ingest job. A new ingest waits while another ingest of the **same MNO**
+   is in flight (one release per MNO at a time: History is per MNO, and
+   two would make each other stale every time). Flip, rollback, abandon,
+   purge and redo jobs keep their own rules.
+5. **The page.** The Ingest page shows every running ingest and the
+   queue by MNO; the "one cycle at a time" text and the blocking-ingest
+   warning follow the new rule.
+
+Rejected: serializing publish (a set can stay staged for days before
+anyone serves it, so staleness appears at serve time whatever the publish
+order); one staging store per running ingest (ports and compose projects
+per ingest, for a step that takes minutes); per-MNO builds roots (the
+baton problem moves, it does not go).
+
 ## 11. Invariants
 
 - A stage output in the store is never modified; a different result is

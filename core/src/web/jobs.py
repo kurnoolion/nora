@@ -81,6 +81,7 @@ class Ingest:
     redo_of: str | None = None
     stage_origins: str | None = None
     documents_staged: int | None = None
+    release_set: str | None = None
 
 
 def _now_iso() -> str:

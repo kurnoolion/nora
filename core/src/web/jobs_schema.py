@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS ingests (
     callback_url TEXT,
     redo_of TEXT,
     stage_origins TEXT,
-    documents_staged INTEGER
+    documents_staged INTEGER,
+    release_set TEXT
 )
 """
 
@@ -118,6 +119,9 @@ INGESTS_ADDED_COLUMNS = (
     # into the shared requirements dir; only then may abandon or purge
     # remove them (two stacks share the dir)
     ("documents_staged", "INTEGER"),
+    # stage graph, step 6: the release set this ingest served when it is not
+    # its label (a set rebased on a newer active set at Serve: <label>-r<n>)
+    ("release_set", "TEXT"),
 )
 
 # Ingest states a client is told about (webhook events `ingest.<state>`).

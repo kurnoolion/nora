@@ -255,6 +255,11 @@ class Registry:
             for col in RELEASE_SET_RECIPE_COLUMNS:
                 if col not in rs_cols:
                     con.execute(f"ALTER TABLE release_set ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+            # stage graph, step 6: the set a release set was built on. NULL for a
+            # set recorded before the column (unknown, never checked); '' for a
+            # set published with no base (a whole lineage, `--base none`).
+            if "base_label" not in rs_cols:
+                con.execute("ALTER TABLE release_set ADD COLUMN base_label TEXT")
             found = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if found is None:
                 con.execute("INSERT INTO meta(key, value) VALUES ('schema_version', ?)",
@@ -377,6 +382,7 @@ class Registry:
                            created_by: str = "", note: str = "",
                            code_version: str = "", prompt_scheme: str = "",
                            recipe: str = "", recipe_digest: str = "", stage_fps: str = "",
+                           base_label: "str | None" = None,
                            at: str = "") -> list[StoreVersion]:
         """Inside an open write (``begin_write``): insert the new
         ``store_version`` rows (version numbers from ``versions``, else
@@ -407,9 +413,10 @@ class Registry:
             seen.add(m.key)
         con.execute(
             "INSERT INTO release_set(label, created_at, created_by, note, code_version, "
-            "prompt_scheme, recipe, recipe_digest, stage_fps) VALUES (?,?,?,?,?,?,?,?,?)",
+            "prompt_scheme, recipe, recipe_digest, stage_fps, base_label) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (label, at, created_by, note, code_version, prompt_scheme,
-             recipe, recipe_digest, stage_fps))
+             recipe, recipe_digest, stage_fps, base_label))
         con.executemany(
             "INSERT INTO release_set_member(label, store, unit, version) VALUES (?,?,?,?)",
             [(label, m.store, m.unit, m.version) for m in members])
@@ -520,10 +527,15 @@ class Registry:
             con.close()
 
     def flip(self, label: str, *, kind: str = "flip", mode: str = "staged",
-             by: str = "", note: str = "", at: str = "") -> dict:
+             by: str = "", note: str = "", at: str = "",
+             expect_active: "str | None" = None) -> dict:
         """Make ``active`` equal to the set's members and log the flip —
         one transaction. Returns ``{from_label, label, changed: [...],
-        removed: [...]}`` (units whose version changed / disappeared)."""
+        removed: [...]}`` (units whose version changed / disappeared).
+        With ``expect_active``, refuse (``REG-E010``) unless the active set
+        is that label at the moment of the flip, inside the same
+        transaction: a set built on another set never replaces a newer
+        one (stage graph, step 6)."""
         if kind not in FLIP_KINDS:
             raise RegistryError("REG-E008", f"flip kind must be one of {', '.join(FLIP_KINDS)}")
         if mode not in FLIP_MODES:
@@ -536,6 +548,12 @@ class Registry:
             before = {(r["store"], r["unit"]): (int(r["version"]), r["label"])
                       for r in con.execute("SELECT * FROM active")}
             labels = {v[1] for v in before.values()}
+            if expect_active is not None:
+                current = next(iter(labels)) if len(labels) == 1 else ""
+                if current != expect_active:
+                    raise RegistryError(
+                        "REG-E010", f"release set {label!r} was built on {expect_active!r}, "
+                        f"but the active set is {current or 'none'!r}")
             last = con.execute("SELECT label FROM flip ORDER BY id DESC LIMIT 1").fetchone()
             from_label = labels.pop() if len(labels) == 1 else (last["label"] if last else "")
             con.execute("DELETE FROM active")

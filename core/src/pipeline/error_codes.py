@@ -174,6 +174,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("PUB-E008", "Serving verification failed after flip to {label}: {what}", "The registry already points at the set; check the store's logs, then roll back with `publish rollback --to <previous>`"),
     ErrorDef("PUB-E009", "Rollback target {label} never served", "Roll back only to a set that was flipped before; use `publish flip` for a new set, or --force"),
     ErrorDef("PUB-E010", "Registry unusable at {path}: {reason}", "Publish once to create it, or point --serve-root at the serving root that holds registry.db"),
+    ErrorDef("PUB-E011", "Release set {label} was built on {base}, but the active set is {active}", "Publish the same units again on the active set (`publish --base <active>`, a new label), gate it, and flip that; --allow-stale flips anyway and drops what was served since"),
 
     # --- Publish registry file (REG) — core.src.stores.registry.RegistryError ---
     ErrorDef("REG-E001", "Registry not found: {path}", "Publish once to create it (core.src.stores.publish), or fix NORA_STORE_REGISTRY / --serve-root"),
@@ -185,6 +186,7 @@ _DEFS: list[ErrorDef] = [
     ErrorDef("REG-E007", "Unknown release set {label}", "See `publish status` for the sets in this registry"),
     ErrorDef("REG-E008", "Bad gate / flip argument: {detail}", "Kinds: golden-stage1, golden-stage2, manual; verdicts: pass, fail, waived; flip modes: staged, expedited, override"),
     ErrorDef("REG-E009", "Release set {label} is active", "An active set is never purged; flip or roll back to another set first"),
+    ErrorDef("REG-E010", "Release set {label} was built on another set than the active one", "Rebase it: publish its units again on the active set"),
     # release-change answers from the History store (strand rel-history)
     ErrorDef("RHD-E001", "Fewer than two served releases for this MNO ({count})", "Release-change questions need two releases in the History store; publish the next release first"),
     ErrorDef("RHD-E002", "Release {release} is not served for this MNO", "Name a served release, 'latest' or 'previous'; the Ask page lists the served releases"),
