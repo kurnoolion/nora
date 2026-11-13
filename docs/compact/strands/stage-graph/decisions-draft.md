@@ -187,3 +187,33 @@
 **Why.** Serializing publish was rejected: a set can stay staged for days, so staleness appears at serve time whatever the publish order. Carrying the first gate over to the rebased set was rejected: the set differs, and the gate is minutes.
 
 **Consequences.** A served ingest may serve `<label>-r<n>` rather than its label; rollback and purge follow `release_set`. `--allow-stale` exists for a knowing hand flip.
+
+### D-DRAFT-20 — 2026-11-13 — Builds in flight are named, not found; enrich runs take host-wide slots
+
+**Context.** `cycle.sh` kept one `ACTIVE` build per builds root and rewrote the wiring env's `NORA_BUILD_DIR` on `start`, so two builds in flight would point every one-shot at the last one started. Nothing capped the sum of enrich calls on the shared model endpoint.
+
+**Decision.** With `NORA_CYCLE_BUILD` set, every verb acts on that build, registered under `ACTIVE.d/` beside the one baton; every compose call takes `NORA_BUILD_DIR`, `NORA_ENV_DIR` and `STORE_ROOT` from the shell. Hand cycles keep `ACTIVE`. Enrich takes one of `NORA_ENRICH_SLOTS` (default 2) host-wide `flock` slots under the stage store; the staging gate and serve take stack-wide locks.
+
+**Why.** Per-MNO builds roots were rejected: the baton problem moves, it does not go. One staging store per running ingest was rejected: ports and compose projects per ingest, for a step that takes minutes.
+
+**Consequences.** The wiring env file no longer decides which build a one-shot sees. The endpoint sees at most N enrich runs times their concurrency; a third enrich waits. No store or no `flock` in the image: no slot.
+
+### D-DRAFT-21 — 2026-11-13 — At most one ingest per MNO in flight
+
+**Context.** `max_parallel_ingests` workers can claim several ingests at once.
+
+**Decision.** A worker passes over an ingest job while another ingest of the same MNO is running, staged or claimed, checked inside the claim's write transaction. Flip, rollback, abandon, purge and redo keep their own rules.
+
+**Why.** History is per MNO, and two releases of one MNO in flight would make each other stale at every serve (D-DRAFT-19).
+
+**Consequences.** Parallelism is across MNOs only. A second release of an MNO queues until the first is served or abandoned; the Ingest page names what it waits for.
+
+### D-DRAFT-22 — 2026-11-13 — Select-synth cuts reasoning only when the reply opens with it
+
+**Context.** Some models write their reasoning in the answer untagged and skip the final-answer marker, so `_strip_reasoning` has nothing to cut on. The leak predates the intent work. The History lane already has an ID-anchored detector and stripper.
+
+**Decision.** After the usual cleanup, a select-synth reply whose opening matches a reasoning opener (`opener:` mark) is cut with History's `strip_working_text`, anchored on the packed candidates' requirement ids. A cut that would leave nothing keeps the reply. Each firing is logged (marks, characters cut, no text) and stamped in `lane_config`.
+
+**Why.** History's full detector was rejected for this lane: most of its phrases are tuned to change summaries, and a genuine compliance answer can contain them; a wrong cut deletes part of a real answer.
+
+**Consequences.** Reasoning that does not open the reply passes through. Firings are countable per model and intent from the feedback DB. The older rerank-pin synthesizer path is not covered.

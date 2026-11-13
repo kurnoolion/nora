@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-11-12 by regen-map. Do not hand-edit.
+Generated 2026-11-13 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -123,6 +123,7 @@ flowchart TD
     m_vectorstore --> m_parser
     m_vectorstore --> m_pipeline
     m_web --> m_corrections
+    m_web --> m_decision
     m_web --> m_env
     m_web --> m_eval
     m_web --> m_extraction
@@ -711,6 +712,7 @@ nora/
 │   ├── prompts/
 │   │   └── README.md
 │   └── recipes/
+│       ├── sira-generic.json
 │       ├── sira-plain.json
 │       └── sira-taxonomy.json
 ├── docker/
@@ -947,17 +949,17 @@ nora/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   └── journal.md
-│   │   │   ├── stage-graph/
-│   │   │   │   ├── STRAND.md
-│   │   │   │   ├── decisions-draft.md
-│   │   │   │   ├── design.md
-│   │   │   │   └── journal.md
 │   │   │   ├── sira-intent/
 │   │   │   │   ├── STRAND.md
 │   │   │   │   ├── decisions-draft.md
 │   │   │   │   ├── design.md
 │   │   │   │   ├── journal.md
 │   │   │   │   └── kev_floor_report.html
+│   │   │   ├── stage-graph/
+│   │   │   │   ├── STRAND.md
+│   │   │   │   ├── decisions-draft.md
+│   │   │   │   ├── design.md
+│   │   │   │   └── journal.md
 │   │   │   └── team-operations/
 │   │   │       ├── STRAND.md
 │   │   │       ├── decisions-draft.md
@@ -991,7 +993,10 @@ nora/
 │   └── update.py                                        # Add Human Filter philosophy to NORA presentation.
 ├── reports/
 │   └── intent/
-│       └── 2026-11-08-0931_kev-floor_intent-dev-v1/
+│       ├── 2026-11-08-0931_kev-floor_intent-dev-v1/
+│       │   ├── report.html
+│       │   └── run.json
+│       └── 2026-11-12-1020_kev-floor_intent-dev-v1/
 │           ├── report.html
 │           └── run.json
 ├── requirements.txt
@@ -1035,6 +1040,7 @@ nora/
 │   │   ├── __init__.py
 │   │   ├── batched-enrich.patch
 │   │   ├── extra-config-dir.patch
+│   │   ├── legacy-refusal.patch
 │   │   ├── no-best-update.patch
 │   │   ├── per-stage-routing.patch
 │   │   └── test/
