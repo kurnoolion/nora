@@ -299,3 +299,37 @@ def test_the_shared_page_shows_the_stored_badge(world):
     app.state.feedback_store = Store()
     r = world["client"].get("/api/ask/s/1")
     assert r.status_code == 200 and 'title="Answer intent">compare</span>' in r.text
+
+
+# ── scope badges: the cells SIRA searched, beside the intent badge ────
+
+def test_the_card_shows_the_searched_cells_and_the_missing_scope(world, monkeypatch):
+    def sira_cells(question, request, **kw):
+        async def run():
+            out = await _sira_ok(question, request, **kw)
+            out["sira_result"] = {"mode": "multi-cell", "resolved_cells": ["MNO_A/R2"],
+                                  "unresolved": [["MNO_B", "*"], ["MNO_A", "R9"]]}
+            return out
+        return run()
+
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", sira_cells)
+    _, html = _ask(world, PLAIN)
+    assert 'title="Searched (MNO/release)">MNO_A/R2</span>' in html
+    assert 'title="Named in the question but not ingested">MNO_B</span>' in html
+    assert 'title="Named in the question but not ingested">MNO_A / R9</span>' in html
+
+
+def test_no_scope_badge_without_cells(world, monkeypatch):
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    _, html = _ask(world, PLAIN)
+    assert 'title="Searched (MNO/release)"' not in html
+
+
+def test_progress_rows_can_be_hidden(world):
+    # Bootstrap's d-flex is display:flex !important, which beats the inline
+    # display:none and the JS that hides the lanes an ask does not run.
+    import re
+    html = world["client"].get("/test").text
+    for lane in ("nora", "sira", "history"):
+        tag = re.search(rf'<div id="progress-row-{lane}"[^>]*>', html).group(0)
+        assert "d-flex" not in tag, tag
