@@ -379,3 +379,14 @@ def test_healthz_single_dataset_when_no_cells(monkeypatch):
     assert body["mode"] == "single-dataset"
     assert body["ok"] is False
     assert body["cells"] == []
+
+
+def test_expand_model_reported_when_expansion_runs(client, monkeypatch):
+    monkeypatch.setattr(svc, "_QUERY_ENRICH_ENABLED", True)
+    monkeypatch.setattr(svc, "_query_prompt_template", "{doc_text} {max_n}")
+    monkeypatch.setattr(svc, "_SHIM_MODEL", "m-expand")
+    assert _post(client, "what 5G bands are supported")["expand_model"] == "m-expand"
+
+
+def test_no_expand_model_when_expansion_is_off(client):
+    assert _post(client, "what 5G bands are supported")["expand_model"] is None

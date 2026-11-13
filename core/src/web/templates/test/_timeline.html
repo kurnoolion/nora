@@ -84,7 +84,8 @@
       <tbody>
         {% for seg in timeline.segments %}
           <tr {% if seg.band == 'unaccounted' %}class="text-muted"{% endif %}>
-            <td>{{ seg.label }}</td>
+            <td>{{ seg.label }}{% if seg.slug == 'expand_ms' and sira_expand_model %}
+              <span class="text-muted">· <span title="Query expansion model">{{ sira_expand_model }}</span></span>{% endif %}</td>
             <td class="text-muted">{{ seg.band }}</td>
             <td class="text-end">{{ seg.ms }}</td>
             <td class="text-end">{{ seg.pct }}</td>
