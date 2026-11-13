@@ -411,7 +411,7 @@ nora/
 │   │       ├── enrich_overlay_store.py                  # Enrichment-corrections overlay store — the WEB side's edit surface
 │   │       ├── enrich_report.py                         # Enrichment-review exports: the label × category pivot report and the
 │   │       ├── feedback_db.py                           # Test-page feedback store — async SQLite log of question / answer /
-│   │       ├── issue_link.py                            # Prefilled "Report issue" link for an answer card (opt-in).
+│   │       ├── issue_link.py                            # Prefilled "Report issue" links (opt-in): one per stored answer, and a
 │   │       ├── jobs.py                                  # Job queue for NORA pipeline execution tracking.
 │   │       ├── jobs_schema.py                           # The jobs database schema, shared by the web and the ingest runner.
 │   │       ├── markdown_render.py                       # Markdown → HTML rendering for LLM-synthesized answers.

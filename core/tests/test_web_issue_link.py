@@ -59,3 +59,28 @@ def test_a_url_with_a_query_keeps_it(monkeypatch):
     monkeypatch.setenv("NORA_ISSUE_URL", BASE + "?template=bug.md")
     url = _url()
     assert url.startswith(BASE + "?template=bug.md&") and _q(url)["template"] == "bug.md"
+
+
+def test_page_link_off_without_a_configured_url(monkeypatch):
+    monkeypatch.delenv("NORA_ISSUE_URL", raising=False)
+    assert issue_link.page_issue_url("/test") == ""
+
+
+def test_page_link_carries_the_path(monkeypatch):
+    monkeypatch.setenv("NORA_ISSUE_URL", BASE)
+    q = _q(issue_link.page_issue_url("/jobs"))
+    assert q["title"] == "Issue: /jobs" and q["labels"] == "bug"
+    assert "Path: /jobs" in q["body"]
+
+
+def test_top_bar_shows_the_link_only_when_configured(monkeypatch):
+    from fastapi.testclient import TestClient
+    from core.src.web.app import app
+
+    client = TestClient(app)
+    monkeypatch.delenv("NORA_ISSUE_URL", raising=False)
+    assert "bi-bug" not in client.get("/test?q=secret+question+text").text
+    monkeypatch.setenv("NORA_ISSUE_URL", BASE)
+    html = client.get("/test?q=secret+question+text").text
+    assert "bi-bug" in html and "Issue%3A+%2Ftest" in html
+    assert "secret" not in html.split("bi-bug")[0].rsplit("<a", 1)[1]
