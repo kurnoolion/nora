@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silver recall</title>
+<style>
+/* One reading column: summary table, then recall@k over time for one intent. */
+:root { --bg: #fafaf9; --surface: #fff; --ink: #1c1917; --muted: #78716c; --grid: #e7e5e4;
+        --k1: #2563eb; --k2: #0891b2; --k3: #7c3aed; --k4: #c2410c; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #1c1917; --surface: #292524; --ink: #f5f5f4; --muted: #a8a29e; --grid: #44403c;
+          --k1: #60a5fa; --k2: #22d3ee; --k3: #a78bfa; --k4: #fb923c; }
+}
+:root[data-theme="dark"] { --bg: #1c1917; --surface: #292524; --ink: #f5f5f4; --muted: #a8a29e; --grid: #44403c;
+        --k1: #60a5fa; --k2: #22d3ee; --k3: #a78bfa; --k4: #fb923c; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+.eyebrow { color: var(--muted); font-size: 13px; }
+h1 { font-size: 22px; margin: 4px 0 8px; }
+.lede, .foot { color: var(--muted); }
+.card { background: var(--surface); border: 1px solid var(--grid); border-radius: 6px; padding: 12px; margin: 16px 0; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+tr.all td { font-weight: 600; }
+.sub { color: var(--muted); font-size: 12px; }
+svg { width: 100%; height: auto; display: block; }
+svg text { fill: var(--muted); font-size: 12px; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; margin-top: 6px; }
+.legend span::before { content: ""; display: inline-block; width: 12px; height: 3px; margin-right: 6px; vertical-align: middle; background: var(--c); }
+label { font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow" id="eyebrow"></div>
+  <h1>Silver recall</h1>
+  <p class="lede">Share of the requirements each SIRA answer cited that BM25 ranked within the top k. Cited requirements stand in for gold labels, so this shows how deep the evidence sat, not what BM25 missed. Each k is averaged over the answers that fetched at least that many.</p>
+  <div class="card"><table id="summary"></table></div>
+  <div class="card">
+    <label>Intent <select id="pick"></select></label>
+    <div id="chart"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <p class="foot" id="foot"></p>
+</main>
+<script>
+const RUN = /*__RUN__*/null;
+const M = RUN.meta, $ = id => document.getElementById(id);
+const pct = v => v === null || v === undefined ? "–" : Math.round(v * 100) + "%";
+const KS = [...new Set(RUN.summary.flatMap(g => Object.keys(g.recall)))].sort((a, b) => a - b);
+const COLORS = ["var(--k1)", "var(--k2)", "var(--k3)", "var(--k4)"];
+const f = M.filters, when = M.created_at.replace("T", " ");
+$("eyebrow").textContent = `recall-metrics · last ${M.since} · by ${M.bucket}${f.intent ? " · intent " + f.intent : ""}${f.stack ? " · stack " + f.stack : ""} · ${when}`;
+$("foot").textContent = `${M.rows} answers with silver recall; ${M.skipped} SIRA answers skipped (older rows, failed answers, no citations). Run ${when}, git ${M.git.commit ?? "unknown"}${M.git.dirty ? " (uncommitted changes)" : ""}. "Cut" is the share of answers where the context budget left fetched results out.`;
+
+const t = $("summary");
+const hr = t.insertRow(); ["Intent", "Answers", ...KS.map(k => "@" + k), "Cited", "Outside", "Cut"].forEach(h => { const th = document.createElement("th"); th.textContent = h; hr.appendChild(th); });
+for (const g of RUN.summary) {
+  const r = t.insertRow(); if (g.intent === "all") r.className = "all";
+  const cells = [g.intent, g.n, ...KS.map(k => k in g.recall ? `${pct(g.recall[k])} <span class="sub">(${g.n_k[k]})</span>` : "–"),
+                 g.cited.toFixed(1), g.outside.toFixed(1), pct(g.budget_cut)];
+  cells.forEach(c => { r.insertCell().innerHTML = String(c); });
+}
+if (!RUN.summary.length) t.insertRow().insertCell().textContent = "No answers with silver recall in this window.";
+
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, a, p) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); p && p.appendChild(e); return e; };
+const intents = RUN.summary.map(g => g.intent);
+const pick = $("pick");
+for (const i of intents) pick.add(new Option(i, i));
+pick.value = intents.includes("all") ? "all" : intents[0] || "";
+
+function draw(intent) {
+  const box = $("chart"); box.innerHTML = ""; $("legend").innerHTML = "";
+  const pts = RUN.series.filter(s => s.intent === intent);
+  if (!pts.length) return;
+  const W = 800, H = 300, m = { l: 44, r: 16, t: 12, b: 34 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Silver recall over time, intent ${intent}` }, box);
+  const x = i => m.l + (pts.length === 1 ? iw / 2 : i * iw / (pts.length - 1)), y = v => m.t + ih - v * ih;
+  for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+    el("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: "var(--grid)" }, svg);
+    el("text", { x: m.l - 6, y: y(v) + 4, "text-anchor": "end" }, svg).textContent = pct(v);
+  }
+  const every = Math.ceil(pts.length / 8);
+  pts.forEach((p, i) => { if (i % every === 0) el("text", { x: x(i), y: H - 10, "text-anchor": "middle" }, svg).textContent = p.bucket; });
+  KS.forEach((k, ki) => {
+    const c = COLORS[ki % COLORS.length], seg = pts.map((p, i) => [i, p.recall[k]]).filter(d => d[1] !== undefined && d[1] !== null);
+    if (!seg.length) return;
+    el("polyline", { points: seg.map(([i, v]) => `${x(i)},${y(v)}`).join(" "), fill: "none", stroke: c, "stroke-width": 2 }, svg);
+    for (const [i, v] of seg) {
+      const dot = el("circle", { cx: x(i), cy: y(v), r: 3.5, fill: c }, svg);
+      el("title", {}, dot).textContent = `${pts[i].bucket} · @${k} ${pct(v)} over ${pts[i].n_k[k]} answers`;
+    }
+    const s = document.createElement("span"); s.style.setProperty("--c", c); s.textContent = "@" + k; $("legend").appendChild(s);
+  });
+}
+pick.onchange = () => draw(pick.value);
+draw(pick.value);
+</script>
+</body>
+</html>

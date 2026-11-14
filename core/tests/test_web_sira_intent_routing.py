@@ -358,3 +358,66 @@ def test_share_sits_in_the_header_beside_asked_by(world, monkeypatch):
     _, html = _ask(world, PLAIN)
     header = html[: html.index('class="row g-3"')]
     assert "askCopyShare(this, '/ask/s/" in header
+
+
+# ── silver recall line (strand recall-metrics, design §6) ────────────
+
+_SR = {"recall": {"10": 0.4, "20": 0.6, "30": 0.6, "40": 0.8},
+       "cited": 5, "outside": 1, "fetched": 40, "packed": 31}
+
+
+def _sira_with_recall(question, request, **kw):
+    async def run():
+        out = await _sira_ok(question, request, **kw)
+        out["lane_config"]["silver_recall"] = dict(_SR)
+        return out
+    return run()
+
+
+@pytest.mark.parametrize("team", [False, True])
+def test_the_live_card_shows_the_silver_recall_line(world, monkeypatch, team):
+    if team:
+        import core.src.web.team_mode as tm
+        monkeypatch.setattr(tm, "TEAM_MODE", True)
+        monkeypatch.setattr(tm, "ADMIN_TOKEN", "sek")
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_with_recall)
+    _, html = _ask(world, PLAIN)
+    assert _rows(world)[0]["lane_config"]["silver_recall"] == _SR
+    assert "Silver recall" in html
+    assert "@10 40%" in html and "@40 80%" in html
+    assert "5 cited" in html and "1 outside" in html and "31/40 in context" in html
+
+
+def test_no_line_without_silver_recall(world, monkeypatch):
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_ok)
+    _, html = _ask(world, PLAIN)
+    assert "Silver recall" not in html
+
+
+def test_outside_is_shown_only_when_non_zero(world, monkeypatch):
+    def none_outside(question, request, **kw):
+        async def run():
+            out = await _sira_ok(question, request, **kw)
+            out["lane_config"]["silver_recall"] = dict(_SR, outside=0)
+            return out
+        return run()
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", none_outside)
+    _, html = _ask(world, PLAIN)
+    line = html.split("Silver recall", 1)[1].split("</div>", 1)[0]
+    assert "in context" in line and "outside" not in line
+
+
+def test_the_shared_page_shows_the_stored_silver_recall(world):
+    import json as _json
+    from core.src.web.app import app
+
+    class Store:
+        async def get_row(self, row_id):
+            return {"id": 1, "lane": "sira", "question": "q", "answer": "a", "user_name": "u",
+                    "timestamp": "t", "lane_config": _json.dumps({"silver_recall": _SR}),
+                    "cited_ids": "[]", "retrieved_ids": "[]", "citations_json": "[]"}
+
+    app.state.feedback_store = Store()
+    for path in ("/api/ask/s/1", "/ask/s/1"):
+        r = world["client"].get(path)
+        assert r.status_code == 200 and "@20 60%" in r.text and "31/40 in context" in r.text

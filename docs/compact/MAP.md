@@ -214,6 +214,8 @@ nora/
 │   │   │   ├── prompts/
 │   │   │   │   └── judge_v1.txt
 │   │   │   ├── questions.py                             # Evaluation test question set with ground truth (TDD 9.4).
+│   │   │   ├── recall_report.py                         # Silver recall report over the Ask page's feedback DB (strand recall-metrics, design §7).
+│   │   │   ├── recall_report_template.html
 │   │   │   ├── release_map.py                           # Golden-set release map — what ``N`` means for each MNO (strand
 │   │   │   └── runner.py                                # Evaluation runner (TDD 9.4, Step 11).
 │   │   ├── extraction/                                  # Format-aware content extraction.
@@ -440,6 +442,7 @@ nora/
 │   │       │   ├── query.py                             # Query page and API routes.
 │   │       │   ├── req_browser.py                       # Requirement browser routes — browse, view, and compare requirements.
 │   │       │   ├── resolve_review.py                    # Resolve-review routes — table-based cross-reference resolution review UI.
+│   │       │   ├── silver_recall.py                     # Silver recall for a SIRA select-synth answer (strand recall-metrics).
 │   │       │   └── sira_intent.py                       # Answer intent for the SIRA path of the Ask page (strand sira-intent).
 │   │       ├── sira_intent_prompts.py                   # Per-intent select-synth system prompts (strand sira-intent, design §5, D-DRAFT-6).
 │   │       ├── static/
@@ -537,6 +540,7 @@ nora/
 │   │       │       ├── _merged_answer.html
 │   │       │       ├── _req_bubble.html
 │   │       │       ├── _shared_body.html
+│   │       │       ├── _silver_recall.html
 │   │       │       ├── _timeline.html
 │   │       │       ├── history.html
 │   │       │       ├── index.html
@@ -577,6 +581,7 @@ nora/
 │       ├── test_eval_golden_stage2.py                   # Tests for golden Stage-2 (pin + judge), run report, and batch runner.
 │       ├── test_eval_intent.py                          # Tests for the answer-intent eval (strand sira-intent, design §8).
 │       ├── test_eval_intent_report.py                   # Intent confidence report (strand sira-intent, design §8).
+│       ├── test_eval_recall_report.py                   # Silver recall report over the feedback DB (strand recall-metrics, design §7).
 │       ├── test_eval_release_map.py                     # Tests for the golden set's release map (synthetic labels only).
 │       ├── test_extractor_images_root.py                # images_root redirect — extracted-image artifacts belong in the BUILD
 │       ├── test_feedback_db.py                          # Tests for `core/src/web/feedback_db.py` — Test page Q&A + vote log.
@@ -689,6 +694,7 @@ nora/
 │       ├── test_web_req_bubbles.py                      # Tests for the req-bubble endpoint and its wiring (strand req-id-bubbles).
 │       ├── test_web_req_tree.py                         # Tests for the shared requirement-tree loader (web/req_tree.py).
 │       ├── test_web_sidebar.py                          # Sidebar nav-label markup (strand collapsible-sidebar).
+│       ├── test_web_silver_recall.py                    # Silver recall: how deep in the BM25 fetch the cited requirements sat
 │       ├── test_web_sira_intent_prompts.py              # Per-intent select-synth prompts (strand sira-intent, design §5, D-DRAFT-6).
 │       ├── test_web_sira_intent_routing.py              # Change routing on the Ask page (strand sira-intent, design §4, D-DRAFT-3/5).
 │       ├── test_web_timeline.py                         # Tests for the normalized query timeline (`core.src.web.timeline`).

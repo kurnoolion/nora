@@ -37,6 +37,7 @@ from core.src.web.markdown_render import render_markdown
 from core.src.web.routes import history_lane
 from core.src.web.routes import id_lookup_lane
 from core.src.web.routes import sira_intent
+from core.src.web.routes import silver_recall
 from core.src.web.sira_intent_prompts import DEFAULT_PROMPTS, prompt_for
 from core.src.query.schema import Intent
 from core.src.pipeline.error_codes import PipelineError
@@ -640,6 +641,7 @@ async def _build_merged_response_html(
                 "history_run": h.get("run") or {},
             })
         ctx["intent_badge"] = sira_intent.intent_badge(lane, out.get("lane_config"))
+        ctx["silver_recall"] = silver_recall.line(lane, out.get("lane_config"))
         if lane == id_lookup_lane.LANE:
             ctx["lookup"] = out.get("lookup") or {}
         lanes_html[lane] = _render_template_to_string(
@@ -977,6 +979,12 @@ async def _run_select_synth_lane(
         lane_config["prompt_intent"] = intent_prompt.intent.value
         lane_config["prompt_source"] = intent_prompt.source
         lane_config["prompt_hash"] = intent_prompt.hash
+    cited_ids = _flatten_cited_ids([] if synth_error else (synth_result.get("llm_citations") or []))
+    # How deep in the BM25 fetch the cited requirements sat (strand
+    # recall-metrics); named-ID pins are not SIRA results, so not counted packed.
+    recall = silver_recall.compute(sira_results, packed[len(pinned_named):], cited_ids)
+    if recall is not None:
+        lane_config["silver_recall"] = recall
     return {
         "result": {} if synth_error else synth_result,
         "sira_result": sira_result,
@@ -987,9 +995,7 @@ async def _run_select_synth_lane(
         "elapsed_ms": elapsed_ms,
         "retrieved_ids": retrieved_ids,
         "reranked_ids": None,
-        "cited_ids": _flatten_cited_ids(
-            [] if synth_error else (synth_result.get("llm_citations") or [])
-        ),
+        "cited_ids": cited_ids,
         "lane_config": lane_config,
     }
 
@@ -1337,6 +1343,8 @@ async def _render_stored_ask(request: Request, row_id: int, template: str):
         # re-rendered from the row (the shared page, the History page).
         "bubble_endpoints": _stored_bubble_endpoints(row),
         "intent_badge": sira_intent.intent_badge(
+            row.get("lane") or "", _decode_json_column(row.get("lane_config"), {})),
+        "silver_recall": silver_recall.line(
             row.get("lane") or "", _decode_json_column(row.get("lane_config"), {})),
     })
 
