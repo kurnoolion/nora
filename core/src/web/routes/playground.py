@@ -650,6 +650,7 @@ async def _build_merged_response_html(
             share_path=f"{config.root_path}/ask/s/{row_id}",
             cells=(out.get("sira_result") or {}).get("resolved_cells") or (),
             model=result.get("llm_model") or "")
+        ctx["silver_recall"] = silver_recall.line(lane, out.get("lane_config"))
         if lane == id_lookup_lane.LANE:
             ctx["lookup"] = out.get("lookup") or {}
         lanes_html[lane] = _render_template_to_string(
@@ -1352,6 +1353,8 @@ async def _render_stored_ask(request: Request, row_id: int, template: str):
         # re-rendered from the row (the shared page, the History page).
         "bubble_endpoints": _stored_bubble_endpoints(row),
         "intent_badge": sira_intent.intent_badge(
+            row.get("lane") or "", _decode_json_column(row.get("lane_config"), {})),
+        "silver_recall": silver_recall.line(
             row.get("lane") or "", _decode_json_column(row.get("lane_config"), {})),
     })
 
