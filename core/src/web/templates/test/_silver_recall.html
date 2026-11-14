@@ -1,0 +1,16 @@
+{# Silver recall line (strand recall-metrics, design §6): how deep in the
+   BM25 fetch the requirements this answer cited sat. Shared by the live
+   card (_answer.html) and the stored one (_shared_body.html). Expects
+   `silver_recall` from `silver_recall.line`; None renders nothing. #}
+{% if silver_recall %}
+<div class="silver-recall text-muted small mt-2"
+     title="Share of the requirements this answer cited that BM25 ranked within the top k. Cited requirements stand in for gold labels.">
+  <i class="bi bi-bullseye me-1"></i>Silver recall
+  {% for k, v in silver_recall.recall.items() %}
+    <span class="ms-1">@{{ k }} {{ (v * 100) | round | int }}%</span>{% if not loop.last %} ·{% endif %}
+  {% endfor %}
+  <span class="ms-2">({{ silver_recall.cited }} cited
+    {%- if silver_recall.outside %} · {{ silver_recall.outside }} outside{% endif %}
+    · {{ silver_recall.packed }}/{{ silver_recall.fetched }} in context)</span>
+</div>
+{% endif %}
