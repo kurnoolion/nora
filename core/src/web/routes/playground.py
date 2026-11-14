@@ -29,11 +29,13 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from core.src.llm.openai_provider import (
+    CANCEL as LLM_CANCEL,
+    LLMCancelled,
     FINAL_ANSWER_MARKER as _FINAL_ANSWER_MARKER,
     REASONING_SENTINEL_ENABLED as _REASONING_SENTINEL_ENABLED,
 )
 from core.src.web.feedback_db import CATEGORIES
-from core.src.web.markdown_render import render_markdown
+from core.src.web.markdown_render import render_markdown, render_markdown_bubbles
 from core.src.web.routes import history_lane
 from core.src.web.routes import id_lookup_lane
 from core.src.web.routes import sira_intent
@@ -411,6 +413,8 @@ async def _run_sira_lane_for_merged(
     mode: str = "",
     model: str = "",
     intent: "Intent | None" = None,
+    cancel: "threading.Event | None" = None,
+    emit_partial: "Callable[[dict], Awaitable[None]] | None" = None,
 ) -> dict[str, Any]:
     """Run SIRA's BM25→rerank pipeline + NORA's synthesizer pinned to
     the SIRA top results, for the merged tab. Returns a standardized
@@ -430,7 +434,8 @@ async def _run_sira_lane_for_merged(
     if _SELECT_SYNTH_ENABLED:
         return await _run_select_synth_lane(
             question, _say, start, label=label, provider_id=provider_id,
-            mode=mode, model=model, intent=intent,
+            mode=mode, model=model, intent=intent, cancel=cancel,
+            emit_partial=emit_partial,
         )
     await _say("Calling SIRA service for retrieval (BM25 + LLM rerank)…")
     try:
@@ -806,6 +811,25 @@ def _clean_working_text(answer: str, ids: list[str]) -> tuple[str, list[str], in
     return cleaned, marks, len(answer) - len(cleaned)
 
 
+# The stored answer of a SIRA ask stopped before the model answered (strand
+# ask-stream-stop): readers of the row (History page, exports) show this text,
+# and lane_config `stopped` marks the row.
+_STOPPED_NOTE = "_Stopped before the answer._"
+
+
+def _candidates_partial(sira_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """The `partial` event sent once the store returns: the fetched
+    candidates in retrieval order, labelled as what the answer cites from,
+    each id a requirement bubble. Ids and cells only, no corpus text."""
+    from core.src.web.app import config
+    ids = [r["req_id"] for r in sira_results if r.get("req_id")]
+    lines = [f"**Searched: {len(ids)} candidates** (the answer cites from these)", ""]
+    lines += [f"{i}. {r['req_id']} · {r.get('mno') or ''} {r.get('release') or ''}".rstrip()
+              for i, r in enumerate((r for r in sira_results if r.get("req_id")), 1)]
+    return {"lane": "sira", "count": len(ids),
+            "html": str(render_markdown_bubbles("\n".join(lines), ids, config.root_path))}
+
+
 def _select_synth_synthesize(
     question: str, packed: list[dict[str, Any]], provider_id: str | None = None,
     mode: str | None = None, model: str | None = None,
@@ -824,6 +848,8 @@ def _select_synth_synthesize(
             prompt=context_text, system=system,
             temperature=0.0, max_tokens=_SELECT_SYNTH_MAX_OUTPUT_TOKENS,
         )
+    except LLMCancelled:
+        return {"error": "stopped"}     # the lane sees its cancel event and says so
     except Exception as exc:  # noqa: BLE001 — surfaced to the UI
         logger.exception("select-synth LLM synthesis failed")
         return {"error": f"LLM synthesis failed: {exc}"}
@@ -882,10 +908,17 @@ async def _run_select_synth_lane(
     mode: str = "",
     model: str = "",
     intent: "Intent | None" = None,
+    cancel: "threading.Event | None" = None,
+    emit_partial: "Callable[[dict], Awaitable[None]] | None" = None,
 ) -> dict[str, Any]:
     """select-synth lane: SIRA BM25 candidates (no rerank, full text) → one LLM call
     that selects relevant chunks + synthesizes. Same dict shape as the default
-    rerank-pin lane so the merged template/response is unchanged."""
+    rerank-pin lane so the merged template/response is unchanged.
+
+    Stop (strand ask-stream-stop): the candidates go out through
+    `emit_partial` as soon as the store returns; once `cancel` is set the
+    model call is shut (llm CANCEL) or never made, and the answer is
+    _STOPPED_NOTE with lane_config `stopped`."""
     await _say(
         f"select-synth: fetching {_SELECT_SYNTH_TOP_K} BM25 candidates with full text "
         f"(reranker bypassed)…"
@@ -901,6 +934,8 @@ async def _run_select_synth_lane(
         return {"error": f"SIRA service call failed: {exc}"}
 
     sira_results = sira_result.get("results", []) or []
+    if emit_partial is not None:
+        await emit_partial(_candidates_partial(sira_results))
     # Requirements named by ID in the question go first, fetched from the
     # Trees store whatever BM25 returned (strand sira-intent, D-DRAFT-8),
     # behind NORA_PIN_NAMED_IDS. SIRA's copy of a pinned id is dropped.
@@ -939,23 +974,30 @@ async def _run_select_synth_lane(
         if change_note:
             intent_prompt = prompt_for(Intent.OTHER)
     synth_start = time.time()
-    synth_result = await asyncio.to_thread(
-        _select_synth_synthesize, question, packed,
-        provider_id=provider_id or None, mode=mode or None, model=model or None,
-        system_prompt=(intent_prompt.text + _SENTINEL_SUFFIX) if intent_prompt else None,
-    )
+    synth_result: dict[str, Any] = {"error": "stopped"}     # Stop came during the search
+    if cancel is None or not cancel.is_set():
+        LLM_CANCEL.set(cancel)      # to_thread copies it into the call's thread
+        synth_result = await asyncio.to_thread(
+            _select_synth_synthesize, question, packed,
+            provider_id=provider_id or None, mode=mode or None, model=model or None,
+            system_prompt=(intent_prompt.text + _SENTINEL_SUFFIX) if intent_prompt else None,
+        )
+    stopped = synth_result.get("error") == "stopped"      # an answer that made it is kept
+    if stopped:
+        synth_result = {"answer": _STOPPED_NOTE}
+        await _say("select-synth: stopped before the answer")
     synth_ms = int((time.time() - synth_start) * 1000)
     timings = sira_result.setdefault("timings_ms", {})
     if isinstance(timings, dict):
         timings["synth_ms"] = synth_ms
 
     synth_error = synth_result.get("error")
-    if change_note and not synth_error:
+    if change_note and not synth_error and not stopped:
         synth_result["answer"] = f"_{change_note}_\n\n{synth_result['answer']}"
     if synth_error:
         await _say(f"select-synth synth error: {synth_error}")
     elapsed_ms = int((time.time() - start) * 1000)
-    if not synth_error:
+    if not synth_error and not stopped:
         await _say(f"select-synth: answer ready ({elapsed_ms} ms)")
 
     retrieved_ids = [r["req_id"] for r in sira_results if r.get("req_id")]
@@ -969,6 +1011,12 @@ async def _run_select_synth_lane(
         lane_config["named_in_sira"] = [i for i in named if i in sira_ids]
     if change_note:
         lane_config["change_fallback"] = True
+    if stopped:
+        lane_config["stopped"] = True
+    cited_ids = _flatten_cited_ids(
+        [] if synth_error else (synth_result.get("llm_citations") or []))
+    for r in sira_results:
+        r["cited"] = r.get("req_id") in cited_ids
     wt = synth_result.get("working_text") if not synth_error else None
     if wt:
         lane_config["working_text_marks"] = wt["marks"]
@@ -987,9 +1035,7 @@ async def _run_select_synth_lane(
         "elapsed_ms": elapsed_ms,
         "retrieved_ids": retrieved_ids,
         "reranked_ids": None,
-        "cited_ids": _flatten_cited_ids(
-            [] if synth_error else (synth_result.get("llm_citations") or [])
-        ),
+        "cited_ids": cited_ids,
         "lane_config": lane_config,
     }
 
@@ -1831,8 +1877,11 @@ async def playground_ask_stream(request: Request):
                              "error_code": exc.code}
     if history_intent is not None or history_error is not None:
         lanes_checked = [l for l in lanes_checked if l != "sira"] + [history_lane.LANE]
-    if history_intent is not None:
-        run_id = history_lane.new_run_id()
+    if history_intent is not None or ("sira" in lanes_checked and _SELECT_SYNTH_ENABLED):
+        run_id = history_lane.new_run_id()      # Stop/Cancel posts it back (ask-cancel)
+
+    async def _emit_sira_partial(p: dict) -> None:
+        await progress_q.put({"type": "partial", **p})
 
     async def _emit_partial(p: dict) -> None:
         await progress_q.put({"type": "partial", "lane": history_lane.LANE, **p,
@@ -1850,6 +1899,8 @@ async def playground_ask_stream(request: Request):
             emit_progress=_make_emitter("sira"),
             provider_id=provider_id, mode=mode, model=model,
             intent=q_intent.intent if q_intent is not None else None,
+            cancel=history_lane.cancel_event(run_id) if run_id else None,
+            emit_partial=_emit_sira_partial,
         )
     if id_msg is not None:
         from core.src.web.app import config
@@ -1903,6 +1954,8 @@ async def playground_ask_stream(request: Request):
 
         # All tasks done — collect results, build final HTML, emit done.
         outputs = {lane: t.result() for lane, t in tasks.items()}
+        if run_id:
+            history_lane.forget_run(run_id)
         # Record the intent on the rows it routed (design §7).
         if q_intent is not None:
             fields = sira_intent.lane_fields(q_intent, _intent_trace)
@@ -1948,10 +2001,12 @@ def _history_provider(provider_id: str, mode: str, model: str):
 
 @router.post("/api/test/ask-cancel")
 async def playground_ask_cancel(request: Request):
-    """Cancel a running release-change synthesis (strand rel-history).
-    Form or JSON `run_id` from the stream's `lanes` event. Batches in
-    flight finish and are shown; no new batch starts. Team-tier: the
-    asker cancels their own run."""
+    """Cancel a running release-change synthesis (strand rel-history), or
+    Stop a SIRA select-synth ask (strand ask-stream-stop). Form or JSON
+    `run_id` from the stream's `lanes` event. History: batches in flight
+    finish and are shown; no new batch starts. SIRA: the model call is shut
+    and the card keeps the candidates. Team-tier: the asker cancels their
+    own run."""
     run_id = ""
     try:
         form = await request.form()

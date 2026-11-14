@@ -452,6 +452,9 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
                           <span class="badge bg-info text-dark ms-1"
                                 title="source cell (MNO / release)">{{ r.mno }} {{ r.release }}</span>
                         {% endif %}
+                        {% if r.cited %}
+                          <span class="badge bg-success ms-1" title="the answer cites this requirement">cited</span>
+                        {% endif %}
                         {% if r.pinned %}
                           <span class="badge bg-primary ms-1" title="passed score filter → fed to synthesizer">pinned</span>
                         {% else %}
