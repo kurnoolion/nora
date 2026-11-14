@@ -22,6 +22,8 @@ What it shows and what it can't:
 - **Silver recall@k** = cited with rank ≤ k ÷ all cited.
 - **Fetched** = length of SIRA's results. **Packed** = how many SIRA results made it into the LLM context after budget packing (named-ID pins excluded). Packed < fetched means the context budget cut candidates.
 
+The fetch size is `NORA_SIRA_SELECT_SYNTH_TOP_K` (default 40; `sandbox/run_local.sh` sets 20, so local cards show @10 and @20).
+
 Worked example: fetched 40, packed 31, cited at ranks 2, 7, 18, 35 and one outside → cited 5, outside 1, @10 = 2/5 = 40%, @20 = 60%, @30 = 60%, @40 = 80%.
 
 ## 3. Shape in code

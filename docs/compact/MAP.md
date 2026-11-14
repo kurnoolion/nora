@@ -440,6 +440,7 @@ nora/
 │   │       │   ├── query.py                             # Query page and API routes.
 │   │       │   ├── req_browser.py                       # Requirement browser routes — browse, view, and compare requirements.
 │   │       │   ├── resolve_review.py                    # Resolve-review routes — table-based cross-reference resolution review UI.
+│   │       │   ├── silver_recall.py                     # Silver recall for a SIRA select-synth answer (strand recall-metrics).
 │   │       │   └── sira_intent.py                       # Answer intent for the SIRA path of the Ask page (strand sira-intent).
 │   │       ├── sira_intent_prompts.py                   # Per-intent select-synth system prompts (strand sira-intent, design §5, D-DRAFT-6).
 │   │       ├── static/
@@ -537,6 +538,7 @@ nora/
 │   │       │       ├── _merged_answer.html
 │   │       │       ├── _req_bubble.html
 │   │       │       ├── _shared_body.html
+│   │       │       ├── _silver_recall.html
 │   │       │       ├── _timeline.html
 │   │       │       ├── history.html
 │   │       │       ├── index.html
@@ -689,6 +691,7 @@ nora/
 │       ├── test_web_req_bubbles.py                      # Tests for the req-bubble endpoint and its wiring (strand req-id-bubbles).
 │       ├── test_web_req_tree.py                         # Tests for the shared requirement-tree loader (web/req_tree.py).
 │       ├── test_web_sidebar.py                          # Sidebar nav-label markup (strand collapsible-sidebar).
+│       ├── test_web_silver_recall.py                    # Silver recall: how deep in the BM25 fetch the cited requirements sat
 │       ├── test_web_sira_intent_prompts.py              # Per-intent select-synth prompts (strand sira-intent, design §5, D-DRAFT-6).
 │       ├── test_web_sira_intent_routing.py              # Change routing on the Ask page (strand sira-intent, design §4, D-DRAFT-3/5).
 │       ├── test_web_timeline.py                         # Tests for the normalized query timeline (`core.src.web.timeline`).
