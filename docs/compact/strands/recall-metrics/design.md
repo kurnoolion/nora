@@ -69,7 +69,7 @@ Team gate: no new route, nothing to allowlist. Verify the line with the gate on.
 
 Averages stored `silver_recall` over a time window from the feedback DB. Sketch: `--since 7d`, `--bucket day|week`, filters `--intent`, `--stack`. Output: a table to stdout and an HTML chart under `reports/recall/<time>_silver/` with `run.json` (time, git commit, window, row counts, rows skipped), same pattern as `intent_report` and the `eval-report` skill. Also the share of queries where packed < fetched, per intent.
 
-**Open:** which module owns it (`eval`, next to `intent_report`, or `web`, next to `feedback_db`). Decide when we get there.
+**Owner: `eval`** (`eval/recall_report.py`, next to `intent_report`; decided 2026-11-13). It reads the feedback DB read-only with sqlite and does not import `web`, since `web` already imports `eval`; its test builds the DB from web's schema to catch drift. Reports go to `reports/recall/`, gitignored: they come from live usage and the repo is public.
 
 ## 8. Build order
 

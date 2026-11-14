@@ -91,3 +91,6 @@ config/ingest_runner.json
 # compose bind-mount placeholder: anything Docker creates under it (e.g. out/sira for a build-less serving env) is not ours
 docker/empty/*
 !docker/empty/.gitkeep
+
+# Silver recall reports come from live usage (strand recall-metrics); never committed.
+reports/recall/
