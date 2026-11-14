@@ -214,6 +214,8 @@ nora/
 │   │   │   ├── prompts/
 │   │   │   │   └── judge_v1.txt
 │   │   │   ├── questions.py                             # Evaluation test question set with ground truth (TDD 9.4).
+│   │   │   ├── recall_report.py                         # Silver recall report over the Ask page's feedback DB (strand recall-metrics, design §7).
+│   │   │   ├── recall_report_template.html
 │   │   │   ├── release_map.py                           # Golden-set release map — what ``N`` means for each MNO (strand
 │   │   │   └── runner.py                                # Evaluation runner (TDD 9.4, Step 11).
 │   │   ├── extraction/                                  # Format-aware content extraction.
@@ -579,6 +581,7 @@ nora/
 │       ├── test_eval_golden_stage2.py                   # Tests for golden Stage-2 (pin + judge), run report, and batch runner.
 │       ├── test_eval_intent.py                          # Tests for the answer-intent eval (strand sira-intent, design §8).
 │       ├── test_eval_intent_report.py                   # Intent confidence report (strand sira-intent, design §8).
+│       ├── test_eval_recall_report.py                   # Silver recall report over the feedback DB (strand recall-metrics, design §7).
 │       ├── test_eval_release_map.py                     # Tests for the golden set's release map (synthetic labels only).
 │       ├── test_extractor_images_root.py                # images_root redirect — extracted-image artifacts belong in the BUILD
 │       ├── test_feedback_db.py                          # Tests for `core/src/web/feedback_db.py` — Test page Q&A + vote log.

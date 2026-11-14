@@ -7,7 +7,7 @@
      title="Share of the requirements this answer cited that BM25 ranked within the top k. Cited requirements stand in for gold labels.">
   <i class="bi bi-bullseye me-1"></i>Silver recall
   {% for k, v in silver_recall.recall.items() %}
-    <span class="ms-1">@{{ k }} {{ (v * 100) | round | int }}%</span>{% if not loop.last %} ·{% endif %}
+    <span class="ms-1">@{{ k }} {{ (v * 100 + 0.5) | int }}%</span>{% if not loop.last %} ·{% endif %}
   {% endfor %}
   <span class="ms-2">({{ silver_recall.cited }} cited
     {%- if silver_recall.outside %} · {{ silver_recall.outside }} outside{% endif %}
