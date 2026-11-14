@@ -28,6 +28,7 @@ def lane(monkeypatch):
             return f"answer citing {RID}"
 
     async def store(*a, **k):
+        seen["store_calls"] = seen.get("store_calls", 0) + 1
         return {"results": [{"req_id": RID, "mno": "mno-w", "release": "Sep2031",
                              "text": "corpus placeholder", "rank": 1, "bm25_score": 1.0, "rerank_score": None},
                             {"req_id": "VZ_REQ_PLANA_0002", "mno": "mno-w", "release": "Sep2031",
@@ -60,7 +61,7 @@ def test_candidates_go_out_before_the_answer_labelled_and_without_corpus_text(la
     (p,) = seen["partials"]
     assert p["lane"] == "sira" and p["count"] == 2
     assert "Searched: 2 candidates" in p["html"] and "the answer cites from these" in p["html"]
-    assert RID in p["html"] and "corpus placeholder" not in p["html"]
+    assert RID in p["html"] and 'class="card mb-2' in p["html"]       # the tab's tiles
     assert out["result"]["answer"].startswith(f"answer citing {RID}")
     assert [r["cited"] for r in out["sira_results"]] == [True, False]
     assert "stopped" not in out["lane_config"]
@@ -129,6 +130,7 @@ def test_stopped_ask_renders_the_note_and_marks_the_row(client):
     ev = _stream(c)
     html = [d for n, d in ev if n == "done"][0]["html"]
     assert "Stopped before the answer" in html
+    assert 'nav-link py-1 active" type="button" role="tab"\n                  data-bs-toggle="tab" data-bs-target="#sira-tabs-1-cands"' in html
     row = store.rows[0]
     assert row["answer"] == playground._STOPPED_NOTE and row["lane_config"]["stopped"] is True
 
@@ -168,3 +170,41 @@ def test_stop_after_the_answer_arrived_keeps_the_answer(lane, monkeypatch):
     out = run(ev)
     assert out["result"]["answer"].startswith(f"answer citing {RID}")
     assert "stopped" not in out["lane_config"]
+
+
+def test_the_card_has_answer_cited_and_candidates_tabs(client):
+    c, seen, store = client
+    html = [d for n, d in _stream(c) if n == "done"][0]["html"]
+    for tab in (">Answer</button>", ">Cited by LLM (1)</button>", ">Search candidates (2)</button>"):
+        assert tab in html, tab
+    assert 'data-bs-target="#sira-tabs-1-answer"' in html
+    assert "SIRA retrieval (top" not in html                  # moved out of engineering details
+
+
+# --- alongside the ID-lookup and History lanes: no SIRA candidates, no Stop ---
+
+def _sira_events(ev):
+    return [d for n, d in ev if n == "partial" and d.get("lane") == "sira"]
+
+
+def test_an_id_lookup_ask_gets_no_candidates_or_stop(client, monkeypatch):
+    c, seen, _ = client
+    monkeypatch.setenv("NORA_ID_LOOKUP", "on")
+    r = c.post("/api/test/ask-stream", data={"question": RID, "lanes": ["sira"], "section": "merged"})
+    ev = _events(r.text)
+    assert ev[0][1] == {"lanes": ["id_lookup"], "run_id": ""}     # no run id: the page shows no Stop
+    assert _sira_events(ev) == [] and "store_calls" not in seen
+    assert [n for n, _ in ev].count("done") == 1
+
+
+def test_a_history_ask_keeps_its_cancel_and_gets_no_candidates(client, monkeypatch):
+    c, seen, _ = client
+    monkeypatch.setattr(history_lane, "history_diff_applies", lambda *a, **k: object())
+
+    async def history_run(question, intent, **kw):
+        return {"error": "stubbed history"}
+    monkeypatch.setattr(history_lane, "run_history_lane", history_run)
+    ev = _stream(c)
+    assert ev[0][1]["lanes"] == ["history"] and ev[0][1]["run_id"]   # History's Cancel
+    assert _sira_events(ev) == [] and "store_calls" not in seen
+    assert [n for n, _ in ev].count("done") == 1

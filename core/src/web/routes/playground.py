@@ -35,7 +35,7 @@ from core.src.llm.openai_provider import (
     REASONING_SENTINEL_ENABLED as _REASONING_SENTINEL_ENABLED,
 )
 from core.src.web.feedback_db import CATEGORIES
-from core.src.web.markdown_render import render_markdown, render_markdown_bubbles
+from core.src.web.markdown_render import render_markdown
 from core.src.web.routes import history_lane
 from core.src.web.routes import id_lookup_lane
 from core.src.web.routes import sira_intent
@@ -633,6 +633,7 @@ async def _build_merged_response_html(
                 "sira_expand_model": out["sira_result"].get("expand_model"),
                 "synth_error": out["synth_error"],
                 "candidate_count": 0,
+                "stopped": bool((out.get("lane_config") or {}).get("stopped")),
             })
 
         if lane == history_lane.LANE:
@@ -817,17 +818,20 @@ def _clean_working_text(answer: str, ids: list[str]) -> tuple[str, list[str], in
 _STOPPED_NOTE = "_Stopped before the answer._"
 
 
-def _candidates_partial(sira_results: list[dict[str, Any]]) -> dict[str, Any]:
+def _candidates_partial(sira_result: dict[str, Any], sira_results: list[dict[str, Any]]) -> dict[str, Any]:
     """The `partial` event sent once the store returns: the fetched
     candidates in retrieval order, labelled as what the answer cites from,
-    each id a requirement bubble. Ids and cells only, no corpus text."""
-    from core.src.web.app import config
-    ids = [r["req_id"] for r in sira_results if r.get("req_id")]
-    lines = [f"**Searched: {len(ids)} candidates** (the answer cites from these)", ""]
-    lines += [f"{i}. {r['req_id']} · {r.get('mno') or ''} {r.get('release') or ''}".rstrip()
-              for i, r in enumerate((r for r in sira_results if r.get("req_id")), 1)]
-    return {"lane": "sira", "count": len(ids),
-            "html": str(render_markdown_bubbles("\n".join(lines), ids, config.root_path))}
+    as the same tiles the card's Search candidates tab shows."""
+    from core.src.web.app import config, templates
+    html = templates.get_template("test/_sira_candidates.html").render({
+        "root_path": config.root_path,
+        "heading": f"Searched: {len(sira_results)} candidates (the answer cites from these)",
+        "cands": sira_results, "show_scope": True,
+        "sira_expansion_phrases": sira_result.get("expansion_phrases_kept") or [],
+        "sira_resolved_cells": sira_result.get("resolved_cells"),
+        "sira_unresolved": sira_result.get("unresolved"),
+    })
+    return {"lane": "sira", "count": len(sira_results), "html": html}
 
 
 def _select_synth_synthesize(
@@ -935,7 +939,7 @@ async def _run_select_synth_lane(
 
     sira_results = sira_result.get("results", []) or []
     if emit_partial is not None:
-        await emit_partial(_candidates_partial(sira_results))
+        await emit_partial(_candidates_partial(sira_result, sira_results))
     # Requirements named by ID in the question go first, fetched from the
     # Trees store whatever BM25 returned (strand sira-intent, D-DRAFT-8),
     # behind NORA_PIN_NAMED_IDS. SIRA's copy of a pinned id is dropped.

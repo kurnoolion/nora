@@ -343,19 +343,37 @@
     block.appendChild(part);
     progressTextHistory.textContent = "synthesized " + data.done + " of " + data.total + " batches";
   }
-  [[cancelBtn, "Cancelling…"], [stopBtn, "Stopping…"]].forEach(([btn, busy]) => {
-    if (!btn) return;
-    btn.addEventListener("click", async () => {
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", async () => {
       if (!currentRunId) return;
-      btn.disabled = true;
-      btn.textContent = busy;
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = "Cancelling…";
       try {
         const fd = new FormData();
         fd.append("run_id", currentRunId);
-        await fetch(btn.dataset.cancelUrl, { method: "POST", body: fd });
+        await fetch(cancelBtn.dataset.cancelUrl, { method: "POST", body: fd });
       } catch (err) { /* the stream's done event still arrives */ }
     });
-  });
+  }
+  // Stop is instant on the page: the stopped view shows at once with the
+  // candidates already fetched, and Ask is free again. The server stops the
+  // model in the background; its final card (share, feedback) replaces this
+  // view when it arrives, unless a newer ask has started.
+  let askSeq = 0, stoppedSeq = -1;
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => {
+      if (!currentRunId) return;
+      const fd = new FormData();
+      fd.append("run_id", currentRunId);
+      fetch(stopBtn.dataset.cancelUrl, { method: "POST", body: fd }).catch(() => {});
+      stoppedSeq = askSeq;
+      answerEl.innerHTML = '<div class="alert alert-secondary py-2 small mb-2">Stopped before the answer.</div>'
+        + (candidatesEl.innerHTML ? '<div class="border rounded p-2 bg-white small">' + candidatesEl.innerHTML + '</div>' : '');
+      if (window.htmx) window.htmx.process(answerEl);
+      hideProgress();
+      setBusy(false);
+    });
+  }
 
   function setBusy(busy) {
     submitBtn.disabled = busy;
@@ -446,6 +464,7 @@
     // recents, which is the whole point of re-running after a fix.
     const historyId = askBeginHistory(askedQuestion);
     askRenderRecents();          // the question is available to re-run at once
+    const mySeq = ++askSeq;      // a stopped ask's late events must not touch a newer one
 
     setBusy(true);
     answerEl.innerHTML = "";
@@ -494,6 +513,11 @@
           buf = buf.slice(sep + 2);
           const parsed = parseSSEBlock(block);
           if (!parsed) continue;
+          if (parsed.event === "done" && mySeq !== askSeq) {
+            askRecordHistory(askedQuestion, historyId);   // superseded: keep its share link only
+            continue;
+          }
+          if (mySeq !== askSeq || (stoppedSeq === mySeq && parsed.event !== "done")) continue;
           if (parsed.event === "lanes") {
             // Authoritative: re-render the rows for the lanes the SERVER is
             // actually running (team-mode may have forced SIRA-only), so a
@@ -516,11 +540,13 @@
         }
       }
     } catch (err) {
-      answerEl.innerHTML = '<div class="alert alert-danger mb-0">'
-        + 'Stream interrupted: ' + (err.message || err) + '</div>';
-      hideProgress();
+      if (mySeq === askSeq && stoppedSeq !== mySeq) {
+        answerEl.innerHTML = '<div class="alert alert-danger mb-0">'
+          + 'Stream interrupted: ' + (err.message || err) + '</div>';
+        hideProgress();
+      }
     } finally {
-      setBusy(false);
+      if (mySeq === askSeq) setBusy(false);
       // No-op on the success path (phase 2 already consumed the entry); on a
       // stream failure it drops the marker from the entry that stays pathless.
       askFinishHistory(historyId);
