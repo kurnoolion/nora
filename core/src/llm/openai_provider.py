@@ -58,16 +58,23 @@ class LLMCancelled(RuntimeError):
 
 
 class _TrackConns:
-    """Handler mixin that keeps the connections urllib opens, so a watcher
-    thread can shut their sockets."""
-    def __init__(self, conns: list, *a, **kw):
+    """Handler mixin that keeps the sockets urllib opens, so a watcher thread
+    can shut them. Each socket is recorded when it connects: urllib's do_open
+    drops `conn.sock` once the headers arrive, but the response body is still
+    read from that same socket object, so shutting it stops the body read."""
+    def __init__(self, socks: list, *a, **kw):
         super().__init__(*a, **kw)
-        self._conns = conns
+        self._socks = socks
 
     def do_open(self, http_class, req, **kw):
         def make(*a, **k):
             conn = http_class(*a, **k)
-            self._conns.append(conn)
+            connect = conn.connect
+
+            def connect_and_record():
+                connect()
+                self._socks.append(conn.sock)
+            conn.connect = connect_and_record
             return conn
         return super().do_open(make, req, **kw)
 
@@ -86,19 +93,18 @@ def _urlopen(req, timeout: float, cancel: "threading.Event | None", done: thread
     when the call is over, which ends the watcher."""
     if cancel is None:
         return urllib.request.urlopen(req, timeout=timeout)
-    conns: list = []
+    socks: list = []
 
     def watch() -> None:
         while not done.wait(0.1):
             if cancel.is_set():
-                for c in conns:
+                for s in list(socks):
                     try:
-                        if c.sock is not None:
-                            c.sock.shutdown(socket.SHUT_RDWR)
+                        s.shutdown(socket.SHUT_RDWR)
                     except OSError:
                         pass
     threading.Thread(target=watch, daemon=True).start()
-    return urllib.request.build_opener(_HTTP(conns), _HTTPS(conns)).open(req, timeout=timeout)
+    return urllib.request.build_opener(_HTTP(socks), _HTTPS(socks)).open(req, timeout=timeout)
 
 # Reasoning ("thinking") models sometimes inline their chain-of-thought in the
 # message content as <think>…</think> (or <thinking>/<reasoning>) rather than

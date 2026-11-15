@@ -468,7 +468,7 @@ class TestErrorSummary:
 class TestCancel:
     """A loopback server that never answers stands in for a slow model."""
 
-    def _slow_server(self):
+    def _slow_server(self, early_headers=False):
         import socket
         import threading
 
@@ -481,6 +481,10 @@ class TestCancel:
             conn, _ = srv.accept()
             conn.settimeout(10)
             try:
+                if early_headers:           # a gateway that sends headers at once,
+                    conn.recv(65536)        # then holds the body
+                    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                 b"Content-Length: 100\r\n\r\n")
                 while conn.recv(65536):     # read the request, then never reply;
                     pass                    # b"" means the client closed
             except OSError:
@@ -515,6 +519,21 @@ class TestCancel:
             self._run(p, cancel)
         assert time.time() - t0 < 3
         assert seen["closed"].wait(3)       # the endpoint saw the disconnect
+
+    def test_stop_after_early_headers_still_returns_at_once(self):
+        import threading
+        import time
+        from core.src.llm.openai_provider import LLMCancelled
+
+        url, seen = self._slow_server(early_headers=True)
+        p = OpenAICompatibleProvider(model="m", base_url=url, timeout=30)
+        cancel = threading.Event()
+        threading.Timer(0.5, cancel.set).start()
+        t0 = time.time()
+        with pytest.raises(LLMCancelled):
+            self._run(p, cancel)
+        assert time.time() - t0 < 3
+        assert seen["closed"].wait(3)
 
     def test_already_stopped_makes_no_call(self):
         import threading
