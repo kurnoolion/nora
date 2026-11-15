@@ -26,6 +26,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REPORTS_DIR = REPO_ROOT / "reports" / "recall"
@@ -49,7 +50,7 @@ def load(db: Path, *, since: datetime, intent: "str | None" = None,
     and how many matching SIRA rows did not (older rows, failed answers,
     no citations)."""
     since_s = since.astimezone(timezone.utc).isoformat(timespec="seconds")
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True)
     try:
         raw = con.execute("SELECT timestamp, lane_config FROM test_feedback"
                           " WHERE lane = 'sira' AND timestamp >= ? ORDER BY timestamp, id",
@@ -62,11 +63,13 @@ def load(db: Path, *, since: datetime, intent: "str | None" = None,
             lc = json.loads(lc_text) if lc_text else {}
         except ValueError:
             lc = {}
+        if not isinstance(lc, dict):
+            lc = {}
         row_intent = str(lc.get("intent") or "unknown")
         if (intent and row_intent != intent) or (stack and lc.get("stack") != stack):
             continue
         sr = lc.get("silver_recall")
-        if not sr:
+        if not sr or not isinstance(sr, dict):
             skipped += 1
             continue
         rows.append({"ts": ts, "intent": row_intent, "stack": lc.get("stack"), "sr": sr})
@@ -88,6 +91,7 @@ def _group(rows: list[dict]) -> dict:
             "n_k": {k: len(by_k[k]) for k in ks},
             "cited": _mean([r["sr"]["cited"] for r in rows]),
             "outside": _mean([r["sr"]["outside"] for r in rows]),
+            "pinned": _mean([r["sr"].get("pinned_cited", 0) for r in rows]),
             "budget_cut": _mean([1.0 if r["sr"]["packed"] < r["sr"]["fetched"] else 0.0 for r in rows])}
 
 
@@ -135,8 +139,12 @@ def render_html(run: dict) -> str:
 
 def write_run(run: dict, out_root: Path) -> Path:
     stamp = datetime.fromisoformat(run["meta"]["created_at"]).strftime("%Y-%m-%d-%H%M")
-    out = Path(out_root) / f"{stamp}_{SLUG}_{run['meta']['since']}"
-    out.mkdir(parents=True, exist_ok=False)
+    base = Path(out_root) / f"{stamp}_{SLUG}_{run['meta']['since']}"
+    out, n = base, 1
+    while out.exists():                                 # a second run in the same minute
+        n += 1
+        out = base.with_name(f"{base.name}-{n}")
+    out.mkdir(parents=True)
     (out / "run.json").write_text(json.dumps(run, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     (out / "report.html").write_text(render_html(run), encoding="utf-8")
     return out
@@ -160,11 +168,11 @@ def _pct(v: float) -> int:
 
 def _table(summary: list[dict]) -> str:
     ks = sorted({k for g in summary for k in g["recall"]}, key=int)
-    head = f"{'intent':<12}{'n':>5}" + "".join(f"{'@' + k:>8}" for k in ks) + f"{'cited':>8}{'outside':>9}{'cut':>6}"
+    head = f"{'intent':<12}{'n':>5}" + "".join(f"{'@' + k:>8}" for k in ks) + f"{'cited':>8}{'outside':>9}{'pinned':>8}{'cut':>6}"
     lines = [head]
     for g in summary:
         cells = "".join(f"{_pct(g['recall'][k]):>7}%" if k in g["recall"] else f"{'-':>8}" for k in ks)
-        lines.append(f"{g['intent']:<12}{g['n']:>5}{cells}{g['cited']:>8.1f}{g['outside']:>9.1f}"
+        lines.append(f"{g['intent']:<12}{g['n']:>5}{cells}{g['cited']:>8.1f}{g['outside']:>9.1f}{g['pinned']:>8.1f}"
                      f"{_pct(g['budget_cut']):>5}%")
     return "\n".join(lines)
 

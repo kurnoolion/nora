@@ -114,3 +114,46 @@ def test_cli_missing_db(tmp_path, capsys):
 
 def test_halves_round_up_like_the_page_and_the_card():
     assert rr._pct(0.625) == 63 and rr._pct(0.6249) == 62 and rr._pct(1.0) == 100
+
+
+# --- #32 review: pins, odd rows, odd paths, same-minute runs, the intent cell ---
+
+def test_pinned_is_averaged_and_older_rows_count_zero(tmp_path):
+    path = _db(tmp_path, [
+        ("2026-11-12T10:00:00+00:00", "sira", {"intent": "list", "silver_recall": dict(_sr(1.0), pinned_cited=2)}),
+        ("2026-11-12T11:00:00+00:00", "sira", {"intent": "list", "silver_recall": _sr(1.0)}),   # before pinned_cited
+    ])
+    rows, _ = rr.load(path, since=NOW - rr.timedelta(days=7))
+    assert {g["intent"]: g for g in rr.summarize(rows)}["list"]["pinned"] == 1.0
+    assert "pinned" in rr._table(rr.summarize(rows))
+
+
+def test_rows_that_are_not_dicts_are_skipped(tmp_path):
+    path = _db(tmp_path, [
+        ("2026-11-12T10:00:00+00:00", "sira", ["not", "a", "dict"]),
+        ("2026-11-12T11:00:00+00:00", "sira", {"intent": "list", "silver_recall": "oops"}),
+        ("2026-11-12T12:00:00+00:00", "sira", {"intent": "list", "silver_recall": _sr(1.0)}),
+    ])
+    rows, skipped = rr.load(path, since=NOW - rr.timedelta(days=7))
+    assert len(rows) == 1 and skipped == 2
+
+
+def test_a_db_path_with_uri_characters_opens(tmp_path):
+    d = tmp_path / "a #dir?x"
+    d.mkdir()
+    path = _db(d, [("2026-11-12T10:00:00+00:00", "sira", {"intent": "list", "silver_recall": _sr(1.0)})])
+    assert len(rr.load(path, since=NOW - rr.timedelta(days=7))[0]) == 1
+
+
+def test_two_runs_in_the_same_minute_both_land(db, tmp_path):
+    rows, skipped = rr.load(db, since=NOW - rr.timedelta(days=7))
+    run = rr.build_run(rows, skipped=skipped, since="7d", bucket="day", intent=None, stack=None,
+                       created_at=NOW.replace(tzinfo=None), git={"commit": "abc", "dirty": False})
+    a, b = rr.write_run(run, tmp_path / "r"), rr.write_run(run, tmp_path / "r")
+    assert a != b and (b / "report.html").exists()
+
+
+def test_the_intent_cell_is_text_not_markup():
+    """lane_config.intent comes from the DB unchecked; only numeric cells take markup."""
+    page = rr.TEMPLATE.read_text(encoding="utf-8")
+    assert "insertCell().textContent = g.intent" in page

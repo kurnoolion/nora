@@ -36,7 +36,7 @@ label { font-size: 14px; }
 <main>
   <div class="eyebrow" id="eyebrow"></div>
   <h1>Silver recall</h1>
-  <p class="lede">Share of the requirements each SIRA answer cited that BM25 ranked within the top k. Cited requirements stand in for gold labels, so this shows how deep the evidence sat, not what BM25 missed. Each k is averaged over the answers that fetched at least that many.</p>
+  <p class="lede">Share of the requirements each SIRA answer cited that ranked within the top k of the search. Cited requirements stand in for gold labels, so this shows how deep the evidence sat, not what BM25 missed. Requirements named by ID in the question are pinned into the context, so they are counted apart (Pinned), not in Cited. Each k is averaged over the answers that fetched at least that many.</p>
   <div class="card"><table id="summary"></table></div>
   <div class="card">
     <label>Intent <select id="pick"></select></label>
@@ -56,11 +56,12 @@ $("eyebrow").textContent = `recall-metrics · last ${M.since} · by ${M.bucket}$
 $("foot").textContent = `${M.rows} answers with silver recall; ${M.skipped} SIRA answers skipped (older rows, failed answers, no citations). Run ${when}, git ${M.git.commit ?? "unknown"}${M.git.dirty ? " (uncommitted changes)" : ""}. "Cut" is the share of answers where the context budget left fetched results out.`;
 
 const t = $("summary");
-const hr = t.insertRow(); ["Intent", "Answers", ...KS.map(k => "@" + k), "Cited", "Outside", "Cut"].forEach(h => { const th = document.createElement("th"); th.textContent = h; hr.appendChild(th); });
+const hr = t.insertRow(); ["Intent", "Answers", ...KS.map(k => "@" + k), "Cited", "Outside", "Pinned", "Cut"].forEach(h => { const th = document.createElement("th"); th.textContent = h; hr.appendChild(th); });
 for (const g of RUN.summary) {
   const r = t.insertRow(); if (g.intent === "all") r.className = "all";
-  const cells = [g.intent, g.n, ...KS.map(k => k in g.recall ? `${pct(g.recall[k])} <span class="sub">(${g.n_k[k]})</span>` : "–"),
-                 g.cited.toFixed(1), g.outside.toFixed(1), pct(g.budget_cut)];
+  r.insertCell().textContent = g.intent;              // from the DB unchecked: text, never markup
+  const cells = [g.n, ...KS.map(k => k in g.recall ? `${pct(g.recall[k])} <span class="sub">(${g.n_k[k]})</span>` : "–"),
+                 g.cited.toFixed(1), g.outside.toFixed(1), (g.pinned ?? 0).toFixed(1), pct(g.budget_cut)];
   cells.forEach(c => { r.insertCell().innerHTML = String(c); });
 }
 if (!RUN.summary.length) t.insertRow().insertCell().textContent = "No answers with silver recall in this window.";
