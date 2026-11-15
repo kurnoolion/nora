@@ -213,6 +213,13 @@ class TestAskPageModelSelect:
         assert 'data-url-template="/api/test/providers/__ID__/models"' in body
         assert 'data-default-model="vega-alpha-9"' in body
 
+    def test_ask_bar_widgets_name_themselves_on_hover(self, client_with_roster):
+        body = client_with_roster.get("/test").text
+        for tip in ('title="Your name — optional, credits your feedback"', 'title="LLM provider"',
+                    'title="Model"', 'title="Thinking level"',
+                    'modelEl.title = "Model";', 'modeEl.title = "Thinking level — Fast'):
+            assert tip in body, tip
+
     def test_no_roster_renders_no_model_select(self, client_no_roster):
         r = client_no_roster.get("/test")
         assert r.status_code == 200

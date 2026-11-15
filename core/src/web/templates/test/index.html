@@ -118,7 +118,7 @@
               style="max-width: 200px"
               placeholder="Your name (optional)"
               aria-label="Your name — optional, credits your feedback"
-              title="Optional — credits your feedback"
+              title="Your name — optional, credits your feedback"
               maxlength="80">
           {% if providers %}
           <select
@@ -126,7 +126,8 @@
               name="provider"
               class="form-select form-select-sm"
               style="max-width: 210px"
-              aria-label="Which endpoint answers">
+              aria-label="Which endpoint answers"
+              title="LLM provider">
             {% for p in providers %}
             <option value="{{ p.id }}"
                     data-supports-reasoning-control="{{ 1 if p.supports_reasoning_control else 0 }}"
@@ -141,6 +142,7 @@
               class="form-select form-select-sm"
               style="max-width: 230px"
               aria-label="Which model on that provider answers"
+              title="Model"
               data-url-template="{{ root_path }}/api/test/providers/__ID__/models">
             {% for p in providers %}{% if loop.first %}
             <option value="{{ p.model }}" selected>{{ p.model }}</option>
@@ -151,7 +153,8 @@
               name="mode"
               class="form-select form-select-sm"
               style="max-width: 150px"
-              aria-label="How hard the model thinks">
+              aria-label="How hard the model thinks"
+              title="Thinking level">
             <option value="fast">Fast</option>
             <option value="think">Think</option>
           </select>
@@ -780,12 +783,12 @@ function askRecordHistory(question, pendingId) {
         modeEl.appendChild(placeholder);
       }
       modeEl.value = "";
-      modeEl.title = "This endpoint exposes no control over how much the "
+      modeEl.title = "Thinking level — this endpoint exposes no control over how much the "
         + "model thinks — it may still reason, we just cannot change it.";
       return;
     }
     if (placeholder) placeholder.remove();
-    modeEl.title = "Fast skips the model's thinking step. Think lets it think "
+    modeEl.title = "Thinking level — Fast skips the model's thinking step. Think lets it think "
       + "as the deployment configured. Recorded with the answer.";
     if (opt.dataset.defaultMode && !modeEl.dataset.userSet) {
       modeEl.value = opt.dataset.defaultMode;
@@ -817,7 +820,7 @@ function askRecordHistory(question, pendingId) {
     modelEl.replaceChildren(placeholderOpt);
     const url = modelEl.dataset.urlTemplate.replace(
       "__ID__", encodeURIComponent(providerEl.value));
-    modelEl.title = "";
+    modelEl.title = "Model";
     try {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error("HTTP " + resp.status);
@@ -833,12 +836,12 @@ function askRecordHistory(question, pendingId) {
       modelEl.value = wanted;
       savedModel = "";                          // restore once, on first load
       if (!data.discovered) {
-        modelEl.title = "Could not list this provider's models — showing "
+        modelEl.title = "Model — could not list this provider's models — showing "
           + "its configured default only.";
       }
     } catch (e) {
       if (reqId !== modelReq) return;
-      modelEl.title = "Could not load models — the provider's default is used.";
+      modelEl.title = "Model — could not load models — the provider's default is used.";
     }
   }
   if (providerEl) providerEl.addEventListener("change", syncModels);
