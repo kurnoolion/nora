@@ -254,6 +254,9 @@ templates.env.globals["duration"] = _duration_filter
 # (name differs from the routes' `team_restricted` bool context var)
 from core.src.web.team_mode import team_restricted as _team_restricted  # noqa: E402
 templates.env.globals["is_team_restricted"] = _team_restricted
+# top bar Report issue link; "" (hidden) unless NORA_ISSUE_URL is set
+from core.src.web.issue_link import page_issue_url as _page_issue_url  # noqa: E402
+templates.env.globals["page_issue_url"] = _page_issue_url
 
 
 def _ingest_user(request: Request) -> bool:

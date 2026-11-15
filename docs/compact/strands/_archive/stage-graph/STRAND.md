@@ -1,8 +1,8 @@
 # stage-graph
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-11-06
-**Landed:**
+**Landed:** 2026-11-15
 **Assignees:** kurnoolion
 **Target modules:** pipeline, env, stores, store_service, ingest_runner, web, docker (cycle driver, compose)
 **Active phase:** development
@@ -21,7 +21,8 @@ enrichment per stack, is the first use; recipes without resolve, with a
 graph or with a vector store are the ones the design must carry without
 another layout change. Doc-first: the design note in `design.md`, two
 rulings, then seven implementation steps that each leave the system
-working.
+working. Step 7 (graph and vector unit kinds) is deferred (2026-11-15,
+D-DRAFT-25); the strand lands with steps 1–6.
 
 ## Notes
 
@@ -78,3 +79,4 @@ working.
   a runner config sets `max_parallel_ingests` above 1. Refusal handling
   for the generic enrich path and enrich concurrency per stack landed for
   stack A's phase 4, which is running.
+- Landed on 2026-11-15 with 25 promoted decisions: D-323, D-324, D-325, D-326, D-327, D-328, D-329, D-330, D-331, D-332, D-333, D-334, D-335, D-336, D-337, D-338, D-339, D-340, D-341, D-342, D-343, D-344, D-345, D-346, D-347.

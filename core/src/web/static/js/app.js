@@ -272,6 +272,23 @@ function refreshStatus() {
  * copy means the next fix cannot land in only one of them. `askCopyShare`
  * keeps its name because _answer.html calls it from an inline onclick.
  */
+/*
+ * Report issue (_merged_answer.html): the server prefills the issue body
+ * with the share link's path only; on click, put this browser's origin in
+ * front, as askCopyShare does. The server's view of the host (behind a
+ * reverse proxy) never reaches the issue.
+ */
+function askIssueLink(a, path) {
+  try {
+    const u = new URL(a.href);
+    const body = u.searchParams.get("body") || "";
+    const full = window.location.origin + path;
+    if (!body.includes("- Link: " + path + "\n")) return;
+    u.searchParams.set("body", body.replace("- Link: " + path + "\n", "- Link: " + full + "\n"));
+    a.href = u.toString();
+  } catch (e) { /* leave the path-only link */ }
+}
+
 function askCopyShare(btn, path) {
   const url = window.location.origin + path;
 
