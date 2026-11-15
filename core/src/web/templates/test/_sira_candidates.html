@@ -37,7 +37,7 @@
   {% else %}
     <div class="mt-2">
       {% for r in cands %}
-        <div class="card mb-2 {% if r.pinned %}border-primary{% else %}border-secondary{% endif %}"
+        <div class="card mb-2 sira-tile {% if r.pinned %}border-primary{% else %}border-secondary{% endif %}"
              {% if not r.pinned %}style="opacity: 0.55;"{% endif %}>
           <div class="card-body py-2 px-3">
             <div class="d-flex justify-content-between align-items-start">
@@ -60,6 +60,18 @@
                 </div>
                 {% if r.title %}<div class="fw-semibold mb-1" style="font-size: .92rem;">{{ r.title }}</div>{% endif %}
                 {% if r.text_preview %}<div class="text-muted small" style="font-size: .85rem;">{{ r.text_preview }}{% if r.text_preview|length >= 400 %}…{% endif %}</div>{% endif %}
+                {# Full requirement on first open, from the bubble route and
+                   pinned to this tile's cell. The page carries the preview
+                   only, so a 120-candidate fetch stays small. #}
+                {% set q = {"mno": r.mno, "release": r.release} | urlencode if r.release else "" %}
+                <details class="sira-tile-full mt-1"
+                         hx-get="{{ root_path }}/api/req/{{ r.req_id | urlencode }}{% if q %}?{{ q }}{% endif %}"
+                         hx-trigger="toggle once" hx-target="find .req-bubble-body" hx-swap="innerHTML">
+                  <summary class="small text-primary">Full text</summary>
+                  <div class="req-bubble-body d-block border rounded p-2 mt-1 small">
+                    <span class="text-muted">Loading {{ r.req_id }}…</span>
+                  </div>
+                </details>
               </div>
               <div class="text-end small" style="min-width: 140px;">
                 <div>rerank

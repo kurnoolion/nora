@@ -1419,13 +1419,18 @@ async def shared_answer_fragment(request: Request, row_id: int):
 
 
 @router.get("/api/req/{req_id:path}", response_class=HTMLResponse)
-async def req_fragment(request: Request, req_id: str):
+async def req_fragment(request: Request, req_id: str, mno: str = "", release: str = ""):
     """Requirement body behind an answer bubble (strand req-id-bubbles).
 
     Read-only, parse-layer only. Resolves through the shared `req_tree`
     helpers so it agrees with the Requirement Browser and the Eval Studio
     picker; a req_id carried by several releases shows the latest, per
     D-207's latest-on-conflict contract.
+
+    `release` (and `mno`) pin the cell instead: a SIRA candidate tile passes
+    the cell it was fetched from, so an older release's tile expands to that
+    release's text (strand ask-stream-stop). No match there falls back to
+    the latest.
     """
     from core.src.web.app import _template_response, config
     from core.src.web import req_tree
@@ -1441,10 +1446,13 @@ async def req_fragment(request: Request, req_id: str):
             "corpus.</span>",
             status_code=404,
         )
-    best = req_tree.latest_match(matches)
+    in_cell = [m for m in matches
+               if release and m.get("release") == release and (not mno or m.get("mno") == mno)]
+    best = req_tree.latest_match(in_cell or matches)
     resp = _template_response(request, "test/_req_bubble.html", {
         "req": {**best, "req_id": req_id},
         "other_releases": len(matches) - 1,
+        "release_pinned": bool(in_cell),
     })
     # htmx's `once` already stops a single bubble from refetching, but the same
     # req can appear as several badges in one answer, and again on a reload or

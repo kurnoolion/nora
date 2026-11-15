@@ -21,7 +21,11 @@
   <span class="d-block text-muted mb-1">Section {{ section }}</span>
 {% endif %}
 <span class="d-block req-body">{{ req.text | req_body }}</span>
-{% if other_releases %}
+{% if other_releases and release_pinned %}
+  <span class="d-block text-muted mt-1">
+    Also in {{ other_releases }} other release{% if other_releases != 1 %}s{% endif %}.
+  </span>
+{% elif other_releases %}
   <span class="d-block text-muted mt-1">
     Showing the latest of {{ other_releases + 1 }} releases carrying this id.
   </span>
