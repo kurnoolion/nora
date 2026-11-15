@@ -245,7 +245,7 @@
               <span id="progress-text-sira" class="small text-muted">waiting…</span>
               {# Stop (strand ask-stream-stop): posts the run id to ask-cancel,
                  like History's Cancel; the card keeps the candidates. #}
-              <button type="button" id="ask-stop" class="btn btn-outline-secondary btn-sm ms-auto"
+              <button type="button" id="ask-stop" class="btn btn-danger btn-sm ms-auto"
                       data-cancel-url="{{ root_path }}/api/test/ask-cancel" style="display:none;">Stop</button>
             </div>
             <div id="sira-candidates" class="border rounded p-2 mt-2 bg-white small" style="display:none;"></div>
