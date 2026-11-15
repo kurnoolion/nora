@@ -174,3 +174,49 @@ class TestMixedBody:
         out = str(render_req_body(src))
         assert out.count("<table") == 2
         assert "Between." in out
+
+
+# ── Wrapped pipe rows (issue #34 compat) ───────────────────────
+# Corpus parsed before the parser fix carries PDF line wraps inside cells, so
+# one GFM row spans several lines. The renderer rejoins such a row when the
+# result has the table's column count; anything else stays as it was.
+
+
+WRAPPED_TABLE = """Intro sentence.
+| Condition | Behavior |
+| --- | --- |
+| No response and the
+timeout expires | Follow the algorithm
+below. |
+| Server rejects with codes:
+400, 402 | See the special
+requirement. |
+Closing sentence."""
+
+
+class TestWrappedPipeRows:
+    def test_wrapped_rows_rejoin_into_cells(self):
+        out = str(render_req_body(WRAPPED_TABLE))
+        assert out.count("<table") == 1
+        assert "<td>No response and the timeout expires</td>" in out
+        assert "<td>Follow the algorithm below.</td>" in out
+        assert "<td>Server rejects with codes: 400, 402</td>" in out
+        assert "<td>See the special requirement.</td>" in out
+
+    def test_surrounding_prose_keeps_order(self):
+        out = str(render_req_body(WRAPPED_TABLE))
+        assert out.index("Intro sentence") < out.index("<table")
+        assert out.index("</table>") < out.index("Closing sentence")
+        assert "|" not in out
+
+    def test_unterminated_row_stays_literal(self):
+        src = "| A | B |\n| --- | --- |\n| x and\nno closing pipe here\nProse after."
+        out = str(render_req_body(src))
+        assert "| x and" in out
+        assert "Prose after." in out
+
+    def test_wrong_cell_count_stays_literal(self):
+        src = "| A | B |\n| --- | --- |\n| x\ny | z | extra |"
+        out = str(render_req_body(src))
+        assert "| x" in out
+        assert "extra" in out
