@@ -18,3 +18,22 @@
 
 ### Flags
 - 26 `test_cycle_driver.py` failures on macOS (BSD `find -printf`), present on main too; candidate for #26.
+
+## 2026-11-15 — PR #32 review round
+
+### Done this session
+- Rebased on `main` (#31): keep-both in `playground.py`, `test_web_sira_intent_routing.py`, `web/MODULE.md`; `MAP.md` merged on its own.
+- Review 1: SIRA's copies of pinned ids count as packed, so packed = fetched when nothing was cut (`d3a7492`).
+- Review 2: report page sets the intent cell as text (`27005cf`).
+- Review 3 (our call): cited pins counted apart as `pinned_cited`, out of `cited`; `None` when only pins were cited (`d3a7492`). D-DRAFT-3.
+- Nits: `compute` best-effort; "ranked" not "BM25 ranked"; tooltip names pins and below-last-k; report skips non-object rows, URL-quotes the DB path, keeps a second same-minute run (`-2`); Pinned column on the page and CLI table.
+- design.md §2, §3, §4, §6 brought in line; MODULE.md for web and eval.
+
+### Next
+- Force-push `recall-metrics`; reply on #32 naming the pins choice.
+- If #33 lands first: `MAP.md` keep-both on the next rebase (`/regen-map`).
+
+### Flags
+- Full suite: 46 failures in this checkout, identical on `main` (environmental). None from this branch.
+- Rows stored before this change keep pins inside `cited`; the report's by-intent trend mixes the two definitions until those rows age out of the window.
+- Local `node` is broken (Homebrew `llhttp` dylib missing); the report JS was syntax-checked with JavaScriptCore.

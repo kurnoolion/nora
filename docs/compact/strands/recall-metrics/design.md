@@ -17,10 +17,10 @@ What it shows and what it can't:
 
 - **Fetched list**: SIRA's `results` for the query, in the service's order, with its `rank` field (1..N). Used as is, single-cell and multi-cell alike. Multi-cell results are round-robin interleaved by the service; no per-cell logic here (settled 2026-11-11: keep it simple).
 - **Rank of a cited requirement**: the `rank` of the first fetched result with that `req_id`. When the same `req_id` sits in two cells (two releases), the better (lower) rank counts.
-- **Outside**: a cited `req_id` that is not in the fetched list (a named-ID pin BM25 didn't return, or an invented id). It counts in the denominator, so it lowers recall at every k, and is also reported on its own.
+- **Outside**: a cited `req_id` that is not in the fetched list (an invented id, or a cell BM25 didn't fetch). Cited named-ID pins are not here: they are in context by pinning, not by search depth, so they are counted apart as `pinned_cited` (#32 review, D-DRAFT-3). It counts in the denominator, so it lowers recall at every k, and is also reported on its own.
 - **k steps**: 10, 20, 30 … up to the number fetched, capped at 40. When the fetched count isn't a multiple of 10, it is the last step (fetched 25 → 10, 20, 25). Fetched under 10 → one step at the fetched count.
 - **Silver recall@k** = cited with rank ≤ k ÷ all cited.
-- **Fetched** = length of SIRA's results. **Packed** = how many SIRA results made it into the LLM context after budget packing (named-ID pins excluded). Packed < fetched means the context budget cut candidates.
+- **Fetched** = length of SIRA's results. **Packed** = how many SIRA results have their text in the LLM context: those packed by budget, plus SIRA's own copies of pinned ids (dropped from the pack, their text is in by the pin). Packed < fetched means the context budget cut candidates.
 
 The fetch size is `NORA_SIRA_SELECT_SYNTH_TOP_K` (default 40; `sandbox/run_local.sh` sets 20, so local cards show @10 and @20).
 
@@ -30,8 +30,8 @@ Worked example: fetched 40, packed 31, cited at ranks 2, 7, 18, 35 and one outsi
 
 New `core/src/web/routes/silver_recall.py`, pure functions, no I/O (same pattern as `sira_intent.py`):
 
-- `compute(results, packed, cited_ids) -> dict | None`: returns `None` when nothing was cited. Otherwise
-  `{"recall": {"10": 0.4, "20": 0.6, "30": 0.6, "40": 0.8}, "cited": 5, "outside": 1, "fetched": 40, "packed": 31}`.
+- `compute(results, packed, cited_ids, pinned_ids=()) -> dict | None`: returns `None` when nothing but pins was cited. Otherwise
+  `{"recall": {"10": 0.4, "20": 0.6, "30": 0.6, "40": 0.8}, "cited": 5, "outside": 1, "fetched": 40, "packed": 31, "pinned_cited": 0}`.
   Recall values rounded to 4 places.
 - `line(lane, lane_config) -> dict | None`: reads `silver_recall` back from a stored `lane_config` for the templates; `None` for other lanes, older rows, or no citations. Takes `lane` like `sira_intent.intent_badge`, since `lane_config` does not carry it.
 - A result without a `rank` field ranks by its list position.
@@ -39,7 +39,7 @@ New `core/src/web/routes/silver_recall.py`, pure functions, no I/O (same pattern
 ## 4. Flow
 
 1. `_run_select_synth_lane` (playground.py) already has `sira_results`, `packed` and the synth result.
-2. After synthesis succeeds, it calls `silver_recall.compute(sira_results, packed[len(pinned_named):], cited_ids)` (the packed list minus the named-ID pins) and sets `lane_config["silver_recall"]` when the result isn't `None`.
+2. After synthesis succeeds, it calls `silver_recall.compute(sira_results, <SIRA results in context>, cited_ids, pinned_ids)` (the packed list minus the named-ID pins, plus SIRA's copies of pinned ids), best-effort (a failure is logged, the answer kept), and sets `lane_config["silver_recall"]` when the result isn't `None`.
 3. The ask-stream route records the row as today. `lane_config` is already persisted, so no extra write.
 4. Templates read it back through `silver_recall.line(...)`, the same way `intent_badge` is read today.
 
@@ -61,7 +61,8 @@ One muted line at the bottom of SIRA answers, in `_answer.html` (Ask / `/test`) 
 
 - "1 outside" only when non-zero.
 - "31/40 in context" always shown, so a budget cut is visible.
-- Tooltip: "Share of the requirements this answer cited that BM25 ranked within the top k. Cited requirements stand in for gold labels."
+- "· N pinned" only when non-zero (cited named-ID pins, counted apart).
+- Tooltip: "Share of the requirements this answer cited that ranked within the top k of the search. Cited requirements stand in for gold labels; requirements named by ID in the question (pinned) are counted apart. A citation ranked below the last k shows in no column." (Ranks are fused positions across cells, so not "BM25 ranked".)
 
 Team gate: no new route, nothing to allowlist. Verify the line with the gate on.
 

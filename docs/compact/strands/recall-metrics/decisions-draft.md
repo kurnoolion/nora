@@ -17,3 +17,20 @@
 **Why.** web already imports eval, so eval importing web would create a cycle; eval already holds the timestamped-report pattern. Reports come from live usage and the repo is public, so they are never committed.
 
 **Consequences.** A data edge (eval → web's table shape) that the import graph does not show; the test is the guard against a renamed table or column. Reports are shared outside the repo, not through it.
+
+### D-DRAFT-3 — 2026-11-15 — Cited named-ID pins are counted apart (`pinned_cited`), not in `cited`
+
+**Context.**
+- PR #32 review: a cited pin that BM25 did not return counted as "outside", so questions that name an id showed lower recall by construction. That measures pinning, not search depth, and it mixed into the by-intent trend. The reviewer asked us to choose: keep pins out of `cited` with a separate count, or state the effect in the report.
+
+**Decision.**
+- `silver_recall.compute` takes `pinned_ids`; cited ids among them go to `pinned_cited` and out of `cited` (and so out of recall and outside). No recall (`None`) when nothing but pins was cited. The answer line shows "· N pinned" when non-zero; the report gains a Pinned column.
+
+**Why.**
+- Silver recall is meant to show how deep in the search the evidence sat; a pin is in context whatever its rank.
+- Rejected:
+  - **Keep pins in `cited` and explain the effect in the report:** the number still drops for every question that names an id, and the by-intent trend still mixes pinning with depth.
+
+**Consequences.**
+- A pin BM25 also returned is still counted apart, not credited to its rank.
+- Rows stored before this change keep pins inside `cited` and lack `pinned_cited` (read as 0); the trend mixes both definitions until they age out.
