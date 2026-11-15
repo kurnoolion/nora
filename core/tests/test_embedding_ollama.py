@@ -103,7 +103,10 @@ def test_proxy_not_bypassed_for_remote_host():
 
 def test_satisfies_embedding_provider_protocol():
     with patch("core.src.vectorstore.embedding_ollama._build_opener") as mock_builder:
-        mock_builder.return_value = _make_opener([_tags_payload(["nomic-embed-text:latest"])])
+        # Python 3.11's isinstance() on a runtime Protocol reads the `dimension`
+        # property, which probes the endpoint once; 3.12 does not read it.
+        mock_builder.return_value = _make_opener([_tags_payload(["nomic-embed-text:latest"]),
+                                                  _emb_payload([0.1] * 768)])
         emb = OllamaEmbedder(model_name="nomic-embed-text")
     assert isinstance(emb, EmbeddingProvider)
     assert emb.model_name == "nomic-embed-text"
