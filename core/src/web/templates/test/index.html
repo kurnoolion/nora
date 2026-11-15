@@ -82,7 +82,7 @@
            it is a per-question choice made at the moment of asking, unlike the
            engineering knobs (retrieval lanes, correction label) that collapse.
            Collapsed inputs are still submitted — collapse hides, not disables. #}
-        <div class="d-flex align-items-center justify-content-end gap-2 flex-wrap flex-lg-nowrap">
+        <div class="d-flex align-items-center justify-content-end gap-2 flex-wrap">
           {# Recents + Re-run (strand ask-rerun). Left-aligned via me-auto so
              Ask stays the rightmost primary action. Both start hidden and are
              revealed by askRenderRecents() only when history is non-empty —
@@ -105,17 +105,18 @@
                   title="Ask the most recent question again, with the current settings">
             <i class="bi bi-arrow-repeat me-1"></i>Re-run last
           </button>
-          <button class="btn btn-sm btn-outline-secondary flex-shrink-0 text-nowrap" type="button"
+          <button class="btn btn-sm btn-outline-secondary flex-shrink-0" type="button"
                   data-bs-toggle="collapse" data-bs-target="#ask-options"
-                  aria-expanded="false" aria-controls="ask-options">
-            <i class="bi bi-sliders me-1"></i>Options
+                  aria-expanded="false" aria-controls="ask-options"
+                  aria-label="Options" title="Options">
+            <i class="bi bi-sliders"></i>
           </button>
           <input
               type="text"
               id="user-name"
               name="user_name"
               class="form-control form-control-sm"
-              style="max-width: 200px; min-width: 0"
+              style="width: 10rem"
               placeholder="Your name (optional)"
               aria-label="Your name — optional, credits your feedback"
               title="Your name — optional, credits your feedback"
@@ -125,7 +126,7 @@
               id="ask-provider"
               name="provider"
               class="form-select form-select-sm"
-              style="max-width: 210px; min-width: 0"
+              style="width: auto; max-width: 210px"
               aria-label="Which endpoint answers"
               title="LLM provider">
             {% for p in providers %}
@@ -140,7 +141,7 @@
               id="ask-model"
               name="model"
               class="form-select form-select-sm"
-              style="max-width: 230px; min-width: 0"
+              style="width: auto; max-width: 230px"
               aria-label="Which model on that provider answers"
               title="Model"
               data-url-template="{{ root_path }}/api/test/providers/__ID__/models">
@@ -152,7 +153,7 @@
               id="ask-mode"
               name="mode"
               class="form-select form-select-sm"
-              style="max-width: 150px; min-width: 0"
+              style="width: auto; max-width: 150px"
               aria-label="How hard the model thinks"
               title="Thinking level">
             <option value="fast">Fast</option>
