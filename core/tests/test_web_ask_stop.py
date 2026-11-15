@@ -103,6 +103,7 @@ def client(lane, monkeypatch):
     monkeypatch.setattr(team_mode, "TEAM_MODE", True)       # gate on, no admin cookie
     monkeypatch.setattr(team_mode, "ADMIN_TOKEN", "sek")
     monkeypatch.setattr(playground, "_SELECT_SYNTH_ENABLED", True)
+    monkeypatch.setattr(playground, "_SYNTH_MODE", "select-synth")   # the two agree in real config
     monkeypatch.delenv("NORA_ID_LOOKUP", raising=False)
     app.state.feedback_store = FakeFeedback()
     return TestClient(app), lane[1], app.state.feedback_store
@@ -179,6 +180,24 @@ def test_the_card_has_answer_cited_and_candidates_tabs(client):
         assert tab in html, tab
     assert 'data-bs-target="#sira-tabs-1-answer"' in html
     assert "SIRA retrieval (top" not in html                  # moved out of engineering details
+
+
+def test_the_default_rerank_pin_card_keeps_its_citation_list_and_no_tabs(client, monkeypatch):
+    c, _, _ = client
+    monkeypatch.setattr(playground, "_SELECT_SYNTH_ENABLED", False)
+    monkeypatch.setattr(playground, "_SYNTH_MODE", "rerank-pin")
+
+    async def rerank_pin(question, request, **kw):
+        return {"result": {"answer": f"answer citing {RID}", "llm_citations": [{"req_id": RID}]},
+                "sira_result": {}, "sira_results": [{"req_id": RID, "mno": "mno-w", "release": "Sep2031",
+                                                     "text": "corpus placeholder", "rank": 1, "bm25_score": 1.0,
+                                                     "rerank_score": None, "pinned": True}],
+                "max_rerank_score": 0, "pinned_count": 0, "synth_error": None, "elapsed_ms": 1,
+                "retrieved_ids": [RID], "reranked_ids": None, "cited_ids": [RID], "lane_config": {}}
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", rerank_pin)
+    html = [d for n, d in _stream(c) if n == "done"][0]["html"]
+    assert "nav-tabs" not in html and ">Cited by LLM (" not in html
+    assert "<strong>Cited by LLM</strong>" in html
 
 
 # --- alongside the ID-lookup and History lanes: no SIRA candidates, no Stop ---
