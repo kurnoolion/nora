@@ -136,6 +136,21 @@ def test_stopped_ask_renders_the_note_and_marks_the_row(client):
     assert row["answer"] == playground._STOPPED_NOTE and row["lane_config"]["stopped"] is True
 
 
+def test_a_lane_that_raises_cancels_and_forgets_its_run(client, monkeypatch):
+    c, _, _ = client
+    seen = {}
+
+    async def boom(question, request, **kw):
+        seen["cancel"] = kw["cancel"]
+        raise RuntimeError("lane failed")
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", boom)
+    with pytest.raises(RuntimeError, match="lane failed"):
+        _stream(c)
+    assert seen["cancel"].is_set()                   # the model call would be shut
+    with history_lane._CANCELS_LOCK:
+        assert seen["cancel"] not in history_lane._CANCELS.values()
+
+
 def test_ask_cancel_passes_the_team_gate(client):
     c, _, _ = client
     run_id = history_lane.new_run_id()

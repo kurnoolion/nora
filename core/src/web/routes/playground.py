@@ -1937,37 +1937,47 @@ async def playground_ask_stream(request: Request):
         # server, not the submitted form. Without this, a form that still carries
         # 'nora' (e.g. team-mode bypass / stale page) leaves a NORA row spinning
         # at "waiting…" forever because the server never runs or emits for it.
-        # `run_id` (history lane only) is what the Cancel button posts back.
+        # `run_id` (History lane, or a SIRA select-synth ask) is what the
+        # Cancel / Stop button posts back.
         yield f"event: lanes\ndata: {json.dumps({'lanes': lanes_checked, 'run_id': run_id})}\n\n"
-        tasks = {
-            lane: asyncio.create_task(coro)
-            for lane, coro in runners.items()
-        }
+        # The run's cancel entry goes on every exit. A client that went away
+        # (tab closed) or a lane that raised also cancels the run first, so
+        # the model call is shut rather than left running.
+        finished = False
+        try:
+            tasks = {
+                lane: asyncio.create_task(coro)
+                for lane, coro in runners.items()
+            }
 
-        # Drain progress queue + check for task completion. Heartbeats
-        # at the queue's get-timeout keep proxies from closing the
-        # connection during quiet stretches (NORA's blocking call can
-        # last seconds without emitting anything).
-        def _event(msg: dict) -> str:
-            name = "partial" if msg.get("type") == "partial" else "progress"
-            return f"event: {name}\ndata: {json.dumps(msg)}\n\n"
+            # Drain progress queue + check for task completion. Heartbeats
+            # at the queue's get-timeout keep proxies from closing the
+            # connection during quiet stretches (NORA's blocking call can
+            # last seconds without emitting anything).
+            def _event(msg: dict) -> str:
+                name = "partial" if msg.get("type") == "partial" else "progress"
+                return f"event: {name}\ndata: {json.dumps(msg)}\n\n"
 
-        while not all(t.done() for t in tasks.values()):
-            try:
-                msg = await asyncio.wait_for(progress_q.get(), timeout=2.0)
-                yield _event(msg)
-            except asyncio.TimeoutError:
-                yield ": heartbeat\n\n"
+            while not all(t.done() for t in tasks.values()):
+                try:
+                    msg = await asyncio.wait_for(progress_q.get(), timeout=2.0)
+                    yield _event(msg)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
 
-        # Drain any final progress events that may have been pushed
-        # between the last loop iteration and task completion.
-        while not progress_q.empty():
-            yield _event(progress_q.get_nowait())
+            # Drain any final progress events that may have been pushed
+            # between the last loop iteration and task completion.
+            while not progress_q.empty():
+                yield _event(progress_q.get_nowait())
 
-        # All tasks done — collect results, build final HTML, emit done.
-        outputs = {lane: t.result() for lane, t in tasks.items()}
-        if run_id:
-            history_lane.forget_run(run_id)
+            # All tasks done — collect results, build final HTML, emit done.
+            outputs = {lane: t.result() for lane, t in tasks.items()}
+            finished = True
+        finally:
+            if run_id:
+                if not finished:
+                    history_lane.cancel_run(run_id)
+                history_lane.forget_run(run_id)
         # Record the intent on the rows it routed (design §7).
         if q_intent is not None:
             fields = sira_intent.lane_fields(q_intent, _intent_trace)
