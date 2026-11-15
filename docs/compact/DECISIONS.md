@@ -9632,3 +9632,14 @@ Promoted from strand: self-serve-ingestion on 2026-11-08 (draft D-DRAFT-18).
 **Consequences.** Two shared tokens, still no users (web non-goal reworded). NFR-17's immutability holds while a set exists; a dead set may go whole. `publish gc` keeps the retention rule for everything else.
 
 Promoted from strand: self-serve-ingestion on 2026-11-08 (draft D-DRAFT-19).
+
+## D-323: Wrapped table cells: display-time repair for the corpus we have, parser fix with a version bump separately
+**Status**: Active · **Date**: 2026-11-15.
+
+**Context.** PDF extraction keeps a table cell's line wraps as newlines, and `render_table_markdown` joined cells as-is, so a wrapped cell ends the GFM row and the rest of the table reads as literal text (#34). A great many documents are already ingested; a parser fix with the `CODE_VERSION` bump the stage-pin convention requires moves the parse fingerprint and re-parses all of them.
+
+**Decision.** Two PRs. #35 rejoins wrapped rows in the web renderer when the requirement body is displayed, keeping a join only when it has the previous row's cell count; it needs no rebuild. #36 collapses whitespace in pipe-table cells at the parser and bumps parse `CODE_VERSION` 1 → 2; it merges whenever a re-ingest is acceptable.
+
+**Why.** The display repair is non-controversial and fixes what users see today. Rejected: the parser fix without the bump (breaks the stage-pin convention, so stale parse outputs would never be refreshed); the display repair as the only fix (newly ingested documents would keep producing broken tables); escaping `|` in cells (the web renderer splits rows on every `|`).
+
+**Consequences.** The display repair stays permanently and is a no-op on clean text. A headerless table whose first row is wrapped is not repaired. The LLM context still receives wrapped rows until the follow-up repair after #35.

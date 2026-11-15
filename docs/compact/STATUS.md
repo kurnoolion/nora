@@ -168,6 +168,7 @@
 
 ## In progress
 
+- **Issue #34: table cells with line wraps break pipe tables.** Two PRs open 2026-11-15: #35 (web compat repair, display-only, merge-ready) and #36 (parser fix + parse CODE_VERSION 1→2, so merging re-parses every document). D-323.
 - ~~Strand `multi-mno-nora` — MNO-B onboarding~~ — **landed 2026-06-28** (D-091..D-104 promoted; archived). Superseded block retained in git history. The one live remnant: query-side per-cell vectorstore routing (its D-DRAFT-11 slice 2) is now carried by strand `nora-retrieval-quality`.
 - **LLM citation of a struck-through requirement** (under investigation; user started a rebuild and moved on before we confirmed Scenario A vs B). Reproduce after the next clean rebuild: grep the cited req_id in `<env_dir>/out/parse/*_tree.json` AND `<env_dir>/out/vectorstore/*.json`. Scenario A (req_id in tree): partial-strike where last run isn't struck → parser-side leak. Scenario B (req_id only in vectorstore chunks): chunk-builder reading struck content through a non-parser path (surrounding_text / definitions_map / cross-reference). Both have clean fixes once direction is known.
 - **Glossary scoring — partial: D-079 ships the vocab signal as a tightening gate (false positives suppressed); full three-signal scorer still needed for the 135/135 miss case.** Original gap: work-PC corpus 135/135 docs missing glossary because the `definitions_section_pattern` regex never matched their titles at all. D-079 only narrows the regex's accepts — it doesn't add a new detection path for titles the regex misses. Build the parallel `GlossaryDetection` profile dataclass mirroring `RevhistDetection`: position + vocab + cell-fingerprint (col-0 short-uppercase / col-1 prose), with `_extract_definitions` running it as a third path after `definitions_section_pattern` and `definitions_table_header_pattern` both miss. Vocab signal can lift `_glossary_label_density` from D-079 directly.
@@ -176,6 +177,7 @@
 
 ## Next
 
+- Follow-up after #35: repair wrapped pipe rows in the LLM context for already-ingested documents (#34).
 - `stage-graph` strand (opened 2026-11-06): two rulings before code — a recipe per stack or per ingest; one stage store per host or per corpus. Bind with `/switch-strand stage-graph`.
 
 - ✅ Browser smoke-test of Steps 1 + 2 complete (this session, on dev + work PCs).
