@@ -282,8 +282,10 @@ the stage fingerprint of the output they were built from. Two stacks on
 one release therefore name the same Trees unit and the same History
 unit; only Cells differ. New unit kinds, `graph` and `vectors`, get
 builders from the matching stage outputs when a recipe serves them, and
-the store service gains a `serve.mode` switch; both are later work with
-a place reserved here. The serving containers mount no build (D-318).
+the store service gains a `serve.mode` switch. Both are deferred (step 7,
+D-DRAFT-25): no recipe serves a graph or vectors, and none is planned.
+The place stays reserved here. The serving containers mount no build
+(D-318).
 
 **Outside the graph**, by design: the Overlay review edits (composed at
 serve time, D-275), the serving knobs, the golden eval (a gate, not a
@@ -372,7 +374,10 @@ Each step leaves the system working and is landed on its own.
    limiter hands out slots to every enrich run, as the bindings lock does
    for the corpus.
 7. **New unit kinds** when a recipe needs them: graph and vector units
-   in the registry, a serving mode in the store.
+   in the registry, a serving mode in the store. **Deferred
+   (2026-11-15, D-DRAFT-25):** no recipe enables the graph or vector
+   stages, and none is planned soon. The strand lands with steps 1–6;
+   step 7 is a new strand when a recipe needs it.
 
 ## 10a. Step 2 on the host: migration of what exists (2026-11-09)
 

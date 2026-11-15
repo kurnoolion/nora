@@ -26,11 +26,14 @@ locked-down hosts that nonetheless have outbound HTTPS.
 
 from __future__ import annotations
 
+import contextvars
 import http.client
 import json
 import logging
 import os
 import re
+import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +41,70 @@ import urllib.request
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 300
+
+# Stop for an in-flight call (strand ask-stream-stop). The caller sets an
+# Event here before running complete() in a worker thread (asyncio.to_thread
+# copies the context); setting the Event shuts the call's socket, so the
+# blocked call returns at once and the endpoint sees the client disconnect,
+# which is how OpenAI-compatible servers stop a generation. A context
+# variable, not a complete() argument, so wrappers (refusal reroute) pass it
+# through untouched.
+CANCEL: "contextvars.ContextVar[threading.Event | None]" = contextvars.ContextVar(
+    "nora_llm_cancel", default=None)
+
+
+class LLMCancelled(RuntimeError):
+    """complete() was stopped through CANCEL."""
+
+
+class _TrackConns:
+    """Handler mixin that keeps the sockets urllib opens, so a watcher thread
+    can shut them. Each socket is recorded when it connects: urllib's do_open
+    drops `conn.sock` once the headers arrive, but the response body is still
+    read from that same socket object, so shutting it stops the body read."""
+    def __init__(self, socks: list, *a, **kw):
+        super().__init__(*a, **kw)
+        self._socks = socks
+
+    def do_open(self, http_class, req, **kw):
+        def make(*a, **k):
+            conn = http_class(*a, **k)
+            connect = conn.connect
+
+            def connect_and_record():
+                connect()
+                self._socks.append(conn.sock)
+            conn.connect = connect_and_record
+            return conn
+        return super().do_open(make, req, **kw)
+
+
+class _HTTP(_TrackConns, urllib.request.HTTPHandler):
+    pass
+
+
+class _HTTPS(_TrackConns, urllib.request.HTTPSHandler):
+    pass
+
+
+def _urlopen(req, timeout: float, cancel: "threading.Event | None", done: threading.Event):
+    """urllib.request.urlopen, or with a cancel Event, an opener whose
+    sockets a watcher shuts once the Event is set. The caller sets `done`
+    when the call is over, which ends the watcher."""
+    if cancel is None:
+        return urllib.request.urlopen(req, timeout=timeout)
+    socks: list = []
+
+    def watch() -> None:
+        while not done.wait(0.1):
+            if cancel.is_set():
+                for s in list(socks):
+                    try:
+                        s.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+    threading.Thread(target=watch, daemon=True).start()
+    return urllib.request.build_opener(_HTTP(socks), _HTTPS(socks)).open(req, timeout=timeout)
 
 # Reasoning ("thinking") models sometimes inline their chain-of-thought in the
 # message content as <think>…</think> (or <thinking>/<reasoning>) rather than
@@ -276,9 +343,21 @@ class OpenAICompatibleProvider:
         )
 
         t0 = time.time()
+        cancel = CANCEL.get()
+        if cancel is not None and cancel.is_set():
+            raise LLMCancelled("LLM call cancelled")
+        done = threading.Event()
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                data = json.loads(resp.read())
+            try:
+                with _urlopen(req, self._timeout, cancel, done) as resp:
+                    data = json.loads(resp.read())
+            except Exception as e:
+                if cancel is not None and cancel.is_set():
+                    logger.info("LLM call #%d cancelled", self._call_count)
+                    raise LLMCancelled("LLM call cancelled") from e
+                raise
+            finally:
+                done.set()
         except urllib.error.HTTPError as e:
             # Surface the API's error body — providers usually return JSON
             # with a useful "error.message" field. A gateway's HTML error

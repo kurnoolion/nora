@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-11-13 by regen-map. Do not hand-edit.
+Generated 2026-11-15 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -91,9 +91,11 @@ flowchart TD
     m_pipeline --> m_standards
     m_pipeline --> m_taxonomy
     m_pipeline --> m_vectorstore
+    m_profile_miner --> m_env
     m_profile_miner --> m_llm
     m_profile_miner --> m_models
     m_profile_miner --> m_parser
+    m_profile_miner --> m_pipeline
     m_profile_miner --> m_profiler
     m_profiler --> m_extraction
     m_profiler --> m_llm
@@ -103,9 +105,11 @@ flowchart TD
     m_query --> m_env
     m_query --> m_graph
     m_query --> m_llm
+    m_query --> m_models
     m_query --> m_pipeline
     m_query --> m_vectorstore
     m_resolver --> m_parser
+    m_standards --> m_env
     m_standards --> m_parser
     m_standards --> m_resolver
     m_store_service --> m_extraction
@@ -542,6 +546,7 @@ nora/
 │   │       │       ├── _req_bubble.html
 │   │       │       ├── _shared_body.html
 │   │       │       ├── _silver_recall.html
+│   │       │       ├── _sira_candidates.html
 │   │       │       ├── _timeline.html
 │   │       │       ├── history.html
 │   │       │       ├── index.html
@@ -679,6 +684,7 @@ nora/
 │       ├── test_user_annotations.py                     # Tests for user-driven `remove` annotations [D-061].
 │       ├── test_vectorstore.py                          # Tests for vector store construction (PoC Step 9).
 │       ├── test_vectorstore_cell.py                     # Per-cell vectorstore build + cell-store loader (D-DRAFT-11 slice 1).
+│       ├── test_web_ask_stop.py                         # Ask page, SIRA select-synth lane: early candidates and Stop (strand
 │       ├── test_web_config.py                           # Tests for `core/src/web/config.py` — env_dir + DB-path resolution.
 │       ├── test_web_config_db.py                        # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_eval_studio.py                      # Eval Studio route tests (FR-39): sample CRUD, ground-truth add flows,

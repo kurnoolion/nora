@@ -332,6 +332,20 @@ details.rc-ids > ul { margin: 6px 0 0 6px; padding-left: 20px; border-left: 2px 
     white-space: normal;
 }
 
+/* SIRA candidate tile, expanded (strand ask-stream-stop): the full text
+   scrolls inside the tile so one long requirement cannot push the other
+   tiles away, and a faded (filtered) tile is read at full strength once
+   opened. */
+.sira-tile-full > .req-bubble-body {
+    max-height: 20rem;
+    overflow-y: auto;
+    box-shadow: none;
+}
+
+.sira-tile:has(.sira-tile-full[open]) {
+    opacity: 1 !important;
+}
+
 /* Requirement body (strand req-bubble-tables). Prose keeps the source's own
    line breaks; tables are real tables. `pre-wrap` sits on the prose spans
    rather than the panel so it cannot leak into table cells and stop them

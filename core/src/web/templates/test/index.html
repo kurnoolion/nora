@@ -243,7 +243,12 @@
               <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
               <span class="badge bg-primary">SIRA</span>
               <span id="progress-text-sira" class="small text-muted">waiting…</span>
+              {# Stop (strand ask-stream-stop): posts the run id to ask-cancel,
+                 like History's Cancel; the card keeps the candidates. #}
+              <button type="button" id="ask-stop" class="btn btn-outline-secondary btn-sm ms-auto"
+                      data-cancel-url="{{ root_path }}/api/test/ask-cancel" style="display:none;">Stop</button>
             </div>
+            <div id="sira-candidates" class="border rounded p-2 mt-2 bg-white small" style="display:none;"></div>
             {# Release-change lane (strand rel-history): takes the SIRA row's
                place when the question is a release diff and History is
                served. Partial syntheses land under it, per plan, as they
@@ -300,16 +305,26 @@
   const progressRowHistory = document.getElementById("progress-row-history");
   const progressTextHistory = document.getElementById("progress-text-history");
   const cancelBtn = document.getElementById("ask-cancel");
+  const stopBtn = document.getElementById("ask-stop");
+  const candidatesEl = document.getElementById("sira-candidates");
   const partialsEl = document.getElementById("history-partials");
   const answerEl = document.getElementById("test-answer");
   let currentRunId = "";
   function resetPartials() {
     partialsEl.innerHTML = "";
     partialsEl.style.display = "none";
+    candidatesEl.innerHTML = "";
+    candidatesEl.style.display = "none";
   }
   // One block per plan, created on the first partial for that plan, so the
   // page fills in plan by plan while later batches are still running.
   function applyPartialEvent(data) {
+    if (data.lane === "sira") {           // the fetched candidates, while the model writes
+      candidatesEl.innerHTML = data.html || "";
+      candidatesEl.style.display = "block";
+      if (window.htmx) window.htmx.process(candidatesEl);   // wire the req-ID bubbles
+      return;
+    }
     partialsEl.style.display = "block";
     const planKey = "history-plan-" + (data.plan || "").replace(/[^A-Za-z0-9_-]/g, "_");
     let block = document.getElementById(planKey);
@@ -340,6 +355,25 @@
       } catch (err) { /* the stream's done event still arrives */ }
     });
   }
+  // Stop is instant on the page: the stopped view shows at once with the
+  // candidates already fetched, and Ask is free again. The server stops the
+  // model in the background; its final card (share, feedback) replaces this
+  // view when it arrives, unless a newer ask has started.
+  let askSeq = 0, stoppedSeq = -1;
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => {
+      if (!currentRunId) return;
+      const fd = new FormData();
+      fd.append("run_id", currentRunId);
+      fetch(stopBtn.dataset.cancelUrl, { method: "POST", body: fd }).catch(() => {});
+      stoppedSeq = askSeq;
+      answerEl.innerHTML = '<div class="alert alert-secondary py-2 small mb-2">Stopped before the answer.</div>'
+        + (candidatesEl.innerHTML ? '<div class="border rounded p-2 bg-white small">' + candidatesEl.innerHTML + '</div>' : '');
+      if (window.htmx) window.htmx.process(answerEl);
+      hideProgress();
+      setBusy(false);
+    });
+  }
 
   function setBusy(busy) {
     submitBtn.disabled = busy;
@@ -360,6 +394,11 @@
       cancelBtn.style.display = (lanes.includes("history") && currentRunId) ? "" : "none";
       cancelBtn.disabled = false;
       cancelBtn.textContent = "Cancel";
+    }
+    if (stopBtn) {
+      stopBtn.style.display = (lanes.includes("sira") && currentRunId) ? "" : "none";
+      stopBtn.disabled = false;
+      stopBtn.textContent = "Stop";
     }
   }
 
@@ -425,6 +464,7 @@
     // recents, which is the whole point of re-running after a fix.
     const historyId = askBeginHistory(askedQuestion);
     askRenderRecents();          // the question is available to re-run at once
+    const mySeq = ++askSeq;      // a stopped ask's late events must not touch a newer one
 
     setBusy(true);
     answerEl.innerHTML = "";
@@ -473,6 +513,11 @@
           buf = buf.slice(sep + 2);
           const parsed = parseSSEBlock(block);
           if (!parsed) continue;
+          if (parsed.event === "done" && mySeq !== askSeq) {
+            askRecordHistory(askedQuestion, historyId);   // superseded: keep its share link only
+            continue;
+          }
+          if (mySeq !== askSeq || (stoppedSeq === mySeq && parsed.event !== "done")) continue;
           if (parsed.event === "lanes") {
             // Authoritative: re-render the rows for the lanes the SERVER is
             // actually running (team-mode may have forced SIRA-only), so a
@@ -495,11 +540,13 @@
         }
       }
     } catch (err) {
-      answerEl.innerHTML = '<div class="alert alert-danger mb-0">'
-        + 'Stream interrupted: ' + (err.message || err) + '</div>';
-      hideProgress();
+      if (mySeq === askSeq && stoppedSeq !== mySeq) {
+        answerEl.innerHTML = '<div class="alert alert-danger mb-0">'
+          + 'Stream interrupted: ' + (err.message || err) + '</div>';
+        hideProgress();
+      }
     } finally {
-      setBusy(false);
+      if (mySeq === askSeq) setBusy(false);
       // No-op on the success path (phase 2 already consumed the entry); on a
       // stream failure it drops the marker from the entry that stays pathless.
       askFinishHistory(historyId);
@@ -856,6 +903,30 @@ function askRecordHistory(question, pendingId) {
         sira:      sira ? sira.checked : undefined,
       }));
     } catch (e) { /* storage full/blocked — sticky fields are best-effort */ }
+  });
+})();
+
+// SIRA candidate tiles: double-click a tile to toggle its Full text, the same
+// lazy load as the toggle. Delegated, so tiles injected later (the early list,
+// the card's tabs) are covered. Inside the opened text a double-click keeps
+// its normal job of selecting a word, and links and the toggle itself keep
+// theirs.
+(function () {
+  function tileOf(e) {
+    const t = e.target;
+    if (!(t instanceof Element)) return null;
+    const tile = t.closest(".sira-tile");
+    if (!tile || t.closest(".sira-tile-full > .req-bubble-body, summary, a, button")) return null;
+    return tile;
+  }
+  // A double-click would also select the word under the cursor.
+  document.addEventListener("mousedown", function (e) {
+    if (e.detail > 1 && tileOf(e)) e.preventDefault();
+  });
+  document.addEventListener("dblclick", function (e) {
+    const tile = tileOf(e);
+    const full = tile && tile.querySelector("details.sira-tile-full");
+    if (full) full.open = !full.open;
   });
 })();
 </script>

@@ -24,7 +24,7 @@ How they connect (build → promote → serve, and the query path):
     requirements/ corpus (ro)
         │  ingestion lane                 sira lane
         ▼                                    ▼
-    [nora-batch] ──► nora-builds/<b> ─► [sira-batch] ──► nora-builds/<b>/out/sira
+    [nora-batch] ──► builds/<lineage>/<b> ─► [sira-batch] ──► builds/<lineage>/<b>/out/sira
         │   (also nora lane:                     │
         │    taxonomy/graph/vectorstore)         │
         └────────────┬───────────────────────────┘
@@ -55,31 +55,38 @@ paths (`$HOME` does not expand there).
     ├── requirements/<MNO>/<MMMYYYY>/  # THE source corpus — one canonical copy,
     │                                  #   shared by all builds (requirements_dir
     │                                  #   override; default is <env_dir>/input)
-    ├── nora-builds/<build>/           # env_dirs: out/, state/, corrections/, reports/
-    │   └── out/sira/<MNO>/<MMMYYYY>/ #   the SIRA cells: the build's last stage dir
-    │                                  #   (since 2026-11-06; NORA_BUILDS_SIRA_ROOT keeps the
-    │                                  #   older sira-builds/<build> twin) — NEVER inside the
-    │                                  #   repo tree (git clean would wipe the enrichment cache)
-    │                                  #   (+ prompts/ + RECIPE.md when the build is a
-    │                                  #   variant lineage — see "Variant lineages")
-    ├── serve-<stack>/                 # the stack's serving root (core.src.stores.publish):
+    ├── builds/                        # everything ingestion writes
+    │   ├── models/docling/            #   MODELS_DIR: Docling weights for the extract stage
+    │   │                              #   (nora-batch only; DOCLING_ARTIFACTS -> /data/models/docling)
+    │   ├── stages/                    #   the stage store (STAGES_ROOT): one per host
+    │   ├── labels/<label>/            #   promoted hardlink snapshots (NORA_SERVE_ROOT; the
+    │   │   ├── MANIFEST.json          #   converter's input when a cell is reconverted):
+    │   │   ├── nora/out/...           #   nora/out/{...,parse} + sira/<cells>. Same
+    │   │   └── sira/...               #   filesystem as stages/ (hard links)
+    │   └── <lineage>/                 #   one per stack recipe (NORA_BUILDS_NORA_ROOT)
+    │       ├── <build>/               #     env_dirs: out/, state/, reports/
+    │       │   └── out/sira/<MNO>/<MMMYYYY>/ # the SIRA cells: the build's last stage dir
+    │       │                          #     (since 2026-11-06; NORA_BUILDS_SIRA_ROOT keeps the
+    │       │                          #     older sira-builds/<build> twin) — NEVER inside the
+    │       │                          #     repo tree (git clean would wipe the enrichment cache)
+    │       └── work/                  #     the ingest runner's work_dir
+    ├── serve/<stack>/                 # the stack's serving root (core.src.stores.publish):
     │   ├── registry.db                #   store versions, release sets, gate runs, active, flips
     │   ├── cells/cell-<mno>-<rel>-vN.db   # write-once, versioned; several versions coexist
     │   ├── trees/trees-<mno>-<rel>-vN.db  # Stacks mount THIS (ro) — builds and labels can
     │   └── history/history-<mno>-vN.db    #   be rebuilt or wiped without touching serving
-    ├── serve/<label>/                 # dev/test only: promoted hardlink snapshots
-    │   ├── MANIFEST.json              #   (promote.sh) — nora/out/{...,parse} + sira/<cells>;
-    │   ├── nora/out/...               #   also the converter's input when a cell is
-    │   └── sira/...                   #   reconverted from flat files
-    ├── web-state-a/                   # per stack: nora_jobs/metrics/config.db
-    ├── web-state-b/                   #   (stack identity = directory, not filename)
-    ├── feedback/                      # ONE pooled dir for ALL stacks (D-120)
-    ├── corrections/                   # ONE pooled dir: enrichment-review overlay
-    │   ├── overlay.db                 #   the Overlay store (nora-store writes — the
-    │   └── sira-enrich/*.json         #   authority — and applies it at load); JSON =
-    │                                  #   the import-time backup, dev fallback
-    └── models/
-        └── docling/                   # DOCLING_ARTIFACTS -> /data/models/docling
+    ├── curation/                      # hand-tuned inputs, one per host
+    │   ├── corpus/                    #   CORPUS_DIR: profiles.json + annotations/
+    │   ├── overlay/                   #   CORRECTIONS_DIR: the enrichment-review overlay,
+    │   │   ├── overlay.db             #     pooled; the Overlay store (nora-store writes —
+    │   │   └── sira-enrich/*.json     #     the authority — and applies it at load); JSON =
+    │   │                              #     the import-time backup, dev fallback
+    │   └── golden/                    #   GOLDEN_DIR: the pooled golden eval set
+    ├── runtime/                       # what the serving stacks write
+    │   ├── <stack>/                   #   WEB_STATE_DIR: nora_jobs/metrics/config.db
+    │   │                              #   (stack identity = directory, not filename)
+    │   └── feedback/                  #   FEEDBACK_DIR: ONE pooled dir for ALL stacks (D-120)
+    └── archive/                       # retired trees, kept until deleted by hand
 
 ## Quick start (serve, on one host)
 
@@ -134,7 +141,7 @@ cannot list models, only the default is offered.
 In `.env`, point the volume paths at the layout above:
 
     REQUIREMENTS_DIR=/home/<you>/nora-data/requirements
-    SERVE_REGISTRY_ROOT=/home/<you>/nora-data/serve-a       # served stacks: the registry root (publish)
+    SERVE_REGISTRY_ROOT=/home/<you>/nora-data/serve/a       # served stacks: the registry root (publish)
     # no build line: a registry-mode stack mounts no build (since 2026-11-07); the
     # ingestion wiring env (.env.<stack>-builds) is a SEPARATE file that carries
     # NORA_BUILD_DIR and is rewritten by cycle.sh start per cycle — never a symlink
@@ -144,11 +151,11 @@ In `.env`, point the volume paths at the layout above:
     # JOB_UID/JOB_GID may be left out too: cycle.sh and the ingest runner run their
     # one-shots as the calling user unless an env file or the shell names a job user
     #NORA_ENV_DIR= / #STORE_ROOT=                              # dev/test only: a flat label's nora/ and sira/ dirs instead of the registry
-    WEB_STATE_DIR=/home/<you>/nora-data/web-state-a
-    FEEDBACK_DIR=/home/<you>/nora-data/feedback
-    CORRECTIONS_DIR=/home/<you>/nora-data/corrections
-    MODELS_DIR=/home/<you>/nora-data/models
-    GOLDEN_DIR=/home/<you>/nora-data/eval-golden   # pooled golden eval set; like corrections, never inside a serve label
+    WEB_STATE_DIR=/home/<you>/nora-data/runtime/a
+    FEEDBACK_DIR=/home/<you>/nora-data/runtime/feedback
+    CORRECTIONS_DIR=/home/<you>/nora-data/curation/overlay
+    MODELS_DIR=/home/<you>/nora-data/builds/models
+    GOLDEN_DIR=/home/<you>/nora-data/curation/golden   # pooled golden eval set; like corrections, never inside a serve label
 
 Create the directories before `up` (docker creates missing bind sources
 root-owned, and the app then can't write its DBs). Then bring the stack up —
@@ -278,8 +285,8 @@ optional lines in the ingestion wiring env, the same values for every
 stack on the host:
 
 ```bash
-STAGES_ROOT=/home/<you>/nora-data/stages   # the stage store: one per host
-CORPUS_DIR=/home/<you>/nora-data/corpus    # profiles.json + annotations/: one per host
+STAGES_ROOT=/home/<you>/nora-data/builds/stages   # the stage store: one per host
+CORPUS_DIR=/home/<you>/nora-data/curation/corpus   # profiles.json + annotations/: one per host
 ```
 
 With `STAGES_ROOT`, a build reuses any extract, profile, parse, resolve
@@ -433,20 +440,20 @@ git pull
 docker compose --env-file .env.builds --profile ingest build nora-batch sira-batch
 
 # 0.3 create the new build dir and stage the source docs
-mkdir -p /home/<you>/nora-data/nora-builds/<build>/out/sira    # the SIRA cells live in the build
+mkdir -p /home/<you>/nora-data/builds/<lineage>/<build>/out/sira    # the SIRA cells live in the build
 # source corpus (if not already present for these cells):
 #   /home/<you>/nora-data/requirements/<MNO>/<MMMYYYY>/*.pdf|docx|xlsx
 
 # 0.4 profile bindings — a new env dir fails loud (PIP-E003) without them:
-cp /home/<you>/nora-data/nora-builds/<previous-build>/profiles.json \
-   /home/<you>/nora-data/nora-builds/<build>/profiles.json
+cp /home/<you>/nora-data/builds/<lineage>/<previous-build>/profiles.json \
+   /home/<you>/nora-data/builds/<lineage>/<build>/profiles.json
 # (or author one: each <MNO>/<MMMYYYY> cell -> a repo-relative
 #  customizations/profiles/*.json path — those are baked into the image;
 #  a single-profile run can bypass via --profile <path>)
 
 # 0.5 repoint the builds wiring env at the new build (one line; the compose
 #     file derives /data/env from it and /data/db from its out/sira):
-#     .env.builds:  NORA_BUILD_DIR=/home/<you>/nora-data/nora-builds/<build>
+#     .env.builds:  NORA_BUILD_DIR=/home/<you>/nora-data/builds/<lineage>/<build>
 ```
 
 ### Phase 1 — parse the corpus (all cells, or `--cell` for one)
@@ -471,10 +478,10 @@ docker compose --env-file .env.builds --profile ingest run -d --rm -T nora-batch
   sh -c "mkdir -p /data/env/reports && exec python -m core.src.pipeline.run_cli \
     --env-dir /data/env --lane ingestion --skip-taxonomy \
     > /data/env/reports/lane-ingestion-ALL-$TS.log 2>&1"
-tail -f /home/<you>/nora-data/nora-builds/<build>/reports/lane-ingestion-ALL-$TS.log
+tail -f /home/<you>/nora-data/builds/<lineage>/<build>/reports/lane-ingestion-ALL-$TS.log
 
 # sanity: one parse dir per cell, trees inside:
-ls /home/<you>/nora-data/nora-builds/<build>/out/parse/*/*/
+ls /home/<you>/nora-data/builds/<lineage>/<build>/out/parse/*/*/
 ```
 
 **Incremental ingestion** is the default behavior (scope+skip): re-running
@@ -499,7 +506,7 @@ New cells also need their `profiles.json` binding added before the run.
 **Fresh corpus:** run once per ingested MNO. Give Cline:
 
 > Follow cline-playbooks/derive-prompts.md for MNO `<MNO>`, version v02.
-> Use env_dir /home/`<you>`/nora-data/nora-builds/`<build>`.
+> Use env_dir /home/`<you>`/nora-data/builds/<lineage>/`<build>`.
 
 `<MNO>` must match the cell naming exactly (spelling + case). Each run
 writes four files to `customizations/prompts/`:
@@ -541,7 +548,7 @@ ways to deliver prompt files — pick one:
 set into the build env dir, which is already mounted at `/data/env`:
 
 ```bash
-cp customizations/prompts/*_<MNO>_v*.txt /home/<you>/nora-data/nora-builds/<build>/prompts/
+cp customizations/prompts/*_<MNO>_v*.txt /home/<you>/nora-data/builds/<lineage>/<build>/prompts/
 ```
 
 Each build env carries its own prompt set — different envs can run
@@ -629,7 +636,7 @@ so the run can't silently no-op.
 Verify:
 
 ```bash
-E=/home/<you>/nora-data/nora-builds/<build>
+E=/home/<you>/nora-data/builds/<lineage>/<build>
 grep "Corpus context" $E/reports/stage-taxonomy-*.log | head  # one per doc, right MNO's overview
 grep "TAX-W003" $E/reports/stage-taxonomy-*.log               # must be EMPTY
 grep "TAX-W004\|TAX-E001" $E/reports/stage-taxonomy-*.log     # failures -> re-run same command to retry
@@ -697,7 +704,7 @@ Inspect the pilot cell before continuing (host
 paths — the sira-build dir is directly visible):
 
 ```bash
-D=/home/<you>/nora-data/nora-builds/<build>/out/sira/<MNO>/<MMMYYYY>/runs/doc-enrich/<run-name>
+D=/home/<you>/nora-data/builds/<lineage>/<build>/out/sira/<MNO>/<MMMYYYY>/runs/doc-enrich/<run-name>
 grep -c '{taxonomy_block}' $D/prompt.txt   # 1 -> per-MNO BATCHED template resolved
                                            # (0 -> fell back to generic v01: check
                                            #  NORA_SIRA_DOC_PROMPT_DIR + that the dir
@@ -977,8 +984,8 @@ here; only the serving half differs.
 # graph to snapshot; taxonomy already did its job feeding enrichment —
 # serving doesn't read it). NORA-native query lanes will have no data on
 # this label. Add --nora-build after the Phase-4 full-stack variant.
-./promote.sh --serve-root /home/<you>/nora-data/serve --label <YYYY-MM-DD-a> \
-    --sira-build /home/<you>/nora-data/nora-builds/<build>/out/sira
+./promote.sh --serve-root /home/<you>/nora-data/builds/labels --label <YYYY-MM-DD-a> \
+    --sira-build /home/<you>/nora-data/builds/<lineage>/<build>/out/sira
 
 # dev/test stack .env: NORA_ENV_DIR/STORE_ROOT -> serve/<label>/{nora,sira} (the overrides), then
 # RECREATE (a plain `restart` does NOT re-read .env or the env_files —
@@ -1053,9 +1060,9 @@ complete artifact lineage built from the **shared raw corpus**.
 
 ```
 input/<MNO>/<release>/            SHARED raw corpus — the controlled variable
-nora-builds/<variant>/            per-variant build env (artifacts + prompts/ + RECIPE.md)
+builds/<variant>/                 per-variant build env (artifacts + prompts/ + RECIPE.md)
 sira-builds/<variant>/            per-variant sira db_root
-serve/<variant>-<label>/          immutable promoted labels, per (variant, release)
+builds/labels/<variant>-<label>/   immutable promoted labels, per (variant, release)
 docker/.env.builds.<variant>     ingest wiring: where artifacts land + which knobs
 docker/.env.<variant>            serve wiring: stack -> its labels + runtime env files
 ```
@@ -1076,7 +1083,7 @@ Rules that keep the comparison honest:
    the price of a clean comparison.
 3. **Change one variable per new variant.** Seed `nora<N+1>` by copying
    the previous recipe (wiring envs + prompts/) and altering only the
-   idea under test. Record it in `nora-builds/<variant>/RECIPE.md` — one
+   idea under test. Record it in `builds/<variant>/RECIPE.md` — one
    short paragraph: what this variant embodies ("generic prompts, no
    taxonomy context" / "Cline per-MNO prompts v3 + taxonomy blocks").
    `MANIFEST.json` in each label ties artifacts to source builds + git
@@ -1132,7 +1139,7 @@ reverse proxy (Caddy)" below.
 
 The two-variant instance of the lineage pattern above (with the LLM as
 the recipe delta). Same images; each stack gets its own wiring env + its
-own service runtime files. Per stack: STACK_NAME, ports, its `web-state-<x>/` directory, and the
+own service runtime files. Per stack: STACK_NAME, ports, its `runtime/<x>/` state directory, and the
 LLM-bearing runtime files, and its own serving root (`SERVE_REGISTRY_ROOT`;
 the same label published into each). Shared (same values in both wiring
 envs): NORA_ENV_DIR, CORRECTIONS_DIR with one stack's nora-store as the
@@ -1144,14 +1151,14 @@ dev/test flat path.)
 
     # stack A
     cp env.example .env.stack-a            # STACK_NAME=stack-a, ports 8000/8040,
-                                           # WEB_STATE_DIR=/home/<you>/nora-data/web-state-a,
+                                           # WEB_STATE_DIR=/home/<you>/nora-data/runtime/a,
                                            # WEB_ENV_FILE=.env.nora-web.a,
                                            # STORE_ENV_FILE=.env.nora-store.a
     cp env.nora-web.example  .env.nora-web.a     # LLM A (+ its sentinel setting)
     cp env.nora-store.example .env.nora-store.a  # shim/rerank -> LLM A
 
     # stack B — STACK_NAME=stack-b, ports 8001/8041,
-    # WEB_STATE_DIR=/home/<you>/nora-data/web-state-b,
+    # WEB_STATE_DIR=/home/<you>/nora-data/runtime/b,
     # and .env.nora-web.b / .env.nora-store.b pointing at LLM B
     cp env.example .env.stack-b
     cp env.nora-web.example  .env.nora-web.b
