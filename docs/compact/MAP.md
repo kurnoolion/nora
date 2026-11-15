@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-11-13 by regen-map. Do not hand-edit.
+Generated 2026-11-15 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -91,9 +91,11 @@ flowchart TD
     m_pipeline --> m_standards
     m_pipeline --> m_taxonomy
     m_pipeline --> m_vectorstore
+    m_profile_miner --> m_env
     m_profile_miner --> m_llm
     m_profile_miner --> m_models
     m_profile_miner --> m_parser
+    m_profile_miner --> m_pipeline
     m_profile_miner --> m_profiler
     m_profiler --> m_extraction
     m_profiler --> m_llm
@@ -103,9 +105,11 @@ flowchart TD
     m_query --> m_env
     m_query --> m_graph
     m_query --> m_llm
+    m_query --> m_models
     m_query --> m_pipeline
     m_query --> m_vectorstore
     m_resolver --> m_parser
+    m_standards --> m_env
     m_standards --> m_parser
     m_standards --> m_resolver
     m_store_service --> m_extraction

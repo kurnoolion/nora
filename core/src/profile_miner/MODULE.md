@@ -39,6 +39,8 @@ Convert human-supplied parse corrections (from the Web UI Review tab) into propo
 - No support for non-regex profile fields (e.g. font-size clusters). Corrections expressing "the font size threshold is wrong" need a different miner.
 
 **Depends on**
+- [env](../env/MODULE.md) — the CLI resolves the LLM provider, model and timeout through `env.config` (`resolve_llm_*`).
+- [pipeline](../pipeline/MODULE.md) — the CLI builds a `runner.PipelineContext` for the env.
 - [llm](../llm/MODULE.md) — `LLMProvider` protocol; CLI defaults to `OllamaProvider` with `model_picker.pick_model`.
 - [models](../models/MODULE.md) — `DocumentIR`, `ContentBlock`, `BlockType` for the corrections→IR join.
 - [parser](../parser/MODULE.md) — consumes corrections produced by the parse-review Web UI (route at `core/src/web/routes/parse_review.py`); writes patches that target `parser`'s `DocumentProfile`.
