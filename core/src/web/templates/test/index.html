@@ -905,5 +905,29 @@ function askRecordHistory(question, pendingId) {
     } catch (e) { /* storage full/blocked — sticky fields are best-effort */ }
   });
 })();
+
+// SIRA candidate tiles: double-click a tile to toggle its Full text, the same
+// lazy load as the toggle. Delegated, so tiles injected later (the early list,
+// the card's tabs) are covered. Inside the opened text a double-click keeps
+// its normal job of selecting a word, and links and the toggle itself keep
+// theirs.
+(function () {
+  function tileOf(e) {
+    const t = e.target;
+    if (!(t instanceof Element)) return null;
+    const tile = t.closest(".sira-tile");
+    if (!tile || t.closest(".sira-tile-full > .req-bubble-body, summary, a, button")) return null;
+    return tile;
+  }
+  // A double-click would also select the word under the cursor.
+  document.addEventListener("mousedown", function (e) {
+    if (e.detail > 1 && tileOf(e)) e.preventDefault();
+  });
+  document.addEventListener("dblclick", function (e) {
+    const tile = tileOf(e);
+    const full = tile && tile.querySelector("details.sira-tile-full");
+    if (full) full.open = !full.open;
+  });
+})();
 </script>
 {% endblock %}

@@ -67,7 +67,7 @@
                 <details class="sira-tile-full mt-1"
                          hx-get="{{ root_path }}/api/req/{{ r.req_id | urlencode }}{% if q %}?{{ q }}{% endif %}"
                          hx-trigger="toggle once" hx-target="find .req-bubble-body" hx-swap="innerHTML">
-                  <summary class="small text-primary">Full text</summary>
+                  <summary class="small text-primary" title="Show the full requirement (or double-click the tile)">Full text</summary>
                   <div class="req-bubble-body d-block border rounded p-2 mt-1 small">
                     <span class="text-muted">Loading {{ r.req_id }}…</span>
                   </div>

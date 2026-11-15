@@ -265,6 +265,7 @@ class TestCandidateTileExpand:
         assert 'hx-get="/r/api/req/REQ-X-1?mno=MNO-A&amp;release=Jan2031"' in html
         assert 'hx-trigger="toggle once"' in html
         assert "<details" in html
+        assert "double-click the tile" in html
 
     def test_page_carries_the_preview_only(self):
         """The full text loads on click; 120 tiles must not ship 120 chunks."""
