@@ -41,6 +41,13 @@
             <span class="text-muted small ms-2 d-none d-sm-inline">Network Operator Requirements Analyzer</span>
         </div>
         <div class="d-flex align-items-center text-light small">
+            {% set report_url = page_issue_url(request.url.path) %}
+            {% if report_url %}
+            <a class="btn btn-sm btn-outline-light me-3" href="{{ report_url }}"
+               target="_blank" rel="noopener" title="Report an issue with this page">
+                <i class="bi bi-bug me-1"></i>Report issue
+            </a>
+            {% endif %}
             <span id="system-status-dot" class="status-dot unknown"></span>
             <span id="system-status-label">Checking...</span>
         </div>

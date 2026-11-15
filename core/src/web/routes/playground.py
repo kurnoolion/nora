@@ -33,6 +33,7 @@ from core.src.llm.openai_provider import (
     REASONING_SENTINEL_ENABLED as _REASONING_SENTINEL_ENABLED,
 )
 from core.src.web.feedback_db import CATEGORIES
+from core.src.web.issue_link import issue_url
 from core.src.web.markdown_render import render_markdown
 from core.src.web.routes import history_lane
 from core.src.web.routes import id_lookup_lane
@@ -521,9 +522,11 @@ async def _build_merged_response_html(
     `/api/test/ask-stream` (final SSE event payload). Handles per-lane
     `test_feedback` row insertion, per-lane context building, per-lane
     `_answer.html` pre-rendering, and the outer two-column container."""
+    from core.src.web.app import config
     feedback_store = request.app.state.feedback_store
     lanes_html: dict[str, str] = {}
     share_rows: dict[str, int] = {}   # lane -> stored row id, for header Share
+    issue_urls: dict[str, str] = {}   # lane -> prefilled issue link, beside it
 
     for lane, out in outputs.items():
         if "error" in out:
@@ -640,6 +643,12 @@ async def _build_merged_response_html(
                 "history_run": h.get("run") or {},
             })
         ctx["intent_badge"] = sira_intent.intent_badge(lane, out.get("lane_config"))
+        # Prefilled "Report issue" link (opt-in, NORA_ISSUE_URL).
+        issue_urls[lane] = issue_url(
+            row_id=row_id, lane=lane, intent=ctx["intent_badge"], question=question,
+            share_path=f"{config.root_path}/ask/s/{row_id}",
+            cells=(out.get("sira_result") or {}).get("resolved_cells") or (),
+            model=result.get("llm_model") or "")
         if lane == id_lookup_lane.LANE:
             ctx["lookup"] = out.get("lookup") or {}
         lanes_html[lane] = _render_template_to_string(
@@ -652,6 +661,7 @@ async def _build_merged_response_html(
             "user_name": user_name,
             "lanes_html": lanes_html,
             "share_rows": share_rows,
+            "issue_urls": {k: v for k, v in issue_urls.items() if v},
         },
     )
 

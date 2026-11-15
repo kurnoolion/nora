@@ -411,6 +411,7 @@ nora/
 │   │       ├── enrich_overlay_store.py                  # Enrichment-corrections overlay store — the WEB side's edit surface
 │   │       ├── enrich_report.py                         # Enrichment-review exports: the label × category pivot report and the
 │   │       ├── feedback_db.py                           # Test-page feedback store — async SQLite log of question / answer /
+│   │       ├── issue_link.py                            # Prefilled "Report issue" links (opt-in): one per stored answer, and a
 │   │       ├── jobs.py                                  # Job queue for NORA pipeline execution tracking.
 │   │       ├── jobs_schema.py                           # The jobs database schema, shared by the web and the ingest runner.
 │   │       ├── markdown_render.py                       # Markdown → HTML rendering for LLM-synthesized answers.
@@ -679,6 +680,7 @@ nora/
 │       ├── test_web_history_lane.py                     # The Ask page's release-change lane (core/src/web/routes/history_lane.py
 │       ├── test_web_id_lookup_lane.py                   # Tests for the requirement-ID lookup lane (strand sira-intent, D-DRAFT-8).
 │       ├── test_web_ingest.py                           # Tests for the Ingest page and API (core/src/web/routes/ingest.py).
+│       ├── test_web_issue_link.py                       # The answer card's prefilled "Report issue" link (opt-in, NORA_ISSUE_URL).
 │       ├── test_web_jobs.py                             # Tests for the NORA web job queue.
 │       ├── test_web_markdown_bubbles.py                 # Tests for req-ID bubbles in the web markdown renderer (strand req-id-bubbles).
 │       ├── test_web_markdown_render.py                  # Tests for the web markdown renderer.
