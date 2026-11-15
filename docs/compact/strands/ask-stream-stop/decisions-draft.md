@@ -78,3 +78,37 @@
 
 **Consequences.**
 - The stopped view lacks the share link and feedback until the server card arrives.
+
+### D-DRAFT-6 — 2026-11-15 — Stop shuts sockets recorded at connect, not `conn.sock`
+
+**Context.**
+- PR #33 review: Stop did nothing once response headers had arrived. urllib's `do_open` closes and nulls `conn.sock` after `getresponse()`, and the body is read through `resp.fp`, which the watcher never saw. A gateway that sends headers early held the call ~10 s past Stop.
+
+**Decision.**
+- `_TrackConns` wraps each connection's `connect()` and records `conn.sock` the moment it connects; the watcher shuts the recorded sockets. urllib's `close()` only drops a reference while `resp.fp` holds the same socket object, so `shutdown()` still cuts the body read.
+
+**Why.**
+- No window between headers and the watcher picking up the response; nothing reaches into urllib's response internals; the watcher never sees `None`, which also removes the check-then-shutdown race.
+- Rejected:
+  - **Watching `resp.fp` after `_urlopen` returns:** a gap before the watcher sees it, and depends on the private `fp.raw._sock` chain.
+
+**Consequences.**
+- Stop holds behind gateways and proxies that send headers early (test: loopback server with early headers).
+- The socket list grows with redirects/retries within one call; bounded by the call's lifetime.
+
+### D-DRAFT-7 — 2026-11-15 — An early stream exit cancels the run, then forgets it
+
+**Context.**
+- PR #33 review: `forget_run` ran only on the normal path. A closed tab or a lane that raised left the registry entry behind, and the model call ran on.
+
+**Decision.**
+- The ask stream's body runs in `try/finally`. A normal finish forgets the run; any early exit (client gone, lane raised) first calls `cancel_run`, then forgets it.
+
+**Why.**
+- A closed tab should free the shared model endpoint, the same as pressing Stop.
+- Rejected:
+  - **Forget only on early exit:** frees the registry but leaves the model call running on the shared endpoint.
+
+**Consequences.**
+- Closing the tab mid-answer stops the answer; there is no "finish in the background" for an abandoned stream.
+- The History lane gets the same: a closed tab stops new batches.
