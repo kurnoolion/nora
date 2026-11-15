@@ -11,7 +11,20 @@ def test_worked_example():
     results, in_context = _fetched(40), 31
     out = silver_recall.compute(results, results[:in_context], ["R2", "R7", "R18", "R35", "GONE"])
     assert out == {"recall": {"10": 0.4, "20": 0.6, "30": 0.6, "40": 0.8},
-                   "cited": 5, "outside": 1, "fetched": 40, "packed": 31}
+                   "cited": 5, "outside": 1, "fetched": 40, "packed": 31, "pinned_cited": 0}
+
+
+def test_pinned_citations_are_counted_apart():
+    """A named-ID pin is in context by pinning, not by BM25 depth (#32 review 3)."""
+    results = _fetched(20)
+    out = silver_recall.compute(results, results, ["R2", "PIN", "R15"], pinned_ids=["PIN", "R9"])
+    assert out["cited"] == 2 and out["outside"] == 0 and out["pinned_cited"] == 1
+    assert out["recall"] == {"10": 0.5, "20": 1.0}
+
+
+def test_only_pinned_citations_is_none():
+    results = _fetched(20)
+    assert silver_recall.compute(results, results, ["PIN"], pinned_ids=["PIN"]) is None
 
 
 def test_all_cited_in_top_ten():
@@ -135,4 +148,33 @@ def test_no_silver_recall_on_synth_error(lane):
     reply["text"] = RuntimeError("model down")
     out = run()
     assert out["synth_error"]
+    assert "silver_recall" not in out["lane_config"]
+
+
+def _pin(monkeypatch, req_id):
+    from core.src.web.routes import id_lookup_lane
+    monkeypatch.setenv("NORA_PIN_NAMED_IDS", "on")
+    monkeypatch.setattr(id_lookup_lane, "pinned_candidates", lambda *a, **k: (
+        [req_id], [{"req_id": req_id, "mno": "mno-w", "release": "Sep2031",
+                    "title": "t", "text": "pinned body"}]))
+
+
+def test_a_pin_bm25_also_returned_is_not_a_budget_cut(lane, monkeypatch):
+    """SIRA's copy of a pinned id is dropped from the pack, but its text is in
+    context, so nothing was cut (#32 review 1)."""
+    run, _ = lane
+    _pin(monkeypatch, "REQ_0003")
+    sr = run()["lane_config"]["silver_recall"]
+    assert sr["fetched"] == 15 and sr["packed"] == 15
+    assert sr["cited"] == 1 and sr["pinned_cited"] == 1      # REQ_0012 by BM25, REQ_0003 by pin
+
+
+def test_silver_recall_is_best_effort(lane, monkeypatch):
+    run, _ = lane
+
+    def boom(*a, **k):
+        raise ValueError("bad row")
+    monkeypatch.setattr(playground.silver_recall, "compute", boom)
+    out = run()
+    assert out["result"]["answer"].startswith("answer citing")
     assert "silver_recall" not in out["lane_config"]

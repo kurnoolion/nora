@@ -991,8 +991,19 @@ async def _run_select_synth_lane(
         lane_config["prompt_hash"] = intent_prompt.hash
     cited_ids = _flatten_cited_ids([] if synth_error else (synth_result.get("llm_citations") or []))
     # How deep in the BM25 fetch the cited requirements sat (strand
-    # recall-metrics); named-ID pins are not SIRA results, so not counted packed.
-    recall = silver_recall.compute(sira_results, packed[len(pinned_named):], cited_ids)
+    # recall-metrics). Packed counts the SIRA results whose text is in
+    # context: those packed from `rest`, plus SIRA's copies of pinned ids
+    # (dropped from `rest`, their text is in by the pin). Display-only, so
+    # best-effort, as pinning is.
+    try:
+        in_context = packed[len(pinned_named):] + [
+            r for r in sira_results
+            if (r.get("mno"), r.get("release"), r.get("req_id")) in pinned_keys]
+        recall = silver_recall.compute(sira_results, in_context, cited_ids,
+                                       pinned_ids=[c["req_id"] for c in pinned_named])
+    except Exception:                                    # noqa: BLE001 — never sinks an answer
+        logger.exception("silver recall failed")
+        recall = None
     if recall is not None:
         lane_config["silver_recall"] = recall
     return {

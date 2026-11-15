@@ -4,13 +4,14 @@
    `silver_recall` from `silver_recall.line`; None renders nothing. #}
 {% if silver_recall %}
 <div class="silver-recall text-muted small mt-2"
-     title="Share of the requirements this answer cited that BM25 ranked within the top k. Cited requirements stand in for gold labels.">
+     title="Share of the requirements this answer cited that ranked within the top k of the search. Cited requirements stand in for gold labels; requirements named by ID in the question (pinned) are counted apart. A citation ranked below the last k shows in no column.">
   <i class="bi bi-bullseye me-1"></i>Silver recall
   {% for k, v in silver_recall.recall.items() %}
     <span class="ms-1">@{{ k }} {{ (v * 100 + 0.5) | int }}%</span>{% if not loop.last %} ·{% endif %}
   {% endfor %}
   <span class="ms-2">({{ silver_recall.cited }} cited
     {%- if silver_recall.outside %} · {{ silver_recall.outside }} outside{% endif %}
+    {%- if silver_recall.pinned_cited %} · {{ silver_recall.pinned_cited }} pinned{% endif %}
     · {{ silver_recall.packed }}/{{ silver_recall.fetched }} in context)</span>
 </div>
 {% endif %}

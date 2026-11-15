@@ -17,6 +17,7 @@ Fake stores and providers; no network, no corpus text.
 from __future__ import annotations
 
 import asyncio
+import re
 
 import pytest
 
@@ -406,6 +407,23 @@ def test_the_live_card_shows_the_silver_recall_line(world, monkeypatch, team):
     assert "Silver recall" in html
     assert "@10 40%" in html and "@40 80%" in html
     assert "5 cited" in html and "1 outside" in html and "31/40 in context" in html
+
+
+def test_pinned_is_shown_only_when_non_zero(world, monkeypatch):
+    def pinned(question, request, **kw):
+        async def run():
+            out = await _sira_ok(question, request, **kw)
+            out["lane_config"]["silver_recall"] = dict(_SR, pinned_cited=2)
+            return out
+        return run()
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", pinned)
+    _, html = _ask(world, PLAIN)
+    line = re.search(r'<div class="silver-recall.*?</div>', html, re.S).group(0)
+    assert "· 2 pinned" in line
+    monkeypatch.setattr(playground, "_run_sira_lane_for_merged", _sira_with_recall)
+    _, html = _ask(world, PLAIN)
+    line = re.search(r'<div class="silver-recall.*?</div>', html, re.S).group(0)
+    assert not re.search(r"\d+ pinned", line)
 
 
 def test_no_line_without_silver_recall(world, monkeypatch):
