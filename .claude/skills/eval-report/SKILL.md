@@ -12,6 +12,9 @@ ready, runs it, reads the result back to the user, and proposes the commit.
 | Report | Script | Output folder |
 |---|---|---|
 | Intent confidence floor | `python -m core.src.eval.intent_report` | `reports/intent/<YYYY-MM-DD-HHMM>_kev-floor_<set_id>/` |
+| Silver recall (live answers) | `python -m core.src.eval.recall_report --db <env_dir>/state/nora_test_feedback.db [--since 7d] [--bucket day\|week] [--intent I] [--stack S]` | `reports/recall/<YYYY-MM-DD-HHMM>_silver_<since>/` (gitignored, never committed) |
+
+The silver recall report needs no decision model: skip steps 1-3, run it, and report recall@k per intent, the skipped count and the budget-cut share. It reads live usage, so skip step 5; never commit it.
 
 Each folder holds `report.html` (the charts, open it in a browser) and
 `run.json` (every number plus `meta`: `created_at`, `git.commit`, `git.dirty`,
