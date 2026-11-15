@@ -217,3 +217,13 @@
 **Why.** History's full detector was rejected for this lane: most of its phrases are tuned to change summaries, and a genuine compliance answer can contain them; a wrong cut deletes part of a real answer.
 
 **Consequences.** Reasoning that does not open the reply passes through. Firings are countable per model and intent from the feedback DB. The older rerank-pin synthesizer path is not covered.
+
+### D-DRAFT-23 — 2026-11-15 — The gate's first baseline comes from this stack's own gated runs
+
+**Context.** D-307 seeds a runner's first baseline from the newest recorded golden run. The golden dir is shared by the stacks on a host, so that run can be another stack's: a second stack's first ingest would be judged against the first stack's recall.
+
+**Decision.** After the last passed ingest and `baseline_recall` in the config, the baseline is the run of the newest passed `golden-stage1` gate in this stack's registry whose report has Stage-1 results. A stack with none passes its first run, which seeds the baseline. Amends D-307.
+
+**Why.** Filtering golden runs by prompt scheme was rejected: two stacks can share a scheme. The registry already records which runs gated which sets on this stack.
+
+**Consequences.** A hand gate recorded with `publish gate --verdict pass` becomes a baseline, so the verdict recorded by hand matters. A stack's golden runs that were never gated no longer seed anything.

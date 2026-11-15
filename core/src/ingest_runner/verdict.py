@@ -2,14 +2,17 @@
 
 Stage 1 only. Pass when the run has no `GEV-E` error and `recall_avg`
 is at least the baseline minus the tolerance. The baseline is the
-Stage-1 result of the last ingest whose gate passed; before any, the
-newest recorded golden run with Stage-1 results; before any of those,
-the first run passes and seeds the baseline.
+Stage-1 result of the last ingest whose gate passed; before any, the run
+of the newest passed `golden-stage1` gate in this stack's own registry;
+before any of those, the first run passes and seeds the baseline. The
+golden dir is shared by every stack on a host, so its newest run may be
+another stack's: only a run this stack's registry gated counts.
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 
@@ -31,26 +34,34 @@ def read_report(golden_dir: str | Path, run_id: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def latest_recorded_recall(golden_dir: str | Path, exclude: str = "") -> tuple[float, str] | None:
-    """The newest run under `<golden_dir>/runs/` with Stage-1 results,
-    other than `exclude` (the run being judged): `(recall_avg, run_id)`,
-    or None."""
-    runs = Path(golden_dir) / "runs"
-    if not runs.is_dir():
+def gated_recall(registry_root: str | Path, golden_dir: str | Path,
+                 exclude: str = "") -> tuple[float, str] | None:
+    """`(recall_avg, run_ref)` of the newest passed `golden-stage1` gate
+    in the registry under `registry_root` whose run report under
+    `golden_dir` has Stage-1 results, other than `exclude` (the run being
+    judged); None when there is none, or no readable registry."""
+    reg = Path(registry_root) / "registry.db"
+    if not reg.is_file():
         return None
-    for d in sorted((p for p in runs.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True):
-        if d.name == exclude:
-            continue
-        rp = d / "report.json"
-        if not rp.is_file():
+    try:
+        con = sqlite3.connect(f"file:{reg}?mode=ro", uri=True)
+        try:
+            refs = [r[0] for r in con.execute(
+                "SELECT run_ref FROM gate_run WHERE kind = 'golden-stage1' AND verdict = 'pass' "
+                "AND run_ref != '' ORDER BY id DESC")]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    for ref in refs:
+        if ref == exclude:
             continue
         try:
-            rep = json.loads(rp.read_text(encoding="utf-8"))
+            avg = recall_avg(read_report(golden_dir, ref))
         except (OSError, json.JSONDecodeError):
             continue
-        avg = recall_avg(rep)
         if avg is not None:
-            return avg, d.name
+            return avg, ref
     return None
 
 

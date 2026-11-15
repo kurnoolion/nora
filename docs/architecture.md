@@ -2121,7 +2121,9 @@ Stage 1 only; Stage 2 stays the experts' tool. The verdict is `pass` when
 the run has no `GEV-E` error and `recall_avg` is at least the baseline
 minus a tolerance (0.03; runs move about ±0.02, §24). The baseline is the
 Stage-1 result of the last ingest whose gate passed; before any, a value
-in the runner config, else the newest recorded golden run; before any of
+in the runner config, else the run of the newest passed `golden-stage1`
+gate in this stack's own registry (the golden dir is shared by the
+stacks on a host, so its newest run may be another stack's); before any of
 those, the run passes and seeds the baseline. The staged set's latest
 release for the MNO is one ahead of the release map until the flip, so
 the eval runs with `--allow-map-mismatch` (stamped on the run) and the

@@ -273,15 +273,37 @@ def test_verdict_rule():
     assert V.gev_errors({"errors": [{"code": "GEV-W002"}, {"code": "GEV-E003"}]}) == ["GEV-E003"]
 
 
-def test_latest_recorded_recall_picks_newest_with_stage1(tmp_path):
-    runs = tmp_path / "runs"
-    for name, rep in (("20310101T000000-a", {"stage1": [{"recall": 0.5}]}),
-                      ("20310102T000000-b", {"stage1": [{"recall": 0.9}]}),
-                      ("20310103T000000-c", {"stage1": []})):
-        (runs / name).mkdir(parents=True)
-        (runs / name / "report.json").write_text(json.dumps(rep))
-    assert V.latest_recorded_recall(tmp_path) == (0.9, "20310102T000000-b")
-    assert V.latest_recorded_recall(tmp_path / "nope") is None
+def _gate_rows(registry_root, rows):
+    """A registry holding only `gate_run` rows `(kind, run_ref, verdict)`, in id order."""
+    registry_root.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(registry_root / "registry.db")
+    con.execute("CREATE TABLE gate_run(id INTEGER PRIMARY KEY, label TEXT, kind TEXT, "
+                "run_ref TEXT, verdict TEXT)")
+    con.executemany("INSERT INTO gate_run(label, kind, run_ref, verdict) VALUES ('x', ?, ?, ?)", rows)
+    con.commit()
+    con.close()
+
+
+def _golden_run(golden_dir, name, recalls):
+    (golden_dir / "runs" / name).mkdir(parents=True, exist_ok=True)
+    (golden_dir / "runs" / name / "report.json").write_text(
+        json.dumps({"stage1": [{"recall": r} for r in recalls]}))
+
+
+def test_gated_recall_reads_only_this_stacks_passed_gates(tmp_path):
+    golden, reg = tmp_path / "golden", tmp_path / "registry"
+    _golden_run(golden, "20310101T000000-own", [0.6])
+    _golden_run(golden, "20310102T000000-failed", [0.4])
+    _golden_run(golden, "20310103T000000-empty", [])
+    _golden_run(golden, "20310104T000000-other-stack", [0.9])   # newest, never gated here
+    assert V.gated_recall(reg, golden) is None                   # no registry yet
+    _gate_rows(reg, [("golden-stage1", "20310101T000000-own", "pass"),
+                     ("golden-stage1", "20310102T000000-failed", "fail"),
+                     ("manual", "20310102T000000-failed", "pass"),
+                     ("golden-stage1", "20310103T000000-empty", "pass"),
+                     ("golden-stage1", "20310109T000000-missing", "pass")])
+    assert V.gated_recall(reg, golden) == (0.6, "20310101T000000-own")
+    assert V.gated_recall(reg, golden, exclude="20310101T000000-own") is None
 
 
 # -- the ingest plan -------------------------------------------------------------------------
@@ -581,16 +603,16 @@ def test_gate_fails_on_gev_error(host):
     assert ing.verdict == "fail" and "GEV-E004" in ing.verdict_detail
 
 
-def test_baseline_seeds_from_recorded_run_then_from_passed_ingest(host):
-    runs = host["root"] / "golden/runs/20300101T000000-old"
-    runs.mkdir(parents=True)
-    (runs / "report.json").write_text(json.dumps({"stage1": [{"recall": 0.85}]}))
+def test_baseline_seeds_from_gated_run_then_from_passed_ingest(host):
+    _golden_run(host["root"] / "golden", "20300101T000000-old", [0.85])
+    _golden_run(host["root"] / "golden", "20300102T000000-peer", [0.99])   # another stack's run
+    _gate_rows(host["root"] / "registry", [("golden-stage1", "20300101T000000-old", "pass")])
     sim = Sim(host["root"], golden_recall=0.70)   # 0.70 < 0.85 - 0.03
     job_id, ingest_id = _submit_ingest(host)
     assert _runner(host, sim).run_once() == "completed"
     ing = _run(host["q"].get_ingest(ingest_id))
     assert ing.verdict == "fail" and ing.baseline == 0.85
-    assert any("recorded run 20300101T000000-old" in l for l in _run(host["q"].get_logs(job_id)))
+    assert any("gated run 20300101T000000-old" in l for l in _run(host["q"].get_logs(job_id)))
 
 
 def test_flip_rollback_abandon(host):

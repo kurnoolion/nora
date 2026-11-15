@@ -572,9 +572,9 @@ def st_gate(c: Ctx) -> None:
     if baseline is None and c.cfg.baseline_recall is not None:
         baseline, source = float(c.cfg.baseline_recall), "runner config"
     if baseline is None:
-        rec = V.latest_recorded_recall(c.cfg.golden_dir, exclude=c.run_ref)
+        rec = V.gated_recall(c.cfg.registry_root, c.cfg.golden_dir, exclude=c.run_ref)
         if rec:
-            baseline, source = rec[0], f"recorded run {rec[1]}"
+            baseline, source = rec[0], f"gated run {rec[1]}"
     verdict, detail = V.decide(recall, baseline, c.cfg.eval_tolerance, errors)
     c.log(f"gate: {verdict} — {detail} (baseline from {source if baseline is not None else 'nothing'})")
     cmd = ["python", "-m", "core.src.stores.publish", "gate", "--serve-root", CTR_SERVE,

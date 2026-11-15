@@ -373,8 +373,10 @@ documents copied to `requirements/<MNO>/<MMMYYYY>/` → `cycle.sh start
 store up, `golden_cli --stage 1 --allow-map-mismatch`, store down →
 `publish gate`. About an hour and a half, enrichment most of it. The gate
 passes when Stage-1 `recall_avg` is within `eval_tolerance` (0.03) of
-the last gated run's; the first run takes its baseline from the newest
-recorded golden run. **Serve** runs `publish flip --store-url` and
+the last gated run's; the first run takes its baseline from
+`baseline_recall` in the runner config, else from the run of the newest
+passed `golden-stage1` gate in the stack's own registry (never another
+stack's run in the shared golden dir). **Serve** runs `publish flip --store-url` and
 `golden_release_cli advance`; **Roll back** runs `publish rollback --to
 <previous>`. A failed stage offers **Retry** (from the stage, or from
 enrich for a verify failure); **Abandon** closes the cycle and removes
