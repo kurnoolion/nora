@@ -458,3 +458,94 @@ class TestErrorSummary:
         assert str(ei.value) == "LLM HTTP 500 INTERNAL SERVER ERROR: HTML error page, 72 chars: read timed out"
         assert all("gw.internal" not in m for m in caplog.messages)
 
+
+
+# ---------------------------------------------------------------------------
+# Stop (strand ask-stream-stop): CANCEL shuts the call's socket
+# ---------------------------------------------------------------------------
+
+
+class TestCancel:
+    """A loopback server that never answers stands in for a slow model."""
+
+    def _slow_server(self, early_headers=False):
+        import socket
+        import threading
+
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        seen = {"closed": threading.Event()}
+
+        def serve():
+            conn, _ = srv.accept()
+            conn.settimeout(10)
+            try:
+                if early_headers:           # a gateway that sends headers at once,
+                    conn.recv(65536)        # then holds the body
+                    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                 b"Content-Length: 100\r\n\r\n")
+                while conn.recv(65536):     # read the request, then never reply;
+                    pass                    # b"" means the client closed
+            except OSError:
+                pass
+            seen["closed"].set()
+            conn.close()
+            srv.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        return f"http://127.0.0.1:{srv.getsockname()[1]}/v1", seen
+
+    def _run(self, provider, cancel):
+        import asyncio
+        from core.src.llm import openai_provider as op
+
+        async def go():
+            op.CANCEL.set(cancel)
+            return await asyncio.to_thread(provider.complete, "q")
+        return asyncio.run(go())
+
+    def test_stop_returns_at_once_and_closes_the_connection(self):
+        import threading
+        import time
+        from core.src.llm.openai_provider import LLMCancelled
+
+        url, seen = self._slow_server()
+        p = OpenAICompatibleProvider(model="m", base_url=url, timeout=30)
+        cancel = threading.Event()
+        threading.Timer(0.3, cancel.set).start()
+        t0 = time.time()
+        with pytest.raises(LLMCancelled):
+            self._run(p, cancel)
+        assert time.time() - t0 < 3
+        assert seen["closed"].wait(3)       # the endpoint saw the disconnect
+
+    def test_stop_after_early_headers_still_returns_at_once(self):
+        import threading
+        import time
+        from core.src.llm.openai_provider import LLMCancelled
+
+        url, seen = self._slow_server(early_headers=True)
+        p = OpenAICompatibleProvider(model="m", base_url=url, timeout=30)
+        cancel = threading.Event()
+        threading.Timer(0.5, cancel.set).start()
+        t0 = time.time()
+        with pytest.raises(LLMCancelled):
+            self._run(p, cancel)
+        assert time.time() - t0 < 3
+        assert seen["closed"].wait(3)
+
+    def test_already_stopped_makes_no_call(self):
+        import threading
+        from core.src.llm.openai_provider import LLMCancelled
+
+        p = OpenAICompatibleProvider(model="m", base_url="http://127.0.0.1:9/v1")
+        cancel = threading.Event()
+        cancel.set()
+        with pytest.raises(LLMCancelled):
+            self._run(p, cancel)
+
+    def test_no_cancel_keeps_plain_urlopen(self):
+        p = OpenAICompatibleProvider(model="m", base_url="http://x.test/v1")
+        with patch("urllib.request.urlopen", return_value=_ok_response("hi")):
+            assert p.complete("q") == "hi"

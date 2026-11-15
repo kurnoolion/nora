@@ -202,3 +202,82 @@ class TestAnswerTemplateWithoutIds:
         )
         assert "answer-body" in html
         assert "req-bubble" not in html
+
+
+# ── Candidate tiles: full text on click, from the tile's own cell ──
+# (strand ask-stream-stop.) The tile ships only its preview; the full
+# requirement loads through the bubble route on first open, pinned to the
+# release the tile came from rather than the latest one.
+
+
+@pytest.fixture()
+def cells(tmp_path: Path) -> Path:
+    for release, text in (("Jan2031", "older cell text"), ("Jul2031", "newer cell text")):
+        d = tmp_path / "out" / "parse" / "MNO-A" / release
+        d.mkdir(parents=True)
+        (d / "DOC_tree.json").write_text(json.dumps({
+            "plan_id": "PLANX", "plan_name": "Plan X",
+            "requirements": [{"req_id": "REQ-X-1", "title": "Tile req", "text": text,
+                              "section_number": "2.1"}],
+        }))
+    return tmp_path
+
+
+@pytest.fixture()
+def cells_client(cells: Path):
+    from core.src.web.app import app, config
+
+    with patch.object(type(config), "env_dir_path", lambda self: cells):
+        yield TestClient(app)
+
+
+class TestReqEndpointPinnedRelease:
+    def test_release_param_shows_that_cell(self, cells_client):
+        r = cells_client.get("/api/req/REQ-X-1", params={"mno": "MNO-A", "release": "Jan2031"})
+        assert r.status_code == 200
+        assert "older cell text" in r.text and "newer cell text" not in r.text
+        assert "Showing the latest" not in r.text
+        assert "Also in 1 other release" in r.text
+
+    def test_without_params_the_latest_still_wins(self, cells_client):
+        r = cells_client.get("/api/req/REQ-X-1")
+        assert "newer cell text" in r.text
+        assert "Showing the latest of 2 releases" in r.text
+
+    def test_unknown_release_falls_back_to_the_latest(self, cells_client):
+        r = cells_client.get("/api/req/REQ-X-1", params={"mno": "MNO-A", "release": "Dec2099"})
+        assert r.status_code == 200
+        assert "newer cell text" in r.text
+
+
+class TestCandidateTileExpand:
+    def _render(self, **cand):
+        from core.src.web.app import templates
+
+        base = {"rank": 1, "req_id": "REQ-X-1", "mno": "MNO-A", "release": "Jan2031",
+                "title": "Tile req", "text_preview": "short preview", "text": "FULL-CHUNK-TEXT",
+                "bm25_score": 1.0, "rerank_score": None, "pinned": True}
+        return templates.get_template("test/_sira_candidates.html").render(
+            root_path="/r", heading="h", cands=[{**base, **cand}], show_scope=False)
+
+    def test_tile_loads_its_own_cell_on_first_open(self):
+        html = self._render()
+        assert 'hx-get="/r/api/req/REQ-X-1?mno=MNO-A&amp;release=Jan2031"' in html
+        assert 'hx-trigger="toggle once"' in html
+        assert "<details" in html
+        assert "double-click the tile" in html
+
+    def test_page_carries_the_preview_only(self):
+        """The full text loads on click; 120 tiles must not ship 120 chunks."""
+        html = self._render()
+        assert "short preview" in html
+        assert "FULL-CHUNK-TEXT" not in html
+
+    def test_single_cell_tile_without_cell_still_expands(self):
+        html = self._render(mno="", release="")
+        assert 'hx-get="/r/api/req/REQ-X-1"' in html
+
+    def test_tile_with_a_release_but_no_mno_pins_the_release_only(self):
+        html = self._render(mno=None)
+        assert 'hx-get="/r/api/req/REQ-X-1?release=Jan2031"' in html
+        assert "None" not in html

@@ -542,6 +542,7 @@ nora/
 │   │       │       ├── _merged_answer.html
 │   │       │       ├── _req_bubble.html
 │   │       │       ├── _shared_body.html
+│   │       │       ├── _sira_candidates.html
 │   │       │       ├── _timeline.html
 │   │       │       ├── history.html
 │   │       │       ├── index.html
@@ -678,6 +679,7 @@ nora/
 │       ├── test_user_annotations.py                     # Tests for user-driven `remove` annotations [D-061].
 │       ├── test_vectorstore.py                          # Tests for vector store construction (PoC Step 9).
 │       ├── test_vectorstore_cell.py                     # Per-cell vectorstore build + cell-store loader (D-DRAFT-11 slice 1).
+│       ├── test_web_ask_stop.py                         # Ask page, SIRA select-synth lane: early candidates and Stop (strand
 │       ├── test_web_config.py                           # Tests for `core/src/web/config.py` — env_dir + DB-path resolution.
 │       ├── test_web_config_db.py                        # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_eval_studio.py                      # Eval Studio route tests (FR-39): sample CRUD, ground-truth add flows,
