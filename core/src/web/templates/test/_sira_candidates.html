@@ -63,7 +63,7 @@
                 {# Full requirement on first open, from the bubble route and
                    pinned to this tile's cell. The page carries the preview
                    only, so a 120-candidate fetch stays small. #}
-                {% set q = {"mno": r.mno, "release": r.release} | urlencode if r.release else "" %}
+                {% set q = ({"mno": r.mno, "release": r.release} if r.mno else {"release": r.release}) | urlencode if r.release else "" %}
                 <details class="sira-tile-full mt-1"
                          hx-get="{{ root_path }}/api/req/{{ r.req_id | urlencode }}{% if q %}?{{ q }}{% endif %}"
                          hx-trigger="toggle once" hx-target="find .req-bubble-body" hx-swap="innerHTML">

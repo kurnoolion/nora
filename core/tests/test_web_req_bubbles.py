@@ -276,3 +276,8 @@ class TestCandidateTileExpand:
     def test_single_cell_tile_without_cell_still_expands(self):
         html = self._render(mno="", release="")
         assert 'hx-get="/r/api/req/REQ-X-1"' in html
+
+    def test_tile_with_a_release_but_no_mno_pins_the_release_only(self):
+        html = self._render(mno=None)
+        assert 'hx-get="/r/api/req/REQ-X-1?release=Jan2031"' in html
+        assert "None" not in html
