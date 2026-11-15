@@ -431,6 +431,16 @@ def test_select_synth_extract_citations_is_corpus_agnostic():
     assert all(c["llm_cited"] for c in cites)
 
 
+def test_select_synth_extract_citations_sees_markdown_escaped_ids():
+    # Some models escape underscores in markdown (VZ\_REQ\_X\_1); the page
+    # renders them plainly, so they are citations all the same.
+    from core.src.web.routes import playground as pg
+    packed = [_cand("MNO-A", "VZ_REQ_X_1", "..."), _cand("MNO-A", "VZ-FOO-12", "...")]
+    answer = r"Retry per VZ\_REQ\_X\_1 and VZ\-FOO\-12."
+    cites = pg._select_synth_extract_citations(answer, packed)
+    assert [c["req_id"] for c in cites] == ["VZ_REQ_X_1", "VZ-FOO-12"]
+
+
 def test_filter_sira_notes_drops_rerank_disabled_in_select_synth(monkeypatch):
     import core.src.web.routes.playground as pg
     monkeypatch.setattr(pg, "_SELECT_SYNTH_ENABLED", True)
