@@ -307,8 +307,13 @@ def render_table_markdown(headers: list[str], rows: list[list[str]]) -> str:
     tables (no body rows — typically 1x1 paragraph-wrapper tables) collapse to
     the same compact line so their cell content still reaches the text. The
     compact form can span multiple lines when a cell contains newlines —
-    consumers must not assume ``[Table: …]`` is single-line.
+    consumers must not assume ``[Table: …]`` is single-line. Pipe-table cells
+    have whitespace collapsed to single spaces, since a newline inside a cell
+    (PDF line wraps) would end the GFM row.
     """
+    def cell(c) -> str:
+        return " ".join(str(c).split())
+
     if not rows:
         cells = [h.strip() for h in (headers or []) if (h or "").strip()]
         return "[Table: " + " | ".join(cells) + "]" if cells else ""
@@ -317,15 +322,15 @@ def render_table_markdown(headers: list[str], rows: list[list[str]]) -> str:
         return "[Table: " + " | ".join(cells) + "]" if cells else ""
     if not headers:
         return "\n".join(
-            "| " + " | ".join(str(c) for c in row) + " |" for row in rows
+            "| " + " | ".join(cell(c) for c in row) + " |" for row in rows
         )
     lines = [
-        "| " + " | ".join(str(h) for h in headers) + " |",
+        "| " + " | ".join(cell(h) for h in headers) + " |",
         "| " + " | ".join("---" for _ in headers) + " |",
     ]
     for row in rows:
         padded = list(row) + [""] * (len(headers) - len(row))
-        lines.append("| " + " | ".join(str(c) for c in padded[: len(headers)]) + " |")
+        lines.append("| " + " | ".join(cell(c) for c in padded[: len(headers)]) + " |")
     return "\n".join(lines)
 
 

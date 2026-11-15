@@ -592,6 +592,26 @@ class TestHeadersOnlyTableInline:
         out = render_table_markdown(["H"], [["v"]])
         assert out.splitlines() == ["| H |", "| --- |", "| v |"]
 
+    def test_render_cell_newlines_stay_on_one_row(self):
+        # Issue #34: PDF line wraps inside a cell must not split a GFM row.
+        from core.src.parser.structural_parser import render_table_markdown
+
+        out = render_table_markdown(
+            ["Condition\nType", "Behavior"],
+            [["No response and the\ntimeout expires", "Follow the  algorithm\nbelow."]],
+        )
+        assert out.splitlines() == [
+            "| Condition Type | Behavior |",
+            "| --- | --- |",
+            "| No response and the timeout expires | Follow the algorithm below. |",
+        ]
+
+    def test_render_headerless_cell_newlines_stay_on_one_row(self):
+        from core.src.parser.structural_parser import render_table_markdown
+
+        out = render_table_markdown([], [["a\nb", "c"]])
+        assert out.splitlines() == ["| a b | c |"]
+
     def test_headers_only_table_inlines_and_stores(self):
         blocks = [
             _heading(0, "1 General"),
