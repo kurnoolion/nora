@@ -21,7 +21,8 @@ enrichment per stack, is the first use; recipes without resolve, with a
 graph or with a vector store are the ones the design must carry without
 another layout change. Doc-first: the design note in `design.md`, two
 rulings, then seven implementation steps that each leave the system
-working.
+working. Step 7 (graph and vector unit kinds) is deferred (2026-11-15,
+D-DRAFT-25); the strand lands with steps 1–6.
 
 ## Notes
 

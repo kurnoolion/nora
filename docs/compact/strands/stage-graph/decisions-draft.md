@@ -227,3 +227,23 @@
 **Why.** Filtering golden runs by prompt scheme was rejected: two stacks can share a scheme. The registry already records which runs gated which sets on this stack.
 
 **Consequences.** A hand gate recorded with `publish gate --verdict pass` becomes a baseline, so the verdict recorded by hand matters. A stack's golden runs that were never gated no longer seed anything.
+
+### D-DRAFT-24 — 2026-11-15 — Feedback stays per stack until rows carry their stack
+
+**Context.** D-120 pools one feedback DB across stacks and attributes rows by `llm_model`. Stacks A and B now differ by recipe and prompt scheme, not by LLM, so `llm_model` no longer tells their rows apart. Both stacks' DBs hold recent, distinct rows.
+
+**Decision.** Each stack keeps its own feedback dir (`runtime/<stack>/feedback/` on the host). The two DBs are not merged. Pooling returns when `test_feedback` has a `stack` column, stamped from `STACK_NAME` on each new row and filled in for existing rows at the merge. Amends D-120 until then.
+
+**Why.** Merging now was rejected: once rows from two stacks on the same LLM are mixed, nothing can attribute them again.
+
+**Consequences.** A/B comparison of feedback reads two DBs. The docker README still describes the pooled design (D-120).
+
+### D-DRAFT-25 — 2026-11-15 — Step 7 (graph and vector unit kinds) is deferred
+
+**Context.** Step 7 adds `graph` and `vectors` units to the registry and a `serve.mode` switch to the store service, for recipes that serve the knowledge graph or a vector store.
+
+**Decision.** Defer step 7. The strand lands with steps 1–6; step 7 opens as its own strand when a recipe needs it. Design §7 keeps the place reserved.
+
+**Why.** No recipe enables the graph or vector stages, and none is planned soon. Building unit kinds that no recipe uses would add untested surface.
+
+**Consequences.** A recipe refuses any `serve.mode` but `sira` (`pipeline/recipes.py` `SERVE_MODES`). The graph and vectorstore stages stay off.
