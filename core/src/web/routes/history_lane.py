@@ -162,8 +162,12 @@ def _summary_lines(result: dict) -> list[str]:
     bits.append(f"{sent} changed in text"
                 + (f" (the model judged {same} of them unchanged in meaning on this run)" if same else "")
                 + (f"; another {dropped} differ in bookkeeping only" if dropped else ""))
-    bits.append(f"{c.get('added', 0)} added, {c.get('removed', 0)} removed, "
-                f"{c.get('renumbered', 0)} renumbered, {c.get('moved', 0)} moved")
+    whole = [f"{c['added_in_new_plans']} of the added in new plans" if c.get("added_in_new_plans") else "",
+             f"{c['removed_with_plans']} of the removed with dropped plans" if c.get("removed_with_plans") else ""]
+    whole = [w for w in whole if w]
+    bits.append(f"{c.get('added', 0)} added, {c.get('removed', 0)} removed"
+                + (f" ({'; '.join(whole)})" if whole else "")
+                + f", {c.get('renumbered', 0)} renumbered, {c.get('moved', 0)} moved")
     bits.append(f"{len(plans)} plan(s) with changes"
                 + (f", {c['absent_plans']} plan(s) present in one release only" if c.get("absent_plans") else ""))
     lines.append("; ".join(bits) + ".")
@@ -311,7 +315,9 @@ def answer_markdown(result: dict) -> str:
     absent = result.get("absent_plans") or []
     if absent:
         lines += _section_block("absent", "Plans present in one release only",
-                                [f"- {x['plan_id']}: not part of {x['absent_in']}" for x in absent])
+                                [f"- {x['plan_id']}: not part of {x['absent_in']}"
+                                 + (f" ({x['requirements']} requirement(s))" if x.get("requirements") else "")
+                                 for x in absent])
     lines += ["</div>", ""]
     return "\n".join(lines).strip() + "\n"
 

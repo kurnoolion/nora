@@ -937,11 +937,15 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
            totals: "dict[str, int] | None" = None) -> dict:
     """The release-change payload (protocol ``changed_pairs``) from the
     diff rows and both releases' node states. Plans absent from one
-    release appear only in ``absent_plans``; their requirements are not
-    removals or additions. ``counts`` are requirement rows of the present
-    plans (section rows excluded), so they differ from ``diff_releases``'s
-    kind tallies by design. Deterministic: plans by id, rows by outline
-    position then id."""
+    release appear only in ``absent_plans``, with their requirement count
+    (``requirements``); they carry no rows, but their requirements count
+    in ``counts`` ``added`` / ``removed`` (``added_in_new_plans`` /
+    ``removed_with_plans`` say how many of those came whole). Otherwise
+    ``counts`` are requirement rows of the present plans (section rows
+    excluded), so they differ from ``diff_releases``'s kind tallies by
+    design. A plan whose only changes are section rows (structural nodes
+    with no requirement id) is left out. Deterministic: plans by id, rows
+    by outline position then id."""
     def body(n: "dict | None") -> dict:
         if not n:
             return {}
@@ -971,7 +975,12 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
     absent: dict[str, dict] = {}
     for c in changes:
         if c["node"] == PLAN and ("removed" in c["change"] or "added" in c["change"]):
-            absent[c["plan_id"]] = {"absent_in": rel_b if "removed" in c["change"] else rel_a}
+            absent[c["plan_id"]] = {"absent_in": rel_b if "removed" in c["change"] else rel_a,
+                                    "requirements": 0}
+    for c in changes:
+        if c["plan_id"] in absent and c["node"] == REQUIREMENT \
+                and ("added" in c["change"] or "removed" in c["change"]):
+            absent[c["plan_id"]]["requirements"] += 1
     renamed_from = {c["renamed_from"] for c in changes if c.get("renamed_from")}
     plans: dict[str, dict] = {}
     for c in changes:
@@ -1012,6 +1021,10 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
         elif "moved" in kinds:
             p["moved"].append({**row, "from": c.get("moved_from", ""),
                                "from_parent": parent_label(x, sa), "to_parent": parent_label(y, sb)})
+    # a plan with section rows only (e.g. the structural nodes of a
+    # multi-plan document, plan id '') has nothing to show
+    plans = {k: p for k, p in plans.items()
+             if any(p[key] for key in ("changed", "added", "removed", "renamed", "renumbered", "moved"))}
     for p in plans.values():
         for key in ("changed", "added", "removed", "renumbered", "moved"):
             p[key].sort(key=lambda r: (_section_key(r["section"]), r["req_id"]))
@@ -1023,6 +1036,14 @@ def _pairs(mno: str, rel_a: str, rel_b: str, changes: list[dict],
                                 if "renumbered" in c["kinds"])
     counts["moved"] += sum(1 for p in plans.values() for c in p["changed"]
                            if "moved" in c["kinds"])
+    # whole plans present in one release: their requirements are additions
+    # or removals too (field review: the totals must include them)
+    counts["added_in_new_plans"] = sum(v["requirements"] for v in absent.values()
+                                       if v["absent_in"] == rel_a)
+    counts["removed_with_plans"] = sum(v["requirements"] for v in absent.values()
+                                       if v["absent_in"] == rel_b)
+    counts["added"] += counts["added_in_new_plans"]
+    counts["removed"] += counts["removed_with_plans"]
     counts["plans"] = len(plans)
     counts["absent_plans"] = len(absent)
     if totals:

@@ -603,3 +603,69 @@ class TestHeadersOnlyTableInline:
         foo1 = next(r for r in tree.requirements if r.req_id == "ABC-FOO-001")
         assert len(foo1.tables) == 1
         assert "[Table: Wrapped paragraph content]" in foo1.text
+
+
+# ---------------------------------------------------------------------------
+# Cross-reference lists split over lines (strand history-fidelity)
+# ---------------------------------------------------------------------------
+
+
+class TestCrossReferenceIdList:
+    """A requirement's closing references, put one per line by the extractor
+    (``…see`` / ``ABC-FOO-013,`` / ``ABC-FOO-014``), open with an id but state
+    no requirement. They continue the open requirement; the real definitions
+    of those ids elsewhere stay the only nodes for them."""
+
+    def _blocks(self):
+        return [
+            _heading(0, "1 General"),
+            _body(1, "ABC-FOO-013 Timer. The device shall start the timer."),   # real definition
+            _body(2, "ABC-FOO-014 Retry. The device shall retry once."),        # real definition
+            _body(3, "ABC-FOO-404 Recovery. The device shall recover as in"),
+            _body(4, "ABC-FOO-013,"),                                            # list item
+            _body(5, "ABC-FOO-014"),                                             # last list item
+            _body(6, "ABC-FOO-405 Next. The device shall continue."),
+        ]
+
+    def test_an_id_list_continues_the_open_requirement(self):
+        tree = _parse(self._blocks())
+        reqs = _leading_reqs(tree)
+        assert [r.req_id for r in reqs] == ["ABC-FOO-013", "ABC-FOO-014", "ABC-FOO-404", "ABC-FOO-405"]
+        r404 = next(r for r in reqs if r.req_id == "ABC-FOO-404")
+        assert "ABC-FOO-013," in r404.text and "ABC-FOO-014" in r404.text   # its references are kept
+        r13 = next(r for r in reqs if r.req_id == "ABC-FOO-013")
+        assert "start the timer" in (r13.title + r13.text)                  # the real definition stays
+        assert tree.parse_stats.id_list_blocks_continued == 2
+        assert tree.parse_stats.duplicate_req_ids == 0
+
+    def test_two_ids_in_one_block_are_a_list(self):
+        blocks = [_heading(0, "1 General"),
+                  _body(1, "ABC-FOO-001 First. The device shall do one."),
+                  _body(2, "ABC-FOO-002 / ABC-FOO-003 and ABC-FOO-004")]
+        reqs = _leading_reqs(_parse(blocks))
+        assert [r.req_id for r in reqs] == ["ABC-FOO-001"]
+
+    def test_a_lone_id_not_after_a_list_still_opens_a_requirement(self):
+        # a header line with only the id, its statement in the next block
+        blocks = [_heading(0, "1 General"),
+                  _body(1, "ABC-FOO-001 First. The device shall do one."),
+                  _body(2, "ABC-FOO-002"),
+                  _body(3, "The device shall do two.")]
+        tree = _parse(blocks)
+        reqs = _leading_reqs(tree)
+        assert [r.req_id for r in reqs] == ["ABC-FOO-001", "ABC-FOO-002"]
+        assert "do two" in reqs[1].text
+        assert tree.parse_stats.id_list_blocks_continued == 0
+
+    def test_an_id_followed_by_words_is_a_requirement(self):
+        blocks = [_heading(0, "1 General"),
+                  _body(1, "ABC-FOO-001 First. The device shall do one."),
+                  _body(2, "ABC-FOO-002, ABC-FOO-003 The device shall do both.")]
+        reqs = _leading_reqs(_parse(blocks))
+        assert [r.req_id for r in reqs] == ["ABC-FOO-001", "ABC-FOO-002"]
+
+    def test_duplicate_req_ids_are_counted(self):
+        blocks = [_heading(0, "1 General"),
+                  _body(1, "ABC-FOO-001 First. The device shall do one."),
+                  _body(2, "ABC-FOO-001 Again. The device shall do one again.")]
+        assert _parse(blocks).parse_stats.duplicate_req_ids == 1

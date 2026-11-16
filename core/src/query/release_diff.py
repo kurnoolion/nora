@@ -1009,7 +1009,8 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
                                      # heading-only entries; the model's marks are not in it
                                      "bookkeeping": t.get("dropped", 0)
                                      + len(t.get("heading_removed", [])) + len(t.get("heading_added", []))}})
-    absent = [{"plan_id": k, "absent_in": v.get("absent_in", "")}
+    absent = [{"plan_id": k, "absent_in": v.get("absent_in", ""),
+               "requirements": int(v.get("requirements", 0) or 0)}
               for k, v in sorted(payload.get("absent_plans", {}).items())]
     return {"mno": payload.get("mno", ""), "from": payload.get("from", ""),
             "to": payload.get("to", ""), "plans": plans_out, "absent_plans": absent,

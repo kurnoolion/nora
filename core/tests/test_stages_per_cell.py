@@ -8,6 +8,8 @@ this pins the cell *routing*).
 
 from __future__ import annotations
 
+import core.src.parser as parser_pkg
+
 import json
 from pathlib import Path
 
@@ -144,7 +146,7 @@ class TestIncrementalSkip:
         assert set(m["stages"]["profile"]) == {f"{a}/{b}" for a, b in CELLS}
         entry = m["stages"]["parse"]["MNO-A/Feb2026"]
         assert entry["inputs"]["profile"] == m["stages"]["profile"]["MNO-A/Feb2026"]["fp"]
-        assert entry["code_version"] == "1" and entry["inputs"]["extract"] == "absent"
+        assert entry["code_version"] == parser_pkg.CODE_VERSION and entry["inputs"]["extract"] == "absent"
 
 
 class TestCellScopeInStages:

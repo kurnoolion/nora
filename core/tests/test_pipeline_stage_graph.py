@@ -6,6 +6,10 @@ Fixtures are hand-made in-memory cells (no document content).
 
 from __future__ import annotations
 
+import importlib
+
+import core.src.parser as parser_pkg
+
 import hashlib
 import json
 from pathlib import Path
@@ -104,13 +108,14 @@ class TestStageFingerprint:
         assert len({h1, h2, h3, h4}) == 4
 
     def test_code_version_by_tier(self, monkeypatch):
-        for stage in sg.CORPUS_STAGES:
-            assert fpm.code_version(stage) == "1"
+        for stage in sg.CORPUS_STAGES:     # each package's own version, never the image's
+            assert fpm.code_version(stage) == importlib.import_module(
+                fpm.CORPUS_VERSION_MODULES[stage]).CODE_VERSION
         monkeypatch.delenv(fpm.VARIANT_CODE_VERSION_ENV, raising=False)
         assert fpm.code_version("taxonomy") == fpm.DEFAULT_VARIANT_CODE_VERSION
         monkeypatch.setenv(fpm.VARIANT_CODE_VERSION_ENV, "img-42")
         assert fpm.code_version("taxonomy") == "img-42"
-        assert fpm.code_version("parse") == "1"   # a corpus stage ignores the image version
+        assert fpm.code_version("parse") == parser_pkg.CODE_VERSION   # a corpus stage ignores the image version
 
     def test_cell_key(self):
         assert fpm.cell_key("parse", Cell("MNO-A", "Feb2026")) == "MNO-A/Feb2026"

@@ -391,3 +391,16 @@ def test_answer_markdown_names_pairs_without_synthesis_text():
     assert "no synthesis text came back for 2 pair(s); ids: R1, R3_" in md
     # text present: no status line
     assert "no synthesis text" not in history_lane.answer_markdown(result("For [R1], x.", []))
+
+
+def test_answer_markdown_counts_whole_plans_in_the_totals():
+    result = {"cancelled": False, "mno": "m", "from": "Apr2031", "to": "Jul2031",
+              "absent_plans": [{"plan_id": "PN", "absent_in": "Apr2031", "requirements": 12},
+                               {"plan_id": "PD", "absent_in": "Jul2031", "requirements": 153}],
+              "counts": {"added": 97, "removed": 192, "renumbered": 0, "moved": 0, "absent_plans": 2,
+                         "added_in_new_plans": 12, "removed_with_plans": 153},
+              "plans": []}
+    md = history_lane.answer_markdown(result)
+    assert ("97 added, 192 removed (12 of the added in new plans; 153 of the removed with dropped plans)"
+            ", 0 renumbered, 0 moved") in md
+    assert "PN: not part of Apr2031 (12 requirement(s))" in md and "PD: not part of Jul2031 (153 requirement(s))" in md

@@ -227,7 +227,7 @@ def test_containing_section_prefers_tree_parent_then_outline_prefix():
     assert containing_section("requirement", "R1", "1.11", "", secs) == "1"
 
 
-def test_pairs_keep_absent_plans_out_of_the_rows():
+def test_pairs_keep_absent_plans_out_of_the_rows_and_count_their_requirements():
     from core.src.stores.history import _pairs, node_key, text_fp
     pk, rk, px, rx = (node_key("plan", "PLANA"), node_key("requirement", "PLANA", "R1"),
                       node_key("plan", "PLANX"), node_key("requirement", "PLANX", "RX"))
@@ -248,10 +248,38 @@ def test_pairs_keep_absent_plans_out_of_the_rows():
     texts = {fa: ("t", "old"), fb: ("t", "new"), fx: ("t", "gone"), fpa: ("Plan A", ""), fpx: ("Plan X", "")}
     out = _pairs("m", "Jan2031", "Apr2031", changes, {"PLANA": (sa, sb), "PLANX": (sa, sb)}, texts)
     assert list(out["plans"]) == ["PLANA"]                      # PLANX only under absent_plans
-    assert out["absent_plans"] == {"PLANX": {"absent_in": "Apr2031"}}
-    assert out["counts"] == {"changed": 1, "added": 0, "removed": 0, "renamed": 0,
-                             "renumbered": 1, "moved": 0, "plans": 1, "absent_plans": 1}
+    assert out["absent_plans"] == {"PLANX": {"absent_in": "Apr2031", "requirements": 1}}
+    # the dropped plan's requirement is a removal in the totals (field review)
+    assert out["counts"] == {"changed": 1, "added": 0, "removed": 1, "renamed": 0,
+                             "renumbered": 1, "moved": 0, "plans": 1, "absent_plans": 1,
+                             "added_in_new_plans": 0, "removed_with_plans": 1}
     assert out["plans"]["PLANA"]["changed"][0]["kinds"] == ["renumbered"]
+
+
+def test_pairs_count_a_new_plans_requirements_as_added_and_drop_section_only_plans():
+    from core.src.stores.history import _pairs, node_key, text_fp
+    pn, r1, r2 = (node_key("plan", "PLANN"), node_key("requirement", "PLANN", "N1"),
+                  node_key("requirement", "PLANN", "N2"))
+    se = node_key("section", "", "3")
+    f1, f2, fp, fs = text_fp("t", "one"), text_fp("t", "two"), text_fp("Plan N", ""), text_fp("Chapter", "")
+    node = lambda key, kind, plan, lid, fp: {"key": key, "kind": kind, "plan_id": plan, "local_id": lid,
+                                             "text_fp": fp, "attrs_json": "{}", "location_json": "{}"}
+    sb = {pn: node(pn, "plan", "PLANN", "PLANN", fp), r1: node(r1, "requirement", "PLANN", "N1", f1),
+          r2: node(r2, "requirement", "PLANN", "N2", f2), se: node(se, "section", "", "3", fs)}
+    sa = {se: node(se, "section", "", "3", text_fp("Chapter old", ""))}
+    changes = [
+        {"key": pn, "node": "plan", "plan_id": "PLANN", "local_id": "PLANN", "change": ["added"]},
+        {"key": r1, "node": "requirement", "plan_id": "PLANN", "local_id": "N1", "change": ["added"]},
+        {"key": r2, "node": "requirement", "plan_id": "PLANN", "local_id": "N2", "change": ["added"]},
+        # a structural node of a multi-plan document: plan id '', no requirement id
+        {"key": se, "node": "section", "plan_id": "", "local_id": "3", "change": ["changed"]},
+    ]
+    texts = {f1: ("t", "one"), f2: ("t", "two"), fp: ("Plan N", ""), fs: ("Chapter", "")}
+    out = _pairs("m", "Jan2031", "Apr2031", changes, {"PLANN": (sa, sb), "": (sa, sb)}, texts)
+    assert out["plans"] == {}                                   # no blank '' plan row
+    assert out["absent_plans"] == {"PLANN": {"absent_in": "Jan2031", "requirements": 2}}
+    assert out["counts"]["added"] == 2 and out["counts"]["added_in_new_plans"] == 2
+    assert out["counts"]["removed"] == 0 and out["counts"]["plans"] == 0
 
 
 def test_summary_separates_absent_plans():
@@ -293,6 +321,7 @@ def test_changed_pairs_payload(built):
     assert p["added"] == [] and p["renamed"] == [] and p["renumbered"] == []
     assert d["counts"] == {"changed": 2, "added": 0, "removed": 1, "renamed": 0,
                            "renumbered": 0, "moved": 1, "plans": 1, "absent_plans": 0,
+                           "added_in_new_plans": 0, "removed_with_plans": 0,
                            "requirements_from": 7, "requirements_to": 6}
     assert p["moved"][0]["from_parent"] and p["moved"][0]["to_parent"]   # containing sections named
     j = h.changed_pairs(MNO, "Apr2031", "Jul2031")["plans"]["PLANA"]

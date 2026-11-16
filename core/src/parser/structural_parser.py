@@ -457,6 +457,15 @@ class ParseStats:
     toc_pair_misses: int = 0        # generic-rules pivot — body heading with no TOC entry
     req_id_over_captures_recovered: int = 0  # id-precision guard: weld recovered to true id
     req_id_captures_rejected: int = 0        # id-precision guard: over-wide capture dropped
+    id_list_blocks_continued: int = 0
+    """leading_id_body: blocks that open with a req_id but hold only ids and
+    separators (a cross-reference list such as ``ABC-1,`` / ``ABC-2``),
+    kept as text of the open requirement instead of a bare new one
+    (strand history-fidelity)."""
+    duplicate_req_ids: int = 0
+    """Req_ids carried by more than one requirement node in this document.
+    Downstream stores keep the last occurrence, so a duplicate can hide the
+    real definition (strand history-fidelity); counted, never repaired."""
     frontmatter_blocks_dropped: int = 0
     """Generic-rules pivot — blocks ≤ ``max(toc_end, revhist_end)`` that are
     NOT themselves TOC or revhist (typically: doc title heading, preface
@@ -648,6 +657,8 @@ class RequirementTree:
                 req_id_over_captures_recovered=ps.get("req_id_over_captures_recovered", 0),
                 req_id_captures_rejected=ps.get("req_id_captures_rejected", 0),
                 frontmatter_blocks_dropped=ps.get("frontmatter_blocks_dropped", 0),
+                id_list_blocks_continued=ps.get("id_list_blocks_continued", 0),
+                duplicate_req_ids=ps.get("duplicate_req_ids", 0),
             ),
             definitions_map=dict(data.get("definitions_map", {})),
             definitions_section_number=data.get("definitions_section_number", ""),
@@ -1101,6 +1112,15 @@ class GenericStructuralParser:
             sections,
         )
 
+        # Duplicate req_ids (strand history-fidelity): counted for the stage
+        # report; the stores keep the last occurrence, so a duplicate can
+        # hide a requirement's real definition.
+        _seen: dict[str, int] = {}
+        for _r in sections:
+            if _r.req_id:
+                _seen[_r.req_id] = _seen.get(_r.req_id, 0) + 1
+        self._parse_stats.duplicate_req_ids = sum(1 for n in _seen.values() if n > 1)
+
         tree = RequirementTree(
             mno=doc.mno,
             release=doc.release,
@@ -1535,6 +1555,9 @@ class GenericStructuralParser:
         # None whenever a fresh heading opens, so a section's pre-requirement
         # preamble lands on the heading, not the prior section's last req.
         current_leading_req: Requirement | None = None
+        # The previous body block was a cross-reference id list (strand
+        # history-fidelity): a following lone id is the list's last item.
+        in_id_list = False
 
         # Announced-req cursor (strand req-recall): in id_label corpora a
         # standalone announcement paragraph ("(Marker) ID: <id>", nothing
@@ -2164,10 +2187,22 @@ class GenericStructuralParser:
                     # A freshly-opened heading resets the requirement cursor.
                     if previous_block_was_heading:
                         current_leading_req = None
+                        in_id_list = False
                     leads_with_id = bool(
                         self._req_id_leading_re
                         and self._req_id_leading_re.match(block.text)
                     )
+                    # A cross-reference list split over lines (``…see
+                    # ABC-1,`` / ``ABC-2``) opens with an id but states no
+                    # requirement: it continues the open one (field review,
+                    # strand history-fidelity). A lone id with no separator
+                    # still opens a requirement unless it follows such a list.
+                    if leads_with_id and self._is_id_list(block.text, after_list=in_id_list):
+                        leads_with_id = False
+                        in_id_list = True
+                        self._parse_stats.id_list_blocks_continued += 1
+                    else:
+                        in_id_list = False
                     if leads_with_id:
                         new_req = self._create_leading_id_req(
                             block, current_section, sections
@@ -3643,6 +3678,32 @@ class GenericStructuralParser:
                 self._doc_source_file,
             )
         return guarded
+
+    # What may sit between the ids of a cross-reference list.
+    _ID_LIST_FILLER_RE = re.compile(r"^[\s,;/&.()\[\]]*(?:(?:and|or)[\s,;/&.()\[\]]*)*$",
+                                    re.IGNORECASE)
+
+    def _is_id_list(self, text: str, after_list: bool = False) -> bool:
+        """Whether a block holds only req_ids and list separators — a
+        cross-reference list, not a requirement (strand history-fidelity).
+
+        Two or more ids, or one id with a separator (``ABC-1,``), is a list.
+        A lone id with nothing else is a list only right after a list block
+        (``after_list``): the last item of a list split over lines. A lone id
+        elsewhere keeps opening a requirement (a header whose statement may
+        follow in the next block)."""
+        if self._req_id_re is None:
+            return False
+        t = (text or "").strip()
+        ids = list(self._req_id_re.finditer(t))
+        if not ids:
+            return False
+        rest = self._req_id_re.sub(" ", t)
+        if not self._ID_LIST_FILLER_RE.match(rest):
+            return False
+        if len(ids) > 1 or re.search(r"[,;/&]", rest):
+            return True
+        return after_list
 
     def _find_req_ids(self, text: str) -> list[str]:
         """Find all req_id patterns in `text` and canonicalize each.

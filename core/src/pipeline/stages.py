@@ -404,7 +404,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
         return _fail(stage, "PIP-E002",
                      f"No input cells under {ctx.documents_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "skipped": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0, "toc_pair_misses": 0, "frontmatter": 0}
+    stats = {"docs": 0, "skipped": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0, "toc_pair_misses": 0, "frontmatter": 0, "id_lists": 0, "dup_ids": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
     # Per-doc parse summaries accumulated across ALL cells; emitted as the
@@ -479,6 +479,8 @@ def run_parse(ctx: PipelineContext) -> StageResult:
                 stats["defs"] += tree.parse_stats.defs_extracted
                 stats["toc_pair_misses"] += tree.parse_stats.toc_pair_misses
                 stats["frontmatter"] += tree.parse_stats.frontmatter_blocks_dropped
+                stats["id_lists"] += tree.parse_stats.id_list_blocks_continued
+                stats["dup_ids"] += tree.parse_stats.duplicate_req_ids
                 if tree.parse_summary is not None:
                     per_doc_summaries.append(tree.parse_summary)
             except Exception as e:

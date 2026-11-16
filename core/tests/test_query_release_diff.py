@@ -174,7 +174,7 @@ def test_synthesize_reassembles_in_plan_order_and_streams_partials():
                           "Section(s) renumbered: 2 → 3.",
                           "[R2]: priority Mandatory → Optional; text unchanged."]
     assert out["plans"][1]["notes"] == ["Moved: [B4] from 2.1 to 4.1."]
-    assert out["absent_plans"] == [{"plan_id": "PLANX", "absent_in": "Jul2031"}]
+    assert out["absent_plans"] == [{"plan_id": "PLANX", "absent_in": "Jul2031", "requirements": 0}]
     assert out["run"]["batches"] == 4 and out["run"]["done"] == 4 and out["run"]["failed"] == 0
     assert not out["cancelled"]
     assert len(partials) == 4 and sorted(p["done"] for p in partials) == [1, 2, 3, 4]

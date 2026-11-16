@@ -1094,7 +1094,8 @@ erDiagram
 - The query kinds: `changed_pairs` (the release-change payload for
   synthesis: per plan the changed requirement pairs with old and new
   text, added, removed, renamed, renumbered and moved lists, absent
-  plans), `req_history`, `plan_history`, `last_changed`,
+  plans with their requirement counts, which also enter the added and
+  removed totals), `req_history`, `plan_history`, `last_changed`,
   `plan_last_changed`, `diff_releases` (kind tallies and row counts per
   plan and per containing section — the nearest real section node, else a
   two-level outline prefix — the ten most changed sections by edit rows,
