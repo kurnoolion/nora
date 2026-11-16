@@ -282,16 +282,15 @@ def test_answer_markdown_summary_leads_and_structural_notes_are_grouped():
               "display": {"mno": "mno-q", "from": "Spring 31 (Apr2031)", "to": "Jul2031"},
               "counts": {"requirements_from": 120, "requirements_to": 124, "added": 5, "removed": 1,
                          "renumbered": 2, "moved": 1, "absent_plans": 1},
-              "plans": [{"plan_id": "P1", "plan_name": "One",
+              "plans": [{"plan_id": "P1", "plan_name": "One", "model_same": ["R5"],
                          "counts": {"changed": 3, "added": 5, "removed": 1, "renumbered": 2, "moved": 1,
-                                    "dropped": 4, "same": 1, "bookkeeping": 4},
+                                    "dropped": 4, "same": 1, "bookkeeping": 3},
                          "sections": [{"kind": "pair", "status": "ok", "text": "For [R1], x.", "ids": ["R1"], "lead": ""},
                                       {"kind": "removed", "status": "ok", "text": "The plan loses a timer.",
                                        "ids": ["R6"], "lead": "Removed: [R6]"}],
                          "notes": ["x"], "note_groups": {
                              "structural": ["2 requirement(s) renumbered (2 sibling); content unchanged."],
-                             "bookkeeping": ["3 requirement(s) differ only in the revision record: [R2], [R3], [R4].",
-                                             "1 requirement(s) unchanged in meaning (wording, formatting or layout only): [R5]."]}}]}
+                             "bookkeeping": ["3 requirement(s) differ only in the revision record: [R2], [R3], [R4]."]}}]}
     md = history_lane.answer_markdown(result)
     assert '<div class="rc-head" markdown="1">\n\n**mno-q: Spring 31 (Apr2031) → Jul2031**' in md
     # headline numbers are store-derived: changed = pairs sent (3); the model's marks (1) stated beside;
@@ -301,15 +300,19 @@ def test_answer_markdown_summary_leads_and_structural_notes_are_grouped():
     assert md.index('<div class="rc-sec" data-kind="removed" markdown="1">') < md.index("**Removed: [R6]**")   # the lead is the section title
     assert md.count("**Changed: 3 requirement(s)**") == 1 and md.index("**Changed: 3") < md.index("For [R1], x.")
     assert "**Structural changes only**" in md and "- 2 requirement(s) renumbered" in md
-    assert "<summary>5 requirement(s) with no change in meaning (bookkeeping only, and 1 the model judged unchanged on this run) · show</summary>" in md
+    # the table's Bookkeeping count (3) is what its list holds; the model's
+    # ~same pair is listed under Changed, whose count (3) includes it
+    assert "<summary>3 requirement(s) with no change in meaning (bookkeeping only) · show</summary>" in md
+    assert ("_The model judged 1 of these unchanged in meaning on this run (wording, formatting or "
+            "layout only): [R5]._") in md
+    assert md.index("For [R1], x.") < md.index("_The model judged 1 of these") < md.index("**Structural changes only**")
     assert "<summary>P1 — One · 3 changed, 5 added, 1 removed</summary>" in md
     # counts are buttons with the column's summary as hover text; zero is plain
     assert ('<button type="button" class="rc-count" data-tab="changed" title="3 requirement(s) changed in text; '
             'the model judged 1 of them unchanged in meaning on this run.">3</button>') in md
     assert 'data-tab="removed" title="Removed after Spring 31 (Apr2031): R6.">1</button>' in md
     assert 'data-tab="structural" title="2 requirement(s) renumbered (2 sibling); content unchanged.">2</button>' in md
-    assert ('data-tab="bookkeeping" title="4 with no change in meaning: 3 differ only in the revision record; '
-            '1 unchanged in meaning (wording, formatting or layout only).">4</button>') in md
+    assert ('data-tab="bookkeeping" title="3 with no change in meaning: 3 differ only in the revision record.">3</button>') in md
     assert md.startswith('<div class="rel-change" data-mno="mno-q" data-from="Spring 31 (Apr2031)" data-to="Jul2031" markdown="1">')
     assert md.index("Structural changes only") < md.index("**Bookkeeping only**") < md.index("no change in meaning (bookkeeping only")
     # the title is visible once the plan is open; the id list is the nested block, still collapsed
@@ -384,11 +387,12 @@ def test_answer_markdown_names_pairs_without_synthesis_text():
     assert "_changed: no synthesis text came back for 3 pair(s); ids: R1, R2, R3_" in md
     # all pairs marked unchanged: the section says so instead
     md = history_lane.answer_markdown(result("", ["R1", "R2", "R3"]))
-    assert "_the model judged all 3 changed pair(s) unchanged in meaning on this run_" in md
+    assert "_The model judged all 3 of these unchanged in meaning on this run" in md
     assert "no synthesis text" not in md
     # one marked unchanged, the rest without text
     md = history_lane.answer_markdown(result("", ["R2"]))
     assert "no synthesis text came back for 2 pair(s); ids: R1, R3_" in md
+    assert "_The model judged 1 of these unchanged in meaning on this run (wording, formatting or layout only): [R2]._" in md
     # text present: no status line
     assert "no synthesis text" not in history_lane.answer_markdown(result("For [R1], x.", []))
 

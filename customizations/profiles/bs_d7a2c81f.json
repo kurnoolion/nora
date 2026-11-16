@@ -39,6 +39,7 @@
   },
   "build_context": "path",
   "plan_metadata": {
+    "plan_per_document": true,
     "plan_name": {
       "location": "first_page",
       "pattern": "Plan\\s+Name:\\s*(.+?)(?:\\n|Plan\\s+Id|$)",

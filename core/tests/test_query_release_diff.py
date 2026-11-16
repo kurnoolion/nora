@@ -473,10 +473,18 @@ def test_triage_takes_bookkeeping_out_of_the_model_input():
     assert "2 requirement(s) differ only in the applicability line (each gained: watch): [C3], [C4]." in notes
     assert "1 requirement(s): title changed, text identical: [C6]." in notes
     assert "1 requirement(s) differ in layout or markup only: [C5]." in notes
-    assert "1 heading-only entry removed: [C8]." in notes and "1 heading-only entry added: [C10]." in notes
+    # heading-only entries are additions and removals: listed and counted with
+    # them (never sent to the model), not as bookkeeping
+    assert not any("heading-only" in n for n in notes)
+    sec = {(s["kind"], bool(s.get("heading_only"))): s for s in res["plans"][0]["sections"]}
+    assert sec[("removed", True)]["ids"] == ["C8"] and sec[("added", True)]["ids"] == ["C10"]
+    assert sec[("removed", True)]["lead"] == "Removed: [C8]"
+    assert sec[("removed", True)]["text"] == "1 heading-only entry (a heading with no body text)."
+    c = res["plans"][0]["counts"]
+    assert c["removed"] == 2 and c["added"] == 1 and c["bookkeeping"] == 6
     assert sorted(res["plans"][0]["note_ids"]) == ["C1", "C10", "C2", "C3", "C4", "C5", "C6", "C8"]
     assert "sent=1 dropped=6" in res["compact"] and res["triage"]["dropped"] == 6
-    assert len(res["plans"][0]["sections"]) == 2            # one pair batch, one removed batch
+    assert len(res["plans"][0]["sections"]) == 4    # pair and removed batches, two heading-only lists
 
 
 def test_config_file_rules_and_model_pin(tmp_path, monkeypatch):
@@ -599,8 +607,9 @@ def test_reassembly_lists_ids_itself_and_groups_the_notes():
     assert "~same" not in kinds["pair"]["text"]
     assert b["counts"]["same"] == 1 and b["counts"]["dropped"] == 1 and "B2" in b["note_ids"]
     assert b["note_groups"]["structural"] == ["Moved: [B4] from 2.1 to 4.1."]
-    assert b["note_groups"]["bookkeeping"] == [
-        "1 requirement(s) unchanged in meaning (wording, formatting or layout only): [B2]."]
+    # the model's ~same pairs belong to Changed's count: not a bookkeeping note
+    assert b["note_groups"]["bookkeeping"] == [] and b["model_same"] == ["B2"]
+    assert b["counts"]["bookkeeping"] == 0
     assert a["note_groups"]["structural"][0].startswith("1 requirement(s) renumbered")
     assert out["triage"]["same"] == 1 and "sent=4 dropped=1 same=1" in out["compact"]
     pair_prompt = next(pr for _, pr in Marks().calls or [("", prompt_for(build_batches(pl)[0], pl)[1])])
@@ -863,3 +872,53 @@ def test_trailing_gateway_page_on_a_retry_is_counted_and_logged(caplog):
     fired = [m for m in caplog.messages if "RHD gateway reply:" in m and "retried=1 trailing=1" in m]
     assert len(fired) == 2 and all("kept_chars=" in m for m in fired)
     assert all("statusCode" not in s["text"] for p in out["plans"] for s in p["sections"])
+
+
+def test_max_tokens_from_config_file_and_env(tmp_path):
+    f = tmp_path / "rd.json"
+    f.write_text('{"max_tokens": 8192}')
+    assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(f)}).max_tokens == 8192
+    assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(f),
+                                       "NORA_HISTORY_DIFF_MAX_TOKENS": "4096"}).max_tokens == 4096
+    assert ReleaseDiffConfig.from_env({"NORA_HISTORY_DIFF_CONFIG": str(tmp_path / "none.json")}).max_tokens == 2048
+    assert ReleaseDiffConfig.from_env({}).max_tokens == 8192          # the shipped config
+
+
+def test_looks_cut_off():
+    from core.src.query.release_diff import looks_cut_off
+    assert looks_cut_off("[R12")
+    assert looks_cut_off("For [R1], a change.\n[R2")
+    assert not looks_cut_off("For [R1], a change.")
+    assert not looks_cut_off("")
+
+
+class _CutOff(EchoProvider):
+    """Stops inside an id unless given at least `room` output tokens."""
+    def __init__(self, room: int):
+        super().__init__()
+        self.room, self.caps = room, []
+
+    def complete(self, prompt, system="", temperature=0.0, max_tokens=0):
+        self.caps.append(max_tokens)
+        ids = re.findall(r"\[([A-Z]+\d+)\]", prompt)
+        if max_tokens < self.room:
+            return f"[{ids[0][:-1]}"
+        return " ".join(f"For [{i}], a real change." for i in dict.fromkeys(ids))
+
+
+def test_reply_cut_inside_an_id_is_retried_at_twice_the_cap():
+    prov = _CutOff(room=2000)
+    out = synthesize_release_diff(payload(), prov, config=ReleaseDiffConfig(parallel=1, max_tokens=1024))
+    assert 2048 in prov.caps
+    assert out["run"]["cut_off"] >= 1 and out["run"]["failed"] == 0
+    texts = " ".join(s["text"] for p in out["plans"] for s in p["sections"])
+    assert "a real change" in texts and not any(t.rstrip().endswith(tuple("0123456789")) and "[" in t
+                                                for t in texts.split("\n"))
+
+
+def test_reply_cut_again_fails_the_batch_instead_of_showing_a_fragment():
+    prov = _CutOff(room=10 ** 9)
+    out = synthesize_release_diff(payload(), prov, config=ReleaseDiffConfig(parallel=1, max_tokens=1024))
+    secs = [s for p in out["plans"] for s in p["sections"] if s.get("batch", 0) >= 0]
+    assert secs and all(s["status"] == "error" for s in secs)
+    assert "ReplyCutOffError" in out["run"]["errors"]

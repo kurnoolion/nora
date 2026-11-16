@@ -201,6 +201,10 @@ class PlanMetadata:
     plan_id: MetadataField = field(default_factory=MetadataField)
     version: MetadataField = field(default_factory=MetadataField)
     release_date: MetadataField = field(default_factory=MetadataField)
+    # One plan per document: every requirement takes the document's plan,
+    # not the plan component of its own id. For corpora whose documents mix
+    # id-prefix variants of one plan; a multi-plan document leaves it off.
+    plan_per_document: bool = False
 
 
 @dataclass
@@ -711,6 +715,7 @@ class DocumentProfile:
                 plan_id=MetadataField(**pm.get("plan_id", {})) if pm.get("plan_id") else MetadataField(),
                 version=MetadataField(**pm.get("version", {})) if pm.get("version") else MetadataField(),
                 release_date=MetadataField(**pm.get("release_date", {})) if pm.get("release_date") else MetadataField(),
+                plan_per_document=bool(pm.get("plan_per_document", False)),
             ),
             document_zones=zones,
             header_footer=HeaderFooter(

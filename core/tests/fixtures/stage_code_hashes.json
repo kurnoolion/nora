@@ -4,12 +4,12 @@
     "version": "1"
   },
   "parse": {
-    "sha256": "701a5c169dbc45c3",
-    "version": "4"
+    "sha256": "81e5afb343144620",
+    "version": "5"
   },
   "profile": {
-    "sha256": "f939d59e5fcf8769",
-    "version": "1"
+    "sha256": "9d7d4f96da623af6",
+    "version": "2"
   },
   "resolve": {
     "sha256": "c73ddcf82c994132",

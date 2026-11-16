@@ -54,6 +54,7 @@ PARALLEL_ENV = "NORA_HISTORY_DIFF_PARALLEL"
 ENABLED_ENV = "NORA_HISTORY_DIFF_ENABLED"
 MODEL_ENV = "NORA_HISTORY_DIFF_MODEL"
 BATCH_TIMEOUT_ENV = "NORA_HISTORY_DIFF_BATCH_TIMEOUT_S"
+MAX_TOKENS_ENV = "NORA_HISTORY_DIFF_MAX_TOKENS"
 DEFAULT_BATCH_TIMEOUT_S = 300          # a stuck call fails its batch, not the whole answer
 CONFIG_ENV = "NORA_HISTORY_DIFF_CONFIG"
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -113,6 +114,7 @@ class ReleaseDiffConfig:
             parallel=max(1, int(e.get(PARALLEL_ENV, "4") or 4)),
             enabled=enabled,
             model=str(e.get(MODEL_ENV, "") or file_cfg.get("model", "") or "").strip(),
+            max_tokens=max(256, int(e.get(MAX_TOKENS_ENV, "") or file_cfg.get("max_tokens", 2048) or 2048)),
             batch_timeout_s=max(0, int(e.get(BATCH_TIMEOUT_ENV, "") or file_cfg.get("batch_timeout_s", DEFAULT_BATCH_TIMEOUT_S) or 0)),
             annotation_lines=lines if "annotation_lines" in file_cfg else DEFAULT_ANNOTATION_LINES,
             release_names={str(m): {str(k): str(v) for k, v in (names or {}).items()}
@@ -390,13 +392,9 @@ def _triage_notes(t: dict) -> list[str]:
     if t.get("layout_only"):
         notes.append(f"{len(t['layout_only'])} requirement(s) differ in layout or markup only: "
                      + _ids_text(t["layout_only"]) + ".")
-    for key, verb in (("heading_removed", "removed"), ("heading_added", "added")):
-        if t.get(key):
-            notes.append(f"{len(t[key])} heading-only entr{'y' if len(t[key]) == 1 else 'ies'} {verb}: "
-                         + _ids_text(t[key]) + ".")
-    if t.get("model_same"):
-        notes.append(f"{len(t['model_same'])} requirement(s) unchanged in meaning (wording, "
-                     f"formatting or layout only): " + _ids_text(t["model_same"]) + ".")
+    # heading-only entries are listed under Removed / Added and the model's
+    # "unchanged in meaning" marks under Changed (reassemble), so the
+    # bookkeeping list holds exactly what its count says
     return notes
 
 
@@ -747,6 +745,19 @@ def normalize_brackets(text: str) -> str:
     return re.sub(r"\[\s+([^\[\]\n]*?)\s+\]", r"[\1]", out)
 
 
+def looks_cut_off(text: str) -> bool:
+    """A reply that stops inside a bracketed id: the output cap was reached
+    mid-answer, often after the model spent it on working text the lane
+    then cut away, leaving only a fragment such as ``[ABC-12``."""
+    t = text.rstrip()
+    return bool(t) and t.rfind("[") > t.rfind("]")
+
+
+class ReplyCutOffError(RuntimeError):
+    """The reply stopped inside an id twice, the second time at twice the
+    output cap; the batch fails visibly rather than show a fragment."""
+
+
 class GatewayReplyError(RuntimeError):
     """The provider returned a gateway or filter error as the reply's
     content (HTTP success, no exception): not an answer."""
@@ -992,6 +1003,16 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
                                      "text": text, "ids": ids,
                                      "lead": (lead + ", ".join(f"[{i}]" for i in ids)) if lead else ""})
         t = {**p.get("triage", {}), "model_same": model_same}
+        # heading-only entries (an id with no body text) are real additions
+        # and removals: counted and listed with them, never sent to the model
+        for kind, bucket in (("removed", "heading_removed"), ("added", "heading_added")):
+            hids = list(t.get(bucket, []))
+            if hids:
+                sections.append({"kind": kind, "batch": -1, "status": "ok", "heading_only": True,
+                                 "text": f"{len(hids)} heading-only entr{'y' if len(hids) == 1 else 'ies'} "
+                                         f"(a heading with no body text).",
+                                 "ids": hids,
+                                 "lead": f"{kind.capitalize()}: " + ", ".join(f"[{i}]" for i in hids)})
         structural, bookkeeping = _plan_notes(p), _triage_notes(t)
         plans_out.append({"plan_id": plan_id, "plan_name": p.get("plan_name", ""),
                           "sections": sections, "notes": structural + bookkeeping,
@@ -999,16 +1020,18 @@ def reassemble(payload: dict, batches: list[Batch], outcomes: dict[int, BatchOut
                           "note_ids": triage_ids(t), "model_same": model_same,
                           "counts": {**{k: len(p.get(k, [])) for k in
                                         ("changed", "added", "removed", "renamed", "renumbered", "moved")},
+                                     "added": len(p.get("added", [])) + len(t.get("heading_added", [])),
+                                     "removed": len(p.get("removed", [])) + len(t.get("heading_removed", [])),
                                      # changed = pairs sent; same = the model found them unchanged;
                                      # dropped = pairs the lane kept from the model + same;
-                                     # bookkeeping = dropped + heading-only entries (what the
+                                     # bookkeeping = the triage's dropped pairs (what the
                                      # collapsed list holds)
                                      "dropped": t.get("dropped", 0) + len(model_same),
                                      "same": len(model_same),
-                                     # store-derived, run-independent: the triage's pairs and the
-                                     # heading-only entries; the model's marks are not in it
-                                     "bookkeeping": t.get("dropped", 0)
-                                     + len(t.get("heading_removed", [])) + len(t.get("heading_added", []))}})
+                                     # store-derived, run-independent: the triage's pairs; the
+                                     # model's marks are listed under Changed, heading-only
+                                     # entries under Removed / Added
+                                     "bookkeeping": t.get("dropped", 0)}})
     absent = [{"plan_id": k, "absent_in": v.get("absent_in", ""),
                "requirements": int(v.get("requirements", 0) or 0)}
               for k, v in sorted(payload.get("absent_plans", {}).items())]
@@ -1032,7 +1055,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
     batches = build_batches(payload, cfg.max_batch_bytes)
     total = len(batches)
 
-    working = {"retried": 0, "stripped": 0, "trimmed": 0, "empty": 0}
+    working = {"retried": 0, "stripped": 0, "trimmed": 0, "empty": 0, "cut_off": 0}
     wlock = threading.Lock()
 
     def call(batch: Batch) -> str:
@@ -1115,6 +1138,27 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
             log.warning("RHD empty reply: batch=%d group=%s raw_chars=%d retried=1 retry_chars=%d empty=%d",
                         batch.index, batch.group.replace("\x00", "/"), raw_chars, retry_chars,
                         int(not text.strip()))
+        if looks_cut_off(text):
+            # the cap was reached inside an id: one retry at twice the cap,
+            # then a failed batch the page names, never a fragment shown
+            retry = normalize_brackets(provider.complete(
+                prompt + "\n\nOutput only the final answer, nothing before it.",
+                system=system, temperature=cfg.temperature, max_tokens=cfg.max_tokens * 2))
+            retry, rv = split_gateway_reply(retry, ids)
+            if rv == "error":
+                raise GatewayReplyError("the provider returned a gateway error as the reply")
+            retry = _cut_at_announcement(retry, ids)
+            retry = strip_lone_phrases(strip_working_text(retry, ids) if looks_like_working_text(retry) else retry)
+            cut = looks_cut_off(retry) or not retry.strip()
+            with wlock:
+                working["retried"] += 1
+                working["cut_off"] += 1
+            log.warning("RHD cut off: batch=%d group=%s raw_chars=%d retried=1 max_tokens=%d still_cut=%d",
+                        batch.index, batch.group.replace("\x00", "/"), raw_chars,
+                        cfg.max_tokens * 2, int(cut))
+            if cut:
+                raise ReplyCutOffError("the reply stopped inside an id at twice the output cap")
+            text = retry
         return text
 
     done_count = [0]
@@ -1137,7 +1181,7 @@ def synthesize_release_diff(payload: dict, provider: Any, *,
                   "oversized": sum(1 for b in batches if b.oversized),
                   "batch_ms": rr.latency_ms(),
                   "retried": working["retried"], "stripped": working["stripped"],
-                  "trimmed": working["trimmed"], "empty": working["empty"],
+                  "trimmed": working["trimmed"], "empty": working["empty"], "cut_off": working["cut_off"],
                   "errors": sorted({o.error.split(":")[0] for o in rr.outcomes.values() if o.error})}
     out["triage"] = {**triage_totals(payload),
                      "same": sum(p["counts"].get("same", 0) for p in out["plans"])}

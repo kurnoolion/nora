@@ -287,15 +287,21 @@ def answer_markdown(result: dict) -> str:
             elif s["status"] == "error":
                 body += [f"_{s['kind']}: synthesis failed ({s.get('error', 'RHD-E004')}); "
                          f"ids: {_cap_ids(s.get('ids', []))}_", ""]
+        same_ids = list(p.get("model_same") or [])
         if c.get("changed") and not by_kind["changed"]:
             # the pairs exist but no synthesis text does: say so in place,
             # so the table's count and the plan's sections agree
             pair_ids = [i for s in p.get("sections", []) if s["kind"] == "pair" for i in s.get("ids", [])]
-            missing = [i for i in pair_ids if i not in set(p.get("model_same") or [])]
-            by_kind["changed"] = ([f"_changed: no synthesis text came back for {len(missing)} pair(s); "
-                                   f"ids: {_cap_ids(missing)}_"] if missing
-                                  else [f"_the model judged all {c['changed']} changed pair(s) unchanged "
-                                        f"in meaning on this run_"])
+            missing = [i for i in pair_ids if i not in set(same_ids)]
+            by_kind["changed"] = [f"_changed: no synthesis text came back for {len(missing)} pair(s); "
+                                  f"ids: {_cap_ids(missing)}_", ""] if missing else []
+        if same_ids:
+            # the model's "unchanged in meaning" pairs are part of Changed's
+            # count, so they are listed under it, not under Bookkeeping
+            whole = len(same_ids) == c.get("changed", 0)
+            by_kind["changed"] += [f"_The model judged {'all ' if whole else ''}{len(same_ids)} of these "
+                                   f"unchanged in meaning on this run (wording, formatting or layout "
+                                   f"only): " + ", ".join(f"[{i}]" for i in same_ids) + "._", ""]
         for kind in ("changed", "added", "removed"):
             if by_kind[kind]:
                 lines += _section_block(kind, leads.get(kind, kind.capitalize()), by_kind[kind])
@@ -304,11 +310,10 @@ def answer_markdown(result: dict) -> str:
             lines += _section_block("structural", "Structural changes only", [f"- {n}" for n in groups["structural"]])
         if groups.get("bookkeeping"):
             # the title is visible once the plan is open; the id list stays collapsed until asked for
-            n_book = c.get("bookkeeping", c.get("dropped", 0)) + c.get("same", 0)   # what the list holds
+            n_book = c.get("bookkeeping", c.get("dropped", 0))   # what the list holds
             body = ['<details class="rc-ids" markdown="1">',
-                    f"<summary>{n_book} requirement(s) with no change in meaning (bookkeeping only"
-                    + (f", and {c['same']} the model judged unchanged on this run" if c.get("same") else "")
-                    + ") · show</summary>", ""] + [f"- {n}" for n in groups["bookkeeping"]] + ["", "</details>"]
+                    f"<summary>{n_book} requirement(s) with no change in meaning (bookkeeping only)"
+                    " · show</summary>", ""] + [f"- {n}" for n in groups["bookkeeping"]] + ["", "</details>"]
             lines += _section_block("bookkeeping", "Bookkeeping only", body)
         lines += ["</details>", ""]
     lines += ["</div>", ""]

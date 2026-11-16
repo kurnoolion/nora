@@ -1090,10 +1090,15 @@ class GenericStructuralParser:
         #     heading nodes with no req_id, or a profile without a plan
         #     component) fall back to the tree-level plan. For single-plan
         #     documents this yields plan_id == tree.plan_id for every req.
+        #     ``plan_metadata.plan_per_document`` overrides this for corpora
+        #     with one plan per document whose ids mix prefix variants: every
+        #     req takes the document's plan when the document names one.
         tree_plan_id = plan_meta.get("plan_id", "")
+        per_doc = self.profile.plan_metadata.plan_per_document and bool(tree_plan_id)
         for req in sections:
             rid_plan = (
-                self._extract_plan_id_from_req(req.req_id) if req.req_id else None
+                self._extract_plan_id_from_req(req.req_id)
+                if req.req_id and not per_doc else None
             )
             req.plan_id = rid_plan or tree_plan_id
 

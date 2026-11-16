@@ -54,3 +54,9 @@ count over both MNOs' corpora, which need a re-parse.
   115 matrix-only ids leave both releases; section 74.6 (one introductory
   sentence, same title) is dropped with them. Next: one re-ingest of
   MNO-A and MNO-B, then the field review's question again.
+- 2026-11-16: Word-format corpus field feedback, four fixes: one plan per
+  document (profile option, parser CODE_VERSION 5, profiler 2); a lane
+  reply cut inside an id is retried at twice the cap, then fails its batch
+  visibly, cap 8192 in `config/release_diff.json`; heading-only entries
+  count as Added / Removed (amends D-294); the model's unchanged-in-meaning
+  pairs are listed under Changed. Drafts D-DRAFT-1..3.
