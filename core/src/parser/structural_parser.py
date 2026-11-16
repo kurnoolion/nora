@@ -10,11 +10,11 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path
 from typing import Any
 
-from core.src.models.document import BlockType, ContentBlock, DocumentIR
+from core.src.models.document import BlockType, ContentBlock, DocumentIR, TextRun
 from core.src.profiler.profile_schema import DocumentProfile, HeadingLevel
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,11 @@ _HEADING_MAX_LEN = 200
 # a gate ("is this a heading?") and this regex to pull out the canonical
 # `<digits>(\.<digits>)*` portion.
 _SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*")
+
+# A multi-level outline number inside running text, preceded by whitespace
+# and followed by more text: the start of a heading the extractor joined onto
+# the previous paragraph (strand history-fidelity, fused headings).
+_EMBEDDED_OUTLINE_RE = re.compile(r"(?<=\s)(\d+(?:\.\d+)+)\.?\s+(?=\S)")
 
 
 # Req-ID canonicalization. PDF text extraction occasionally drops the
@@ -462,6 +467,10 @@ class ParseStats:
     separators (a cross-reference list such as ``ABC-1,`` / ``ABC-2``),
     kept as text of the open requirement instead of a bare new one
     (strand history-fidelity)."""
+    fused_headings_split: int = 0
+    """heading mode with an id label: numbered, id-labelled headings the
+    extractor had joined onto the end of the previous paragraph, split back
+    out so they anchor their own requirement (strand history-fidelity)."""
     duplicate_req_ids: int = 0
     """Req_ids carried by more than one requirement node in this document.
     Downstream stores keep the last occurrence, so a duplicate can hide the
@@ -658,6 +667,7 @@ class RequirementTree:
                 req_id_captures_rejected=ps.get("req_id_captures_rejected", 0),
                 frontmatter_blocks_dropped=ps.get("frontmatter_blocks_dropped", 0),
                 id_list_blocks_continued=ps.get("id_list_blocks_continued", 0),
+                fused_headings_split=ps.get("fused_headings_split", 0),
                 duplicate_req_ids=ps.get("duplicate_req_ids", 0),
             ),
             definitions_map=dict(data.get("definitions_map", {})),
@@ -1691,7 +1701,7 @@ class GenericStructuralParser:
                 return None
             return section_num.count(".") + 1
 
-        for block in doc.content_blocks:
+        for block in self._split_fused_headings(doc.content_blocks):
             # Front-matter cutoff (Phase 4 of the generic-rules pivot).
             # Drop everything at index ≤ ``max(toc_end, revhist_end)``.
             # Categorize the drop reason for diagnostics: TOC, revhist,
@@ -3923,8 +3933,13 @@ class GenericStructuralParser:
         # number (1, 2, 3…); without this gate each becomes a phantom section.
         # Real headings are bold or larger than body, so `_is_heading_font`
         # keeps them. Off by default (font stays advisory for legacy corpora).
-        if self._require_heading_font_for_numbering and not self._is_heading_font(
-            block
+        # A heading split out of a fused paragraph keeps that paragraph's
+        # body font; its outline-order and id-label checks stand in for the
+        # font signal (``_split_fused_headings``).
+        if (
+            self._require_heading_font_for_numbering
+            and not block.metadata.get("fused_heading")
+            and not self._is_heading_font(block)
         ):
             return "", ""
 
@@ -4114,6 +4129,117 @@ class GenericStructuralParser:
         if self.profile.requirement_id.normalize == "upper":
             rid = rid.upper()
         return rid
+
+    @staticmethod
+    def _outline_follows(num: str, last: str) -> bool:
+        """True when outline number ``num`` can be the next heading after
+        ``last``: a child of ``last``, or a later sibling of ``last`` or of
+        one of its ancestors (``3.2.4`` → ``3.2.4.1``, ``3.2.5``, ``3.3``).
+        A number from another branch (``24.301`` after ``3.2.4``) cannot."""
+        n = [int(x) for x in num.split(".")]
+        l = [int(x) for x in last.split(".")]
+        parent = n[:-1]
+        if parent == l:
+            return True
+        return len(parent) < len(l) and l[: len(parent)] == parent \
+            and n[-1] > l[len(parent)]
+
+    def _split_fused_headings(
+        self, blocks: list[ContentBlock]
+    ) -> list[ContentBlock]:
+        """Split numbered, id-labelled headings out of the paragraph the
+        extractor joined them onto (strand history-fidelity, field review).
+
+        Field shape: the PDF extractor joined a requirement heading
+        (``<outline number> <title> … ID: <id>``) onto the end of the
+        previous requirement's last body paragraph, separated by a single
+        space. The heading then never anchors, and its requirement's text
+        folds into the previous one. A paragraph is split before an
+        embedded outline number when all of these hold:
+
+          * an id label (``requirement_id.id_label_pattern``) follows the
+            number within ``_HEADING_MAX_LEN`` characters;
+          * the number is the plausible next heading after the last one
+            seen (``_outline_follows``), so a cited section number from
+            another branch does not split;
+          * no part of the block is struck (run-level strike state could
+            not be divided faithfully).
+
+        The block becomes up to three paragraphs with the same font and
+        position: the text before the number, the heading (number through
+        the label, marked ``fused_heading`` so the heading-font gate does
+        not reject it for its body font), and any text after the label.
+        Active only in heading mode with an id label and the numbering
+        classifier; other corpora get ``blocks`` back unchanged.
+        """
+        if (
+            self._id_label_re is None
+            or self._num_re is None
+            or self._leading_id_mode
+            or self.profile.heading_detection.method == "docx_styles"
+        ):
+            return blocks
+        out: list[ContentBlock] = []
+        last_num = ""
+        for block in blocks:
+            if block.type != BlockType.PARAGRAPH or not block.text:
+                out.append(block)
+                continue
+            if block.text.strip() and not any(r.struck for r in block.runs):
+                sec_num, _ = self._classify_heading(block)
+                if sec_num:
+                    last_num = sec_num
+                    out.append(block)
+                    continue
+            if (
+                not last_num
+                or any(r.struck for r in block.runs)
+                or (block.font_info is not None and block.font_info.strikethrough)
+            ):
+                out.append(block)
+                continue
+            pieces: list[tuple[str, str]] = []   # (text, role)
+            rest = block.text
+            while True:
+                cut = None
+                for lm in self._id_label_re.finditer(rest):
+                    lo = max(0, lm.start() - _HEADING_MAX_LEN)
+                    cands = [
+                        nm for nm in _EMBEDDED_OUTLINE_RE.finditer(rest, lo, lm.start())
+                        if nm.start() > 0
+                        and self._outline_follows(nm.group(1), last_num)
+                    ]
+                    if cands:
+                        cut = (cands[-1], lm)
+                        break
+                if cut is None:
+                    break
+                nm, lm = cut
+                head = rest[: nm.start()].strip()
+                if head:
+                    pieces.append((head, "head" if not pieces else "tail"))
+                pieces.append((rest[nm.start(): lm.end()].strip(), "heading"))
+                last_num = nm.group(1)
+                rest = rest[lm.end():]
+            if not pieces:
+                out.append(block)
+                continue
+            if rest.strip():
+                pieces.append((rest.strip(), "tail"))
+            for text, role in pieces:
+                meta = dict(block.metadata)
+                meta["fused_split"] = role
+                if role == "heading":
+                    meta["fused_heading"] = True
+                    self._parse_stats.fused_headings_split += 1
+                out.append(replace(
+                    block,
+                    text=text,
+                    runs=[TextRun(text=text)] if block.runs else [],
+                    lines=[text] if block.lines else [],
+                    metadata=meta,
+                ))
+        return out
 
     @staticmethod
     def _absorbed_statement_split(

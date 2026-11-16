@@ -31,3 +31,11 @@ count over both MNOs' corpora, which need a re-parse.
   (4) tables compared by content; (5) structural nodes without a
   requirement id leave plan grouping; (6) whole-plan items count in Added
   and Removed (decided). Order: 3, 5, 6 first; 4; then 1 and 2.
+- 2026-11-15: (3) changed: the stores keep the last-occurrence rule; the
+  parser counts duplicate ids (`dup_ids`) instead, and (2) removes the
+  field's cause. (2), (3), (5), (6) committed in `535aa6f`.
+- 2026-11-16: (1) built: heading mode with an id label splits a paragraph
+  before an embedded outline number that is the plausible next heading and
+  has an id label within heading length (`fused`). Parser CODE_VERSION 3.
+  Next: a dry count of `fused`, `id_lists` and `dup_ids` per cell on the
+  host before any re-parse; then (4).
