@@ -3956,12 +3956,20 @@ class GenericStructuralParser:
         # Extract the section number with a local, known-good regex —
         # independent of the profile's gate-pattern capture shape.
         sec_m = _SECTION_NUM_RE.match(text)
-        if not sec_m:
-            return "", ""
-        section_num = sec_m.group(0).rstrip(".")
-        title = text[sec_m.end():].lstrip()
+        if sec_m:
+            section_num = sec_m.group(0).rstrip(".")
+            title = text[sec_m.end():].lstrip()
+            return section_num, title
 
-        return section_num, title
+        # The profile's pattern can admit a worded prefix before the number
+        # (``Chapter 12 ...``), which the local regex rejects. Take the number
+        # from the profile match's first non-empty group instead; without
+        # this, such headings fall through as body text and fold into the
+        # previous section's last node.
+        num = next((g for g in m.groups() if g), "")
+        if not num or not _SECTION_NUM_RE.fullmatch(num.rstrip(".")):
+            return "", ""
+        return num.rstrip("."), text[m.end():].lstrip()
 
     def _classify_heading_docx_styles(
         self, block: ContentBlock

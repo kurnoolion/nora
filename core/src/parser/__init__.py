@@ -3,4 +3,4 @@
 # inputs; the fingerprints of every build then change for this stage and its
 # downstream stages. `core/tests/test_pipeline_stage_graph.py` pins each
 # version to a hash of the package source as the reminder.
-CODE_VERSION = "3"
+CODE_VERSION = "4"

@@ -39,3 +39,11 @@ count over both MNOs' corpora, which need a re-parse.
   has an id label within heading length (`fused`). Parser CODE_VERSION 3.
   Next: a dry count of `fused`, `id_lists` and `dup_ids` per cell on the
   host before any re-parse; then (4).
+- 2026-11-16: the MNO-B duplicates (97-98 per release) are matrix-section
+  repeats; the fix is the profile's `exclude_section_pattern`, pending a
+  dry parse. That parse showed MNO-B chapter headings (`Chapter N`) were
+  never sections: the profile pattern admitted them but the classifier
+  re-read the number with a digit-first regex. Fixed: the number comes
+  from the profile match. Parser CODE_VERSION 4. Next: dry parse with the
+  fix and the exclusion together, then the profile field, then one
+  re-ingest of MNO-A and MNO-B.
