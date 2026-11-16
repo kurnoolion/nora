@@ -47,3 +47,10 @@ count over both MNOs' corpora, which need a re-parse.
   from the profile match. Parser CODE_VERSION 4. Next: dry parse with the
   fix and the exclusion together, then the profile field, then one
   re-ingest of MNO-A and MNO-B.
+- 2026-11-16: CODE_VERSION 4 dry parse: MNO-A unchanged; MNO-B gains 54
+  chapter sections and the chapter introductions leave the matrix nodes.
+  With the MNO-B profile's `exclude_section_pattern` (parent matrix title,
+  placeholder `<MATRIX_SECTION_TITLE>`), `dup_ids` fall 98 → 1 and 97 → 2;
+  115 matrix-only ids leave both releases; section 74.6 (one introductory
+  sentence, same title) is dropped with them. Next: one re-ingest of
+  MNO-A and MNO-B, then the field review's question again.

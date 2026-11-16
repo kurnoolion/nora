@@ -39,6 +39,7 @@
     "total_found": 0
   },
   "content_start_section": "3",
+  "exclude_section_pattern": "^-\\s*<MATRIX_SECTION_TITLE>$",
   "build_context": "path_and_content",
   "build_context_max_chars": 2000,
   "plan_metadata": {
