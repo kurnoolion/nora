@@ -77,3 +77,10 @@ count over both MNOs' corpora, which need a re-parse.
   three runs (`eval_runs`), against the same cell score of the cell's last
   passed ingest; a cell with no gold passes unscored (D-DRAFT-4, amends
   D-307 and D-345). Next: register runner jobs for the six cells.
+- 2026-11-18: scope closed. Every defect from the field review and the
+  MNO-A team feedback is fixed and served in `ALL-20261118-1`. Out of
+  scope, TBD for a future strand (also in STATUS.md Next): the "N plans
+  unchanged" line; the Renumbered and Moved filters; an email-ready
+  side-by-side table; a cross-carrier comparison document. Before
+  landing: the trial runner job (0526) passes; the reviewers re-check
+  on the served release.
