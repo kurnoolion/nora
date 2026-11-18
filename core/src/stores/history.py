@@ -57,6 +57,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +85,23 @@ PLAN, SECTION, REQUIREMENT = "plan", "section", "requirement"
 CHANGE_KINDS = ("added", "removed", "changed", "moved", "renumbered",
                 "reordered", "likely_renamed")
 _EMPTY_TEXT_FP = text_fp("", "")
+
+# What a node's ``node_fp`` compares, beyond ``canonical_text``: a markdown
+# table's separator rows (``| --- | --- |``) are layout, so a table the
+# extractor split into two pieces in one release and kept whole in the other
+# is not a change (strand history-fidelity, fix 4). ``text_fp`` stays on the
+# raw text: it is the cross-store join key and addresses ``content``.
+NODE_TEXT_RULE = "tables-v1"
+_TABLE_RULE_LINE_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$")
+
+
+def compare_text(text: str) -> str:
+    """The body as History compares it: markdown table separator rows
+    dropped. Everything else is left to ``canonical_text`` inside the
+    fingerprint."""
+    if "-" not in text:
+        return text
+    return "\n".join(line for line in text.split("\n") if not _TABLE_RULE_LINE_RE.match(line))
 
 
 def node_key(kind: str, plan_id: str, local_id: str = "") -> str:
@@ -203,7 +221,8 @@ def release_nodes(store: TreeStore, mno: str, release: str) -> dict[str, dict]:
             node.pop("section", None)
         node["location_json"] = json.dumps(loc, ensure_ascii=False, sort_keys=True)
         node["text_fp"] = text_fp(node["title"], node["text"])
-        node["node_fp"] = node_fp(node["text_fp"], node["attrs"].get("priority", ""),
+        node["node_fp"] = node_fp(text_fp(node["title"], compare_text(node["text"])),
+                                  node["attrs"].get("priority", ""),
                                   node["attrs"].get("applicability", []))
     # Bottom-up, children in document order (iterative post-order).
     roots = [k for k, n in nodes.items() if n["kind"] == PLAN]
@@ -337,6 +356,7 @@ def write_history_db(db_path: "str | Path", mno: str, releases: list[str],
         meta = {
             "schema_version": str(SQLITE_SCHEMA_VERSION),
             "fingerprint_version": FINGERPRINT_VERSION,
+            "node_text_rule": NODE_TEXT_RULE,
             "mno": mno,
             "releases": json.dumps(releases),
             "source": json.dumps(source, sort_keys=True),

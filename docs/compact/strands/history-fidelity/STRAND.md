@@ -60,3 +60,16 @@ count over both MNOs' corpora, which need a re-parse.
   visibly, cap 8192 in `config/release_diff.json`; heading-only entries
   count as Added / Removed (amends D-294); the model's unchanged-in-meaning
   pairs are listed under Changed. Drafts D-DRAFT-1..3.
+- 2026-11-17: deployed. Six cells rebuilt from the version-5 trees (only
+  the 150 split-out MNO-A requirements needed new enrichment) and served
+  on both stacks; the History, Trees and Cells views now agree. The gate
+  failed on single runs for two cells: one was cross-operator scoring
+  (the cell's own gold improved), the other the online query expansion,
+  whose run-to-run spread is about 0.02 (three-run means: 0.629 rebuilt
+  against 0.612 served). Follow-ups: the gate averages several runs or
+  replays stored expansions; each cell scored on its own gold; runner
+  jobs for the six cells.
+- 2026-11-18: (4) built: History's `node_fp` ignores markdown table
+  separator rows (`node_text_rule` = `tables-v1`); `text_fp` unchanged.
+  Attachment captions (an id plus one file name) continue the open
+  requirement in leading-id mode (`file_refs`). Parser CODE_VERSION 6.

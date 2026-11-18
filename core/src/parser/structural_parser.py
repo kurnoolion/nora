@@ -467,6 +467,11 @@ class ParseStats:
     separators (a cross-reference list such as ``ABC-1,`` / ``ABC-2``),
     kept as text of the open requirement instead of a bare new one
     (strand history-fidelity)."""
+    file_ref_blocks_continued: int = 0
+    """leading_id_body: blocks holding one req_id and a single file name
+    (an attachment or diagram caption), kept as text of the open
+    requirement instead of a second node for that id (strand
+    history-fidelity)."""
     fused_headings_split: int = 0
     """heading mode with an id label: numbered, id-labelled headings the
     extractor had joined onto the end of the previous paragraph, split back
@@ -667,6 +672,7 @@ class RequirementTree:
                 req_id_captures_rejected=ps.get("req_id_captures_rejected", 0),
                 frontmatter_blocks_dropped=ps.get("frontmatter_blocks_dropped", 0),
                 id_list_blocks_continued=ps.get("id_list_blocks_continued", 0),
+                file_ref_blocks_continued=ps.get("file_ref_blocks_continued", 0),
                 fused_headings_split=ps.get("fused_headings_split", 0),
                 duplicate_req_ids=ps.get("duplicate_req_ids", 0),
             ),
@@ -2218,6 +2224,13 @@ class GenericStructuralParser:
                         self._parse_stats.id_list_blocks_continued += 1
                     else:
                         in_id_list = False
+                        # An id followed only by a file name is an attachment
+                        # caption (``ABC-1 diagram.pdf``), not a definition:
+                        # it continues the open requirement (strand
+                        # history-fidelity).
+                        if leads_with_id and self._is_file_reference(block.text):
+                            leads_with_id = False
+                            self._parse_stats.file_ref_blocks_continued += 1
                     if leads_with_id:
                         new_req = self._create_leading_id_req(
                             block, current_section, sections
@@ -3719,6 +3732,28 @@ class GenericStructuralParser:
         if len(ids) > 1 or re.search(r"[,;/&]", rest):
             return True
         return after_list
+
+    _FILE_NAME_RE = re.compile(
+        r"^[\w.()\-]{1,80}\.(?:pdf|docx?|xlsx?|pptx?|vsdx?|png|jpe?g|gif|bmp|svg|"
+        r"tiff?|emf|wmf|zip|txt|csv|xml|json)$",
+        re.IGNORECASE,
+    )
+
+    def _is_file_reference(self, text: str) -> bool:
+        """Whether a block holds exactly one req_id followed by one file name
+        (an attachment or diagram caption such as ``ABC-1 diagram.pdf``):
+        a reference to the requirement, not its definition (strand
+        history-fidelity). The file name must be a single token with a known
+        document or image extension, so a statement that mentions a file
+        still opens a requirement."""
+        if self._req_id_re is None:
+            return False
+        t = (text or "").strip()
+        m = self._req_id_re.match(t)
+        if not m or len(self._req_id_re.findall(t)) != 1:
+            return False
+        rest = t[m.end():].strip()
+        return bool(rest) and self._FILE_NAME_RE.match(rest) is not None
 
     def _find_req_ids(self, text: str) -> list[str]:
         """Find all req_id patterns in `text` and canonicalize each.

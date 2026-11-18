@@ -544,3 +544,23 @@ def test_location_kinds_hierarchy_gap_and_same_section_are_not_moves():
     assert _location_kinds(loc("S1", "2.1"), loc("S2", "3.1"), sa, sb) == (["moved"], "", "2.1")
     assert _location_kinds(loc("S1", ""), loc("S2", ""), sa, sb) == (["moved"], "", "")
 
+
+
+def test_table_split_into_two_pieces_is_not_a_change(tmp_path):
+    """Fix 4 (strand history-fidelity): the extractor split one table into two
+    pieces in one release (an extra separator row in the body) and kept it
+    whole in the next. The content is the same, so no change is reported;
+    a changed cell still is."""
+    whole = "Timers:\n| Timer | Value |\n| --- | --- |\n| T1 | 10 s |\n| T2 | 20 s |"
+    split = "Timers:\n| Timer | Value |\n| --- | --- |\n| T1 | 10 s |\n| --- | --- |\n| T2 | 20 s |"
+    edited = whole.replace("20 s", "25 s")
+    env, out = tmp_path / "env", tmp_path / "history"
+    for rel, text in (("Jan2031", split), ("Apr2031", whole), ("Jul2031", edited)):
+        _write(env, rel, "docA", "PLANA", [_sec("SEC_1", "1", "General"),
+                                           _req("R1", "1.1", "SEC_1", text)])
+    assert history_build.main(["--env-dir", str(env), "--out", str(out)]) == 0
+    h = SqliteHistoryStore(out)
+    assert _kinds(h.diff_releases(MNO, "Jan2031", "Apr2031")) == {}
+    assert "changed" in _kinds(h.diff_releases(MNO, "Apr2031", "Jul2031"))["R1"]
+    db = next(out.glob("*.db"))
+    assert read_meta(db)["node_text_rule"] == "tables-v1"
