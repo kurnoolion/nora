@@ -541,20 +541,27 @@ def _eval(c: Ctx) -> None:
                "--stage", "1", "--allow-map-mismatch"]
         if _scheme(c):
             cmd += ["--sira-prompt-scheme", _scheme(c)]
-        res = c.ex.run(["docker", "compose", "-p", c.cfg.staging_project, "--env-file", c.cfg.staging_env,
-                        "--profile", "ingest", "run", "--rm", "-T", "nora-batch", *cmd],
-                       env={**os.environ, **_job_user(c.cfg.staging_env), **stage_env},
-                       cwd=c.cfg.docker_dir, on_line=c.log)
-        run_ref = ""
-        for line in res.lines:
-            m = re.search(r"Run artifacts:\s*(\S+)", line)
-            if m:
-                run_ref = Path(m.group(1)).name
-        if res.rc == 2 or not run_ref:
-            raise StageError(f"golden eval did not run (rc={res.rc}); see the log above")
-        c.run_ref = run_ref
-        c.db.update_ingest(c.ingest["id"], run_ref=run_ref)
-        c.log(f"eval: run {run_ref} (rc={res.rc})")
+        # Several runs: the online query expansion varies from run to run by
+        # about the gate's tolerance, so the gate judges their mean.
+        runs = max(1, int(c.cfg.eval_runs or 1))
+        refs: list[str] = []
+        for n in range(1, runs + 1):
+            res = c.ex.run(["docker", "compose", "-p", c.cfg.staging_project, "--env-file", c.cfg.staging_env,
+                            "--profile", "ingest", "run", "--rm", "-T", "nora-batch", *cmd],
+                           env={**os.environ, **_job_user(c.cfg.staging_env), **stage_env},
+                           cwd=c.cfg.docker_dir, on_line=c.log)
+            run_ref = ""
+            for line in res.lines:
+                m = re.search(r"Run artifacts:\s*(\S+)", line)
+                if m:
+                    run_ref = Path(m.group(1)).name
+            if res.rc == 2 or not run_ref:
+                raise StageError(f"golden eval did not run (run {n} of {runs}, rc={res.rc}); "
+                                 f"see the log above")
+            refs.append(run_ref)
+            c.log(f"eval: run {n} of {runs}: {run_ref} (rc={res.rc})")
+        c.run_ref = ",".join(refs)
+        c.db.update_ingest(c.ingest["id"], run_ref=c.run_ref)
     finally:
         try:
             c.compose(c.cfg.staging_project, c.cfg.staging_env, "--profile", "serve", "down",
@@ -564,25 +571,55 @@ def _eval(c: Ctx) -> None:
 
 
 def st_gate(c: Ctx) -> None:
-    report = V.read_report(c.cfg.golden_dir, c.run_ref)
-    recall = V.recall_avg(report)
-    errors = V.gev_errors(report)
-    baseline = c.db.baseline_recall()
-    source = "last passed ingest"
-    if baseline is None and c.cfg.baseline_recall is not None:
-        baseline, source = float(c.cfg.baseline_recall), "runner config"
-    if baseline is None:
-        rec = V.gated_recall(c.cfg.registry_root, c.cfg.golden_dir, exclude=c.run_ref)
-        if rec:
-            baseline, source = rec[0], f"gated run {rec[1]}"
-    verdict, detail = V.decide(recall, baseline, c.cfg.eval_tolerance, errors)
-    c.log(f"gate: {verdict} — {detail} (baseline from {source if baseline is not None else 'nothing'})")
+    mno, rel = c.ingest["mno"], c.ingest["release"]
+    refs = V.run_refs(c.run_ref)
+    recall, spread, scored, errors = V.mean_cell_recall(c.cfg.golden_dir, refs, mno, rel)
+    if recall is None and not errors and _any_stage1(c, refs):
+        # the golden set has no ground truth in this cell: nothing to compare
+        verdict, detail = "pass", f"no gold for {c.cell} in the golden set; not scored"
+        baseline, source = None, "nothing"
+    else:
+        baseline, source = None, "nothing"
+        for prior in c.db.baseline_runs(mno, rel):
+            if prior["id"] == c.ingest["id"]:
+                # this ingest re-gated (a rebased set): its stored score is
+                # its earlier pass; its run ref already names the new runs
+                b = prior["recall_avg"]
+            else:
+                b = V.mean_cell_recall(c.cfg.golden_dir, V.run_refs(prior["run_ref"]), mno, rel)[0]
+                if b is None:
+                    b = prior["recall_avg"]
+            if b is not None:
+                baseline, source = float(b), f"last passed ingest of {c.cell}"
+                break
+        if baseline is None and c.cfg.baseline_recall is not None:
+            baseline, source = float(c.cfg.baseline_recall), "runner config"
+        if baseline is None:
+            rec = V.gated_recall(c.cfg.registry_root, c.cfg.golden_dir, exclude=c.run_ref,
+                                 mno=mno, release=rel)
+            if rec:
+                baseline, source = rec[0], f"gated run {rec[1]}"
+        verdict, detail = V.decide(recall, baseline, c.cfg.eval_tolerance, errors)
+        if recall is not None:
+            detail += f"; mean of {scored} run(s), spread {spread:.3f}, scored on {c.cell}'s own gold"
+    c.log(f"gate: {verdict} — {detail} (baseline from {source})")
     cmd = ["python", "-m", "core.src.stores.publish", "gate", "--serve-root", CTR_SERVE,
            "--label", c.label, "--kind", "golden-stage1", "--verdict", verdict, "--run-ref", c.run_ref]
     c.batch_oneshot(c.cfg.stack_project, c.cfg.stack_env, "nora-batch", cmd,
                     mounts=[(c.cfg.registry_root, CTR_SERVE)], what="publish gate")
     c.db.update_ingest(c.ingest["id"], recall_avg=recall, baseline=baseline, verdict=verdict,
                        verdict_detail=detail)
+
+
+def _any_stage1(c: Ctx, refs: list[str]) -> bool:
+    """Whether any of the runs produced Stage-1 results at all."""
+    for ref in refs:
+        try:
+            if V.read_report(c.cfg.golden_dir, ref).get("stage1"):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 STAGE_FNS = {
@@ -859,8 +896,8 @@ def run_purge(c: Ctx) -> None:
         if not sdir.is_relative_to(bdir):
             _remove_tree(c, "SIRA build", sdir, problems)
         _remove_tree(c, "build", bdir, problems)
-    if ing.get("run_ref"):
-        _remove_tree(c, "golden run", Path(c.cfg.golden_dir) / "runs" / ing["run_ref"], problems)
+    for ref in V.run_refs(ing.get("run_ref") or ""):
+        _remove_tree(c, "golden run", Path(c.cfg.golden_dir) / "runs" / ref, problems)
     cell = Path(c.cfg.requirements_dir) / ing["mno"] / ing["release"]
     if cell.is_dir():
         kept = _documents_kept(c, ing)

@@ -28,6 +28,7 @@
   "peer_registry_roots": [],
   "max_parallel_ingests": 1,
   "eval_tolerance": 0.03,
+  "eval_runs": 3,
   "verify_n": 25,
   "poll_seconds": 5,
   "heartbeat_seconds": 15,

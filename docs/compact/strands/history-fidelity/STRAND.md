@@ -73,3 +73,7 @@ count over both MNOs' corpora, which need a re-parse.
   separator rows (`node_text_rule` = `tables-v1`); `text_fp` unchanged.
   Attachment captions (an id plus one file name) continue the open
   requirement in leading-id mode (`file_refs`). Parser CODE_VERSION 6.
+- 2026-11-18: the self-serve gate scores the ingest's own cell, over
+  three runs (`eval_runs`), against the same cell score of the cell's last
+  passed ingest; a cell with no gold passes unscored (D-DRAFT-4, amends
+  D-307 and D-345). Next: register runner jobs for the six cells.

@@ -85,7 +85,14 @@ class Sim:
         self.golden_recall = golden_recall
         self.fail_phase = fail_phase
         self.gev_error = gev_error
-        self.run_id = "20310101T000000-lbl"
+        self.run_ids: list[str] = []
+
+    _seq = 0          # golden run ids are unique across Sims sharing one root
+
+    @property
+    def run_id(self) -> str:
+        """The ingest's stored run ref: every eval run's id, comma-joined."""
+        return ",".join(self.run_ids)
 
     def _cycle(self, args: list[str], env: dict | None = None) -> Result:
         verb = args[0]
@@ -133,14 +140,17 @@ class Sim:
     def _compose(self, args: list[str], env: dict) -> Result:
         text = " ".join(args)
         if "golden_cli" in text:
-            rep = {"run_id": self.run_id, "stage1": [{"recall": self.golden_recall}] * 4, "errors": []}
+            Sim._seq += 1
+            rid = f"20310101T{Sim._seq:06d}-lbl"
+            self.run_ids.append(rid)
+            rep = {"run_id": rid, "stage1": [{"recall": self.golden_recall}] * 4, "errors": []}
             if self.gev_error:
                 rep["errors"].append({"code": self.gev_error})
-            d = self.root / "golden/runs" / self.run_id
+            d = self.root / "golden/runs" / rid
             d.mkdir(parents=True, exist_ok=True)
             (d / "report.json").write_text(json.dumps(rep))
             return Result(1 if self.gev_error else 0,
-                          ["GEV ...", f"Run artifacts: /data/env/eval/golden/runs/{self.run_id}"])
+                          ["GEV ...", f"Run artifacts: /data/env/eval/golden/runs/{rid}"])
         if "publish flip" in text:
             return Result(0, [json.dumps({"from_label": "old-label", "label": "x"})])
         if "publish purge" in text:
@@ -405,7 +415,7 @@ def test_purge_removes_every_artifact_of_a_dead_ingest(host, monkeypatch):
     _registry(host, sets=[label, "old-label"], active=[("old-label", "MNO-A/Jan2031")])
     assert (host["root"] / "builds/nora" / build).is_dir()
     assert (host["root"] / "requirements/MNO-A/Apr2031").is_dir()
-    run_dir = host["root"] / "golden/runs" / ing.run_ref
+    run_dir = host["root"] / "golden/runs" / V.run_refs(ing.run_ref)[0]
     assert run_dir.is_dir()
     # staged is not purgeable: abandon first
     sim.calls.clear()
@@ -433,6 +443,7 @@ def test_purge_removes_every_artifact_of_a_dead_ingest(host, monkeypatch):
     assert not (host["root"] / "builds/nora" / build).exists()          # the others went
     assert not (host["root"] / "work" / label).exists()
     assert not run_dir.exists()
+    assert not any((host["root"] / "golden/runs" / ref).exists() for ref in V.run_refs(ing.run_ref))
     assert not (host["root"] / "requirements/MNO-A/Apr2031").exists()    # cell not active → documents removed
     assert (host["root"] / "labels" / label).exists()
     # re-run after the fix: the gone parts are logged as absent, the state moves
@@ -1387,3 +1398,67 @@ def test_run_forever_runs_two_mnos_at_once(host):
     names = {row[0] for row in con.execute("SELECT name FROM runners")}
     con.close()
     assert {f"{host['cfg'].runner_name}#1", f"{host['cfg'].runner_name}#2"} <= names
+
+
+
+# ── per-cell, multi-run gate (strand history-fidelity) ─────────────────
+
+def _s1(hits, misses):
+    return {"recall": 0.0, "hits": [{"mno": m, "release": r, "req_id": "X", "rank": 1} for m, r in hits],
+            "misses": [{"mno": m, "release": r, "req_id": "Y"} for m, r in misses]}
+
+
+def test_cell_recall_scores_only_the_cells_own_gold():
+    rep = {"stage1": [
+        _s1(hits=[("MNO-A", "Apr2031")], misses=[("MNO-A", "Apr2031"), ("MNO-B", "Apr2031")]),  # 1/2
+        _s1(hits=[("MNO-A", "")], misses=[]),                    # a bare entry counts: 1/1
+        _s1(hits=[("MNO-B", "Apr2031")], misses=[("MNO-A", "Jan2031")]),   # other release: skipped
+    ]}
+    assert V.cell_recall(rep, "MNO-A", "Apr2031") == 0.75
+    assert V.cell_recall(rep, "MNO-C", "Apr2031") is None                   # no gold for the cell
+    assert V.cell_recall({"stage1": [{"recall": 0.4}, {"recall": 0.6}]}, "MNO-A", "x") == 0.5  # old format
+
+
+def test_mean_cell_recall_over_runs_and_run_refs(tmp_path):
+    golden = tmp_path / "golden"
+    for name, h in (("r1", 1), ("r2", 0)):
+        d = golden / "runs" / name
+        d.mkdir(parents=True)
+        rep = {"stage1": [_s1(hits=[("MNO-A", "Apr2031")] * h, misses=[("MNO-A", "Apr2031")] * (1 - h))],
+               "errors": [{"code": "GEV-E001"}] if name == "r2" else []}
+        (d / "report.json").write_text(json.dumps(rep))
+    assert V.run_refs("r1, r2,") == ["r1", "r2"]
+    mean, spread, n, errors = V.mean_cell_recall(golden, ["r1", "r2", "missing"], "MNO-A", "Apr2031")
+    assert (mean, spread, n, errors) == (0.5, 1.0, 2, ["GEV-E001"])
+    assert V.mean_cell_recall(golden, ["r1"], "MNO-C", "Apr2031")[0] is None
+
+
+def test_eval_runs_three_times_and_gate_takes_the_mean(host):
+    _submit_ingest(host)
+    sim = Sim(host["root"])
+    assert _runner(host, sim).run_once() == "completed"
+    assert sum("golden_cli" in c for c in sim.cmds()) == 3
+    assert len(V.run_refs(sim.run_id)) == 3
+    gate = next(c for c in sim.cmds() if "publish gate" in c)
+    assert f"--run-ref {sim.run_id}" in gate
+
+
+class OtherMnoGoldSim(Sim):
+    """The golden set holds ground truth for another MNO only."""
+
+    def _compose(self, args, env):
+        res = super()._compose(args, env)
+        if "golden_cli" in " ".join(args):
+            p = self.root / "golden/runs" / self.run_ids[-1] / "report.json"
+            p.write_text(json.dumps({"stage1": [_s1(hits=[], misses=[("MNO-Z", "Apr2031")])],
+                                     "errors": []}))
+        return res
+
+
+def test_a_cell_with_no_gold_passes_unscored(host):
+    q = host["q"]
+    _, ingest_id = _submit_ingest(host)
+    host["cfg"].baseline_recall = 0.90          # would fail any scored run
+    assert _runner(host, OtherMnoGoldSim(host["root"])).run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.verdict == "pass" and "no gold" in ing.verdict_detail and ing.recall_avg is None

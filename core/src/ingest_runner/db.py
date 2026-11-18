@@ -238,3 +238,17 @@ class RunnerDB:
             return float(row["recall_avg"]) if row else None
         finally:
             con.close()
+
+    def baseline_runs(self, mno: str, release: str) -> list[dict]:
+        """The passed ingests of this cell, newest first:
+        ``{id, run_ref, recall_avg}`` each. A ref may list several runs,
+        comma-joined; the caller splits it."""
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "SELECT id, run_ref, recall_avg FROM ingests WHERE verdict = 'pass' AND mno = ? "
+                "AND release = ? ORDER BY updated_at DESC", (mno, release)).fetchall()
+            return [{"id": r["id"], "run_ref": str(r["run_ref"] or ""),
+                     "recall_avg": r["recall_avg"]} for r in rows]
+        finally:
+            con.close()
