@@ -84,3 +84,10 @@ count over both MNOs' corpora, which need a re-parse.
   side-by-side table; a cross-carrier comparison document. Before
   landing: the trial runner job (0526) passes; the reviewers re-check
   on the served release.
+- 2026-11-19: trial runner job (MNO-A REL-2) passed the per-cell gate
+  and serves on both stacks. It re-enriched the whole cell: a seed build
+  lends only its bindings, so per-requirement reuse across builds is
+  missing from the runner path (TBD, stage graph). The other five cells
+  stay on the manual rebuild; no runner jobs for them now. The gate's
+  staging store runs without query expansion (D-261), so its runs are
+  deterministic; D-DRAFT-4 corrected accordingly.

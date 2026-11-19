@@ -64,8 +64,9 @@ class RunnerConfig:
     prompt_scheme: str = ""
     seed_build: str = ""
     eval_tolerance: float = 0.03
-    # Stage-1 runs per ingest; the gate takes their mean. The online query
-    # expansion varies by about 0.02 per run, the size of the tolerance.
+    # Stage-1 runs per ingest; the gate takes their mean. The gate's staging
+    # store runs without online query expansion (D-261), so runs normally
+    # agree; the repeat is a cheap guard (seconds per run).
     eval_runs: int = 3
     baseline_recall: float | None = None
     verify_n: int = 25

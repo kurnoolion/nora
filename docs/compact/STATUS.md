@@ -176,7 +176,7 @@
 
 ## Next
 
-- **History follow-ups, TBD (a future strand; from the history-fidelity field review and the MNO-A team feedback, 2026-11-18):** (1) an "N plans unchanged" line on the release-change answer; (2) keep or drop the Renumbered and Moved filters; (3) an email-ready side-by-side comparison table (an export of the requirement view's word diff); (4) a cross-carrier comparison document (a new feature: cross-MNO matching and synthesis; design first). Every reported defect is fixed and served (`ALL-20261118-1`); the reviewers' re-check on that release is still to come.
+- **History follow-ups, TBD (a future strand; from the history-fidelity field review and the MNO-A team feedback, 2026-11-18):** (1) an "N plans unchanged" line on the release-change answer; (2) keep or drop the Renumbered and Moved filters; (3) an email-ready side-by-side comparison table (an export of the requirement view's word diff); (4) a cross-carrier comparison document (a new feature: cross-MNO matching and synthesis; design first). Also TBD (stage graph): runner ingest jobs re-enrich a whole cell after a parser change, because a seed build lends only its bindings and reuse is per stage; give the runner per-requirement enrichment reuse across builds, as the manual incremental path has (field trial 2026-11-19: 5,504 requirements re-enriched, 96 min, where the manual rebuild needed one model call). Every reported defect is fixed and served (`ALL-20261118-1`); the reviewers' re-check on that release is still to come.
 
 - `stage-graph` strand (opened 2026-11-06): two rulings before code — a recipe per stack or per ingest; one stage store per host or per corpus. Bind with `/switch-strand stage-graph`.
 
