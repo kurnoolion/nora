@@ -1,8 +1,8 @@
 # history-fidelity
 
-**Status:** in-flight
+**Status:** landed
 **Opened:** 2026-11-15
-**Landed:**
+**Landed:** 2026-11-19
 **Assignees:** kurnoolion
 **Target modules:** parser, stores, query, web
 **Active phase:** development
@@ -91,3 +91,4 @@ count over both MNOs' corpora, which need a re-parse.
   stay on the manual rebuild; no runner jobs for them now. The gate's
   staging store runs without query expansion (D-261), so its runs are
   deterministic; D-DRAFT-4 corrected accordingly.
+- Landed on 2026-11-19 with 5 promoted decisions: D-348, D-349, D-350, D-351, D-352

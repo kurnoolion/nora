@@ -9959,3 +9959,58 @@ Promoted from strand: stage-graph on 2026-11-15 (draft D-DRAFT-24).
 **Consequences.** A recipe refuses any `serve.mode` but `sira` (`pipeline/recipes.py` `SERVE_MODES`). The graph and vectorstore stages stay off.
 
 Promoted from strand: stage-graph on 2026-11-15 (draft D-DRAFT-25).
+
+## D-348: Heading-only entries count as Added and Removed (amends D-294)
+**Status**: Active · **Date**: 2026-11-19.
+
+**Decision.** An id added or removed with no body text stays out of the model's input but is counted and listed under Added / Removed, marked heading only, not under Bookkeeping.
+
+**Why.** Field review: all 85 such removals in one plan were real deletions (absent from the new release, none renumbered or moved). D-294's point was keeping empty text from the model, not from the counts. Rejected: keeping them as bookkeeping.
+
+**Consequences.** Plan Added / Removed counts match the headline's store counts; the Bookkeeping count is the triage's dropped pairs only.
+
+Promoted from strand: history-fidelity on 2026-11-19 (draft D-DRAFT-1).
+
+## D-349: The model's "unchanged in meaning" pairs are listed under Changed
+**Status**: Active · **Date**: 2026-11-19.
+
+**Decision.** Pairs the model marks `~same` stay in Changed's count (D-295) and are now listed under Changed, not under Bookkeeping.
+
+**Why.** Field review: the table showed Changed 12 / Bookkeeping 1 while the detail listed 9 and 4. Rejected: moving them into the Bookkeeping count, which would make the headline vary between runs.
+
+**Consequences.** Every table count equals what its section lists.
+
+Promoted from strand: history-fidelity on 2026-11-19 (draft D-DRAFT-2).
+
+## D-350: One plan per document is a profile option
+**Status**: Active · **Date**: 2026-11-19.
+
+**Decision.** `plan_metadata.plan_per_document` makes every requirement take the document's plan; off by default, on for the Word-format corpus.
+
+**Why.** About 20 documents per release there mix id-prefix variants of one plan, and History showed each as two plan rows. Rejected: always using the document's plan (one MNO-B PDF holds several plans); an alias list (20+ pairs to curate).
+
+**Consequences.** Parser CODE_VERSION 5, profiler 2.
+
+Promoted from strand: history-fidelity on 2026-11-19 (draft D-DRAFT-3).
+
+## D-351: The self-serve gate scores the ingest's own cell (amends D-307, D-345)
+**Status**: Active · **Date**: 2026-11-19.
+
+**Decision.** The gate scores each sample only on its ground truth in the ingest's cell, takes the mean of `eval_runs` (3) Stage-1 runs, and compares it with the same cell score of the cell's last passed ingest. A new release, which the release map lists only after Serve, is scored on its MNO's ground truth at every release, run and baseline alike; only an MNO with no ground truth passes unscored. The baseline fallbacks are unchanged, and each is scored in the same scope.
+
+**Why.** A whole-set score judged one cell's ingest on every MNO's questions: in the field rebuild, a cell "failed" while its own questions gained. The gate's staging store runs without online query expansion (D-261), so its runs are deterministic (trial job: spread 0.000); the three runs are a cheap guard (seconds per run), not the fix. The run-to-run drift seen in the field (about 0.02) came from evals on the live stack, which expands queries. Rejected: a wider tolerance (it hides real drops).
+
+**Consequences.** `run_ref` holds the run ids comma-joined; old reports without per-entry hits are scored whole.
+
+Promoted from strand: history-fidelity on 2026-11-19 (draft D-DRAFT-4).
+
+## D-352: Duplicate requirement ids: the stores keep the last occurrence; the parser counts duplicates and removes their causes
+**Status**: Active · **Date**: 2026-11-19.
+
+**Decision.** Trees, History and Cells keep the last node of a repeated req_id, as before. The parser counts repeats per document (`ParseStats.duplicate_req_ids`, `dup_ids` per cell), and each field-found cause is fixed where it arises: cross-reference id lists, fused headings, matrix sections (`exclude_section_pattern`), attachment captions.
+
+**Why.** Field review: MNO-B carried 97–98 duplicate ids per release, and the last occurrence was often a matrix repeat. Rejected: first-wins (in MNO-B a matrix repeat sometimes comes before the definition); longest-wins (some repeats absorbed the next chapter's introduction and were longer than the definition). Both store rules would trade one wrong node for another; the count makes each cause visible to fix.
+
+**Consequences.** `dup_ids` on every parse; fell from 98 / 97 to 1 / 1 on MNO-B after the fixes. A source document that defines one id twice keeps one of the two, by the last-occurrence rule.
+
+Promoted from strand: history-fidelity on 2026-11-19 (draft D-DRAFT-5).
