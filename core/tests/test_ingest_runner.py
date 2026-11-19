@@ -1462,3 +1462,37 @@ def test_a_cell_with_no_gold_passes_unscored(host):
     assert _runner(host, OtherMnoGoldSim(host["root"])).run_once() == "completed"
     ing = _run(q.get_ingest(ingest_id))
     assert ing.verdict == "pass" and "no gold" in ing.verdict_detail and ing.recall_avg is None
+
+
+class PreviousReleaseGoldSim(Sim):
+    """A new release: the MNO's ground truth is still bound to the previous
+    release, because the release map advances only at Serve."""
+
+    def __init__(self, root, hits: int, misses: int):
+        super().__init__(root)
+        self.h, self.m = hits, misses
+
+    def _compose(self, args, env):
+        res = super()._compose(args, env)
+        if "golden_cli" in " ".join(args):
+            p = self.root / "golden/runs" / self.run_ids[-1] / "report.json"
+            p.write_text(json.dumps({"stage1": [_s1(hits=[("MNO-A", "Jan2031")] * self.h,
+                                                    misses=[("MNO-A", "Jan2031")] * self.m)],
+                                     "errors": []}))
+        return res
+
+
+def test_a_new_release_is_scored_on_its_mnos_gold_not_passed_unscored(host):
+    q = host["q"]
+    _, ingest_id = _submit_ingest(host)                      # MNO-A Apr2031, not in the map yet
+    host["cfg"].baseline_recall = 0.90
+    assert _runner(host, PreviousReleaseGoldSim(host["root"], hits=1, misses=1)).run_once() == "completed"
+    ing = _run(q.get_ingest(ingest_id))
+    assert ing.verdict == "fail" and ing.recall_avg == 0.5   # 0.5 < 0.90 - 0.03: really scored
+    assert "MNO-A's gold at every release" in ing.verdict_detail and "no gold" not in ing.verdict_detail
+
+
+def test_cell_recall_mno_only_scope():
+    rep = {"stage1": [_s1(hits=[("MNO-A", "Jan2031")], misses=[("MNO-A", "Jan2031"), ("MNO-B", "")])]}
+    assert V.cell_recall(rep, "MNO-A", "Apr2031") is None
+    assert V.cell_recall(rep, "MNO-A", "Apr2031", mno_only=True) == 0.5

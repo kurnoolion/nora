@@ -22,6 +22,6 @@
 ## D-DRAFT-4: The self-serve gate scores the ingest's own cell (amends D-307, D-345)
 **Status**: Draft · **Date**: 2026-11-18.
 
-**Decision.** The gate scores each sample only on its ground truth in the ingest's cell, takes the mean of `eval_runs` (3) Stage-1 runs, and compares it with the same cell score of the cell's last passed ingest. A cell with no ground truth passes unscored. The baseline fallbacks are unchanged, and each is scored on the cell.
+**Decision.** The gate scores each sample only on its ground truth in the ingest's cell, takes the mean of `eval_runs` (3) Stage-1 runs, and compares it with the same cell score of the cell's last passed ingest. A new release, which the release map lists only after Serve, is scored on its MNO's ground truth at every release, run and baseline alike; only an MNO with no ground truth passes unscored. The baseline fallbacks are unchanged, and each is scored in the same scope.
 **Why.** A whole-set score judged one cell's ingest on every MNO's questions: in the field rebuild, a cell "failed" while its own questions gained. The gate's staging store runs without online query expansion (D-261), so its runs are deterministic (trial job: spread 0.000); the three runs are a cheap guard (seconds per run), not the fix. The run-to-run drift seen in the field (about 0.02) came from evals on the live stack, which expands queries. Rejected: a wider tolerance (it hides real drops).
 **Consequences.** `run_ref` holds the run ids comma-joined; old reports without per-entry hits are scored whole.

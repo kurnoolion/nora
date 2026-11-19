@@ -14,6 +14,12 @@ before any of those, the first run passes and seeds the baseline. A cell with no
 the golden set passes with a `no gold` detail. The golden dir is shared by
 every stack on a host, so its newest run may be another stack's: only a
 run this stack's registry gated counts.
+
+A new release has no ground truth of its own until Serve advances the
+release map (its MNO's standard samples stay bound to the previous
+release), so when the cell scores nothing the gate falls back to the MNO's
+ground truth at every release, for the run and its baseline alike. Only an
+MNO with no ground truth at all passes unscored.
 """
 
 from __future__ import annotations
@@ -36,11 +42,14 @@ def run_refs(ref: str) -> list[str]:
     return [r.strip() for r in str(ref or "").split(",") if r.strip()]
 
 
-def cell_recall(report: dict, mno: str, release: str) -> float | None:
+def cell_recall(report: dict, mno: str, release: str, mno_only: bool = False) -> float | None:
     """Mean Stage-1 recall over the samples with ground truth in the cell
     ``mno``/``release``, each sample scored on those entries alone (an
     entry with no release counts for every release of its MNO); None when
-    no sample has any. A report without per-entry hits and misses (an
+    no sample has any. With ``mno_only`` every entry of the MNO counts,
+    whatever its release: the scope for a new release that the release
+    map does not list yet (its standard samples are still bound to the
+    previous release until Serve advances the map). A report without per-entry hits and misses (an
     older format) is scored whole, as ``recall_avg``."""
     s1 = [r for r in report.get("stage1") or [] if isinstance(r, dict)]
     if s1 and not any("hits" in r or "misses" in r for r in s1):
@@ -49,7 +58,7 @@ def cell_recall(report: dict, mno: str, release: str) -> float | None:
     for r in s1:
         def mine(e) -> bool:
             return (isinstance(e, dict) and str(e.get("mno", "")) == mno
-                    and str(e.get("release", "") or "") in ("", release))
+                    and (mno_only or str(e.get("release", "") or "") in ("", release)))
         hits = [e for e in r.get("hits") or [] if mine(e)]
         misses = [e for e in r.get("misses") or [] if mine(e)]
         if hits or misses:
@@ -57,8 +66,8 @@ def cell_recall(report: dict, mno: str, release: str) -> float | None:
     return sum(per) / len(per) if per else None
 
 
-def mean_cell_recall(golden_dir: str | Path, refs: list[str], mno: str,
-                     release: str) -> tuple[float | None, float, int, list[str]]:
+def mean_cell_recall(golden_dir: str | Path, refs: list[str], mno: str, release: str,
+                     mno_only: bool = False) -> tuple[float | None, float, int, list[str]]:
     """``(mean, spread, runs, errors)`` of ``cell_recall`` over the runs in
     ``refs`` (spread = max − min; runs = how many scored); errors are the
     `GEV-E` codes of every run. Unreadable reports are skipped."""
@@ -70,7 +79,7 @@ def mean_cell_recall(golden_dir: str | Path, refs: list[str], mno: str,
         except (OSError, json.JSONDecodeError):
             continue
         errors += gev_errors(report)
-        v = cell_recall(report, mno, release)
+        v = cell_recall(report, mno, release, mno_only)
         if v is not None:
             scores.append(v)
     if not scores:
@@ -90,8 +99,8 @@ def read_report(golden_dir: str | Path, run_id: str) -> dict:
 
 
 def gated_recall(registry_root: str | Path, golden_dir: str | Path,
-                 exclude: str = "", mno: str = "",
-                 release: str = "") -> tuple[float, str] | None:
+                 exclude: str = "", mno: str = "", release: str = "",
+                 mno_only: bool = False) -> tuple[float, str] | None:
     """`(recall, run_ref)` of the newest passed `golden-stage1` gate in the
     registry under `registry_root` whose run reports under `golden_dir`
     have Stage-1 results, other than `exclude` (the runs being judged);
@@ -117,7 +126,7 @@ def gated_recall(registry_root: str | Path, golden_dir: str | Path,
         if not ids:
             continue
         if mno:
-            avg = mean_cell_recall(golden_dir, ids, mno, release)[0]
+            avg = mean_cell_recall(golden_dir, ids, mno, release, mno_only)[0]
         else:
             try:
                 avg = recall_avg(read_report(golden_dir, ids[0]))

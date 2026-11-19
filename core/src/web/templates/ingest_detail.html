@@ -90,7 +90,7 @@
                 {% if ing.verdict %}
                 {% if ing.verdict == 'pass' %}<span class="badge bg-success me-2">pass</span>{% else %}<span class="badge bg-danger me-2">fail</span>{% endif %}
                 {{ ing.verdict_detail }}
-                <div class="form-text mt-2">Stage 1 of the golden eval over the staged set, run several times and scored on this release's own ground truth; the mean is compared with the last gated run of the same release. The new release is covered by {{ ing.mno }}'s standard samples until experts add version samples.{% if ing.run_ref %} Runs <code>{{ ing.run_ref }}</code>.{% endif %}</div>
+                <div class="form-text mt-2">Stage 1 of the golden eval over the staged set, run three times and scored on this MNO's golden questions (this release's own, or the MNO's at every release while the release is new to the golden set); the mean is compared with the same score at the last passed ingest. The new release is covered by {{ ing.mno }}'s standard samples until experts add version samples.{% if ing.run_ref %} Runs <code>{{ ing.run_ref }}</code>.{% endif %}</div>
                 {% else %}
                 <span class="text-muted">not evaluated yet</span>
                 {% endif %}

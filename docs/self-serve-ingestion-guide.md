@@ -42,19 +42,27 @@ the design is `docs/architecture.md` §28.
 
 The ingest's own page shows twelve stages as pills, the current one
 highlighted, and the job log underneath with every command the system
-runs. Enrichment is the long stage, about an hour; the rest take
-seconds to minutes. The whole run takes about an hour and a half.
+runs. Taxonomy and enrichment are the long stages; the rest take
+seconds to minutes. For a release of about 5,500 requirements the
+whole run takes about an hour and a half (taxonomy about 35 minutes,
+enrichment about an hour); a larger release takes longer.
 
 Under the stage pills, badges say where each early stage's result came
 from. **Found** means another build on this host had already done that
 stage on the same documents with the same settings, so it was reused in
-seconds. **Computed** means it ran now.
+seconds. **Computed** means it ran now. After a NORA update that changes
+how documents are read, expect **Computed** throughout and the full run
+time: the earlier results no longer match.
 
 At the end the ingest is **staged**: built, published to a staging
 store, and measured by the golden eval. The Gate card shows the
-verdict. **Pass** means the eval's recall over the staged set is
-within tolerance of the last gated run. **Fail** means it is not, or
-the eval hit an error; the card says which.
+verdict. The eval runs three times and the gate takes the average,
+counting only the golden questions about this MNO: this release's own,
+or, for a release new to the golden set, the MNO's questions at every
+release. **Pass** means that score is within tolerance of the same
+score at the last passed ingest. **Fail** means it is not, or the eval
+hit an error; the card says which. An MNO with no golden questions at
+all passes without a score, and the card says so.
 
 Nobody has to watch the page. Leave it open and it updates on its
 own; come back later and the state is there. A chat or mail bridge can
@@ -63,14 +71,16 @@ be told of each state change (the administrator sets that up).
 ## Serve, roll back
 
 A staged ingest whose gate passed has a **Serve** button. Serve makes
-the new release visible to everyone on the Ask page, in minutes. The
+the new release visible to everyone on the Ask page, in minutes, and
+adds it to the History page, so the changes from the previous release
+can be asked about there. The
 previous set stays available: the page then offers **Roll back**, one
 click, which puts the previous set back. Rolling back does not undo
 the build; the release can be served again later.
 
 A **served** ingest has a **Redo** button. Redo runs the release's
 taxonomy and enrichment again, as a new ingest with its own page (about
-an hour); the documents and the early stages are reused. Use it when
+an hour and a half); the documents and the early stages are reused. Use it when
 the enrichment came out wrong, for example after a prompt fix. The
 original stays served until you serve the redo, and a failed or
 abandoned redo leaves it served.

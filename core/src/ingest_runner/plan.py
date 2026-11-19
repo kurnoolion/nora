@@ -573,21 +573,28 @@ def _eval(c: Ctx) -> None:
 def st_gate(c: Ctx) -> None:
     mno, rel = c.ingest["mno"], c.ingest["release"]
     refs = V.run_refs(c.run_ref)
+    scope, mno_only = f"{c.cell}'s own gold", False
     recall, spread, scored, errors = V.mean_cell_recall(c.cfg.golden_dir, refs, mno, rel)
+    if recall is None and not errors:
+        # a new release: the release map lists it only after Serve, so its
+        # MNO's standard samples are still bound to the previous release
+        recall, spread, scored, errors = V.mean_cell_recall(c.cfg.golden_dir, refs, mno, rel, True)
+        scope, mno_only = f"{mno}'s gold at every release ({rel} has none of its own yet)", True
     if recall is None and not errors and _any_stage1(c, refs):
-        # the golden set has no ground truth in this cell: nothing to compare
-        verdict, detail = "pass", f"no gold for {c.cell} in the golden set; not scored"
+        # the golden set has no ground truth for this MNO: nothing to compare
+        verdict, detail = "pass", f"no gold for {mno} in the golden set; not scored"
         baseline, source = None, "nothing"
     else:
         baseline, source = None, "nothing"
         for prior in c.db.baseline_runs(mno, rel):
-            if prior["id"] == c.ingest["id"]:
+            if prior["id"] == c.ingest["id"] and not mno_only:
                 # this ingest re-gated (a rebased set): its stored score is
                 # its earlier pass; its run ref already names the new runs
                 b = prior["recall_avg"]
             else:
-                b = V.mean_cell_recall(c.cfg.golden_dir, V.run_refs(prior["run_ref"]), mno, rel)[0]
-                if b is None:
+                b = V.mean_cell_recall(c.cfg.golden_dir, V.run_refs(prior["run_ref"]), mno, rel,
+                                       mno_only)[0]
+                if b is None and not mno_only:
                     b = prior["recall_avg"]
             if b is not None:
                 baseline, source = float(b), f"last passed ingest of {c.cell}"
@@ -596,12 +603,12 @@ def st_gate(c: Ctx) -> None:
             baseline, source = float(c.cfg.baseline_recall), "runner config"
         if baseline is None:
             rec = V.gated_recall(c.cfg.registry_root, c.cfg.golden_dir, exclude=c.run_ref,
-                                 mno=mno, release=rel)
+                                 mno=mno, release=rel, mno_only=mno_only)
             if rec:
                 baseline, source = rec[0], f"gated run {rec[1]}"
         verdict, detail = V.decide(recall, baseline, c.cfg.eval_tolerance, errors)
         if recall is not None:
-            detail += f"; mean of {scored} run(s), spread {spread:.3f}, scored on {c.cell}'s own gold"
+            detail += f"; mean of {scored} run(s), spread {spread:.3f}, scored on {scope}"
     c.log(f"gate: {verdict} — {detail} (baseline from {source})")
     cmd = ["python", "-m", "core.src.stores.publish", "gate", "--serve-root", CTR_SERVE,
            "--label", c.label, "--kind", "golden-stage1", "--verdict", verdict, "--run-ref", c.run_ref]
