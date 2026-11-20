@@ -177,6 +177,8 @@
 
 ## Next
 
+- **Self-serve ingestion: taxonomy partial failure, TBD (field incident 2026-11-19, MNO-B new release).** When a few plans fail taxonomy (gateway timeouts), the stage still exits 0 (`TAX-W004`), the runner advances, and enrich refuses (`CYC-E061`); the page's Retry re-runs enrich and fails again, so the user is stuck until the administrator re-runs taxonomy (which retries only the failures, about a minute). Fix: in `ingest_runner/plan.py` `st_taxonomy`, re-run taxonomy up to 2 rounds while the log shows `TAX-W004`, then fail the taxonomy stage so Retry lands there. Until then the administrator re-runs taxonomy by hand.
+
 - **History follow-ups, TBD (a future strand; from the history-fidelity field review and the MNO-A team feedback, 2026-11-18):** (1) an "N plans unchanged" line on the release-change answer; (2) keep or drop the Renumbered and Moved filters; (3) an email-ready side-by-side comparison table (an export of the requirement view's word diff); (4) a cross-carrier comparison document (a new feature: cross-MNO matching and synthesis; design first). Also TBD (stage graph): runner ingest jobs re-enrich a whole cell after a parser change, because a seed build lends only its bindings and reuse is per stage; give the runner per-requirement enrichment reuse across builds, as the manual incremental path has (field trial 2026-11-19: 5,504 requirements re-enriched, 96 min, where the manual rebuild needed one model call). Every reported defect is fixed and served (`ALL-20261118-1`); the reviewers' re-check on that release is still to come.
 
 - `stage-graph` strand (opened 2026-11-06): two rulings before code — a recipe per stack or per ingest; one stage store per host or per corpus. Bind with `/switch-strand stage-graph`.
