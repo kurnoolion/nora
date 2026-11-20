@@ -10014,3 +10014,14 @@ Promoted from strand: history-fidelity on 2026-11-19 (draft D-DRAFT-4).
 **Consequences.** `dup_ids` on every parse; fell from 98 / 97 to 1 / 1 on MNO-B after the fixes. A source document that defines one id twice keeps one of the two, by the last-occurrence rule.
 
 Promoted from strand: history-fidelity on 2026-11-19 (draft D-DRAFT-5).
+
+## D-353: History compares text with table separator rows dropped; text_fp stays on the raw text
+**Status**: Active · **Date**: 2026-11-19.
+
+**Context.** A table the PDF extractor split into two pieces in one release and kept whole in the next showed as Changed (`<req-1030>` and five siblings on MNO-B, plus two sections).
+
+**Decision.** History's `node_fp` hashes the text through `compare_text`, which drops markdown table separator rows; `text_fp`, the cross-store join key, stays on the raw text. Each History DB records the rule as `node_text_rule` = `tables-v1`.
+
+**Why.** Rejected: dropping the rows in `canonical_text` / `text_fp` — it would change the fingerprint every store and the enrichment cache key on, and invalidate all reuse. Rejected: comparing table objects (piece count differs by design of the split).
+
+**Consequences.** A History rebuild applies the rule (no re-parse needed); the History schema version stays 1, so served DBs keep loading; layout-only table edits never reach Changed. A real cell edit still does.
