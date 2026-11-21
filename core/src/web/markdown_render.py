@@ -305,6 +305,46 @@ def render_req_body(text: str) -> Markup:
     return Markup("".join(out))
 
 
+def _cell_count(line: str) -> int:
+    return len(line.strip().strip("|").split("|"))
+
+
+def _rejoin_wrapped_rows(lines: list[str]) -> list[str]:
+    """Compat for corpus parsed before issue #34: a cell's PDF line wraps
+    split one pipe row across several lines. Inside a table (previous line is
+    a pipe row), a line that opens with `|` but does not close is joined with
+    the lines after it up to the first one ending in `|`. The join is kept
+    only if it is a pipe row with the previous row's cell count; otherwise
+    the lines pass through untouched."""
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        in_table = bool(out) and _PIPE_LINE_RE.match(out[-1])
+        if in_table and line.lstrip().startswith("|") and not _PIPE_LINE_RE.match(line):
+            end = _wrapped_row_end(lines, i)
+            if end is not None:
+                joined = " ".join(ln.strip() for ln in lines[i:end + 1])
+                if _cell_count(joined) == _cell_count(out[-1]):
+                    out.append(joined)
+                    i = end + 1
+                    continue
+        out.append(line)
+        i += 1
+    return out
+
+
+def _wrapped_row_end(lines: list[str], start: int) -> int | None:
+    """Index of the first line after `start` that closes the row with `|`,
+    or None if a new row opens (or the text ends) first."""
+    for j in range(start + 1, len(lines)):
+        if lines[j].lstrip().startswith("|"):
+            return None
+        if lines[j].rstrip().endswith("|"):
+            return j
+    return None
+
+
 def _render_segment(text: str) -> str:
     """Pass 2 over a table-HTML-free segment: group contiguous pipe-table
     lines into tables, everything else into prose, preserving order."""
@@ -324,7 +364,7 @@ def _render_segment(text: str) -> str:
             out.append(_render_pipe_table(list(pipes)))
             pipes.clear()
 
-    for line in text.split("\n"):
+    for line in _rejoin_wrapped_rows(text.split("\n")):
         if _PIPE_LINE_RE.match(line):
             flush_prose()
             pipes.append(line)
