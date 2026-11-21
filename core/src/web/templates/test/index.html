@@ -90,7 +90,7 @@
              question LOADS it into the box rather than asking, so it can be
              edited first; Re-run last submits immediately, which is the
              tight alpha loop: change a knob, re-ask the same question. #}
-          <div class="dropdown me-auto d-none" id="ask-recents-wrap">
+          <div class="dropdown me-auto d-none flex-shrink-0" id="ask-recents-wrap">
             <button class="btn btn-sm btn-outline-primary dropdown-toggle"
                     type="button" id="ask-recents-btn"
                     data-bs-toggle="dropdown" aria-expanded="false"
@@ -100,33 +100,35 @@
             <ul class="dropdown-menu" id="ask-recents-menu"
                 style="max-width: 34rem"></ul>
           </div>
-          <button class="btn btn-sm btn-outline-secondary d-none" type="button"
+          <button class="btn btn-sm btn-outline-secondary d-none flex-shrink-0 text-nowrap" type="button"
                   id="ask-rerun-last"
                   title="Ask the most recent question again, with the current settings">
             <i class="bi bi-arrow-repeat me-1"></i>Re-run last
           </button>
-          <button class="btn btn-sm btn-outline-secondary" type="button"
+          <button class="btn btn-sm btn-outline-secondary flex-shrink-0" type="button"
                   data-bs-toggle="collapse" data-bs-target="#ask-options"
-                  aria-expanded="false" aria-controls="ask-options">
-            <i class="bi bi-sliders me-1"></i>Options
+                  aria-expanded="false" aria-controls="ask-options"
+                  aria-label="Options" title="Options">
+            <i class="bi bi-sliders"></i>
           </button>
           <input
               type="text"
               id="user-name"
               name="user_name"
               class="form-control form-control-sm"
-              style="max-width: 200px"
+              style="width: 10rem"
               placeholder="Your name (optional)"
               aria-label="Your name — optional, credits your feedback"
-              title="Optional — credits your feedback"
+              title="Your name — optional, credits your feedback"
               maxlength="80">
           {% if providers %}
           <select
               id="ask-provider"
               name="provider"
               class="form-select form-select-sm"
-              style="max-width: 210px"
-              aria-label="Which endpoint answers">
+              style="width: auto; max-width: 210px"
+              aria-label="Which endpoint answers"
+              title="LLM provider">
             {% for p in providers %}
             <option value="{{ p.id }}"
                     data-supports-reasoning-control="{{ 1 if p.supports_reasoning_control else 0 }}"
@@ -139,8 +141,9 @@
               id="ask-model"
               name="model"
               class="form-select form-select-sm"
-              style="max-width: 230px"
+              style="width: auto; max-width: 230px"
               aria-label="Which model on that provider answers"
+              title="Model"
               data-url-template="{{ root_path }}/api/test/providers/__ID__/models">
             {% for p in providers %}{% if loop.first %}
             <option value="{{ p.model }}" selected>{{ p.model }}</option>
@@ -150,8 +153,9 @@
               id="ask-mode"
               name="mode"
               class="form-select form-select-sm"
-              style="max-width: 150px"
-              aria-label="How hard the model thinks">
+              style="width: auto; max-width: 150px"
+              aria-label="How hard the model thinks"
+              title="Thinking level">
             <option value="fast">Fast</option>
             <option value="think">Think</option>
           </select>
@@ -159,7 +163,7 @@
              so this only has to name the reason. Full sentence lives in the
              tooltip. #}
           {% endif %}
-          <button id="ask-submit" class="btn btn-primary" type="submit">
+          <button id="ask-submit" class="btn btn-sm btn-primary flex-shrink-0" type="submit">
             <span id="ask-submit-label">Ask</span>
             <span id="ask-submit-busy" style="display:none;">
               <span class="spinner-border spinner-border-sm me-1"></span>
@@ -827,12 +831,12 @@ function askRecordHistory(question, pendingId) {
         modeEl.appendChild(placeholder);
       }
       modeEl.value = "";
-      modeEl.title = "This endpoint exposes no control over how much the "
+      modeEl.title = "Thinking level — this endpoint exposes no control over how much the "
         + "model thinks — it may still reason, we just cannot change it.";
       return;
     }
     if (placeholder) placeholder.remove();
-    modeEl.title = "Fast skips the model's thinking step. Think lets it think "
+    modeEl.title = "Thinking level — Fast skips the model's thinking step. Think lets it think "
       + "as the deployment configured. Recorded with the answer.";
     if (opt.dataset.defaultMode && !modeEl.dataset.userSet) {
       modeEl.value = opt.dataset.defaultMode;
@@ -864,7 +868,7 @@ function askRecordHistory(question, pendingId) {
     modelEl.replaceChildren(placeholderOpt);
     const url = modelEl.dataset.urlTemplate.replace(
       "__ID__", encodeURIComponent(providerEl.value));
-    modelEl.title = "";
+    modelEl.title = "Model";
     try {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error("HTTP " + resp.status);
@@ -880,12 +884,12 @@ function askRecordHistory(question, pendingId) {
       modelEl.value = wanted;
       savedModel = "";                          // restore once, on first load
       if (!data.discovered) {
-        modelEl.title = "Could not list this provider's models — showing "
+        modelEl.title = "Model — could not list this provider's models — showing "
           + "its configured default only.";
       }
     } catch (e) {
       if (reqId !== modelReq) return;
-      modelEl.title = "Could not load models — the provider's default is used.";
+      modelEl.title = "Model — could not load models — the provider's default is used.";
     }
   }
   if (providerEl) providerEl.addEventListener("change", syncModels);
