@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Awaitable, Callable
 
@@ -790,7 +791,9 @@ def _build_select_synth_context(question: str, packed: list[dict[str, Any]]) -> 
 def _select_synth_extract_citations(answer: str, packed: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Corpus-agnostic citation extraction: which packed req_ids appear verbatim
     in the answer. Works for any MNO req_id format, unlike the synthesizer's
-    VZ_REQ_-specific regex."""
+    VZ_REQ_-specific regex. Markdown backslash escapes (VZ\\_REQ\\_…, which
+    some models write and the page renders plainly) are dropped first."""
+    answer = re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", answer)
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for c in packed:
