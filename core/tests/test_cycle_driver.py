@@ -16,12 +16,33 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 CYCLE = REPO / "docker" / "cycle.sh"
+
+# cycle.sh is a Linux host script: GNU find (-printf), GNU sed (-i), GNU
+# coreutils (wc without padding) and util-linux flock. On macOS the tests run against Homebrew's GNU tools,
+# put first on PATH for this module only; without them the module is
+# skipped with the install line rather than failing 36 ways.
+_GNUBIN = [f"{prefix}/opt/{pkg}/libexec/gnubin"
+           for prefix in ("/opt/homebrew", "/usr/local") for pkg in ("findutils", "gnu-sed", "coreutils")]
+_MAC_GNU = [d for d in _GNUBIN if os.path.isdir(d)] if sys.platform == "darwin" else []
+_MAC_MISSING = sys.platform == "darwin" and not (
+    all(any(d.endswith(f"/{pkg}/libexec/gnubin") for d in _MAC_GNU)
+        for pkg in ("findutils", "gnu-sed", "coreutils"))
+    and shutil.which("flock"))
+pytestmark = pytest.mark.skipif(
+    _MAC_MISSING, reason="cycle.sh needs GNU tools on macOS: brew install findutils gnu-sed coreutils flock")
+
+
+@pytest.fixture(autouse=True)
+def _gnu_tools_first(monkeypatch):
+    if _MAC_GNU:
+        monkeypatch.setenv("PATH", os.pathsep.join(_MAC_GNU + [os.environ["PATH"]]))
 
 FAKE_DOCKER = r'''#!/usr/bin/env bash
 # fake docker for cycle.sh tests

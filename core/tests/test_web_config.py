@@ -24,6 +24,9 @@ from core.src.web.config import (
     load_config,
 )
 
+# The config resolves env_dir; on macOS /tmp is a symlink to /private/tmp.
+_ENV = Path("/tmp/myenv").resolve()
+
 
 @pytest.fixture
 def clean_env(monkeypatch):
@@ -64,9 +67,9 @@ def test_db_paths_default_to_env_dir_state(clean_env, isolated_configs):
     untouched when nothing is configured."""
     _write(isolated_configs["web"], {"env_dir": "/tmp/myenv"})
     cfg = load_config()
-    assert cfg.jobs_db_path() == Path("/tmp/myenv/state/nora.db")
-    assert cfg.metrics_db_path() == Path("/tmp/myenv/state/nora_metrics.db")
-    assert cfg.feedback_db_path() == Path("/tmp/myenv/state/nora_test_feedback.db")
+    assert cfg.jobs_db_path() == _ENV / "state/nora.db"
+    assert cfg.metrics_db_path() == _ENV / "state/nora_metrics.db"
+    assert cfg.feedback_db_path() == _ENV / "state/nora_test_feedback.db"
 
 
 def test_env_var_overrides_state_default(clean_env, isolated_configs, monkeypatch):
@@ -79,7 +82,7 @@ def test_env_var_overrides_state_default(clean_env, isolated_configs, monkeypatc
     assert cfg.jobs_db_path() == Path("/var/lib/custom-jobs.sqlite")
     assert cfg.feedback_db_path() == Path("/var/lib/feedback.sqlite")
     # Untouched DB still uses computed default
-    assert cfg.metrics_db_path() == Path("/tmp/myenv/state/nora_metrics.db")
+    assert cfg.metrics_db_path() == _ENV / "state/nora_metrics.db"
 
 
 def test_env_json_overrides_state_default(clean_env, isolated_configs):
@@ -95,7 +98,7 @@ def test_env_json_overrides_state_default(clean_env, isolated_configs):
     assert cfg.metrics_db_path() == Path("/srv/data/metrics.db")
     assert cfg.feedback_db_path() == Path("/srv/data/feedback.db")
     # Untouched DB still uses computed default
-    assert cfg.jobs_db_path() == Path("/tmp/myenv/state/nora.db")
+    assert cfg.jobs_db_path() == _ENV / "state/nora.db"
 
 
 def test_env_var_beats_env_json(clean_env, isolated_configs, monkeypatch):
@@ -120,9 +123,9 @@ def test_empty_strings_in_env_json_fall_through(clean_env, isolated_configs):
     })
     cfg = load_config()
     # All fall through to computed defaults under <env_dir>/state/
-    assert cfg.jobs_db_path() == Path("/tmp/myenv/state/nora.db")
-    assert cfg.metrics_db_path() == Path("/tmp/myenv/state/nora_metrics.db")
-    assert cfg.feedback_db_path() == Path("/tmp/myenv/state/nora_test_feedback.db")
+    assert cfg.jobs_db_path() == _ENV / "state/nora.db"
+    assert cfg.metrics_db_path() == _ENV / "state/nora_metrics.db"
+    assert cfg.feedback_db_path() == _ENV / "state/nora_test_feedback.db"
 
 
 def test_env_json_missing_treated_as_no_overrides(clean_env, isolated_configs):
@@ -132,7 +135,7 @@ def test_env_json_missing_treated_as_no_overrides(clean_env, isolated_configs):
     # No env.json written
     assert not isolated_configs["env"].exists()
     cfg = load_config()
-    assert cfg.jobs_db_path() == Path("/tmp/myenv/state/nora.db")
+    assert cfg.jobs_db_path() == _ENV / "state/nora.db"
 
 
 def test_env_json_malformed_treated_as_no_overrides(clean_env, isolated_configs):
@@ -141,7 +144,7 @@ def test_env_json_malformed_treated_as_no_overrides(clean_env, isolated_configs)
     _write(isolated_configs["web"], {"env_dir": "/tmp/myenv"})
     isolated_configs["env"].write_text("{ not valid json")
     cfg = load_config()
-    assert cfg.jobs_db_path() == Path("/tmp/myenv/state/nora.db")
+    assert cfg.jobs_db_path() == _ENV / "state/nora.db"
 
 
 # ---------------------------------------------------------------------------

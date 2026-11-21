@@ -463,6 +463,16 @@ def test_count_cell_distinct_plans_and_requirements():
     assert _count_cell(metas) == (3, 3)
 
 
+def _no_sira_store(monkeypatch):
+    """No SIRA store /cells: the vectorstore-only tests must not see a live
+    store on the developer's machine."""
+    from core.src.web.routes import playground as pg
+
+    def down(*a, **k):
+        raise pg.httpx.ConnectError("no store in tests")
+    monkeypatch.setattr(pg.httpx, "get", down)
+
+
 def test_ingested_rows_per_cell_layout(tmp_path, monkeypatch):
     """Per-cell store dirs -> one row per (mno, release) with counts + date."""
     import core.src.web.routes.playground as pg
@@ -493,6 +503,7 @@ def test_ingested_rows_per_cell_layout(tmp_path, monkeypatch):
         def env_dir_path(self):
             return tmp_path
     monkeypatch.setattr("core.src.web.app.config", _Cfg(), raising=False)
+    _no_sira_store(monkeypatch)
 
     pg._INGESTED_CACHE.update(key=None, rows=None)
     rows = pg._ingested_rows()
@@ -536,6 +547,7 @@ def test_ingested_rows_latest_tag_per_mno(tmp_path, monkeypatch):
         def env_dir_path(self):
             return tmp_path
     monkeypatch.setattr("core.src.web.app.config", _Cfg(), raising=False)
+    _no_sira_store(monkeypatch)
 
     pg._INGESTED_CACHE.update(key=None, rows=None)
     tags = {(r["mno"], r["release"]): r["latest"] for r in pg._ingested_rows()}

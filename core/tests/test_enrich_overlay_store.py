@@ -253,7 +253,11 @@ class TestEditApi:
 
 
 def test_routes_registered():
+    """Asked over HTTP: newer FastAPI keeps included routers nested, so a
+    flat scan of app.routes does not see them."""
+    from fastapi.testclient import TestClient
     from core.src.web.app import app
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/api/enrich-review/edit" in paths
-    assert "/api/enrich-review/labels" in paths
+    c = TestClient(app)
+    assert c.post("/api/enrich-review/edit", json={}).status_code != 404
+    assert c.get("/api/enrich-review/labels").status_code != 404
+    assert c.get("/api/enrich-review/no-such-route").status_code == 404

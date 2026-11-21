@@ -572,6 +572,8 @@ python -m pytest tests/test_query.py -v              # Step 10: Query pipeline
 python -m pytest tests/test_eval.py -v               # Step 11: Evaluation framework
 ```
 
+**On macOS:** `docker/cycle.sh` is a Linux host script (GNU `find`, `sed`, coreutils and util-linux `flock`), so its tests (`test_cycle_driver.py`) need the GNU tools: `brew install findutils gnu-sed coreutils flock`. The tests put them first on `PATH` for that module only; your shell is unchanged. Without them the module is skipped with that install line.
+
 ### Test Summary
 
 | Test File | Count | Covers | Dependencies |
